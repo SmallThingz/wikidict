@@ -1,0 +1,6 @@
+== <span class='sectionlangue' id='es'>[[Portail:Espagnol|Espagnol]]</span>[[Catégorie:espagnol]] ==
+=== <span class="titredef" id="es-flex-nom-1">Forme de nom commun</span><span id="es-flex-nom" style="font-size:0;"></span>[[Catégorie:Formes de noms communs en espagnol]] ===
+'''ovejas''' <span class="ligne-de-forme"  ><i>féminin</i></span> <span title="Prononciation à préciser">\<small><span class="plainlinks stubedit">[//fr.wiktionary.org/w/index.php?title=ovejas&action=edit Prononciation ?]</span></small>\</span>[[Catégorie:Wiktionnaire:Prononciations  manquantes en espagnol]]
+[[Fichier:Ovejas latxa en Sierra Gibijo 02.jpg|vignette|alt=Un troupeau de moutons.|Des '''ovejas'''.]]
+# ''Pluriel de'' [[oveja#es-nom|oveja]].
+

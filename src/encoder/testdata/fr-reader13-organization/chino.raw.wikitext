@@ -1,0 +1,56 @@
+== {{langue|fr}} ==
+=== {{S|étymologie}} ===
+: De ''[[chinois]]''
+: {{note}} Le terme ''chino'' proviendrait du nom donné aux pantalons acquis sur place par les soldats américains stationnés aux [[Philippines]]. Ces vêtements, qui auraient été produits à l'origine à [[Manchester]], y étaient revendus par les marchands chinois de l'île. Ce néologisme daterait, selon des spécialistes, des années suivant la guerre hispano-américaine (1898) ou des années 1930.
+
+=== {{S|nom|fr}} ===
+{{fr-rég|ʃi.no}}
+[[Fichier:Chino pants.jpg|250px|thumb|pantalon '''chino''' actuel]]
+'''chino''' {{pron|ʃi.no|fr}} {{m}}
+# {{vête|fr}} [[pantalon|Pantalon]] en serge de coton, à l’origine de couleur claire.
+#* {{exemple | lang=fr
+ | … portait un sweat-shirt bleu pâle et un '''chino''' havane au lieu de son antique costume corseté.
+ | source={{w|Jean Échenoz}}, ''Vie de Gérard Fulmard'', Minuit, 2020, page 176}}
+#* {{exemple | lang=fr
+ | Le '''chino''' est un pantalon en toile de coton beaucoup plus léger qu’un jean, bien que des modèles en toile épaisse existent également. Il présente de multiples avantages : il est léger, souple, ultra-confortable et, pour peu qu’il soit bien coupé, extrêmement élégant.
+ | source={{lien web|url=https://www.bonnegueule.fr/chinos-selection-dete/|titre=Conseils : Comment choisir et porter un chino homme ?|site=www.bonnegueule.fr}}, 10 juin 2016}}
+
+==== {{S|traductions}} ====
+{{trad-début}}
+* {{T|en}} : {{trad+|en|chino}}
+{{trad-fin}}
+
+=== {{S|anagrammes}} ===
+{{voir anagrammes|fr}}
+
+=== {{S|voir aussi}} ===
+* {{WP|Chino (vêtement)}}
+
+== {{langue|es}} ==
+=== {{S|étymologie}} ===
+:Dérivé de ''[[China#es|China]]''.
+
+=== {{S|adjectif|es}} ===
+{{es-accord-oa|chin|'ʈʃin}}
+'''chino''' {{pron|'ʈʃino|es}} {{m}}
+#[[chinois|Chinois]] (en rapport avec la [[Chine]]).
+
+=== {{S|nom|es|num=1}} ===
+{{es-accord-oa|chin|'ʈʃin}}
+'''chino''' {{pron|'ʈʃino|es}} {{m}} {{équiv-pour|lang=es|une femme|china}}
+#[[Chinois]] (personne chinoise).
+# {{Mexique|es}} Toute personne originaire d’Asie de l’est (chinois, coréens, mongols, vietnamiens)
+
+=== {{S|nom|es|num=2}} ===
+{{es-rég|'ʈʃino}}
+'''chino''' {{pron|'ʈʃino|es}} {{m}}
+#{{info lex|linguistique}} [[chinois|Chinois]].
+
+=== {{S|prononciation}} ===
+* {{écouter|lang=es|France (Paris)||audio=LL-Q1321 (spa)-Eavqwiki-chino.wav}}
+* {{écouter|lang=es|Espagne (Villarreal)||audio=LL-Q1321 (spa)-Millars-chino.wav}}
+* {{écouter|lang=es|Espagne (Valladolid)||audio=LL-Q1321 (spa)-MiguelAlanCS-chino.wav}}
+
+[[Catégorie:Langues en espagnol]]
+[[Catégorie:Gentilés d’Asie en espagnol]]
+[[Catégorie:Chine en espagnol]]

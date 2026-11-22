@@ -1,0 +1,119 @@
+== <span class='sectionlangue' id='fr'>[[Portail:Français|Français]]</span>[[Catégorie:français]] ==
+=== <span class="titreetym" title="">Étymologie</span> ===
+: De ''[[chinois]]''
+: '''Note : ''' Le terme ''chino'' proviendrait du nom donné aux pantalons acquis sur place par les soldats américains stationnés aux [[Philippines]]. Ces vêtements, qui auraient été produits à l'origine à [[Manchester]], y étaient revendus par les marchands chinois de l'île. Ce néologisme daterait, selon des spécialistes, des années suivant la guerre hispano-américaine (1898) ou des années 1930.
+
+=== <span class="titredef" id="fr-nom-1">Nom commun</span><span id="fr-nom" style="font-size:0;"></span>[[Catégorie:Lemmes en français]][[Catégorie:Noms communs en français]] ===
+{| class="wikitable flextable flextable-fr-mfsp"
+
+
+! Singulier !! Pluriel
+|-
+
+| '''<span lang="fr" xml:lang="fr" class="lang-fr"><bdi>chino</bdi></span>'''
+| <bdi lang="fr" xml:lang="fr" class="lang-fr">[[chinos#fr|chinos]]</bdi>
+
+|-
+| colspan="2" |[[Annexe:Prononciation/français|<span class="API" title="Prononciation API">\ʃi.no\</span>]]
+
+|}
+[[Fichier:Chino pants.jpg|250px|thumb|pantalon '''chino''' actuel]]
+'''chino''' [[Annexe:Prononciation/français|<span class="API" title="Prononciation API">\ʃi.no\</span>]] <span class="ligne-de-forme"  ><i>masculin</i></span>
+# <span class="term" id="fr-vêtement"><i>(<span class="texte">Habillement
+</span>)</i></span>[[Catégorie:Vêtements en français]] [[pantalon|Pantalon]] en serge de coton, à l’origine de couleur claire.
+#* <span class="example"><q><bdi lang="fr" xml:lang="fr" class="lang-fr">''… portait un sweat-shirt bleu pâle et un '''chino''' havane au lieu de son antique costume corseté.''</bdi></q> <span class="sources"><span class="tiret">—&#160;</span>([[w:Jean Échenoz|Jean Échenoz]], ''Vie de Gérard Fulmard'', Minuit, 2020, page 176)</span></span>[[Catégorie:Exemples en français]]
+#* <span class="example"><q><bdi lang="fr" xml:lang="fr" class="lang-fr">''Le '''chino''' est un pantalon en toile de coton beaucoup plus léger qu’un jean, bien que des modèles en toile épaisse existent également. Il présente de multiples avantages : il est léger, souple, ultra-confortable et, pour peu qu’il soit bien coupé, extrêmement élégant.''</bdi></q> <span class="sources"><span class="tiret">—&#160;</span>(<cite style="font-style:normal" class="ouvrage" >[https://www.bonnegueule.fr/chinos-selection-dete/ ''Conseils : Comment choisir et porter un chino homme ?'']&#32;sur ''www.bonnegueule.fr''</cite>, 10 juin 2016)</span></span>[[Catégorie:Exemples en français]]
+
+==== <span class="titretrad" title="">Traductions</span> ====
+<div class="boite ">
+<div class="NavFrame  ">
+<div class="NavHead"><span class="nav-head-title">'''<i></i>'''</span>&nbsp;<span class="nav-head-number"></span></div>
+<div class="NavContent">
+<div style="column-width:  26em; -webkit-column-width: 26em; -moz-column-width:  26em;  vertical-align: top; text-align: left;"><div class="translations">
+* <span data-translation-lang="en" class="trad-en">Anglais</span>[[Catégorie:Traductions en anglais]] : <span class="translation"><bdi lang="en" xml:lang="en" class="lang-en">[[chino#en|chino]]</bdi>&nbsp;<span class="trad-exposant">[[:en:chino|<span class="trad-existe">(en)</span>]]</span></span>
+</div></div></div><div style="clear:both"></div></div></div>
+
+=== <span class="titreanagr" title="">Anagrammes</span> ===
+→ [[Spécial:EditPage/Modèle:anagrammes/fr/chino|Modifier la liste d’anagrammes]]<div class="boite ">
+<div >
+
+<div >
+<div style="column-width:  26em; -webkit-column-width: 26em; -moz-column-width:  26em;  vertical-align: top; text-align: left;">
+* [[choin#fr|choin]]
+* [[Nohic#fr|Nohic]]
+* [[noich#fr|noich]]
+* [[Onich#fr|Onich]]
+</div></div><div style="clear:both"></div></div></div>
+
+=== <span class="titrevoir" title="">Voir aussi</span> ===
+* [[w:Chino (vêtement)|<span lang="fr" xml:lang="fr" class="lang-fr"><bdi>Chino (vêtement)</bdi></span>]] sur l’encyclopédie Wikipédia [[Image:Wikipedia-logo-v2.svg|20px|link=]][[Catégorie:Pages liées à Wikipédia en français]]
+
+== <span class='sectionlangue' id='es'>[[Portail:Espagnol|Espagnol]]</span>[[Catégorie:espagnol]] ==
+=== <span class="titreetym" title="">Étymologie</span> ===
+:Dérivé de ''[[China#es|China]]''.
+
+=== <span class="titredef" id="es-adj-1">Adjectif</span><span id="es-adj" style="font-size:0;"></span>[[Catégorie:Lemmes en espagnol]][[Catégorie:Adjectifs en espagnol]] ===
+
+{|class="wikitable flextable flextable-es-mfsp"
+|+ 
+! Genre
+! Singulier
+! Pluriel
+|- class="flextable-es-m"
+! Masculin
+| '''<span lang="es" xml:lang="es" class="lang-es"><bdi>chino</bdi></span>'''<br>[[Annexe:Prononciation/espagnol|<span class="API" title="Prononciation API">\'ʈʃino\</span>]]
+| <bdi lang="es" xml:lang="es" class="lang-es">[[chinos#es|chinos]]</bdi><br>[[Annexe:Prononciation/espagnol|<span class="API" title="Prononciation API">\'ʈʃinos\</span>]]
+|- class="flextable-es-f"
+! Féminin
+| <bdi lang="es" xml:lang="es" class="lang-es">[[china#es|china]]</bdi><br>[[Annexe:Prononciation/espagnol|<span class="API" title="Prononciation API">\'ʈʃina\</span>]]
+| <bdi lang="es" xml:lang="es" class="lang-es">[[chinas#es|chinas]]</bdi><br>[[Annexe:Prononciation/espagnol|<span class="API" title="Prononciation API">\'ʈʃinas\</span>]]
+|}
+'''chino''' [[Annexe:Prononciation/espagnol|<span class="API" title="Prononciation API">\'ʈʃino\</span>]] <span class="ligne-de-forme"  ><i>masculin</i></span>
+#[[chinois|Chinois]] (en rapport avec la [[Chine]]).
+
+=== <span class="titredef" id="es-nom-1">Nom commun 1</span><span id="es-nom" style="font-size:0;"></span>[[Catégorie:Lemmes en espagnol]][[Catégorie:Noms communs en espagnol]] ===
+
+{|class="wikitable flextable flextable-es-mfsp"
+|+ 
+! Genre
+! Singulier
+! Pluriel
+|- class="flextable-es-m"
+! Masculin
+| '''<span lang="es" xml:lang="es" class="lang-es"><bdi>chino</bdi></span>'''<br>[[Annexe:Prononciation/espagnol|<span class="API" title="Prononciation API">\'ʈʃino\</span>]]
+| <bdi lang="es" xml:lang="es" class="lang-es">[[chinos#es|chinos]]</bdi><br>[[Annexe:Prononciation/espagnol|<span class="API" title="Prononciation API">\'ʈʃinos\</span>]]
+|- class="flextable-es-f"
+! Féminin
+| <bdi lang="es" xml:lang="es" class="lang-es">[[china#es|china]]</bdi><br>[[Annexe:Prononciation/espagnol|<span class="API" title="Prononciation API">\'ʈʃina\</span>]]
+| <bdi lang="es" xml:lang="es" class="lang-es">[[chinas#es|chinas]]</bdi><br>[[Annexe:Prononciation/espagnol|<span class="API" title="Prononciation API">\'ʈʃinas\</span>]]
+|}
+'''chino''' [[Annexe:Prononciation/espagnol|<span class="API" title="Prononciation API">\'ʈʃino\</span>]] <span class="ligne-de-forme"  ><i>masculin</i></span> ''(pour une femme, on dit'' : <bdi lang="es" xml:lang="es" class="lang-es">[[china#es|china]]</bdi>'')''
+#[[Chinois]] (personne chinoise).
+# <span id="région">''([[Mexique]])''</span>[[Catégorie:espagnol du Mexique]] Toute personne originaire d’Asie de l’est (chinois, coréens, mongols, vietnamiens)
+
+=== <span class="titredef" id="es-nom-2">Nom commun 2</span>[[Catégorie:Lemmes en espagnol]][[Catégorie:Noms communs en espagnol]] ===
+
+{| class="wikitable flextable flextable-es-mfsp"
+|+ 
+
+! Singulier !! Pluriel
+|-
+
+|  | '''<span lang="es" xml:lang="es" class="lang-es"><bdi>chino</bdi></span>'''<br />[[Annexe:Prononciation/espagnol|<span class="API" title="Prononciation API">\'ʈʃino\</span>]]
+|  | <bdi lang="es" xml:lang="es" class="lang-es">[[chinos#es|chinos]]</bdi><br />[[Annexe:Prononciation/espagnol|<span class="API" title="Prononciation API">\'ʈʃinos\</span>]]
+|-
+
+
+
+|}
+'''chino''' [[Annexe:Prononciation/espagnol|<span class="API" title="Prononciation API">\'ʈʃino\</span>]] <span class="ligne-de-forme"  ><i>masculin</i></span>
+#''(<span title="La linguistique est l’étude du langage.">Linguistique</span>)'' [[chinois|Chinois]].
+
+=== <span class="titrepron" title="">Prononciation</span> ===
+* <span class="audio-pronunciation"><span class="audio-region" data-region="France (Paris)">France (Paris)</span>&nbsp;: écouter «&nbsp;<span lang="es" class="audio-word" data-word="chino">chino</span>[[Catégorie:Prononciations audio en espagnol]] <span class="audio-ipa" data-ipa=""><span title="Prononciation à préciser">[<small><span class="plainlinks stubedit">[//fr.wiktionary.org/w/index.php?title=chino&action=edit Prononciation ?]</span></small>]</span>[[Catégorie:Wiktionnaire:Prononciations phonétiques manquantes en espagnol]]</span>&nbsp;» <span class="audio-file" data-file="LL-Q1321 (spa)-Eavqwiki-chino.wav">[[File:LL-Q1321 (spa)-Eavqwiki-chino.wav]]</span></span>
+* <span class="audio-pronunciation"><span class="audio-region" data-region="Espagne (Villarreal)">Espagne (Villarreal)</span>&nbsp;: écouter «&nbsp;<span lang="es" class="audio-word" data-word="chino">chino</span>[[Catégorie:Prononciations audio en espagnol]] <span class="audio-ipa" data-ipa=""><span title="Prononciation à préciser">[<small><span class="plainlinks stubedit">[//fr.wiktionary.org/w/index.php?title=chino&action=edit Prononciation ?]</span></small>]</span>[[Catégorie:Wiktionnaire:Prononciations phonétiques manquantes en espagnol]]</span>&nbsp;» <span class="audio-file" data-file="LL-Q1321 (spa)-Millars-chino.wav">[[File:LL-Q1321 (spa)-Millars-chino.wav]]</span></span>
+* <span class="audio-pronunciation"><span class="audio-region" data-region="Espagne (Valladolid)">Espagne (Valladolid)</span>&nbsp;: écouter «&nbsp;<span lang="es" class="audio-word" data-word="chino">chino</span>[[Catégorie:Prononciations audio en espagnol]] <span class="audio-ipa" data-ipa=""><span title="Prononciation à préciser">[<small><span class="plainlinks stubedit">[//fr.wiktionary.org/w/index.php?title=chino&action=edit Prononciation ?]</span></small>]</span>[[Catégorie:Wiktionnaire:Prononciations phonétiques manquantes en espagnol]]</span>&nbsp;» <span class="audio-file" data-file="LL-Q1321 (spa)-MiguelAlanCS-chino.wav">[[File:LL-Q1321 (spa)-MiguelAlanCS-chino.wav]]</span></span>
+
+[[Catégorie:Langues en espagnol]]
+[[Catégorie:Gentilés d’Asie en espagnol]]
+[[Catégorie:Chine en espagnol]]

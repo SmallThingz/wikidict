@@ -1,0 +1,163 @@
+== <span class='sectionlangue' id='fr'>[[Portail:Français|Français]]</span>[[Catégorie:français]] ==
+
+=== <span class="titreetym" title="">Étymologie</span> ===
+: De l’espagnol ''<bdi lang="es" xml:lang="es" class="lang-es">[[desaparecido#es|desaparecido]]</bdi>''[[Catégorie:Mots en français issus d’un mot en espagnol]].
+
+=== <span class="titredef" id="fr-nom-1">Nom commun</span><span id="fr-nom" style="font-size:0;"></span>[[Catégorie:Lemmes en français]][[Catégorie:Noms communs en français]] ===
+{| class="wikitable flextable flextable-fr-mfsp"
+
+
+! Singulier !! Pluriel
+|-
+
+| '''<span lang="fr" xml:lang="fr" class="lang-fr"><bdi>desaparecido</bdi></span>'''
+| <bdi lang="fr" xml:lang="fr" class="lang-fr">[[desaparecidos#fr|desaparecidos]]</bdi>
+
+|-
+| colspan="2" |<span title="Prononciation à préciser">\<small><span class="plainlinks stubedit">[//fr.wiktionary.org/w/index.php?title=desaparecido&action=edit Prononciation ?]</span></small>\</span>[[Catégorie:Wiktionnaire:Prononciations  manquantes en français]]
+
+|}
+'''desaparecido''' <span title="Prononciation à préciser">\<small><span class="plainlinks stubedit">[//fr.wiktionary.org/w/index.php?title=desaparecido&action=edit Prononciation ?]</span></small>\</span>[[Catégorie:Wiktionnaire:Prononciations  manquantes en français]] <span class="ligne-de-forme"  ><i>masculin</i></span>
+# ''(<span title="L’histoire est l’étude des évènements passés." id="fr-histoire">Histoire</span>, <span title="La politique désigne le traitement et la discussion des affaires publiques liées au gouvernement d’un État." id="fr-politique">Politique</span>)''[[Catégorie:Lexique en français de l’histoire]][[Catégorie:Lexique en français de la politique]] Personne [[porté disparu#fr|portée disparue]], secrètement arrêtée et tuée en Argentine pendant la « [[w:guerre sale|guerre sale]] », organisée par la dictature militaire du général Videla, entre 1976 et 1983.
+#* <span class="example"><q><bdi lang="fr" xml:lang="fr" class="lang-fr">''Pour la première fois, Jorge Rafael Videla, ex-chef de la junte militaire au pouvoir entre 1976 et 1983 en Argentine, a avoué, lors d'un entretien filmé de 20 heures, les meurtres des '''''desaparecidos''''' (« disparus ») durant la dictature, qui a assassiné ou supprimé toute trace de quelque 20 000 personnes.''</bdi></q> <span class="sources"><span class="tiret">—&#160;</span>(''[http://feedproxy.google.com/~r/fluxdudevoir/~3/M_LJ7RAiJo8/deja-condamne-a-perpetuite-videla-reconnait-les-exactions-commises-par-la-junte-argentine Déjà condamné à perpétuité - Videla reconnaît les exactions commises par la junte argentine]'', Le Devoir.com, 17 avril 2012)</span></span>[[Catégorie:Exemples en français]]
+#* <span class="example"><q><bdi lang="fr" xml:lang="fr" class="lang-fr">''En 2005, une polémique avait éclaté au sujet de l’implication de Jorge Mario Bergoglio, le futur pape François, pendant la dictature militaire en Argentine (1976-1983), dont le bilan s’élève à 30 000 « '''desaparecidos''' ».''</bdi></q> <span class="sources"><span class="tiret">—&#160;</span>(''[http://feedproxy.google.com/~r/fluxdudevoir/~3/-N73mYNdCGg/livres-de-benoit-a-francois De Benoît à François]'', Le Devoir.com, 19 avril 2014)</span></span>[[Catégorie:Exemples en français]]
+# <span class="emploi"><span id="extension"></span>''(<span class="texte">[[Annexe:Glossaire grammatical#P|Par extension]]</span>)''</span> Personne portée disparue en Amérique latine.
+#* <span class="example"><q><bdi lang="fr" xml:lang="fr" class="lang-fr">''Certains sont relâchés, d'autres rejoignent la longue liste des '''''desaparecidos''''' (« disparus ») et finissent, corps anonymes, dans des fosses communes.''</bdi></q> <span class="sources"><span class="tiret">—&#160;</span>(''[http://tempsreel.nouvelobs.com/actualite/monde/20110730.OBS7891/le-mexique-traverse-par-une-caravane-de-la-paix.html Le Mexique traversé par une caravane de la paix]'', nouvelObs.fr, 31 juillet 2011)</span></span>[[Catégorie:Exemples en français]]
+
+==== <span class="titretrad" title="">Traductions</span> ====
+<div class="boite ">
+<div class="NavFrame  ">
+<div class="NavHead"><span class="nav-head-title">'''<i></i>'''</span>&nbsp;<span class="nav-head-number"></span></div>
+<div class="NavContent">
+<div style="column-width:  26em; -webkit-column-width: 26em; -moz-column-width:  26em;  vertical-align: top; text-align: left;"><div class="translations">
+</div></div></div><div style="clear:both"></div></div></div>
+
+=== <span class="titrepron" title="">Prononciation</span> ===
+* <span class="audio-pronunciation"><span class="audio-region" data-region="Somain (France)">Somain (France)</span>&nbsp;: écouter «&nbsp;<span lang="fr" class="audio-word" data-word="desaparecido">desaparecido</span>[[Catégorie:Prononciations audio en français]] <span class="audio-ipa" data-ipa=""><span title="Prononciation à préciser">[<small><span class="plainlinks stubedit">[//fr.wiktionary.org/w/index.php?title=desaparecido&action=edit Prononciation ?]</span></small>]</span>[[Catégorie:Wiktionnaire:Prononciations phonétiques manquantes en français]]</span>&nbsp;» <span class="audio-file" data-file="LL-Q150 (fra)-Jérémy-Günther-Heinz Jähnick-desaparecido.wav">[[File:LL-Q150 (fra)-Jérémy-Günther-Heinz Jähnick-desaparecido.wav]]</span></span>
+
+=== <span class="titrevoir" title="">Voir aussi</span> ===
+* [[w:Desaparecidos|<span lang="fr" xml:lang="fr" class="lang-fr"><bdi>Desaparecidos</bdi></span>]] sur l’encyclopédie Wikipédia [[Image:Wikipedia-logo-v2.svg|20px|link=]][[Catégorie:Pages liées à Wikipédia en français]]
+
+== <span class='sectionlangue' id='es'>[[Portail:Espagnol|Espagnol]]</span>[[Catégorie:espagnol]] ==
+
+=== <span class="titreetym" title="">Étymologie</span> ===
+: De <bdi lang="es" xml:lang="es" class="lang-es">[[desaparecer#es|''desaparecer'']]</bdi> («&nbsp;disparaitre&nbsp;»)<ref group="" name="DRAE">[[w:Académie royale espagnole|<span lang="es" xml:lang="es" class="lang-es"><bdi>Real Academia Española</bdi></span>]],&nbsp;''[[Wiktionnaire:Liste des références#Diccionario de la lengua española (2014)|<span lang="es" xml:lang="es" class="lang-es"><bdi>Diccionario de la lengua española</bdi></span>]]'', 23<sup style="font-size:83.33%;line-height:1">e</sup> édition&nbsp;[https://dle.rae.es/?w=desaparecido → consulter cet ouvrage]</ref>.
+
+=== <span class="titredef" id="es-adj-1">Adjectif</span><span id="es-adj" style="font-size:0;"></span>[[Catégorie:Lemmes en espagnol]][[Catégorie:Adjectifs en espagnol]] ===
+
+{|class="wikitable flextable flextable-es-mfsp"
+|+ 
+! Genre
+! Singulier
+! Pluriel
+|- class="flextable-es-m"
+! Masculin
+| '''<span lang="es" xml:lang="es" class="lang-es"><bdi>desaparecido</bdi></span>'''<br>[[Annexe:Prononciation/espagnol|<span class="API" title="Prononciation API">\de.sa.pa.ɾeˈθi.ðo\</span>]]
+| <bdi lang="es" xml:lang="es" class="lang-es">[[desaparecidos#es|desaparecidos]]</bdi><br>[[Annexe:Prononciation/espagnol|<span class="API" title="Prononciation API">\de.sa.pa.ɾeˈθi.ðos\</span>]]
+|- class="flextable-es-f"
+! Féminin
+| <bdi lang="es" xml:lang="es" class="lang-es">[[desaparecida#es|desaparecida]]</bdi><br>[[Annexe:Prononciation/espagnol|<span class="API" title="Prononciation API">\de.sa.pa.ɾeˈθi.ða\</span>]]
+| <bdi lang="es" xml:lang="es" class="lang-es">[[desaparecidas#es|desaparecidas]]</bdi><br>[[Annexe:Prononciation/espagnol|<span class="API" title="Prononciation API">\de.sa.pa.ɾeˈθi.ðas\</span>]]
+|}
+'''desaparecido''' [[Annexe:Prononciation/espagnol|<span class="API" title="Prononciation API">\de.sa.pa.ɾeˈθi.ðo\</span>]] [[Annexe:Prononciation/espagnol|<span class="API" title="Prononciation API">\de.sa.pa.ɾeˈsi.ðo\</span>]] <span class="ligne-de-forme"  ><i>masculin</i></span>
+# [[disparu#Adjectif|Disparu]].
+
+=== <span class="titredef" id="es-nom-1">Nom commun</span><span id="es-nom" style="font-size:0;"></span>[[Catégorie:Lemmes en espagnol]][[Catégorie:Noms communs en espagnol]] ===
+
+{|class="wikitable flextable flextable-es-mfsp"
+|+ 
+! Genre
+! Singulier
+! Pluriel
+|- class="flextable-es-m"
+! Masculin
+| '''<span lang="es" xml:lang="es" class="lang-es"><bdi>desaparecido</bdi></span>'''<br>[[Annexe:Prononciation/espagnol|<span class="API" title="Prononciation API">\de.sa.pa.ɾeˈθi.ðo\</span>]]
+| <bdi lang="es" xml:lang="es" class="lang-es">[[desaparecidos#es|desaparecidos]]</bdi><br>[[Annexe:Prononciation/espagnol|<span class="API" title="Prononciation API">\de.sa.pa.ɾeˈθi.ðos\</span>]]
+|- class="flextable-es-f"
+! Féminin
+| <bdi lang="es" xml:lang="es" class="lang-es">[[desaparecida#es|desaparecida]]</bdi><br>[[Annexe:Prononciation/espagnol|<span class="API" title="Prononciation API">\de.sa.pa.ɾeˈθi.ða\</span>]]
+| <bdi lang="es" xml:lang="es" class="lang-es">[[desaparecidas#es|desaparecidas]]</bdi><br>[[Annexe:Prononciation/espagnol|<span class="API" title="Prononciation API">\de.sa.pa.ɾeˈθi.ðas\</span>]]
+|}
+[[File:Donde Estan.JPG|vignette|''Conmemoración de los '''desaparecidos''' en Chile el 11 de septiembre de 2004, frente al monumento a los '''desaparecidos''' en el Cementerio General.'']]
+'''desaparecido''' [[Annexe:Prononciation/espagnol|<span class="API" title="Prononciation API">\de.sa.pa.ɾeˈθi.ðo\</span>]] [[Annexe:Prononciation/espagnol|<span class="API" title="Prononciation API">\de.sa.pa.ɾeˈsi.ðo\</span>]] <span class="ligne-de-forme"  ><i>masculin</i></span>
+# [[disparu#fr-nom|Disparu]].
+#* <span class="example">''[[Aide:Exemples|Exemple d’utilisation]] manquant.'' <span class="plainlinks stubedit">([//fr.wiktionary.org/w/index.php?title=desaparecido&action=edit Ajouter])</span><bdi lang="es" style="display: none"></bdi></span>[[Catégorie:Wiktionnaire:Exemples manquants en espagnol]]
+# ''(<span title="L’histoire est l’étude des évènements passés." id="es-histoire">Histoire</span>, <span title="La politique désigne le traitement et la discussion des affaires publiques liées au gouvernement d’un État." id="es-politique">Politique</span>)''[[Catégorie:Lexique en espagnol de l’histoire]][[Catégorie:Lexique en espagnol de la politique]] [[desaparecido#fr|Desaparecido]].
+#*<span class="example"><q><bdi lang="es" xml:lang="es" class="lang-es">''Ellas danzan con los '''desaparecidos'''.<br>Ellas danzan con los muertos.<br>Ellas danzan con amores invisibles.<br>Ellas danzan con silenciosa angustia.<br>Danzan con sus padres.<br>Danzan con sus hijos.<br>Danzan con sus esposos.<br>Ellas danzan solas,<br>Danzan solas.''</bdi></q> <span class="sources"><span class="tiret">—&#160;</span>([[w:Gordon Sumner|Gordon Sumner]], ''They Dance Alone'' (Cueca Solo), 1987 ; chanson célébrant les [[w:mères de la place de Mai|mères de la place de Mai]].)</span></span>
+#*: Elles dansent avec les disparus.<br>Elles dansent avec les morts.<br>Elles dansent avec des amours invisibles.<br>Elles dansent avec une angoisse silencieuse.<br>Elles dansent avec leurs pères.<br>Elles dansent avec leurs fils.<br>Elles dansent avec leurs époux.<br>Elles dansent seules.<br>Elles dansent seules.[[Catégorie:Exemples en espagnol]]
+
+=== <span class="titredef" id="es-flex-verb-1">Forme de verbe</span><span id="es-flex-verb" style="font-size:0;"></span>[[Catégorie:Formes de verbes en espagnol]] ===
+{| class="wikitable flextable"<nowiki />
+!colspan="3"|<small>[[Conjugaison:espagnol/desaparecer|Voir la conjugaison du verbe ''<span lang="es" xml:lang="es" class="lang-es"><bdi>desaparecer</bdi></span>'']]</small><nowiki />
+|- style="vertical-align:top"
+! rowspan="5" style="font-variant:small-caps;text-align:right;vertical-align:top"| '''Participe'''
+! style="background-color:#FFEEBB" style="display:none"| '''Présent'''
+|style="display:none"| 
+|- style="vertical-align:top"
+! rowspan="4" style="background-color:#FFEEBB" | '''Passé'''
+| <small>''(masculin singulier)''</small><br />desaparecido
+|- style="vertical-align:top"
+|style="display:none"| 
+|- style="vertical-align:top"
+|style="display:none"| 
+|- style="vertical-align:top"
+|style="display:none"|
+|}
+'''desaparecido''' [[Annexe:Prononciation/espagnol|<span class="API" title="Prononciation API">\de.sa.pa.ɾeˈθi.ðo\</span>]] <small>ou</small> [[Annexe:Prononciation/espagnol|<span class="API" title="Prononciation API">\de.sa.pa.ɾeˈsi.ðo\</span>]]
+#''Participe passé de'' [[desaparecer#es|desaparecer]].
+
+=== <span class="titrevoir" title="">Voir aussi</span> ===
+* [[w:es:Detenido desaparecido|<span lang="es" xml:lang="es" class="lang-es"><bdi>Detenido desaparecido</bdi></span>]] sur l’encyclopédie Wikipédia (en espagnol)&nbsp;[[Image:Wikipedia-logo-v2.svg|20px|link=]][[Catégorie:Pages liées à Wikipédia en espagnol]]
+
+=== <span class="titreref" title="">Références</span> ===
+<div class="references-small" style="column-count:1;"><references group=""></references></div>
+
+== <span class='sectionlangue' id='it'>[[Portail:Italien|Italien]]</span>[[Catégorie:italien]] ==
+
+=== <span class="titreetym" title="">Étymologie</span> ===
+: De l’espagnol ''<bdi lang="es" xml:lang="es" class="lang-es">[[desaparecido#es|desaparecido]]</bdi>''[[Catégorie:Mots en italien issus d’un mot en espagnol]]<ref group="" name="Treccani">«&nbsp;desaparecido&nbsp;», dans&nbsp;''[[Wiktionnaire:Liste des références#Treccani|Treccani]]'', Dictionnaire, encyclopédie et thésaurus italien en ligne&nbsp;[https://www.treccani.it/vocabolario/ricerca/desaparecido → consulter cet ouvrage]</ref>.
+
+=== <span class="titredef" id="it-nom-1">Nom commun</span><span id="it-nom" style="font-size:0;"></span>[[Catégorie:Lemmes en italien]][[Catégorie:Noms communs en italien]] ===
+'''desaparecido''' <span title="Prononciation à préciser">\<small><span class="plainlinks stubedit">[//fr.wiktionary.org/w/index.php?title=desaparecido&action=edit Prononciation ?]</span></small>\</span>[[Catégorie:Wiktionnaire:Prononciations  manquantes en italien]] <span class="ligne-de-forme"  ><i>masculin</i></span> 
+# [[desaparecido#fr|Desaparecido]].
+#*<span class="example"><q><bdi lang="it" xml:lang="it" class="lang-it">''La tragedia dei '''desaparecidos'''.''</bdi></q></span>
+#*: ''La traduction en français de l’[[Aide:Exemples|exemple]] manque.'' <span class="plainlinks stubedit">([//fr.wiktionary.org/w/index.php?title=desaparecido&action=edit Ajouter])</span>[[Catégorie:Exemples en italien à traduire]][[Catégorie:Exemples en italien]]
+
+=== <span class="titrevoir" title="">Voir aussi</span> ===
+* [[w:it:Desaparecidos|<span lang="it" xml:lang="it" class="lang-it"><bdi>Desaparecidos</bdi></span>]] sur l’encyclopédie Wikipédia (en italien)&nbsp;[[Image:Wikipedia-logo-v2.svg|20px|link=]][[Catégorie:Pages liées à Wikipédia en italien]]
+
+=== <span class="titreref" title="">Références</span> ===
+<div class="references-small" style="column-count:1;"><references group=""></references></div>
+
+== <span class='sectionlangue' id='pt'>[[Portail:Portugais|Portugais]]</span>[[Catégorie:portugais]] ==
+=== <span class="titredef" id="pt-flex-verb-1">Forme de verbe</span><span id="pt-flex-verb" style="font-size:0;"></span>[[Catégorie:Formes de verbes en portugais]] ===
+__EXPECTSHORTPAGE__
+{| class="wikitable flextable"<nowiki />
+!colspan="3"|<small>[[Conjugaison:portugais/desaparecer|Voir la conjugaison du verbe ''<span lang="pt" xml:lang="pt" class="lang-pt"><bdi>desaparecer</bdi></span>'']]</small><nowiki />
+|-style="vertical-align:top"
+|rowspan="5" valign="top" style="font-variant:small-caps;text-align:right;vertical-align:top"| '''Participe'''
+|style="background-color:#FFEEBB" style="display:none"| '''Présent'''
+|style="display:none"| 
+|-style="vertical-align:top"
+|rowspan="4" style="background-color:#FFEEBB" | '''Passé'''
+| <small>''(masculin singulier)''</small><br />desaparecido
+|-style="vertical-align:top"
+|style="display:none"| 
+|-style="vertical-align:top"
+|style="display:none"| 
+|-style="vertical-align:top"
+|style="display:none"|
+|}
+'''desaparecido''' [[Annexe:Prononciation/portugais|<span class="API" title="Prononciation API">\dɨ.zɐ.pɐ.ɾɨ.sˈi.du\</span>]] (Lisbonne) [[Annexe:Prononciation/portugais|<span class="API" title="Prononciation API">\de.za.pa.ɾe.sˈi.dʊ\</span>]] (São Paulo)
+# ''Participe passé masculin singulier de'' <bdi lang="pt" xml:lang="pt" class="lang-pt">[[desaparecer#pt|desaparecer]]</bdi>.
+
+=== <span class="titrepron" title="">Prononciation</span> ===
+* Lisbonne: [[Annexe:Prononciation/portugais|<span class="API" title="Prononciation API">\dɨ.zɐ.pɐ.ɾɨ.sˈi.du\</span>]] (langue standard), [[Annexe:Prononciation/portugais|<span class="API" title="Prononciation API">\dɨ.zɐ.pɐ.ɾɨ.sˈi.du\</span>]] (langage familier)
+* São Paulo: [[Annexe:Prononciation/portugais|<span class="API" title="Prononciation API">\de.za.pa.ɾe.sˈi.dʊ\</span>]] (langue standard), [[Annexe:Prononciation/portugais|<span class="API" title="Prononciation API">\de.za.pa.ɾe.sˈi.dʊ\</span>]] (langage familier)
+* Rio de Janeiro: [[Annexe:Prononciation/portugais|<span class="API" title="Prononciation API">\de.za.pa.ɾe.sˈi.dʊ\</span>]] (langue standard), [[Annexe:Prononciation/portugais|<span class="API" title="Prononciation API">\de.za.pa.ɾe.sˈi.dʊ\</span>]] (langage familier)
+* Maputo: [[Annexe:Prononciation/portugais|<span class="API" title="Prononciation API">\de.zɐ.pɐ.ɾe.sˈi.du\</span>]] (langue standard), [[Annexe:Prononciation/portugais|<span class="API" title="Prononciation API">\de.zɐ.pɐ.ɾe.sˈi.du\</span>]] (langage familier)
+* Luanda: [[Annexe:Prononciation/portugais|<span class="API" title="Prononciation API">\de.zɐ.pɐ.ɾe.sˈi.dʊ\</span>]]
+* Dili: [[Annexe:Prononciation/portugais|<span class="API" title="Prononciation API">\dɨ.zə.pə.ɾɨ.sˈi.dʊ\</span>]]
+
+=== <span class="titreref" title="">Références</span> ===
+* «&nbsp;desaparecido&nbsp;», dans&nbsp;''[[Wiktionnaire:Liste des références#Dicionário Fonético|Portal da língua portuguesa: Dicionário Fonético]]'', Instituto de linguística teórica e computacional (ILTeC), de Simone Ashby ; Sílvia Barbosa ; Silvia Brandão ; José Pedro Ferreira ; Maarten Janssen ; Catarina Silva ; Mário Eduardo Viaro (2012), [https://www.isca-speech.org/archive/pdfs/interspeech_2012/ashby12_interspeech.pdf “A Rule Based Pronunciation Generator and Regional Accent Databank for Portuguese”], in ''Proceedings of Interspeech 2012, ISCA’s 13th Annual Conference, Portland, OR, USA, September 9-13, 2012'', International Speech Communication Association, p. 1886-1887&nbsp;[http://www.portaldalinguaportuguesa.org/%3E?action=fonetica&region=lbx&act=details&id=10113 → consulter cet ouvrage]

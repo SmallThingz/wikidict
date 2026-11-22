@@ -1,0 +1,77 @@
+{{voir|ESO}}
+== {{langue|conv}} ==
+=== {{S|symbole|conv}} ===
+'''eso'''
+# {{lexique|linguistique|conv}} Code {{w|ISO 639-3}} de la [[langue des signes estonienne]].
+
+=== {{S|références}} ===
+* {{Lien 639-3|eso}}
+
+== {{langue|es}} ==
+=== {{S|étymologie}} ===
+: Du {{étyl|la|es|mot=ipsum}} ; voir ''{{lien|ese|es}}''.
+
+=== {{S|pronom démonstratif|es|flexion}} ===
+{{es-accord-mixte-mfn|ms=ese|fs=esa|mp=esos|fp=esas|ns=eso}}
+'''eso''' {{pron|ˈe.so|es}} {{n}}
+# Neutre de [[ése]]: [[ça|Ça]]. 
+{{pronoms démonstratifs/es}}
+{{note}} S’utilise principalement quand on parle d’un concept dont on ne connaît pas le genre.
+
+=== {{S|prononciation}} ===
+* {{écouter|lang=es|France|audio=LL-Q1321 (spa)-Anonymât (Kvardek du)-eso.wav}}
+* {{écouter|lang=es|||audio=LL-Q1321 (spa)-Rodelar-eso.wav}}
+* {{écouter|lang=es|Allemagne (Berlin)||audio=LL-Q1321 (spa)-Guergana-eso.wav}}
+
+=== {{S|anagrammes}} ===
+* {{lien|seo|es}}
+
+== {{langue|avk}} ==
+=== {{S|adjectif|avk|flexion}} ===
+'''eso''' {{pron|ˈɛsɔ|ˈeso|ˈɛso|ˈesɔ|avk}}
+# ''Forme du participe actif ''[[es#avk|es]]'' (« professant ») {{avk-réf euphonique|o}}.''
+
+=== {{S|anagrammes}} ===
+* {{lien|soe|avk}}
+
+=== {{S|références}} ===
+* {{R:avk-grammaire|p=9}}
+
+== {{langue|pln}} ==
+=== {{S|étymologie}} ===
+: De l’{{étyl|es|pln|mot=eso|type=nom}} (même sens).
+
+=== {{S|pronom démonstratif|pln}} ===
+'''eso''' {{pron|ˈe.so|pln}}
+# [[ça|Ça]]. 
+#* {{exemple | lang=pln
+ | Yo i-sabé '''eso''' nu.
+ | Je ne connais pas cela}}
+
+== {{langue|cs}} ==
+=== {{S|étymologie}} ===
+:Via le {{étyl|goh|cs|tr=esse}} du {{étyl|la|cs|mot=as}}, ''assis''.
+
+=== {{S|nom|cs}} ===
+{{cs-décl-nom-n-o|rad=es}}
+[[File:Pinochonaipes.PNG|thumb|esa.]]
+'''eso''' {{pron|ɛsɔ|cs}} {{n}}
+# [[as|As]] d’un jeu de carte.
+#* {{exemple
+| lang = cs|'''Eso''' je v [[kanasta|kanastě]] za [[dvacet]] [[bod]]ů.|À la canasta l'as vaut vingt points.
+}}
+# {{lexique|sport|cs}} [[ace|Ace]].
+#* {{exemple | lang=cs | Jeho [[podání]] byla [[chytit#cs|nechytatelná]], dal [[soupeř]]i po [[sobě]] [[hned]] [[několik]] '''es'''.}}
+
+=== {{S|prononciation}} ===
+* {{écouter|Brno-venkov (Tchéquie)||lang=cs|audio=LL-Q9056 (ces)-Ghost4Man-eso.wav}}
+
+=== {{S|anagrammes}} ===
+* {{lien|ose|cs}}
+
+=== {{S|voir aussi}} ===
+* {{WP|lang=cs}}
+
+=== {{S|références}} ===
+*{{R:DÉT}}
+*{{R:ÚJČ}}

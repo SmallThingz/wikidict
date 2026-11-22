@@ -1,0 +1,165 @@
+<div class="bandeau-voir modele-voir"><span class="bandeau-voir-icone">''Voir aussi''</span> : <span class="">[[ESO]]</span></div>
+== <span class='sectionlangue' id='conv'>Conventions internationales</span>[[Catégorie:conventions internationales]] ==
+=== <span class="titredef" id="conv-symb-1">Symbole</span><span id="conv-symb" style="font-size:0;"></span>[[Catégorie:Symboles en conventions internationales]] ===
+'''eso'''
+# ''(<span title="La linguistique est l’étude du langage." id="conv-linguistique">Linguistique</span>)''[[Catégorie:Lexique en conventions internationales de la linguistique]] Code [[w:ISO 639-3|ISO 639-3]] de la [[langue des signes estonienne]].
+
+=== <span class="titreref" title="">Références</span> ===
+* ''[[iso639-3:eso|<span lang="en" xml:lang="en" class="lang-en"><bdi>Documentation for ISO 639 identifier:</bdi></span> eso]]'', SIL International, 2026
+
+== <span class='sectionlangue' id='es'>[[Portail:Espagnol|Espagnol]]</span>[[Catégorie:espagnol]] ==
+=== <span class="titreetym" title="">Étymologie</span> ===
+: Du latin ''<bdi lang="la" xml:lang="la" class="lang-la">[[ipsum#la|ipsum]]</bdi>''[[Catégorie:Mots en espagnol issus d’un mot en latin]] ; voir ''<bdi lang="es" xml:lang="es" class="lang-es">[[ese#es|ese]]</bdi>''.
+
+=== <span class="titredef" id="es-flex-pronom-dém-1">Forme de pronom démonstratif</span><span id="es-flex-pronom-dém" style="font-size:0;"></span>[[Catégorie:Formes de pronoms démonstratifs en espagnol]] ===
+{|class="wikitable flextable flextable-es-mfsp"
+|+ 
+! Genre
+! Singulier
+! Pluriel
+|- class="flextable-es-m"
+! Masculin
+| <bdi lang="es" xml:lang="es" class="lang-es">[[ese#es|ese]]</bdi>
+| <bdi lang="es" xml:lang="es" class="lang-es">[[esos#es|esos]]</bdi>
+|- class="flextable-es-f"
+! Féminin
+| <bdi lang="es" xml:lang="es" class="lang-es">[[esa#es|esa]]</bdi>
+| <bdi lang="es" xml:lang="es" class="lang-es">[[esas#es|esas]]</bdi>
+|- class="flex-table-es-n"
+! Neutre
+| '''<span lang="es" xml:lang="es" class="lang-es"><bdi>eso</bdi></span>'''
+| —
+|}
+'''eso''' [[Annexe:Prononciation/espagnol|<span class="API" title="Prononciation API">\ˈe.so\</span>]] <span class="ligne-de-forme"  ><i>[[Annexe:Glossaire grammatical#N|neutre]]</i></span>
+# Neutre de [[ése]]: [[ça|Ça]]. 
+{| class="wikitable" style="margin-left: 0.5em;"
+|+ Pronoms démonstratifs en espagnol
+! style="background:#cfe4c0" rowspan="3" | Type
+! style="background:#b0bfd4" colspan="5" | Pronoms
+! style="background:#d4b0bf" rowspan="3" | Adverbes
+|-
+! style="background:#d0dff4" colspan="2" | Singulier
+! style="background:#d0dff4" colspan="2" | Pluriel
+! style="background:#d0dff4" rowspan="2" | Neutre
+|-
+! style="background:#d0dff4" | Masculin
+! style="background:#d0dff4" | Féminin
+! style="background:#d0dff4" | Masculin
+! style="background:#d0dff4" | Féminin
+|-
+! style="background:#cfe4c0" | Proximal
+|<bdi lang="es" xml:lang="es" class="lang-es">[[este#es|este]]</bdi>
+|<bdi lang="es" xml:lang="es" class="lang-es">[[esta#es|esta]]</bdi>
+|<bdi lang="es" xml:lang="es" class="lang-es">[[estos#es|estos]]</bdi>
+|<bdi lang="es" xml:lang="es" class="lang-es">[[estas#es|estas]]</bdi>
+|<bdi lang="es" xml:lang="es" class="lang-es">[[esto#es|esto]]</bdi>
+| style="background:#f4e9ff" |<bdi lang="es" xml:lang="es" class="lang-es">[[aquí#es|aquí]]</bdi>
+|-
+! style="background:#cfe4c0" | Médial
+|<bdi lang="es" xml:lang="es" class="lang-es">[[ese#es|ese]]</bdi>
+|<bdi lang="es" xml:lang="es" class="lang-es">[[esa#es|esa]]</bdi>
+|<bdi lang="es" xml:lang="es" class="lang-es">[[esos#es|esos]]</bdi>
+|<bdi lang="es" xml:lang="es" class="lang-es">[[esas#es|esas]]</bdi>
+|'''<span lang="es" xml:lang="es" class="lang-es"><bdi>eso</bdi></span>'''
+| style="background:#f4e9ff" |<bdi lang="es" xml:lang="es" class="lang-es">[[ahí#es|ahí]]</bdi>
+|-
+! style="background:#cfe4c0" | Distal
+|<bdi lang="es" xml:lang="es" class="lang-es">[[aquel#es|aquel]]</bdi>
+|<bdi lang="es" xml:lang="es" class="lang-es">[[aquella#es|aquella]]</bdi>
+|<bdi lang="es" xml:lang="es" class="lang-es">[[aquellos#es|aquellos]]</bdi>
+|<bdi lang="es" xml:lang="es" class="lang-es">[[aquellas#es|aquellas]]</bdi>
+|<bdi lang="es" xml:lang="es" class="lang-es">[[aquello#es|aquello]]</bdi>
+| style="background:#f4e9ff" |<bdi lang="es" xml:lang="es" class="lang-es">[[allí#es|allí]]</bdi>
+|}
+'''Note : ''' S’utilise principalement quand on parle d’un concept dont on ne connaît pas le genre.
+
+=== <span class="titrepron" title="">Prononciation</span> ===
+* <span class="audio-pronunciation"><span class="audio-region" data-region="France">France</span>&nbsp;: écouter «&nbsp;<span lang="es" class="audio-word" data-word="eso">eso</span>[[Catégorie:Prononciations audio en espagnol]] <span class="audio-ipa" data-ipa=""><span title="Prononciation à préciser">[<small><span class="plainlinks stubedit">[//fr.wiktionary.org/w/index.php?title=eso&action=edit Prononciation ?]</span></small>]</span>[[Catégorie:Wiktionnaire:Prononciations phonétiques manquantes en espagnol]]</span>&nbsp;» <span class="audio-file" data-file="LL-Q1321 (spa)-Anonymât (Kvardek du)-eso.wav">[[File:LL-Q1321 (spa)-Anonymât (Kvardek du)-eso.wav]]</span></span>
+* <span class="audio-pronunciation"><span class="audio-region" data-region=""><small>(Région à préciser)</small></span>&nbsp;: écouter «&nbsp;<span lang="es" class="audio-word" data-word="eso">eso</span>[[Catégorie:Prononciations audio en espagnol]] <span class="audio-ipa" data-ipa=""><span title="Prononciation à préciser">[<small><span class="plainlinks stubedit">[//fr.wiktionary.org/w/index.php?title=eso&action=edit Prononciation ?]</span></small>]</span>[[Catégorie:Wiktionnaire:Prononciations phonétiques manquantes en espagnol]]</span>&nbsp;» <span class="audio-file" data-file="LL-Q1321 (spa)-Rodelar-eso.wav">[[File:LL-Q1321 (spa)-Rodelar-eso.wav]]</span></span>
+* <span class="audio-pronunciation"><span class="audio-region" data-region="Allemagne (Berlin)">Allemagne (Berlin)</span>&nbsp;: écouter «&nbsp;<span lang="es" class="audio-word" data-word="eso">eso</span>[[Catégorie:Prononciations audio en espagnol]] <span class="audio-ipa" data-ipa=""><span title="Prononciation à préciser">[<small><span class="plainlinks stubedit">[//fr.wiktionary.org/w/index.php?title=eso&action=edit Prononciation ?]</span></small>]</span>[[Catégorie:Wiktionnaire:Prononciations phonétiques manquantes en espagnol]]</span>&nbsp;» <span class="audio-file" data-file="LL-Q1321 (spa)-Guergana-eso.wav">[[File:LL-Q1321 (spa)-Guergana-eso.wav]]</span></span>
+
+=== <span class="titreanagr" title="">Anagrammes</span> ===
+* <bdi lang="es" xml:lang="es" class="lang-es">[[seo#es|seo]]</bdi>
+
+== <span class='sectionlangue' id='avk'>[[kotava#fr|Kotava]]</span>[[Catégorie:kotava]] ==
+=== <span class="titredef" id="avk-flex-adj-1">Forme d’adjectif</span><span id="avk-flex-adj" style="font-size:0;"></span>[[Catégorie:Formes d’adjectifs en kotava]] ===
+'''eso''' [[Annexe:Prononciation/kotava|<span class="API" title="Prononciation API">\ˈɛsɔ\</span>]] <small>ou</small> [[Annexe:Prononciation/kotava|<span class="API" title="Prononciation API">\ˈeso\</span>]] <small>ou</small> [[Annexe:Prononciation/kotava|<span class="API" title="Prononciation API">\ˈɛso\</span>]] <small>ou</small> [[Annexe:Prononciation/kotava|<span class="API" title="Prononciation API">\ˈesɔ\</span>]]
+# ''Forme du participe actif ''[[es#avk|es]]'' (« professant ») lorsqu’il est soumis à la référence euphonique à un mot se terminant par un o.''
+
+=== <span class="titreanagr" title="">Anagrammes</span> ===
+* <bdi lang="avk" xml:lang="avk" class="lang-avk">[[soe#avk|soe]]</bdi>
+
+=== <span class="titreref" title="">Références</span> ===
+* Staren Fetcey, ''[http://www.kotava.org/fr/fr_pulviropa_000.pdf Grammaire officielle complète]'', Comité linguistique kotava (kotava.org), janvier 2025, 73 pages, p. 9
+
+== <span class='sectionlangue' id='pln'>[[palenquero#fr|Palenquero]]</span>[[Catégorie:palenquero]] ==
+=== <span class="titreetym" title="">Étymologie</span> ===
+: De l’espagnol ''<bdi lang="es" xml:lang="es" class="lang-es">[[eso#es-nom|eso]]</bdi>''[[Catégorie:Mots en palenquero issus d’un mot en espagnol]] (même sens).
+
+=== <span class="titredef" id="pln-pronom-dém-1">Pronom démonstratif</span><span id="pln-pronom-dém" style="font-size:0;"></span>[[Catégorie:Pronoms démonstratifs en palenquero]] ===
+'''eso''' [[Annexe:Prononciation/palenquero|<span class="API" title="Prononciation API">\ˈe.so\</span>]]
+# [[ça|Ça]]. 
+#* <span class="example"><q><bdi lang="pln" xml:lang="pln" class="lang-pln">''Yo i-sabé '''eso''' nu.''</bdi></q></span>
+#*: Je ne connais pas cela[[Catégorie:Exemples en palenquero]]
+
+== <span class='sectionlangue' id='cs'>[[tchèque#fr|Tchèque]]</span>[[Catégorie:tchèque]] ==
+=== <span class="titreetym" title="">Étymologie</span> ===
+:Via le vieux haut allemand ''esse''[[Catégorie:Mots en tchèque issus d’un mot en vieux haut allemand]] du latin ''<bdi lang="la" xml:lang="la" class="lang-la">[[as#la|as]]</bdi>''[[Catégorie:Mots en tchèque issus d’un mot en latin]], ''assis''.
+
+=== <span class="titredef" id="cs-nom-1">Nom commun</span><span id="cs-nom" style="font-size:0;"></span>[[Catégorie:Lemmes en tchèque]][[Catégorie:Noms communs en tchèque]] ===
+
+{|class="wikitable flextable"
+|-
+!scope="col"| Cas<nowiki />
+!scope="col"| Singulier<nowiki />
+!scope="col"| Pluriel
+|-
+!scope="row"| Nominatif<nowiki />
+| [[eso#cs-nom|es'''o ''']]<nowiki />
+| [[esa#cs-flex-nom|es'''a ''']]
+|-
+!scope="row"| Génitif<nowiki />
+| [[esa#cs-flex-nom|es'''a ''']]<nowiki />
+| [[es#cs-flex-nom|es''' ''']]
+|-
+!scope="row"| Datif<nowiki />
+| [[esu#cs-flex-nom|es'''u ''']]<nowiki />
+| [[esům#cs-flex-nom|es'''ům ''']]
+|-
+!scope="row"| Accusatif<nowiki />
+| [[eso#cs-flex-nom|es'''o ''']]<nowiki />
+| [[esa#cs-flex-nom|es'''a ''']]<nowiki />
+|-
+!scope="row"| Vocatif<nowiki />
+| [[eso#cs-flex-nom|es'''o ''']]<nowiki />
+| [[esa#cs-flex-nom|es'''a ''']]<nowiki />
+|-
+!scope="row"| Locatif<nowiki />
+| [[esě#cs-flex-nom|es'''ě ''']]<br /><small>''ou''</small> [[esu#cs-flex-nom|es'''u ''']]<nowiki />
+| [[esech#cs-flex-nom|es'''ech ''']]
+|-
+!scope="row"| Instrumental<nowiki />
+| [[esem#cs-flex-nom|es'''em ''']]<nowiki />
+| [[esy#cs-flex-nom|es'''y ''']]
+|}
+[[File:Pinochonaipes.PNG|thumb|esa.]]
+'''eso''' [[Annexe:Prononciation/tchèque|<span class="API" title="Prononciation API">\ɛsɔ\</span>]] <span class="ligne-de-forme"  ><i>[[Annexe:Glossaire grammatical#N|neutre]]</i></span>
+# [[as|As]] d’un jeu de carte.
+#* <span class="example"><q><bdi lang="cs" xml:lang="cs" class="lang-cs">'' '''Eso''' je v [[kanasta|kanastě]] za [[dvacet]] [[bod]]ů.''</bdi></q></span>
+#*: À la canasta l'as vaut vingt points.[[Catégorie:Exemples en tchèque]]
+# ''(<span title="Le sport est l’activité récréative du corps." id="cs-sport">Sport</span>)''[[Catégorie:Lexique en tchèque du sport]] [[ace|Ace]].
+#* <span class="example"><q><bdi lang="cs" xml:lang="cs" class="lang-cs">''Jeho [[podání]] byla [[chytit#cs|nechytatelná]], dal [[soupeř]]i po [[sobě]] [[hned]] [[několik]] '''es'''.''</bdi></q></span>
+#*: ''La traduction en français de l’[[Aide:Exemples|exemple]] manque.'' <span class="plainlinks stubedit">([//fr.wiktionary.org/w/index.php?title=eso&action=edit Ajouter])</span>[[Catégorie:Exemples en tchèque à traduire]][[Catégorie:Exemples en tchèque]]
+
+=== <span class="titrepron" title="">Prononciation</span> ===
+* <span class="audio-pronunciation"><span class="audio-region" data-region="Brno-venkov (Tchéquie)">Brno-venkov (Tchéquie)</span>&nbsp;: écouter «&nbsp;<span lang="cs" class="audio-word" data-word="eso">eso</span>[[Catégorie:Prononciations audio en tchèque]] <span class="audio-ipa" data-ipa=""><span title="Prononciation à préciser">[<small><span class="plainlinks stubedit">[//fr.wiktionary.org/w/index.php?title=eso&action=edit Prononciation ?]</span></small>]</span>[[Catégorie:Wiktionnaire:Prononciations phonétiques manquantes en tchèque]]</span>&nbsp;» <span class="audio-file" data-file="LL-Q9056 (ces)-Ghost4Man-eso.wav">[[File:LL-Q9056 (ces)-Ghost4Man-eso.wav]]</span></span>
+
+=== <span class="titreanagr" title="">Anagrammes</span> ===
+* <bdi lang="cs" xml:lang="cs" class="lang-cs">[[ose#cs|ose]]</bdi>
+
+=== <span class="titrevoir" title="">Voir aussi</span> ===
+* [[w:cs:eso|<span lang="cs" xml:lang="cs" class="lang-cs"><bdi>eso</bdi></span>]] sur l’encyclopédie Wikipédia (en tchèque)&nbsp;[[Image:Wikipedia-logo-v2.svg|20px|link=]][[Catégorie:Pages liées à Wikipédia en tchèque]]
+
+=== <span class="titreref" title="">Références</span> ===
+*<cite style="font-style:normal" class="ouvrage" id="CITEREFRejzek2012">Jiří Rejzek,&#32;''Dictionnaire étymologique tchèque'', Leda, Prague,&#32;2012</cite>
+*''[[Wiktionnaire:Liste des références#Ústav pro jazyk český|Ústav pro jazyk český]]'', Akademie věd ČR, v.v.i., 2008–2025&nbsp;[http://prirucka.ujc.cas.cz/?slovo=eso → consulter cet ouvrage]

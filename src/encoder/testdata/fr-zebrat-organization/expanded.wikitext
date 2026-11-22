@@ -1,0 +1,24 @@
+<div class="bandeau-voir modele-voir"><span class="bandeau-voir-icone">''Voir aussi''</span> : <span class="">[[zébrât]]</span></div>
+
+== <span class='sectionlangue' id='cs'>[[tchèque#fr|Tchèque]]</span>[[Catégorie:tchèque]] ==
+=== <span class="titreetym" title="">Étymologie</span> ===
+:Variante du vieux tchèque ''škebrati'' → voir ''[[škemrat#cs|škemrat]]'', apparenté au polonais ''<span class="translation"><bdi lang="pl" xml:lang="pl" class="lang-pl">[[żebrać#pl|żebrać]]</bdi>&nbsp;<span class="trad-exposant">[[:pl:żebrać|<span class="trad-existe">(pl)</span>]]</span></span>'', au slovaque ''<bdi lang="sk" xml:lang="sk" class="lang-sk">[[žobrať#sk|žobrať]]</bdi>''.
+
+=== <span class="titredef" id="cs-verb-1">Verbe</span><span id="cs-verb" style="font-size:0;"></span>[[Catégorie:Lemmes en tchèque]][[Catégorie:Verbes en tchèque]] ===
+[[File:Please_Help_Me.jpg|vignette]]
+'''žebrat''' [[Annexe:Prononciation/tchèque|<span class="API" title="Prononciation API">\ˈʒɛbrat\</span>]] <span class="ligne-de-forme"  ><i>[[:Annexe:Glossaire_grammatical#I|imperfectif]]</i></span>[[Catégorie:Verbes imperfectifs en tchèque]] ([[Conjugaison:tchèque/žebrat|<span style="font-size: 100%; font-weight: bold; font-variant: small-caps">voir la conjugaison</span>]])
+# [[mendier#fr|Mendier]].
+#* <span class="example">''[[Aide:Exemples|Exemple d’utilisation]] manquant.'' <span class="plainlinks stubedit">([//fr.wiktionary.org/w/index.php?title=%C5%BEebrat&action=edit Ajouter])</span><bdi lang="cs" style="display: none"></bdi></span>[[Catégorie:Wiktionnaire:Exemples manquants en tchèque]]
+
+==== <span class="titrederiv" title="">Dérivés</span> ====
+* <bdi lang="cs" xml:lang="cs" class="lang-cs">[[vyžebrat#cs|vyžebrat]]</bdi>
+* <bdi lang="cs" xml:lang="cs" class="lang-cs">[[žebračí#cs|žebračí]]</bdi>
+* <bdi lang="cs" xml:lang="cs" class="lang-cs">[[žebrácký#cs|žebrácký]]</bdi>
+* <bdi lang="cs" xml:lang="cs" class="lang-cs">[[žebrák#cs|žebrák]]</bdi>, <bdi lang="cs" xml:lang="cs" class="lang-cs">[[žebračka#cs|žebračka]]</bdi> (mendiant(e))
+* <bdi lang="cs" xml:lang="cs" class="lang-cs">[[žebrota#cs|žebrota]]</bdi>, aumône
+* <bdi lang="cs" xml:lang="cs" class="lang-cs">[[žebrání#cs|žebrání]]</bdi>
+
+=== <span class="titreref" title="">Références</span> ===
+* ''[[Wiktionnaire:Liste des références#Ústav pro jazyk český|Ústav pro jazyk český]]'', Akademie věd ČR, v.v.i., 2008–2025&nbsp;[http://prirucka.ujc.cas.cz/?slovo=%C5%BEebrat → consulter cet ouvrage]
+* <cite style="font-style:normal" class="ouvrage" id="CITEREFRejzek2012">Jiří Rejzek,&#32;''Dictionnaire étymologique tchèque'', Leda, Prague,&#32;2012</cite>
+

@@ -1,0 +1,193 @@
+{
+  "schema": "dict.results.v1",
+  "operation": "lookup",
+  "query": "eso",
+  "kind": "language",
+  "language": "Unclassified",
+  "match_mode": "exact-utf8",
+  "record_count": 1,
+  "total_matches": 1,
+  "offset": 0,
+  "has_more": false,
+  "matches": [],
+  "entries": [
+    {
+      "organization": {
+        "lexemes": [],
+        "other_sections": [
+          0
+        ]
+      },
+      "title": "eso",
+      "display_title": [],
+      "kind": "language",
+      "language": "Unclassified",
+      "language_code": "",
+      "sections": [
+        {
+          "level": 2,
+          "title": "Unclassified",
+          "anchor": "",
+          "anchor_fallback": "",
+          "blocks": [
+            {
+              "kind": "container",
+              "depth": 0,
+              "spans": [],
+              "feature": null,
+              "list_path": "",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null,
+              "container": {
+                "blocks": [
+                  {
+                    "kind": "paragraph",
+                    "depth": 0,
+                    "spans": [
+                      {
+                        "kind": "text",
+                        "text": "Voir aussi",
+                        "target": "",
+                        "trail": "",
+                        "language": "",
+                        "classes": "bandeau-voir-icone",
+                        "direction": "",
+                        "explanation": "",
+                        "tooltip": null,
+                        "foreground": null,
+                        "bold": false,
+                        "italic": true,
+                        "code": false,
+                        "small": false,
+                        "superscript": false,
+                        "subscript": false,
+                        "strike": false,
+                        "underline": false,
+                        "role": "normal"
+                      },
+                      {
+                        "kind": "text",
+                        "text": " : ",
+                        "target": "",
+                        "trail": "",
+                        "language": "",
+                        "classes": "",
+                        "direction": "",
+                        "explanation": "",
+                        "tooltip": null,
+                        "foreground": null,
+                        "bold": false,
+                        "italic": false,
+                        "code": false,
+                        "small": false,
+                        "superscript": false,
+                        "subscript": false,
+                        "strike": false,
+                        "underline": false,
+                        "role": "normal"
+                      },
+                      {
+                        "kind": "link",
+                        "text": "ESO",
+                        "target": "ESO",
+                        "trail": "",
+                        "language": "",
+                        "classes": "",
+                        "direction": "",
+                        "explanation": "",
+                        "tooltip": null,
+                        "foreground": null,
+                        "bold": false,
+                        "italic": false,
+                        "code": false,
+                        "small": false,
+                        "superscript": false,
+                        "subscript": false,
+                        "strike": false,
+                        "underline": false,
+                        "role": "normal"
+                      }
+                    ],
+                    "feature": null,
+                    "list_path": "",
+                    "number": "",
+                    "level": 0,
+                    "anchor": "",
+                    "anchor_fallback": "",
+                    "table": null
+                  }
+                ],
+                "style": {
+                  "margins": {
+                    "top": {
+                      "unit": "px",
+                      "value": 0
+                    },
+                    "right": {
+                      "unit": "px",
+                      "value": 0
+                    },
+                    "bottom": {
+                      "unit": "em",
+                      "value": 0.5
+                    },
+                    "left": {
+                      "unit": "px",
+                      "value": 0
+                    }
+                  },
+                  "padding": {
+                    "top": {
+                      "unit": "px",
+                      "value": 3
+                    },
+                    "right": {
+                      "unit": "px",
+                      "value": 3
+                    },
+                    "bottom": {
+                      "unit": "px",
+                      "value": 3
+                    },
+                    "left": {
+                      "unit": "px",
+                      "value": 3
+                    }
+                  },
+                  "width": {
+                    "length": {
+                      "unit": "percent",
+                      "value": 100
+                    }
+                  },
+                  "background": {
+                    "rgb": "#f9f9f0"
+                  },
+                  "border": {
+                    "solid": {
+                      "width": {
+                        "unit": "px",
+                        "value": 1
+                      },
+                      "color": {
+                        "rgb": "#e9e7c4"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "preamble_spans": [],
+      "references": [],
+      "media": [],
+      "redirect": null,
+      "alias": null
+    }
+  ]
+}

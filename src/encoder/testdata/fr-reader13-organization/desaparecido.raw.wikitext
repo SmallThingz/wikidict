@@ -1,0 +1,86 @@
+== {{langue|fr}} ==
+
+=== {{S|étymologie}} ===
+: De l’{{étyl|es|fr|mot=desaparecido}}.
+
+=== {{S|nom|fr}} ===
+{{fr-rég}}
+'''desaparecido''' {{pron||fr}} {{m}}
+# {{lexique|histoire|politique|fr}} Personne [[porté disparu#fr|portée disparue]], secrètement arrêtée et tuée en Argentine pendant la « {{w|guerre sale}} », organisée par la dictature militaire du général Videla, entre 1976 et 1983.
+#* {{exemple|lang=fr|Pour la première fois, Jorge Rafael Videla, ex-chef de la junte militaire au pouvoir entre 1976 et 1983 en Argentine, a avoué, lors d'un entretien filmé de 20 heures, les meurtres des '''''desaparecidos''''' (« disparus ») durant la dictature, qui a assassiné ou supprimé toute trace de quelque 20 000 personnes.|source=''[http://feedproxy.google.com/~r/fluxdudevoir/~3/M_LJ7RAiJo8/deja-condamne-a-perpetuite-videla-reconnait-les-exactions-commises-par-la-junte-argentine Déjà condamné à perpétuité - Videla reconnaît les exactions commises par la junte argentine]'', Le Devoir.com, 17 avril 2012}}
+#* {{exemple|lang=fr|En 2005, une polémique avait éclaté au sujet de l’implication de Jorge Mario Bergoglio, le futur pape François, pendant la dictature militaire en Argentine (1976-1983), dont le bilan s’élève à 30 000 « '''desaparecidos''' ».|source=''[http://feedproxy.google.com/~r/fluxdudevoir/~3/-N73mYNdCGg/livres-de-benoit-a-francois De Benoît à François]'', Le Devoir.com, 19 avril 2014}}
+# {{par extension}} Personne portée disparue en Amérique latine.
+#* {{exemple|lang=fr|Certains sont relâchés, d'autres rejoignent la longue liste des '''''desaparecidos''''' (« disparus ») et finissent, corps anonymes, dans des fosses communes.|source=''[http://tempsreel.nouvelobs.com/actualite/monde/20110730.OBS7891/le-mexique-traverse-par-une-caravane-de-la-paix.html Le Mexique traversé par une caravane de la paix]'', nouvelObs.fr, 31 juillet 2011}}
+
+==== {{S|traductions}} ====
+{{trad-début}}
+{{trad-fin}}
+
+=== {{S|prononciation}} ===
+* {{écouter|Somain (France)||lang=fr|audio=LL-Q150 (fra)-Jérémy-Günther-Heinz Jähnick-desaparecido.wav}}
+
+=== {{S|voir aussi}} ===
+* {{WP|Desaparecidos}}
+
+== {{langue|es}} ==
+
+=== {{S|étymologie}} ===
+: De {{lien|''desaparecer''|es|sens=disparaitre}}{{R|DRAE}}.
+
+=== {{S|adjectif|es}} ===
+{{es-accord-oa|desaparecid|de.sa.pa.ɾeˈθi.ð}}
+'''desaparecido''' {{pron|de.sa.pa.ɾeˈθi.ðo|es}} {{pron|de.sa.pa.ɾeˈsi.ðo|es}} {{m}}
+# [[disparu#Adjectif|Disparu]].
+
+=== {{S|nom|es}} ===
+{{es-accord-oa|desaparecid|de.sa.pa.ɾeˈθi.ð}}
+[[File:Donde Estan.JPG|vignette|''Conmemoración de los '''desaparecidos''' en Chile el 11 de septiembre de 2004, frente al monumento a los '''desaparecidos''' en el Cementerio General.'']]
+'''desaparecido''' {{pron|de.sa.pa.ɾeˈθi.ðo|es}} {{pron|de.sa.pa.ɾeˈsi.ðo|es}} {{m}}
+# [[disparu#fr-nom|Disparu]].
+#* {{exemple|lang=es}}
+# {{lexique|histoire|politique|es}} [[desaparecido#fr|Desaparecido]].
+#*{{exemple|lang=es|Ellas danzan con los '''desaparecidos'''.<br>Ellas danzan con los muertos.<br>Ellas danzan con amores invisibles.<br>Ellas danzan con silenciosa angustia.<br>Danzan con sus padres.<br>Danzan con sus hijos.<br>Danzan con sus esposos.<br>Ellas danzan solas,<br>Danzan solas.|Elles dansent avec les disparus.<br>Elles dansent avec les morts.<br>Elles dansent avec des amours invisibles.<br>Elles dansent avec une angoisse silencieuse.<br>Elles dansent avec leurs pères.<br>Elles dansent avec leurs fils.<br>Elles dansent avec leurs époux.<br>Elles dansent seules.<br>Elles dansent seules.|source={{w|Gordon Sumner}}, ''They Dance Alone'' (Cueca Solo), 1987 ; chanson célébrant les {{w|mères de la place de Mai}}.}}
+
+=== {{S|verbe|es|flexion}} ===
+{{es-verbe-flexion|desaparecer|ppa=1}}
+'''desaparecido''' {{pron|de.sa.pa.ɾeˈθi.ðo|de.sa.pa.ɾeˈsi.ðo|es}}
+#''Participe passé de'' [[desaparecer#es|desaparecer]].
+
+=== {{S|voir aussi}} ===
+* {{WP|Detenido desaparecido|lang=es}}
+
+=== {{S|références}} ===
+{{Références}}
+
+== {{langue|it}} ==
+
+=== {{S|étymologie}} ===
+: De l’{{étyl|es|it|mot=desaparecido}}{{R|Treccani}}.
+
+=== {{S|nom|it}} ===
+'''desaparecido''' {{pron||it}} {{m}} 
+# [[desaparecido#fr|Desaparecido]].
+#*{{exemple|lang=it|La tragedia dei '''desaparecidos'''.}}
+
+=== {{S|voir aussi}} ===
+* {{WP|Desaparecidos|lang=it}}
+
+=== {{S|références}} ===
+{{Références}}
+
+== {{langue|pt}} ==
+=== {{S|verbe|pt|flexion}} ===
+{{pt-verbe-flexion|desaparecer|ppms=oui}}
+'''desaparecido''' {{pron|dɨ.zɐ.pɐ.ɾɨ.sˈi.du|pt}} (Lisbonne) {{pron|de.za.pa.ɾe.sˈi.dʊ|pt}} (São Paulo)
+# ''Participe passé masculin singulier de'' {{lien|desaparecer|pt}}.
+
+=== {{S|prononciation}} ===
+* Lisbonne: {{pron|dɨ.zɐ.pɐ.ɾɨ.sˈi.du|pt}} (langue standard), {{pron|dɨ.zɐ.pɐ.ɾɨ.sˈi.du|pt}} (langage familier)
+* São Paulo: {{pron|de.za.pa.ɾe.sˈi.dʊ|pt}} (langue standard), {{pron|de.za.pa.ɾe.sˈi.dʊ|pt}} (langage familier)
+* Rio de Janeiro: {{pron|de.za.pa.ɾe.sˈi.dʊ|pt}} (langue standard), {{pron|de.za.pa.ɾe.sˈi.dʊ|pt}} (langage familier)
+* Maputo: {{pron|de.zɐ.pɐ.ɾe.sˈi.du|pt}} (langue standard), {{pron|de.zɐ.pɐ.ɾe.sˈi.du|pt}} (langage familier)
+* Luanda: {{pron|de.zɐ.pɐ.ɾe.sˈi.dʊ|pt}}
+* Dili: {{pron|dɨ.zə.pə.ɾɨ.sˈi.dʊ|pt}}
+
+=== {{S|références}} ===
+* {{R:DicionárioFonético|desaparecido|id=10113}}

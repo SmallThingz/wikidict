@@ -1,0 +1,25 @@
+{{voir|zébrât}}
+
+== {{langue|cs}} ==
+=== {{S|étymologie}} ===
+:Variante du vieux tchèque ''škebrati'' {{cf|škemrat|lang=cs}}, apparenté au polonais ''{{trad+|pl|żebrać}}'', au slovaque ''{{lien|žobrať|sk}}''.
+
+=== {{S|verbe|cs}} ===
+[[File:Please_Help_Me.jpg|vignette]]
+'''žebrat''' {{pron|ˈʒɛbrat|cs}} {{imperfectif|cs}} {{conjugaison|cs}}
+# [[mendier#fr|Mendier]].
+#* {{exemple|lang=cs}}
+
+==== {{S|dérivés}} ====
+* {{lien|vyžebrat|cs}}
+* {{lien|žebračí|cs}}
+* {{lien|žebrácký|cs}}
+* {{lien|žebrák|cs}}, {{lien|žebračka|cs}} (mendiant(e))
+* {{lien|žebrota|cs}}, aumône
+* {{lien|žebrání|cs}}
+
+=== {{S|références}} ===
+* {{R:ÚJČ}}
+* {{R:DÉT}}
+
+{{clé de tri|zebrat}}

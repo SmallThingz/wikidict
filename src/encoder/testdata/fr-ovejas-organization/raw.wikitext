@@ -1,0 +1,7 @@
+== {{langue|es}} ==
+=== {{S|nom|es|flexion}} ===
+'''ovejas''' {{f}} {{pron||es}}
+[[Fichier:Ovejas latxa en Sierra Gibijo 02.jpg|vignette|alt=Un troupeau de moutons.|Des '''ovejas'''.]]
+# ''Pluriel de'' [[oveja#es-nom|oveja]].
+
+{{clé de tri|ovejas}}
