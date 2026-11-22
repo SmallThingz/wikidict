@@ -62,6 +62,14 @@ member and its complete native Reader exports. Column count and gap survive
 decoding and use balanced native CSS flow; unsupported column combinations
 such as fixed height, scrolling overflow and flex rows remain rejected.
 
+For the focused normal-app missing-link regression, use that same genuine TPI
+case, set `WIKIDICT_STATUS_REPORT` to a fresh absolute directory, and run
+`node missing-status.browser.test.mjs`. It imports the original file through the
+worker, opens the entry with the keyboard, and checks that a missing-link notice
+stays visible without taking focus or moving the triggering link in the viewport.
+The live region stays in normal document flow and becomes sticky while shown;
+History remains the ordinary recovery route.
+
 | Format | Remaining consumer work |
 | --- | --- |
 | M | Container positioning/minimum height and signed/auto margins; font families/features, link paint and expanded figure/viewport policies |
