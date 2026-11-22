@@ -34,6 +34,29 @@ class RoundTripTests(unittest.TestCase):
                             compress_blobs.verify_round_trip(raw, packed)
 
 
+class PublicationBatchTests(unittest.TestCase):
+    def test_byte_and_count_limits_preserve_order_and_oversized_singleton(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = [Path(tmp) / f'{index}.wikblb' for index in range(7)]
+            for path, size in zip(paths, [6, 4, 8, 7, 13, 3, 2]):
+                path.write_bytes(b'x' * size)
+            with mock.patch.object(compress_blobs, 'PUBLICATION_BATCH_BYTES', 10), \
+                 mock.patch.object(compress_blobs, '_compress_batch') as encode:
+                compress_blobs.compress_many(iter(paths), 65536, workers=1, small_limit=15, batch_size=2)
+            self.assertEqual([call.args for call in encode.call_args_list], [
+                (paths[0:2], 65536), (paths[2:3], 65536), (paths[3:4], 65536),
+                (paths[4:5], 65536), (paths[5:7], 65536)])
+
+    def test_count_limit_still_batches_tiny_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = [Path(tmp) / str(index) for index in range(3)]
+            for path in paths:
+                path.write_bytes(b'x')
+            with mock.patch.object(compress_blobs, '_compress_batch') as encode:
+                compress_blobs.compress_many(paths, 65536, workers=1, batch_size=2)
+            self.assertEqual([call.args[0] for call in encode.call_args_list], [paths[:2], paths[2:]])
+
+
 class LargeXzWaveTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()

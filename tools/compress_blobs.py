@@ -13,6 +13,7 @@ import time
 MAX_XZ_WORKERS = 4
 SHARD_BATCH_FILES = 128
 SHARD_BATCH_BYTES = 8 * 1024 * 1024
+PUBLICATION_BATCH_BYTES = 32 * 1024 * 1024
 
 def max_workers():
     return max(1, min(MAX_XZ_WORKERS, os.cpu_count() or 1))
@@ -163,13 +164,28 @@ def _compress_large_wave(paths, block_size):
 def compress_many(paths, block_size, workers=None, small_limit=8*1024*1024, batch_size=128):
     workers = default_workers() if workers is None else workers
     if workers < 1 or workers > max_workers():raise ValueError(f'Compression workers must be 1 through {max_workers()}')
-    paths=[Path(path) for path in paths]
-    if not paths:return
-    small=[];large=[]
+    if batch_size < 1:
+        raise ValueError('Compression batch size must be positive')
+    batches = []
+    batch = []
+    batch_bytes = 0
+    large = []
     for path in paths:
-        (small if path.stat().st_size <= small_limit else large).append(path)
-    if small:
-        batches=[small[i:i+batch_size] for i in range(0,len(small),batch_size)]
+        path = Path(path)
+        size = path.stat().st_size
+        if size > small_limit:
+            large.append(path)
+            continue
+        # Each batch retains all of its raw inputs until verification completes.
+        if batch and (len(batch) == batch_size or batch_bytes + size > PUBLICATION_BATCH_BYTES):
+            batches.append(batch)
+            batch = []
+            batch_bytes = 0
+        batch.append(path)
+        batch_bytes += size
+    if batch:
+        batches.append(batch)
+    if batches:
         concurrency=min(workers,len(batches))
         with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as pool:
             list(pool.map(lambda batch:_compress_batch(batch,block_size),batches))
