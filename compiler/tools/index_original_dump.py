@@ -290,6 +290,74 @@ def write_directory(items, downloads, output, workers=1, *, stage=None, page_ind
     return result
 
 
+def read_bound_json(path, expected_sha256):
+    if not isinstance(expected_sha256, str) or not re.fullmatch('[0-9a-f]{64}', expected_sha256):
+        raise ValueError('Expected a SHA-256 digest')
+    path = path.absolute()
+    if path.resolve(strict=True) != path or not path.is_file():
+        raise ValueError(f'Expected a regular input file: {path}')
+    with path.open('rb') as stream:
+        stamp = _stamp(os.fstat(stream.fileno()))
+        if not 0 < stamp[2] <= 64 * 1024 * 1024:
+            raise ValueError(f'Unexpected metadata size: {path}')
+        raw = stream.read(stamp[2] + 1)
+        if (_stamp(os.fstat(stream.fileno())) != stamp or _stamp(path.stat()) != stamp
+                or len(raw) != stamp[2] or hashlib.sha256(raw).hexdigest() != expected_sha256):
+            raise ValueError(f'Metadata identity changed: {path}')
+    return json.loads(raw), stamp
+
+
+def prepare_build_input(root, output, block_sha256, items, downloads, stage, page_index):
+    """Select an earned block directory and its original logical stage for a build."""
+    from build_wiktionaries import DUMP_STAGING_VERSION, dump_input_fingerprint
+
+    blocks, stamp = read_bound_json(output, block_sha256)
+    items = ordered_parts(items)
+    directory = (downloads / items[0]['wiki'] / items[0]['date']).resolve(strict=True)
+    parts = [(item['name'], item['size'], item['sha1']) for item in items]
+    if (blocks.get('format') != 'wikidict-bzip2-blocks-v1'
+            or parts != [(p['name'], p['size'], p['sha1']) for p in blocks['parts']]
+            or any(not (directory / name).is_file() or (directory / name).stat().st_size != size
+                   for name, size, _ in parts)):
+        raise ValueError('Block directory differs from the official archive inventory')
+    bridge = blocks.get('zstd_frame_bridge')
+    if (not isinstance(bridge, dict) or stage.get('version') != DUMP_STAGING_VERSION
+            or stage.get('input_sha256') != dump_input_fingerprint(items)
+            or stage.get('dump_codec') != 'zstd' or stage.get('dump_stream_kind') != 'multistream-zstd'
+            or type(stage.get('source_pages')) is not int or stage['source_pages'] < 0
+            or type(page_index.get('bytes')) is not int or page_index['bytes'] <= 0
+            or not isinstance(page_index.get('sha256'), str) or not re.fullmatch('[0-9a-f]{64}', page_index['sha256'])
+            or type(bridge.get('page_index_bytes')) is not int
+            or bridge.get('page_index_bytes') != page_index['bytes']
+            or bridge.get('page_index_sha256') != page_index['sha256']):
+        raise ValueError('Original index and retained stage select different inputs')
+    marker = dict(version='wikidict-original-bzip2-input-v1', source_pages=stage['source_pages'],
+                  input_sha256=stage['input_sha256'], source_directory=str(directory),
+                  block_directory=dict(path=str(output.absolute()), bytes=stamp[2], sha256=block_sha256))
+    for role, byte_key, hash_key in [('dump', 'dump_bytes', 'dump_sha256'), ('index', 'offset_index_bytes', 'offset_index_sha256')]:
+        size, digest = bridge[byte_key], bridge[hash_key]
+        if (type(size) is not int or size <= 0 or not isinstance(digest, str) or not re.fullmatch('[0-9a-f]{64}', digest)
+                or (size, digest) != (stage.get(role + '_size'), stage.get(role + '_sha256'))):
+            raise ValueError(f'Retained {role} differs from the authenticated frame bridge')
+        marker[role + '_size'], marker[role + '_sha256'] = size, digest
+    root.mkdir(mode=0o700)
+    try:
+        with tempfile.NamedTemporaryFile(mode='w', encoding='utf8', dir=root) as temporary:
+            json.dump(marker, temporary, separators=(',', ':'))
+            temporary.write('\n')
+            temporary.flush()
+            os.fsync(temporary.fileno())
+            if _stamp(output.stat()) != stamp:
+                raise ValueError('Block directory changed before selection')
+            os.link(temporary.name, root / '.complete.json')
+    except BaseException:
+        # Never retire a file that a different writer placed in this directory.
+        if not any(root.iterdir()):
+            root.rmdir()
+        raise
+    return marker
+
+
 def main():
     import argparse
     from download_wiktionaries import load_input_manifest, select_manifest_files
@@ -299,23 +367,38 @@ def main():
     parser.add_argument('--manifest', type=Path, required=True)
     parser.add_argument('--manifest-sha256', required=True)
     parser.add_argument('--edition', required=True, help='Edition name, e.g. enwiktionary')
-    parser.add_argument('--output', type=Path, required=True, help='New block directory JSON file')
+    parser.add_argument('--output', type=Path, required=True, help='Block directory JSON file to create or select by digest')
     parser.add_argument('--workers', type=int, choices=range(1, 5), default=4, help='Concurrent independent archive parts')
     parser.add_argument('--stage-receipt', type=Path, help='Reproduce a retained Zstandard stage and its stream index in memory')
     parser.add_argument('--page-index-size', type=int, help='Authenticated uncompressed size of the retained page-index.tsv')
     parser.add_argument('--page-index-sha256', help='Authenticated SHA-256 of the retained page-index.tsv')
+    parser.add_argument('--build-input-root', type=Path, help='Create a new read-only input selection directory for a bridged index')
+    parser.add_argument('--existing-blocks-sha256', help='Reuse the exact block directory at --output when preparing a build input')
+    parser.add_argument('--stage-receipt-sha256', help='Authenticated stage receipt digest, required for reuse of an existing index')
     args = parser.parse_args()
     bridge = (args.stage_receipt, args.page_index_size, args.page_index_sha256)
     if any(value is not None for value in bridge) and any(value is None for value in bridge):
         parser.error('--stage-receipt, --page-index-size and --page-index-sha256 belong together')
+    if args.build_input_root and (not args.stage_receipt or os.path.lexists(args.build_input_root)):
+        parser.error('--build-input-root requires a retained stage and an unused destination')
+    if args.existing_blocks_sha256 and not (args.build_input_root and args.stage_receipt_sha256):
+        parser.error('Reusing a block directory requires --build-input-root and --stage-receipt-sha256')
+    if args.stage_receipt_sha256 and not args.stage_receipt:
+        parser.error('--stage-receipt-sha256 requires --stage-receipt')
     downloads = args.downloads.absolute()
     manifest = load_input_manifest(args.manifest.absolute(), args.manifest_sha256, downloads)
     items = [row for row in select_manifest_files(manifest, [args.edition]) if '-pages-meta-current' in row['name']
              and re.search(r'\.xml(?:-p[0-9]+p[0-9]+)?\.bz2$', row['name'])]
-    stage = json.loads(args.stage_receipt.read_bytes()) if args.stage_receipt else None
+    stage = (read_bound_json(args.stage_receipt, args.stage_receipt_sha256)[0] if args.stage_receipt_sha256
+             else json.loads(args.stage_receipt.read_bytes()) if args.stage_receipt else None)
     page_index = dict(bytes=args.page_index_size, sha256=args.page_index_sha256) if args.stage_receipt else None
-    result = write_directory(items, downloads, args.output, args.workers, stage=stage, page_index=page_index)
-    print(f'{args.edition}: indexed {len(result["parts"])} archive parts, {result["xml_bytes"]} XML bytes; directory {args.output.stat().st_size} bytes')
+    if not args.existing_blocks_sha256:
+        result = write_directory(items, downloads, args.output, args.workers, stage=stage, page_index=page_index)
+        print(f'{args.edition}: indexed {len(result["parts"])} archive parts, {result["xml_bytes"]} XML bytes; directory {args.output.stat().st_size} bytes')
+    if args.build_input_root:
+        digest = args.existing_blocks_sha256 or hashlib.sha256(args.output.read_bytes()).hexdigest()
+        prepare_build_input(args.build_input_root, args.output, digest, items, downloads, stage, page_index)
+        print(f'{args.edition}: selected {stage["source_pages"]} source pages in {args.build_input_root}')
 
 
 if __name__ == '__main__':

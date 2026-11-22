@@ -90,6 +90,49 @@ class OriginalXmlParts(unittest.TestCase):
         self.assertEqual([p['name'] for p in seq['parts']],['a.bz2','z.bz2'])
         with self.assertRaises(ValueError): index_parts(items+items,self.base,1)
 
+    def test_select_existing_blocks_without_repacking_or_replacing_a_stage(self):
+        import json
+        from build_wiktionaries import DUMP_STAGING_VERSION, _stage_seekable_dump, dump_input_fingerprint
+        from index_original_dump import prepare_build_input, write_directory
+
+        source = self.base / 'tnwiktionary' / '20261001'
+        source.mkdir(parents=True)
+        name = 'part.xml.bz2'
+        packed = bz2.compress(b'<page>one</page>')
+        (source / name).write_bytes(packed)
+        items = [dict(wiki=source.parent.name, date=source.name, name=name, size=len(packed),
+                      sha1=hashlib.sha1(packed).hexdigest())]
+        stage = dict(version=DUMP_STAGING_VERSION, input_sha256=dump_input_fingerprint(items))
+        _stage_seekable_dump(items, self.base, self.base, stage)
+        page_index = dict(bytes=1, sha256=hashlib.sha256(b'1').hexdigest())
+        out = self.base / 'blocks.json'
+        write_directory(items, self.base, out, stage=stage, page_index=page_index)
+        digest = hashlib.sha256(out.read_bytes()).hexdigest()
+        root = self.base / 'build-input'
+
+        def select(**overrides):
+            args = dict(root=root, output=out, block_sha256=digest, items=items, downloads=self.base,
+                        stage=stage, page_index=page_index)
+            return prepare_build_input(**(args | overrides))
+
+        for variant in [dict(block_sha256='f' * 64), dict(items=[dict(items[0], sha1='f' * 40)]),
+                        dict(stage=dict(stage, input_sha256='f' * 64)), dict(stage=dict(stage, index_size=1)),
+                        dict(page_index=dict(page_index, bytes=True)), dict(page_index=dict(page_index, sha256='f' * 64))]:
+            with self.subTest(variant=variant), self.assertRaises(ValueError):
+                select(**variant)
+            self.assertFalse(root.exists())
+        marker = select()
+        self.assertEqual(list(root.iterdir()), [root / '.complete.json'])
+        self.assertEqual(json.loads((root / '.complete.json').read_bytes()), marker)
+        self.assertEqual(marker['source_directory'], str(source))
+        self.assertEqual(marker['block_directory'], dict(path=str(out), bytes=out.stat().st_size, sha256=digest))
+        self.assertEqual(marker['dump_sha256'], stage['dump_sha256'])
+        with self.assertRaises(FileExistsError):
+            select()
+        (source / name).write_bytes(packed[:-1])
+        with self.assertRaisesRegex(ValueError, 'archive inventory'):
+            select(root=self.base / 'changed')
+
     def test_retained_stage_uses_the_same_coordinates_for_split_and_independent_parts(self):
         import json
         from build_wiktionaries import DUMP_STAGING_VERSION, _stage_seekable_dump, dump_input_fingerprint

@@ -202,6 +202,13 @@ historical `--stage-receipt` and the authenticated `--page-index-sha256` and
 offset index in memory, verifies both digests and the source page count, and
 adds the logical frame ranges to the same JSON output.
 
+To select an already verified index for a build, pass `--build-input-root` with
+a new directory name, `--existing-blocks-sha256` for the JSON file at `--output`,
+and `--stage-receipt-sha256` for the retained stage receipt. Keep the same
+manifest, edition and page-index arguments. This writes a small `.complete.json`
+pointing to the original archives and their block directory. It does not repeat
+decompression or create a staged XML file.
+
 The build pipeline:
 
 1. extracts templates, modules and page metadata;
