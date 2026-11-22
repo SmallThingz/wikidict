@@ -190,8 +190,33 @@ in a JSON file. A fresh index can process up to four archive parts in parallel.
 For a single-part download it inflates up to four blocks concurrently and
 feeds verified XML to the framer in source order. `--workers 1` uses the serial
 reader. Both paths check the same SHA-1, block CRCs and stream CRCs.
-The ordinary corpus build above defaults to Zstandard staging. To prepare an
-original-archive input for the native builder, give the indexer a new output
+The ordinary corpus build above defaults to Zstandard staging. Opt into direct
+archive inputs for new editions with `--original-archives`. This works with
+multiple editions in one ordinary invocation:
+
+```sh
+python3.14 compiler/tools/build_wiktionaries.py --in data/dumps --out data/dictionaries \
+  --wikis itwiktionary viwiktionary --original-archives
+```
+
+Each new edition gets a counted block directory and input marker under
+`<output>/<edition>/<date>.original-input`. Indexing verifies the original bytes
+once; the build retains their physical identities through completion. Resuming
+uses the selected marker without repeating the indexing pass. Existing staged
+work, publications, extraction caches and selected sealed workers retain their
+normal path. An explicit `--staged-input-root` also remains authoritative.
+New indexes and their markers are installed together, so an interrupted creation
+can be retried without selecting incomplete metadata. A previously unbound block
+directory without its marker is still refused; it is never authenticated against
+a digest computed from itself.
+
+Reviewed nonlexical row selections bind an exact physical dump and page index.
+For these builds, automatic archive mode retains normal staging. Combining a
+review with an explicit original-archive input is rejected before build setup;
+the reviewed rows are never discarded or rebound to different coordinates.
+
+To prepare an original-archive input separately for the native builder, give
+the indexer a new output
 file and a new build-input directory. It counts pages while it verifies the
 original archives. This requires only the downloaded dump and its manifest.
 

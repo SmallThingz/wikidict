@@ -6301,6 +6301,94 @@ def borrowed_staged_input(items, root, output, raw_shard_root=None, extraction_c
         check()
 
 
+def require_reviewed_archive_compatibility(reviewed, staged_input_root):
+    if reviewed is not None and original_archive_record(staged_input_root) is not None:
+        raise ValueError('Reviewed nonlexical rows require their exact physical staged dump and page index; '
+                         'original archive transport is not supported with this review')
+
+
+def select_original_archive_input(items, downloads, output, workers, *, staged_input_root=None,
+                                  extraction_cache_root=None, raw_shard_root=None, retained_roles=None):
+    """Create a fresh archive selection only when no ordinary work would be displaced."""
+    if staged_input_root is not None:return staged_input_root,{}
+    edition,date=phase_identity(items)
+    parent=Path(output).absolute()/edition
+    container=parent/(date+'.original-input')
+    selected=container/'input'
+    prior=[parent/date,parent/(date+'.building'),parent/(date+'.shards')]
+    if any(os.path.lexists(path) for path in prior):
+        state=next((p for p in (prior[2]/'state.json',prior[0]/'complete.json',prior[1]/'complete.json') if p.is_file()),None)
+        record=read_build_envelope(state) if state is not None else None
+        identity=record.get('build_inputs',record) if isinstance(record,dict) else None
+        archive=identity.get('original_archive_input') if isinstance(identity,dict) else None
+        if archive is None:return None,{}
+        if archive.get('marker',{}).get('path')!=str(selected/'.complete.json'):
+            raise ValueError('Existing archive work requires its original staged input selection')
+        if not (selected/'.complete.json').is_file():
+            raise ValueError('Existing archive work is missing its retained input marker')
+    if (extraction_cache_root is not None or any(getattr(retained_roles,name,None) is not None for name in
+            ('initial_sealed_generation','closed_whole_execution','sealed_expander_recovery'))):
+        return None,{}
+    artifact_path(container)
+    if container.resolve()!=container or any(p.is_symlink() for p in (container,*container.parents)):
+        raise ValueError('Unsafe original archive staging path')
+    xml=current_xml_inputs(items)
+    if not xml:raise ValueError('No full-namespace current XML in snapshot')
+    source=Path(downloads).absolute()/edition/date
+    _staged_path_stamp(source,directory=True)
+    protected=[source]
+    if raw_shard_root is not None:protected.append(Path(raw_shard_root).absolute())
+    if any(container.is_relative_to(p) or p.is_relative_to(container) for p in protected):
+        raise ValueError('Original archive staging overlaps selected inputs or raw output')
+    container.mkdir(parents=True,exist_ok=True)
+    with acquire_build_resource_lock(container/'.input.lock'):
+        if os.path.lexists(selected):
+            selected_staged_input_root(items,selected,output,raw_shard_root,extraction_cache_root)
+            if original_archive_record(selected) is None:
+                raise ValueError('Original archive staging requires a complete archive marker')
+            validated_staged_dump(xml,selected)
+            return selected,{}
+        import index_original_dump
+        if os.path.lexists(container/'blocks.json'):
+            raise ValueError('Orphan original block directory has no authenticated input marker')
+        before={source/item['name']:_staged_path_stamp(source/item['name']) for item in xml}
+        with tempfile.TemporaryDirectory(prefix='.pending-input-',dir=container) as temporary:
+            pending=Path(temporary);blocks=pending/'blocks.json';ready=pending/'input'
+            with build_phase(edition,date,'original_archive_index'):
+                directory=index_original_dump.write_directory(xml,Path(downloads),blocks,workers,count_pages=True)
+            if any(_staged_path_stamp(path)!=stamp for path,stamp in before.items()):
+                raise ValueError('Original archives changed during indexing')
+            # Bind the producer's result before changing only its final location.
+            expected=hashlib.sha256((json.dumps(directory,separators=(',',':'))+'\n').encode()).hexdigest()
+            marker=index_original_dump.prepare_build_input(ready,blocks,expected,xml,Path(downloads))
+            os.rename(blocks,ready/'blocks.json')
+            marker['block_directory']['path']=str(selected/'blocks.json')
+            with (ready/'.complete.json').open('w') as stream:
+                json.dump(marker,stream,separators=(',',':'));stream.write('\n')
+                stream.flush();os.fsync(stream.fileno())
+            descriptor=os.open(ready,os.O_RDONLY|os.O_DIRECTORY)
+            try:os.fsync(descriptor)
+            finally:os.close(descriptor)
+            os.rename(ready,selected)
+            descriptor=os.open(container,os.O_RDONLY|os.O_DIRECTORY)
+            try:os.fsync(descriptor)
+            finally:os.close(descriptor)
+        verified=before
+        selected_staged_input_root(items,selected,output,raw_shard_root,extraction_cache_root)
+        validated_staged_dump(xml,selected)
+        return selected,verified
+
+
+def verify_original_download(source, item, indexed):
+    """Reuse only this invocation's successful index hash and unchanged physical identity."""
+    if source in indexed:
+        if _staged_path_stamp(source)!=indexed[source] or indexed[source][3]!=item['size']:
+            raise ValueError('Indexed original archive changed before ordinary verification')
+        return
+    if not source.is_file() or source.stat().st_size!=item['size'] or digest(source)!=item['sha1']:
+        raise ValueError(f'Missing or unverified download: {source}')
+
+
 def cached_shard_dump(items, downloads, workspace, workers=4):
     """Reuse only a completed, content-verified repack for these XML inputs."""
     edition,date=phase_identity(items)
@@ -8793,7 +8881,8 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
     cleanup_shard_workspace(workspace)
 
 
-def build(items, downloads, output, zig, compression_workers=None, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None, now_unix=None, raw_shard_root=None, compress_shards=False, extraction_cache_root=None, reviewed_nonlexical_review=None, llvm_workers=None, staged_input_root=None, presentation_audit_pages=None, retained_roles=None, continue_failed_shards=False, shard_pages=None):
+def build(items, downloads, output, zig, compression_workers=None, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None, now_unix=None, raw_shard_root=None, compress_shards=False, extraction_cache_root=None, reviewed_nonlexical_review=None, llvm_workers=None, staged_input_root=None, presentation_audit_pages=None, retained_roles=None, continue_failed_shards=False, shard_pages=None, original_archives=False):
+    require_reviewed_archive_compatibility(reviewed_nonlexical_review,staged_input_root)
     selected_shard_pages(shard_pages)
     validate_presentation_audit_pages(presentation_audit_pages, continue_failed_shards)
     selected_staged_input_root(items,staged_input_root,output,raw_shard_root,extraction_cache_root)
@@ -8829,7 +8918,12 @@ def build(items, downloads, output, zig, compression_workers=None, expansion_wor
                 # Legitimate producers share this edition lock; success still overrides.
                 if (parent / date / 'complete.json').exists():
                     result['execution_mode']='existing_output'
-                mode=build_locked(items, downloads, output, zig, compression_workers, expansion_workers, interwiki_snapshot, auxiliary_snapshots, **({'expansion_timeout_ms':expansion_timeout_ms} if expansion_timeout_ms is not None else {}), **({'now_unix':now_unix} if now_unix is not None else {}), **({'raw_shard_root':raw_shard_root} if raw_shard_root is not None else {}), **({'compress_shards':True} if compress_shards else {}), **({'extraction_cache_root':extraction_cache_root} if extraction_cache_root is not None else {}), reviewed_nonlexical_review=reviewed_nonlexical_review, **({'llvm_workers':llvm_workers} if llvm_workers is not None else {}), **({'staged_input_root':staged_input_root} if staged_input_root is not None else {}), **({'presentation_audit_pages':presentation_audit_pages} if presentation_audit_pages is not None else {}), **({'continue_failed_shards':True} if continue_failed_shards else {}), **({'retained_roles':retained_roles} if retained_roles is not None else {}), **shard_page_options(shard_pages))
+                indexed={}
+                if original_archives and reviewed_nonlexical_review is None:
+                    staged_input_root,indexed=select_original_archive_input(items,downloads,output,compression_workers or 1,
+                        staged_input_root=staged_input_root,extraction_cache_root=extraction_cache_root,
+                        raw_shard_root=raw_shard_root,retained_roles=retained_roles)
+                mode=build_locked(items, downloads, output, zig, compression_workers, expansion_workers, interwiki_snapshot, auxiliary_snapshots, **({'expansion_timeout_ms':expansion_timeout_ms} if expansion_timeout_ms is not None else {}), **({'now_unix':now_unix} if now_unix is not None else {}), **({'raw_shard_root':raw_shard_root} if raw_shard_root is not None else {}), **({'compress_shards':True} if compress_shards else {}), **({'extraction_cache_root':extraction_cache_root} if extraction_cache_root is not None else {}), reviewed_nonlexical_review=reviewed_nonlexical_review, **({'llvm_workers':llvm_workers} if llvm_workers is not None else {}), **({'staged_input_root':staged_input_root} if staged_input_root is not None else {}), **({'presentation_audit_pages':presentation_audit_pages} if presentation_audit_pages is not None else {}), **({'continue_failed_shards':True} if continue_failed_shards else {}), **({'retained_roles':retained_roles} if retained_roles is not None else {}), **shard_page_options(shard_pages), **({'_indexed_originals':indexed} if indexed else {}))
                 result['execution_mode']=mode
                 return mode
         except (DeterministicPresentationFailure, DeterministicBuildInputFailure) as failure:
@@ -9405,7 +9499,8 @@ def publish_verified_staging(staging, target, edition, date, compression_workers
         blobs,fallback_pages=_publish_verified_staging(staging,target,edition,date,compression_workers,interwiki_sha,auxiliary_hashes,build_identity,namespace_snapshot,site_info_snapshot,**({'_staged_input_guard':_staged_input_guard} if _staged_input_guard is not None else {}))
         result.update(blobs=blobs,fallback_pages=fallback_pages)
 
-def build_locked(items, downloads, output, zig, compression_workers=None, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None, now_unix=None, raw_shard_root=None, compress_shards=False, extraction_cache_root=None, reviewed_nonlexical_review=None, llvm_workers=None, staged_input_root=None, presentation_audit_pages=None, retained_roles=None, continue_failed_shards=False, shard_pages=None):
+def build_locked(items, downloads, output, zig, compression_workers=None, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None, now_unix=None, raw_shard_root=None, compress_shards=False, extraction_cache_root=None, reviewed_nonlexical_review=None, llvm_workers=None, staged_input_root=None, presentation_audit_pages=None, retained_roles=None, continue_failed_shards=False, shard_pages=None, _indexed_originals=None):
+    require_reviewed_archive_compatibility(reviewed_nonlexical_review,staged_input_root)
     selected_shard_pages(shard_pages)
     if retained_roles is not None and not isinstance(retained_roles,RetainedNativeToolRoles):
         raise ValueError('Invalid retained native input guards')
@@ -9422,13 +9517,14 @@ def build_locked(items, downloads, output, zig, compression_workers=None, expans
             return _build_locked(items,downloads,output,zig,compression_workers,expansion_workers,
             interwiki_snapshot,auxiliary_snapshots,expansion_timeout_ms,now_unix,raw_shard_root,
             compress_shards,extraction_cache_root,reviewed_nonlexical_review,llvm_workers,borrowed,input_guard,
+            _indexed_originals=_indexed_originals,
             **({'presentation_audit_pages':presentation_audit_pages} if presentation_audit_pages is not None else {}), **({'continue_failed_shards':True} if continue_failed_shards else {}), **({'retained_roles':retained_roles} if retained_roles is not None else {}), **shard_page_options(shard_pages))
 
         finally:
             input_guard()
 
 
-def _build_locked(items, downloads, output, zig, compression_workers=None, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None, now_unix=None, raw_shard_root=None, compress_shards=False, extraction_cache_root=None, reviewed_nonlexical_review=None, llvm_workers=None, staged_input_root=None, _staged_input_guard=None, presentation_audit_pages=None, retained_roles=None, continue_failed_shards=False, shard_pages=None):
+def _build_locked(items, downloads, output, zig, compression_workers=None, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None, now_unix=None, raw_shard_root=None, compress_shards=False, extraction_cache_root=None, reviewed_nonlexical_review=None, llvm_workers=None, staged_input_root=None, _staged_input_guard=None, presentation_audit_pages=None, retained_roles=None, continue_failed_shards=False, shard_pages=None, _indexed_originals=None):
     interval=selected_shard_pages(shard_pages)
     if retained_roles is not None and (not compress_shards or not isinstance(retained_roles, RetainedNativeToolRoles)):
         raise ValueError('Retained roles require ordinary compressed sharded execution')
@@ -9468,8 +9564,7 @@ def _build_locked(items, downloads, output, zig, compression_workers=None, expan
             validate_item(item)
             source = (archive_source/item['name'] if archive_source is not None and item['name'] in archive_names
                       else downloads / item['wiki'] / item['date'] / item['name'])
-            if not source.is_file() or source.stat().st_size != item['size'] or digest(source) != item['sha1']:
-                raise ValueError(f'Missing or unverified download: {source}')
+            verify_original_download(source,item,_indexed_originals or {})
             verified_bytes+=item['size']
         result['verified_bytes']=verified_bytes
         if _staged_input_guard is not None:_staged_input_guard()
@@ -9889,6 +9984,7 @@ def main():
     p.add_argument('--presentation-audit-pages',type=int,metavar='N',help='After a bound presentation failure, audit at most N rows from the failed shard start using the same worker; edition remains failed and unpublished, original deadline applies')
     p.add_argument('--shard-pages',type=int,metavar='N',help='Positive verified shard checkpoint interval; default 100000 pages. Smaller shards increase verification/compression/merge overhead.')
     p.add_argument('--compress-shards',action='store_true',help='Verify and compress each temporary shard, then merge directly to compressed output')
+    p.add_argument('--original-archives',action='store_true',help='Use original bzip2 archives for new editions without repacking; preserve existing staged work and sealed workers')
     p.add_argument('--staged-input-root',type=Path,metavar='DIR',help='Read-only completed repack or explicit original-bzip2 input marker for one edition; validates declared inputs, never copies or retires them')
     p.add_argument('--extraction-cache-root',type=Path,metavar='DIR',help='Existing verified native extraction/object cache for one edition; cache identities are checked against fresh build inputs')
     p.add_argument('--raw-shard-root',type=Path,metavar='DIR',help='Optional raw shard volume; input/native caches and merged publication remain under --output')
@@ -10049,6 +10145,8 @@ def main():
     if a.interwiki_map_snapshot: options['interwiki_snapshot']=a.interwiki_map_snapshot.resolve()
     try: options['edition_options']=resolve_edition_snapshot_options(manifest,groups,a.downloads.resolve(),auxiliary,workspace=workspace,metadata_network=a.metadata_network,figure_reuse_batches=tuple(a.figure_reuse_batch))
     except (ValueError,OSError) as error:p.error(str(error))
+    if a.original_archives:
+        for value in options['edition_options'].values():value['original_archives']=True
     if retained_roles is not None:
         try:
             for value in options['edition_options'].values():

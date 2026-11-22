@@ -17644,4 +17644,192 @@ class FreshArchivePublicationTests(PublicationCompilerFixture):
                     with self.assertRaisesRegex(ValueError,'Outdated dump staging'):b.require_current_staging_version(target,version,bad)
 
 
+class MultiEditionOriginalArchiveTests(unittest.TestCase):
+    def fixture(self,root,wiki='aawiktionary'):
+        date='20261001';downloads=root/'downloads';folder=downloads/wiki/date
+        folder.mkdir(parents=True)
+        name=wiki+'-'+date+'-pages-meta-current.xml.bz2'
+        raw=bz2.compress(b'<mediawiki><page><title>A</title><ns>0</ns><id>1</id><revision><id>2</id><text xml:space="preserve">one</text></revision></page></mediawiki>')
+        (folder/name).write_bytes(raw)
+        item=dict(wiki=wiki,date=date,name=name,size=len(raw),sha1=hashlib.sha1(raw).hexdigest(),
+                  url='https://dumps.wikimedia.org/'+wiki+'/'+date+'/'+name)
+        return item,downloads,root/'output'
+
+    def test_two_editions_use_normal_admission_and_one_index_pass_each(self):
+        import index_original_dump as index
+        import inspect
+        signature=inspect.signature(b._build_locked)
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);one,downloads,output=self.fixture(root);two,_,_=self.fixture(root,'abwiktionary')
+            groups={(x['wiki'],x['date']):[x] for x in (one,two)};selected=[]
+            def consume(*args,**kwargs):
+                values=signature.bind(*args,**kwargs).arguments
+                path=values['staged_input_root'];verified=values['_indexed_originals'] or {}
+                marker=b.original_archive_record(path);self.assertTrue(b.is_fresh_archive(marker))
+                self.assertEqual(marker['source_pages'],1)
+                if verified:
+                    self.assertEqual(len(verified),1)
+                    with patch.object(b,'digest',side_effect=AssertionError('second archive scan')):
+                        b.verify_original_download(next(iter(verified)),values['items'][0],verified)
+                values['_staged_input_guard']();selected.append(path)
+                return 'new_output'
+            with patch.object(b,'_build_locked',side_effect=consume),patch.object(b,'safe_worker_budget',return_value=4), \
+                 patch.object(index,'write_directory',wraps=index.write_directory) as create:
+                options={key:{'original_archives':True} for key in groups}
+                self.assertEqual(b.build_groups(groups,downloads,output,'unused-zig',1,1,edition_options=options),[])
+                self.assertEqual(create.call_count,2);self.assertEqual(len(set(selected)),2)
+                self.assertEqual(b.build_groups(groups,downloads,output,'unused-zig',1,1,edition_options=options),[])
+                self.assertEqual(create.call_count,2);self.assertEqual(selected[:2],selected[2:])
+            self.assertFalse(any(output.rglob('pages.xml.zst')))
+
+    def test_legacy_work_cache_sealed_context_and_explicit_inputs_remain_selected(self):
+        import index_original_dump as index
+        for mode in ('published','building','shards','explicit_cache','sealed','explicit_stage'):
+            with self.subTest(mode=mode),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);item,downloads,output=self.fixture(root);kwargs={}
+                parent=output/item['wiki'];date=item['date']
+                if mode in ('published','building','shards'):
+                    path=parent/(date+{'published':'','building':'.building','shards':'.shards'}[mode]);path.mkdir(parents=True)
+                    (path/'keep').write_bytes(b'paid source/output')
+                elif mode=='explicit_cache':kwargs['extraction_cache_root']=root/'paid-cache'
+                elif mode=='sealed':kwargs['retained_roles']=SimpleNamespace(initial_sealed_generation={'paid':True})
+                else:kwargs['staged_input_root']=root/'explicit-selected'
+                with patch.object(index,'write_directory',side_effect=AssertionError('duplicate extraction')):
+                    selected,verified=b.select_original_archive_input([item],downloads,output,1,**kwargs)
+                self.assertEqual(selected,kwargs.get('staged_input_root'));self.assertEqual(verified,{})
+                self.assertFalse((parent/(date+'.original-input')).exists())
+                if mode in ('published','building','shards'):self.assertEqual((path/'keep').read_bytes(),b'paid source/output')
+
+    def test_orphan_count_offsets_and_missing_started_marker_refuse_without_reindex(self):
+        import index_original_dump as index
+        for change in ('unchanged','count','offset'):
+            with self.subTest(change=change),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);item,downloads,output=self.fixture(root)
+                path,_=b.select_original_archive_input([item],downloads,output,1)
+                marker=b.original_archive_record(path);blocks=Path(marker['block_directory']['path'])
+                orphan=path.parent/'blocks.json';blocks.rename(orphan);blocks=orphan
+                (path/'.complete.json').unlink();path.rmdir();directory=json.loads(blocks.read_text())
+                if change=='count':directory['source_pages']+=1
+                if change=='offset':directory['parts'][0]['blocks'][0][0]+=1
+                blocks.write_text(json.dumps(directory));before=blocks.read_bytes()
+                with patch.object(index,'write_directory',side_effect=AssertionError('repeat original decode')), \
+                     patch.object(b,'_build_locked',side_effect=AssertionError('native execution')):
+                    with self.assertRaisesRegex(ValueError,'Orphan original block directory'):
+                        b.build([item],downloads,output,'unused-zig',1,original_archives=True)
+                self.assertEqual(blocks.read_bytes(),before);self.assertFalse(path.exists())
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);item,downloads,output=self.fixture(root)
+            path,_=b.select_original_archive_input([item],downloads,output,1);marker=b.original_archive_record(path)
+            workspace=output/item['wiki']/(item['date']+'.shards');workspace.mkdir()
+            state=dict(original_archive_input=dict(marker=b.prepared_metadata_ref(path/'.complete.json'),selection=marker))
+            (workspace/'state.json').write_text(b.build_envelope_text(state))
+            (output/item['wiki']/(item['date']+'.building')).mkdir()
+            with patch.object(index,'write_directory',side_effect=AssertionError('repeat original decode')):
+                self.assertEqual(b.select_original_archive_input([item],downloads,output,1)[0],path)
+                (path/'.complete.json').unlink()
+                with self.assertRaisesRegex(ValueError,'missing its retained input marker'):
+                    b.select_original_archive_input([item],downloads,output,1)
+
+    def test_interrupted_creation_retries_and_marked_previous_layout_remains_usable(self):
+        import index_original_dump as index
+        import inspect
+        signature=inspect.signature(b._build_locked)
+        for interruption in ('before_marker','before_commit'):
+            with self.subTest(interruption=interruption),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);item,downloads,output=self.fixture(root)
+                selected=output/item['wiki']/(item['date']+'.original-input')/'input'
+                original_prepare=index.prepare_build_input;original_rename=b.os.rename
+                def stop_prepare(*args,**kwargs):
+                    self.assertTrue(args[1].is_file())
+                    raise RuntimeError('interrupted marker preparation')
+                def stop_commit(source,destination):
+                    if Path(destination)==selected:
+                        self.assertTrue((Path(source)/'blocks.json').is_file())
+                        self.assertTrue((Path(source)/'.complete.json').is_file())
+                        raise RuntimeError('interrupted directory commit')
+                    return original_rename(source,destination)
+                with patch.object(index,'prepare_build_input',side_effect=stop_prepare if interruption=='before_marker' else original_prepare), \
+                     patch.object(b.os,'rename',side_effect=stop_commit if interruption=='before_commit' else original_rename), \
+                     patch.object(b,'_build_locked',side_effect=AssertionError('native execution')):
+                    with self.assertRaisesRegex(RuntimeError,'interrupted'):
+                        b.build([item],downloads,output,'unused-zig',1,original_archives=True)
+                self.assertFalse(selected.exists())
+                self.assertEqual(list(selected.parent.glob('.pending-input-*')),[])
+                def consume(*args,**kwargs):
+                    values=signature.bind(*args,**kwargs).arguments
+                    self.assertEqual(values['staged_input_root'],selected)
+                    values['_staged_input_guard']()
+                    marker=b.original_archive_record(selected)
+                    self.assertEqual(marker['block_directory']['path'],str(selected/'blocks.json'))
+                    self.assertEqual(marker['block_directory']['sha256'],b.sha256_file(selected/'blocks.json'))
+                    return 'new_output'
+                with patch.object(index,'write_directory',wraps=index.write_directory) as write, \
+                     patch.object(b,'_build_locked',side_effect=consume):
+                    self.assertEqual(b.build([item],downloads,output,'unused-zig',1,original_archives=True),'new_output')
+                    self.assertEqual(write.call_count,1)
+                # The previous marked layout also remains an authoritative selection.
+                old=selected.parent/'blocks.json';(selected/'blocks.json').rename(old)
+                marker=b.original_archive_record(selected);marker['block_directory']['path']=str(old)
+                (selected/'.complete.json').write_text(json.dumps(marker))
+                with patch.object(index,'write_directory',side_effect=AssertionError('repeat decode')):
+                    self.assertEqual(b.select_original_archive_input([item],downloads,output,1)[0],selected)
+
+    def test_indexed_part_mutation_and_aliased_or_overlapping_roots_refuse(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);item,downloads,output=self.fixture(root)
+            selected,verified=b.select_original_archive_input([item],downloads,output,1)
+            part=next(iter(verified));part.write_bytes(part.read_bytes()+b'changed')
+            with self.assertRaisesRegex(ValueError,'changed before ordinary verification'):
+                b.verify_original_download(part,item,verified)
+        for mode in ('symlink','overlap','incomplete'):
+            with self.subTest(mode=mode),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);item,downloads,output=self.fixture(root)
+                container=output/item['wiki']/(item['date']+'.original-input');container.parent.mkdir(parents=True)
+                kwargs={}
+                if mode=='symlink':container.symlink_to(downloads,target_is_directory=True)
+                elif mode=='overlap':kwargs['raw_shard_root']=container
+                else:(container/'input').mkdir(parents=True)
+                with self.assertRaises((ValueError,FileNotFoundError)):
+                    b.select_original_archive_input([item],downloads,output,1,**kwargs)
+
+
+class ReviewedOriginalArchiveCompatibilityTests(unittest.TestCase):
+    def test_automatic_archives_keep_reviewed_rows_on_normal_staging(self):
+        import inspect
+        signature=inspect.signature(b._build_locked)
+        for explicit_legacy in (False,True):
+            with self.subTest(explicit_legacy=explicit_legacy),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);item,legacy=BorrowedStagedInputTests().fixture(root)
+                review=root/'review.json';review.write_bytes(b'{"held-review":"physical dump and index"}')
+                selected=legacy if explicit_legacy else None
+                def consume(*args,**kwargs):
+                    values=signature.bind(*args,**kwargs).arguments
+                    self.assertEqual(values['reviewed_nonlexical_review'],review)
+                    self.assertEqual(values['staged_input_root'],selected)
+                    values['_staged_input_guard']()
+                    return 'new_output'
+                with patch.object(b,'select_original_archive_input',side_effect=AssertionError('new archive selection')), \
+                     patch.object(b,'_build_locked',side_effect=consume):
+                    self.assertEqual(b.build([item],root,root/'out','unused-zig',1,original_archives=True,
+                        reviewed_nonlexical_review=review,staged_input_root=selected),'new_output')
+                self.assertEqual(review.read_bytes(),b'{"held-review":"physical dump and index"}')
+                self.assertFalse((root/'out'/item['wiki']/(item['date']+'.original-input')).exists())
+
+    def test_explicit_fresh_and_bridged_archives_with_review_refuse_before_build_setup(self):
+        for fixture in (FreshOriginalArchiveTests(),OriginalArchiveStagedInputTests()):
+            with self.subTest(fixture=type(fixture).__name__),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);item,selected,marker,directory,source,part=fixture.fixture(root)
+                review=root/'review.json';review.write_bytes(b'{"reviewed_rows":"retain"}')
+                with patch.object(b,'digest',side_effect=AssertionError('archive verification')), \
+                     patch.object(b,'select_original_archive_input',side_effect=AssertionError('indexing')), \
+                     patch.object(b,'_build_locked',side_effect=AssertionError('native setup')):
+                    for entry in (b.build,b.build_locked):
+                        with self.assertRaisesRegex(ValueError,'exact physical staged dump and page index'):
+                            entry([item],root,root/'out','unused-zig',1,staged_input_root=selected,
+                                  reviewed_nonlexical_review=review)
+                self.assertFalse((root/'out').exists());self.assertTrue(part.is_file())
+                self.assertEqual(json.loads((selected/'.complete.json').read_text()),marker)
+                self.assertEqual(review.read_bytes(),b'{"reviewed_rows":"retain"}')
+
+
 if __name__=='__main__':unittest.main()
