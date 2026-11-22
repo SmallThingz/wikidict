@@ -16,7 +16,7 @@ const web = path.dirname(fileURLToPath(import.meta.url));
 const repo = path.resolve(web, '../..');
 const widths = [1000, 640];
 if (process.argv.slice(2).join(' ') === '--help') {
-  console.log('node desktop/web/check-edition-layout.mjs INVENTORY.tsv NEW_OUTPUT_DIR EDITION... [--resume] [--pause-after-members N] [--figure-witness FILE.json]');
+  console.log('node desktop/web/check-edition-layout.mjs INVENTORY.tsv NEW_OUTPUT_DIR EDITION... [--resume] [--pause-after-members N] [--scroll-review CASES.json] [--figure-witness FILE.json]');
   console.log('A fresh directory records an atomic checkpoint after each member. --resume reuses completed members under the same inputs and renderer. --pause-after-members N stops cleanly with exit 75 for a bounded run.');
   console.log('Reads an existing local edition inventory and its sibling Reader checks, then writes editions.jsonl, issues.jsonl, progress.jsonl and sampled viewport PNGs. Exit 2 means enumeration or a required layout check was incomplete.');
   process.exit(0);
@@ -29,6 +29,8 @@ function option(name, takesValue = false) {
   if (takesValue) assert(removed[1], `Missing value for ${name}`);
   return takesValue ? removed[1] : true;
 }
+const scrollFile = option('--scroll-review',true);
+const scrollCases = scrollFile ? JSON.parse(await readFile(scrollFile,'utf8')) : null;
 const resume = option('--resume');
 const pause = option('--pause-after-members', true);
 if (pause !== null) assert(/^[1-9]\d*$/.test(pause) && Number.isSafeInteger(Number(pause)));
@@ -209,6 +211,76 @@ async function inspectEntries(page, edition, entries) {
   }
 }
 
+// Test the leading and trailing edges independently: a long preformatted line
+// cannot fit in a single viewport, but a reader should be able to reach both ends.
+function inspectScroll() {
+  const walker=document.createTreeWalker(document.querySelector('main'),NodeFilter.SHOW_TEXT);
+  const result={outsideNodes:0,reachableNodes:0,containers:{},unreachableExamples:[],keyboardTarget:null};
+  let node;
+  while ((node=walker.nextNode())) {
+    const owner=node.parentElement;
+    if (!node.data.trim() || owner.closest('h1,.entry-language,summary,footer,script,style') || parseFloat(getComputedStyle(owner).fontSize)===0) continue;
+    const range=document.createRange(); range.selectNodeContents(node);
+    const rects=()=>[...range.getClientRects()].filter(r=>r.width && r.height);
+    const before=rects();
+    if (!before.some(r=>r.left<-.5 || r.right>innerWidth+.5)) continue;
+    ++result.outsideNodes;
+    const clips=[];
+    for (let el=owner;el && el!==document.body;el=el.parentElement) {
+      if (getComputedStyle(el).overflowX!=='visible') clips.push(el);
+    }
+    const scrollers=clips.filter(el=>/^(auto|scroll)$/.test(getComputedStyle(el).overflowX) && el.scrollWidth>el.clientWidth+1);
+    const names=scrollers.map(el=>el.tagName.toLowerCase()).join('/') || '(none)';
+    result.containers[names]=(result.containers[names]||0)+1;
+    const saved=scrollers.map(el=>el.scrollLeft);
+    function visible(x) {
+      if (x<-.5 || x>innerWidth+.5) return false;
+      return clips.every(el=>{const left=el.getBoundingClientRect().left+el.clientLeft;return x>=left-1 && x<=left+el.clientWidth+1;});
+    }
+    let reachable=true;
+    for (const [i,r] of before.entries()) for (const edge of ['left','right']) {
+      const target=r[edge]; if (target>=-.5 && target<=innerWidth+.5) continue;
+      for (const el of scrollers) {
+        const box=el.getBoundingClientRect(),left=box.left+el.clientLeft;
+        const x=rects()[i][edge];
+        el.scrollLeft+=x-Math.min(Math.max(x,left+1),left+el.clientWidth-1);
+      }
+      if (!visible(rects()[i][edge])) reachable=false;
+      scrollers.forEach((el,j)=>{el.scrollLeft=saved[j];});
+    }
+    if (reachable) ++result.reachableNodes;
+    else if (result.unreachableExamples.length<4) result.unreachableExamples.push({text:node.data.slice(0,100),containers:names});
+    const a=owner.closest('a[href^="#"]');
+    if (a && !result.keyboardTarget) {const links=[...document.querySelectorAll('main a[href^="#"]')];result.keyboardTarget={index:links.indexOf(a),href:a.getAttribute('href')};}
+  }
+  return result;
+}
+
+async function activateLink(page,link) {
+    await link.focus();
+    const href = await link.getAttribute('href');
+    assert(await link.evaluate(el => el === document.activeElement));
+    const state = () => ({actions:window.auditActions.slice(), hash:location.hash, focused:document.activeElement?.id || null});
+    const before = await page.evaluate(state);
+    await page.keyboard.press('Enter');
+    const after = await page.evaluate(state);
+    const actions = after.actions.slice(before.actions.length);
+    const expectedParts = href.slice(1).split('#').map(decodeURIComponent);
+    const [call] = actions;
+    const exactDispatch = actions.length === 1 && Array.isArray(call) && (
+      (call.length === expectedParts.length && call.every((v,i)=>v === expectedParts[i])) ||
+      (expectedParts.length === 1 && call.length === 2 && call[0] === '' && call[1] === expectedParts[0])
+    );
+    const localTarget = expectedParts.length === 1 ? expectedParts[0] : expectedParts[0] === '' ? expectedParts[1] : null;
+    const exactLocalFocus = actions.length === 0 && localTarget && before.focused !== after.focused && after.focused === localTarget &&
+      await page.evaluate(id => document.getElementById(id) === document.activeElement, localTarget);
+    const exactLocalHash = actions.length === 0 && localTarget && before.hash !== after.hash &&
+      decodeURIComponent(after.hash.slice(1)) === localTarget && await page.evaluate(id=>!!document.getElementById(id),localTarget);
+    
+    return {href, before, after, expectedParts, confirmedBy: exactDispatch ? 'matching dispatch' : exactLocalFocus ? 'focus moved to target' : exactLocalHash ? 'hash moved to target' : null,
+      unconfirmed: !(exactDispatch || exactLocalFocus || exactLocalHash)};
+}
+
 async function sample(page, payload, filename, keyboard) {
   const [rendered] = await page.evaluate(inspectBatch, payload);
   await page.evaluate(async () => {scrollTo(0, 0); await document.fonts.ready; await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));});
@@ -233,29 +305,8 @@ async function sample(page, payload, filename, keyboard) {
   const result = {filename, sha256: digest(bytes), bytes: bytes.length, pixels};
   if (rendered.error) return {...result, renderError:rendered.error};
   if (keyboard) {
-    const link = page.locator('main a[href^="#"]').filter({hasText: /\S/}).first();
-    await link.focus();
-    const href = await link.getAttribute('href');
-    assert(await link.evaluate(el => el === document.activeElement));
-    const state = () => ({actions:window.auditActions.slice(), hash:location.hash, focused:document.activeElement?.id || null});
-    const before = await page.evaluate(state);
-    await page.keyboard.press('Enter');
-    const after = await page.evaluate(state);
-    const actions = after.actions.slice(before.actions.length);
-    const expectedParts = href.slice(1).split('#').map(decodeURIComponent);
-    const [call] = actions;
-    const exactDispatch = actions.length === 1 && Array.isArray(call) && (
-      (call.length === expectedParts.length && call.every((v,i)=>v === expectedParts[i])) ||
-      (expectedParts.length === 1 && call.length === 2 && call[0] === '' && call[1] === expectedParts[0])
-    );
-    const localTarget = expectedParts.length === 1 ? expectedParts[0] : expectedParts[0] === '' ? expectedParts[1] : null;
-    const exactLocalFocus = actions.length === 0 && localTarget && before.focused !== after.focused && after.focused === localTarget &&
-      await page.evaluate(id => document.getElementById(id) === document.activeElement, localTarget);
-    const exactLocalHash = actions.length === 0 && localTarget && before.hash !== after.hash &&
-      decodeURIComponent(after.hash.slice(1)) === localTarget && await page.evaluate(id=>!!document.getElementById(id),localTarget);
-    result.href = href;
-    result.keyboard = {before, after, expectedParts, confirmedBy: exactDispatch ? 'matching dispatch' : exactLocalFocus ? 'focus moved to target' : exactLocalHash ? 'hash moved to target' : null,
-      unconfirmed: !(exactDispatch || exactLocalFocus || exactLocalHash)};
+    result.keyboard=await activateLink(page,page.locator('main a[href^="#"]').filter({hasText:/\S/}).first());
+    result.href=result.keyboard.href;
   }
   return result;
 }
@@ -271,13 +322,14 @@ try {
   for (const file of inputPaths) sources[file] = await fileDigest(path.join(web,file));
   const binding = {version:1, selected, inventory:digest(inventoryBytes), reader:digest(readerTable), sources,
     bundle:digest(js), css:digest(css), font:digest(font), browser:browser.version(),
-    executable:await fileDigest(process.env.CHROMIUM || '/opt/brave-bin/brave'), node:process.version, widths, figureWitness:figureWitness ?? null};
+    executable:await fileDigest(process.env.CHROMIUM || '/opt/brave-bin/brave'), node:process.version, widths, scrollCasesSha256:scrollCases ? digest(JSON.stringify(scrollCases)) : null, figureWitness:figureWitness ?? null};
+  let scrollDigest=saved?.scrollDigest ?? null;
   let witnessDigest = saved?.witnessDigest ?? null;
   const syncFile = async filename => {const f=await open(filename,'r'); try {await f.sync();} finally {await f.close();}};
   async function commit(editionIndex, nextMember, stat, screens) {
     const logs = {};
     for (const [name,log] of Object.entries(journals)) {await log.sync(); logs[name]=log.position();}
-    const state = {binding,witnessDigest,editionIndex,nextMember,stat,screens:screens?.map(v=>[...v]) ?? null,issueCount,incompleteEditions,logs};
+    const state = {binding,witnessDigest,scrollDigest,editionIndex,nextMember,stat,screens:screens?.map(v=>[...v]) ?? null,issueCount,incompleteEditions,logs};
     const tmp = `${checkpointPath}.next`;
     await writeFile(tmp,JSON.stringify({state,sha256:digest(JSON.stringify(state))})+'\n'); await syncFile(tmp);
     await rename(tmp,checkpointPath); await directory.sync();
@@ -296,6 +348,7 @@ try {
       assert.equal(path.basename(sample.filename),sample.filename);
       assert.equal(await fileDigest(path.join(out,sample.filename)),sample.sha256,'Committed sample changed');
     }
+    if (scrollDigest) assert.equal(await fileDigest(path.join(out,'scroll-review.jsonl')),scrollDigest);
     if (witnessDigest) assert.equal(await fileDigest(path.join(out,'figure-witness.json')),witnessDigest);
     // Discard only uncredited tail writes, after validating every journal and input.
     for (const log of Object.values(journals)) await log.handle.truncate(log.position().bytes);
@@ -309,6 +362,41 @@ try {
     await page.addScriptTag({content: js});
     await page.evaluate(async () => { const faces = await document.fonts.load('16px Reader'); await document.fonts.ready; if (!faces.length || faces.some(face => face.status !== 'loaded') || !document.fonts.check('16px Reader')) throw Error('Product Reader font failed to load'); });
     pages.push(page);
+  }
+  if (scrollCases && !saved?.scrollDigest) {
+    const target=path.join(out,'scroll-review.jsonl');
+    const reviewed=await open(target,'w');
+    try {
+    for (const group of scrollCases) {
+      const [, , relative,sha]=selections.get(group.edition);
+      assert.equal(sha,group.completeHash);
+      const root=path.resolve(repo,relative), manifest=await readFile(path.join(root,'complete.json'));
+      assert.equal(digest(manifest),sha);
+      const members=JSON.parse(manifest).publication_files;
+      for (const [member,items] of Object.entries(group.members)) {
+        assert(!path.isAbsolute(member) && member.split('/').every(s=>s && s!=='.' && s!=='..'));
+        const filename=path.join(root,member); assert.equal(await fileDigest(filename),members[member].sha256);
+        const source=await openSource(await openAsBlob(filename)),index=await buildIndex(source);
+        for (const j of items) {
+          const row=index.rows[j.ordinal]; assert.equal(row.title,j.title); assert.equal(row.offset,j.offset); assert.equal(row.length,j.length);
+          assert.equal(index.metadata.kind,'language');
+          const entry=decode(await source.read(row.offset,row.length),{...index.metadata,title:row.title}); entry.source_title=row.title;entry.source_edition=group.edition;
+          const page=pages[widths.indexOf(j.width)];
+          const [layout]=await page.evaluate(inspectBatch,{entries:[entry],edition:group.edition});
+          assert.equal(layout.problems.outsideViewportCandidates,j.expected);
+          const measured=await page.evaluate(inspectScroll);assert.equal(measured.outsideNodes,j.expected);
+          if (measured.keyboardTarget) {
+            const link=page.locator('main a[href^="#"]').nth(measured.keyboardTarget.index);
+            assert.equal(await link.getAttribute('href'),measured.keyboardTarget.href);
+            await link.focus(); measured.focusInViewport=await link.evaluate(el=>{const r=el.getBoundingClientRect();return document.activeElement===el && r.right>0 && r.left<innerWidth && r.bottom>0 && r.top<innerHeight;});
+            measured.activation=await activateLink(page,link);
+          }
+          await reviewed.writeFile(JSON.stringify({edition:group.edition,member,...j,...measured})+'\n');
+        }
+      }
+    }
+    } finally {await reviewed.close();}
+    await syncFile(target);scrollDigest=await fileDigest(target);
   }
   if (figureWitness && !witnessDigest) {
     const w = figureWitness;
