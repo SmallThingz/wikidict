@@ -210,6 +210,30 @@ class AttemptIndexTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, 'Guarded snapshots differ'):
                     read_execution(base, path, guardian=True)
             interwiki = record(root / 'interwiki.tsv', b'interwiki')
+            stage = root / 'worker' / 'input'
+            stage.mkdir(parents=True)
+            marker = record(stage / '.complete.json', {})
+            roles = record(root / 'roles.json', {})
+            initial = record(root / 'initial.json', {})
+            source_alias = stage.parent / 'expander' / '.bundle-expander' / 'interwiki-map.tsv'
+            source_alias.parent.mkdir(parents=True)
+            source_alias.symlink_to(interwiki['path'])
+            staged = dict(staged_input_root=str(stage), staged_completion=marker, roles=roles,
+                          initial_generation=initial, interwiki=interwiki, original_inputs=manifest)
+            staged_args = (*flags, '--interwiki-map-snapshot', interwiki['path'], '--staged-input-root', str(stage),
+                           '--retained-native-roles-ref', json.dumps(roles))
+            staged_auth = dict(input_selection=True, snapshot=snapshot, snapshot_context=staged,
+                               extra_refs=(roles, marker, initial, dict(interwiki, path=str(source_alias))))
+            freeze(staged_args, **staged_auth)
+            self.assertEqual(read_execution(base, path, guardian=True)['production_seconds'], '2.500')
+            source_alias.unlink()
+            source_alias.write_bytes(Path(interwiki['path']).read_bytes())
+            with self.assertRaisesRegex(ValueError, 'Unguarded staged snapshot'):
+                read_execution(base, path, guardian=True)
+            for changed in (dict(roles=initial), dict(staged_input_root=str(root))):
+                freeze(staged_args, **{**staged_auth, 'snapshot_context': {**staged, **changed}})
+                with self.assertRaisesRegex(ValueError, 'Different staged worker'):
+                    read_execution(base, path, guardian=True)
             plan = dict(manifest=manifest, snapshots={'language-registry': snapshot}, interwiki=interwiki,
                         indexed_pages=4000, shard_pages=200, presentation_audit_pages=50, normal_input_validation_pending=True)
             original = record(root / 'whole-inputs.json', plan)
@@ -307,6 +331,10 @@ class AttemptIndexTests(unittest.TestCase):
             self.assertEqual(row['command_exit'], 1)
             self.assertEqual(row['closure_join'], 'original-terminal-unknown')
             self.assertEqual(row['production_status'], 'no-terminal-production-clock')
+            for program, expected in ((b'builder.py', 'failed-before-production'), (b'other', 'no-terminal-production-clock')):
+                stderr = record(run / 'tests.stderr', b'usage: builder.py [-h]\n' + program + b': error: invalid role\n')
+                freeze(exit_code=2, watchdog_code=2, selected_catalog=True)
+                self.assertEqual(read_execution(base, path, guardian=True)['production_status'], expected)
             for watchdog_code, cleanup in [(0, True), (1, False)]:
                 freeze(detached=True, exit_code=1, watchdog_code=watchdog_code, cleanup=cleanup)
                 with self.assertRaisesRegex(ValueError, 'Incomplete guardian closure'):

@@ -63,6 +63,39 @@ def attempt_key(base, path):
     return ('absolute:' if relative.is_absolute() else 'path:') + relative.parents[1].as_posix()
 
 
+def staged_selection_manifest(inputs, refs, argv, option):
+    """Authenticate the original selection of a whole build using a sealed worker."""
+    stage = Path(option('--staged-input-root'))
+    roles = json.loads(option('--retained-native-roles-ref'))
+    marker = inputs['staged_completion']
+    if (str(stage) != inputs['staged_input_root'] or marker not in refs
+            or Path(marker['path']) != stage / '.complete.json'
+            or roles != inputs['roles'] or roles not in refs or inputs['initial_generation'] not in refs):
+        raise ValueError('Different staged worker or retained role selection')
+    snapshots = inputs['snapshots']
+    if not isinstance(snapshots, dict) or not snapshots or 'interwiki-map' in snapshots:
+        raise ValueError('Invalid staged snapshot selection')
+    selected = {**snapshots, 'interwiki-map': inputs['interwiki']}
+    flags = [arg for arg in argv if arg.startswith('--') and arg.split('=', 1)[0].endswith('-snapshot')]
+    if (argv.count('--exact-snapshot-selection') != 1 or sorted(flags) != sorted('--' + k + '-snapshot' for k in selected)):
+        raise ValueError('Staged snapshot flags differ')
+    for name, ref in selected.items():
+        if option('--' + name + '-snapshot') != ref['path']:
+            raise ValueError(f'Staged snapshot argument differs: {name}')
+        if ref in refs:
+            continue
+        # The existing worker can guard its interwiki input through its own
+        # symlink. Equal contents at an unrelated path do not identify it.
+        alias = stage.parent / 'expander' / '.bundle-expander' / 'interwiki-map.tsv'
+        if (name != 'interwiki-map' or {**ref, 'path': str(alias)} not in refs
+                or not alias.is_symlink() or os.readlink(alias) != ref['path']):
+            raise ValueError(f'Unguarded staged snapshot: {name}')
+        checked(ref)
+        if os.readlink(alias) != ref['path']:
+            raise ValueError(f'Staged snapshot link changed: {name}')
+    return inputs['original_inputs']
+
+
 def guardian_whole(path, closure, result):
     """Recover whole-build scope from the guardian's authenticated invocation.
 
@@ -161,6 +194,9 @@ def guardian_whole(path, closure, result):
                                           'input_validation_deferred_to_normal_whole'}
         if 'manifest' in inputs and command.get('input_step') == 'ordinary_whole':
             manifest_ref = inputs['manifest']
+        elif {'staged_input_root', 'staged_completion', 'roles', 'initial_generation', 'snapshots',
+              'interwiki', 'original_inputs'} <= inputs.keys():
+            manifest_ref = staged_selection_manifest(inputs, refs, argv, option)
         elif (set(inputs) in ({'snapshots'}, dated_fields, deferred_fields)
               and argv.count('--exact-snapshot-selection') == 1):
             if 'edition' in inputs:
@@ -274,9 +310,14 @@ def guardian_whole(path, closure, result):
         digest = (hashlib.sha256(diagnostic) if diagnostic is not None else hashlib.file_digest(stream, 'sha256')).hexdigest()
         if digest != stderr['sha256'] or os.fstat(stream.fileno()).st_size != stderr['bytes']:
             raise ValueError(stderr['path'])
+    # argparse exits 2 before entering edition_build. Require its actual usage
+    # preamble and final diagnostic from the same bound direct script.
+    program = Path(script).name.encode()
+    parser_refusal = (code == 2 and diagnostic is not None and diagnostic.startswith(b'usage: ' + program + b' ')
+                      and diagnostic.rstrip().split(b'\n')[-1].startswith(program + b': error: '))
     return {**closure, 'whole_edition_selected': True, 'page_limit': None,
             'presentation_audit_limit': None, 'edition_output': str(output),
-            'failed_builder_import': diagnostic is not None and failed_builder_import(diagnostic, builder, catalog['modules']),
+            'failed_at_startup': parser_refusal or (diagnostic is not None and failed_builder_import(diagnostic, builder, catalog['modules'])),
             'failed_child_only': failed_child_only, 'deferred_preflight': deferred_preflight,
             'deferred_input_pages': dated_snapshots['indexed_pages'] if deferred_preflight else None,
             'command_returncode': code, 'ordinary_producer_passed': code == 0}
@@ -340,7 +381,7 @@ def read_execution(base, path, guardian=False):
     preflight_failed = (preflight_events == [('start', None), ('end', 'failure')]
                         and last_phase['phase'] == 'selected_snapshot_resolution')
     failed_before_build = (not phases and not closure['ordinary_producer_passed'] and result['returncode'] != 0
-                           and (preflight_failed or (guardian and closure['failed_builder_import'])))
+                           and (preflight_failed or (guardian and closure['failed_at_startup'])))
     if guardian and closure['deferred_preflight']:
         successful_pair = [('start', None), ('end', 'success')]
         validated = preflight_events == successful_pair if phases else preflight_failed and failed_before_build
