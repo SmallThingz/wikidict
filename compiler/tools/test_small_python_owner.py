@@ -6,6 +6,9 @@ import io
 import json
 import os
 from pathlib import Path
+import resource
+import subprocess
+import sys
 import tempfile
 import tracemalloc
 import unittest
@@ -282,6 +285,27 @@ class SourceValidationTests(unittest.TestCase):
 
 class DirectCliWatchdogTests(unittest.TestCase):
     def exercise(self, expected_exit, *, compact_start=False):
+        # The real owner changes process-wide limits and affinity. Give every
+        # control a fresh process so it cannot limit the surrounding test suite.
+        limits_before = resource.getrlimit(resource.RLIMIT_CPU)
+        affinity_before = os.sched_getaffinity(0)
+        priority_before = os.getpriority(os.PRIO_PROCESS, 0)
+        code = (
+            'from test_small_python_owner import DirectCliWatchdogTests\n'
+            f'DirectCliWatchdogTests().exercise_isolated({expected_exit!r}, '
+            f'compact_start={compact_start!r})\n'
+        )
+        completed = subprocess.run(
+            [sys.executable, '-B', '-c', code], cwd=D,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            timeout=90,
+        )
+        self.assertEqual(0, completed.returncode, completed.stdout + completed.stderr)
+        self.assertEqual(limits_before, resource.getrlimit(resource.RLIMIT_CPU))
+        self.assertEqual(affinity_before, os.sched_getaffinity(0))
+        self.assertEqual(priority_before, os.getpriority(os.PRIO_PROCESS, 0))
+
+    def exercise_isolated(self, expected_exit, *, compact_start=False):
         import os
         import sys
         selected = D / 'small_python_owner.py'
@@ -290,7 +314,7 @@ class DirectCliWatchdogTests(unittest.TestCase):
         root = PROJECT
         resources = D / 'build_resource_limits.py'
         guardian = D / 'build_watchdog_guardian.py'
-        with tempfile.TemporaryDirectory(prefix='direct-cli-proof-', dir=PROJECT / '.tmp') as tmp:
+        with tempfile.TemporaryDirectory(prefix='direct-cli-proof-') as tmp:
             output = Path(tmp)
             command = output / 'command.json'
             memory = 256 * 1024**2

@@ -85,11 +85,21 @@ class NormalCatalogTests(unittest.TestCase):
             selected = normal_build_catalog(spec)
             self.assertEqual(spec, original)
             self.assertEqual(selected['modules'], {k: modules[k] for k in ('build_wiktionaries', 'corpus_controller', 'helper')})
-            tooling = PythonTooling(selected)
-            tooling.require_unchanged()
-            Path(modules['helper']['path']).write_text('changed required\n')
-            with self.assertRaisesRegex(ValueError, 'identity changed'):
+            # Discovery may already have imported the real production modules.
+            # This catalog selects distinct synthetic sources for these names.
+            with patch.dict(build_python_tooling.sys.modules):
+                for name in selected['modules']:
+                    build_python_tooling.sys.modules.pop(name, None)
+                tooling = PythonTooling(selected)
                 tooling.require_unchanged()
+                foreign = ModuleType('build_wiktionaries')
+                foreign.__file__ = str(root / 'unselected_builder.py')
+                with patch.dict(build_python_tooling.sys.modules, build_wiktionaries=foreign):
+                    with self.assertRaisesRegex(ValueError, 'Loaded project module differs'):
+                        tooling.require_unchanged()
+                Path(modules['helper']['path']).write_text('changed required\n')
+                with self.assertRaisesRegex(ValueError, 'identity changed'):
+                    tooling.require_unchanged()
 
     def test_import_and_subprocess_reference_prevent_omission(self):
         for text in ('import verify_reader_ux\n', 'from verify_reader_ux import main\n',
