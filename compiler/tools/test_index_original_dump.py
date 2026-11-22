@@ -5,7 +5,72 @@ import random
 import tempfile
 import unittest
 
+from build_wiktionaries import XmlFrames
 from index_original_dump import _markers, decode_block, index_part, index_parts
+
+
+class CountOnlyXmlFrames(unittest.TestCase):
+    @staticmethod
+    def outcome(chunks, *, materialize=True, part_boundary=False, target=23):
+        boundaries = []
+
+        class Observed(XmlFrames):
+            def _take(self):
+                boundaries.append(self.batch_size)
+                return super()._take()
+
+        state = Observed(target, 97, 'same-original.xml.bz2',
+                         materialize=materialize, part_boundary=part_boundary)
+        frames = []
+        error = None
+        try:
+            for chunk in chunks:
+                frames.extend(state.feed(chunk))
+            frames.extend(state.finish())
+        except (ValueError, RuntimeError) as exc:
+            error = (type(exc).__name__, exc.args)
+        return dict(pages=state.pages, xml_bytes=state.xml_bytes, boundaries=boundaries,
+                    frames=[bytes(frame) if frame is not None else None for frame in frames],
+                    error=error)
+
+    def test_count_only_preserves_materialized_bytes_and_batch_boundaries(self):
+        large_page = b'<page>' + b'x' * 44 + b'</page>'
+        sources = [b'', b'<mediawiki/>', b'<page>a</page>',
+                   b'<mediawiki><page>a</page>' + large_page + b'</mediawiki>',
+                   b'<page>one</page>\n<page>two</page>trailer',
+                   large_page * 2, large_page + b'x' * 44]
+        for raw in sources:
+            for target in (23, 97, 200):
+                for width in range(1, len(raw) + 2):
+                    chunks = [raw[i:i + width] for i in range(0, len(raw), width)]
+                    materialized = self.outcome(chunks, target=target)
+                    counted = self.outcome(chunks, target=target, materialize=False)
+                    self.assertIsNone(materialized['error'])
+                    self.assertEqual(b''.join(materialized['frames']), raw)
+                    self.assertEqual(materialized['pages'], raw.count(b'<page>'))
+                    self.assertEqual(materialized['xml_bytes'], len(raw))
+                    self.assertEqual(materialized | {'frames': [None] * len(materialized['frames'])}, counted)
+
+    def test_count_only_preserves_errors_and_partial_part_fallback(self):
+        sources = [b'</page>', b'<page>unfinished', b'<pa', b'<page>' + b'x' * 98,
+                   b'<page>a</page><page>' + b'x' * 98 + b'</page>', b'header' * 20]
+        for raw in sources:
+            for part in (False, True):
+                for width in (1, 6, 7, 13, len(raw) + 1):
+                    chunks = [raw[i:i + width] for i in range(0, len(raw), width)]
+                    materialized = self.outcome(chunks, part_boundary=part)
+                    counted = self.outcome(chunks, materialize=False, part_boundary=part)
+                    self.assertEqual(materialized | {'frames': [None] * len(materialized['frames'])}, counted)
+
+    def test_count_only_keeps_no_materialized_batch(self):
+        state = XmlFrames(20, 100, 'source', materialize=False)
+        for raw in (b'<page>a</page>', b'<page>b</page>', b'tail'):
+            self.assertTrue(all(frame is None for frame in state.feed(raw)))
+            self.assertIsNone(state.batch)
+        self.assertTrue(all(frame is None for frame in state.finish()))
+        self.assertEqual((state.pages, state.xml_bytes), (2, 32))
+        self.assertIsNone(state.batch)
+        self.assertEqual(state.batch_size, 0)
 
 
 class OriginalXmlParts(unittest.TestCase):

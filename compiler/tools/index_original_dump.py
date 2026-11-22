@@ -209,7 +209,7 @@ def index_parts(items, downloads, workers=1, *, count_pages=False):
 
     def scan(item, block_workers, framer):
         def observe(raw):
-            # Count with the same XML boundaries as ordinary staging, discarding each batch.
+            # Count with ordinary XML boundaries without materializing discarded batches.
             for _ in framer.feed(raw):
                 pass
         path = downloads / item['wiki'] / item['date'] / item['name']
@@ -219,7 +219,7 @@ def index_parts(items, downloads, workers=1, *, count_pages=False):
         if block_workers is None:
             block_workers = slots if len(items) == 1 else 1
         framer = XmlFrames(STAGE_TARGET_BYTES, STAGE_MAX_MEMBER_BYTES, item['name'],
-                           part_boundary=len(items) > 1) if count_pages else None
+                           part_boundary=len(items) > 1, materialize=False) if count_pages else None
         try:
             part = scan(item, block_workers, framer)
         except AmbiguousBlockBoundary:
@@ -239,7 +239,7 @@ def index_parts(items, downloads, workers=1, *, count_pages=False):
         pages = sum(count for _, count in records)
     except SplitXmlPage:
         # One XML page can span physical parts. Retain only its unfinished bytes.
-        framer = XmlFrames(STAGE_TARGET_BYTES, STAGE_MAX_MEMBER_BYTES, items[0]['name'])
+        framer = XmlFrames(STAGE_TARGET_BYTES, STAGE_MAX_MEMBER_BYTES, items[0]['name'], materialize=False)
         parts = []
         for item in items:
             framer.source = item['name']

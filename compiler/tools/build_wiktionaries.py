@@ -3284,18 +3284,21 @@ class SplitXmlPage(ValueError):
 class XmlFrames:
     """Yield bounded, page-aligned XML batches in their original byte order."""
 
-    def __init__(self, target, limit, source, *, part_boundary=False):
+    def __init__(self, target, limit, source, *, part_boundary=False, materialize=True):
         self.target = target
         self.limit = limit
         self.source = source
         self.part_boundary = part_boundary
         self.pending = bytearray()
-        self.batch = bytearray()
+        self.batch = bytearray() if materialize else None
+        self.batch_size = 0
         self.pages = 0
         self.xml_bytes = 0
 
     def _take(self):
-        frame, self.batch = self.batch, bytearray()
+        frame = self.batch
+        self.batch = bytearray() if frame is not None else None
+        self.batch_size = 0
         return frame
 
     def feed(self, chunk):
@@ -3314,12 +3317,14 @@ class XmlFrames:
             size = cut - consumed
             if size > self.limit:
                 raise ValueError(f'XML page exceeds bounded Zstandard member: {self.source}')
-            if len(self.batch) + size > self.limit:
+            if self.batch_size + size > self.limit:
                 yield self._take()
-            self.batch.extend(memoryview(self.pending)[consumed:cut])
+            if self.batch is not None:
+                self.batch.extend(memoryview(self.pending)[consumed:cut])
+            self.batch_size += size
             consumed = scan = cut
             self.pages += 1
-            if len(self.batch) >= self.target:
+            if self.batch_size >= self.target:
                 yield self._take()
         del self.pending[:consumed]
         if len(self.pending) > self.limit:
@@ -3331,11 +3336,13 @@ class XmlFrames:
             raise SplitXmlPage(self.source)
         if opening in self.pending:
             raise ValueError('Truncated XML page at end of dump')
-        if len(self.batch) + len(self.pending) > self.limit:
+        if self.batch_size + len(self.pending) > self.limit:
             yield self._take()
-        self.batch.extend(self.pending)
+        if self.batch is not None:
+            self.batch.extend(self.pending)
+        self.batch_size += len(self.pending)
         self.pending.clear()
-        if self.batch:
+        if self.batch_size:
             yield self._take()
 
 
