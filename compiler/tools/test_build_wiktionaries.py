@@ -2725,6 +2725,46 @@ class BuildTest(PreparedToolsFixture):
             self.assertEqual(len(rows),2)
             self.assertEqual([row.split(':',1)[1] for row in rows],['1:member0','2:member1'])
 
+    def test_single_archive_parallel_decode_matches_standard_and_reaps_failures(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            directory = root/'testwiktionary/20260901'
+            directory.mkdir(parents=True)
+            archive = directory/'pages.xml.bz2'
+            xml = b'<mediawiki><page>A</page><page>B</page></mediawiki>'
+            archive.write_bytes(bz2.compress(xml[:19]) + bz2.compress(xml[19:]))
+            items = [dict(wiki='testwiktionary', date='20260901', name=archive.name)]
+            decoder = root/'lbzip2'
+            program = (
+                f'#!{sys.executable}\n'
+                'import bz2, os, sys\n'
+                'assert sys.argv[1:] == ["-dc", "-n", "2"]\n'
+                'assert not {"BZIP2", "BZIP", "LBZIP2"}.intersection(os.environ)\n'
+                'sys.stdout.buffer.write(bz2.decompress(sys.stdin.buffer.read()))\n'
+            )
+            decoder.write_text(program)
+            decoder.chmod(0o700)
+            with (patch.object(b, 'STAGE_PARALLEL_BZIP2_MIN_BYTES', 0),
+                  patch.object(b.os, 'sched_getaffinity', return_value={0, 1, 2, 3}),
+                  patch.object(b.shutil, 'which', return_value=str(decoder)) as lookup,
+                  patch.dict(os.environ, {'LBZIP2':'-t', 'BZIP':'-z', 'BZIP2':'-t'})):
+                results = []
+                for workers in (1, 3):
+                    stage = root/str(workers)
+                    stage.mkdir()
+                    record = {}
+                    dump = b.stage_seekable_dump(items, root, stage, record, workers)
+                    self.assertEqual(decode_staged_dump(dump), xml)
+                    results.append(record)
+                self.assertEqual(results[0], results[1])
+                lookup.assert_called_once_with('lbzip2')
+                decoder.write_text(program + 'sys.exit(19)\n')
+                bad = root/'incomplete'
+                bad.mkdir()
+                with self.assertRaisesRegex(OSError, 'exit 19'):
+                    b.stage_seekable_dump(items, root, bad, workers=3)
+                self.assertEqual(list(bad.iterdir()), [])
+
     def test_parallel_part_decode_preserves_input_order(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True);write_namespace_fixture(folder)
@@ -2743,7 +2783,8 @@ class BuildTest(PreparedToolsFixture):
                 return original(raw,level=level)
             scratch=root/'scratch';scratch.mkdir()
             metadata={}
-            with patch.object(b.zstd,'compress',side_effect=concurrent_compress):
+            with patch.object(b.os, 'sched_getaffinity', return_value={0, 1, 2, 3}), \
+                 patch.object(b.zstd,'compress',side_effect=concurrent_compress):
                 dump=b.stage_seekable_dump(items,root,scratch,metadata)
             self.assertEqual(len(set(seen)),4)
             self.assertEqual(decode_staged_dump(dump),b''.join(parts))
@@ -2798,6 +2839,7 @@ class BuildTest(PreparedToolsFixture):
             self.assertEqual(decode_staged_dump(dump),b''.join(parts))
             self.assertEqual(len(bz2.decompress((scratch/'pages-index.txt.bz2').read_bytes()).splitlines()),1)
 
+    @patch.object(b.os, 'sched_getaffinity', lambda pid: {0, 1, 2, 3})
     def test_parallel_nine_part_submission_stays_within_ordered_window(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True);write_namespace_fixture(folder)
@@ -2837,6 +2879,7 @@ class BuildTest(PreparedToolsFixture):
             self.assertEqual(completed,9)
             self.assertEqual(decode_staged_dump(dump),b''.join(parts))
 
+    @patch.object(b.os, 'sched_getaffinity', lambda pid: {0, 1, 2, 3})
     def test_parallel_submit_failure_cancels_blocked_producer_and_removes_outputs(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True);write_namespace_fixture(folder)
@@ -2918,6 +2961,7 @@ class BuildTest(PreparedToolsFixture):
             with self.assertRaisesRegex(ValueError,'Truncated XML page'):
                 b.stage_seekable_dump([dict(wiki='testwiktionary',date='20260901',name=name)],root,scratch)
 
+    @patch.object(b.os, 'sched_getaffinity', lambda pid: {0, 1, 2, 3})
     def test_seekable_repack_limits_four_jobs_and_writes_submission_order(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True);write_namespace_fixture(folder)
@@ -2968,6 +3012,7 @@ class BuildTest(PreparedToolsFixture):
             self.assertEqual(metadata['index_size'],len(index_bytes))
             self.assertEqual(metadata['index_sha256'],hashlib.sha256(index_bytes).hexdigest())
 
+    @patch.object(b.os, 'sched_getaffinity', lambda pid: {0, 1, 2, 3})
     def test_seekable_repack_drains_before_oversized_member(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True);write_namespace_fixture(folder)
@@ -3282,7 +3327,7 @@ class BuildTest(PreparedToolsFixture):
             workspace=root/'output/20260901.shards'
             expected={'version':b.SHARD_STATE_VERSION,'source':'a'*64,'production_source':'a'*64}
             b.prepare_shard_workspace(workspace,expected)
-            def fail_stage(_items,_downloads,cache,_metadata):
+            def fail_stage(_items,_downloads,cache,_metadata,_workers):
                 (cache/'pages.xml.zst').write_bytes(b'partial')
                 raise OSError('interrupted')
             with patch.object(b,'stage_seekable_dump',side_effect=fail_stage):

@@ -3255,9 +3255,29 @@ STAGE_MAX_MEMBER_BYTES=64*1024*1024
 STAGE_PARALLEL_MAX_BYTES=8*1024*1024
 STAGE_PARALLEL_PART_WORKERS=4
 STAGE_PART_QUEUE_BYTES=512*1024*1024
+STAGE_PARALLEL_BZIP2_MIN_BYTES = 8 * 1024 * 1024
 
 
-def _stage_seekable_dump_serial(items, downloads, scratch, metadata=None):
+@contextmanager
+def _stage_archive_reader(path, decoder, threads):
+    if decoder is None:
+        with bz2.open(path, 'rb') as source:
+            yield source
+        return
+    # lbzip2 accepts options from these environment variables, including ones
+    # that change its mode or thread count. Only use the build's own arguments.
+    env = {k: v for k, v in os.environ.items() if k not in ('LBZIP2', 'BZIP2', 'BZIP')}
+    with path.open('rb') as archive, subprocess.Popen(
+        [decoder, '-dc', '-n', str(threads)], stdin=archive, stdout=subprocess.PIPE, env=env,
+    ) as process:
+        with process.stdout as source:
+            yield source
+        status = process.wait()
+        if status:
+            raise OSError(f'lbzip2 failed to decode {path} (exit {status})')
+
+
+def _stage_seekable_dump_serial(items, downloads, scratch, metadata=None, workers=4):
     """Repack full-namespace dumps into bounded, page-aligned Zstandard frames.
 
     The downloaded meta-current parts are not indexed by page. A whole part can
@@ -3274,6 +3294,11 @@ def _stage_seekable_dump_serial(items, downloads, scratch, metadata=None):
             if f.read(3)!=b'BZh': raise ValueError(f'Expected bzip2 dump part: {source}')
         parts.append(source)
     if not parts: raise ValueError('No dump parts')
+    decoder = None
+    if len(parts) == 1 and workers >= 3 and parts[0].stat().st_size >= STAGE_PARALLEL_BZIP2_MIN_BYTES:
+        decoder = shutil.which('lbzip2')
+    if decoder:
+        print(f'Decoding {parts[0].name} with {decoder} ({workers - 1} workers)', flush=True)
     dump=scratch/'pages.xml.zst'
     index=scratch/'pages-index.txt.bz2'
     target_bytes=STAGE_TARGET_BYTES
@@ -3291,7 +3316,7 @@ def _stage_seekable_dump_serial(items, downloads, scratch, metadata=None):
     max_queued_batches=4
     with _remove_partial_stage_on_error(dump,index), \
          dump.open('wb',buffering=0) as out, bz2.open(index,'wb',compresslevel=1) as offsets, \
-         concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+         concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
         queued=deque()
 
         def write_member(member, raw_len):
@@ -3311,7 +3336,7 @@ def _stage_seekable_dump_serial(items, downloads, scratch, metadata=None):
         def flush():
             nonlocal batch
             if not batch: return
-            if len(batch)>max_parallel_bytes:
+            if decoder is not None or workers == 1 or len(batch)>max_parallel_bytes:
                 while queued: finish_oldest()
                 write_member(zstd.compress(batch,level=1),len(batch))
                 batch.clear()
@@ -3322,7 +3347,7 @@ def _stage_seekable_dump_serial(items, downloads, scratch, metadata=None):
             queued.append((pool.submit(zstd.compress,raw,level=1),len(raw)))
 
         for source in parts:
-            with bz2.open(source,'rb') as inp:
+            with _stage_archive_reader(source, decoder, workers - 1) as inp:
                 while chunk:=inp.read(1024*1024):
                     xml_bytes+=len(chunk)
                     # Only the final partial closing tag can match across reads.
@@ -3407,7 +3432,7 @@ class _PartFrameQueue:
         with self.condition: self.condition.notify_all()
 
 
-def _stage_seekable_dump_parallel(items, downloads, scratch, metadata=None):
+def _stage_seekable_dump_parallel(items, downloads, scratch, metadata=None, workers=4):
     """Decode independent bzip2 parts concurrently into bounded frame queues.
 
     At most four part queues can hold frames, each capped at 512 MiB. The
@@ -3423,7 +3448,7 @@ def _stage_seekable_dump_parallel(items, downloads, scratch, metadata=None):
         with source.open('rb',buffering=0) as stream:
             if stream.read(3)!=b'BZh': raise ValueError(f'Expected bzip2 dump part: {source}')
         parts.append(source)
-    if len(parts)<2: return _stage_seekable_dump_serial(items,downloads,scratch,metadata)
+    if len(parts)<2: return _stage_seekable_dump_serial(items,downloads,scratch,metadata,workers)
     started=time.monotonic()
     dump=scratch/'pages.xml.zst'
     index=scratch/'pages-index.txt.bz2'
@@ -3480,7 +3505,7 @@ def _stage_seekable_dump_parallel(items, downloads, scratch, metadata=None):
             output.put_control(exc)
 
     try:
-        with (concurrent.futures.ThreadPoolExecutor(max_workers=STAGE_PARALLEL_PART_WORKERS) as pool,
+        with (concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool,
               _remove_partial_stage_on_error(dump,index),
               dump.open('wb',buffering=0) as out,
               bz2.open(index,'wb',compresslevel=1) as offsets_out):
@@ -3488,7 +3513,7 @@ def _stage_seekable_dump_parallel(items, downloads, scratch, metadata=None):
             dump_hash=hashlib.sha256()
             futures=[]
             try:
-                for i in range(min(STAGE_PARALLEL_PART_WORKERS,len(parts))):
+                for i in range(min(workers,len(parts))):
                     futures.append(pool.submit(stage_part,parts[i],queues[i]))
                 for part_index,output in enumerate(queues):
                     while True:
@@ -3505,7 +3530,7 @@ def _stage_seekable_dump_parallel(items, downloads, scratch, metadata=None):
                             pages+=part_pages
                             xml_bytes+=part_xml_bytes
                             break
-                    next_index=part_index+STAGE_PARALLEL_PART_WORKERS
+                    next_index=part_index+workers
                     if next_index<len(parts):
                         futures.append(pool.submit(stage_part,parts[next_index],queues[next_index]))
                 for future in futures: future.result()
@@ -3532,11 +3557,12 @@ def _stage_seekable_dump_parallel(items, downloads, scratch, metadata=None):
         unlink_artifact(dump, missing_ok=True)
         unlink_artifact(index, missing_ok=True)
         print('XML page crosses archive part boundary; using serial stage',flush=True)
-        return _stage_seekable_dump_serial(items,downloads,scratch,metadata)
+        return _stage_seekable_dump_serial(items,downloads,scratch,metadata,workers)
 
 
-def _stage_seekable_dump(items, downloads, scratch, metadata=None):
-    return _stage_seekable_dump_parallel(items,downloads,scratch,metadata)
+def _stage_seekable_dump(items, downloads, scratch, metadata=None, workers=4):
+    workers = min(workers, STAGE_PARALLEL_PART_WORKERS, len(os.sched_getaffinity(0)))
+    return _stage_seekable_dump_parallel(items,downloads,scratch,metadata,workers)
 
 
 def phase_identity(items):
@@ -3546,10 +3572,10 @@ def phase_identity(items):
     return 'unknown','unknown'
 
 
-def stage_seekable_dump(items, downloads, scratch, metadata=None):
+def stage_seekable_dump(items, downloads, scratch, metadata=None, workers=4):
     edition,date=phase_identity(items)
     with build_phase(edition,date,'repack',parts=len(items)):
-        return _stage_seekable_dump(items,downloads,scratch,metadata)
+        return _stage_seekable_dump(items,downloads,scratch,metadata,workers)
 
 
 def count_page_index_rows(path):
@@ -6135,7 +6161,7 @@ def borrowed_staged_input(items, root, output, raw_shard_root=None, extraction_c
         check()
 
 
-def cached_shard_dump(items, downloads, workspace):
+def cached_shard_dump(items, downloads, workspace, workers=4):
     """Reuse only a completed, content-verified repack for these XML inputs."""
     edition,date=phase_identity(items)
     cache=workspace/'input'
@@ -6162,7 +6188,7 @@ def cached_shard_dump(items, downloads, workspace):
         remove_artifact_tree(cache)
     cache.mkdir()
     metadata={}
-    stage_seekable_dump(items,downloads,cache,metadata)
+    stage_seekable_dump(items,downloads,cache,metadata,workers)
     record=dict(metadata,version=DUMP_STAGING_VERSION,input_sha256=input_hash)
     temp=marker.with_suffix('.part')
     temp.write_text(json.dumps(record,sort_keys=True)+'\n')
@@ -9384,7 +9410,7 @@ def _build_locked(items, downloads, output, zig, compression_workers=None, expan
             update_args['closed_whole_execution' if closed_whole is not None else 'initial_generation']=closed_whole if closed_whole is not None else initial_generation
         now_unix=prepare_shard_workspace(workspace,expected,now_unix,**({'raw_shards_path':raw_shards_path} if raw_shards_path is not None else {}),**update_args)
         if reviewed is not None:nonlexical.pin_review(reviewed,workspace/'reviewed-nonlexical-source.json')
-    dump=(staged_input_root/'pages.xml.zst') if staged_input_root is not None else cached_shard_dump(xml,downloads,workspace)
+    dump=(staged_input_root/'pages.xml.zst') if staged_input_root is not None else cached_shard_dump(xml,downloads,workspace,workers)
     source_metadata=read_small_json((staged_input_root if staged_input_root is not None else workspace/'input')/'.complete.json')
     if not isinstance(source_metadata,dict) or type(source_metadata.get('source_pages')) is not int or source_metadata['source_pages']<0:
         raise ValueError('Staged dump lacks a verified source page count')

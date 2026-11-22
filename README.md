@@ -156,6 +156,13 @@ as page-stream boundaries: a single meta-current part can expand to gigabytes.
 Corpus staging requires Python 3.14's `compression.zstd`; the native build tools
 link against libbz2 and libzstd.
 
+For faster staging of a single large `.bz2` archive, install `lbzip2` on the
+builder's `PATH`. At 8 MiB or larger, a build with at least three available
+workers can decode bzip2 blocks in parallel and stream them straight into the
+Zstandard writer. One worker handles framing and the rest decode the archive,
+up to the four-worker staging limit. Smaller jobs and hosts without `lbzip2`
+use Python's bzip2 decoder. Both paths produce the same page frames and index.
+
 ```sh
 python compiler/tools/download_wiktionaries.py --out data/dumps --wikis enwiktionary
 python compiler/tools/build_wiktionaries.py --in data/dumps --out data/dictionaries \
