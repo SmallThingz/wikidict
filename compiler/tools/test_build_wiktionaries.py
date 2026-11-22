@@ -127,6 +127,77 @@ class WriterReviewedAliasCompiledAuthorityTests(unittest.TestCase):
                 b.validate_writer_reviewed_alias_markers(registry,selected)
 
 
+class WriterReviewedAliasOrdinarySourceTests(unittest.TestCase):
+    def test_selected_ordinary_source_accepts_subset_and_rejects_stale_marker_in_both_layouts(self):
+        for directory in ('tools','compiler/tools'):
+            with self.subTest(directory=directory), tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);evidence=root/directory/'reviewed_language_aliases.json'
+                evidence.parent.mkdir(parents=True);evidence.write_bytes(b'actual selected ordinary authority')
+                digest=b.sha256_file(evidence);registry=root/'registry.tsv'
+                registry.write_text('en\tEnglish\n# reviewed-alias\ten\tLocal English\tid\t'+digest+'\n')
+                b.validate_writer_reviewed_alias_markers(registry,None,ordinary_source_root=root)
+                registry.write_text(registry.read_text().replace(digest,'0'*64))
+                with self.assertRaisesRegex(ValueError,'selected Writer authority'):
+                    b.validate_writer_reviewed_alias_markers(registry,None,ordinary_source_root=root)
+                # Source compatibility checks do not invent marker membership.
+                registry.write_text('en\tEnglish\n# reviewed-alias\tmalformed\n')
+                b.validate_writer_reviewed_alias_markers(registry,None,ordinary_source_root=root)
+
+    def test_historical_and_retained_paths_never_borrow_current_authority(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);registry=root/'registry.tsv'
+            registry.write_text('# reviewed-alias\ten\tEnglish\tid\t'+'1'*64+'\n')
+            b.validate_writer_reviewed_alias_markers(registry,None)
+            b.validate_writer_reviewed_alias_markers(registry,None,ordinary_source_root=root)
+            evidence=root/'compiler/tools/reviewed_language_aliases.json'
+            evidence.parent.mkdir(parents=True);evidence.write_bytes(b'current unrelated authority')
+            roles=SimpleNamespace(writer_reviewed_alias_sha256='1'*64,require_unchanged=lambda:None)
+            b.validate_writer_reviewed_alias_markers(registry,roles,ordinary_source_root=root)
+            b.validate_writer_reviewed_alias_markers(registry,SimpleNamespace(),ordinary_source_root=root)
+            registry.write_text(registry.read_text().replace('1'*64,b.sha256_file(evidence)))
+            with self.assertRaisesRegex(ValueError,'selected Writer authority'):
+                b.validate_writer_reviewed_alias_markers(registry,roles,ordinary_source_root=root)
+
+    def test_selected_private_source_does_not_use_checkout_authority(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);selected=root/'selected';checkout=root/'checkout'
+            for path,body in ((selected,b'selected'),(checkout,b'other')):
+                evidence=path/'compiler/tools/reviewed_language_aliases.json'
+                evidence.parent.mkdir(parents=True);evidence.write_bytes(body)
+            digest=b.sha256_file(selected/'compiler/tools/reviewed_language_aliases.json')
+            registry=root/'registry.tsv';registry.write_text('# reviewed-alias\ten\tEnglish\tid\t'+digest+'\n')
+            with patch.object(b,'PROJECT',checkout):
+                b.validate_writer_reviewed_alias_markers(registry,None,ordinary_source_root=selected)
+                with self.assertRaisesRegex(ValueError,'selected Writer authority'):
+                    b.validate_writer_reviewed_alias_markers(registry,None,ordinary_source_root=checkout)
+
+    def test_normal_cli_rejects_stale_input_before_dispatch_for_both_build_branches(self):
+        with tempfile.TemporaryDirectory() as tmp, contextlib.chdir(tmp):
+            root=Path(tmp);evidence=root/'compiler/tools/reviewed_language_aliases.json'
+            evidence.parent.mkdir(parents=True);evidence.write_bytes(b'normal source authority')
+            digest=b.sha256_file(evidence);registry=root/'selected.tsv'
+            write_test_manifest(root,{'files':[dict(wiki='testwiktionary',date='20261001',name='test.xml.bz2',url='https://dumps.wikimedia.org/testwiktionary/20261001/test.xml.bz2',size=1,sha1='a'*40)]})
+            argv=['build_wiktionaries.py','--resource-mode=watchdog','--cpu-admission=affinity','--downloads',str(root),'--output',str(root/'out'),'--threads','1','--jobs','1']
+            for sharded in (False,True):
+                with self.subTest(sharded=sharded), patch.object(b,'PROJECT',root), patch.object(b,'_script_source_root',return_value=root), patch.object(b,'_PYTHON_TOOLING',None), patch.object(sys,'argv',argv+(['--compress-shards'] if sharded else [])), patch.object(b,'safe_worker_budget',return_value=1), patch.object(b,'affinity_worker_budget',return_value=1), patch.object(b,'resolve_edition_snapshot_options',return_value={('testwiktionary','20261001'):{'auxiliary_snapshots':{'language-registry':registry}}}), patch.object(b,'build_groups',return_value=[]) as dispatch, contextlib.redirect_stderr(io.StringIO()) as errors:
+                    registry.write_text('# reviewed-alias\ten\tEnglish\tid\t'+'0'*64+'\n')
+                    with self.assertRaises(SystemExit) as rejected:b.main()
+                    self.assertEqual(rejected.exception.code,2)
+                    self.assertIn('selected Writer authority',errors.getvalue())
+                    dispatch.assert_not_called()
+                    registry.write_text(registry.read_text().replace('0'*64,digest))
+                    b.main()
+                    dispatch.assert_called_once()
+                    self.assertNotIn('retained_roles',dispatch.call_args.kwargs['edition_options'][('testwiktionary','20261001')])
+                    # A present JSON does not prove an external/historical
+                    # recipe uses it. Both unsupported source routes stay native.
+                    registry.write_text(registry.read_text().replace(digest,'0'*64))
+                    for overrides in ({'_PYTHON_TOOLING':SimpleNamespace(require_unchanged=lambda:None)}, {'_script_source_root':lambda:root/'other-driver'}):
+                        with patch.multiple(b,**overrides):
+                            b.main()
+                    self.assertEqual(dispatch.call_count,3)
+
+
 class PreparedToolsFixture(unittest.TestCase):
     def setUp(self):
         super().setUp()

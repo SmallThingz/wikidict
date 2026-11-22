@@ -9946,11 +9946,18 @@ def parse_retained_native_roles(value, zig, *, sharded, edition_count, jobs, ref
     return RetainedNativeToolRoles(roles, compiler_path=Path(compiler).resolve(strict=True))
 
 
-def validate_writer_reviewed_alias_markers(registry, retained_roles):
-    """Fail early only when this Writer proves a different marker authority."""
-    if retained_roles is None:
+def validate_writer_reviewed_alias_markers(registry, retained_roles, *, ordinary_source_root=None):
+    """Check retained compiled authority, or an explicitly selected normal source."""
+    if retained_roles is not None:
+        # A retained executable never borrows authority from a later source tree.
+        expected=getattr(retained_roles,'writer_reviewed_alias_sha256',None)
+    elif ordinary_source_root is not None:
+        # Explicit caller contract: this maintained normal recipe embeds this
+        # file. Relocated/historical recipes must not infer that from presence.
+        evidence=producer_source_path(Path(ordinary_source_root),'tools/reviewed_language_aliases.json')
+        expected=sha256_file(evidence) if evidence.is_file() else None
+    else:
         return
-    expected=getattr(retained_roles,'writer_reviewed_alias_sha256',None)
     if expected is None:
         # Older/unavailable projections retain the native Writer's validation.
         return
@@ -9971,7 +9978,7 @@ def validate_writer_reviewed_alias_markers(registry, retained_roles):
                 continue
             if fields[4]!=expected:
                 raise ValueError('Language registry reviewed alias differs from selected Writer authority')
-    retained_roles.require_unchanged()
+    if retained_roles is not None:retained_roles.require_unchanged()
 
 
 def main():
@@ -10147,12 +10154,16 @@ def main():
     except (ValueError,OSError) as error:p.error(str(error))
     if a.original_archives:
         for value in options['edition_options'].values():value['original_archives']=True
+    # The maintained checkout's normal build recipe embeds this authority.
+    # An external tooling projection is not evidence for a historical Writer.
+    ordinary_source_root=(PROJECT if _PYTHON_TOOLING is None and PROJECT==_script_source_root() else None)
+    try:
+        for value in options['edition_options'].values():
+            registry=value['auxiliary_snapshots'].get('language-registry')
+            if registry is not None:
+                validate_writer_reviewed_alias_markers(registry,retained_roles,ordinary_source_root=ordinary_source_root)
+    except (ValueError,OSError) as error:p.error(str(error))
     if retained_roles is not None:
-        try:
-            for value in options['edition_options'].values():
-                registry=value['auxiliary_snapshots'].get('language-registry')
-                if registry is not None:validate_writer_reviewed_alias_markers(registry,retained_roles)
-        except (ValueError,OSError) as error:p.error(str(error))
         for value in options['edition_options'].values():value['retained_roles']=retained_roles
     if a.interwiki_map_snapshot:
         for value in options['edition_options'].values():value['interwiki_snapshot']=a.interwiki_map_snapshot.resolve()
