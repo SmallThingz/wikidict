@@ -5,7 +5,7 @@ const contrastInk=background=>{
   const luminance=.2126*rgb[0]+.7152*rgb[1]+.0722*rgb[2];
   return (luminance+.05)/.05>=1.05/(luminance+.05)?'#000000':'#ffffff';
 };
-import {safeURL,linkTargetParts,bookSourcesURL,validateContainerBlock} from './validate.js';
+import {safeURL,linkTargetParts,bookSourcesURL,validateContainerBlock,validateCellMetrics} from './validate.js';
 import {previewBlocks} from './preview.js';
 const node = (tag, text, cls) => { const el = document.createElement(tag); if (text != null) el.textContent = text; if (cls) el.className = cls; return el; };
 let explanationSequence = 0;
@@ -77,10 +77,10 @@ function poemSpans(values,onLink,explanations,withinSummary,cellBackground) {
 // Keep context-relative em sizing for legacy and inline heading spans.
 function semanticFontSize(span) {
   const basis=span.font_scale_basis===undefined?'context':span.font_scale_basis,scale=span.font_scale;
-  if(basis!=='context'&&basis!=='normal_body')throw new Error('invalid semantic font scale basis');
+  if(!['context','normal_body','css_px'].includes(basis))throw new Error('invalid semantic font scale basis');
   if(scale===undefined||scale===null){if(basis!=='context')throw new Error('normal body scale is absent');return null;}
   if(typeof scale!=='number'||!Number.isFinite(scale)||scale<0)throw new Error('invalid semantic font scale');
-  const size=basis==='normal_body'?`calc(var(--wikidict-normal-body-size) * ${scale})`:(scale===1?null:`${scale}em`);
+  const size=basis==='css_px'?`${scale}px`:basis==='normal_body'?`calc(var(--wikidict-normal-body-size) * ${scale})`:(scale===1?null:`${scale}em`);
   // Match the browser's computed-font ceiling in CSS pixels, retaining semantic
   // scale and the zero/identity paths rather than rewriting compiled data.
   return scale>0&&size!==null?`min(10000px, ${size})`:size;
@@ -217,7 +217,7 @@ function destination(el, value, legacy = '') {
 }
 function legacyDestinations(entry) {
   const candidates = [], counts = new Map();
-  if (['DPR5','DPR6','DPR7','DPR8','DPR9','DPRA','DPRB','DPRC','DPRD','DPRE','DPRF','DPRG','DPRH','DPRI','DPRJ','DPRK','DPRL'].includes(entry.presentation_version)) return new Map();
+  if (['DPR5','DPR6','DPR7','DPR8','DPR9','DPRA','DPRB','DPRC','DPRD','DPRE','DPRF','DPRG','DPRH','DPRI','DPRJ','DPRK','DPRL','DPRM'].includes(entry.presentation_version)) return new Map();
   const add = (value, label) => {
     if (value.anchor || value.anchor_fallback) return;
     const id = label.replaceAll(' ','_');
@@ -340,7 +340,7 @@ function validateRichEntry(entry){
     if(depth>16)richError();
     for(const block of array(values)){
       spanList(block.spans);const owner=richListKinds.has(block.kind)||(block.kind==='paragraph'&&!(block.depth||0)&&!block.list_path);
-      if(block.kind==='container'||block.container!=null){validateContainerBlock(block);blocks(block.container.blocks,tableDepth,depth+1,inReference);}
+      if(block.kind==='container'||block.container!=null){validateContainerBlock(block,{containerFonts:entry.presentation_version==='DPRM'});blocks(block.container.blocks,tableDepth,depth+1,inReference);}
       if(block.flow!=null){if(!owner||block.spans?.length||block.table!=null||block.feature!=null||block.figure!=null)richError();flow(block.flow,tableDepth,depth+1,inReference);}
       if(block.figure!=null){if(!owner||block.spans?.length||block.table!=null||block.feature!=null||block.style!=null)richError();figure(block.figure,tableDepth,depth,inReference);}
       if(block.style!=null){if(block.kind!=='paragraph'||block.depth||block.list_path||block.table!=null||block.feature!=null)richError();richObject(block.style,['margins','padding']);if(block.style.margins==null&&block.style.padding==null)richError();for(const key of ['margins','padding'])if(block.style[key]!=null)richEdges(block.style[key]);}
@@ -464,7 +464,7 @@ function applyTableStyle(el,value){
   if(s.padding!=null)styleEdges(el,'padding',s.padding);
   if(s.clear!=null){if(!['none','left','right','both'].includes(s.clear))throw Error('Invalid table clear');el.style.clear=s.clear;}
   if(s.display!=null){if(!['table','inline_block','inline_table'].includes(s.display))throw Error('Invalid table display');if(s.display!=='table'&&s.float_side!=null)throw Error('Invalid floated inline table');el.style.display=s.display.replace('_','-');}
-  if(s.vertical_align!=null){if(!['baseline','middle'].includes(s.vertical_align))throw Error('Invalid table vertical alignment');el.style.verticalAlign=s.vertical_align;}
+  if(s.vertical_align!=null){if(!['baseline','middle','top'].includes(s.vertical_align))throw Error('Invalid table vertical alignment');el.style.verticalAlign=s.vertical_align;}
   if(s.display!=null||s.vertical_align!=null||s.line_height!=null)el.style.fontSize='inherit';
   if(s.line_height!=null){
     const h=s.line_height;
@@ -474,7 +474,25 @@ function applyTableStyle(el,value){
     el.style.lineHeight=h.font_scale_basis==='normal_body'?`calc(var(--wikidict-normal-body-size) * ${h.value})`:h.value+'em';
   }
 }
-function applyCellStyle(el,value){const s=styleObject(value);if(!s)return;for(const key of Object.keys(s))if(!['border','padding','text_align'].includes(key))throw Error('Invalid cell style field');if(s.border!=null)el.style.border=styleBorder(s.border);if(s.padding!=null)styleEdges(el,'padding',s.padding);if(s.text_align!=null){if(!['left','center','right'].includes(s.text_align))throw Error('Invalid cell text alignment');el.style.textAlign=s.text_align;}}
+function applyCellStyle(el,value){
+  const s=styleObject(value);if(!s)return;
+  for(const key of Object.keys(s))if(!['border','padding','text_align','width','min_width','vertical_align','line_height'].includes(key))throw Error('Invalid cell style field');
+  validateCellMetrics(s);
+  if(s.border!=null)el.style.border=styleBorder(s.border);
+  if(s.padding!=null)styleEdges(el,'padding',s.padding);
+  if(s.text_align!=null){if(!['left','center','right'].includes(s.text_align))throw Error('Invalid cell text alignment');el.style.textAlign=s.text_align;}
+  if(s.width)el.style.width=s.width.unit==='percent'?s.width.value+'%':styleLength(s.width);
+  if(s.min_width)el.style.minWidth=styleLength(s.min_width);
+  if(s.vertical_align)el.style.verticalAlign=s.vertical_align;
+  if(s.line_height){
+    el.classList.add('compiled-cell-metrics');
+    const {strut,height}=s.line_height;
+    const metric=(value,basis)=>basis==='css_px'?value+'px':`calc(var(--wikidict-normal-body-size) * ${value})`;
+    // The cell's authored strut is independent of its children's font sizes.
+    if(strut)el.style.fontSize=metric(strut.font_scale,strut.font_scale_basis);
+    el.style.lineHeight=height.length?metric(height.length.value,height.length.font_scale_basis):height.multiplier!=null?String(height.multiplier):'normal';
+  }
+}
 function tableView(value,onLink,explanations,depth=1,inheritedBackground=null){
   if(depth>16)throw Error('Nested table depth exceeds limit');
   if(value.geometry!=null&&(typeof value.geometry!=='object'||Array.isArray(value.geometry)))throw Error('Invalid table geometry object');
@@ -573,6 +591,7 @@ function containerDeclarations(style,dark=false){
   if(style.line_height)set('line-height',containerHeightCSS(style.line_height));
   if(style.text_align!=null)set('text-align',style.text_align);
   if(style.overflow!=null)set('overflow',style.overflow);
+  if(style.owner_font_scale!=null)set('font-size',`calc(var(--wikidict-normal-body-size) * ${style.owner_font_scale})`);
   return css.join(';');
 }
 function containerView(value,onLink,explanations,context){

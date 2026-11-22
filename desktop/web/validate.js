@@ -65,6 +65,17 @@ function containerEdges(value,check=containerLength){containerObject(value,sides
 const containerRGB=value=>{if(typeof value!=='string'||!/^#[0-9a-f]{6}$/.test(value))containerError();};
 const containerColor=value=>containerUnion(value,{transparent:emptyContainerTag,rgb:containerRGB,light_dark:v=>{containerObject(v,['light','dark'],['light','dark']);containerRGB(v.light);containerRGB(v.dark);}});
 const containerEnum=(value,values)=>{if(!values.includes(value))containerError();};
+export function validateCellMetrics(style){
+  if(style.width!=null)containerLength(style.width,['px','em','percent']);
+  if(style.min_width!=null)containerLength(style.min_width);
+  if(style.vertical_align!=null)containerEnum(style.vertical_align,['top','middle']);
+  if(style.line_height!=null){
+    const value=style.line_height;containerObject(value,['strut','height'],['height']);
+    const metric=(v,key)=>{containerObject(v,[key,'font_scale_basis'],[key,'font_scale_basis']);containerNumber(v[key]);containerEnum(v.font_scale_basis,['normal_body','css_px']);};
+    if(value.strut!=null)metric(value.strut,'font_scale');
+    containerUnion(value.height,{normal:emptyContainerTag,multiplier:containerNumber,length:v=>metric(v,'value')});
+  }
+}
 function containerScreen(value,following=false){
   const fields=['width','max_width','box_sizing','line_height','float_side','margins','clear'];
   containerObject(value,['max_width_px',...fields,'following_rules'],['max_width_px']);
@@ -80,8 +91,9 @@ function containerScreen(value,following=false){
   let limit=value.max_width_px;
   for(const rule of rest){containerScreen(rule,true);if(rule.max_width_px>=limit)containerError();limit=rule.max_width_px;}
 }
-export function validateContainerStyle(style){
-  containerObject(style,containerKeys);
+export function validateContainerStyle(style,{containerFonts=false}={}){
+  containerObject(style,containerFonts?[...containerKeys,'owner_font_scale']:containerKeys);
+  if(style.owner_font_scale!=null)containerNumber(style.owner_font_scale);
   for(const key of ['margins','padding'])if(style[key]!=null)containerEdges(style[key]);
   if(style.width!=null)containerWidth(style.width);if(style.max_width!=null)containerMaxWidth(style.max_width);
   if(style.float_side!=null)containerEnum(style.float_side,['left','right']);
@@ -97,18 +109,18 @@ export function validateContainerStyle(style){
   if(style.overflow!=null)containerEnum(style.overflow,['visible','auto']);
   if(style.screen_max_width!=null)containerScreen(style.screen_max_width);
   let floating=style.float_side!=null,vertical=!!(style.margins?.top.value||style.margins?.bottom.value);
-  if(!floating&&vertical)containerError();
+  if(!containerFonts&&!floating&&vertical)containerError();
   for(const rule of style.screen_max_width?[style.screen_max_width,...(style.screen_max_width.following_rules??[])]:[]){
     if(rule.float_side!=null)floating=rule.float_side!=='none';
     if(rule.margins!=null)vertical=!!(rule.margins.top.length?.value||rule.margins.bottom.length?.value);
-    if(!floating&&vertical)containerError();
+    if(!containerFonts&&!floating&&vertical)containerError();
   }
 }
-export function validateContainerBlock(block){
+export function validateContainerBlock(block,options){
   if(block.kind!=='container'||(block.depth??0)!==0||(block.level??0)!==0||!Array.isArray(block.spans)||block.spans.length||
     (block.path??'')!==''||(block.list_path??'')!==''||(block.number??'')!==''||(block.anchor??'')!==''||(block.anchor_fallback??'')!==''||
     ['feature','table','figure','flow','style','text_align'].some(key=>block[key]!=null))containerError();
-  const value=block.container;containerObject(value,['style','blocks'],['style','blocks']);validateContainerStyle(value.style);
+  const value=block.container;containerObject(value,['style','blocks'],['style','blocks']);validateContainerStyle(value.style,options);
   if(!Array.isArray(value.blocks))containerError();
   for(const child of value.blocks){
     if(!child||child.kind==='heading'||child.style?.margins?.top.value||child.style?.margins?.bottom.value)containerError();

@@ -134,13 +134,40 @@ test('L refuses malformed container ownership styles rules and later capabilitie
  const value=decode(valid,{}).sections[0].blocks[0];
  for(const field of ['owner_font_scale','height','font_family','columns','margin_values'])assert.throws(()=>validateContainerBlock({...value,container:{...value.container,style:{[field]:1}}}));
 });
+test('M preserves owner font and cell strut metrics without shifting nested content',()=>{
+ const style=cat([1,0xa8],[0],f(20),[0,1],f(.9),[1,2],f(.855),[1]);
+ const c=cat([0,1,0,1,0,0],u(0),[0,1],list([block('M',{values:[textSpan('M',{text:'linked reading',scale:.9,basis:1})]})]),style);
+ const owner=cat(u(0x10002),edges(),f(.9),list([block('M',{values:[textSpan('M',{text:'owner'})]})]));
+ const bytes=wire('M',[block('M',{table:table('M',{cells:[c]})}),block('M',{container:owner})]);
+ const result=decode(bytes,{}),value=result.sections[0].blocks[0].table.rows[0].cells[0];
+ assert.deepEqual(value.style,{width:{unit:'px',value:20},vertical_align:'top',line_height:{strut:{font_scale:Math.fround(.9),font_scale_basis:'normal_body'},height:{length:{value:Math.fround(.855),font_scale_basis:'normal_body'}}}});
+ assert.equal(value.blocks[0].spans[0].text,'linked reading');
+ assert.equal(result.sections[0].blocks[1].container.style.owner_font_scale,Math.fround(.9));
+ for(let end=0;end<bytes.length;end++)assert.throws(()=>decode(bytes.subarray(0,end),{}));
+});
+test('M admits authored flow margins while L still rejects them and unknown policies fail closed',()=>{
+ const margin=cat(length(1),length(0),length(1),length(0));
+ const m=wire('M',[block('M',{container:cat(u(1),margin,u(0))})]);
+ assert.equal(decode(m,{}).sections[0].blocks[0].container.style.margins.top.value,1);
+ assert.throws(()=>decode(wire('L',[block('L',{container:cat(short(1),margin,u(0))})]),{}));
+ assert.throws(()=>decode(wire('M',[block('M',{container:cat(u(0x20000),length(1),u(0))})]),{}));
+ for(const value of [NaN,Infinity,-1])assert.throws(()=>decode(wire('M',[block('M',{container:cat(u(0x10000),f(value),u(0))})]),{}));
+ assert.throws(()=>decode(wire('N',[]),{}));
+});
 // Existing ordinary Writer/Reader export route supplies genuine payload+complete JSON.
 // No constructed page can satisfy this optional cross-decoder artifact assertion.
 test('selected genuine Writer payload and Reader modeled graph agree',{skip:!process.env.WIKIDICT_WEB_TYPED_CASES},async()=>{
  const cases=JSON.parse(await readFile(process.env.WIKIDICT_WEB_TYPED_CASES,'utf8'));assert.ok(cases.length>0);
  for(const item of cases){
   const response=JSON.parse(await readFile(item.reader_json,'utf8'));assert.equal(response.entries.length,1);
-  const expected=response.entries[0],actual=decode(new Uint8Array(await readFile(item.payload)),{title:expected.title,kind:expected.kind,language:expected.language,language_code:expected.language_code});
+  const expected=response.entries[0];
+  let payload;
+  if(item.blob){
+   const bytes=new Uint8Array(await readFile(item.blob)),source={size:bytes.length,read:async(offset,length)=>bytes.slice(offset,offset+length)};
+   const index=await buildIndex(source),row=index.rows.find(row=>row.title===expected.title);assert.ok(row,'genuine title missing from index');
+   payload=await source.read(row.offset,row.length);
+  }else payload=new Uint8Array(await readFile(item.payload));
+  const actual=decode(payload,{title:expected.title,kind:expected.kind,language:expected.language,language_code:expected.language_code});
   // Existing web schema names list_path as path and omits query-side organization/alias fields.
   const project=(value,root=false)=>{
    if(Array.isArray(value))return value.map(x=>project(x));

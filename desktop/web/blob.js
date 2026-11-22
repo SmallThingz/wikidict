@@ -1,6 +1,6 @@
 // WIKBLB08 contains compiled semantic pages or typed DAL1 redirect envelopes.
 // A leading U+FEFF belongs to a compiled title or field, not a file BOM.
-import {validateContainerBlock} from './validate.js';
+import {validateContainerBlock,validateCellMetrics} from './validate.js';
 const utf8 = new TextDecoder('utf-8', {fatal:true,ignoreBOM:true});
 const kinds = ['language','thesaurus','citations','reconstruction','rhymes','sign_gloss','supplemental','alias'];
 const blocks = ['paragraph','blank','definition','example','quotation','list_item','list_detail','indent','term','heading','preformatted','rule','table','container'];
@@ -8,7 +8,7 @@ const validInlineImageFile=value=>typeof value==='string'&&value.length>0&&new T
 const roles = ['normal','label','pronunciation','headword','example','quotation','citation','reference'];
 const require = (ok, message='Invalid compiled dictionary') => { if (!ok) throw Error(message); };
 export function decode(bytes, metadata) {
-  let p=0, budget=1000000, explained=false, colored=false, anchored=false, painted=false, nested=false, ordered=false, scaled=false, based=false, referenceItems=false, referenceBlocks=false, imageBorder=false, aligned=false, componentTargets=false, dynamicCatalogue=false, tooltips=false, blockGeometry=false, rich=false, inlineTableStyles=false, containers=false, contentDepth=0, mapStringBudget=32*1024*1024;
+  let p=0, budget=1000000, explained=false, colored=false, anchored=false, painted=false, nested=false, ordered=false, scaled=false, based=false, referenceItems=false, referenceBlocks=false, imageBorder=false, aligned=false, componentTargets=false, dynamicCatalogue=false, tooltips=false, blockGeometry=false, rich=false, inlineTableStyles=false, containers=false, containerFonts=false, contentDepth=0, mapStringBudget=32*1024*1024;
   const view=new DataView(bytes.buffer,bytes.byteOffset,bytes.byteLength);
   const take=n=>{require(n>=0 && n<=bytes.length-p);const start=p;p+=n;return bytes.subarray(start,p);};
   const byte=()=>take(1)[0], u16=()=>{const at=p;take(2);return view.getUint16(at,true);}, u32=()=>{const at=p;take(4);return view.getUint32(at,true);};
@@ -36,7 +36,9 @@ export function decode(bytes, metadata) {
   const spanValue=()=>{
     const kind=tag(['text','link','external_link','line_break']),role=tag(roles),flags=byte();
     const s={kind,role,text:string(),target:string(),trail:string(),language:string(),classes:string(),direction:string(),explanation:explained?string():'',foreground:colored?rgb():null,background:painted?rgb():null};
-    if(scaled&&presence()){const at=p;take(4);const value=view.getFloat32(at,true);require(Number.isFinite(value)&&value>=0,'Invalid semantic font scale');s.font_scale=value;if(based){const basis=tag(['context','normal_body']);if(basis!=='context')s.font_scale_basis=basis;if(tooltips&&value===1&&basis==='context')delete s.font_scale;}}
+    const fontFields=scaled?(containerFonts?byte():(presence()?1:0)):0;
+    require((fontFields&~1)===0,'Unsupported span font policy');
+    if(fontFields&1){const value=f32();require(Number.isFinite(value)&&value>=0,'Invalid semantic font scale');s.font_scale=value;if(based){const basis=tag(containerFonts?['context','normal_body','css_px']:['context','normal_body']);if(basis!=='context')s.font_scale_basis=basis;if(tooltips&&value===1&&basis==='context')delete s.font_scale;}}
     if(referenceBlocks&&presence()){
       require(kind!=='line_break'&&s.text===''&&s.trail===''&&(kind==='text'?s.target==='':s.target.length>0));const image={file:string()},flags=byte();require((flags&~(inlineTableStyles?127:rich?63:imageBorder?31:15))===0&&validInlineImageFile(image.file));
       for(const [bit,key] of [[1,'width_px'],[2,'height_px']])if(flags&bit){image[key]=u32();require(image[key]>0);}
@@ -65,13 +67,14 @@ export function decode(bytes, metadata) {
     return value;
   };
   const containerStyle=()=>{
-    const flags=u16(),style={},fields=[['margins',edges],['padding',edges],['width',containerWidth],['float_side',()=>tag(['left','right'])],['clear',()=>tag(['none','left','right','both'])],['max_width',containerMaxWidth],['box_sizing',()=>tag(['content_box','border_box'])],['layout',()=>tag(['flow','flex_row'])],['align_items',()=>tag(['stretch','start','center','end'])],['flex_item',()=>tag(['none'])],['background',containerColor],['border',containerBorder],['line_height',containerLineHeight],['text_align',()=>tag(['left','center','right'])],['screen_max_width',containerScreen],['overflow',()=>tag(['visible','auto'])]];
+    const flags=containerFonts?u32():u16(),style={},fields=[['margins',edges],['padding',edges],['width',containerWidth],['float_side',()=>tag(['left','right'])],['clear',()=>tag(['none','left','right','both'])],['max_width',containerMaxWidth],['box_sizing',()=>tag(['content_box','border_box'])],['layout',()=>tag(['flow','flex_row'])],['align_items',()=>tag(['stretch','start','center','end'])],['flex_item',()=>tag(['none'])],['background',containerColor],['border',containerBorder],['line_height',containerLineHeight],['text_align',()=>tag(['left','center','right'])],['screen_max_width',containerScreen],['overflow',()=>tag(['visible','auto'])],['owner_font_scale',f32]];
+    require((flags&~0x1ffff)===0,'Unsupported container layout policy');
     fields.forEach(([key,read],bit)=>{if(flags&(1<<bit))style[key]=read();});return style;
   };
   const borderStyle=()=>{const kind=tag(['none','solid']);if(kind==='none')return {none:{}};const width=styleLength(),color=string();require(/^#[0-9a-f]{6}$/.test(color));return {solid:{width,color}};};
   const typedStyle=table=>{
     if(!presence())return null;
-    const flags=byte(),extension=table&&inlineTableStyles?byte():0;require((extension&~7)===0&&(flags!==0||extension!==0)&&(flags&~(table?(rich?255:aligned?31:15):7))===0);
+    const flags=byte(),extension=table&&inlineTableStyles?byte():0;require((extension&~7)===0&&(flags!==0||extension!==0)&&(flags&~(table?(rich?255:aligned?31:15):containerFonts?239:7))===0);
     const style={};
     if(table){
       if(flags&1){style.background=string();require(/^#[0-9a-f]{6}$/.test(style.background));}
@@ -83,13 +86,24 @@ export function decode(bytes, metadata) {
       if(flags&64)style.padding=edges();
       if(flags&128)style.clear=tag(['none','left','right','both']);
       if(extension&1)style.display=tag(['table','inline_block','inline_table']);
-      if(extension&2)style.vertical_align=tag(['baseline','middle']);
+      if(extension&2)style.vertical_align=tag(containerFonts?['baseline','middle','top']:['baseline','middle']);
       if(extension&4){const value=f32(),font_scale_basis=tag(['context','normal_body']);require(Number.isFinite(value)&&value>0);style.line_height={value,font_scale_basis};}
       require(!style.float_side||!['inline_block','inline_table'].includes(style.display),'Contradictory inline table float');
     }else{
       if(flags&1)style.border=borderStyle();
       if(flags&2)style.padding=edges();
       if(flags&4)style.text_align=tag(['left','center','right']);
+      if(flags&32)style.width={unit:tag(['px','em','percent']),value:f32()};
+      if(flags&64)style.min_width=styleLength();
+      if(flags&128)style.vertical_align=tag(['top','middle']);
+      if(flags&8){
+        const strut=presence()?{font_scale:f32(),font_scale_basis:tag(['invalid','normal_body','css_px'])}:null;
+        if(strut)require(strut.font_scale_basis!=='invalid'&&Number.isFinite(strut.font_scale)&&strut.font_scale>=0);
+        const kind=tag(['normal','multiplier','length']);
+        const height={[kind]:kind==='normal'?{}:kind==='multiplier'?f32():{value:f32(),font_scale_basis:tag(['invalid','normal_body','css_px'])}};
+        style.line_height={...(strut?{strut}:{}),height};
+      }
+      validateCellMetrics(style);
     }
     return style;
   };
@@ -145,14 +159,14 @@ export function decode(bytes, metadata) {
     }
     if(kind==='container'){
       value.container=content(()=>({style:containerStyle(),blocks:list(blockMinimum(),()=>block(tableDepth))}));
-      validateContainerBlock(value);
+      validateContainerBlock(value,{containerFonts});
     }
     return value;
   };
   const contentContext=value=>['list_item','definition','example','quotation','term','list_detail','indent'].includes(value.kind)||(value.kind==='paragraph'&&value.depth===0&&value.path==='');
   const magic=utf8.decode(take(4));
-  require(magic==='DPR2'||magic==='DPR3'||magic==='DPR4'||magic==='DPR5'||magic==='DPR6'||magic==='DPR7'||magic==='DPR8'||magic==='DPR9'||magic==='DPRA'||magic==='DPRB'||magic==='DPRC'||magic==='DPRD'||magic==='DPRE'||magic==='DPRF'||magic==='DPRG'||magic==='DPRH'||magic==='DPRI'||magic==='DPRJ'||magic==='DPRK'||magic==='DPRL','Dictionary contains uncompiled records');
-  containers=magic==='DPRL';inlineTableStyles=magic==='DPRK'||containers;rich=magic==='DPRJ'||inlineTableStyles;blockGeometry=magic==='DPRI'||rich;tooltips=magic==='DPRH'||blockGeometry;dynamicCatalogue=magic==='DPRG'||tooltips;componentTargets=magic==='DPRF'||dynamicCatalogue;aligned=magic==='DPRE'||componentTargets;imageBorder=magic==='DPRD'||aligned;referenceBlocks=magic==='DPRC'||imageBorder;based=magic==='DPRB'||referenceBlocks;scaled=magic==='DPRA'||based;referenceItems=magic==='DPR9'||scaled;ordered=magic==='DPR8'||referenceItems;nested=magic==='DPR7'||ordered;if(nested)budget=1<<20;painted=magic==='DPR6'||nested;anchored=magic==='DPR5'||painted;colored=magic==='DPR4'||anchored;explained=magic!=='DPR2';
+  require(magic==='DPR2'||magic==='DPR3'||magic==='DPR4'||magic==='DPR5'||magic==='DPR6'||magic==='DPR7'||magic==='DPR8'||magic==='DPR9'||magic==='DPRA'||magic==='DPRB'||magic==='DPRC'||magic==='DPRD'||magic==='DPRE'||magic==='DPRF'||magic==='DPRG'||magic==='DPRH'||magic==='DPRI'||magic==='DPRJ'||magic==='DPRK'||magic==='DPRL'||magic==='DPRM','Dictionary contains uncompiled records');
+  containerFonts=magic==='DPRM';containers=magic==='DPRL'||containerFonts;inlineTableStyles=magic==='DPRK'||containers;rich=magic==='DPRJ'||inlineTableStyles;blockGeometry=magic==='DPRI'||rich;tooltips=magic==='DPRH'||blockGeometry;dynamicCatalogue=magic==='DPRG'||tooltips;componentTargets=magic==='DPRF'||dynamicCatalogue;aligned=magic==='DPRE'||componentTargets;imageBorder=magic==='DPRD'||aligned;referenceBlocks=magic==='DPRC'||imageBorder;based=magic==='DPRB'||referenceBlocks;scaled=magic==='DPRA'||based;referenceItems=magic==='DPR9'||scaled;ordered=magic==='DPR8'||referenceItems;nested=magic==='DPR7'||ordered;if(nested)budget=1<<20;painted=magic==='DPR6'||nested;anchored=magic==='DPR5'||painted;colored=magic==='DPR4'||anchored;explained=magic!=='DPR2';
   const entry={...metadata,presentation_version:magic,display_title:spans(),sections:list(anchored?17:9,()=>({level:byte(),title:string(),anchor:anchored?string():'',anchor_fallback:anchored?string():'',blocks:list(blockMinimum(),()=>block())})),preamble_spans:spans()};
   const childPath=(values,root)=>{
     const n=count(4);require(n<=16);let value=values[root];
@@ -255,7 +269,7 @@ export async function buildIndex(source) {
       rows.push({title:alias.source_key,raw_key:title,source_kind:alias.source_kind,source_title:alias.source_title,offset:p,length});
     }else{
       const magic=utf8.decode(await source.read(p,4));
-      require(magic==='DPR2'||magic==='DPR3'||magic==='DPR4'||magic==='DPR5'||magic==='DPR6'||magic==='DPR7'||magic==='DPR8'||magic==='DPR9'||magic==='DPRA'||magic==='DPRB'||magic==='DPRC'||magic==='DPRD'||magic==='DPRE'||magic==='DPRF'||magic==='DPRG'||magic==='DPRH'||magic==='DPRI'||magic==='DPRJ'||magic==='DPRK'||magic==='DPRL');
+      require(magic==='DPR2'||magic==='DPR3'||magic==='DPR4'||magic==='DPR5'||magic==='DPR6'||magic==='DPR7'||magic==='DPR8'||magic==='DPR9'||magic==='DPRA'||magic==='DPRB'||magic==='DPRC'||magic==='DPRD'||magic==='DPRE'||magic==='DPRF'||magic==='DPRG'||magic==='DPRH'||magic==='DPRI'||magic==='DPRJ'||magic==='DPRK'||magic==='DPRL'||magic==='DPRM');
       rows.push({title,offset:p,length});
     }
     require(rows.length<=10000000);p+=length;
