@@ -46,8 +46,35 @@ class PublicationBatchTests(unittest.TestCase):
                  mock.patch.object(compress_blobs, '_compress_batch') as encode:
                 compress_blobs.compress_many(iter(paths), 65536, workers=1, small_limit=15, batch_size=2)
             self.assertEqual([call.args for call in encode.call_args_list], [
-                (paths[0:2], 65536), (paths[2:3], 65536), (paths[3:4], 65536),
-                (paths[4:5], 65536), (paths[5:7], 65536)])
+                (paths[0:2], 65536, 1), (paths[2:3], 65536, 1), (paths[3:4], 65536, 1),
+                (paths[4:5], 65536, 1), (paths[5:7], 65536, 1)])
+
+    def test_parallel_parts_keep_whole_batch_until_last_verification(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = [Path(tmp) / str(i) for i in range(4)]
+            payload = b'WIKBLB08' + b'X' * (256 * 1024)
+            for path in paths:
+                path.write_bytes(payload)
+            together = threading.Barrier(4)
+            def verify(path, part):
+                self.assertEqual(lzma.decompress(part.read_bytes()), payload)
+                together.wait(timeout=5)
+                if path == paths[-1]:
+                    raise ValueError('injected verification failure')
+            with mock.patch.object(compress_blobs, 'max_workers', return_value=4), \
+                 mock.patch.object(compress_blobs, 'verify_round_trip', side_effect=verify):
+                with self.assertRaisesRegex(ValueError, 'injected verification failure'):
+                    compress_blobs.compress_many(paths, 65536, workers=4)
+            self.assertEqual(set(Path(tmp).iterdir()), set(paths))
+            self.assertTrue(all(path.read_bytes() == payload for path in paths))
+
+    def test_duplicate_input_fails_before_any_batch_runs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'blob'
+            path.write_bytes(b'WIKBLB08')
+            with self.assertRaisesRegex(ValueError, 'Duplicate compression input'):
+                compress_blobs.compress_many([path, path], 65536, workers=1, batch_size=1)
+            self.assertEqual(list(Path(tmp).iterdir()), [path])
 
     def test_count_limit_still_batches_tiny_files(self):
         with tempfile.TemporaryDirectory() as tmp:

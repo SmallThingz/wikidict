@@ -55,7 +55,7 @@ def compress_small_batch_keep(paths, block_size):
     print(f'small batch: {len(paths)} blobs; {time.perf_counter()-started:.3f}s; verified; raw retained', flush=True)
 
 
-def _encode_verified_batch(paths, block_size):
+def _encode_verified_batch(paths, block_size, workers=1):
     """Only give a stream its final name after all batch members round-trip."""
     parts = [Path(str(path) + '.xz.part') for path in paths]
     targets = [Path(str(path) + '.xz') for path in paths]
@@ -63,14 +63,33 @@ def _encode_verified_batch(paths, block_size):
         _validate_raw_blob(path)
         if part.exists() or part.is_symlink(): raise FileExistsError(part)
         if target.exists() or target.is_symlink(): raise FileExistsError(target)
-    try:
+    def encode_group(group):
         subprocess.run(['xz', '-0', '--threads=1', f'--block-size={block_size}',
-                        '--keep', '--suffix=.xz.part', '--', *map(str, paths)], check=True)
-        for path, part in zip(paths, parts):
+                        '--keep', '--suffix=.xz.part', '--', *map(str, group)], check=True)
+        for path in group:
+            part = Path(str(path) + '.xz.part')
             fd = os.open(part, os.O_RDONLY | os.O_NOFOLLOW)
             try: os.fsync(fd)
             finally: os.close(fd)
             verify_round_trip(path, part)
+
+    try:
+        if workers > 1:
+            sizes = {path: path.stat().st_size for path in paths}
+            # Amortize starting xz for tiny batches. Keep independent encoders
+            # busy even when most bytes belong to just a few language files.
+            workers = min(workers, len(paths), max(1, sum(sizes.values()) // (128 * 1024)))
+        if workers == 1:
+            encode_group(paths)
+        else:
+            groups = [[] for _ in range(workers)]
+            loads = [0] * workers
+            for path in sorted(paths, key=sizes.__getitem__, reverse=True):
+                index = min(range(workers), key=loads.__getitem__)
+                groups[index].append(path)
+                loads[index] += sizes[path]
+            with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+                list(pool.map(encode_group, groups))
         for part, target in zip(parts, targets): os.replace(part, target)
     finally:
         for part in parts: part.unlink(missing_ok=True)
@@ -88,11 +107,11 @@ def _retire_compressed_inputs(paths):
         path.unlink()
 
 
-def _compress_batch(paths, block_size):
+def _compress_batch(paths, block_size, workers=1):
     paths=list(paths)
     if not paths:return
     started=time.perf_counter()
-    _encode_verified_batch(paths, block_size)
+    _encode_verified_batch(paths, block_size, workers)
     raw_bytes = sum(path.stat().st_size for path in paths)
     compressed_bytes = sum(Path(str(path) + '.xz').stat().st_size for path in paths)
     _retire_compressed_inputs(paths)
@@ -176,8 +195,12 @@ def compress_many(paths, block_size, workers=None, small_limit=8*1024*1024, batc
     batch = []
     batch_bytes = 0
     large = []
+    seen = set()
     for path in paths:
         path = Path(path)
+        if path in seen:
+            raise ValueError(f'Duplicate compression input: {path}')
+        seen.add(path)
         size = path.stat().st_size
         if size > small_limit:
             large.append(path)
@@ -193,8 +216,12 @@ def compress_many(paths, block_size, workers=None, small_limit=8*1024*1024, batc
         batches.append(batch)
     if batches:
         concurrency=min(workers,len(batches))
-        with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as pool:
-            list(pool.map(lambda batch:_compress_batch(batch,block_size),batches))
+        if concurrency == 1:
+            for batch in batches:
+                _compress_batch(batch, block_size, workers)
+        else:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as pool:
+                list(pool.map(lambda batch: _compress_batch(batch, block_size), batches))
     if workers >= 4 and len(large) >= 2:
         # The two workers pull from each three-file wave as they become free.
         # A wave holds at most three temporary outputs on disk.
