@@ -147,6 +147,47 @@ def _receipt_indexes(root):
             ("page-index.tsv", "page-title-index.bin", "dump-streams.tsv")]
 
 
+def _valid_archive_binding(binding):
+    if (not isinstance(binding, dict) or set(binding) != {'kind', 'descriptor_sha256', 'block_directory_sha256'}
+            or binding['kind'] != 'bzip2-blocks'):
+        return False
+    return all(isinstance(value, list) and len(value) == 32 and
+               all(type(n) is int and 0 <= n <= 255 for n in value)
+               for value in (binding['descriptor_sha256'], binding['block_directory_sha256']))
+
+
+def _source_transport(root, dump=None):
+    """Bind the explicit original-archive selection to this worker and request."""
+    path = root / 'source-transport.json'
+    if not os.path.lexists(path):
+        return None
+    regular(path)
+    before = _full_stamp(path.stat())
+    with path.open('rb') as stream:
+        raw = stream.read(16385)
+        if _full_stamp(os.fstat(stream.fileno())) != before or len(raw) != before[3] or len(raw) > 16384:
+            raise ValueError('Invalid source transport descriptor')
+    descriptor = json.loads(raw)
+    if (not isinstance(descriptor, dict) or set(descriptor) != {'format', 'transport', 'block_directory', 'source_directory'}
+            or descriptor['format'] != 'wikidict-source-transport-v1' or descriptor['transport'] != 'bzip2-blocks'):
+        raise ValueError('Unknown source transport descriptor')
+    for name in ('block_directory', 'source_directory'):
+        text = descriptor[name]
+        if not isinstance(text, str) or not Path(text).is_absolute() or str(Path(text).resolve(strict=True)) != text:
+            raise ValueError('Invalid source transport path')
+    directory = Path(descriptor['block_directory'])
+    if (dump is not None and Path(dump) != directory) or not Path(descriptor['source_directory']).is_dir():
+        raise ValueError('Source transport differs from selected input')
+    regular(directory)
+    if not 0 < directory.stat().st_size <= MAX_MARKER_BYTES:
+        raise ValueError('Invalid original block directory size')
+    digest = stable_file_digest(directory)[1]
+    if before != _full_stamp(path.stat()):
+        raise ValueError('Source transport descriptor changed')
+    return directory, {'kind': 'bzip2-blocks', 'descriptor_sha256': list(hashlib.sha256(raw).digest()),
+                       'block_directory_sha256': list(bytes.fromhex(digest))}
+
+
 def _completed_source_binding(root, dump, *, restored_source=None, restored_indexes=None):
     raw, receipt = _read_source_receipt(root)
     namespace = stable_file_digest(root / "namespace-registry.tsv", snapshot=True)[1]
@@ -162,6 +203,15 @@ def _completed_source_binding(root, dump, *, restored_source=None, restored_inde
                     indexes=indexes,
                     namespace_sha256=list(bytes.fromhex(namespace)),
                     redirects_sha256=list(bytes.fromhex(redirects)) if redirects else None)
+    selection = _source_transport(root, dump)
+    if selection is not None:
+        if restored_source is not None or restored_indexes is not None:
+            raise ValueError('Original archive transport requires its own source receipt')
+        if not isinstance(receipt, dict) or not _valid_archive_binding(receipt.get('transport')):
+            raise ValueError('Malformed original archive source binding')
+        if _receipt_identity(dump) != expected['source']:
+            raise ValueError('Original block directory changed during source validation')
+        expected.update(version=3, transport=selection[1])
     if receipt != expected:
         raise ValueError("Completed expander source receipt changed")
     return dict(path=(str(dump.absolute()) if restored_source is None else restored_source["path"]), receipt=expected,
@@ -2063,6 +2113,10 @@ def extraction_ownership_proven(root):
         fields = {"version", "extractor_args", "dump_sha256", "index_sha256",
                   "namespace_registry_sha256", "transclusion_redirects_sha256",
                   "page_redirects_sha256", "unicode_case", "tool"}
+        if 'source_transport' in identity_record:
+            fields.add('source_transport')
+            if not _valid_archive_binding(identity_record['source_transport']):
+                return False
         if (set(record) != {"identity", "assets", "asset_ownership"} or
                 set(identity_record) != fields or type(identity_record["version"]) is not int or
                 identity_record["version"] != EXTRACTION_IDENTITY_VERSION or
@@ -2171,7 +2225,7 @@ def probe(root, expected, output, *, dump=None, _after_verified=None):
     if not os.path.lexists(source):
         # Only a missing current key may use the exact historical identity. The
         # new probe owns those inodes; it never upgrades legacy retirement proof.
-        if expected.get("version") != EXTRACTION_IDENTITY_VERSION:
+        if expected.get("version") != EXTRACTION_IDENTITY_VERSION or 'source_transport' in expected:
             return MISS
         validated_identity = dict(expected, version=3)
         legacy_key = hashlib.sha256(json.dumps(validated_identity, sort_keys=True).encode()).hexdigest()
@@ -2190,11 +2244,19 @@ def probe(root, expected, output, *, dump=None, _after_verified=None):
     try:
         if source.is_symlink():
             return MISS
-        if dump is not None:
+        transport = expected.get('source_transport')
+        selection = _source_transport(output, dump)
+        if transport != (selection[1] if selection else None):
+            return MISS
+        if selection is not None:
+            dump_identity = _receipt_identity(selection[0])
+        if dump is not None or transport is not None:
             # The extractor binds offsets to the original dump and index inodes.
             # An identical restaged dump needs fresh indexes, even on a content-key hit.
             _, receipt = _read_source_receipt(source)
-            if (not isinstance(receipt, dict) or receipt.get('version') != 2 or
+            if (not isinstance(receipt, dict) or receipt.get('version') != (3 if transport is not None else 2) or
+                    (transport is not None and not _valid_archive_binding(receipt.get('transport'))) or
+                    receipt.get('transport') != transport or
                     receipt.get('source') != dump_identity or
                     receipt.get('indexes') != _receipt_indexes(source)):
                 print('Extraction cache miss: receipt does not bind the current dump and indexes.', file=sys.stderr)
@@ -3388,9 +3450,13 @@ def _frontend_extraction_identity(executable, dump_sha, index_sha, output):
     redirects, page_redirects = output / 'transclusion-redirects.tsv', output / 'page-redirects.tsv'
     if page_redirects.exists() or page_redirects.is_symlink():
         page_redirects = page_redirects.resolve(strict=True); regular(page_redirects)
-    return identity(Path(executable), dump_sha, index_sha, sha256(output / 'namespace-registry.tsv'),
-                    sha256(redirects) if redirects.exists() else None,
-                    sha256(page_redirects) if page_redirects.exists() else None)
+    value = identity(Path(executable), dump_sha, index_sha, sha256(output / 'namespace-registry.tsv'),
+                     sha256(redirects) if redirects.exists() else None,
+                     sha256(page_redirects) if page_redirects.exists() else None)
+    selection = _source_transport(output)
+    if selection is not None:
+        value['source_transport'] = selection[1]
+    return value
 
 
 def main(argv):
@@ -3424,16 +3490,14 @@ def main(argv):
             (len(argv) == 8 and argv[1] == "probe")):
         raise SystemExit("usage: extraction_cache.py probe|publish CACHE_ROOT EXTRACTOR DUMP_SHA256 INDEX_SHA256 EXPANDER_ROOT [DUMP for probe]")
     _, action, root, executable, dump_sha256, index_sha256, output = argv[:7]
-    redirects = Path(output) / "transclusion-redirects.tsv"
-    page_redirects = Path(output) / "page-redirects.tsv"
-    # bundle_build installs input snapshots as links; they are not cached assets.
-    # Resolve only this identity input, retaining strict asset symlink rejection.
-    if page_redirects.exists() or page_redirects.is_symlink():
-        page_redirects = page_redirects.resolve(strict=True)
-        regular(page_redirects)
-    expected = identity(Path(executable), dump_sha256, index_sha256, sha256(Path(output) / "namespace-registry.tsv"), sha256(redirects) if redirects.exists() else None, sha256(page_redirects) if page_redirects.exists() else None)
+    expected = _frontend_extraction_identity(executable, dump_sha256, index_sha256, Path(output))
     if action == "probe":
         return probe(Path(root), expected, Path(output), dump=Path(argv[7]) if len(argv) == 8 else None)
+    if 'source_transport' in expected:
+        descriptor = read_marker(Path(output) / 'source-transport.json')
+        current = completed_source_binding(Path(output), Path(descriptor['block_directory']))
+        if current['receipt']['transport'] != expected['source_transport']:
+            raise ValueError('Source transport changed before extraction cache publication')
     return publish(Path(root), expected, Path(output))
 
 

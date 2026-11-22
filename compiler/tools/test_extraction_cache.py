@@ -80,6 +80,45 @@ class ExtractionCacheTest(unittest.TestCase):
         self.assertEqual(before, set(output.iterdir()))
         self.assertEqual(marker, (generation / '.complete.json').read_bytes())
 
+    def test_archive_probe_binds_selected_descriptor_directory_and_original_index_inodes(self):
+        import hashlib
+        dump = self.base / 'blocks.json'
+        dump.write_text('{"format":"wikidict-bzip2-blocks-v1"}\n')
+        archives = self.base / 'originals'
+        archives.mkdir()
+        backing = self.base / 'redirect-snapshot'
+        backing.write_bytes(b'redirect')
+        self.snapshot_output(self.source, backing)
+        descriptor = json.dumps(dict(format='wikidict-source-transport-v1', transport='bzip2-blocks',
+                                     block_directory=str(dump), source_directory=str(archives))).encode()
+        (self.source / 'source-transport.json').write_bytes(descriptor)
+        binding = dict(kind='bzip2-blocks', descriptor_sha256=list(hashlib.sha256(descriptor).digest()),
+                       block_directory_sha256=list(hashlib.sha256(dump.read_bytes()).digest()))
+        receipt = dict(version=3, source=cache._receipt_identity(dump), indexes=cache._receipt_indexes(self.source),
+                       namespace_sha256=list(hashlib.sha256(b'namespace fixture').digest()), redirects_sha256=None,
+                       transport=binding)
+        (self.source / 'extraction-source.json').write_text(json.dumps(receipt))
+        self.assertEqual(cache.completed_source_binding(self.source, dump)['receipt'], receipt)
+        self.assertEqual(self.snapshot_main('publish', self.source), 0)
+        generation, = self.root.iterdir()
+        self.assertTrue(cache.extraction_ownership_proven(generation))
+        selected = self.base / 'selected'
+        self.snapshot_output(selected, backing)
+        self.assertEqual(self.snapshot_main('probe', selected, dump), cache.MISS)
+        (selected / 'source-transport.json').write_bytes(descriptor + b'\n')
+        self.assertEqual(self.snapshot_main('probe', selected, dump), cache.MISS)
+        (selected / 'source-transport.json').write_bytes(descriptor)
+        self.assertEqual(self.snapshot_main('probe', selected, dump), 0)
+        self.assertEqual(cache.completed_source_binding(selected, dump)['receipt'], receipt)
+        altered = self.base / 'replacement'
+        altered.write_bytes(dump.read_bytes())
+        altered.replace(dump)
+        with self.assertRaisesRegex(ValueError, 'receipt changed'):
+            cache.completed_source_binding(selected, dump)
+        (selected / 'source-transport.json').unlink()
+        with self.assertRaisesRegex(ValueError, 'receipt changed'):
+            cache.completed_source_binding(selected, dump)
+
     def test_snapshot_main_cold_publish_warm_link_and_copy(self):
         backing = self.base / "redirects.tsv"
         backing.write_bytes(b"exact redirect snapshot")
@@ -982,6 +1021,31 @@ class CompletedExpanderTests(unittest.TestCase):
         book.write_bytes(b'changed observations')
         with self.assertRaises(ValueError):
             cache.frozen_runtime_context(root2, dump2, binding)
+
+    def test_original_archive_descriptor_is_an_ordinary_sealed_asset(self):
+        root, blocks, providers = self.fixture(ready=False)
+        descriptor = root / 'source-transport.json'
+        descriptor.write_text(json.dumps(dict(format='wikidict-source-transport-v1', transport='bzip2-blocks',
+                                              block_directory=str(blocks), source_directory=str(self.base))))
+        path = root / 'extraction-source.json'
+        receipt = json.loads(path.read_bytes())
+        receipt.update(version=3, transport=dict(kind='bzip2-blocks',
+                       descriptor_sha256=list(bytes.fromhex(cache.sha256(descriptor))),
+                       block_directory_sha256=list(bytes.fromhex(cache.sha256(blocks)))))
+        path.write_text(json.dumps(receipt))
+        self.assertEqual(self.call('seal-expander', root, blocks, providers), 0)
+        record = cache.read_marker(root / cache.COMPLETED_EXPANDER)
+        self.assertEqual(record['identity']['source']['receipt'], receipt)
+        self.assertIn([descriptor.name, descriptor.stat().st_size, cache.sha256(descriptor)], record['identity']['assets'])
+        self.assertNotIn(descriptor.name, record['identity']['providers'])
+        binding = self.binding(root)
+        cache.shutil.rmtree(root / 'llvm')
+        (root / '.incomplete').unlink()
+        (root.parent / '.incomplete').write_bytes(b'expander ready')
+        self.assertIsNotNone(cache.frozen_runtime_context(root, blocks, binding))
+        descriptor.write_bytes(descriptor.read_bytes() + b'\n')
+        with self.assertRaises(ValueError):
+            cache.frozen_runtime_context(root, blocks, binding)
 
     def test_seal_snapshot_inventory_refuses_missing_and_unknown_roles(self):
         root, dump, snapshots = self.fixture(ready=False)
