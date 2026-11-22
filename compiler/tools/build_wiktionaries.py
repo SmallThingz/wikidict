@@ -3432,7 +3432,7 @@ class _PartFrameQueue:
 
     def put_frame(self, frame):
         with self.condition:
-            while self.bytes+len(frame)>self.capacity and not self.cancelled.is_set():
+            while self.bytes and self.bytes+len(frame)>self.capacity and not self.cancelled.is_set():
                 self.condition.wait()
             if self.cancelled.is_set(): raise _CancelledParallelStage()
             self.items.append(frame)
@@ -3458,6 +3458,49 @@ class _PartFrameQueue:
         with self.condition: self.condition.notify_all()
 
 
+def consume_ordered_part_frames(parts, workers, produce, consume, *, queue_bytes):
+    """Drain frames in archive order, allowing at most `workers` producers ahead."""
+    cancelled = threading.Event()
+    queues = [_PartFrameQueue(cancelled, queue_bytes) for _ in parts]
+
+    def run_part(part, queue):
+        try:
+            if not cancelled.is_set():
+                queue.put_control(produce(part, queue.put_frame))
+        except BaseException as exc:
+            queue.put_control(exc)
+
+    results = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = []
+        try:
+            for i in range(min(workers, len(parts))):
+                futures.append(pool.submit(run_part, parts[i], queues[i]))
+            for i, queue in enumerate(queues):
+                while True:
+                    item = queue.get()
+                    if isinstance(item, bytes):
+                        consume(item)
+                    elif isinstance(item, BaseException):
+                        raise item
+                    else:
+                        results.append(item)
+                        break
+                following = i + workers
+                if following < len(parts):
+                    futures.append(pool.submit(run_part, parts[following], queues[following]))
+            for future in futures:
+                future.result()
+        except BaseException:
+            cancelled.set()
+            for queue in queues:
+                queue.wake()
+            for future in futures:
+                future.cancel()
+            raise
+    return results
+
+
 def _stage_seekable_dump_parallel(items, downloads, scratch, metadata=None, workers=4):
     """Decode independent bzip2 parts concurrently into bounded frame queues.
 
@@ -3478,74 +3521,46 @@ def _stage_seekable_dump_parallel(items, downloads, scratch, metadata=None, work
     started=time.monotonic()
     dump=scratch/'pages.xml.zst'
     index=scratch/'pages-index.txt.bz2'
-    cancelled=threading.Event()
-    queues=[_PartFrameQueue(cancelled,STAGE_PART_QUEUE_BYTES) for _ in parts]
+    def stage_part(source, write):
+        framer = XmlFrames(STAGE_TARGET_BYTES, STAGE_MAX_MEMBER_BYTES, source, part_boundary=True)
 
-    def stage_part(source,output):
-        try:
-            if cancelled.is_set(): return
-            framer = XmlFrames(STAGE_TARGET_BYTES, STAGE_MAX_MEMBER_BYTES, source, part_boundary=True)
+        def emit(raw):
+            frame = zstd.compress(raw, level=1)
+            info = zstd.get_frame_info(frame)
+            if info.decompressed_size != len(raw) or zstd.get_frame_size(frame) != len(frame):
+                raise ValueError('Staged Zstandard member is not one known-size frame')
+            write(frame)
 
-            def emit(raw):
-                frame=zstd.compress(raw,level=1)
-                info=zstd.get_frame_info(frame)
-                if info.decompressed_size!=len(raw) or zstd.get_frame_size(frame)!=len(frame):
-                    raise ValueError('Staged Zstandard member is not one known-size frame')
-                output.put_frame(frame)
-
-            with bz2.open(source,'rb') as inp:
-                while chunk:=inp.read(1024*1024):
-                    for raw in framer.feed(chunk):
-                        emit(raw)
-            for raw in framer.finish():
-                emit(raw)
-            output.put_control((framer.pages,framer.xml_bytes))
-        except BaseException as exc:
-            output.put_control(exc)
+        with bz2.open(source, 'rb') as inp:
+            while chunk := inp.read(1024 * 1024):
+                for raw in framer.feed(chunk):
+                    emit(raw)
+        for raw in framer.finish():
+            emit(raw)
+        return framer.pages, framer.xml_bytes
 
     try:
-        with (concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool,
-              _remove_partial_stage_on_error(dump,index),
-              dump.open('wb',buffering=0) as out,
+        with (_remove_partial_stage_on_error(dump,index), dump.open('wb',buffering=0) as out,
               bz2.open(index,'wb',compresslevel=1) as offsets_out):
-            members=pages=xml_bytes=0
-            dump_hash=hashlib.sha256()
-            futures=[]
-            try:
-                for i in range(min(workers,len(parts))):
-                    futures.append(pool.submit(stage_part,parts[i],queues[i]))
-                for part_index,output in enumerate(queues):
-                    while True:
-                        item=output.get()
-                        if isinstance(item,bytes):
-                            offsets_out.write(f'{out.tell()}:{members+1}:member{members}\n'.encode())
-                            if out.write(item)!=len(item): raise OSError('Short staged dump write')
-                            dump_hash.update(item)
-                            members+=1
-                        elif isinstance(item,BaseException):
-                            raise item
-                        else:
-                            part_pages,part_xml_bytes=item
-                            pages+=part_pages
-                            xml_bytes+=part_xml_bytes
-                            break
-                    next_index=part_index+workers
-                    if next_index<len(parts):
-                        futures.append(pool.submit(stage_part,parts[next_index],queues[next_index]))
-                for future in futures: future.result()
-                if members==0:
-                    frame=zstd.compress(b'',level=1)
-                    if zstd.get_frame_info(frame).decompressed_size!=0 or zstd.get_frame_size(frame)!=len(frame):
-                        raise ValueError('Empty Zstandard frame lacks known size')
-                    offsets_out.write(b'0:1:member0\n')
-                    if out.write(frame)!=len(frame): raise OSError('Short staged dump write')
-                    dump_hash.update(frame)
-                    members=1
-            except BaseException:
-                cancelled.set()
-                for output in queues: output.wake()
-                for future in futures: future.cancel()
-                raise
+            members = 0
+            dump_hash = hashlib.sha256()
+
+            def store(frame):
+                nonlocal members
+                offsets_out.write(f'{out.tell()}:{members+1}:member{members}\n'.encode())
+                if out.write(frame) != len(frame):
+                    raise OSError('Short staged dump write')
+                dump_hash.update(frame)
+                members += 1
+
+            totals = consume_ordered_part_frames(parts, workers, stage_part, store, queue_bytes=STAGE_PART_QUEUE_BYTES)
+            pages = sum(count for count, _ in totals)
+            xml_bytes = sum(size for _, size in totals)
+            if members == 0:
+                frame = zstd.compress(b'', level=1)
+                if zstd.get_frame_info(frame).decompressed_size != 0 or zstd.get_frame_size(frame) != len(frame):
+                    raise ValueError('Empty Zstandard frame lacks known size')
+                store(frame)
         if metadata is not None:
             metadata.update({'source_pages':pages,'dump_codec':'zstd','dump_stream_kind':'multistream-zstd',
                              'dump_size':dump.stat().st_size,'dump_sha256':dump_hash.hexdigest(),

@@ -177,8 +177,9 @@ def index_parts(items, downloads, workers=1):
     return dict(format='wikidict-bzip2-blocks-v1', xml_bytes=sum(part['xml_bytes'] for part in parts), parts=parts)
 
 
-def verified_frame_bridge(items, downloads, stage, page_index, *, split_parts=True, part_finished=None):
-    from build_wiktionaries import DUMP_STAGING_VERSION, STAGE_MAX_MEMBER_BYTES, STAGE_TARGET_BYTES, XmlFrames, dump_input_fingerprint
+def verified_frame_bridge(items, downloads, stage, page_index, *, workers=1, split_parts=True):
+    from build_wiktionaries import (DUMP_STAGING_VERSION, STAGE_MAX_MEMBER_BYTES, STAGE_TARGET_BYTES,
+                                    XmlFrames, consume_ordered_part_frames, dump_input_fingerprint)
     from compression import zstd
 
     if (stage.get('version') != DUMP_STAGING_VERSION or stage.get('dump_codec') != 'zstd'
@@ -195,42 +196,53 @@ def verified_frame_bridge(items, downloads, stage, page_index, *, split_parts=Tr
     dump_hash, index_hash = hashlib.sha256(), hashlib.sha256()
     offset_encoder = bz2.BZ2Compressor(1)
 
-    def emit(raw):
+    def store(frame):
         nonlocal xml_size, packed_size, index_size
-        frame = zstd.compress(raw, level=1)
+        size = zstd.get_frame_info(frame).decompressed_size
         ordinal = len(frames)
         offsets = offset_encoder.compress(f'{packed_size}:{ordinal + 1}:member{ordinal}\n'.encode())
         index_hash.update(offsets)
         index_size += len(offsets)
         dump_hash.update(frame)
         packed_size += len(frame)
-        frames.append([xml_size, len(raw)])
-        xml_size += len(raw)
+        frames.append([xml_size, size])
+        xml_size += size
 
     per_part = split_parts and len(items) > 1
     framer = XmlFrames(STAGE_TARGET_BYTES, STAGE_MAX_MEMBER_BYTES, items[0]['name'], part_boundary=per_part)
 
-    def observe(raw):
-        for frame in framer.feed(raw):
-            emit(frame)
-
-    for item in items:
-        if per_part:
-            framer = XmlFrames(framer.target, framer.limit, item['name'], part_boundary=True)
+    def read_part(item, state, consume):
+        def observe(raw):
+            for batch in state.feed(raw):
+                consume(zstd.compress(batch, level=1))
         path = downloads / item['wiki'] / item['date'] / item['name']
-        parts.append(index_part(path, item['size'], item['sha1'], consume_xml=observe))
-        if per_part:
-            for frame in framer.finish():
-                emit(frame)
-            pages += framer.pages
-        if part_finished is not None:
-            part_finished(item['name'], parts[-1]['xml_bytes'], len(parts[-1]['blocks']), len(frames))
-    if not per_part:
-        for frame in framer.finish():
-            emit(frame)
+        return index_part(path, item['size'], item['sha1'], consume_xml=observe)
+
+    def finish(state, consume):
+        for batch in state.finish():
+            consume(zstd.compress(batch, level=1))
+
+    def produce(item, consume):
+        state = XmlFrames(STAGE_TARGET_BYTES, STAGE_MAX_MEMBER_BYTES, item['name'], part_boundary=True)
+        part = read_part(item, state, consume)
+        finish(state, consume)
+        return part, state.pages
+
+    if per_part:
+        # Only compressed frames cross threads. An unusually large single page
+        # may occupy a queue alone, so it cannot wait forever for more space.
+        slots = min(workers, len(items), len(os.sched_getaffinity(0)), 4)
+        records = consume_ordered_part_frames(items, slots, produce, store, queue_bytes=8 * 1024 * 1024)
+        parts = [part for part, _ in records]
+        pages = sum(count for _, count in records)
+    else:
+        for item in items:
+            framer.source = item['name']
+            parts.append(read_part(item, framer, store))
+        finish(framer, store)
         pages = framer.pages
     if not frames:
-        emit(b'')
+        store(zstd.compress(b'', level=1))
     offsets = offset_encoder.flush()
     index_hash.update(offsets)
     index_size += len(offsets)
@@ -251,6 +263,8 @@ def write_directory(items, downloads, output, workers=1, *, stage=None, page_ind
     """Install one authenticated directory without replacing an earlier selection."""
     if os.path.lexists(output):
         raise FileExistsError(output)
+    if type(workers) is not int or workers <= 0:
+        raise ValueError('Expected a positive worker count')
     items = ordered_parts(items)
     paths = [downloads / item['wiki'] / item['date'] / item['name'] for item in items]
     before = [_stamp(path.stat()) for path in paths]
@@ -261,7 +275,7 @@ def write_directory(items, downloads, output, workers=1, *, stage=None, page_ind
     else:
         from build_wiktionaries import SplitXmlPage
         try:
-            result = verified_frame_bridge(items, downloads, stage, page_index)
+            result = verified_frame_bridge(items, downloads, stage, page_index, workers=workers)
         except SplitXmlPage:
             # Ordinary staging carries a partial page across archive parts.
             result = verified_frame_bridge(items, downloads, stage, page_index, split_parts=False)
@@ -286,7 +300,7 @@ def main():
     parser.add_argument('--manifest-sha256', required=True)
     parser.add_argument('--edition', required=True, help='Edition name, e.g. enwiktionary')
     parser.add_argument('--output', type=Path, required=True, help='New block directory JSON file')
-    parser.add_argument('--workers', type=int, choices=range(1, 5), default=4, help='Concurrent original archive parts for a fresh index')
+    parser.add_argument('--workers', type=int, choices=range(1, 5), default=4, help='Concurrent independent archive parts')
     parser.add_argument('--stage-receipt', type=Path, help='Reproduce a retained Zstandard stage and its stream index in memory')
     parser.add_argument('--page-index-size', type=int, help='Authenticated uncompressed size of the retained page-index.tsv')
     parser.add_argument('--page-index-sha256', help='Authenticated SHA-256 of the retained page-index.tsv')
