@@ -3623,13 +3623,14 @@ def inspect_page_index(path, shard_pages=None):
                     raise ValueError('Page index line exceeds size limit')
                 block += tail
             digest.update(block)
-            lines = block.split(b'\n')
-            # Most blocks have neither comments nor a shard boundary inside them.
-            if (-count) % interval >= len(lines) and not block.startswith(b'#') and b'\n#' not in block:
-                count += len(lines) - lines.count(b'')
+            # Ordinary blocks need a count, without a separate allocation for each row.
+            rows = block.count(b'\n') + (not block.endswith(b'\n'))
+            if (rows <= (-count) % interval and not block.startswith((b'\n', b'#')) and b'\n\n' not in block
+                    and (b'#' not in block or b'\n#' not in block)):
+                count += rows
             else:
                 position = offset
-                for line in lines:
+                for line in block.split(b'\n'):
                     if line and not line.startswith(b'#'):
                         if count % interval == 0:
                             offsets[count] = position if count else 0
