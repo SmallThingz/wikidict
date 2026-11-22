@@ -4310,10 +4310,15 @@ fn pairedOrthographyBareFileLine(ns: *const @import("namespace_registry").Regist
 fn pairedOrthographyQualifiers(tail: []const u8) bool {
     var remaining = tail;
     while (remaining.len != 0) {
-        if (remaining[0] != '(') return false;
-        const close = std.mem.indexOfScalar(u8, remaining, ')') orelse return false;
+        const square = remaining[0] == '[';
+        if (remaining[0] != '(' and !square) return false;
+        const close = std.mem.indexOfScalar(u8, remaining, if (square) @as(u8, ']') else ')') orelse return false;
         const value = remaining[1..close];
         if (std.mem.trim(u8, value, " \t").len == 0 or std.mem.indexOfAny(u8, value, "'{}[]<>&|()\r\n") != null) return false;
+        // A square qualifier is plain annotation, never an external link.
+        if (square) for (value) |byte| {
+            if (!std.ascii.isAlphanumeric(byte) and byte != ' ' and byte != '-' and byte != '\t') return false;
+        };
         remaining = remaining[close + 1..];
         if (remaining.len != 0 and remaining[0] != ' ' and remaining[0] != '\t') return false;
         remaining = std.mem.trimStart(u8, remaining, " \t");
@@ -4346,6 +4351,85 @@ fn pairedOrthographyPrefix(ns: *const @import("namespace_registry").Registry, ra
     return false;
 }
 
+// This proof admits only root DIV-wrapped tables following the complete word
+// card. Their contents cannot supply language declarations or categories.
+const PairedOrthographyTable = struct {
+    const Kind = enum { div, table, tr, td, font, b, i };
+    stack: [8]Kind = undefined,
+    depth: usize = 0,
+    has_table: bool = false,
+
+    fn attributes(kind: Kind, bytes: []const u8) bool {
+        const allowed: []const []const u8 = switch (kind) {
+            .table => &.{ "border", "cellspacing", "bordercolor", "cellpadding" },
+            .td => &.{"align"},
+            .font => &.{ "size", "face" },
+            else => &.{},
+        };
+        var remaining = std.mem.trim(u8, bytes, " \t\r");
+        var seen: u8 = 0;
+        while (remaining.len != 0) {
+            var end: usize = 0;
+            while (end < remaining.len and std.ascii.isAlphabetic(remaining[end])) : (end += 1) {}
+            if (end == 0) return false;
+            const name = remaining[0..end];
+            const bit: u8 = for (allowed, 0..) |candidate, index| {
+                if (std.ascii.eqlIgnoreCase(name, candidate)) break @as(u8, 1) << @intCast(index);
+            } else return false;
+            if (seen & bit != 0) return false;
+            seen |= bit;
+            remaining = std.mem.trimStart(u8, remaining[end..], " \t\r");
+            if (remaining.len < 3 or remaining[0] != '=') return false;
+            remaining = std.mem.trimStart(u8, remaining[1..], " \t\r");
+            if (remaining.len < 2 or (remaining[0] != '"' and remaining[0] != '\'')) return false;
+            const quote = remaining[0];
+            const close = std.mem.indexOfScalarPos(u8, remaining, 1, quote) orelse return false;
+            const value = remaining[1..close];
+            if (value.len == 0 or std.mem.indexOfAny(u8, value, "'\"{}[]<>&|\r\n") != null) return false;
+            remaining = remaining[close + 1 ..];
+            if (remaining.len != 0 and !std.ascii.isWhitespace(remaining[0])) return false;
+            remaining = std.mem.trimStart(u8, remaining, " \t\r");
+        }
+        return true;
+    }
+
+    fn accept(self: *PairedOrthographyTable, tag: blobs.wikitext_syntax.Tag) bool {
+        const kind: Kind = inline for (@typeInfo(Kind).@"enum".field_names) |name| {
+            if (tag.is(name)) break @field(Kind, name);
+        } else return false;
+        if (tag.closing) {
+            if (self.depth == 0 or self.stack[self.depth - 1] != kind or
+                std.mem.trim(u8, tag.attrs, " \t\r").len != 0) return false;
+            if (kind == .div and !self.has_table) return false;
+            self.depth -= 1;
+            return true;
+        }
+        if (tag.self_closing or self.depth == self.stack.len or !attributes(kind, tag.attrs)) return false;
+        if (self.depth == 0) {
+            if (kind != .div) return false;
+            self.has_table = false;
+        } else switch (self.stack[self.depth - 1]) {
+            .div => {
+                if (kind != .table or self.has_table) return false;
+                self.has_table = true;
+            },
+            .table => if (kind != .tr) return false,
+            .tr => if (kind != .td) return false,
+            .td, .font, .b, .i => {
+                if (kind != .font and kind != .b and kind != .i) return false;
+                for (self.stack[0..self.depth]) |ancestor| if (ancestor == kind) return false;
+            },
+        }
+        self.stack[self.depth] = kind;
+        self.depth += 1;
+        return true;
+    }
+
+    fn inCell(self: PairedOrthographyTable) bool {
+        return self.depth >= 4 and self.stack[3] == .td;
+    }
+};
+
 // The two authored orthography fields declare a language, while an independent
 // trusted category corroborates it. Neither the edition nor a gloss owns it.
 fn unsectionedPairedOrthographyLanguage(codes: LanguageCodes, raw_source: ?[]const u8, expanded: MissingText) ?ResolvedLanguage {
@@ -4365,21 +4449,35 @@ fn unsectionedPairedOrthographyLanguage(codes: LanguageCodes, raw_source: ?[]con
     var bracket_depth: usize = 0;
     var bracket_start: usize = 0;
     var position: usize = 0;
+    var table: PairedOrthographyTable = .{};
     var lines = std.mem.splitScalar(u8, raw, '\n');
     while (lines.next()) |raw_line| {
         const start = position; position += raw_line.len + 1;
-        const root = bracket_depth == 0;
-        // A monotonic census quarantines cross-line links. Templates, comments
-        // and protected/other HTML tags are declined by this closed BR-only form.
+        const root = bracket_depth == 0 and table.depth == 0;
+        var table_line = table.depth != 0;
+        // A monotonic census quarantines links and closed table bodies.
+        // Templates, comments and all other HTML remain outside this proof.
         var at: usize = 0;
         while (at < raw_line.len) {
             const byte = raw_line[at];
             if (byte == '{' or byte == '}' or byte == 0) return null;
             if (byte == '<') {
                 const tag = blobs.wikitext_syntax.tagAt(raw_line, at) orelse return null;
-                if (!tag.is("br") or tag.closing or std.mem.trim(u8, tag.attrs, " \t\r\n").len != 0) return null;
+                if (tag.is("br")) {
+                    if (tag.closing or std.mem.trim(u8, tag.attrs, " \t\r\n").len != 0 or
+                        (table_line and !table.inCell())) return null;
+                } else {
+                    if (bracket_depth != 0) return null;
+                    if (table.depth == 0) {
+                        if (!root or table_line or variants != 3 or !gloss or at != 0 or
+                            std.mem.trimEnd(u8, raw_line[tag.end..], " \t\r").len != 0) return null;
+                        table_line = true;
+                    }
+                    if (!table.accept(tag)) return null;
+                }
                 at = tag.end; continue;
             }
+            if (table_line and !table.inCell() and !std.ascii.isWhitespace(byte)) return null;
             if (byte == '[') {
                 if (bracket_depth == 2) return null;
                 if (bracket_depth == 0) bracket_start = start + at;
@@ -4397,6 +4495,7 @@ fn unsectionedPairedOrthographyLanguage(codes: LanguageCodes, raw_source: ?[]con
                             const target = std.mem.trim(u8, body[0..pipe], " \t");
                             const category = ns.ofTitle(target);
                             if (target.len != 0 and target[0] != ':' and category.id == 14) {
+                                if (table_line) return null;
                                 if (ordinary(codes.ctx, category.text)) |recognized| {
                                     if (recognized_category) |prior| if (!std.mem.eql(u8, prior.code, recognized.code)) return null;
                                     recognized_category = recognized;
@@ -4413,6 +4512,12 @@ fn unsectionedPairedOrthographyLanguage(codes: LanguageCodes, raw_source: ?[]con
             at += 1;
         }
         const line = std.mem.trim(u8, raw_line, " \t\r");
+        if (table_line) {
+            if (std.mem.indexOf(u8, line, " word (") != null or
+                std.mem.indexOf(u8, line, "English translation:") != null or
+                (line.len != 0 and line[0] == '=')) return null;
+            continue;
+        }
         if (line.len == 0 or !root) continue;
         if (raw_line[0] == ' ' or raw_line[0] == '\t' or line[0] == '=') return null;
         if (!started and needs_break) {
@@ -4448,7 +4553,7 @@ fn unsectionedPairedOrthographyLanguage(codes: LanguageCodes, raw_source: ?[]con
     }
     const declared = owner orelse return null;
     const category = category_owner orelse return null;
-    if (bracket_depth != 0 or variants != 3 or !gloss or !std.mem.eql(u8, category.code, declared.code)) return null;
+    if (bracket_depth != 0 or table.depth != 0 or variants != 3 or !gloss or !std.mem.eql(u8, category.code, declared.code)) return null;
     if (recognized_category) |recognized| if (!std.mem.eql(u8, recognized.code, declared.code)) return null;
     return declared;
 }
@@ -24484,4 +24589,84 @@ test "paired orthography owner requires clean identical source both authored for
         try std.testing.expect(unsectionedPairedOrthographyLanguage(codes, altered, .untracked(altered)) == null);
     }
 
+}
+
+test "paired orthography bona owns only closed root table cards and plain gloss annotations" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const F = struct {
+        fn resolve(_: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
+            if (std.mem.eql(u8, value, "Sesotho")) return .{ .code = "st", .heading = "Sesotho" };
+            if (std.mem.eql(u8, value, "English")) return .{ .code = "en", .heading = "English" };
+            return null;
+        }
+        fn trusted(ctx: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
+            return if (std.mem.eql(u8, value, "Sesotho")) resolve(ctx, value) else null;
+        }
+    };
+    var ns = try @import("namespace_registry").Registry.init(a, @embedFile("testdata/st-paired-orthography/namespace-registry.tsv")); defer ns.deinit();
+    const codes: LanguageCodes = .{ .namespace_catalog = &ns, .resolve_fn = F.resolve, .strong_fn = F.trusted, .trusted_fn = F.trusted };
+    // Official stwiki page 1667, revision 14622: no template or heading authority.
+    const raw = @embedFile("testdata/st-paired-orthography/bona.raw.wikitext");
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, raw, "<table "));
+    const owner = unsectionedPairedOrthographyLanguage(codes, raw, .untracked(raw)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("st", owner.code);
+    try std.testing.expectEqualStrings("Sesotho", owner.heading);
+    for ([_][2][]const u8{
+        .{ "[present tense]", "(present tense)" },
+        .{ "[present tense]", "[present tense] (verb)" },
+        .{ "[present tense]", "" },
+    }) |change| {
+        const altered = try std.mem.replaceOwned(u8, a, raw, change[0], change[1]);
+        try std.testing.expectEqualStrings("st", (unsectionedPairedOrthographyLanguage(codes, altered, .untracked(altered)) orelse return error.TestUnexpectedResult).code);
+    }
+    for ([_][2][]const u8{
+        .{ "[[Category:Sesotho]]", "" },
+        .{ "[[Category:Sesotho]]", "[[:Category:Sesotho]]" },
+        .{ "[[Category:Sesotho]]", "[[Category:English]]" },
+        .{ "'''Sesotho word (Lesotho orthography):''' bona", "" },
+        .{ "'''Sesotho word (Lesotho orthography):''' bona", "'''English word (Lesotho orthography):''' bona" },
+        .{ "[present tense]", "[present tense" },
+        .{ "[present tense]", "[]" },
+        .{ "[present tense]", "[present [tense]]" },
+        .{ "[present tense]", "[https://example.invalid present tense]" },
+        .{ "[present tense]", "[present tense]trailing" },
+        .{ "<div>", "<div lang=\"en\">" },
+        .{ "<div>", " <div>" },
+        .{ "<div>", "<div><div>" },
+        .{ "</div>", "" },
+        .{ "</table>", "" },
+        .{ "</td>", "</tr>" },
+        .{ "<table border=\"1\"", "<table lang=\"en\" border=\"1\"" },
+        .{ "<table border=\"1\"", "<table border=\"1\" border=\"2\"" },
+        .{ "<table border=\"1\"", "<table border=\"1\" style=\"display:none\"" },
+        .{ "<td>&nbsp;</td>", "<td>[[Category:Sesotho]]</td>" },
+        .{ "<td>&nbsp;</td>", "<td>[[Category:English]]</td>" },
+        .{ "<td>&nbsp;</td>", "<td>'''English word (South African orthography):''' example</td>" },
+        .{ "<td>&nbsp;</td>", "<td>\n==English==\n</td>" },
+        .{ "<td>&nbsp;</td>", "<td>'''English translation:''' ''example''</td>" },
+        .{ "<td>&nbsp;</td>", "<td><nowiki>hidden</nowiki></td>" },
+        .{ "<td>&nbsp;</td>", "<td><!--hidden--></td>" },
+        .{ "<td>&nbsp;</td>", "<td>{{hidden}}</td>" },
+        .{ "<td>&nbsp;</td>", "<td>[[unclosed</td>" },
+        .{ "<td>&nbsp;</td>", "<td><table><tr><td>nested</td></tr></table></td>" },
+    }) |change| {
+        const altered = try std.mem.replaceOwned(u8, a, raw, change[0], change[1]);
+        try std.testing.expect(!std.mem.eql(u8, raw, altered));
+        try std.testing.expect(unsectionedPairedOrthographyLanguage(codes, altered, .untracked(altered)) == null);
+        try std.testing.expect(unsectionedPairedOrthographyLanguage(codes, raw, .untracked(altered)) == null);
+    }
+    const nested_category = try std.mem.replaceOwned(u8, a, raw, "[[Category:Sesotho]]\n", "");
+    const table_only = try std.mem.replaceOwned(u8, a, nested_category, "<td>&nbsp;</td>", "<td>[[Category:Sesotho]]</td>");
+    try std.testing.expect(unsectionedPairedOrthographyLanguage(codes, table_only, .untracked(table_only)) == null);
+    const table_start = std.mem.indexOf(u8, raw, "<div>").?;
+    const table_end = std.mem.indexOfPos(u8, raw, table_start, "</div>").? + "</div>".len;
+    const before_card = try std.mem.concat(a, u8, &.{ raw[table_start..table_end], "\n", raw });
+    try std.testing.expect(unsectionedPairedOrthographyLanguage(codes, before_card, .untracked(before_card)) == null);
+    // The pre-existing deliberate refusals remain refusals, including the
+    // numbered lead-ins, bare indented tables, malformed HTML and broken link.
+    inline for (.{ "e", "le", "ho", "bana", "ee", "sereledi", "likolo" }) |name| {
+        const negative = @embedFile("testdata/st-paired-orthography/" ++ name ++ ".raw.wikitext");
+        try std.testing.expect(unsectionedPairedOrthographyLanguage(codes, negative, .untracked(negative)) == null);
+    }
 }

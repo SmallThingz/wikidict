@@ -1,0 +1,130 @@
+'''Sesotho word (South African orthography):''' bona
+<br />
+'''Sesotho word (Lesotho orthography):''' bona
+<br />
+<br />
+'''English translation:''' ''see; watch'' (verb) [present tense]
+<br />
+<br />
+'''Derivative(s)/Related word(s):''' [[bone]] ''saw'' [past tense]
+<br />
+'''Example of usage:''' Bana ba bona telebeshene. ''(The children watch television.)''
+<br />
+'''Similar words:''' [[seipone]] ''(mirror)''
+<br />
+<br />
+
+----
+'''Absolute pronoun'''
+<br />
+Pronoun used instead of a noun.
+<br />
+<br />
+<div>
+  <table border="1" cellspacing="0" bordercolor="#000000">
+    <tr>
+      <td>&nbsp;</td>
+      <td><font size="2" face="Arial"><b>Singular</b></font></td>
+      <td><i><font size="2" face="Arial"><b>Translation</b></font></i></td>
+      <td><font size="2" face="Arial"><b>Plural</b></font></td>
+      <td><i><font size="2" face="Arial"><b>Translation</b></font></i></td>
+    </tr>
+    <tr>
+      <td><font size="2" face="Arial"><b>First person</b></font></td>
+      <td align="center"><font size="2" face="Arial">[[nna]]</font></td>
+      <td align="center"><font size="2" face="Arial">I</font></td>
+      <td align="center"><font size="2" face="Arial">[[rona]]</font></td>
+      <td align="center"><font size="2" face="Arial">we</font></td>
+    </tr>
+    <tr>
+      <td><font size="2" face="Arial"><b>Second person</b></font></td>
+      <td align="center"><font size="2" face="Arial">[[wena]] ([[SeSA]]) / [[oena]] ([[SeL]])</font></td>
+      <td align="center"><font size="2" face="Arial">you</font></td>
+      <td align="center"><font size="2" face="Arial">[[lona]]</font></td>
+      <td align="center"><font size="2" face="Arial">you</font></td>
+    </tr>
+    <tr>
+      <td><font size="2" face="Arial"><b>Third person</b></font></td>
+      <td align="center"><font size="2" face="Arial">[[yena]]</font></td>
+      <td align="center"><font size="2" face="Arial">he/she</font></td>
+      <td align="center"><font size="2" face="Arial">[[bona]]</font></td>
+      <td align="center"><font size="2" face="Arial">they</font></td>
+    </tr>
+  </table>
+</div>
+<br />
+<div>
+  <table border="1" cellspacing="0" bordercolor="#000000" cellpadding="3">
+    <tr>
+      <td align="center"><font size="2" face="Arial"><b>Class</b></font></td>
+      <td align="center"><font size="2" face="Arial">&nbsp;1</font></td>
+      <td align="center"><font size="2" face="Arial">2</font></td>
+      <td align="center"><font size="2" face="Arial">1a</font></td>
+      <td align="center"><font size="2" face="Arial">2a</font></td>
+      <td align="center"><font size="2" face="Arial">3</font></td>
+      <td align="center"><font size="2" face="Arial">4</font></td>
+      <td align="center"><font size="2" face="Arial">5</font></td>
+      <td align="center"><font size="2" face="Arial">6</font></td>
+      <td align="center"><font size="2" face="Arial">7</font></td>
+      <td align="center"><font size="2" face="Arial">8</font></td>
+      <td align="center"><font size="2" face="Arial">9</font></td>
+      <td align="center"><font size="2" face="Arial">10</font></td>
+      <td align="center"><font size="2" face="Arial">14</font></td>
+      <td align="center"><font size="2" face="Arial">15</font></td>
+    </tr>
+    <tr>
+      <td align="center"><font size="2" face="Arial"><b>Subject concord</b></font></td>
+      <td align="center"><font size="2" face="Arial">o</font></td>
+      <td align="center"><font size="2" face="Arial">ba</font></td>
+      <td align="center"><font size="2" face="Arial">o</font></td>
+      <td align="center"><font size="2" face="Arial">ba</font></td>
+      <td align="center"><font size="2" face="Arial">o</font></td>
+      <td align="center"><font size="2" face="Arial">e</font></td>
+      <td align="center"><font size="2" face="Arial">le</font></td>
+      <td align="center"><font size="2" face="Arial">a</font></td>
+      <td align="center"><font size="2" face="Arial">se</font></td>
+      <td align="center"><font size="2" face="Arial">di</font></td>
+      <td align="center"><font size="2" face="Arial">e</font></td>
+      <td align="center"><font size="2" face="Arial">di</font></td>
+      <td align="center"><font size="2" face="Arial">bo</font></td>
+      <td align="center"><font size="2" face="Arial">ho</font></td>
+    </tr>
+    <tr>
+      <td align="center"><font size="2" face="Arial"><b>Absolute pronoun</b></font></td>
+      <td align="center"><font size="2" face="Arial">[[yena]]</font></td>
+      <td align="center"><font size="2" face="Arial">[[bona]]</font></td>
+      <td align="center"><font size="2" face="Arial">[[yena]]</font></td>
+      <td align="center"><font size="2" face="Arial">[[bona]]</font></td>
+      <td align="center"><font size="2" face="Arial">[[wona]]</font></td>
+      <td align="center"><font size="2" face="Arial">[[yona]]</font></td>
+      <td align="center"><font size="2" face="Arial">[[lona]]</font></td>
+      <td align="center"><font size="2" face="Arial">[[ona]]</font></td>
+      <td align="center"><font size="2" face="Arial">[[sona]]</font></td>
+      <td align="center"><font size="2" face="Arial">[[tsona]]</font></td>
+      <td align="center"><font size="2" face="Arial">[[yona]]</font></td>
+      <td align="center"><font size="2" face="Arial">[[tsona]]</font></td>
+      <td align="center"><font size="2" face="Arial">[[bona]]</font></td>
+      <td align="center"><font size="2" face="Arial">[[hona]]</font></td>
+    </tr>
+    <tr>
+      <td align="center"><i><font size="2" face="Arial"><b>Translation</b></font></i></td>
+      <td align="center"><font size="2" face="Arial">he/she</font></td>
+      <td align="center"><font size="2" face="Arial">they</font></td>
+      <td align="center"><font size="2" face="Arial">he/she</font></td>
+      <td align="center"><font size="2" face="Arial">they</font></td>
+      <td align="center"><font size="2" face="Arial">it</font></td>
+      <td align="center"><font size="2" face="Arial">they</font></td>
+      <td align="center"><font size="2" face="Arial">it</font></td>
+      <td align="center"><font size="2" face="Arial">they</font></td>
+      <td align="center"><font size="2" face="Arial">it</font></td>
+      <td align="center"><font size="2" face="Arial">they</font></td>
+      <td align="center"><font size="2" face="Arial">it</font></td>
+      <td align="center"><font size="2" face="Arial">they</font></td>
+      <td align="center"><font size="2" face="Arial">it</font></td>
+      <td align="center"><font size="2" face="Arial">it</font></td>
+    </tr>
+  </table>
+</div>
+
+[[Category:Sesotho]]
+[[Category:Sesotho pronouns]]

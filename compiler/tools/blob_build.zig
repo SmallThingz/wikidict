@@ -69477,3 +69477,66 @@ test "native interwiki Tools preserve unknown source and nested action refusals"
         for (renderer.spans.items) |span| try std.testing.expect(span.inline_action_group == null);
     }
 }
+
+test "ordinary bona root table card changes only language owner with full body and codec parity" {
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io;
+    var ns = try namespace_registry.Registry.init(a, @embedFile("testdata/st-paired-orthography/namespace-registry.tsv")); defer ns.deinit();
+    var registry = language_registry.Registry.empty(a); defer registry.deinit();
+    try registry.addTsv(@embedFile("testdata/st-paired-orthography/language-registry.tsv"));
+    const codes = languageCodes(&registry, &ns);
+    const raw = @embedFile("testdata/st-paired-orthography/bona.raw.wikitext");
+    const output = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/st-bona", .{tmp.sub_path});
+    var writer = try encoder.blob_builder.Writer.init(io, a, output); defer writer.deinit();
+    writer.language_codes = codes;
+    const Case = struct { title: []const u8, page: u64, revision: u64, source: []const u8 };
+    const cards = try std.json.parseFromSliceLeaky([]const Case, a,
+        @embedFile("testdata/st-paired-orthography/table-cards.raw.json"), .{});
+    try std.testing.expectEqual(@as(usize, 20), cards.len);
+    for (cards) |card| {
+        if (std.mem.eql(u8, card.title, "bona")) {
+            try std.testing.expectEqual(@as(u64, 1667), card.page);
+            try std.testing.expectEqual(@as(u64, 14622), card.revision);
+            try std.testing.expectEqualStrings(raw, card.source);
+        }
+        try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, card.title, card.source, card.source, null);
+    }
+    _ = try writer.finish(codes);
+    const actual = (try StPairedOrthographyTesting.entry(io, a, output, "Sesotho", "bona")) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("st", actual.language_code);
+    try std.testing.expectEqualStrings("Sesotho", actual.language.?);
+    try std.testing.expect((try StPairedOrthographyTesting.entry(io, a, output, "Unclassified", "bona")) == null);
+    for (cards) |card| {
+        if (std.mem.eql(u8, card.title, "bona")) continue;
+        try std.testing.expect((try StPairedOrthographyTesting.entry(io, a, output, "Sesotho", card.title)) == null);
+        const held = (try StPairedOrthographyTesting.entry(io, a, output, "Unclassified", card.title)) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualStrings("", held.language_code);
+    }
+    // The prior owner compiled this same complete body as Unclassified. Only
+    // owner metadata may change: table cells, actions, paints and all other
+    // semantic fields compare recursively, with the normal codec round trip.
+    const payload = try encoder.presentation_document.compileReportedWithLinkTrailAlloc(a, "bona", .language,
+        "Unclassified", "", raw, null, codes.link_trail, &ns, null);
+    const reference = try encoder.presentation_codec.decodeAlloc(a, payload, "bona", .language, .{ .code = "", .heading = "Unclassified" });
+    const T = encoder.presentation_types;
+    var expected = reference.entry;
+    expected.language = "Sesotho";
+    expected.language_code = "st";
+    // With no authored headings, Document.Builder uses the owner language for
+    // its single synthetic section title as well (not a body/table change).
+    try std.testing.expectEqual(@as(usize, 1), expected.sections.len);
+    try std.testing.expectEqual(@as(usize, 1), actual.sections.len);
+    try std.testing.expectEqualStrings("Unclassified", expected.sections[0].title);
+    try std.testing.expectEqual(@as(u8, 2), expected.sections[0].level);
+    try std.testing.expectEqualStrings("", expected.sections[0].anchor);
+    try std.testing.expectEqualStrings("", expected.sections[0].anchor_fallback);
+    try std.testing.expect(expected.sections[0].heading_style == null);
+    const owner_sections = try a.dupe(T.Section, expected.sections);
+    owner_sections[0].title = "Sesotho";
+    expected.sections = owner_sections;
+    try std.testing.expectEqualDeep(expected, actual);
+    const reencoded = try encoder.presentation_codec.encodeAlloc(a, T.Stored{ .entry = actual });
+    const decoded = try encoder.presentation_codec.decodeAlloc(a, reencoded, "bona", .language, .{ .code = "st", .heading = "Sesotho" });
+    try std.testing.expectEqualDeep(actual, decoded.entry);
+}
