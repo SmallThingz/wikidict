@@ -22,6 +22,7 @@ from unittest.mock import call, patch
 from types import SimpleNamespace
 import build_wiktionaries as b
 import build_resource_limits as limits
+import build_artifact_root as artifacts
 
 
 def fixture_blob_tool(root, name='dict-blob-build'):
@@ -143,6 +144,42 @@ class PreparedToolsFixture(unittest.TestCase):
         capability.start();self.addCleanup(capability.stop)
 
 
+class WriterProductSourceManifestTests(unittest.TestCase):
+    def manifest(self):
+        return {name:dict(bytes=len(name),sha256=hashlib.sha256(name.encode()).hexdigest(),mode=0o644)
+                for name in artifacts.WRITER_PRODUCT_EMBED_FILES}
+
+    def test_lua_formatter_programs_require_selected_manifest_descriptors(self):
+        original=self.manifest()
+        for name in ('tools/testdata/shy-nom-owner/langues.lua',
+                     'tools/testdata/shy-nom-owner/section-langue.lua',
+                     'tools/testdata/shy-nom-owner/bases.lua'):
+            with self.subTest(name=name):
+                missing=dict(original);del missing[name]
+                with patch.object(Path,'read_bytes',side_effect=AssertionError('ambient source read')):
+                    with self.assertRaisesRegex(ValueError,'Missing Writer product source'):
+                        artifacts.writer_product_source_inputs(missing)
+
+    def test_template_signatures_require_mode_and_return_selected_bytes(self):
+        for name in ('tools/testdata/shy-nom-owner/langue.wikitext',
+                     'tools/testdata/fr-named-owner/langue.wikitext'):
+            with self.subTest(name=name):
+                selected=self.manifest();selected[name]=dict(selected[name]);del selected[name]['mode']
+                with self.assertRaisesRegex(ValueError,'bytes, SHA256 and mode'):
+                    artifacts.writer_product_source_inputs(selected)
+        selected=self.manifest()
+        with patch.object(Path,'read_bytes',side_effect=AssertionError('ambient source read')):
+            result=artifacts.writer_product_source_inputs(selected)
+        self.assertEqual(result,selected)
+        result[name]['mode']=0o444
+        self.assertEqual(selected[name]['mode'],0o644)
+
+    def test_reviewed_alias_evidence_remains_required(self):
+        selected=self.manifest();del selected['tools/reviewed_language_aliases.json']
+        with self.assertRaisesRegex(ValueError,'Missing Writer product source'):
+            artifacts.writer_product_source_inputs(selected)
+
+
 class ShardSourceIdentityTests(PreparedToolsFixture):
     def fixture(self, root):
         sources={
@@ -150,6 +187,11 @@ class ShardSourceIdentityTests(PreparedToolsFixture):
             'src/producer.zig':b'ordinary producer', 'src/lua/runtime/abi.h':b'ABI layout',
             'tools/extraction_cache.py':b'production cache helper',
             'tools/reviewed_language_aliases.json':b'{"records":[]}',
+            'tools/testdata/shy-nom-owner/langues.lua':b'product nom provider',
+            'tools/testdata/shy-nom-owner/section-langue.lua':b'product nom formatter',
+            'tools/testdata/shy-nom-owner/bases.lua':b'product nom casing',
+            'tools/testdata/shy-nom-owner/langue.wikitext':b'product nom template',
+            'tools/testdata/fr-named-owner/langue.wikitext':b'product named template',
             'tools/corpus_controller.py':b'controller timing',
             'tools/test_corpus_controller.py':b'controller timing tests',
             'tools/native_qualification.py':b'standalone native qualification',
@@ -169,6 +211,15 @@ class ShardSourceIdentityTests(PreparedToolsFixture):
         registry=root/'languages.tsv';registry.write_bytes(b'en\tEnglish\n')
         items=[dict(wiki='testwiktionary',date='20261001',name='dump.bz2',size=1,sha1='a'*40)]
         return sources,registry,items
+
+    def test_unselected_testdata_does_not_change_producer_identity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);self.fixture(root)
+            unused=root/'tools/testdata/unselected.lua';unused.write_bytes(b'unused fixture')
+            with patch.object(b,'PROJECT',root):
+                before=b._source_fingerprints(include_production=True)
+                unused.write_bytes(b'changed unused fixture')
+                self.assertEqual(b._source_fingerprints(include_production=True),before)
 
     def seed(self, workspace, state):
         self.assertEqual(b.prepare_shard_workspace(workspace,state,123),123)
@@ -311,6 +362,11 @@ class ShardSourceIdentityTests(PreparedToolsFixture):
     def test_producer_abi_other_tests_and_input_changes_invalidate_native_state(self):
         changes=('src/producer.zig','src/lua/runtime/abi.h','tools/extraction_cache.py',
                  'tools/reviewed_language_aliases.json',
+                 'tools/testdata/shy-nom-owner/langues.lua',
+                 'tools/testdata/shy-nom-owner/section-langue.lua',
+                 'tools/testdata/shy-nom-owner/bases.lua',
+                 'tools/testdata/shy-nom-owner/langue.wikitext',
+                 'tools/testdata/fr-named-owner/langue.wikitext',
                  'tools/test_other.py','tools/nested/corpus_controller.py',
                  'tools/nested/native_qualification.py','tools/nested/test_native_qualification.py','registry','dump')
         for changed in changes:

@@ -30,8 +30,36 @@ def repository_path(path, repository):
 
 
 EXECUTION_ROLES = ('state', 'output', 'raw', 'cache')
-PRODUCER_SOURCE_FILES = ('build.zig', 'build.zig.zon', 'tools/reviewed_language_aliases.json')
+WRITER_PRODUCT_EMBED_FILES = (
+    'tools/reviewed_language_aliases.json',
+    'tools/testdata/shy-nom-owner/langues.lua',
+    'tools/testdata/shy-nom-owner/section-langue.lua',
+    'tools/testdata/shy-nom-owner/bases.lua',
+    'tools/testdata/shy-nom-owner/langue.wikitext',
+    'tools/testdata/fr-named-owner/langue.wikitext',
+)
+PRODUCER_SOURCE_FILES = ('build.zig', 'build.zig.zon', *WRITER_PRODUCT_EMBED_FILES)
 PRODUCER_SOURCE_DIRECTORIES = ('src', 'tools')
+
+
+def writer_product_source_inputs(manifest):
+    """Select product embeds from an explicit future Writer source inventory.
+
+    Never repair an incomplete inventory by reading the current checkout: its
+    files may differ from the retained source selected for that Writer.
+    """
+    require(isinstance(manifest, dict), 'Writer source inventory must be a mapping')
+    selected = {}
+    for name in WRITER_PRODUCT_EMBED_FILES:
+        row = manifest.get(name)
+        require(isinstance(row, dict), 'Missing Writer product source: ' + name)
+        require(type(row.get('bytes')) is int and row['bytes'] >= 0
+                and isinstance(row.get('sha256'), str)
+                and re.fullmatch(r'[0-9a-f]{64}', row['sha256']) is not None
+                and type(row.get('mode')) is int and 0 <= row['mode'] <= 0o7777,
+                'Writer product source must bind bytes, SHA256 and mode: ' + name)
+        selected[name] = dict(row)
+    return selected
 
 
 def execution_parent(repository):
