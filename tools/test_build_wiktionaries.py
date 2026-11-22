@@ -4607,6 +4607,33 @@ class VerifiedResumeCleanupOrderTests(PublicationCompilerFixture):
                     self.assertEqual(self.files(root),before)
                     self.assertTrue(workspace.exists());self.assertTrue(raw.exists());self.assertFalse(target.exists())
 
+    def test_resume_preserves_raw_blob_if_its_xz_file_or_directory_cannot_sync(self):
+        for failure in ('file', 'directory'):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                with patch.object(b, 'PROJECT', root):
+                    item, target, _, staging, _ = self.owned_inputs(root)
+                    raw = staging / 'supplemental.wikblb'
+                    packed = staging / 'supplemental.wikblb.xz'
+                    original = raw.read_bytes()
+                    packed.write_bytes(lzma.compress(original))
+                    rejected = (packed if failure == 'file' else staging).stat()
+                    fsync = os.fsync
+
+                    def sync(fd):
+                        if os.path.samestat(os.fstat(fd), rejected):
+                            raise OSError('injected resume sync failure')
+                        return fsync(fd)
+
+                    with patch.object(os, 'fsync', side_effect=sync):
+                        with self.assertRaisesRegex(OSError, 'resume sync failure'):
+                            b.build_locked([item], root, root / 'output', 'zig', 1)
+                    self.assertEqual(raw.read_bytes(), original)
+                    self.assertEqual(lzma.decompress(packed.read_bytes()), original)
+                    self.assertFalse(target.exists())
+                    self.assertEqual(b.build_locked([item], root, root / 'output', 'zig', 1), 'resumed_publication')
+                    self.assertEqual(lzma.decompress((target / packed.name).read_bytes()), original)
+
     def test_verified_resume_raw_xz_twins_keep_owner_guard_and_retire_shards_before_roundtrip(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp)

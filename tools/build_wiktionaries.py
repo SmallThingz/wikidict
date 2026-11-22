@@ -9054,13 +9054,22 @@ def _publish_verified_staging(staging, target, edition, date, compression_worker
     raw = sorted(staging.rglob('*.wikblb'))
     logical = {name + '.xz' for name in sealed if name.endswith('.wikblb')}
     pending = []
+    resumed = []
     for blob in raw:
         compressed_path = Path(str(blob) + '.xz')
         if compressed_path.exists():
             verify_round_trip(blob, compressed_path)
-            unlink_artifact(blob)
+            fd = os.open(compressed_path, os.O_RDONLY | os.O_NOFOLLOW)
+            try: os.fsync(fd)
+            finally: os.close(fd)
+            resumed.append(blob)
         else:
             pending.append(blob)
+    # An interrupted encoder may have renamed the XZ before its directory synced.
+    for directory in {blob.parent for blob in resumed}:
+        sync_shard_directory(directory)
+    for blob in resumed:
+        unlink_artifact(blob)
     if pending:
         workers = compression_workers or default_build_threads()
         compress_many(pending, 1024*1024, workers)
