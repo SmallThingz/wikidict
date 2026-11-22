@@ -183,6 +183,25 @@ intermediate files. A page split across archive parts uses the serial framer;
 that path compresses up to four ordinary frames concurrently with at most
 32 MiB of raw input queued. Staging removes partial outputs on failure.
 
+`compiler/tools/index_original_dump.py` indexes the `.bz2` downloads in place.
+It verifies each part against its manifest size and SHA-1, checks each bzip2
+block and stream CRC, and records the compressed bit ranges and decoded sizes
+in a JSON file. A fresh index can process up to four archive parts in parallel.
+The ordinary corpus build above still uses the Zstandard staging path.
+
+```sh
+python3.14 compiler/tools/index_original_dump.py --downloads data/dumps \
+  --manifest data/dumps/manifest.json --manifest-sha256 "$manifest_sha256" \
+  --edition enwiktionary --output en-blocks.json
+```
+
+Use the digest of the selected download manifest for `manifest_sha256`. To
+read an existing page index in its original coordinates, also supply the
+historical `--stage-receipt` and the authenticated `--page-index-sha256` and
+`--page-index-size`. This mode rebuilds the original frame stream and its
+offset index in memory, verifies both digests and the source page count, and
+adds the logical frame ranges to the same JSON output.
+
 The build pipeline:
 
 1. extracts templates, modules and page metadata;
