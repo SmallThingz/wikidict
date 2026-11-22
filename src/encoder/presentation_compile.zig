@@ -40172,7 +40172,7 @@ pub const Renderer = struct {
                         const closing_line_end = std.mem.indexOfScalarPos(u8, rest, pair.end, '\n') orelse rest.len;
                         const opening_line_end = std.mem.indexOfScalarPos(u8, rest, tag.end, '\n') orelse rest.len;
                         const first_line_inline = if (item_formatting != null) trim(rest[tag.end..opening_line_end]).len != 0 else trim(clean[tag.end..]).len != 0;
-                        if (!first_line_inline or std.mem.indexOfScalar(u8, rest[tag.end..pair.inner_end], '\n') != null or bodyPreCandidate(rest[tag.end..pair.inner_end]) or mayHaveMultilineLinks(rest[tag.end..pair.inner_end])) {
+                        if (!first_line_inline or std.mem.indexOfScalar(u8, rest[tag.end..pair.inner_end], '\n') != null or bodyPreCandidate(rest[tag.end..pair.inner_end])) {
                             const body = rest[tag.end..pair.inner_end];
                             const joining_format = formatting_join_pending;
                             const join_separator = if ((self.html_list_item_flow or ordinary_formatting) and offset > start)
@@ -43320,7 +43320,7 @@ pub const Renderer = struct {
                         if (syntax.matchingTag(rest, tag)) |pair| {
                             const body = rest[tag.end..pair.inner_end];
                             const first_end = std.mem.indexOfScalarPos(u8, rest, tag.end, '\n') orelse rest.len;
-                            if (trim(rest[tag.end..first_end]).len == 0 or std.mem.indexOfScalar(u8, body, '\n') != null or bodyPreCandidate(body) or mayHaveMultilineLinks(body))
+                            if (trim(rest[tag.end..first_end]).len == 0 or std.mem.indexOfScalar(u8, body, '\n') != null or bodyPreCandidate(body))
                                 return .{ .offset = at, .tag = tag };
                             at += pair.end;
                             continue;
