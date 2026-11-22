@@ -1,4 +1,6 @@
 const std = @import("std");
+const bzip2_blocks = @import("bzip2_blocks.zig");
+pub const SourceTransport = @import("source_transport.zig");
 
 const BZ_OK: c_int = 0;
 const BZ_STREAM_END: c_int = 4;
@@ -535,12 +537,16 @@ extern fn ZSTD_decompress(dst: [*]u8, dst_capacity: usize, src: [*]const u8, src
 extern fn ZSTD_isError(code: usize) c_uint;
 
 pub fn decompressZstdMemberAlloc(io: std.Io, allocator: std.mem.Allocator, file: *std.Io.File, span: StreamSpan) ![]u8 {
+    return decompressZstdMemberAllocLimited(io, allocator, file, span, max_member_uncompressed_bytes);
+}
+
+fn decompressZstdMemberAllocLimited(io: std.Io, allocator: std.mem.Allocator, file: *std.Io.File, span: StreamSpan, limit: usize) ![]u8 {
     if (span.len < 6 or span.len > max_member_uncompressed_bytes + 1024 * 1024) return error.CompressedMemberTooLarge;
     _ = std.math.add(u64, span.offset, span.len) catch return error.InvalidZstdMember;
     const input = try allocator.alloc(u8, @intCast(span.len));
     defer allocator.free(input);
     if (try file.readPositionalAll(io, input, span.offset) != input.len) return error.TruncatedDump;
-    return decompressZstdBytesAlloc(allocator, input, max_member_uncompressed_bytes);
+    return decompressZstdBytesAlloc(allocator, input, limit);
 }
 
 pub fn decompressZstdBytesAlloc(allocator: std.mem.Allocator, input: []const u8, max_output_bytes: usize) ![]u8 {
@@ -749,10 +755,12 @@ pub const SourceReader = struct {
     cache_allocator: std.mem.Allocator,
     file: std.Io.File,
     kind: PageIndexKind,
+    original_bzip2: ?bzip2_blocks.Reader = null,
     streams: []StreamSpan = &.{},
     cache: std.AutoHashMapUnmanaged(u32, CachedMember) = .empty,
     cache_bytes: usize = 0,
     cache_clock: u64 = 0,
+    member_output_limit: usize = max_member_uncompressed_bytes,
     // One bounded cache is shared by indexed dispatch and lazy page proofs.
     read_mutex: std.Io.Mutex = .init,
 
@@ -782,11 +790,70 @@ pub const SourceReader = struct {
         };
     }
 
+    // Explicit physical transport selection; page-index addresses retain their
+    // original logical namespace. The bridge must match the exact loaded TSV.
+    pub fn openOriginalBzip2(
+        io: std.Io,
+        allocator: std.mem.Allocator,
+        cache_allocator: std.mem.Allocator,
+        directory_path: []const u8,
+        source_directory: []const u8,
+        kind: PageIndexKind,
+        page_index_bytes: []const u8,
+        stream_table_path: ?[]const u8,
+    ) !SourceReader {
+        if (kind == .multistream_bz2) return error.UnsupportedBzip2AddressBridge;
+        var original = try bzip2_blocks.Reader.open(io, allocator, cache_allocator, directory_path, source_directory);
+        errdefer original.deinit();
+        var streams: []StreamSpan = &.{};
+        errdefer if (streams.len != 0) allocator.free(streams);
+        if (kind == .multistream_zstd) {
+            const bridge = original.bridge() orelse return error.MissingBzip2Bridge;
+            var digest: [32]u8 = undefined;
+            std.crypto.hash.sha2.Sha256.hash(page_index_bytes, &digest, .{});
+            const hex = std.fmt.bytesToHex(digest, .lower);
+            if (page_index_bytes.len != bridge.page_index_bytes or !std.mem.eql(u8, &hex, bridge.page_index_sha256)) return error.Bzip2PageIndexMismatch;
+            streams = try loadStreamTable(io, allocator, stream_table_path orelse return error.MissingStreamIndex, bridge.dump_bytes);
+            if (streams.len != bridge.frames.len) return error.InvalidBzip2Bridge;
+            var next: u64 = 0;
+            for (streams) |span| {
+                if (span.offset != next) return error.InvalidBzip2Bridge;
+                next = try std.math.add(u64, next, span.len);
+            }
+            if (next != bridge.dump_bytes) return error.InvalidBzip2Bridge;
+        }
+        var file = try std.Io.Dir.cwd().openFile(io, directory_path, .{});
+        errdefer file.close(io);
+        return .{ .io = io, .allocator = allocator, .cache_allocator = cache_allocator, .file = file, .kind = kind, .streams = streams, .original_bzip2 = original };
+    }
+
+    pub const Selection = union(enum) { legacy, root_receipt, original_bzip2: []const u8 };
+
+    pub fn openForRoot(io: std.Io, allocator: std.mem.Allocator, cache_allocator: std.mem.Allocator,
+        root: []const u8, dump_path: []const u8, kind: PageIndexKind,
+        page_index_bytes: []const u8, stream_table_path: ?[]const u8, selection: Selection,
+    ) !SourceReader {
+        var selected = try SourceTransport.load(io, allocator, root, dump_path);
+        defer if (selected) |*value| value.deinit();
+        if (selected) |value| {
+            switch (selection) {
+                .legacy => return error.ExplicitSourceTransportRequired,
+                .root_receipt => {},
+                .original_bzip2 => |directory| if (!std.mem.eql(u8, directory, value.descriptor.value.source_directory)) return error.SourceTransportMismatch,
+            }
+            return openOriginalBzip2(io, allocator, cache_allocator, dump_path,
+                value.descriptor.value.source_directory, kind, page_index_bytes, stream_table_path);
+        }
+        if (selection == .original_bzip2) return error.MissingBzip2SourceTransport;
+        return open(io, allocator, cache_allocator, dump_path, kind, stream_table_path);
+    }
+
     pub fn deinit(self: *SourceReader) void {
         var cache_values = self.cache.valueIterator();
         while (cache_values.next()) |entry| self.cache_allocator.free(entry.bytes);
         self.cache.deinit(self.cache_allocator);
         if (self.streams.len != 0) self.allocator.free(self.streams);
+        if (self.original_bzip2) |*original| original.deinit();
         self.file.close(self.io);
         self.* = undefined;
     }
@@ -836,11 +903,23 @@ pub const SourceReader = struct {
     }
 
     fn readCompressedAlloc(self: *SourceReader, allocator: std.mem.Allocator, loc: anytype) ![]u8 {
-        if (try self.copyCached(allocator, loc)) |cached| return cached;
+        if (self.original_bzip2) |*original| {
+            const start = try original.frameRange(loc.stream_id, loc.offset, loc.len);
+            try original.checkRangeCurrent(start, loc.len);
+        }
+        if (try self.copyCached(allocator, loc)) |cached| {
+            errdefer allocator.free(cached);
+            if (self.original_bzip2) |*original| try original.checkRangeCurrent(try original.frameRange(loc.stream_id, loc.offset, loc.len), loc.len);
+            return cached;
+        }
         const index: usize = @intCast(loc.stream_id);
         if (index >= self.streams.len) return error.InvalidPageIndex;
-        const member = if (self.kind == .multistream_zstd)
-            try decompressZstdMemberAlloc(self.io, self.cache_allocator, &self.file, self.streams[index])
+        const member = if (self.original_bzip2) |*original| blk: {
+            const bridge = original.bridge() orelse return error.MissingBzip2Bridge;
+            const frame = bridge.frames[index];
+            break :blk try original.readAlloc(self.cache_allocator, frame[0], @intCast(frame[1]));
+        } else if (self.kind == .multistream_zstd)
+            try decompressZstdMemberAllocLimited(self.io, self.cache_allocator, &self.file, self.streams[index], self.member_output_limit)
         else
             try decompressMemberAlloc(self.io, self.cache_allocator, &self.file, self.streams[index]);
         errdefer self.cache_allocator.free(member);
@@ -862,6 +941,7 @@ pub const SourceReader = struct {
         // another reader may immediately evict the decompressed cache member.
         return switch (source) {
             .raw_xml => |loc| blk: {
+                if (self.original_bzip2) |*original| break :blk try original.readAlloc(allocator, loc.offset, loc.len);
                 if (loc.len == 0) break :blk "";
                 const out = try allocator.alloc(u8, loc.len);
                 errdefer allocator.free(out);
@@ -931,6 +1011,10 @@ pub const PageTitleIndex = struct {
     page_index_size: usize,
 
     pub fn init(bytes: []const u8) !PageTitleIndex {
+        return initSized(bytes, bytes.len);
+    }
+
+    fn initSized(bytes: []const u8, logical_size: usize) !PageTitleIndex {
         if (bytes.len < page_title_index_header_len or !std.mem.eql(u8, bytes[0..8], page_title_index_magic))
             return error.InvalidPageTitleIndex;
         const kind_raw = std.mem.readInt(u64, bytes[8..16], .little);
@@ -951,7 +1035,7 @@ pub const PageTitleIndex = struct {
         if (capacity < 8 or !std.math.isPowerOfTwo(capacity) or unique_count > row_count or unique_count > capacity)
             return error.InvalidPageTitleIndex;
         const table_bytes = std.math.mul(usize, capacity, page_title_index_entry_len) catch return error.InvalidPageTitleIndex;
-        if (bytes.len != page_title_index_header_len + table_bytes) return error.InvalidPageTitleIndex;
+        if (logical_size != page_title_index_header_len + table_bytes) return error.InvalidPageTitleIndex;
         return .{
             .bytes = bytes,
             .kind = kind,
@@ -1693,3 +1777,207 @@ test "page index numeric shortcut retains complete row fields and strict size pr
     try std.testing.expectError(error.InvalidPageIndex, parsePageIndexLine(.raw_xml, base ++ "\t" ++ revision_size_proof ++ "\t03"));
     try std.testing.expectError(error.Overflow, parsePageIndexLine(.raw_xml, "18446744073709551616\t3" ++ suffix));
 }
+
+// Logical index bytes over the ordinary fixed-size Zstd member transport.
+// Returned rows own their storage; cache eviction cannot invalidate a caller.
+pub const IndexBytes = struct {
+    reader: SourceReader,
+    initial: std.Io.File.Stat,
+    size: usize,
+    block_bytes: usize,
+    verified: bool = false,
+    mutex: std.Io.Mutex = .init,
+    cache_misses: u64 = 0,
+    decoded_bytes: u64 = 0,
+
+    pub fn open(io: std.Io, a: std.mem.Allocator, cache_a: std.mem.Allocator, path: []const u8, streams: []const u8, block_bytes: usize, size: usize, expected_sha256: [32]u8) !IndexBytes {
+        if (block_bytes < 4096 or block_bytes > 1024 * 1024 or !std.math.isPowerOfTwo(block_bytes) or size == 0)
+            return error.InvalidIndexChunks;
+        var source = try SourceReader.open(io, a, cache_a, path, .multistream_zstd, streams);
+        var source_owned = true;
+        errdefer if (source_owned) source.deinit();
+        source.member_output_limit = block_bytes;
+        const initial = try source.file.stat(io);
+        if (initial.kind != .file) return error.InvalidIndexChunks;
+        const count = (size - 1) / block_bytes + 1;
+        if (source.streams.len != count) return error.InvalidIndexChunks;
+        var packed_end: u64 = 0;
+        for (source.streams) |span| {
+            // An ordinary compressed frame cannot require an unbounded input
+            // buffer for a bounded logical chunk. No gaps or trailing payload.
+            if (span.offset != packed_end or span.len > block_bytes + block_bytes / 128 + 1024)
+                return error.InvalidIndexChunks;
+            packed_end = try std.math.add(u64, span.offset, span.len);
+        }
+        if (packed_end != initial.size) return error.InvalidIndexChunks;
+        var result: IndexBytes = .{ .reader = source, .initial = initial, .size = size, .block_bytes = block_bytes };
+        source_owned = false;
+        errdefer result.deinit();
+        // Once ownership moves to result, its error path also owns the cache.
+        var hash = std.crypto.hash.sha2.Sha256.init(.{});
+        for (0..count) |index| {
+            const len = @min(block_bytes, size - index * block_bytes);
+            const bytes = try result.chunkAlloc(cache_a, index * block_bytes, len);
+            defer cache_a.free(bytes);
+            const member = result.reader.cache.get(@intCast(index)) orelse return error.InvalidIndexChunks;
+            if (member.bytes.len != len) return error.InvalidIndexChunks;
+            hash.update(bytes);
+        }
+        const digest = hash.finalResult();
+        if (!std.mem.eql(u8, &digest, &expected_sha256)) return error.IndexDigestMismatch;
+        try result.checkIdentity();
+        result.verified = true;
+        // The scan shares SourceReader's existing bounded LRU. It never writes
+        // an uncompressed file or accumulates a complete logical index.
+        return result;
+    }
+
+    pub fn deinit(self: *IndexBytes) void { self.reader.deinit(); self.* = undefined; }
+
+    pub fn checkIdentity(self: *const IndexBytes) !void {
+        const now = try self.reader.file.stat(self.reader.io);
+        if (now.kind != self.initial.kind or now.inode != self.initial.inode or now.size != self.initial.size or
+            !std.meta.eql(now.mtime, self.initial.mtime) or !std.meta.eql(now.ctime, self.initial.ctime))
+            return error.IndexChanged;
+    }
+
+    fn chunkAlloc(self: *IndexBytes, a: std.mem.Allocator, offset: usize, len: usize) ![]const u8 {
+        const id: u32 = std.math.cast(u32, offset / self.block_bytes) orelse return error.InvalidIndexRange;
+        const cached = self.reader.cache.contains(id);
+        const bytes = try self.reader.readAlloc(a, .{ .multistream_zstd = .{ .stream_id = id, .offset = offset % self.block_bytes, .len = len } });
+        if (!cached) {
+            self.cache_misses += 1;
+            self.decoded_bytes += @min(self.block_bytes, self.size - @as(usize, id) * self.block_bytes);
+        }
+        return bytes;
+    }
+
+    fn readIntoLocked(self: *IndexBytes, offset: usize, output: []u8) !void {
+        if (!self.verified or offset > self.size or output.len > self.size - offset or output.len > 1024 * 1024)
+            return error.InvalidIndexRange;
+        var done: usize = 0;
+        while (done < output.len) {
+            const at = offset + done;
+            const len = @min(output.len - done, self.block_bytes - at % self.block_bytes);
+            const id: u32 = std.math.cast(u32, at / self.block_bytes) orelse return error.InvalidIndexRange;
+            const within = at % self.block_bytes;
+            // IndexBytes owns this reader; every public read holds its mutex.
+            // Copy before unlocking, without allocating a temporary cache hit.
+            if (self.reader.cache.getPtr(id)) |entry| {
+                if (within > entry.bytes.len or len > entry.bytes.len - within) return error.InvalidIndexRange;
+                entry.stamp = self.reader.nextStamp();
+                @memcpy(output[done..][0..len], entry.bytes[within..][0..len]);
+            } else {
+                const bytes = try self.chunkAlloc(self.reader.cache_allocator, at, len);
+                defer self.reader.cache_allocator.free(bytes);
+                @memcpy(output[done..][0..len], bytes);
+            }
+            done += len;
+        }
+    }
+
+    pub fn readInto(self: *IndexBytes, offset: usize, output: []u8) !void {
+        self.mutex.lockUncancelable(self.reader.io);
+        defer self.mutex.unlock(self.reader.io);
+        try self.checkIdentity();
+        try self.readIntoLocked(offset, output);
+        try self.checkIdentity();
+    }
+
+    fn lineAllocLocked(self: *IndexBytes, a: std.mem.Allocator, offset: usize, max_bytes: usize) ![]u8 {
+        if (offset >= self.size or max_bytes == 0 or max_bytes > 1024 * 1024) return error.InvalidIndexRange;
+        if (offset != 0) {
+            var preceding: [1]u8 = undefined;
+            try self.readIntoLocked(offset - 1, &preceding);
+            if (preceding[0] != '\n') return error.InvalidPageIndex;
+        }
+        var out: std.ArrayList(u8) = .empty;
+        errdefer out.deinit(a);
+        var cursor = offset;
+        var buffer: [256]u8 = undefined;
+        while (cursor < self.size) {
+            const count = @min(buffer.len, self.size - cursor);
+            try self.readIntoLocked(cursor, buffer[0..count]);
+            const end = std.mem.indexOfScalar(u8, buffer[0..count], '\n') orelse count;
+            if (end > max_bytes - out.items.len) return error.IndexLineTooLong;
+            try out.appendSlice(a, buffer[0..end]);
+            cursor += end;
+            if (end < count) break;
+        }
+        return out.toOwnedSlice(a);
+    }
+    pub fn lineAlloc(self: *IndexBytes, a: std.mem.Allocator, offset: usize, max_bytes: usize) ![]u8 {
+        self.mutex.lockUncancelable(self.reader.io);
+        defer self.mutex.unlock(self.reader.io);
+        try self.checkIdentity();
+        const row = try self.lineAllocLocked(a, offset, max_bytes);
+        errdefer a.free(row);
+        try self.checkIdentity();
+        return row;
+    }
+
+};
+
+pub const PagedTitleIndex = struct {
+    header: PageTitleIndex,
+    table: *IndexBytes,
+    rows: *IndexBytes,
+
+    pub fn init(table: *IndexBytes, rows: *IndexBytes) !PagedTitleIndex {
+        if (table == rows or !table.verified or !rows.verified) return error.PageTitleIndexMismatch;
+        var bytes: [page_title_index_header_len]u8 = undefined;
+        try table.readInto(0, &bytes);
+        var header = try PageTitleIndex.initSized(&bytes, table.size);
+        header.bytes = &.{};
+        if (rows.size != header.page_index_size) return error.PageTitleIndexMismatch;
+        var first: [64]u8 = undefined;
+        const first_len = @min(first.len, rows.size);
+        try rows.readInto(0, first[0..first_len]);
+        if (pageIndexKind(first[0..first_len]) != header.kind) return error.PageTitleIndexMismatch;
+        try table.checkIdentity();
+        try rows.checkIdentity();
+        return .{ .header = header, .table = table, .rows = rows };
+    }
+
+    fn checkIdentity(self: PagedTitleIndex) !void {
+        try self.rows.checkIdentity();
+        try self.table.checkIdentity();
+    }
+
+    pub fn lookup(self: PagedTitleIndex, a: std.mem.Allocator, title: []const u8, max_row_bytes: usize) !?u64 {
+        // A complete lookup holds both caches and brackets every result,
+        // including null, with the identities earned by first-use verification.
+        const first = if (@intFromPtr(self.rows) < @intFromPtr(self.table)) self.rows else self.table;
+        const second = if (first == self.rows) self.table else self.rows;
+        first.mutex.lockUncancelable(first.reader.io);
+        defer first.mutex.unlock(first.reader.io);
+        second.mutex.lockUncancelable(second.reader.io);
+        defer second.mutex.unlock(second.reader.io);
+        try self.checkIdentity();
+        const result = self.lookupLocked(a, title, max_row_bytes) catch |err| {
+            try self.checkIdentity();
+            return err;
+        };
+        try self.checkIdentity();
+        return result;
+    }
+
+    fn lookupLocked(self: PagedTitleIndex, a: std.mem.Allocator, title: []const u8, max_row_bytes: usize) !?u64 {
+        const hash = std.hash.Wyhash.hash(0, title);
+        var slot: usize = @intCast(hash & @as(u64, @intCast(self.header.capacity - 1)));
+        for (0..self.header.capacity) |_| {
+            var entry: [page_title_index_entry_len]u8 = undefined;
+            try self.table.readIntoLocked(page_title_index_header_len + slot * page_title_index_entry_len, &entry);
+            const ref_plus_one = std.mem.readInt(u64, entry[8..16], .little);
+            if (ref_plus_one == 0) return null;
+            if (std.mem.readInt(u64, entry[0..8], .little) == hash) {
+                const ref = ref_plus_one - 1;
+                const line = try self.rows.lineAllocLocked(a, pageRowRefOffset(ref), max_row_bytes);
+                defer a.free(line);
+                if (std.mem.eql(u8, try pageIndexTitle(self.header.kind, line), title)) return ref;
+            }
+            slot = (slot + 1) & (self.header.capacity - 1);
+        }
+        return error.InvalidPageTitleIndex;
+    }
+};
