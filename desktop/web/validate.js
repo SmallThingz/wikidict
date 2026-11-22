@@ -92,8 +92,9 @@ function containerScreen(value,following=false){
   for(const rule of rest){containerScreen(rule,true);if(rule.max_width_px>=limit)containerError();limit=rule.max_width_px;}
 }
 export function validateContainerStyle(style,{containerFonts=false}={}){
-  containerObject(style,containerFonts?[...containerKeys,'owner_font_scale']:containerKeys);
+  containerObject(style,containerFonts?[...containerKeys,'owner_font_scale','height']:containerKeys);
   if(style.owner_font_scale!=null)containerNumber(style.owner_font_scale);
+  if(style.height!=null)containerLength(style.height);
   for(const key of ['margins','padding'])if(style[key]!=null)containerEdges(style[key]);
   if(style.width!=null)containerWidth(style.width);if(style.max_width!=null)containerMaxWidth(style.max_width);
   if(style.float_side!=null)containerEnum(style.float_side,['left','right']);

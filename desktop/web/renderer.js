@@ -666,6 +666,7 @@ function containerDeclarations(style,dark=false){
   if(style.text_align!=null)set('text-align',style.text_align);
   if(style.overflow!=null)set('overflow',style.overflow);
   if(style.owner_font_scale!=null)set('font-size',`calc(var(--wikidict-normal-body-size) * ${style.owner_font_scale})`);
+  if(style.height!=null)set('height',styleLength(style.height));
   return css.join(';');
 }
 function containerView(value,onLink,explanations,context){

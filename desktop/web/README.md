@@ -1,6 +1,6 @@
 # Binary web reader
 
-The decoder accepts compiled DPR2 through DPRL records and the DPRM font/metric profile described below. Unsupported policies and newer formats are rejected. DPR2 spans retain empty explanations; DPR3 and later preserve authored plain-text explanations across titles, body, table captions/cells, preambles and references. Compact labels and link actions stay separate from the keyboard/touch-accessible **Text details** disclosure. No source markup is interpreted.
+The decoder accepts compiled DPR2 through DPRL records, the DPRM font/metric profile described below, and the initial single-level DPRS Ruby profile. Unsupported policies and other newer formats are rejected. DPR2 spans retain empty explanations; DPR3 and later preserve authored plain-text explanations across titles, body, table captions/cells, preambles and references. Compact labels and link actions stay separate from the keyboard/touch-accessible **Text details** disclosure. No source markup is interpreted.
 
 Run `pnpm install && pnpm build`, then serve `../build/web` over localhost or HTTPS. `pnpm test` covers binary/XZ decoding and malformed inputs; `pnpm test:browser` exercises the real browser with the Android binary fixture. Set `WIKBLB_FIXTURE` to override its path.
 
@@ -36,8 +36,9 @@ existing `WIKIDICT_WEB_TYPED_CASES` payload/Reader-JSON route supplies that sepa
 comparison. The complete Node suite and this focused headless rendering suite
 have passed for L; genuine DPRL corpus interoperability remains unqualified.
 
-DPRM additionally decodes 32-bit container flags, owner font scale, authored flow
-margins, four-sided table and cell borders (none, hidden, solid and dotted),
+DPRM additionally decodes 32-bit container flags, owner font scale, fixed container
+height in pixels or owner-relative em units, authored flow margins, four-sided
+table and cell borders (none, hidden, solid and dotted),
 CSS-pixel span sizes, cell width/minimum width, vertical alignment
 and independent cell strut/line-height metrics. These values survive into native
 CSS layout; the genuine Gun `okpli` comparison exercises its complete modeled
@@ -50,15 +51,20 @@ to a fresh absolute output directory, and run `pnpm test:container-fonts`.
 It indexes and decodes the actual blob, checks 640/1000px layout and keyboard
 activation, and saves frames without enabling network media.
 
+Fixed container heights retain their pixel or container-font-relative em value,
+including zero. `WIKIDICT_WEB_LO_HEIGHT_CASE` selects a manifest-pinned member,
+native Reader JSONL archive, recorded expected counts and hash-pinned pre-fix
+decoder for the optional complete-member height regression.
+
 | Format | Remaining consumer work |
 | --- | --- |
-| M | Container height/columns/positioning and signed/auto margins; font families/features, link paint and expanded figure/viewport policies |
+| M | Container columns/positioning/minimum height and signed/auto margins; font families/features, link paint and expanded figure/viewport policies |
 | N | Authored rule geometry and paint |
 | O | Inline text style, declaring-font metrics and baseline shifts |
 | P | Adjoining block/heading styles, family stacks and cell owner-font metrics |
 | Q | Table corner radii |
 | R | Intrinsic table/image action layout and rule clear semantics |
-| S | Ruby owners, bases/readings, ranges, gaps and fallback content |
+| S | Multilevel Ruby painting and additional owner-font policies; initial single-level Ruby is supported |
 | T | The subsequent table-depth contract, after the intervening semantics are supported |
 
 Native desktop and Android format support is independent of this browser boundary.

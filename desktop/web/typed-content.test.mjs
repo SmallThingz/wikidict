@@ -151,7 +151,7 @@ test('M admits authored flow margins while L still rejects them and unknown poli
  const m=wire('M',[block('M',{container:cat(u(1),margin,u(0))})]);
  assert.equal(decode(m,{}).sections[0].blocks[0].container.style.margins.top.value,1);
  assert.throws(()=>decode(wire('L',[block('L',{container:cat(short(1),margin,u(0))})]),{}));
- assert.throws(()=>decode(wire('M',[block('M',{container:cat(u(0x20000),length(1),u(0))})]),{}));
+ assert.throws(()=>decode(wire('M',[block('M',{container:cat(u(0x40000),length(1),u(0))})]),{}));
  for(const value of [NaN,Infinity,-1])assert.throws(()=>decode(wire('M',[block('M',{container:cat(u(0x10000),f(value),u(0))})]),{}));
  assert.throws(()=>decode(wire('N',[]),{}));
 });
@@ -244,4 +244,45 @@ test('DPRM preserves physical table and cell border edges in wire order', () => 
   assert.throws(()=>decode(make('M',invalid),{}));
  }
  assert.throws(()=>decode(make('L',border),{}));
+});
+
+test('M fixed container height keeps owner basis and rejects malformed or unsupported policies',()=>{
+ const bytes=wire('M',[block('M',{container:cat(u(0x30000),f(.9),length(1.6,1),list([block('M',{values:[textSpan('M',{text:'height body'})]})]))})]);
+ const value=decode(bytes,{}).sections[0].blocks[0].container;
+ assert.deepEqual(value.style,{owner_font_scale:Math.fround(.9),height:{unit:'em',value:Math.fround(1.6)}});
+ assert.equal(value.blocks[0].spans[0].text,'height body');
+ for(const [amount,unit] of [[0,0],[24,0],[1.44,1]]){const sample=decode(wire('M',[block('M',{container:cat(u(0x20000),length(amount,unit),u(0))})]),{});assert.deepEqual(sample.sections[0].blocks[0].container.style.height,{unit:unit?'em':'px',value:Math.fround(amount)});}
+ for(let end=0;end<bytes.length;end++)assert.throws(()=>decode(bytes.subarray(0,end),{}));
+ for(const bad of [-1,NaN,Infinity])assert.throws(()=>decode(wire('M',[block('M',{container:cat(u(0x20000),length(bad),u(0))})]),{}));
+ assert.throws(()=>decode(wire('M',[block('M',{container:cat(u(0x20000),length(1,2),u(0))})]),{}));
+ for(const bit of [0x40000,0x80000,0x100000,0x200000,0x400000])assert.throws(()=>decode(wire('M',[block('M',{container:cat(u(bit),u(0))})]),{}),/Unsupported container layout policy/);
+ assert.throws(()=>validateContainerBlock({kind:'container',container:{style:{height:{unit:'em',value:1.6}},blocks:[]}}));
+});
+
+test('current Lao container height member matches complete retained native graphs',{skip:!process.env.WIKIDICT_WEB_LO_HEIGHT_CASE},async()=>{
+ const {createHash}=await import('node:crypto'),{openAsBlob}=await import('node:fs'),{gunzipSync}=await import('node:zlib');
+ const {openSource}=await import('./xz.js'),{pathToFileURL}=await import('node:url');
+ const c=JSON.parse(await readFile(process.env.WIKIDICT_WEB_LO_HEIGHT_CASE,'utf8')),sha=b=>createHash('sha256').update(b).digest('hex');
+ const baseline=await readFile(c.baseline_decoder.path);assert.equal(sha(baseline),c.baseline_decoder.sha256);assert.equal(baseline.length,c.baseline_decoder.bytes);const {decode:before}=await import(pathToFileURL(c.baseline_decoder.path).href);
+ const manifest=await readFile(c.root+'/complete.json');assert.equal(sha(manifest),c.complete_sha256);const authority=JSON.parse(manifest).publication_files[c.member];
+ const compressed=await readFile(c.root+'/'+c.member);assert.equal(sha(compressed),authority.sha256);assert.equal(compressed.length,authority.size);
+ const source=await openSource(await openAsBlob(c.root+'/'+c.member)),index=await buildIndex(source);assert.equal(index.rows.length,c.expected_records);
+ const decoded=new Map(),failures={},heightValues=new Map();let heightEntries=0,heightNodes=0;
+ const inspect=v=>{let found=false;if(v&&typeof v==='object'){if(v.style?.height!=null){heightNodes++;heightValues.set(JSON.stringify(v.style.height),true);found=true;}for(const x of Object.values(v))if(inspect(x))found=true;}return found;};
+ for(const row of index.rows){const bytes=await source.read(row.offset,row.length);try{before(bytes,{...index.metadata,title:row.title});}catch(error){failures[error.message]=(failures[error.message]||0)+1;}
+  const entry=decode(bytes,{...index.metadata,title:row.title});decoded.set(row.title,entry);if(inspect(entry))heightEntries++;
+ }
+ const archive=await readFile(c.reader_archive);assert.equal(sha(archive),c.reader_archive_sha256);
+ const project=(v,top=false)=>{if(Array.isArray(v))return v.map(x=>project(x));if(!v||typeof v!=='object')return v;
+  const out=Object.fromEntries(Object.entries(v).filter(([k])=>!top||!['organization','redirect','alias','presentation_version'].includes(k)).map(([k,x])=>[k==='list_path'?'path':k,project(x)]));
+  if(Object.hasOwn(out,'text')&&Object.hasOwn(out,'trail')&&Object.hasOwn(out,'target')){out.background??=null;out.tooltip??=null;if(out.font_scale!==undefined)out.font_scale=Math.fround(out.font_scale);}
+  if(Object.hasOwn(out,'depth')&&Object.hasOwn(out,'level')&&Object.hasOwn(out,'spans')){out.feature??=null;out.table??=null;}return out;};
+ let nativeCompared=0,nativeHeightCompared=0;
+ for(const line of gunzipSync(archive,{maxOutputLength:64*1024*1024}).toString().trim().split('\n')){const item=JSON.parse(line),req=item.request;if(req?.[4]!==index.metadata.language)continue;
+  const expected=item.response?.entries?.[0];if(!expected||!decoded.has(expected.title))continue;
+  assert.deepEqual(project(decoded.get(expected.title),true),project(expected,true),expected.title);nativeCompared++;
+  const prior=heightNodes;if(inspect(expected))nativeHeightCompared++;heightNodes=prior;
+ }
+ assert.equal(nativeCompared,c.expected_native_graphs);assert.equal(nativeHeightCompared,c.expected_native_height_graphs);assert.equal(heightEntries,c.expected_height_entries);assert.equal(heightNodes,c.expected_height_nodes);assert.equal(Object.keys(failures).length,1);assert.equal(failures['Unsupported container layout policy'],c.expected_height_entries);
+ console.log(JSON.stringify({scope:'current2b9 affectedLao member, not frozenoldf412 census',records:index.rows.length,baseline_current_failures:failures,candidate_decode_failures:0,height_entries:heightEntries,height_nodes:heightNodes,height_values:[...heightValues.keys()],complete_native_graphs_compared:nativeCompared,native_height_graphs_compared:nativeHeightCompared,compressed_bytes:compressed.length}));
 });
