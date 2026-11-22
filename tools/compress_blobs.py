@@ -76,6 +76,18 @@ def _encode_verified_batch(paths, block_size):
         for part in parts: part.unlink(missing_ok=True)
 
 
+def _retire_compressed_inputs(paths):
+    # Keep every raw recovery copy until all final XZ names are durable.
+    for directory in {path.parent for path in paths}:
+        fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+    for path in paths:
+        path.unlink()
+
+
 def _compress_batch(paths, block_size):
     paths=list(paths)
     if not paths:return
@@ -83,12 +95,7 @@ def _compress_batch(paths, block_size):
     _encode_verified_batch(paths, block_size)
     raw_bytes = sum(path.stat().st_size for path in paths)
     compressed_bytes = sum(Path(str(path) + '.xz').stat().st_size for path in paths)
-    for directory in {path.parent for path in paths}:
-        fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
-        try: os.fsync(fd)
-        finally: os.close(fd)
-    # Verified outputs are now the recovery copies; raw cleanup must not roll them back.
-    for path in paths:path.unlink()
+    _retire_compressed_inputs(paths)
     print(f'batch: {len(paths)} blobs; {raw_bytes} -> {compressed_bytes} bytes; {time.perf_counter()-started:.3f}s; verified',flush=True)
 
 def _compress_large_wave(paths, block_size):
@@ -149,8 +156,7 @@ def _compress_large_wave(paths, block_size):
             verify_round_trip(path, Path(str(path) + '.xz.part'))
         for path in paths:
             os.replace(Path(str(path) + '.xz.part'), Path(str(path) + '.xz'))
-        for path in paths:
-            path.unlink()
+        _retire_compressed_inputs(paths)
         for path, raw_size, duration in zip(paths, raw_sizes, durations):
             target = Path(str(path) + '.xz')
             print(f'{target}: {raw_size} -> {target.stat().st_size} bytes; encode={duration:.3f}s; verified', flush=True)
@@ -196,13 +202,13 @@ def compress_many(paths, block_size, workers=None, small_limit=8*1024*1024, batc
             wave = large[start:start+3]
             if len(wave) == 1:
                 compress(wave[0], block_size, workers)
-                wave[0].unlink()
+                _retire_compressed_inputs(wave)
             else:
                 _compress_large_wave(wave, block_size)
     else:
         for path in large:
             compress(path,block_size,workers)
-            path.unlink()
+            _retire_compressed_inputs([path])
 
 def compress(path, block_size, workers=None):
     workers = default_workers() if workers is None else workers

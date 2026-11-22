@@ -2,8 +2,10 @@
 """Large-XZ concurrency and failure regression tests."""
 import importlib.util
 import lzma
+import os
 from pathlib import Path
 import subprocess
+import stat
 import tempfile
 import threading
 import time
@@ -127,6 +129,35 @@ class LargeXzWaveTests(unittest.TestCase):
             self.assertEqual(path.read_bytes(), original)
             self.assertFalse(Path(str(path) + '.xz').exists())
         self.assert_clean_parts()
+
+    def test_directory_sync_failure_preserves_every_raw_in_current_wave(self):
+        for workers, count in ((1, 1), (4, 3), (4, 4)):
+            with self.subTest(workers=workers, count=count), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                last_parent = root / 'languages'
+                last_parent.mkdir()
+                paths = [root / f'{i}.wikblb' for i in range(count - 1)] + [last_parent / 'last.wikblb']
+                data = b'WIKBLB08' + b'dictionary text' * 32
+                for path in paths:
+                    path.write_bytes(data)
+                directory = last_parent.stat()
+                fsync = os.fsync
+
+                def reject_last_parent(fd):
+                    info = os.fstat(fd)
+                    if stat.S_ISDIR(info.st_mode) and os.path.samestat(info, directory):
+                        raise OSError('directory sync failed')
+                    return fsync(fd)
+
+                with mock.patch.object(os, 'fsync', side_effect=reject_last_parent):
+                    with self.assertRaisesRegex(OSError, 'directory sync failed'):
+                        compress_blobs.compress_many(paths, 65536, workers=workers, small_limit=1)
+                for path in paths:
+                    self.assertEqual(lzma.decompress(Path(str(path) + '.xz').read_bytes()), data)
+                    if count < 4 or path == paths[-1]:
+                        self.assertEqual(path.read_bytes(), data)
+                    else:
+                        self.assertFalse(path.exists())  # The preceding wave was durable.
 
     def test_encoder_failure_joins_and_keeps_all_raw(self):
         fake, state = self.fake_xz(fail=self.paths[1])
