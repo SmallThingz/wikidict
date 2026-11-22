@@ -496,3 +496,24 @@ if(process.env.WIKBLB_FONT_BASIS_INTEROP==='1')test('genuine Native90 DPRB match
  const actions=[...actual.display_title,...actual.preamble_spans,...bodySpans].filter(span=>span.kind==='link').map(span=>span.target);
  assert.deepEqual(actions,['Target','Target','Target','Target','Target']);
 });
+
+test('dictionary import reuses buffered record prefixes and reads a split header in full', async()=>{
+ const magic=Buffer.from('DPR2');
+ async function measured(bytes){
+  const calls=[];
+  const source={size:bytes.length,read:async(offset,length)=>{calls.push([offset,length]);return bytes.subarray(offset,offset+length);}};
+  return {index:await buildIndex(source),calls};
+ }
+ const small=await measured(dictionaryBlob(7,[['A',magic],['B',magic],['C',magic]]));
+ assert.deepEqual(small.index.rows.map(r=>r.title),['A','B','C']);
+ assert.equal(small.calls.length,2);
+ const size=256*1024;
+ // The first scan starts at byte 9. Place B's version tag two bytes before
+ // the end of that scan, so checking the tag requires a complete follow-up read.
+ const first=Buffer.alloc(size-10);magic.copy(first);
+ const crossed=dictionaryBlob(7,[['A',first],['B',magic]]);
+ const {index,calls}=await measured(crossed),b=index.rows[1];
+ assert.deepEqual(calls.at(-1),[b.offset,4]);assert.equal(b.offset,9+size-2);
+ const bad=Buffer.from(crossed);bad[b.offset+3]=0;
+ await assert.rejects(()=>measured(bad));
+});

@@ -268,6 +268,12 @@ export async function buildIndex(source) {
   let p=0, buffer=new Uint8Array(), start=-1;
   const byte=async()=>{require(p<source.size,'Truncated dictionary');if(p<start||p>=start+buffer.length){start=p;buffer=await source.read(p,Math.min(256*1024,source.size-p));}return buffer[p++-start];};
   const nul=async()=>{const value=[];while(true){const b=await byte();if(b===0)return {text:utf8.decode(new Uint8Array(value)),raw:value};require(value.length<65536);value.push(b);}};
+  // The title scan usually brought the record prefix (or the whole alias) into memory.
+  const recordBytes = length => {
+    const at = p - start;
+    if (at >= 0 && at + length <= buffer.length) return buffer.subarray(at, at + length);
+    return source.read(p, length);
+  };
   const magic=await source.read(0,9);require(utf8.decode(magic.subarray(0,8))==='WIKBLB08','Choose a WIKBLB08 dictionary');
   const kind=kinds[magic[8]-1];require(kind);p=9;
   const metadata={kind,language_code:'',language:null};
@@ -280,10 +286,10 @@ export async function buildIndex(source) {
     do{b=await byte();require(n++<8);length+=(b&127)*multiplier;multiplier*=128;}while(b&128);
     require(n===1||b!==0);require(Number.isSafeInteger(length)&&length>=4&&length<=128*1024*1024&&length<=source.size-p);
     if(kind==='alias'){
-      const {alias}=decodeAlias(await source.read(p,length),title);
+      const {alias}=decodeAlias(await recordBytes(length),title);
       rows.push({title:alias.source_key,raw_key:title,source_kind:alias.source_kind,source_title:alias.source_title,offset:p,length});
     }else{
-      const magic=utf8.decode(await source.read(p,4));
+      const magic=utf8.decode(await recordBytes(4));
       require(magic==='DPR2'||magic==='DPR3'||magic==='DPR4'||magic==='DPR5'||magic==='DPR6'||magic==='DPR7'||magic==='DPR8'||magic==='DPR9'||magic==='DPRA'||magic==='DPRB'||magic==='DPRC'||magic==='DPRD'||magic==='DPRE'||magic==='DPRF'||magic==='DPRG'||magic==='DPRH'||magic==='DPRI'||magic==='DPRJ'||magic==='DPRK'||magic==='DPRL'||magic==='DPRM');
       rows.push({title,offset:p,length});
     }
