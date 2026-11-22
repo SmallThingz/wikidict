@@ -187,6 +187,8 @@ that path compresses up to four ordinary frames concurrently with at most
 It verifies each part against its manifest size and SHA-1, checks each bzip2
 block and stream CRC, and records the compressed bit ranges and decoded sizes
 in a JSON file. A fresh index can process up to four archive parts in parallel.
+It consumes numbered Wikimedia parts in ascending page-ID range order. Already
+indexed inputs retain their stored coordinates when a build resumes.
 For a single-part download it inflates up to four blocks concurrently and
 feeds verified XML to the framer in source order. `--workers 1` uses the serial
 reader. Both paths check the same SHA-1, block CRCs and stream CRCs.

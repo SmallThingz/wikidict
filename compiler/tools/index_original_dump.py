@@ -198,13 +198,36 @@ def ordered_parts(items):
     return items
 
 
+def page_range_order(items):
+    """Order ranged Wikimedia parts by their first page ID; keep other inputs in manifest-name order."""
+    ranges = []
+    for item in items:
+        match = re.search(r'-pages-meta-current\d*\.xml-p(\d+)p(\d+)\.bz2\Z', item['name'])
+        if not match:
+            return items
+        ranges.append((int(match[1]), int(match[2])))
+    return [item for _, item in sorted(zip(ranges, items), key=lambda row: row[0])]
+
+
+def matches_archive_parts(items, parts, *, fresh):
+    if not isinstance(parts, list) or any(not isinstance(part, dict) for part in parts):
+        return False
+    manifest = ordered_parts(items)
+    def identities(rows):
+        return [(r.get('name'), r.get('size'), r.get('sha1')) for r in rows]
+    actual = identities(parts)
+    # Existing descriptors pin their exact coordinates. Historical frame bridges
+    # reproduce the old filename order; only fresh indexes can use page ranges.
+    return actual == identities(manifest) or (fresh and actual == identities(page_range_order(manifest)))
+
+
 def index_parts(items, downloads, workers=1, *, count_pages=False):
     """Return a sidecar only after every selected compressed input authenticates."""
     from build_wiktionaries import SplitXmlPage, STAGE_MAX_MEMBER_BYTES, STAGE_TARGET_BYTES, XmlFrames
 
     if type(workers) is not int or workers < 1:
         raise ValueError('Expected a positive worker count')
-    items = ordered_parts(items)
+    items = page_range_order(ordered_parts(items))
     slots = min(workers, len(os.sched_getaffinity(0)), 4)
 
     def scan(item, block_workers, framer):
@@ -398,7 +421,7 @@ def prepare_build_input(root, output, block_sha256, items, downloads, stage=None
     directory = (downloads / items[0]['wiki'] / items[0]['date']).resolve(strict=True)
     parts = [(item['name'], item['size'], item['sha1']) for item in items]
     if (blocks.get('format') != 'wikidict-bzip2-blocks-v1'
-            or parts != [(p['name'], p['size'], p['sha1']) for p in blocks['parts']]
+            or not matches_archive_parts(items, blocks.get('parts'), fresh=stage is None)
             or any(not (directory / name).is_file() or (directory / name).stat().st_size != size
                    for name, size, _ in parts)):
         raise ValueError('Block directory differs from the official archive inventory')

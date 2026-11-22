@@ -155,6 +155,44 @@ class OriginalXmlParts(unittest.TestCase):
         self.assertEqual([p['name'] for p in seq['parts']],['a.bz2','z.bz2'])
         with self.assertRaises(ValueError): index_parts(items+items,self.base,1)
 
+    def test_ranged_archives_follow_page_ids_and_keep_existing_coordinate_orders(self):
+        import json
+        from build_wiktionaries import validated_original_archive
+        from index_original_dump import matches_archive_parts, prepare_build_input, write_directory
+
+        wiki, date = 'frwiktionary', '20261001'
+        source = self.base / wiki / date
+        source.mkdir(parents=True)
+        items = []
+        for span, text in [('p1p1500000', b'<page>first</page>'),
+                           ('p1500001p3000000', b'<page>second</page>'),
+                           ('p3000001p4500000', b'<page>third</page>')]:
+            name = f'{wiki}-{date}-pages-meta-current1.xml-{span}.bz2'
+            packed = bz2.compress(text)
+            (source / name).write_bytes(packed)
+            items.append(dict(wiki=wiki, date=date, name=name, size=len(packed), sha1=hashlib.sha1(packed).hexdigest()))
+
+        directory = self.base / 'blocks.json'
+        indexed = write_directory(items[::-1], self.base, directory, workers=2, count_pages=True)
+        self.assertEqual(indexed, index_parts(items, self.base, 1, count_pages=True))
+        parts = indexed['parts']
+        self.assertEqual([p['name'] for p in parts], [i['name'] for i in items])
+        self.assertEqual(indexed['source_pages'], 3)
+        legacy = sorted(parts, key=lambda part: part['name'])
+        self.assertNotEqual(parts, legacy)
+        self.assertTrue(matches_archive_parts(items, legacy, fresh=False))
+        self.assertFalse(matches_archive_parts(items, parts, fresh=False))
+        self.assertFalse(matches_archive_parts(items, parts[::-1], fresh=True))
+        for label, stored in [('current', parts), ('previous', legacy)]:
+            with self.subTest(label=label):
+                descriptor = self.base / (label + '.json')
+                descriptor.write_text(json.dumps({**indexed, 'parts': stored}))
+                selected = self.base / label
+                marker = prepare_build_input(selected, descriptor, hashlib.sha256(descriptor.read_bytes()).hexdigest(), items, self.base)
+                verified, stamps = validated_original_archive(items, selected, marker)
+                self.assertEqual(verified, marker)
+                self.assertIn(descriptor, stamps)
+
     def test_fresh_build_from_split_originals_has_only_current_source_coordinates(self):
         import json
         from index_original_dump import prepare_build_input, write_directory

@@ -6186,12 +6186,11 @@ def validated_original_archive(items,root,record):
             ('dump_bytes','dump_size'),('dump_sha256','dump_sha256'),
             ('offset_index_bytes','index_size'),('offset_index_sha256','index_sha256')))):
         raise ValueError('Original block directory logical bridge differs')
-    parts=directory.get('parts')
-    expected=[(item['name'],item['size'],item['sha1']) for item in sorted(items,key=lambda x:x['name'])]
-    if (not isinstance(parts,list) or any(not isinstance(p,dict) for p in parts)
-            or [(p.get('name'),p.get('size'),p.get('sha1')) for p in parts]!=expected):
+    from index_original_dump import matches_archive_parts
+    if not matches_archive_parts(items,directory.get('parts'),fresh=fresh):
         raise ValueError('Original block directory parts differ from manifest')
-    for name,size,_ in expected:
+    for item in items:
+        name,size=item['name'],item['size']
         if not isinstance(name,str) or Path(name).name!=name or name in ('.','..'):
             raise ValueError('Invalid original archive part name')
         path=source/name
