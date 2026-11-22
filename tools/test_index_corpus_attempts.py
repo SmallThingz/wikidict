@@ -71,7 +71,7 @@ class AttemptIndexTests(unittest.TestCase):
                     source_refs=[builder], current_python_catalog=catalog_ref, qualification_root=str(run))
                 if selected_catalog:
                     selection = record(root / 'selection.json', dict(python_tooling=command.pop('current_python_catalog')))
-                    command.update(selection=selection, source_refs=[builder, selection, catalog_ref])
+                    command.update(selection=selection, source_refs=[builder, dict(selection, mode=0o644), catalog_ref])
                 if direct_catalog:
                     command['python_tooling'] = command.pop('current_python_catalog')
                 if input_selection:
@@ -226,6 +226,23 @@ class AttemptIndexTests(unittest.TestCase):
                                extra_refs=(roles, marker, initial, dict(interwiki, path=str(source_alias))))
             freeze(staged_args, **staged_auth)
             self.assertEqual(read_execution(base, path, guardian=True)['production_seconds'], '2.500')
+            inline_context = dict(staged, python_tooling=catalog)
+            mode_guards = tuple(dict(ref, mode=0o644) for ref in staged_auth['extra_refs'])
+            inline_auth = {**staged_auth, 'input_selection_key': 'selection',
+                           'snapshot_context': inline_context, 'extra_refs': mode_guards}
+            freeze(staged_args, **inline_auth)
+            self.assertEqual(read_execution(base, path, guardian=True)['production_seconds'], '2.500')
+            freeze(staged_args, **inline_auth, guard_selector=False)
+            with self.assertRaisesRegex(ValueError, 'Unguarded Python catalog member'):
+                read_execution(base, path, guardian=True)
+            freeze(staged_args, **{**inline_auth, 'extra_refs': mode_guards[1:]})
+            with self.assertRaisesRegex(ValueError, 'Different staged worker'):
+                read_execution(base, path, guardian=True)
+            mismatched_tooling = {**catalog, 'selector': builder}
+            freeze(staged_args, **{**inline_auth, 'snapshot_context': dict(staged, python_tooling=mismatched_tooling)})
+            with self.assertRaisesRegex(ValueError, 'Python catalog differs'):
+                read_execution(base, path, guardian=True)
+            freeze(staged_args, **staged_auth)
             source_alias.unlink()
             source_alias.write_bytes(Path(interwiki['path']).read_bytes())
             with self.assertRaisesRegex(ValueError, 'Unguarded staged snapshot'):

@@ -63,14 +63,20 @@ def attempt_key(base, path):
     return ('absolute:' if relative.is_absolute() else 'path:') + relative.parents[1].as_posix()
 
 
+def guarded_ref(reference, refs):
+    return (isinstance(reference, dict) and {'path', 'bytes', 'sha256'} <= reference.keys()
+            and any(all(guard.get(key) == value for key, value in reference.items()) for guard in refs))
+
+
 def staged_selection_manifest(inputs, refs, argv, option):
     """Authenticate the original selection of a whole build using a sealed worker."""
     stage = Path(option('--staged-input-root'))
     roles = json.loads(option('--retained-native-roles-ref'))
     marker = inputs['staged_completion']
-    if (str(stage) != inputs['staged_input_root'] or marker not in refs
+    if (str(stage) != inputs['staged_input_root'] or not guarded_ref(marker, refs)
             or Path(marker['path']) != stage / '.complete.json'
-            or roles != inputs['roles'] or roles not in refs or inputs['initial_generation'] not in refs):
+            or roles != inputs['roles'] or not guarded_ref(roles, refs)
+            or not guarded_ref(inputs['initial_generation'], refs)):
         raise ValueError('Different staged worker or retained role selection')
     snapshots = inputs['snapshots']
     if not isinstance(snapshots, dict) or not snapshots or 'interwiki-map' in snapshots:
@@ -82,12 +88,12 @@ def staged_selection_manifest(inputs, refs, argv, option):
     for name, ref in selected.items():
         if option('--' + name + '-snapshot') != ref['path']:
             raise ValueError(f'Staged snapshot argument differs: {name}')
-        if ref in refs:
+        if guarded_ref(ref, refs):
             continue
         # The existing worker can guard its interwiki input through its own
         # symlink. Equal contents at an unrelated path do not identify it.
         alias = stage.parent / 'expander' / '.bundle-expander' / 'interwiki-map.tsv'
-        if (name != 'interwiki-map' or {**ref, 'path': str(alias)} not in refs
+        if (name != 'interwiki-map' or not guarded_ref({**ref, 'path': str(alias)}, refs)
                 or not alias.is_symlink() or os.readlink(alias) != ref['path']):
             raise ValueError(f'Unguarded staged snapshot: {name}')
         checked(ref)
@@ -157,6 +163,7 @@ def guardian_whole(path, closure, result):
     dated_snapshots = None
     deferred_preflight = False
     catalog_ref = command.get('current_python_catalog')
+    selected_inputs = None
     if catalog_ref is None and 'python_tooling' in command and not {'selection', 'input_selection'}.intersection(command):
         # Direct builds can pin the catalog and input files in the command
         # itself, without a separate selection file. Match actual arguments.
@@ -175,9 +182,19 @@ def guardian_whole(path, closure, result):
                 raise ValueError(f'Unguarded snapshot {name}: {path}')
     if catalog_ref is None and 'selection' in command:
         selection = command['selection']
-        if selection not in command['source_refs']:
+        if not guarded_ref(selection, refs):
             raise ValueError(f'Edition selection was not guarded: {path}')
-        catalog_ref = json.loads(checked(selection)).get('python_tooling')
+        selected_inputs = json.loads(checked(selection))
+        if not isinstance(selected_inputs, dict):
+            raise ValueError(f'Invalid edition selection: {path}')
+        selected_tooling = selected_inputs.get('python_tooling')
+        if isinstance(selected_tooling, dict) and {'modules', 'selector'} <= selected_tooling.keys():
+            if selected_tooling != catalog:
+                raise ValueError(f'Python catalog differs: {path}')
+            # An inline catalog still needs the independent input and module
+            # guards of the whole-edition selection below.
+        else:
+            catalog_ref = selected_tooling
     if catalog_ref is not None:
         if json.loads(checked(catalog_ref)) != catalog:
             raise ValueError(f'Python catalog differs: {path}')
@@ -185,10 +202,10 @@ def guardian_whole(path, closure, result):
         # Older drivers put the manifest in the selection. Exact-snapshot builds
         # pin it directly in the command and list the auxiliary files separately.
         selection = command.get('input_selection', command.get('selection'))
-        if (not isinstance(selection, dict) or not {'path', 'bytes', 'sha256'} <= selection.keys()
-                or not any(all(ref.get(key) == value for key, value in selection.items()) for ref in refs)):
+        if not guarded_ref(selection, refs):
             raise ValueError(f'Missing guarded whole-edition selection: {path}')
-        inputs = json.loads(checked(selection))
+        inputs = (selected_inputs if selected_inputs is not None and selection == command.get('selection')
+                  else json.loads(checked(selection)))
         dated_fields = {'snapshots', 'edition', 'date', 'normal_resolution_validated'}
         deferred_fields = dated_fields | {'indexed_pages', 'shard_pages', 'original_input_selection',
                                           'input_validation_deferred_to_normal_whole'}
@@ -234,7 +251,7 @@ def guardian_whole(path, closure, result):
                 deferred_preflight = True
         else:
             raise ValueError(f'Missing guarded whole-edition selection: {path}')
-        if (manifest_ref not in refs or manifest_ref['path'] != str(manifest_path)
+        if (not guarded_ref(manifest_ref, refs) or manifest_ref['path'] != str(manifest_path)
                 or manifest_ref['sha256'] != manifest_hash or manifest_path.stat().st_size != manifest_ref['bytes']):
             raise ValueError(f'Selected input manifest differs: {path}')
         guarded = {(ref['path'], ref['bytes'], ref['sha256']) for ref in refs}
