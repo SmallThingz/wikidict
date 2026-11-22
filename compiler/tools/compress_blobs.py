@@ -37,6 +37,18 @@ def _validate_raw_blob(path):
         if source.read(8)!=b'WIKBLB08':
             raise ValueError('Expected WIKBLB08: '+str(path))
 
+def _raw_identity(path):
+    info = path.lstat()
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+        raise ValueError('Expected exclusive regular raw blob: ' + str(path))
+    return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
+def _require_raw_unchanged(path, expected):
+    if expected is None:
+        return
+    if _raw_identity(path) != expected:
+        raise ValueError('Raw blob changed during compression: ' + str(path))
+
 def compress_small_batch_keep(paths, block_size):
     """Publish a bounded small-file batch, retaining every raw recovery copy."""
     paths = [Path(path) for path in paths]
@@ -55,23 +67,28 @@ def compress_small_batch_keep(paths, block_size):
     print(f'small batch: {len(paths)} blobs; {time.perf_counter()-started:.3f}s; verified; raw retained', flush=True)
 
 
-def _encode_verified_batch(paths, block_size, workers=1):
+def _encode_verified_batch(paths, block_size, workers=1, *, verify=None):
     """Only give a stream its final name after all batch members round-trip."""
     parts = [Path(str(path) + '.xz.part') for path in paths]
     targets = [Path(str(path) + '.xz') for path in paths]
+    raw_identities = {path: _raw_identity(path) for path in paths} if verify is not None else {}
     for path, part, target in zip(paths, parts, targets):
         _validate_raw_blob(path)
         if part.exists() or part.is_symlink(): raise FileExistsError(part)
         if target.exists() or target.is_symlink(): raise FileExistsError(target)
     def encode_group(group):
+        for path in group:
+            _require_raw_unchanged(path, raw_identities.get(path))
         subprocess.run(['xz', '-0', '--threads=1', f'--block-size={block_size}',
                         '--keep', '--suffix=.xz.part', '--', *map(str, group)], check=True)
         for path in group:
+            _require_raw_unchanged(path, raw_identities.get(path))
             part = Path(str(path) + '.xz.part')
             fd = os.open(part, os.O_RDONLY | os.O_NOFOLLOW)
             try: os.fsync(fd)
             finally: os.close(fd)
-            verify_round_trip(path, part)
+            (verify_round_trip if verify is None else verify)(path, part)
+            _require_raw_unchanged(path, raw_identities.get(path))
 
     try:
         if workers > 1:
@@ -91,12 +108,14 @@ def _encode_verified_batch(paths, block_size, workers=1):
             with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
                 list(pool.map(encode_group, groups))
         for part, target in zip(parts, targets): os.replace(part, target)
+        return raw_identities
     finally:
         for part in parts: part.unlink(missing_ok=True)
 
 
-def _retire_compressed_inputs(paths):
+def _retire_compressed_inputs(paths, raw_identities=None):
     # Keep every raw recovery copy until all final XZ names are durable.
+    raw_identities = raw_identities or {}
     for directory in {path.parent for path in paths}:
         fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
         try:
@@ -104,24 +123,28 @@ def _retire_compressed_inputs(paths):
         finally:
             os.close(fd)
     for path in paths:
+        _require_raw_unchanged(path, raw_identities.get(path))
+    for path in paths:
+        _require_raw_unchanged(path, raw_identities.get(path))
         path.unlink()
 
 
-def _compress_batch(paths, block_size, workers=1):
+def _compress_batch(paths, block_size, workers=1, *, verify=None):
     paths=list(paths)
     if not paths:return
     started=time.perf_counter()
-    _encode_verified_batch(paths, block_size, workers)
+    raw_identities = _encode_verified_batch(paths, block_size, workers, verify=verify)
     raw_bytes = sum(path.stat().st_size for path in paths)
     compressed_bytes = sum(Path(str(path) + '.xz').stat().st_size for path in paths)
-    _retire_compressed_inputs(paths)
+    _retire_compressed_inputs(paths, raw_identities)
     print(f'batch: {len(paths)} blobs; {raw_bytes} -> {compressed_bytes} bytes; {time.perf_counter()-started:.3f}s; verified',flush=True)
 
-def _compress_large_wave(paths, block_size):
+def _compress_large_wave(paths, block_size, *, verify=None):
     """Encode at most three files with two XZ processes, then commit as a wave."""
     paths = list(paths)
     if not paths or len(paths) > 3:
         raise ValueError('Large compression wave must have one through three files')
+    raw_identities = {path: _raw_identity(path) for path in paths} if verify is not None else {}
     for path in paths:
         _validate_raw_blob(path)
         target = Path(str(path) + '.xz')
@@ -147,6 +170,7 @@ def _compress_large_wave(paths, block_size):
             part = Path(str(path) + '.xz.part')
             started = time.perf_counter()
             try:
+                _require_raw_unchanged(path, raw_identities.get(path))
                 with path.open('rb', buffering=0) as source, part.open('xb') as out:
                     subprocess.run(['xz', '-0', '--threads=2',
                                     f'--block-size={block_size}',
@@ -172,10 +196,12 @@ def _compress_large_wave(paths, block_size):
         # Only one Python LZMA decoder is active at a time. No raw input is
         # removed until every output in this wave passes the round trip.
         for path in paths:
-            verify_round_trip(path, Path(str(path) + '.xz.part'))
+            _require_raw_unchanged(path, raw_identities.get(path))
+            (verify_round_trip if verify is None else verify)(path, Path(str(path) + '.xz.part'))
+            _require_raw_unchanged(path, raw_identities.get(path))
         for path in paths:
             os.replace(Path(str(path) + '.xz.part'), Path(str(path) + '.xz'))
-        _retire_compressed_inputs(paths)
+        _retire_compressed_inputs(paths, raw_identities)
         for path, raw_size, duration in zip(paths, raw_sizes, durations):
             target = Path(str(path) + '.xz')
             print(f'{target}: {raw_size} -> {target.stat().st_size} bytes; encode={duration:.3f}s; verified', flush=True)
@@ -186,7 +212,7 @@ def _compress_large_wave(paths, block_size):
         for path in paths:
             Path(str(path) + '.xz.part').unlink(missing_ok=True)
 
-def compress_many(paths, block_size, workers=None, small_limit=8*1024*1024, batch_size=128):
+def compress_many(paths, block_size, workers=None, small_limit=8*1024*1024, batch_size=128, *, verify=None):
     workers = default_workers() if workers is None else workers
     if workers < 1 or workers > max_workers():raise ValueError(f'Compression workers must be 1 through {max_workers()}')
     if batch_size < 1:
@@ -218,31 +244,34 @@ def compress_many(paths, block_size, workers=None, small_limit=8*1024*1024, batc
         concurrency=min(workers,len(batches))
         if concurrency == 1:
             for batch in batches:
-                _compress_batch(batch, block_size, workers)
+                _compress_batch(batch, block_size, workers, verify=verify)
         else:
             with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as pool:
-                list(pool.map(lambda batch: _compress_batch(batch, block_size), batches))
+                list(pool.map(lambda batch: _compress_batch(batch, block_size, verify=verify), batches))
     if workers >= 4 and len(large) >= 2:
         # The two workers pull from each three-file wave as they become free.
         # A wave holds at most three temporary outputs on disk.
         for start in range(0, len(large), 3):
             wave = large[start:start+3]
             if len(wave) == 1:
-                compress(wave[0], block_size, workers)
-                _retire_compressed_inputs(wave)
+                identities = {wave[0]: _raw_identity(wave[0])} if verify is not None else {}
+                compress(wave[0], block_size, workers, verify=verify)
+                _retire_compressed_inputs(wave, identities)
             else:
-                _compress_large_wave(wave, block_size)
+                _compress_large_wave(wave, block_size, verify=verify)
     else:
         for path in large:
-            compress(path,block_size,workers)
-            _retire_compressed_inputs([path])
+            identities = {path: _raw_identity(path)} if verify is not None else {}
+            compress(path,block_size,workers, verify=verify)
+            _retire_compressed_inputs([path], identities)
 
-def compress(path, block_size, workers=None):
+def compress(path, block_size, workers=None, *, verify=None):
     workers = default_workers() if workers is None else workers
     if workers < 1 or workers > max_workers():
         raise ValueError(f"Compression workers must be 1 through {max_workers()}")
     target=Path(str(path)+'.xz');temp=Path(str(target)+'.part')
     started=time.perf_counter()
+    raw_identity = _raw_identity(path) if verify is not None else None
     created=False
     try:
         with path.open('rb', buffering=0) as source:
@@ -252,7 +281,9 @@ def compress(path, block_size, workers=None):
                 created=True
                 subprocess.run(['xz','-0',f'--threads={workers}',f'--block-size={block_size}','--stdout'],stdin=source,stdout=out,check=True)
                 out.flush();os.fsync(out.fileno())
-        verify_round_trip(path,temp)
+        _require_raw_unchanged(path, raw_identity)
+        (verify_round_trip if verify is None else verify)(path,temp)
+        _require_raw_unchanged(path, raw_identity)
         os.replace(temp,target)
         print(f'{target}: {path.stat().st_size} -> {target.stat().st_size} bytes; {time.perf_counter()-started:.3f}s; verified',flush=True)
     finally:

@@ -4081,7 +4081,7 @@ class PublicationResumeTests(PublicationCompilerFixture):
                 self.assertEqual(sentinel.read_bytes(),b'owned recovery state after publication')
 
     @staticmethod
-    def compress_reason_count_fixture(paths, block_size, workers):
+    def compress_reason_count_fixture(paths, block_size, workers, *, verify=None):
         # Count/publication metadata control: no external compressor process.
         for path in paths:
             raw = path.read_bytes()
@@ -4089,7 +4089,7 @@ class PublicationResumeTests(PublicationCompilerFixture):
             target = Path(str(path)+'.xz')
             with target.open('xb') as out:
                 out.write(lzma.compress(raw, preset=0))
-            b.verify_round_trip(path, target)
+            (b.verify_round_trip if verify is None else verify)(path, target)
             path.unlink()
 
     def test_fallback_reason_counts_publication_and_legacy_reuse(self):
@@ -4374,6 +4374,132 @@ class PublicationResumeTests(PublicationCompilerFixture):
 class VerifiedPublicationInventoryTests(PublicationCompilerFixture):
     prepare = PublicationResumeTests.prepare
     """Synthetic interrupted staging; never compile or bless native fixtures."""
+    def test_shared_raw_publication_keeps_ordinary_verification_and_cached_alias(self):
+        import compress_blobs as compression
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch.object(b, 'PROJECT', root):
+                item, target, _ = self.prepare(root, publish=False)
+                staging = target.with_name(item['date']+'.building')
+                raw = staging/'supplemental.wikblb'
+                cached = root/'cached-raw'
+                os.link(raw, cached)
+                payload = cached.read_bytes()
+                with patch.object(compression, 'verify_round_trip', wraps=compression.verify_round_trip) as roundtrip, \
+                     patch.object(b, 'verified_xz_record', wraps=b.verified_xz_record) as strict:
+                    b.build_locked([item], root, root/'output', 'zig', 1)
+                self.assertEqual(roundtrip.call_count, 1)
+                self.assertEqual(strict.call_count, 1)
+                self.assertEqual(cached.read_bytes(), payload)
+                self.assertEqual(lzma.decompress((target/'supplemental.wikblb.xz').read_bytes()), payload)
+
+    def test_fresh_retirement_preserves_changed_raw_and_supports_original_restore(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch.object(b, 'PROJECT', root):
+                item, target, _ = self.prepare(root, publish=False)
+                staging = target.with_name(item['date']+'.building')
+                raw = staging/'supplemental.wikblb'
+                payload = raw.read_bytes()
+                changed = payload[:-1] + b'X'
+                seal = (staging/b.VERIFIED_INVENTORY_NAME).read_bytes()
+                directory = staging.stat()
+                real_sync = os.fsync
+                def sync(fd):
+                    real_sync(fd)
+                    if os.path.samestat(os.fstat(fd), directory):
+                        raw.write_bytes(changed)
+                with patch.object(os, 'fsync', side_effect=sync):
+                    with self.assertRaisesRegex(ValueError, 'Raw blob changed'):
+                        b.build_locked([item], root, root/'output', 'zig', 1)
+                self.assertEqual(raw.read_bytes(), changed)
+                self.assertEqual((staging/b.VERIFIED_INVENTORY_NAME).read_bytes(), seal)
+                self.assertFalse(target.exists())
+                raw.write_bytes(payload)
+                with patch.object(b, 'run_checked', side_effect=AssertionError('native replay')):
+                    self.assertEqual(b.build_locked([item], root, root/'output', 'zig', 1), 'resumed_publication')
+
+    def test_fresh_publication_strict_decodes_once_and_binds_final_digest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch.object(b, 'PROJECT', root):
+                item, target, _ = self.prepare(root, publish=False)
+                with patch.object(b, 'verified_xz_record', wraps=b.verified_xz_record) as strict, \
+                     patch.object(b, 'verify_round_trip', side_effect=AssertionError('duplicate decoder')):
+                    b.build_locked([item], root, root/'output', 'zig', 1)
+                self.assertEqual(strict.call_count, 1)
+                self.assertTrue(str(strict.call_args.args[0]).endswith('.xz.part'))
+                self.assertEqual(json.loads((target/'complete.json').read_text())['publication_files'],
+                                 b.publication_inventory(target))
+
+    def test_fresh_verification_rejects_inflight_inode_churn_and_keeps_raw(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch.object(b, 'PROJECT', root):
+                item, target, _ = self.prepare(root, publish=False)
+                staging = target.with_name(item['date']+'.building')
+                raw = staging/'supplemental.wikblb'
+                payload = raw.read_bytes()
+                saved = (staging/b.VERIFIED_INVENTORY_NAME).read_bytes()
+                original = b.verified_xz_record
+                def churn(path, size, **kwargs):
+                    result = original(path, size, **kwargs)
+                    replacement = path.with_name(path.name+'.replacement')
+                    replacement.write_bytes(path.read_bytes())
+                    os.replace(replacement, path)
+                    return result
+                with patch.object(b, 'verified_xz_record', side_effect=churn):
+                    with self.assertRaisesRegex(ValueError, 'changed while reading'):
+                        b.build_locked([item], root, root/'output', 'zig', 1)
+                self.assertEqual(raw.read_bytes(), payload)
+                self.assertEqual((staging/b.VERIFIED_INVENTORY_NAME).read_bytes(), saved)
+                self.assertFalse(target.exists())
+                self.assertFalse(Path(str(raw)+'.xz.part').exists())
+
+    def test_fresh_receipt_miss_rechecks_changed_encoding_or_refuses_corruption(self):
+        for corrupt in (False, True):
+            with self.subTest(corrupt=corrupt), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                with patch.object(b, 'PROJECT', root):
+                    item, target, _ = self.prepare(root, publish=False)
+                    staging = target.with_name(item['date']+'.building')
+                    raw = staging/'supplemental.wikblb'
+                    payload = raw.read_bytes()
+                    original = b.compress_many
+                    def changed(paths, *args, **kwargs):
+                        original(paths, *args, **kwargs)
+                        packed = Path(str(raw)+'.xz')
+                        packed.write_bytes(lzma.compress(payload, preset=1) + (b'junk' if corrupt else b''))
+                    with patch.object(b, 'compress_many', side_effect=changed), \
+                         patch.object(b, 'verified_xz_record', wraps=b.verified_xz_record) as strict:
+                        if corrupt:
+                            with self.assertRaisesRegex(ValueError, 'Invalid verified compressed payload'):
+                                b.build_locked([item], root, root/'output', 'zig', 1)
+                            self.assertFalse(target.exists())
+                            self.assertTrue((staging/b.VERIFIED_MARKER).exists())
+                        else:
+                            b.build_locked([item], root, root/'output', 'zig', 1)
+                            self.assertEqual(json.loads((target/'complete.json').read_text())['publication_files'],
+                                             b.publication_inventory(target))
+                        self.assertEqual(strict.call_count, 2)
+                    if corrupt:
+                        # The untouched logical seal supports ordinary retry after
+                        # restoring the exact valid bytes, without recompilation.
+                        Path(str(raw)+'.xz').write_bytes(lzma.compress(payload, preset=1))
+                        with patch.object(b, 'run_checked', side_effect=AssertionError('native replay')):
+                            self.assertEqual(b.build_locked([item], root, root/'output', 'zig', 1), 'resumed_publication')
+
+    def test_strict_xz_compressed_digest_covers_all_members_and_padding(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp)/'members.xz'
+            payload = b'first' + b'second'
+            packed = lzma.compress(b'first') + b'\0'*4 + lzma.compress(b'second') + b'\0'*8
+            path.write_bytes(packed)
+            digest = hashlib.sha256()
+            self.assertEqual(b.verified_xz_record(path, len(payload), compressed_digest=digest),
+                             dict(size=len(payload), sha256=hashlib.sha256(payload).hexdigest()))
+            self.assertEqual(digest.hexdigest(), hashlib.sha256(packed).hexdigest())
+
     def interrupted(self, root):
         item,target,workspace=self.prepare(root,publish=False)
         with patch.object(b.os,'rename',side_effect=OSError('publication interrupted')):

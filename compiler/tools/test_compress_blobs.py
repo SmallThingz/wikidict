@@ -37,6 +37,74 @@ class RoundTripTests(unittest.TestCase):
 
 
 class PublicationBatchTests(unittest.TestCase):
+    def test_custom_verification_preserves_raw_churn_after_encode_verify_or_directory_sync(self):
+        for small_limit in (1, 1024 * 1024):
+            for boundary in ('encoded', 'verified', 'directory-sync'):
+                for replacement in (False, True):
+                    with self.subTest(small_limit=small_limit, boundary=boundary, replacement=replacement), tempfile.TemporaryDirectory() as tmp:
+                        paths = [Path(tmp)/str(index) for index in range(4)]
+                        payload = b'WIKBLB08' + b'x'*4096
+                        changed = payload[:-1] + b'y'
+                        for path in paths:
+                            path.write_bytes(payload)
+                        mutated = []
+                        guard = threading.Lock()
+                        def mutate():
+                            with guard:
+                                if mutated:
+                                    return
+                                if replacement:
+                                    other = paths[0].with_name('replacement')
+                                    other.write_bytes(changed)
+                                    os.replace(other, paths[0])
+                                else:
+                                    paths[0].write_bytes(changed)
+                                mutated.append(True)
+                        real_run = subprocess.run
+                        real_sync = os.fsync
+                        def encode(*args, **kwargs):
+                            result = real_run(*args, **kwargs)
+                            if boundary == 'encoded':
+                                mutate()
+                            return result
+                        def verify(path, packed):
+                            compress_blobs.verify_round_trip(path, packed)
+                            if boundary == 'verified':
+                                mutate()
+                        def sync(fd):
+                            real_sync(fd)
+                            if boundary == 'directory-sync' and stat.S_ISDIR(os.fstat(fd).st_mode):
+                                mutate()
+                        with mock.patch.object(compress_blobs, 'max_workers', return_value=4), \
+                             mock.patch.object(compress_blobs.subprocess, 'run', side_effect=encode), \
+                             mock.patch.object(compress_blobs.os, 'fsync', side_effect=sync):
+                            with self.assertRaisesRegex(ValueError, 'Raw blob changed'):
+                                compress_blobs.compress_many(paths, 65536, workers=4,
+                                    small_limit=small_limit, verify=verify)
+                        self.assertEqual(paths[0].read_bytes(), changed)
+                        self.assertTrue(all(path.is_file() for path in paths))
+                        self.assertFalse(list(Path(tmp).glob('*.part')))
+
+    def test_custom_verifier_covers_batches_waves_and_large_singletons(self):
+        for small_limit in (1, 1024 * 1024):
+            with self.subTest(small_limit=small_limit), tempfile.TemporaryDirectory() as tmp:
+                paths = [Path(tmp) / str(index) for index in range(4)]
+                payload = b'WIKBLB08' + b'x' * 4096
+                for path in paths:
+                    path.write_bytes(payload)
+                verified = []
+                def verify(path, part):
+                    self.assertTrue(path.exists())
+                    compress_blobs.verify_round_trip(path, part)
+                    verified.append(path)
+                with mock.patch.object(compress_blobs, 'max_workers', return_value=4):
+                    compress_blobs.compress_many(paths, 65536, workers=4,
+                        small_limit=small_limit, batch_size=2, verify=verify)
+                self.assertCountEqual(verified, paths)
+                for path in paths:
+                    self.assertFalse(path.exists())
+                    self.assertEqual(lzma.decompress(Path(str(path)+'.xz').read_bytes()), payload)
+
     def test_byte_and_count_limits_preserve_order_and_oversized_singleton(self):
         with tempfile.TemporaryDirectory() as tmp:
             paths = [Path(tmp) / f'{index}.wikblb' for index in range(7)]

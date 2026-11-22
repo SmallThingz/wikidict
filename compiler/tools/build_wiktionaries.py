@@ -8944,7 +8944,7 @@ def seal_verified_publication_inventory(staging, *, fresh_compressed=False):
     if fresh_compressed:sync_shard_directory(staging)
 
 
-def verified_xz_record(path, expected_size):
+def verified_xz_record(path, expected_size, *, compressed_digest=None):
     """Hash bounded logical bytes from every stream in a complete XZ file."""
     if type(expected_size) is not int or expected_size < 0:
         raise ValueError('Invalid verified decoded size')
@@ -8953,11 +8953,16 @@ def verified_xz_record(path, expected_size):
     digest = hashlib.sha256()
     data = b''
     with open(path, 'rb') as source:
+        def read():
+            block = source.read(64 * 1024)
+            if compressed_digest is not None:
+                compressed_digest.update(block)
+            return block
         while True:
             decoder = lzma.LZMADecompressor(format=lzma.FORMAT_XZ, memlimit=64 * 1024**2)
             while not decoder.eof:
                 if decoder.needs_input and not data:
-                    data = source.read(64 * 1024)
+                    data = read()
                     if not data:
                         raise ValueError(f'{invalid}; incomplete XZ stream')
                 try:
@@ -8977,7 +8982,7 @@ def verified_xz_record(path, expected_size):
             # the final stream. Every other byte must belong to another stream.
             padding = 0
             while True:
-                data = data or source.read(64 * 1024)
+                data = data or read()
                 if not data or data[0] != 0:
                     break
                 rest = data.lstrip(b'\0')
@@ -9105,6 +9110,31 @@ def validate_namespace_coverage(root, expected_rows, namespace_snapshot=None, fa
     return totals
 
 
+def _compress_verified_publication(staging, pending, sealed, checked_compressed, workers):
+    """Compress only after the caller has authenticated the raw logical seal."""
+    fresh_compressed = {}
+    def verify_fresh(blob, part):
+        # Compare the strict decoded bytes to the authenticated raw seal,
+        # then bind that result to the exact compressed bytes across rename.
+        name = blob.relative_to(staging).as_posix()
+        part = artifact_path(part)
+        before = index_identity(part.stat())
+        digest = hashlib.sha256()
+        decoded = verified_xz_record(part, sealed[name]['size'], compressed_digest=digest)
+        if index_identity(part.stat()) != before:
+            raise ValueError('Fresh compressed payload changed while reading: '+name)
+        if decoded != sealed[name]:
+            raise ValueError('Verified decoded payload changed: '+name)
+        fresh_compressed[name+'.xz'] = {'size': before['size'], 'sha256': digest.hexdigest()}
+    # Shared raw inodes retain the ordinary round-trip path: retiring one
+    # selected hardlink legitimately changes the other link's ctime.
+    if all(blob.stat().st_nlink == 1 for blob in pending):
+        compress_many(pending, 1024*1024, workers, verify=verify_fresh)
+        checked_compressed.update(fresh_compressed)
+    else:
+        compress_many(pending, 1024*1024, workers)
+
+
 def _publish_verified_staging(staging, target, edition, date, compression_workers=None, interwiki_sha=None, auxiliary_hashes=None, build_identity=None, namespace_snapshot=None, site_info_snapshot=None, _staged_input_guard=None):
     marker = staging / VERIFIED_MARKER
     if not marker.is_file():
@@ -9172,7 +9202,7 @@ def _publish_verified_staging(staging, target, edition, date, compression_worker
         unlink_artifact(blob)
     if pending:
         workers = compression_workers or default_build_threads()
-        compress_many(pending, 1024*1024, workers)
+        _compress_verified_publication(staging, pending, sealed, checked_compressed, workers)
     # Record the same physical bytes whose decoded contents passed the logical seal.
     _, compressed, inventory = _verified_publication_inventories(staging, checked_compressed, allow_raw=False)
     # Reader index directories are excluded from the manifest. A misplaced blob
