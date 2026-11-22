@@ -220,7 +220,7 @@ pub fn build(b: *std.Build) void {
             report.addDirectoryArg2(.{ .relative = .{ .base = .install_prefix, .sub_path = "" } }, .{ .make_absolute = true });
             report.addDirectoryArg2(std.Build.LazyPath.cache_root, .{ .make_absolute = true });
             report.addArg(artifact.name);
-            report.addArtifactArg2(artifact, .{ .make_absolute = true });
+            report.addFileArg2(artifact.getEmittedBin(), .{ .make_absolute = true });
             report.addFileArg2(.{ .relative = .{ .base = .install_bin, .sub_path = artifact.out_filename } }, .{ .make_absolute = true });
             report.addArg(captured_source_fingerprint);
             report.step.dependOn(&install.step);
