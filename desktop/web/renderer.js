@@ -414,7 +414,16 @@ function figureView(value,onLink,explanations,context={}){
   const image=imageBox.querySelector('img');
   // The image, not an unbreakable caption, owns the frame width. The authored
   // physical minimum remains a separate content-box floor.
-  const size=()=>{if(!frame.isConnected)return;const css=getComputedStyle(imageBox),box=imageBox.getBoundingClientRect();frame.style.width=(box.width+parseFloat(css.marginLeft)+parseFloat(css.marginRight))+'px';};
+  const size=()=>{
+    if(!frame.isConnected)return;
+    // An unloaded image is replaced by a small status icon. A width-only
+    // requested fit already determines the image width without fetching it.
+    const spec=value.image_span.image;
+    const knownWidth=image.hidden&&value.sizing==='requested_fit'&&spec.width_px!=null&&spec.height_px==null;
+    imageBox.style.width=knownWidth?image.style.width:'max-content';
+    const css=getComputedStyle(imageBox),box=imageBox.getBoundingClientRect();
+    frame.style.width=(box.width+parseFloat(css.marginLeft)+parseFloat(css.marginRight))+'px';
+  };
   image.addEventListener('wikidict-image-geometry',size);queueMicrotask(size);
   const hasCaption=value.caption_blocks!=null?value.caption_blocks.length>0:value.caption?.length>0;
   if(hasCaption||Object.values(value.caption_padding).some(v=>v.value!==0)){

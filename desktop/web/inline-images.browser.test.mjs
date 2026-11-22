@@ -186,6 +186,12 @@ try{
   assert.equal(await page.locator('main .compiled-bidi-scope').evaluate(el=>getComputedStyle(el).unicodeBidi),'isolate');
   assert.ok(richSetup.text.indexOf('Before')<richSetup.text.indexOf('Caption action')&&richSetup.text.indexOf('Caption action')<richSetup.text.indexOf('After figure')&&richSetup.text.indexOf('After figure')<richSetup.text.indexOf('Suffix'));
   assert.equal(await page.locator('main caption').innerText(),'Table caption');
+  const disabledWidth=await page.locator('main .compiled-figure-image').first().evaluate(box=>({
+    content:parseFloat(getComputedStyle(box).width),
+    width:parseFloat(box.querySelector('img').style.width),
+    state:box.querySelector('img').dataset.mediaState,
+  }));
+  assert.deepEqual(disabledWidth,{content:80,width:80,state:'disabled'});
   await page.getByRole('link',{name:'Caption action',exact:true}).focus();await page.keyboard.press('Enter');assert.deepEqual(await page.evaluate(()=>richFollowed),[['Caption target']]);
   await page.evaluate(()=>document.querySelector('main').replaceChildren(richRender(true)));
   await page.waitForFunction(()=>[...document.querySelectorAll('main img')].every(el=>el.dataset.mediaState==='loaded'));
