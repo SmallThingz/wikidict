@@ -10540,6 +10540,118 @@ pub const Renderer = struct {
             observed.focus_proof == binding.observation.focus_proof and observed.focus_action == binding.observation.focus_action and
             std.mem.eql(u8, &observation_hash, &binding.observation_hash);
     }
+    // This proof groups one parsed interwiki occurrence. It grants no paint,
+    // ancestor, font, or page-observation facts; normal label rendering runs first.
+    fn nativeInterwikiActionSource(self: *const Renderer, source: []const u8,
+        original: Style, destination: LinkDestination) ?[32]u8
+    {
+        if (!self.ordinaryActionGroupDomain() or !destination.interwiki or !destination.external or
+            !safeUrl(destination.target) or unresolvedExternalActionTarget(destination.target) or
+            self.required_page_source_focus != null or self.page_source_focus_completion or
+            original.kind != .text or original.target.len != 0 or original.provenance != .parsed or
+            original.missing_nonaction or original.self_link_target != null or original.image != null or
+            source.len > 16384) return null;
+        const tracked = self.inline_missing orelse return null;
+        if (!wikiClassCleanText(tracked) or !wikiClassContains(tracked.bytes, source)) return null;
+        var iterator: ir.InlineIterator = .{ .input = source, .renderer_boundaries = true,
+            .link_trail = self.context.link_trail };
+        const parsed = iterator.next() orelse return null;
+        if (parsed.kind != .link or iterator.cursor != source.len or !parsed.link_has_pipe or
+            parsed.link_empty_label or parsed.link_label_restored_close or parsed.text.len == 0 or
+            !nativeActionFormattingLabel(parsed.text)) return null;
+        var hash = std.crypto.hash.sha2.Sha256.init(.{});
+        hash.update(source);
+        hash.update(destination.target);
+        return hash.finalResult();
+    }
+
+    fn nativeActionFormattingLabel(label: []const u8) bool {
+        // Admit only literal text, quotes and balanced attribute-free formatting.
+        // In particular a nested action, template, or generated owner cannot be
+        // mistaken for more text belonging to this occurrence.
+        var stack: [16][]const u8 = undefined;
+        var count: usize = 0;
+        var at: usize = 0;
+        while (at < label.len) {
+            switch (label[at]) {
+                '[', ']', '{', '}', '\r', '\n', '\t', '\x0c' => return false,
+                '<' => {
+                    const tag = syntax.tagAt(label, at) orelse return false;
+                    if (!oneOf(tag.name, &.{ "b", "strong", "i", "em", "u" }) or
+                        std.mem.trim(u8, tag.attrs, " \t").len != 0 or tag.self_closing) return false;
+                    if (tag.closing) {
+                        if (count == 0 or !std.ascii.eqlIgnoreCase(stack[count - 1], tag.name)) return false;
+                        count -= 1;
+                    } else {
+                        if (count == stack.len) return false;
+                        stack[count] = tag.name;
+                        count += 1;
+                    }
+                    at = tag.end;
+                },
+                else => at += 1,
+            }
+        }
+        return count == 0;
+    }
+
+    fn finishNativeInterwikiAction(self: *Renderer, source: []const u8, before: ?[32]u8,
+        original: Style, action_style: Style, destination: LinkDestination, first: usize) Error!bool
+    {
+        const image = before orelse return false;
+        const current = self.nativeInterwikiActionSource(source, original, destination) orelse return false;
+        if (!std.mem.eql(u8, &image, &current) or first >= self.spans.items.len or
+            self.spans.items.len - first < 2 or self.spans.items.len - first > 128 or
+            action_style.kind != .external_link or action_style.self_link_target != null or
+            action_style.font_size_unknown or action_style.link_paint != null or
+            action_style.ordinary_action_origin != null or action_style.ordinary_link_paint != null or
+            action_style.ruby_unitless_line_height != null) return false;
+        for (self.spans.items[first..]) |child| {
+            if (child.kind != .external_link or child.target.ptr != destination.target.ptr or child.target.len != destination.target.len or
+                child.self_link or child.provenance != .parsed or child.font_size_unknown or
+                child.generated_link != null or child.generated_diagnostic or child.external_literal_parameter != null or
+                child.ordinary_action_origin != null or child.ordinary_action_script != null or child.ordinary_action_entity != null or
+                child.action_focus != null or child.action_group_focus != null or child.link_paint != null or
+                child.image != null or child.ruby != null or child.inline_padding_group != null or
+                child.inline_action_group != null or child.inline_box_group != null or child.pending_figure != null or
+                child.pending_container != null or child.pending_bidi_scope != null or child.captured_bidi_scope != null or
+                child.target_fragment != null or std.mem.indexOfAny(u8, child.text, "\r\n\t\x0c") != null) return false;
+        }
+        const children = try self.a.dupe(Span, self.spans.items[first..]);
+        for (children) |*child| { child.kind = .text; child.target = ""; }
+        const group = try self.a.create(presentation_types.InlineActionGroup(Span));
+        group.* = .{ .spans = children };
+        var style = action_style;
+        const body = self.bodyFormattingStyle(.{});
+        if (style.font_features == null) style.font_features = body.font_features;
+        if (style.font_family == null) style.font_family = body.font_family;
+        if (!style.font_scale_set and style.font_scale == null) {
+            style.font_scale = body.font_scale; style.font_scale_basis = body.font_scale_basis;
+            style.font_scale_set = body.font_scale_set; style.font_size_unknown = body.font_size_unknown;
+        }
+        if (style.font_size_unknown) return false;
+        var flags: SpanFlags = .{ .bold = style.bold, .italic = style.italic, .code = style.code,
+            .small = style.small, .superscript = style.superscript, .subscript = style.subscript, .strike = style.strike };
+        flags = @bitCast(@as(u8, @bitCast(flags)) | @as(u8, @bitCast(self.block_formatting)));
+        if (style.authored_link_font_override) { flags.bold = style.bold; flags.italic = style.italic; }
+        // Decorations are already computed on every child, including whitespace.
+        // An owner-wide underline would incorrectly decorate an unadorned gap.
+        flags.underline = false; flags.strike = false;
+        const owner: Span = .{ .kind = .external_link, .text = "", .target = destination.target,
+            .inline_action_group = group, .flags = flags, .role = style.role,
+            .language = style.language, .classes = style.classes, .direction = style.direction,
+            .captured_direction = style.captured_direction, .explanation = style.explanation,
+            .explanation_set = style.explanation_set, .tooltip = style.tooltip, .tooltip_set = style.tooltip_set,
+            .foreground = style.foreground, .foreground_set = style.foreground_set, .background = style.background,
+            .font_scale = style.font_scale, .font_scale_basis = style.font_scale_basis,
+            .font_scale_set = style.font_scale_set, .font_features = style.font_features, .font_family = style.font_family };
+        presentation_types.validateInlineActionGroupTree(owner, 0, 0) catch return error.UncompiledPresentation;
+        if (!self.spend()) return error.RenderLimit;
+        self.spans.shrinkRetainingCapacity(first);
+        try self.spans.append(self.a, owner);
+        return true;
+    }
+
     fn finishOrdinaryActionGroup(self: *Renderer, pending: *OrdinaryActionGroupPending, first: usize) Error!bool {
         const binding = pending.binding orelse return false;
         defer binding.active = false;
@@ -36543,6 +36655,7 @@ pub const Renderer = struct {
                             const action_target = (try self.localLinkTarget(input[token_start .. it.cursor - token.trail.len], token.target)) orelse target;
                             const destination = try self.interwikiDestination(action_target, 0);
                             const action_first = self.spans.items.len;
+                            const native_group_source = self.nativeInterwikiActionSource(input[token_start..it.cursor], s, destination);
                             var group_pending: OrdinaryActionGroupPending = .{ .token = input[token_start..it.cursor] };
                             const previous_group = self.ordinary_action_group_pending;
                             self.ordinary_action_group_pending = &group_pending;
@@ -36622,7 +36735,8 @@ pub const Renderer = struct {
                             if (trail.len != 0) {
                                 try self.text(trail, action_style);
                             }
-                            if (!try self.finishOrdinaryActionGroup(&group_pending, action_first))
+                            if (!try self.finishOrdinaryActionGroup(&group_pending, action_first) and
+                                !try self.finishNativeInterwikiAction(input[token_start..it.cursor], native_group_source, s, action_style, destination, action_first))
                                 try self.completeSingleSpanActionFocus(input[token_start..it.cursor], destination, action_first);
                         } else {
                             try self.inlineTextWithMissing(try missingSlice(self.a, prepared_missing, label_value), s, depth + 1);

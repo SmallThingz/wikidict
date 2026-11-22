@@ -69386,3 +69386,94 @@ test "KL source owned sju preserves numbered Kisitsit body and styled flag while
     // image or included category. This fix does not certify that family.
     try std.testing.expect(source_language_banner.parse(@embedFile("testdata/kl-number-owner/aa-provider.wikitext"), &ns, null, &registry, "aa") == null);
 }
+
+const KcgNativeActionToolsTest = struct {
+    // Original KCG p3691/r43671 and p3725/r43965: one authored action each.
+    const amput = "[[Species:Taenia solium|'''''<u>Taenia</u> <u>solium</u>''''']]";
+    const sakhwak = "[[Species:Ptilopachus petrosus | '''<u><i>Ptilopachus petrosus</i></u>''']]";
+    const target = "https://species.wikimedia.org/wiki/Taenia_solium";
+    fn encode(a: std.mem.Allocator, r: *encoder.presentation_compile.Renderer, blocks: []const encoder.presentation_compile.Block) !encoder.presentation_types.Stored {
+        const Section = struct { level: u8 = 2, title: []const u8 = "Tyap", blocks: []const encoder.presentation_compile.Block };
+        const sections = [_]Section{.{ .blocks = blocks }};
+        const bytes = try encoder.presentation_codec.encodeBuildAlloc(a, &[_]encoder.presentation_compile.Span{}, &sections,
+            encoder.presentation_types.Layout{}, try r.finishReferences(), r.media.items);
+        const stored = try encoder.presentation_codec.decodeAlloc(a, bytes, "Tyap source token", .language, .{ .code = "kcg", .heading = "Tyap" });
+        try std.testing.expectEqualSlices(u8, bytes, try encoder.presentation_codec.encodeAlloc(a, stored));
+        return stored;
+    }
+    fn registry(a: std.mem.Allocator) !namespace_registry.Registry {
+        var ns = try namespace_registry.Registry.init(a, namespace_registry.english_test_fixture);
+        // Exact selected KCG interwiki-map row; other test namespaces are explicit fixtures.
+        try ns.attachInterwikiMap("species\t1\t0\t0\t0\thttps://species.wikimedia.org/wiki/$1\t0\n");
+        return ns;
+    }
+};
+
+test "native interwiki Tools genuine Tyap labels keep one action and distinct adjacent occurrences" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try KcgNativeActionToolsTest.registry(a); defer ns.deinit();
+    for ([_][]const u8{ KcgNativeActionToolsTest.amput, KcgNativeActionToolsTest.sakhwak }) |token| {
+        const source = try std.fmt.allocPrint(a, "{s}{s}", .{ token, token });
+        var renderer: encoder.presentation_compile.Renderer = .{ .a = a, .content_root = .parser_output, .context = .{ .namespace_catalog = &ns } };
+        defer renderer.spans.deinit(a);
+        try renderer.inlineTextWithMissing(.{ .bytes = source }, .{}, 0);
+        try std.testing.expectEqualDeep(@TypeOf(renderer.fallbacks){}, renderer.fallbacks);
+        try std.testing.expectEqual(@as(usize, 2), renderer.spans.items.len);
+        const owner = renderer.spans.items[0];
+        try std.testing.expect(owner.kind == .external_link and owner.text.len == 0 and owner.inline_action_group != null);
+        try std.testing.expect(owner.inline_action_group != renderer.spans.items[1].inline_action_group);
+        try std.testing.expectEqualStrings(owner.target, renderer.spans.items[1].target);
+        const children = owner.inline_action_group.?.spans;
+        const first_case = std.mem.eql(u8, token, KcgNativeActionToolsTest.amput);
+        try std.testing.expectEqual(@as(usize, if (first_case) 3 else 2), children.len);
+        try std.testing.expectEqualStrings(if (first_case) "Taenia" else " ", children[0].text);
+        try std.testing.expectEqualStrings(if (first_case) " " else "Ptilopachus petrosus", children[1].text);
+        if (first_case) try std.testing.expectEqualStrings("solium", children[2].text);
+        for (children, 0..) |child, index| {
+            try std.testing.expect(child.kind == .text and child.target.len == 0 and child.link_paint == null);
+            const styled = if (first_case) index != 1 else index == 1;
+            try std.testing.expectEqual(styled, child.flags.underline);
+            try std.testing.expectEqual(if (first_case) true else styled, child.flags.bold);
+            try std.testing.expectEqual(if (first_case) true else styled, child.flags.italic);
+        }
+        try std.testing.expect(!owner.flags.underline and owner.link_paint == null);
+        const stored = try KcgNativeActionToolsTest.encode(a, &renderer, &.{.{ .kind = .paragraph, .spans = renderer.spans.items }});
+        const decoded = stored.entry.sections[0].blocks[0].spans;
+        try std.testing.expectEqual(@as(usize, 2), decoded.len);
+        for (decoded) |decoded_owner| {
+            try std.testing.expectEqualStrings(owner.target, decoded_owner.target);
+            try std.testing.expectEqual(@as(usize, children.len), decoded_owner.inline_action_group.?.spans.len);
+            for (decoded_owner.inline_action_group.?.spans, children) |actual, expected| {
+                try std.testing.expect(actual.kind == .text and actual.target.len == 0);
+                try std.testing.expectEqualStrings(expected.text, actual.text);
+                try std.testing.expectEqual(expected.flags.bold, actual.bold);
+                try std.testing.expectEqual(expected.flags.italic, actual.italic);
+                try std.testing.expectEqual(expected.flags.underline, actual.underline);
+            }
+        }
+    }
+}
+
+test "native interwiki Tools preserve unknown source and nested action refusals" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try KcgNativeActionToolsTest.registry(a); defer ns.deinit();
+    var unknown: encoder.presentation_compile.Renderer = .{ .a = a, .content_root = .parser_output, .context = .{ .namespace_catalog = &ns } };
+    defer unknown.spans.deinit(a);
+    try unknown.inlineTextWithMissing(.{ .bytes = KcgNativeActionToolsTest.amput, .unknown = true }, .{}, 0);
+    try std.testing.expect(unknown.spans.items.len >= 2);
+    for (unknown.spans.items) |span| try std.testing.expect(span.inline_action_group == null);
+    // A nested or HTML action is never covered by the outer formatting-only token proof.
+    for ([_][]const u8{
+        "[[Species:Taenia solium|one [[Species:Taenia solium|two]]]]",
+        "[[Species:Taenia solium|one <a href='https://example.org'>two</a>]]",
+    }) |source| {
+        var renderer: encoder.presentation_compile.Renderer = .{ .a = a, .content_root = .parser_output, .context = .{ .namespace_catalog = &ns } };
+        defer renderer.spans.deinit(a);
+        // Preserve any ordinary refusal: it must not become a successful group.
+        renderer.inlineTextWithMissing(.{ .bytes = source }, .{}, 0) catch |failure| switch (failure) {
+            error.UncompiledPresentation, error.UncompiledTemplate => continue,
+            else => return failure,
+        };
+        for (renderer.spans.items) |span| try std.testing.expect(span.inline_action_group == null);
+    }
+}
