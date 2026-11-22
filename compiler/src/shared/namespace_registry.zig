@@ -103,6 +103,7 @@ pub const Registry = struct {
     content_language: []const u8,
     entries: []const Spec,
     names: []const Alias,
+    exact_names: []const Alias = &.{},
     // Optional immutable site metadata, owned by this registry arena.
     interwiki_rows: []const InterwikiRow = &.{},
     interwiki_magic: ?bool = null,
@@ -182,8 +183,29 @@ pub const Registry = struct {
         names.items.len = count;
         var source_sha256: [32]u8 = undefined;
         std.crypto.hash.sha2.Sha256.hash(raw, &source_sha256, .{});
-        const result: Registry = .{ .arena = arena, .source_sha256 = source_sha256, .mapper = mapper, .wiki = wiki, .dump_date = date, .content_language = language, .entries = try entries.toOwnedSlice(a), .names = try names.toOwnedSlice(a) };
+        var result: Registry = .{ .arena = arena, .source_sha256 = source_sha256, .mapper = mapper, .wiki = wiki, .dump_date = date, .content_language = language, .entries = try entries.toOwnedSlice(a), .names = try names.toOwnedSlice(a) };
         for ([_]i32{ 0, 10, 14 }) |id| if (result.byId(id) == null) return error.InvalidNamespaceRegistry;
+        // Common corpus prefixes are the registry's own spellings. Validate
+        // them through the bounded normal path once, then borrow their bytes.
+        // In particular, a long alias must not bypass byName's scratch limits.
+        var exact_names: std.ArrayList(Alias) = .empty;
+        for (result.entries, 0..) |spec, index| {
+            for ([_][]const u8{ spec.name, spec.canonical_name }) |name| {
+                if (result.byNameNormalized(name) != null)
+                    try exact_names.append(a, .{ .key = name, .index = index });
+            }
+            for (spec.aliases) |name| {
+                if (result.byNameNormalized(name) != null)
+                    try exact_names.append(a, .{ .key = name, .index = index });
+            }
+        }
+        std.mem.sort(Alias, exact_names.items, {}, struct {
+            fn less(_: void, lhs: Alias, rhs: Alias) bool {
+                return std.mem.order(u8, lhs.key, rhs.key) == .lt;
+            }
+        }.less);
+        result.exact_names = try exact_names.toOwnedSlice(a);
+        result.arena = arena;
         return result;
     }
     /// The selected installed site-info capture supplies conversion authority.
@@ -383,6 +405,21 @@ pub const Registry = struct {
         return null;
     }
     pub fn byName(self: *const Registry, raw: []const u8) ?Spec {
+        var lo: usize = 0;
+        var hi = self.exact_names.len;
+        while (lo < hi) {
+            const mid = lo + (hi - lo) / 2;
+            const alias = self.exact_names[mid];
+            switch (std.mem.order(u8, alias.key, raw)) {
+                .lt => lo = mid + 1,
+                .gt => hi = mid,
+                .eq => return self.entries[alias.index],
+            }
+        }
+        return self.byNameNormalized(raw);
+    }
+
+    fn byNameNormalized(self: *const Registry, raw: []const u8) ?Spec {
         var normalized: [4096]u8 = undefined;
         var w: std.Io.Writer = .fixed(&normalized);
         normalizeSpacing(&w, raw) catch return null;
@@ -557,6 +594,36 @@ test "edition namespace aliases and title identity" {
         try std.testing.expectEqualStrings(c[0], actual);
     }
 }
+test "registered namespace spellings retain Unicode and spacing identity" {
+    const source = fixture ++ "830\tE\u{301}cole Wiki\tSchool Wiki\tcase-sensitive\t0\t0\t0\twikitext\tsupplemental\tinput\t\u{200e}E\u{301}cole_Wiki  \n";
+    var registry = try Registry.init(std.testing.allocator, source);
+    defer registry.deinit();
+    for ([_][]const u8{ "E\u{301}cole Wiki", "School Wiki", "\u{200e}E\u{301}cole_Wiki  ", "\u{c9}COLE_WIKI", "  \u{e9}cole\u{a0}wiki  ", "school_wiki" }) |name| {
+        const spec = registry.byName(name) orelse return error.TestExpectedEqual;
+        try std.testing.expectEqual(@as(i32, 830), spec.id);
+        try std.testing.expectEqualStrings("E\u{301}cole Wiki", spec.name);
+        try std.testing.expectEqual(Role.supplemental, spec.role);
+    }
+    for ([_][]const u8{ "School", "School Wikis", "School Wiki:x", "Invalid\xffWiki" }) |name|
+        try std.testing.expect(registry.byName(name) == null);
+    try std.testing.expectEqual(@as(i32, 830), registry.ofTitle("School Wiki:Item").id);
+    try std.testing.expectEqual(@as(i32, 0), registry.ofTitle("School Wikis:Item").id);
+}
+
+test "namespace fast lookup owns its spellings and keeps bounded fallback" {
+    const a = std.testing.allocator;
+    const input = try a.dupe(u8, fixture);
+    defer a.free(input);
+    var registry = try Registry.init(a, input);
+    defer registry.deinit();
+    @memset(input, 'x');
+    try std.testing.expectEqual(@as(i32, 10), registry.byName("Vorlage").?.id);
+    try std.testing.expectEqual(@as(i32, 828), registry.byName("M\u{d3}D").?.id);
+    try std.testing.expectEqual(@as(i32, 828), registry.byName("mo\u{301}d").?.id);
+    const long_name: [4097]u8 = @splat('x');
+    try std.testing.expect(registry.byName(&long_name) == null);
+}
+
 test "ambiguous aliases and malformed records fail closed" {
     try std.testing.expectError(error.AmbiguousNamespaceAlias, Registry.init(std.testing.allocator, fixture ++ "830\tOther\tOther\tcase-sensitive\t0\t0\t0\twikitext\tsupplemental\tunknown\tTemplate\n"));
     try std.testing.expectError(error.InvalidNamespaceRegistry, Registry.init(std.testing.allocator, ""));
