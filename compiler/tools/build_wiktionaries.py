@@ -309,7 +309,7 @@ class PreparedSourceGeneration:
     def finalize(self, staging):
         self.require_unchanged(force=True)
         if (not (staging / VERIFIED_MARKER).is_file()
-                or (staging / VERIFIED_MARKER).read_text() != VERIFIED_CONTENT
+                or (staging / VERIFIED_MARKER).read_text() != verified_content(self.identity)
                 or read_build_envelope(staging / BUILD_IDENTITY_NAME) != self.identity):
             raise ValueError('Prepared generation retirement lacks verified original staging')
         # A retired scope authorizes only Python publication finalization. It can
@@ -6040,6 +6040,9 @@ def prepare_shard_workspace(workspace, expected, now_unix=None, raw_shards_path=
         except (OSError,json.JSONDecodeError): existing=None
         if isinstance(existing,dict) and existing.get('version')==2 and expected.get('version')==SHARD_STATE_VERSION:
             raise ValueError('Legacy shard source identity requires a new workspace; existing output preserved')
+        if (is_fresh_archive_identity(existing) or is_fresh_archive_identity(expected)) and (
+                not isinstance(existing,dict) or existing.get('original_archive_input')!=expected.get('original_archive_input')):
+            raise ValueError('Fresh archive transport differs from resumable workspace; choose a new workspace (existing output preserved)')
         comparable=shard_cache_identity(existing) if isinstance(existing,dict) else None
         if isinstance(existing,dict) and existing.get('raw_shards_path')!=selected:
             previous=existing.get('raw_shards_path')
@@ -6104,6 +6107,17 @@ def prepare_shard_workspace(workspace, expected, now_unix=None, raw_shards_path=
 
 
 ORIGINAL_BZIP2_INPUT_VERSION = 'wikidict-original-bzip2-input-v1'
+FRESH_BZIP2_INPUT_VERSION = 'wikidict-original-bzip2-fresh-input-v1'
+FRESH_BZIP2_COORDINATE_VERSION = 'original-bzip2-global-xml-v1'
+
+
+def is_fresh_archive(record):
+    return isinstance(record,dict) and record.get('version')==FRESH_BZIP2_INPUT_VERSION
+
+
+def is_fresh_archive_identity(identity):
+    selected=identity.get('original_archive_input') if isinstance(identity,dict) else None
+    return isinstance(selected,dict) and is_fresh_archive(selected.get('selection'))
 
 
 def _staged_path_stamp(path, *, directory=False):
@@ -6117,7 +6131,7 @@ def _staged_path_stamp(path, *, directory=False):
 def original_archive_record(root):
     if root is None:return None
     record=read_small_json(Path(root)/'.complete.json')
-    return record if isinstance(record,dict) and record.get('version')==ORIGINAL_BZIP2_INPUT_VERSION else None
+    return record if isinstance(record,dict) and record.get('version') in (ORIGINAL_BZIP2_INPUT_VERSION,FRESH_BZIP2_INPUT_VERSION) else None
 
 
 def original_archive_paths(record):
@@ -6135,12 +6149,13 @@ def original_archive_paths(record):
 
 
 def validated_original_archive(items,root,record):
-    fields={'version','input_sha256','source_pages','dump_size','dump_sha256','index_size','index_sha256',
-            'block_directory','source_directory'}
+    fresh=is_fresh_archive(record)
+    fields={'version','input_sha256','source_pages','block_directory','source_directory'}
+    if not fresh:fields.update(('dump_size','dump_sha256','index_size','index_sha256'))
     if (set(record)!=fields or record['input_sha256']!=dump_input_fingerprint(items)
             or type(record['source_pages']) is not int or record['source_pages']<0):
         raise ValueError('Original archive marker differs from selected inputs')
-    for label in ('dump','index'):
+    for label in (() if fresh else ('dump','index')):
         if (type(record[label+'_size']) is not int or record[label+'_size']<=0
                 or not isinstance(record[label+'_sha256'],str)
                 or re.fullmatch('[0-9a-f]{64}',record[label+'_sha256']) is None):
@@ -6156,7 +6171,11 @@ def validated_original_archive(items,root,record):
     if not isinstance(directory,dict) or directory.get('format')!='wikidict-bzip2-blocks-v1':
         raise ValueError('Invalid original block directory format')
     bridge=directory.get('zstd_frame_bridge')
-    if (not isinstance(bridge,dict) or any(bridge.get(key)!=record[field] for key,field in (
+    if fresh:
+        if ('zstd_frame_bridge' in directory or type(directory.get('source_pages')) is not int
+                or directory['source_pages']!=record['source_pages']):
+            raise ValueError('Fresh block directory count or coordinate authority differs')
+    elif (not isinstance(bridge,dict) or any(bridge.get(key)!=record[field] for key,field in (
             ('dump_bytes','dump_size'),('dump_sha256','dump_sha256'),
             ('offset_index_bytes','index_size'),('offset_index_sha256','index_sha256')))):
         raise ValueError('Original block directory logical bridge differs')
@@ -8393,6 +8412,8 @@ def edition_extraction_cache(workspace, selected):
 
 def extraction_cache_args(cache_root, staged):
     if cache_root is None:return []
+    if is_fresh_archive(staged):
+        raise ValueError('Fresh original archive input does not support a historical extraction cache')
     cache_root=Path(cache_root).absolute()
     if cache_root.is_symlink() or (cache_root.exists() and not cache_root.is_dir()):
         raise ValueError('Extraction cache root must be a regular directory')
@@ -8492,7 +8513,7 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
     if generation is None and not worker_ready:
         if expander_build.exists(): remove_artifact_tree(expander_build)
         staged=read_small_json((staged_input_root if staged_input_root is not None else workspace/'input')/'.complete.json')
-        extraction_cache=edition_extraction_cache(workspace, extraction_cache_root)
+        extraction_cache=None if is_fresh_archive(original_archive_record(staged_input_root)) else edition_extraction_cache(workspace, extraction_cache_root)
         tools=prepare_blob_tools(workspace,zig,edition,date,build_identity,
                   expander_args=[str(dump),str(expander_build),*archive_args,
                      *(['--expander-only'] if retained_roles is not None else []),
@@ -8709,7 +8730,7 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
     if actual_pages!=indexed_pages: raise ValueError('Incomplete total shard page coverage')
     coverage=dict(version=1,start_page=0,requested_limit=None,index_byte_offset=0,pages_seen=actual_pages,
                   expected_input_pages=indexed_pages,page_index_identity=index['identity'],page_index_sha256=index['sha256'],page_index_rows=indexed_pages)
-    metadata_texts=[json.dumps(coverage,sort_keys=True)+'\n',json.dumps(now_unix)+'\n',VERIFIED_CONTENT]
+    metadata_texts=[json.dumps(coverage,sort_keys=True)+'\n',json.dumps(now_unix)+'\n',verified_content(build_identity)]
     if interwiki_snapshot is not None:metadata_texts.append(interwiki_sha+'\n')
     if auxiliary_hashes:metadata_texts.append(json.dumps(auxiliary_hashes,sort_keys=True)+'\n')
     if build_identity is not None:metadata_texts.append(json.dumps(build_identity,sort_keys=True)+'\n')
@@ -8752,7 +8773,7 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
     persist_build_identity(staging,build_identity)
     if _staged_input_guard is not None:_staged_input_guard()
     seal_verified_publication_inventory(staging,**({'fresh_compressed':True} if compress_shards else {}))
-    (staging/VERIFIED_MARKER).write_text(VERIFIED_CONTENT)
+    (staging/VERIFIED_MARKER).write_text(verified_content(build_identity))
     if generation is not None:
         request=getattr(_PREPARED_SOURCE,'request',None)
         if request is None:raise ValueError('Missing parent-bound prepared request at finalization')
@@ -8953,18 +8974,23 @@ VERIFIED_CONTENT = f'dump-staging-version={DUMP_STAGING_VERSION}\n'
 def publication_dump_transport(identity):
     archive=identity.get('original_archive_input') if isinstance(identity,dict) else None
     if archive is None:
-        return {'dump_codec':'zstd','dump_stream_kind':'multistream-zstd'}
+        return {'dump_staging_version':DUMP_STAGING_VERSION,'dump_codec':'zstd','dump_stream_kind':'multistream-zstd'}
     if (not isinstance(archive,dict) or not isinstance(archive.get('selection'),dict)
-            or archive['selection'].get('version')!=ORIGINAL_BZIP2_INPUT_VERSION):
+            or archive['selection'].get('version') not in (ORIGINAL_BZIP2_INPUT_VERSION,FRESH_BZIP2_INPUT_VERSION)):
         raise ValueError('Invalid publication archive transport selection')
-    return {'dump_codec':'bzip2','dump_stream_kind':'original-bzip2-blocks'}
+    return {'dump_staging_version':(FRESH_BZIP2_COORDINATE_VERSION if is_fresh_archive(archive['selection']) else DUMP_STAGING_VERSION),
+            'dump_codec':'bzip2','dump_stream_kind':'original-bzip2-blocks'}
+
+
+def verified_content(identity):
+    return 'dump-staging-version='+publication_dump_transport(identity)['dump_staging_version']+'\n'
 
 
 def require_current_staging_version(path, version, metadata=None):
-    if version != DUMP_STAGING_VERSION:
+    expected=publication_dump_transport(metadata.get('build_inputs') if metadata is not None else None)
+    if version != expected['dump_staging_version']:
         raise ValueError(f'Outdated dump staging at {path}; rebuild in a new output directory (existing output preserved)')
     if metadata is not None:
-        expected=publication_dump_transport(metadata.get('build_inputs'))
         if any(metadata.get(key)!=value for key,value in expected.items()):
             raise ValueError(f'Inconsistent publication dump transport at {path}')
 
@@ -9254,7 +9280,7 @@ def _publish_verified_staging(staging, target, edition, date, compression_worker
     marker = staging / VERIFIED_MARKER
     if not marker.is_file():
         raise ValueError(f'Unverified staging directory: {staging}')
-    if marker.read_text() != VERIFIED_CONTENT:
+    if marker.read_text() != verified_content(build_identity):
         require_current_staging_version(staging, None)
     if build_identity is not None:
         require_build_identity(read_build_envelope(staging/BUILD_IDENTITY_NAME) if (staging/BUILD_IDENTITY_NAME).is_file() else None,build_identity)
@@ -9345,7 +9371,7 @@ def _publish_verified_staging(staging, target, edition, date, compression_worker
             unlink_artifact(fallback_raw)
             sync_shard_directory(staging)
             del inventory[FALLBACK_REPORT_NAME]
-    metadata = {'edition':edition,'date':date,'dump_staging_version':DUMP_STAGING_VERSION,
+    metadata = {'edition':edition,'date':date,
         **publication_dump_transport(build_identity),
         'status':'built' if compressed else 'empty', 'fallback_pages':fallback_pages,
         'fallback_reason_counts':fallback_reasons,
@@ -9407,6 +9433,8 @@ def _build_locked(items, downloads, output, zig, compression_workers=None, expan
     validate_llvm_workers(llvm_workers)
     validate_now_unix(now_unix)
     if extraction_cache_root is not None:
+        if is_fresh_archive(original_archive_record(staged_input_root)):
+            raise ValueError('Fresh original archive input does not support an explicit extraction cache')
         if not Path(extraction_cache_root).is_dir():raise ValueError('Explicit extraction cache root must exist')
         extraction_cache_args(extraction_cache_root,{'dump_sha256':'','index_sha256':''})
     for item in items:validate_item(item)
@@ -9624,7 +9652,7 @@ def _build_locked(items, downloads, output, zig, compression_workers=None, expan
     else:
         if getattr(_PREPARED_SOURCE,'value',None) is not None:
             raise ValueError('Nonsharded builds cannot consume a released native source lease')
-        extraction_cache=edition_extraction_cache(workspace, extraction_cache_root)
+        extraction_cache=None if is_fresh_archive(original_archive_record(staged_input_root)) else edition_extraction_cache(workspace, extraction_cache_root)
         timed_run([zig,'build','-j1','-Doptimize=fast','--summary','all','build-dictionary','--',str(dump),str(staging),*original_archive_args(archive),
                      *(['--interwiki-map-snapshot',str(pinned)] if pinned else []),
                      *pipeline_snapshot_args(registry,aux_pinned,page_links_snapshot,page_redirects_snapshot),
@@ -9660,7 +9688,7 @@ def _build_locked(items, downloads, output, zig, compression_workers=None, expan
             persist_build_identity(staging,build_identity)
             if _staged_input_guard is not None:_staged_input_guard()
             seal_verified_publication_inventory(staging)
-            (staging / VERIFIED_MARKER).write_text(VERIFIED_CONTENT)
+            (staging / VERIFIED_MARKER).write_text(verified_content(build_identity))
             # Verified staging can now resume publication without the input cache.
             cleanup_shard_workspace(workspace)
     (staging/NOW_UNIX_NAME).write_text(json.dumps(now_unix)+'\n')

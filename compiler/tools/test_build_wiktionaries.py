@@ -17505,4 +17505,143 @@ class OriginalArchivePublicationTests(PublicationCompilerFixture):
                     path.write_bytes(raw)
 
 
+class FreshOriginalArchiveTests(PreparedToolsFixture):
+    class RouteReached(RuntimeError):pass
+
+    def fixture(self,root):
+        folder=root/'testwiktionary/20260901';write_namespace_fixture(folder)
+        source=root/'originals';source.mkdir()
+        xml=b'<mediawiki><page><title>A</title></page><page><title>B</title></page></mediawiki>'
+        raw=bz2.compress(xml);name='testwiktionary-20260901-pages-meta-current.xml.bz2'
+        part=source/name;part.write_bytes(raw)
+        item=dict(wiki='testwiktionary',date='20260901',name=name,size=len(raw),sha1=hashlib.sha1(raw).hexdigest(),
+                  url='https://dumps.wikimedia.org/testwiktionary/20260901/'+name)
+        # Metadata-only boundary fixture; native block decoding is tested separately.
+        count=xml.count(b'<page>')
+        block=dict(format='wikidict-bzip2-blocks-v1',xml_bytes=len(xml),source_pages=count,
+                   parts=[dict(name=name,size=len(raw),sha1=item['sha1'],xml_bytes=len(xml),blocks=[[32,128,len(xml),9]])])
+        directory=root/'blocks.json';directory.write_text(json.dumps(block))
+        marker=dict(version=b.FRESH_BZIP2_INPUT_VERSION,input_sha256=b.dump_input_fingerprint([item]),source_pages=count,
+                    source_directory=str(source),block_directory=dict(path=str(directory),bytes=directory.stat().st_size,sha256=b.sha256_file(directory)))
+        selected=root/'fresh-input';selected.mkdir();(selected/'.complete.json').write_text(json.dumps(marker))
+        return item,selected,marker,directory,source,part
+
+    def rewrite(self,selected,marker,directory,block):
+        directory.write_text(json.dumps(block));marker['block_directory']=dict(path=str(directory),bytes=directory.stat().st_size,sha256=b.sha256_file(directory))
+        (selected/'.complete.json').write_text(json.dumps(marker))
+
+    def test_fresh_selection_needs_no_historical_stage_hash_or_page_index(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);item,selected,marker,directory,source,part=self.fixture(root)
+            self.assertFalse(any(key in marker for key in ('dump_sha256','index_sha256','dump_size','index_size')))
+            with patch.object(b,'digest',side_effect=AssertionError('duplicate archive hash')), \
+                 patch.object(b,'cached_shard_dump',side_effect=AssertionError('historical repack')):
+                with b.borrowed_staged_input([item],selected,root/'out') as (chosen,guard):
+                    guard();record,stamps=b.validated_staged_dump([item],chosen)
+                    self.assertEqual(record,marker);self.assertEqual(b.selected_staged_dump(chosen),directory)
+            self.assertEqual(list(selected.iterdir()),[selected/'.complete.json'])
+            self.assertEqual(b.extraction_cache_args(None,marker),[])
+
+    def test_fresh_count_bridge_and_historical_fields_refuse_without_fallback(self):
+        for mode in ('missing_count','wrong_count','boolean_count','bridge','null_bridge','dump_hash','index_size'):
+            with self.subTest(mode=mode),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);item,selected,marker,directory,source,part=self.fixture(root);block=json.loads(directory.read_text())
+                if mode=='missing_count':del block['source_pages']
+                if mode=='wrong_count':block['source_pages']+=1
+                if mode=='boolean_count':block['source_pages']=True
+                if mode=='bridge':block['zstd_frame_bridge']={}
+                if mode=='null_bridge':block['zstd_frame_bridge']=None
+                if mode=='dump_hash':marker['dump_sha256']='0'*64
+                if mode=='index_size':marker['index_size']=1
+                self.rewrite(selected,marker,directory,block)
+                with patch.object(b,'cached_shard_dump',side_effect=AssertionError('fallback')):
+                    with self.assertRaises(ValueError):
+                        with b.borrowed_staged_input([item],selected,root/'out'):self.fail('mixed fresh authority')
+
+    def test_both_fresh_preparation_routes_skip_default_cache_and_old_hash_flags(self):
+        for sharded in (False,True):
+            with self.subTest(sharded=sharded),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);item,selected,marker,directory,source,part=self.fixture(root)
+                tool=root/'zig';tool.write_bytes(b'never executed compiler fixture');calls=[]
+                def check(argv):
+                    self.assertEqual(argv[0],str(directory));self.assertEqual(argv[argv.index('--bzip2-source-directory')+1],str(source))
+                    for flag in ('--extraction-cache-root','--verified-dump-sha256','--verified-index-sha256'):self.assertNotIn(flag,argv)
+                    calls.append(argv);raise self.RouteReached()
+                with patch.object(b,'PROJECT',root),patch.object(b.shutil,'which',return_value=str(tool)), \
+                     patch.object(b,'source_fingerprint',return_value='source'),patch.object(b,'SHARD_PAGES',0 if sharded else 100000), \
+                     patch.object(b,'edition_extraction_cache',side_effect=AssertionError('historical cache selection')), \
+                     patch.object(b,'cached_shard_dump',side_effect=AssertionError('repack')), \
+                     patch.object(b,'timed_run',side_effect=lambda argv,*args,**kwargs:check(tool_arguments(argv))), \
+                     patch.object(b,'prepare_blob_tools',side_effect=lambda *args,**kwargs:check(kwargs['expander_args'])), \
+                     patch.object(b,'digest',wraps=b.digest) as hashes:
+                    with self.assertRaises(self.RouteReached):b.build([item],root,root/'out',str(tool),1,staged_input_root=selected)
+                self.assertEqual(len(calls),1);self.assertEqual([c.args[0] for c in hashes.call_args_list],[part])
+                state=b.read_build_envelope(root/'out'/item['wiki']/(item['date']+'.shards')/'state.json')
+                self.assertEqual(state['original_archive_input']['selection'],marker)
+
+    def test_explicit_historical_cache_refuses_before_native_or_download_verification(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);item,selected,marker,directory,source,part=self.fixture(root)
+            cache=root/'cache';cache.mkdir();sentinel=cache/'old-receipt';sentinel.write_bytes(b'preserve')
+            with patch.object(b,'PROJECT',root),patch.object(b,'digest',side_effect=AssertionError('unexpected hashing')), \
+                 patch.object(b,'prepare_blob_tools',side_effect=AssertionError('native')):
+                with self.assertRaisesRegex(ValueError,'explicit extraction cache'):
+                    b.build([item],root,root/'out','never',1,staged_input_root=selected,extraction_cache_root=cache)
+            self.assertEqual(sentinel.read_bytes(),b'preserve')
+            with self.assertRaisesRegex(ValueError,'historical extraction cache'):b.extraction_cache_args(cache,marker)
+
+    def test_fresh_workspace_identity_never_adopts_or_removes_another_transport(self):
+        for prior in ('legacy','bridged','other_fresh','same_fresh'):
+            with self.subTest(prior=prior),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);item,selected,marker,directory,source,part=self.fixture(root)
+                current=dict(version=b.SHARD_STATE_VERSION,source='a'*64,production_source='b'*64,
+                             original_archive_input=dict(selection=marker,marker=b.prepared_metadata_ref(selected/'.complete.json')))
+                old=json.loads(json.dumps(current))
+                if prior=='legacy':del old['original_archive_input']
+                if prior=='bridged':old['original_archive_input']['selection']['version']=b.ORIGINAL_BZIP2_INPUT_VERSION
+                if prior=='other_fresh':old['original_archive_input']['selection']['source_pages']+=1
+                workspace=root/'workspace';workspace.mkdir();state=workspace/'state.json';state.write_text(b.build_envelope_text(dict(old,now_unix=123)))
+                sentinel=workspace/'old-worker';sentinel.write_bytes(b'preserve historical owner')
+                before=state.read_bytes()
+                with patch.object(b,'PROJECT',root):
+                    if prior=='same_fresh':self.assertEqual(b.prepare_shard_workspace(workspace,current,123),123)
+                    else:
+                        with self.assertRaisesRegex(ValueError,'Fresh archive transport differs'):b.prepare_shard_workspace(workspace,current,123)
+                self.assertEqual(state.read_bytes(),before);self.assertEqual(sentinel.read_bytes(),b'preserve historical owner')
+
+
+class FreshArchivePublicationTests(PublicationCompilerFixture):
+    prepare=PublicationResumeTests.prepare
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        compiler=Path(os.environ['PATH'].split(os.pathsep,1)[0])/'zig';original=b.shutil.which
+        cls.enterClassContext(patch.object(b.shutil,'which',side_effect=lambda command,*args,**kwargs:
+            str(compiler) if command=='zig' else original(command,*args,**kwargs)))
+
+    def test_fresh_verified_publication_uses_its_own_coordinate_version(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);original=b.build_input_identity
+            def identity(*args,**kwargs):
+                value=original(*args,**kwargs);value['original_archive_input']={'selection':{'version':b.FRESH_BZIP2_INPUT_VERSION}};return value
+            with patch.object(b,'PROJECT',root),patch.object(b,'build_input_identity',side_effect=identity), \
+                 patch.object(b,'compress_many',side_effect=PublicationResumeTests.compress_reason_count_fixture):
+                item,target,workspace=self.prepare(root,publish=False);staging=target.with_name(item['date']+'.building')
+                selected=b.read_build_envelope(staging/b.BUILD_IDENTITY_NAME)
+                hashes=json.loads((staging/b.AUXILIARY_SHA_NAME).read_text())
+                namespace=root/item['wiki']/item['date']/'namespace-registry.tsv'
+                def publish():return b._publish_verified_staging(staging,target,item['wiki'],item['date'],1,auxiliary_hashes=hashes,build_identity=selected,namespace_snapshot=namespace)
+                with self.assertRaisesRegex(ValueError,'Outdated dump staging'):publish()
+                self.assertTrue(staging.is_dir());self.assertFalse(target.exists())
+                (staging/b.VERIFIED_MARKER).write_text(b.verified_content(selected));publish()
+                metadata=json.loads((target/'complete.json').read_text())
+                self.assertEqual(metadata['dump_staging_version'],b.FRESH_BZIP2_COORDINATE_VERSION)
+                self.assertEqual((metadata['dump_codec'],metadata['dump_stream_kind']),('bzip2','original-bzip2-blocks'))
+                self.assertEqual(b.build([item],root,root/'output','zig',1),'existing_output')
+                for version in (b.DUMP_STAGING_VERSION,'invented'):
+                    bad=dict(metadata,dump_staging_version=version)
+                    with self.assertRaisesRegex(ValueError,'Outdated dump staging'):b.require_current_staging_version(target,version,bad)
+
+
 if __name__=='__main__':unittest.main()
