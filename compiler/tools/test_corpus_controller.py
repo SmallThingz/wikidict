@@ -5679,5 +5679,157 @@ class ConfigurableShardPagesControllerTests(unittest.TestCase):
         base={key:key for key in controller.CONTEXT_KEYS}
         self.assertNotEqual(controller.production_context(base),controller.production_context(dict(base,edition_options=cfg['edition_options'])))
 
+import build_wiktionaries as original_archive_builder
+
+class OriginalArchiveControllerTests(unittest.TestCase):
+    def fixture(self, root, fresh=True, edition="toywiktionary"):
+        stage=root/'stage';stage.mkdir();source=root/'archives';source.mkdir()
+        name=edition+'-20261001-pages-meta-current.xml.bz2'
+        data=b'BZh9metadata fixture';(source/name).write_bytes(data)
+        item=dict(wiki=edition,date='20261001',name=name,size=len(data),sha1=hashlioriginal_archive_builder.sha1(data).hexdigest())
+        block=root/'blocks.json'
+        directory=dict(format='wikidict-bzip2-blocks-v1',xml_bytes=7,source_pages=1,
+            parts=[dict(name=name,size=len(data),sha1=item['sha1'],xml_bytes=7,blocks=[])])
+        marker=dict(version=original_archive_builder.FRESH_BZIP2_INPUT_VERSION if fresh else original_archive_builder.ORIGINAL_BZIP2_INPUT_VERSION,
+            input_sha256=original_archive_builder.dump_input_fingerprint([item]),source_pages=1,source_directory=str(source))
+        if not fresh:
+            directory.pop('source_pages')
+            directory['zstd_frame_bridge']=dict(dump_bytes=8,dump_sha256='1'*64,offset_index_bytes=9,offset_index_sha256='2'*64)
+            marker.update(dump_size=8,dump_sha256='1'*64,index_size=9,index_sha256='2'*64)
+        block.write_text(json.dumps(directory));marker['block_directory']=controller.descriptor(block)
+        (stage/'.complete.json').write_text(json.dumps(marker))
+        st=stage.stat();record=dict(path=str(stage),device=st.st_dev,inode=st.st_ino,uid=st.st_uid,mode=st.st_mode&0o777,
+            completion=controller.descriptor(stage/'.complete.json'))
+        manifest=root/'manifest.json';manifest.write_text(json.dumps(dict(files=[item])))
+        cfg=dict(date='20261001',manifest=controller.descriptor(manifest),edition_options={edition:dict(staged_input_root=record)})
+        return cfg,stage,source,block,marker
+
+    def with_required_roles(self, cfg):
+        value=copy.deepcopy(cfg)
+        root=Path(cfg['manifest']['path']).parent/'required-figure-metadata'
+        root.mkdir(exist_ok=True)
+        snapshots={}
+        for role, name in original_archive_builder.FIGURE_SNAPSHOT_FILES.items():
+            path=root/name;path.write_text('controlled metadata role '+role)
+            snapshots[role]=controller.descriptor(path)
+        for options in value['edition_options'].values():options['auxiliary_snapshots']=snapshots
+        return value
+
+    def test_flag_is_strict_and_older_producers_keep_legacy_path(self):
+        for value in (True,False):
+            self.assertEqual(controller.edition_cli_options(dict(edition_options={'toy':dict(original_archives=value)}),'toy'),
+                             ['--original-archives'] if value else [])
+        for value in (1,0,None,'yes',[]):
+            with self.subTest(value=value),self.assertRaisesRegex(ValueError,'boolean'):
+                controller.edition_cli_options(dict(edition_options={'toy':dict(original_archives=value)}),'toy')
+        with mock.patch.object(b,'select_original_archive_input',None):
+            self.assertEqual(controller.edition_cli_options({},'toy'),[])
+            with self.assertRaisesRegex(ValueError,'does not support'):
+                controller.edition_cli_options(dict(edition_options={'toy':dict(original_archives=True)}),'toy')
+
+    def test_fresh_and_bridged_explicit_archives_need_no_zstd_stage(self):
+        for fresh in (True,False):
+            with self.subTest(fresh=fresh),tempfile.TemporaryDirectory() as tmp:
+                cfg,stage,source,block,_=self.fixture(Path(tmp),fresh)
+                stamp=lambda p:tuple(getattr(p.stat(),key) for key in ('st_dev','st_ino','st_mode','st_size','st_mtime_ns','st_ctime_ns'))
+                before={p:stamp(p) for p in (stage/'.complete.json',block,*source.iterdir())}
+                self.assertEqual(controller.edition_cli_options(cfg,'toywiktionary'),['--staged-input-root',str(stage)])
+                controller.require_ordinary_input_roles(self.with_required_roles(cfg))
+                self.assertTrue(all(stamp(p)==st for p,st in before.items()))
+                self.assertFalse((stage/'pages.xml.zst').exists())
+                cfg['edition_options']['toywiktionary']['original_archives']=True
+                self.assertEqual(controller.edition_cli_options(cfg,'toywiktionary'),['--original-archives','--staged-input-root',str(stage)])
+
+    def test_archive_validation_reads_metadata_not_dump_payload(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg,_,source,_,_=self.fixture(Path(tmp));original=original_archive_builder.sha256_file;seen=[]
+            def digest(path):
+                seen.append(Path(path));self.assertNotEqual(Path(path).parent,source)
+                return original(path)
+            checked=self.with_required_roles(cfg)
+            with mock.patch.object(b,'sha256_file',side_effect=digest):controller.require_ordinary_input_roles(checked)
+            self.assertTrue(seen)
+
+    def test_marker_sidecar_parts_and_source_binding_fail_closed(self):
+        for mode in ('marker','block','part','source-alias','root','unknown','official','completion-path'):
+            with self.subTest(mode=mode),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);cfg,stage,source,block,marker=self.fixture(root)
+                record=cfg['edition_options']['toywiktionary']['staged_input_root']
+                if mode=='marker':(stage/'.complete.json').write_text('{}')
+                if mode=='block':block.write_text('{}')
+                if mode=='part':next(source.iterdir()).write_bytes(b'changed')
+                if mode=='root':record['inode']+=1
+                if mode=='source-alias':
+                    alias=root/'alias';alias.symlink_to(source,target_is_directory=True);marker['source_directory']=str(alias)
+                if mode=='unknown':marker['version']='wikidict-original-bzip2-unknown'
+                if mode in ('source-alias','unknown'):
+                    (stage/'.complete.json').write_text(json.dumps(marker));record['completion']=controller.descriptor(stage/'.complete.json')
+                if mode=='official':
+                    p=Path(cfg['manifest']['path']);p.write_text(json.dumps(dict(files=[])));cfg['manifest']=controller.descriptor(p)
+                if mode=='completion-path':record['completion']=dict(record['completion'],path=str(block))
+                for check in (lambda:controller.edition_cli_options(cfg,'toywiktionary'),lambda:controller.require_ordinary_input_roles(cfg)):
+                    with self.assertRaises((ValueError,OSError,KeyError)):check()
+
+    def test_legacy_stage_still_requires_both_regular_payloads(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);cfg,stage,_,_,_=self.fixture(root)
+            (stage/'.complete.json').write_text(json.dumps(dict(version=original_archive_builder.DUMP_STAGING_VERSION)))
+            cfg['edition_options']['toywiktionary']['staged_input_root']['completion']=controller.descriptor(stage/'.complete.json')
+            with self.assertRaisesRegex(ValueError,'pages.xml.zst'):controller.require_ordinary_input_roles(cfg)
+            (stage/'pages.xml.zst').write_bytes(b'old');(stage/'pages-index.txt.bz2').write_bytes(b'index')
+            controller.require_ordinary_input_roles(self.with_required_roles(cfg))
+
+    def test_writable_cache_identity_guards_are_unchanged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);cfg,_,_,_,_=self.fixture(root);cache=root/'cache';cache.mkdir();st=cache.stat()
+            record=dict(path=str(cache),device=st.st_dev,inode=st.st_ino,uid=st.st_uid,mode=st.st_mode&0o777)
+            cfg['edition_options']['toywiktionary']['extraction_cache_root']=record
+            self.assertIn('--extraction-cache-root',controller.edition_cli_options(cfg,'toywiktionary'))
+            record['inode']+=1
+            with self.assertRaisesRegex(ValueError,'cache identity'):controller.edition_cli_options(cfg,'toywiktionary')
+
+    def test_auto_input_protection_is_bounded_and_uses_produced_marker(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);cfg,stage,source,block,_=self.fixture(root)
+            cfg.update(output=str(root/'output'),downloads=str(root/'downloads'))
+            cfg['edition_options']={'toywiktionary':dict(original_archives=True)}
+            container=root/'output/toywiktionary/20261001.original-input'
+            self.assertEqual(controller._original_archive_protected_paths(cfg),[container,root/'downloads/toywiktionary/20261001'])
+            container.mkdir(parents=True);stage.rename(container/'input')
+            selected=controller._original_archive_protected_paths(cfg)
+            self.assertIn(block,selected);self.assertIn(source,selected)
+            (container/'input/.complete.json').write_text('{}')
+            with self.assertRaisesRegex(ValueError,'Unknown automatic'):controller._original_archive_protected_paths(cfg)
+
+    def test_external_source_protection_allows_disjoint_cleanup_and_blocks_overlap(self):
+        for where in ('current','old'):
+            for overlap in (False,True):
+                with self.subTest(where=where,overlap=overlap),tempfile.TemporaryDirectory() as tmp:
+                    root=Path(tmp);harness=DerivedGenerationLifecycleTests()
+                    with harness.fixture(root) as f:
+                        archive_root=root/'archive-fixture';archive_root.mkdir()
+                        archive,stage,source,block,marker=self.fixture(archive_root,edition=f['edition'])
+                        if overlap:
+                            target=f['aliases'][0]
+                            for part in source.iterdir():(target/part.name).write_bytes(part.read_bytes())
+                            marker['source_directory']=str(target)
+                            (stage/'.complete.json').write_text(json.dumps(marker))
+                            archive['edition_options'][f['edition']]['staged_input_root']['completion']=controller.descriptor(stage/'.complete.json')
+                        selected=f['cfg'] if where=='current' else f['old']
+                        selected.update(manifest=archive['manifest'],edition_options=archive['edition_options'])
+                        if where=='old':
+                            old_ref=f['doc'](root/'old-archive-config.json',f['old']);f['record']['configuration']=old_ref
+                            f['closed']['configuration']=old_ref;f['record']['closure']=f['doc'](root/'old-archive-closure.json',f['closed'])
+                            f['roles']['records'][0]['configuration']=old_ref
+                            f['record']['runtime_roles']=f['doc'](root/'archive-roles.json',f['roles'])
+                        before=(stage/'.complete.json').read_bytes(),block.read_bytes()
+                        result=harness.retire(f)
+                        if overlap:
+                            self.assertEqual(result['status'],'cleanup-deferred');harness.assert_kept(f)
+                        else:
+                            self.assertEqual(result['status'],'superseded-generated-retired')
+                            self.assertTrue(all(not(alias/name).exists()for alias in f['aliases']for name in f['names']))
+                        self.assertEqual(before,((stage/'.complete.json').read_bytes(),block.read_bytes()))
+
 if __name__ == '__main__':
     unittest.main()

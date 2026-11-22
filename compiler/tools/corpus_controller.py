@@ -1929,9 +1929,75 @@ def campaign_selection(cfg, manifest):
                 historical_timing_imported=False, semantic_acceptance=False)
 
 
+def _original_archive_option(options, builder):
+    enabled = options.get('original_archives', False)
+    require(type(enabled) is bool, 'Original archives must be a boolean')
+    if enabled:
+        require(callable(getattr(builder, 'select_original_archive_input', None)),
+                'Selected producer does not support original archives')
+    return enabled
+
+
+def _original_archive_stage(cfg, edition, stage, builder):
+    """Validate the existing explicit archive selection without reading a dump."""
+    marker = read_ref(stage['completion'])
+    version = marker.get('version') if isinstance(marker, dict) else None
+    if not (isinstance(version, str) and version.startswith('wikidict-original-bzip2-')):
+        return None  # Historical markers retain their existing staged checks.
+    require(all(callable(getattr(builder, name, None)) for name in
+                ('original_archive_record', 'original_archive_paths', 'validated_original_archive', 'current_xml_inputs')),
+            'Selected producer does not support original archive markers')
+    root = bound_directory({name:stage[name] for name in ('path','device','inode','uid','mode')},
+                           'Borrowed original archive input')
+    require(stage['completion']['path'] == str(root/'.complete.json'), 'Original archive completion path differs')
+    selected = builder.original_archive_record(root)
+    require(selected is not None and selected == marker, 'Unknown or changed original archive marker')
+    manifest = read_ref(cfg['manifest'])
+    items = builder.current_xml_inputs([item for item in manifest['files']
+                                       if item['wiki'] == edition and item['date'] == cfg['date']])
+    require(bool(items), 'Original archive has no selected official XML inputs')
+    _, identities = builder.validated_original_archive(items, root, selected)
+    return list(identities)
+
+
+def _original_archive_protected_paths(cfg):
+    """Protect explicit physical inputs and bounded normal auto-input locations."""
+    import build_wiktionaries as builder
+    paths = []
+    for edition, options in cfg.get('edition_options', {}).items():
+        enabled = _original_archive_option(options, builder)
+        stage = options.get('staged_input_root')
+        if stage is not None:
+            selected = _original_archive_stage(cfg, edition, stage, builder)
+            if selected is not None:
+                paths.extend(selected)
+        elif enabled:
+            require(isinstance(edition, str) and Path(edition).name == edition and edition not in ('.','..'),
+                    'Invalid original archive edition path')
+            require(isinstance(cfg['date'], str) and re.fullmatch(r'[0-9]{8}', cfg['date']),
+                    'Invalid original archive date path')
+            container = Path(cfg['output'])/edition/(cfg['date']+'.original-input')
+            source = Path(cfg['downloads'])/edition/cfg['date']
+            for path in (container, source):
+                require(path.is_absolute() and not any(node.is_symlink() for node in (path,*path.parents)),
+                        'Unsafe automatic original archive input path')
+            paths.extend((container, source))
+            root = container/'input'
+            marker = root/'.complete.json'
+            if marker.exists() or marker.is_symlink():
+                info = root.stat()
+                record = dict(path=str(root), device=info.st_dev, inode=info.st_ino, uid=info.st_uid,
+                              mode=info.st_mode & 0o7777, completion=descriptor(marker))
+                selected = _original_archive_stage(cfg, edition, record, builder)
+                require(selected is not None, 'Unknown automatic original archive input marker')
+                paths.extend(selected)
+    return list(dict.fromkeys(paths))
+
+
 def edition_cli_options(cfg, edition):
     """Forward existing canonical options, authenticating each selected input."""
     from build_wiktionaries import AUXILIARY_SNAPSHOT_NAMES
+    import build_wiktionaries as builder
     if 'output' in cfg and 'date' in cfg:
         root = Path(cfg['output'])/edition
         if not (root/cfg['date']/'complete.json').exists():
@@ -1939,9 +2005,9 @@ def edition_cli_options(cfg, edition):
                             or (root/(cfg['date']+'.shards')/name).is_symlink() for name in RETIRED_PROVIDER_MARKERS),
                     'Retired provider-copy workspace requires a fresh whole-attempt output; retained captures unchanged')
     options = cfg.get('edition_options', {}).get(edition, {})
-    require(isinstance(options, dict) and set(options) <= {'extraction_cache_root', 'staged_input_root', 'auxiliary_snapshots', 'interwiki_snapshot', 'presentation_audit_pages', 'continue_failed_shards', 'shard_pages'},
+    require(isinstance(options, dict) and set(options) <= {'extraction_cache_root', 'staged_input_root', 'auxiliary_snapshots', 'interwiki_snapshot', 'presentation_audit_pages', 'continue_failed_shards', 'shard_pages', 'original_archives'},
             'Unknown edition option')
-    argv = []
+    argv = ['--original-archives'] if _original_archive_option(options, builder) else []
     if 'shard_pages' in options:
         from build_wiktionaries import selected_shard_pages
         pages=options['shard_pages']
@@ -1996,6 +2062,7 @@ def edition_cli_options(cfg, edition):
         reference=record['completion']
         require(isinstance(reference,dict) and reference.get('path')==str(path/'.complete.json')
                 and descriptor(path/'.complete.json')==reference, 'Borrowed staged input completion differs')
+        _original_archive_stage(cfg, edition, record, builder)
         # The builder authenticates this existing marker against selected XML
         # inputs and verifies dump/index bytes. No copy or marker rewrite here.
         argv += ['--staged-input-root',str(path)]
@@ -2590,9 +2657,10 @@ def require_ordinary_input_roles(cfg):
                 'Required-role check must use the selected producer')
     editions = cfg.get('edition_options')
     require(isinstance(editions, dict) and bool(editions), 'Ordinary input selection has no editions')
-    for options in editions.values():
+    for edition, options in editions.items():
         require(isinstance(options, dict) and isinstance(options.get('auxiliary_snapshots', {}), dict),
                 'Invalid ordinary provider selection')
+        _original_archive_option(options, builder)
         staged = options.get('staged_input_root')
         if staged is not None:
             require(isinstance(staged, dict) and set(staged) == {'path', 'device', 'inode', 'uid', 'mode', 'completion'},
@@ -2602,7 +2670,8 @@ def require_ordinary_input_roles(cfg):
             root = Path(staged['path'])
             require(root.is_absolute() and root.resolve() == root and not root.is_symlink() and root.is_dir(),
                     'Selected staged input root is not a direct existing directory')
-            for name in ('pages.xml.zst', 'pages-index.txt.bz2', '.complete.json'):
+            selected = _original_archive_stage(cfg, edition, staged, builder)
+            for name in (('.complete.json',) if selected is not None else ('pages.xml.zst', 'pages-index.txt.bz2', '.complete.json')):
                 path = root / name
                 require(not path.is_symlink() and path.is_file(),
                         'Selected staged input lacks regular file: ' + name)
@@ -3162,6 +3231,10 @@ def cleanup_superseded_generated(cfg, edition, folder, attempt, locks, *, reconc
             or attempt.get('exit_code') != 0 or attempt.get('controller_interrupted') is not False
             or not all(attempt.get(name) is True for name in ('cleanup_proven', 'source_guard', 'control_proven'))):
         return dict(status='retained-no-valid-replacement', generations=[])
+    try:
+        archive_protected = _original_archive_protected_paths(cfg)
+    except (OSError, ValueError, KeyError, TypeError, AssertionError) as error:
+        return dict(status='cleanup-deferred', generations=[], error=f'{type(error).__name__}: {error}')
     for lock in locks:
         lock.check()
     expected_locks = tuple(map(str, resource_lock_paths(cfg)))
@@ -3181,6 +3254,7 @@ def cleanup_superseded_generated(cfg, edition, folder, attempt, locks, *, reconc
             for name in ('staged_input_root', 'extraction_cache_root'):
                 if name in options:
                     protected.append(Path(options[name]['path']))
+        protected.extend(archive_protected)
         source, workspace = source_roots(cfg)
         protected.extend([source] if source != workspace else
                          [source / name for name in (*PRODUCER_SOURCE_FILES, *PRODUCER_SOURCE_DIRECTORIES)])
@@ -3192,6 +3266,7 @@ def cleanup_superseded_generated(cfg, edition, folder, attempt, locks, *, reconc
                     and set(record) <= {'configuration', 'result', 'closure', 'runtime_roles', 'derived_assets', 'provider_copies', 'raw_intermediates'},
                     'Invalid predecessor role fields')
             old = read_ref(record['configuration']); prior = read_ref(record['result']); closed = read_ref(record['closure'])
+            old_archive_protected = _original_archive_protected_paths(old)
             roles = read_ref(record['runtime_roles'])
             require(old['date'] == cfg['date'] and prior['edition'] == edition
                     and Path(record['result']['path']).parent.parent.parent == Path(old['state_directory'])
@@ -3249,6 +3324,7 @@ def cleanup_superseded_generated(cfg, edition, folder, attempt, locks, *, reconc
                 for name in ('staged_input_root', 'extraction_cache_root'):
                     if name in options:
                         preserved.append(Path(options[name]['path']))
+            preserved.extend(old_archive_protected)
             protected_regions = [region for path in preserved for region in execution_mount_regions(path, mounts)]
             owner = OwnedArtifactRoot(old['artifact_root'])
             for path in paths:
@@ -3306,6 +3382,7 @@ def cleanup_superseded_generated(cfg, edition, folder, attempt, locks, *, reconc
                             for name in ('staged_input_root', 'extraction_cache_root'):
                                 if name in options:
                                     raw_preserved.append(Path(options[name]['path']))
+                        raw_preserved.extend(old_archive_protected)
                         raw_regions = [region for path in raw_preserved for region in execution_mount_regions(path, mounts)]
                         for path in raw_dirs:
                             owner.check_path(path)
@@ -3338,16 +3415,22 @@ def cleanup_superseded_generated(cfg, edition, folder, attempt, locks, *, reconc
                         *[source / name for name in (*PRODUCER_SOURCE_FILES, *PRODUCER_SOURCE_DIRECTORIES)]]
                     for options in cfg.get('edition_options',{}).values():
                         if 'staged_input_root' in options: derived_protected.append(Path(options['staged_input_root']['path']))
+                    derived_protected.extend(archive_protected)
                     try:
                         from build_wiktionaries import DUMP_STAGING_VERSION
                         old_inputs = []
-                        for options in old.get('edition_options',{}).values():
+                        for selected_edition, options in old.get('edition_options',{}).items():
                             if 'staged_input_root' not in options: continue
                             stage = options['staged_input_root']
                             root = bound_directory({key:stage[key] for key in ('path','device','inode','uid','mode')},
                                                    'Released old staged input')
                             require(stage['completion']['path'] == str(root/'.complete.json'), 'Old staged completion path differs')
                             marker = read_ref(stage['completion'])
+                            import build_wiktionaries as builder
+                            archive_inputs = _original_archive_stage(old, selected_edition, stage, builder)
+                            if archive_inputs is not None:
+                                old_inputs.extend(archive_inputs)
+                                continue
                             require(marker.get('version') == DUMP_STAGING_VERSION and marker.get('dump_codec') == 'zstd'
                                     and marker.get('dump_stream_kind') == 'multistream-zstd', 'Unknown released old staged input schema')
                             payloads = [('dump',root/'pages.xml.zst'),('index',root/'pages-index.txt.bz2')]
@@ -3356,6 +3439,7 @@ def cleanup_superseded_generated(cfg, edition, folder, attempt, locks, *, reconc
                             # Keep original input/provenance leaves; only the
                             # explicitly released derived children may be removed.
                             old_inputs.extend([root/'.complete.json',*[path for _,path in payloads]])
+                        old_inputs.extend(path for path in old_archive_protected if path.exists())
                         derived_protected.extend(old_inputs)
                         derived_result = _retire_derived_assets(derived, roles_reference=record['runtime_roles'],
                             cfg=cfg, folder=folder, locks=locks, protected=derived_protected,
