@@ -3277,6 +3277,68 @@ def _stage_archive_reader(path, decoder, threads):
             raise OSError(f'lbzip2 failed to decode {path} (exit {status})')
 
 
+class SplitXmlPage(ValueError):
+    pass
+
+
+class XmlFrames:
+    """Yield bounded, page-aligned XML batches in their original byte order."""
+
+    def __init__(self, target, limit, source, *, part_boundary=False):
+        self.target = target
+        self.limit = limit
+        self.source = source
+        self.part_boundary = part_boundary
+        self.pending = bytearray()
+        self.batch = bytearray()
+        self.pages = 0
+        self.xml_bytes = 0
+
+    def _take(self):
+        frame, self.batch = self.batch, bytearray()
+        return frame
+
+    def feed(self, chunk):
+        self.xml_bytes += len(chunk)
+        opening, closing = b'<page>', b'</page>'
+        scan = max(0, len(self.pending) - len(closing) + 1)
+        self.pending.extend(chunk)
+        consumed = 0
+        while (end := self.pending.find(closing, scan)) >= 0:
+            start = self.pending.find(opening, consumed, end)
+            if start < 0:
+                if self.part_boundary:
+                    raise SplitXmlPage(self.source)
+                raise ValueError(f'Unexpected XML page close: {self.source}')
+            cut = end + len(closing)
+            size = cut - consumed
+            if size > self.limit:
+                raise ValueError(f'XML page exceeds bounded Zstandard member: {self.source}')
+            if len(self.batch) + size > self.limit:
+                yield self._take()
+            self.batch.extend(memoryview(self.pending)[consumed:cut])
+            consumed = scan = cut
+            self.pages += 1
+            if len(self.batch) >= self.target:
+                yield self._take()
+        del self.pending[:consumed]
+        if len(self.pending) > self.limit:
+            raise ValueError(f'Unterminated or oversized XML page: {self.source}')
+
+    def finish(self):
+        opening = b'<page>'
+        if self.part_boundary and (opening in self.pending or any(self.pending.endswith(opening[:n]) for n in range(1, len(opening)))):
+            raise SplitXmlPage(self.source)
+        if opening in self.pending:
+            raise ValueError('Truncated XML page at end of dump')
+        if len(self.batch) + len(self.pending) > self.limit:
+            yield self._take()
+        self.batch.extend(self.pending)
+        self.pending.clear()
+        if self.batch:
+            yield self._take()
+
+
 def _stage_seekable_dump_serial(items, downloads, scratch, metadata=None, workers=4):
     """Repack full-namespace dumps into bounded, page-aligned Zstandard frames.
 
@@ -3301,15 +3363,10 @@ def _stage_seekable_dump_serial(items, downloads, scratch, metadata=None, worker
         print(f'Decoding {parts[0].name} with {decoder} ({workers - 1} workers)', flush=True)
     dump=scratch/'pages.xml.zst'
     index=scratch/'pages-index.txt.bz2'
-    target_bytes=STAGE_TARGET_BYTES
-    max_member_bytes=STAGE_MAX_MEMBER_BYTES  # Strictly below the native reader's 128 MiB cap.
-    open_tag=b'<page>'
-    close_tag=b'</page>'
+    framer = XmlFrames(STAGE_TARGET_BYTES, STAGE_MAX_MEMBER_BYTES, parts[0])
     started=time.monotonic()
-    pages=members=xml_bytes=0
+    members=0
     dump_hash=hashlib.sha256()
-    pending=bytearray()
-    batch=bytearray()
     # Four ordinary members may compress concurrently. Large pages take the
     # original synchronous path after draining the queue, preserving order.
     max_parallel_bytes=STAGE_PARALLEL_MAX_BYTES
@@ -3333,63 +3390,32 @@ def _stage_seekable_dump_serial(items, downloads, scratch, metadata=None, worker
             future,raw_len=queued.popleft()
             write_member(future.result(),raw_len)
 
-        def flush():
-            nonlocal batch
-            if not batch: return
-            if decoder is not None or workers == 1 or len(batch)>max_parallel_bytes:
+        def submit(raw):
+            if decoder is not None or workers == 1 or len(raw)>max_parallel_bytes:
                 while queued: finish_oldest()
-                write_member(zstd.compress(batch,level=1),len(batch))
-                batch.clear()
+                write_member(zstd.compress(raw,level=1),len(raw))
                 return
             if len(queued)==max_queued_batches: finish_oldest()
-            # The compressor owns this buffer until its future completes.
-            raw,batch=batch,bytearray()
             queued.append((pool.submit(zstd.compress,raw,level=1),len(raw)))
 
+        # Split archives may continue the same XML page in the next part.
         for source in parts:
+            framer.source = source
             with _stage_archive_reader(source, decoder, workers - 1) as inp:
                 while chunk:=inp.read(1024*1024):
-                    xml_bytes+=len(chunk)
-                    # Only the final partial closing tag can match across reads.
-                    search_from = max(0, len(pending) - len(close_tag) + 1)
-                    pending.extend(chunk)
-                    consumed=0
-                    while (end:=pending.find(close_tag,search_from))>=0:
-                        start=pending.find(open_tag,consumed)
-                        if start<0 or start>end:
-                            raise ValueError(f'Unexpected XML page close: {source}')
-                        cut=end+len(close_tag)
-                        page_bytes=cut-consumed
-                        if page_bytes>max_member_bytes:
-                            raise ValueError(f'XML page exceeds bounded Zstandard member: {source}')
-                        if len(batch)+page_bytes>max_member_bytes: flush()
-                        batch.extend(memoryview(pending)[consumed:cut])
-                        consumed=cut
-                        search_from=cut
-                        pages+=1
-                        if len(batch)>=target_bytes: flush()
-                    # Move the unfinished suffix once per read, rather than once per page.
-                    del pending[:consumed]
-                    if len(pending)>max_member_bytes:
-                        raise ValueError(f'Unterminated or oversized XML page: {source}')
-            # A split archive part may continue an XML page in the next part.
-        if b'<page>' in pending:
-            raise ValueError('Truncated XML page at end of dump')
-        if len(batch)+len(pending)>max_member_bytes: flush()
-        batch.extend(pending)
-        flush()
+                    for raw in framer.feed(chunk):
+                        submit(raw)
+        for raw in framer.finish():
+            submit(raw)
         while queued: finish_oldest()
         if members==0:
             write_member(zstd.compress(b'',level=1),0)
+    pages, xml_bytes = framer.pages, framer.xml_bytes
     if metadata is not None:
         metadata.update({'source_pages':pages,'dump_codec':'zstd','dump_stream_kind':'multistream-zstd','dump_size':dump.stat().st_size,'dump_sha256':dump_hash.hexdigest(),
                          'index_size':index.stat().st_size,'index_sha256':sha256_file(index)})
     print(f'Staged Zstandard dump: pages={pages} members={members} xml_bytes={xml_bytes} compressed_bytes={dump.stat().st_size} seconds={time.monotonic()-started:.1f}',flush=True)
     return dump
-
-
-class _SplitPageAcrossParts(Exception):
-    pass
 
 
 class _CancelledParallelStage(Exception):
@@ -3452,55 +3478,28 @@ def _stage_seekable_dump_parallel(items, downloads, scratch, metadata=None, work
     started=time.monotonic()
     dump=scratch/'pages.xml.zst'
     index=scratch/'pages-index.txt.bz2'
-    open_tag=b'<page>'
-    close_tag=b'</page>'
     cancelled=threading.Event()
     queues=[_PartFrameQueue(cancelled,STAGE_PART_QUEUE_BYTES) for _ in parts]
 
     def stage_part(source,output):
         try:
             if cancelled.is_set(): return
-            pending=bytearray()
-            batch=bytearray()
-            pages=xml_bytes=0
-            def flush():
-                if not batch: return
-                frame=zstd.compress(batch,level=1)
+            framer = XmlFrames(STAGE_TARGET_BYTES, STAGE_MAX_MEMBER_BYTES, source, part_boundary=True)
+
+            def emit(raw):
+                frame=zstd.compress(raw,level=1)
                 info=zstd.get_frame_info(frame)
-                if info.decompressed_size!=len(batch) or zstd.get_frame_size(frame)!=len(frame):
+                if info.decompressed_size!=len(raw) or zstd.get_frame_size(frame)!=len(frame):
                     raise ValueError('Staged Zstandard member is not one known-size frame')
-                batch.clear()
                 output.put_frame(frame)
 
             with bz2.open(source,'rb') as inp:
                 while chunk:=inp.read(1024*1024):
-                    xml_bytes+=len(chunk)
-                    # Only the final partial closing tag can match across reads.
-                    search_from = max(0, len(pending) - len(close_tag) + 1)
-                    pending.extend(chunk)
-                    consumed=0
-                    while (end:=pending.find(close_tag,search_from))>=0:
-                        start=pending.find(open_tag,consumed)
-                        if start<0 or start>end: raise _SplitPageAcrossParts(source)
-                        cut=end+len(close_tag)
-                        page_bytes=cut-consumed
-                        if page_bytes>STAGE_MAX_MEMBER_BYTES:
-                            raise ValueError(f'XML page exceeds bounded Zstandard member: {source}')
-                        if len(batch)+page_bytes>STAGE_MAX_MEMBER_BYTES: flush()
-                        batch.extend(memoryview(pending)[consumed:cut])
-                        consumed=cut
-                        search_from=cut
-                        pages+=1
-                        if len(batch)>=STAGE_TARGET_BYTES: flush()
-                    del pending[:consumed]
-                    if len(pending)>STAGE_MAX_MEMBER_BYTES:
-                        raise ValueError(f'Unterminated or oversized XML page: {source}')
-            if b'<page>' in pending or any(pending.endswith(open_tag[:n]) for n in range(1,len(open_tag))):
-                raise _SplitPageAcrossParts(source)
-            if len(batch)+len(pending)>STAGE_MAX_MEMBER_BYTES: flush()
-            batch.extend(pending)
-            flush()
-            output.put_control((pages,xml_bytes))
+                    for raw in framer.feed(chunk):
+                        emit(raw)
+            for raw in framer.finish():
+                emit(raw)
+            output.put_control((framer.pages,framer.xml_bytes))
         except BaseException as exc:
             output.put_control(exc)
 
@@ -3553,7 +3552,7 @@ def _stage_seekable_dump_parallel(items, downloads, scratch, metadata=None, work
                              'index_size':index.stat().st_size,'index_sha256':sha256_file(index)})
         print(f'Staged parallel Zstandard dump: pages={pages} members={members} xml_bytes={xml_bytes} compressed_bytes={dump.stat().st_size} seconds={time.monotonic()-started:.1f}',flush=True)
         return dump
-    except _SplitPageAcrossParts:
+    except SplitXmlPage:
         unlink_artifact(dump, missing_ok=True)
         unlink_artifact(index, missing_ok=True)
         print('XML page crosses archive part boundary; using serial stage',flush=True)
