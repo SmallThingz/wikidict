@@ -123,9 +123,11 @@ def validate_wire(path, identity):
             columns = line[:-1].split(b'\t')
             if len(columns) != 5:
                 raise ValueError('Malformed derived redirect row')
-            record = checked_row(int(columns[0]), int(columns[1]),
-                                 *(bytes.fromhex(value.decode('ascii')) for value in columns[2:]))
-            if record[0] <= previous or wire_row(record) != line:
+            record = (int(columns[0]), int(columns[1]),
+                      *(bytes.fromhex(value.decode('ascii')) for value in columns[2:]))
+            # Canonical encoding validates all five fields, including UTF-8.
+            encoded = wire_row(record)
+            if record[0] <= previous or encoded != line:
                 raise ValueError('Duplicate, unsorted or noncanonical redirect row')
             count += 1; previous = record[0]
             if count > MAX_ROWS:
