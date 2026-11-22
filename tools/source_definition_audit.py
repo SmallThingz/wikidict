@@ -183,9 +183,20 @@ def source_line(source, title, trail_rule=None):
     plain = simple_line(source, title, trail_rule)
     if plain is not None:
         return (*plain, None)
-    # Accept disjoint, explicitly paired runs. Nested or unbalanced apostrophes
-    # require the full MediaWiki parser and cannot serve as independent evidence.
+    # Paired markers can establish exact style ranges without expanding a page.
     parts = re.split(r"('{2,})", source)
+    if (len(parts) == 9 and parts[1] == parts[7] and parts[3] == parts[5]
+            and {parts[1], parts[3]} == {"''", "'''"}):
+        before, left, middle, right, after = parts[::2]
+        text = ''.join(parts[::2])
+        if not all(piece.strip() for piece in (left, middle, right)) or not PLAIN.fullmatch(text) or '://' in text:
+            return None
+        start = len(before)
+        inner = start + len(left)
+        end = inner + len(middle)
+        outer_style = 'italic' if parts[1] == "''" else 'bold'
+        return text, (), ((start, inner, outer_style), (inner, end, 'bold-italic'),
+                          (end, end + len(right), outer_style))
     if len(parts) < 5 or len(parts) % 4 != 1:
         return None
     boundaries = []
@@ -245,14 +256,18 @@ def compiled_emphasis(spans):
             style = 'bold-italic'
         else:
             style = 'bold' if span.get('bold') else 'italic'
-        if runs and runs[-1][1] == start - first:
-            if runs[-1][2] != style:
-                return None  # Adjacent style transitions have no simple disjoint source pair.
+        if runs and runs[-1][1:] == (start - first, style):
             runs[-1] = (runs[-1][0], end - first, style)
         else:
             runs.append((start - first, end - first, style))
     if not runs:
         return None
+    if any(a[1] == b[0] for a, b in zip(runs, runs[1:])):
+        # The supported nested source shape has real prose on both sides of
+        # the inner run. A truncated or unrelated style transition cannot pass.
+        if not (len(runs) == 3 and runs[0][1] == runs[1][0] and runs[1][1] == runs[2][0]
+                and runs[0][2] == runs[2][2] != 'bold-italic' and runs[1][2] == 'bold-italic'):
+            return None
     return runs[0] if len(runs) == 1 else tuple(runs)
 
 
@@ -526,7 +541,7 @@ class SourceDefinitions:
                     language_registry_sha256=self.registry_sha256,
                     has_source_evidence=count > 0,
                     examples=examples, matched_example=self.matched_example,
-                    scope='Compare simple numbered lines under exact plain or unpiped linked language headings on template-free pages, ignoring standalone plain editor comments, to ordered definition blocks at their authored nesting depth. A single run of bold, italic or combined bold and italic must occupy its exact source range. Require the registered code for a unique primary name or its explicitly listed initial-capital spelling. Unmatched items need source review; numbered examples and related terms can be intentional.')
+                    scope='Compare simple numbered lines under exact plain or unpiped linked language headings on template-free pages, ignoring standalone plain editor comments, to ordered definition blocks at their authored nesting depth. Compare the visible ranges of bold and italic text, including disjoint runs and plain text with one nested run. Require the registered code for a unique primary name or its explicitly listed initial-capital spelling. Unmatched items need source review; numbered examples and related terms can be intentional.')
 
     def unmatched_locations(self, *, after_examples):
         rows = self.db.execute('SELECT title,owner,page,revision,line FROM sense WHERE matched=0 '

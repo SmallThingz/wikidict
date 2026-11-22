@@ -244,6 +244,22 @@ class SourceDefinitionTests(unittest.TestCase):
         spans[2]['bold'] = True
         self.assertIsNone(compiled_emphasis(spans))
 
+    def test_nested_gun_emphasis_keeps_the_outer_style_on_both_sides(self):
+        source = "''yé sọ hẹ '''osé lẹ''' ji''."
+        spans = [dict(kind='text', text='yé sọ hẹ ', italic=True),
+                 dict(kind='text', text='osé lẹ', italic=True, bold=True),
+                 dict(kind='text', text=' ji', italic=True), dict(kind='text', text='.')]
+        expected = ('yé sọ hẹ osé lẹ ji.', (), ((0, 9, 'italic'), (9, 15, 'bold-italic'), (15, 18, 'italic')))
+        self.assertEqual(source_line(source, 'osé lẹ'), expected)
+        self.assertEqual((*compiled_line(spans), compiled_emphasis(spans)), expected)
+        for index in range(3):
+            damaged = list(spans)
+            damaged[index] = damaged[index] | {'italic': False}
+            self.assertNotEqual((*compiled_line(damaged), compiled_emphasis(damaged)), expected)
+        for outside in (source.replace('osé lẹ', '[[osé lẹ]]'), source.replace(" ji''", " ji'''"),
+                        source.replace('yé sọ hẹ ', ' ')):
+            self.assertIsNone(source_line(outside, 'osé lẹ'))
+
     def test_disjoint_gun_emphasis_keeps_the_link_and_every_styled_occurrence(self):
         source = "[[sunnu]] wẹ '''sunnusi''' kavi '''sun'si'''."
         spans = [dict(kind='link', text='sunnu', target='sunnu'), dict(kind='text', text=' wẹ '),
