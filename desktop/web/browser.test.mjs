@@ -121,6 +121,7 @@ try{
   assert.equal(componentLink('Literal title').href,'#'+encodeURIComponent('Literal#tail')+'#');
   assert.equal(componentLink('Separate fragment').href,'#'+encodeURIComponent('Literal#tail')+'#'+encodeURIComponent('Part#Ω'));
   assert.equal(componentLink('Local component').href,'#'+encodeURIComponent('Local#Ω'));
+  assert.equal(componentLink('Literal reference title').href,'#%23reference-1#');
   assert.equal(componentLink('Book literal').href,'https://de.wiktionary.org/wiki/'+encodeURIComponent('Special:Booksources/978#/%?&Ω'));
   assert.equal(componentLink('Book fragment').href,'https://de.wiktionary.org/wiki/'+encodeURIComponent('Special:Booksources/978#/%?&Ω')+'#'+encodeURIComponent('Part#Ω'));
   assert.equal(componentLink('Legacy uppercase').target,'');
@@ -165,6 +166,7 @@ try{
   assert.equal(await page.evaluate(()=>document.activeElement.id),'reference-3');
   await page.getByRole('link',{name:'First citation',exact:true}).focus();await page.keyboard.press('Enter');
   assert.equal(await page.evaluate(()=>document.activeElement.id),'reference-1');
+  assert.equal(await page.getByRole('link',{name:'First citation',exact:true}).getAttribute('href'),'#reference-1');
   await page.getByRole('link',{name:'Unnumbered item is not a citation',exact:true}).click();
   await page.getByRole('link',{name:'Fragment link',exact:true}).click();
   assert.deepEqual(await page.evaluate(()=>window.fragmentLinks),['#reference-2','Fragment target']);

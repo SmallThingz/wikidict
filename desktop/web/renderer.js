@@ -215,7 +215,14 @@ export function spans(values = [], onLink = () => {}, preserve = false, explanat
     } else if(span.image&&!span.image.map&&span.kind==='link'&&span.target?.startsWith('File:')){
       const unresolved=node('span');unresolved.setAttribute('role','link');unresolved.setAttribute('aria-disabled','true');unresolved.dataset.actionTarget=span.target;unresolved.append(el);el=unresolved;
     } else if (span.kind === 'link' && (span.target||span.target_fragment) && !span.image?.map) {
-      const link = node('a'); link.href = span.target_fragment==null?'#'+encodeURIComponent(span.target):span.target===''?'#'+encodeURIComponent(span.target_fragment):'#'+encodeURIComponent(span.target)+'#'+encodeURIComponent(span.target_fragment);
+      const link = node('a');
+      if (span.target_fragment == null) {
+        // Legacy local links include the leading hash in the stored target.
+        const target = span.target.startsWith('#') ? span.target.slice(1) : span.target;
+        link.href = '#' + encodeURIComponent(target);
+      } else {
+        link.href = '#' + (span.target ? encodeURIComponent(span.target) + '#' : '') + encodeURIComponent(span.target_fragment);
+      }
       // Some table and thumbnail links contain only a space. Keep its layout and name the action.
       if (!span.image && !span.ruby && !span.text?.trim() && !span.tooltip?.trim()) {
         link.setAttribute('aria-label', span.explanation?.trim() || (span.target_fragment ? `${span.target}#${span.target_fragment}` : span.target));
