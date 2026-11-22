@@ -37,7 +37,8 @@ comparison. The complete Node suite and this focused headless rendering suite
 have passed for L; genuine DPRL corpus interoperability remains unqualified.
 
 DPRM additionally decodes 32-bit container flags, owner font scale, fixed container
-height in pixels or owner-relative em units, authored flow margins, four-sided
+height in pixels or owner-relative em units, balanced container columns with
+pixel or owner-relative em gaps, authored flow margins, four-sided
 table and cell borders (none, hidden, solid and dotted),
 CSS-pixel span sizes, cell width/minimum width, vertical alignment
 and independent cell strut/line-height metrics. These values survive into native
@@ -56,9 +57,14 @@ including zero. `WIKIDICT_WEB_LO_HEIGHT_CASE` selects a manifest-pinned member,
 native Reader JSONL archive, recorded expected counts and hash-pinned pre-fix
 decoder for the optional complete-member height regression.
 
+`WIKIDICT_WEB_TPI_COLUMNS_CASE` similarly selects the genuine Tok Pisin English
+member and its complete native Reader exports. Column count and gap survive
+decoding and use balanced native CSS flow; unsupported column combinations
+such as fixed height, scrolling overflow and flex rows remain rejected.
+
 | Format | Remaining consumer work |
 | --- | --- |
-| M | Container columns/positioning/minimum height and signed/auto margins; font families/features, link paint and expanded figure/viewport policies |
+| M | Container positioning/minimum height and signed/auto margins; font families/features, link paint and expanded figure/viewport policies |
 | N | Authored rule geometry and paint |
 | O | Inline text style, declaring-font metrics and baseline shifts |
 | P | Adjoining block/heading styles, family stacks and cell owner-font metrics |

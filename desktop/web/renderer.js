@@ -671,6 +671,7 @@ function containerDeclarations(style,dark=false){
   if(style.overflow!=null)set('overflow',style.overflow);
   if(style.owner_font_scale!=null)set('font-size',`calc(var(--wikidict-normal-body-size) * ${style.owner_font_scale})`);
   if(style.height!=null)set('height',styleLength(style.height));
+  if(style.columns){set('column-count',String(style.columns.count));set('column-gap',styleLength(style.columns.gap));set('column-fill','balance');}
   return css.join(';');
 }
 function containerView(value,onLink,explanations,context){

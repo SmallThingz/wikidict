@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {decode,buildIndex,RawSource} from './blob.js';
-import {validateContainerBlock} from './validate.js';
+import {validateContainerBlock,validateContainerStyle} from './validate.js';
 const cat=(...parts)=>Buffer.concat(parts.map(x=>Array.isArray(x)?Buffer.from(x):x));
 const u=n=>{const b=Buffer.alloc(4);b.writeUInt32LE(n);return b;};
 const short=n=>Buffer.from([n&255,n>>8]);
@@ -151,7 +151,7 @@ test('M admits authored flow margins while L still rejects them and unknown poli
  const m=wire('M',[block('M',{container:cat(u(1),margin,u(0))})]);
  assert.equal(decode(m,{}).sections[0].blocks[0].container.style.margins.top.value,1);
  assert.throws(()=>decode(wire('L',[block('L',{container:cat(short(1),margin,u(0))})]),{}));
- assert.throws(()=>decode(wire('M',[block('M',{container:cat(u(0x40000),length(1),u(0))})]),{}));
+ assert.throws(()=>decode(wire('M',[block('M',{container:cat(u(0x80000),length(1),u(0))})]),{}));
  for(const value of [NaN,Infinity,-1])assert.throws(()=>decode(wire('M',[block('M',{container:cat(u(0x10000),f(value),u(0))})]),{}));
  assert.throws(()=>decode(wire('N',[]),{}));
 });
@@ -255,7 +255,7 @@ test('M fixed container height keeps owner basis and rejects malformed or unsupp
  for(let end=0;end<bytes.length;end++)assert.throws(()=>decode(bytes.subarray(0,end),{}));
  for(const bad of [-1,NaN,Infinity])assert.throws(()=>decode(wire('M',[block('M',{container:cat(u(0x20000),length(bad),u(0))})]),{}));
  assert.throws(()=>decode(wire('M',[block('M',{container:cat(u(0x20000),length(1,2),u(0))})]),{}));
- for(const bit of [0x40000,0x80000,0x100000,0x200000,0x400000])assert.throws(()=>decode(wire('M',[block('M',{container:cat(u(bit),u(0))})]),{}),/Unsupported container layout policy/);
+ for(const bit of [0x80000,0x100000,0x200000,0x400000,0x800000])assert.throws(()=>decode(wire('M',[block('M',{container:cat(u(bit),u(0))})]),{}),/Unsupported container layout policy/);
  assert.throws(()=>validateContainerBlock({kind:'container',container:{style:{height:{unit:'em',value:1.6}},blocks:[]}}));
 });
 
@@ -285,4 +285,31 @@ test('current Lao container height member matches complete retained native graph
  }
  assert.equal(nativeCompared,c.expected_native_graphs);assert.equal(nativeHeightCompared,c.expected_native_height_graphs);assert.equal(heightEntries,c.expected_height_entries);assert.equal(heightNodes,c.expected_height_nodes);assert.equal(Object.keys(failures).length,1);assert.equal(failures['Unsupported container layout policy'],c.expected_height_entries);
  console.log(JSON.stringify({scope:'current2b9 affectedLao member, not frozenoldf412 census',records:index.rows.length,baseline_current_failures:failures,candidate_decode_failures:0,height_entries:heightEntries,height_nodes:heightNodes,height_values:[...heightValues.keys()],complete_native_graphs_compared:nativeCompared,native_height_graphs_compared:nativeHeightCompared,compressed_bytes:compressed.length}));
+});
+
+test('M balanced container columns preserve count gap and native composition limits',()=>{
+ const encoded=(count=3,gap=length(1,1),flags=0x40000,prefix=[])=>wire('M',[block('M',{container:cat(u(flags),prefix,short(count),gap,list([block('M',{values:[textSpan('M',{text:'kept child'})]})]))})]);
+ for(const [count,value,unit] of [[1,0,0],[3,1,1],[65535,2,0]]){const result=decode(encoded(count,length(value,unit)),{}).sections[0].blocks[0].container;assert.deepEqual(result.style.columns,{count,gap:{unit:unit?'em':'px',value}});assert.equal(result.blocks[0].spans[0].text,'kept child');}
+ const bytes=encoded();for(let end=0;end<bytes.length;end++)assert.throws(()=>decode(bytes.subarray(0,end),{}));
+ assert.throws(()=>decode(encoded(0),{}));for(const bad of [-1,NaN,Infinity])assert.throws(()=>decode(encoded(3,length(bad)),{}));assert.throws(()=>decode(encoded(3,length(1,2)),{}));
+ for(const [flags,prefix] of [[0x60000,length(1)],[0x40080,[1]],[0x48000,[1]]])assert.throws(()=>decode(encoded(3,length(1,1),flags,prefix),{}));
+ for(const count of [0,-1,1.5,65536])assert.throws(()=>validateContainerStyle({columns:{count,gap:{unit:'em',value:1}}},{containerFonts:true}));
+ for(const extra of [{height:{unit:'px',value:0}},{layout:'flex_row'},{overflow:'auto'},{min_height:{unit:'px',value:1}},{positioning:'relative_auto'}])assert.throws(()=>validateContainerStyle({columns:{count:3,gap:{unit:'em',value:1}},...extra},{containerFonts:true}));
+ assert.throws(()=>validateContainerStyle({columns:{count:3,gap:{unit:'em',value:1}}}));
+ assert.throws(()=>decode(wire('M',[block('M',{container:cat(u(0x80000),[0],u(0))})]),{}),/Unsupported container layout policy/);
+});
+
+test('genuine TPI Thesaurus talk columns match complete native graphs',{skip:!process.env.WIKIDICT_WEB_TPI_COLUMNS_CASE},async()=>{
+ const {createHash}=await import('node:crypto'),{openAsBlob}=await import('node:fs'),{gunzipSync}=await import('node:zlib'),{openSource}=await import('./xz.js');
+ const c=JSON.parse(await readFile(process.env.WIKIDICT_WEB_TPI_COLUMNS_CASE,'utf8')),sha=b=>createHash('sha256').update(b).digest('hex');
+ const {pathToFileURL}=await import('node:url');const baseline=await readFile(c.baseline_decoder.path);assert.equal(baseline.length,c.baseline_decoder.bytes);assert.equal(sha(baseline),c.baseline_decoder.sha256);const {decode:before}=await import(pathToFileURL(c.baseline_decoder.path).href);
+ const manifest=await readFile(c.root+'/complete.json');assert.equal(sha(manifest),c.complete_sha256);const authority=JSON.parse(manifest).publication_files[c.member],compressed=await readFile(c.root+'/'+c.member);assert.equal(sha(compressed),authority.sha256);assert.equal(compressed.length,authority.size);
+ const source=await openSource(await openAsBlob(c.root+'/'+c.member)),index=await buildIndex(source);assert.equal(index.rows.length,c.expected_records);const map=new Map();let failures=0;
+ for(const row of index.rows){const bytes=await source.read(row.offset,row.length);try{before(bytes,{...index.metadata,title:row.title});}catch(error){assert.equal(row.title,c.title);assert.equal(error.message,'Unsupported container layout policy');failures++;}map.set(row.title,decode(bytes,{...index.metadata,title:row.title}));}
+ assert.equal(failures,1);const archive=await readFile(c.reader_archive);assert.equal(sha(archive),c.reader_archive_sha256);
+ const project=(v,top=false)=>{if(Array.isArray(v))return v.map(x=>project(x));if(!v||typeof v!=='object')return v;const o=Object.fromEntries(Object.entries(v).filter(([k])=>!top||!['organization','redirect','alias','presentation_version'].includes(k)).map(([k,x])=>[k==='list_path'?'path':k,project(x)]));if(Object.hasOwn(o,'text')&&Object.hasOwn(o,'trail')&&Object.hasOwn(o,'target')){o.background??=null;o.tooltip??=null;if(o.font_scale!==undefined)o.font_scale=Math.fround(o.font_scale);}if(Object.hasOwn(o,'depth')&&Object.hasOwn(o,'level')&&Object.hasOwn(o,'spans')){o.feature??=null;o.table??=null;}return o;};
+ let compared=0;const comparedTitles=new Set();for(const line of gunzipSync(archive,{maxOutputLength:64*1024*1024}).toString().trim().split('\n')){const row=JSON.parse(line);if(row.request?.[4]!==index.metadata.language)continue;const expected=row.response?.entries?.[0];if(!expected||!map.has(expected.title))continue;assert.deepEqual(project(map.get(expected.title),true),project(expected,true),expected.title);compared++;comparedTitles.add(expected.title);}
+ assert.equal(compared,c.expected_native_exports);assert.equal(comparedTitles.size,c.expected_native_unique);const actual=map.get(c.title),columns=[];const walk=x=>{if(x&&typeof x==='object'){if(x.style?.columns)columns.push(x.style.columns);for(const y of Object.values(x))walk(y);}};walk(actual);assert.deepEqual(columns,[{count:3,gap:{unit:'em',value:1}},{count:3,gap:{unit:'em',value:1}}]);
+ for(const [name,count] of [['Synonyms',8],['Hyponyms',2]])assert.equal(actual.sections.find(s=>s.title===name).blocks[0].container.blocks.length,count);
+ console.log(JSON.stringify({scope:'Exact current/frozen TPI English member',records:index.rows.length,before_failures:failures,after_failures:0,native_graphs:compared,native_unique_graphs:comparedTitles.size,column_owners:columns,synonyms:8,hyponyms:2,compressed_bytes:compressed.length}));
 });

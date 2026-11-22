@@ -98,8 +98,8 @@ export function decode(bytes, metadata) {
     return value;
   };
   const containerStyle=()=>{
-    const flags=containerFonts?u32():u16(),style={},fields=[['margins',edges],['padding',edges],['width',containerWidth],['float_side',()=>tag(['left','right'])],['clear',()=>tag(['none','left','right','both'])],['max_width',containerMaxWidth],['box_sizing',()=>tag(['content_box','border_box'])],['layout',()=>tag(['flow','flex_row'])],['align_items',()=>tag(['stretch','start','center','end'])],['flex_item',()=>tag(['none'])],['background',containerColor],['border',containerBorder],['line_height',containerLineHeight],['text_align',()=>tag(['left','center','right'])],['screen_max_width',containerScreen],['overflow',()=>tag(['visible','auto'])],['owner_font_scale',f32],['height',styleLength]];
-    require((flags&~0x3ffff)===0,'Unsupported container layout policy');
+    const flags=containerFonts?u32():u16(),style={},fields=[['margins',edges],['padding',edges],['width',containerWidth],['float_side',()=>tag(['left','right'])],['clear',()=>tag(['none','left','right','both'])],['max_width',containerMaxWidth],['box_sizing',()=>tag(['content_box','border_box'])],['layout',()=>tag(['flow','flex_row'])],['align_items',()=>tag(['stretch','start','center','end'])],['flex_item',()=>tag(['none'])],['background',containerColor],['border',containerBorder],['line_height',containerLineHeight],['text_align',()=>tag(['left','center','right'])],['screen_max_width',containerScreen],['overflow',()=>tag(['visible','auto'])],['owner_font_scale',f32],['height',styleLength],['columns',()=>({count:u16(),gap:styleLength()})]];
+    require((flags&~0x7ffff)===0,'Unsupported container layout policy');
     fields.forEach(([key,read],bit)=>{if(flags&(1<<bit))style[key]=read();});return style;
   };
   const borderLine = kind => {

@@ -92,9 +92,15 @@ function containerScreen(value,following=false){
   for(const rule of rest){containerScreen(rule,true);if(rule.max_width_px>=limit)containerError();limit=rule.max_width_px;}
 }
 export function validateContainerStyle(style,{containerFonts=false}={}){
-  containerObject(style,containerFonts?[...containerKeys,'owner_font_scale','height']:containerKeys);
+  containerObject(style,containerFonts?[...containerKeys,'owner_font_scale','height','columns']:containerKeys);
   if(style.owner_font_scale!=null)containerNumber(style.owner_font_scale);
   if(style.height!=null)containerLength(style.height);
+  if(style.columns!=null){
+    containerObject(style.columns,['count','gap'],['count','gap']);
+    if(!Number.isInteger(style.columns.count)||style.columns.count<1||style.columns.count>65535)containerError();
+    containerLength(style.columns.gap);
+    if(style.height!=null||style.min_height!=null||style.layout==='flex_row'||style.overflow==='auto'||style.overflow==='hidden'||style.positioning!=null||style.absolute_position!=null)containerError();
+  }
   for(const key of ['margins','padding'])if(style[key]!=null)containerEdges(style[key]);
   if(style.width!=null)containerWidth(style.width);if(style.max_width!=null)containerMaxWidth(style.max_width);
   if(style.float_side!=null)containerEnum(style.float_side,['left','right']);
