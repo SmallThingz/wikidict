@@ -71,7 +71,22 @@ export function decode(bytes, metadata) {
     require((flags&~0x1ffff)===0,'Unsupported container layout policy');
     fields.forEach(([key,read],bit)=>{if(flags&(1<<bit))style[key]=read();});return style;
   };
-  const borderStyle=()=>{const kind=tag(['none','solid']);if(kind==='none')return {none:{}};const width=styleLength(),color=string();require(/^#[0-9a-f]{6}$/.test(color));return {solid:{width,color}};};
+  const borderLine = kind => {
+    const width = styleLength(), color = string();
+    require(/^#[0-9a-f]{6}$/.test(color) && color.length === 7);
+    return {[kind]: {width, color}};
+  };
+  const borderStyle = () => {
+    const kind = tag(containerFonts ? ['none','solid','edges'] : ['none','solid']);
+    if (kind === 'none') return {none:{}};
+    if (kind === 'solid') return borderLine(kind);
+    const edges = {};
+    for (const side of ['top','right','bottom','left']) {
+      const edge = tag(['none','hidden','solid','dotted']);
+      edges[side] = edge === 'none' || edge === 'hidden' ? {[edge]:{}} : borderLine(edge);
+    }
+    return {edges};
+  };
   const typedStyle=table=>{
     if(!presence())return null;
     const flags=byte(),extension=table&&inlineTableStyles?byte():0;require((extension&~7)===0&&(flags!==0||extension!==0)&&(flags&~(table?(rich?255:aligned?31:15):containerFonts?239:7))===0);

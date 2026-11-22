@@ -37,7 +37,8 @@ comparison. The complete Node suite and this focused headless rendering suite
 have passed for L; genuine DPRL corpus interoperability remains unqualified.
 
 DPRM additionally decodes 32-bit container flags, owner font scale, authored flow
-margins, CSS-pixel span sizes, cell width/minimum width, vertical alignment
+margins, four-sided table and cell borders (none, hidden, solid and dotted),
+CSS-pixel span sizes, cell width/minimum width, vertical alignment
 and independent cell strut/line-height metrics. These values survive into native
 CSS layout; the genuine Gun `okpli` comparison exercises its complete modeled
 graph rather than just checking a version label. Other M policies remain rejected
@@ -51,7 +52,7 @@ activation, and saves frames without enabling network media.
 
 | Format | Remaining consumer work |
 | --- | --- |
-| M | Container height/columns/positioning and signed/auto margins; per-edge borders, font families/features, link paint and expanded figure/viewport policies |
+| M | Container height/columns/positioning and signed/auto margins; font families/features, link paint and expanded figure/viewport policies |
 | N | Authored rule geometry and paint |
 | O | Inline text style, declaring-font metrics and baseline shifts |
 | P | Adjoining block/heading styles, family stacks and cell owner-font metrics |

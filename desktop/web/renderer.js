@@ -450,13 +450,36 @@ function styleLength(value){
   // independently of table typography and nested cell content.
   return value.unit==='em'?`calc(var(--wikidict-normal-body-size) * ${value.value})`:value.value+'px';
 }
-function styleBorder(value){if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).length!==1)throw Error('Invalid style border');if(Object.hasOwn(value,'none')){if(!value.none||typeof value.none!=='object'||Array.isArray(value.none)||Object.keys(value.none).length)throw Error('Invalid none border');return 'none';}const solid=value.solid;if(!solid||!canonicalRGB(solid.color))throw Error('Invalid style border color');return styleLength(solid.width)+' solid '+solid.color;}
+function borderLineCSS(value, physical) {
+  const kinds = physical ? ['none','hidden','solid','dotted'] : ['none','solid'];
+  richObject(value, kinds);
+  const keys = Object.keys(value);
+  if (keys.length !== 1) throw Error('Invalid style border');
+  const [kind] = keys, line = value[kind];
+  if (kind === 'none' || kind === 'hidden') {
+    richObject(line, []);
+    return kind;
+  }
+  richObject(line, ['width','color'], ['width','color']);
+  if (!canonicalRGB(line.color)) throw Error('Invalid style border color');
+  return `${styleLength(line.width)} ${kind} ${line.color}`;
+}
+function applyStyleBorder(el, value) {
+  if (value && Object.hasOwn(value, 'edges')) {
+    const sides = ['top','right','bottom','left'];
+    richObject(value, ['edges']);
+    richObject(value.edges, sides, sides);
+    for (const side of sides) el.style.setProperty('border-' + side, borderLineCSS(value.edges[side], true));
+  } else {
+    el.style.border = borderLineCSS(value, false);
+  }
+}
 function styleEdges(el,name,value){if(!value||typeof value!=='object'||Array.isArray(value))throw Error('Invalid style edges');for(const side of ['top','right','bottom','left'])el.style[name+side[0].toUpperCase()+side.slice(1)]=styleLength(value[side]);}
 function applyTableStyle(el,value){
   const s=styleObject(value);if(!s)return;
   for(const key of Object.keys(s))if(!['background','border','collapse','margins','float_side','width','padding','clear','display','vertical_align','line_height'].includes(key))throw Error('Invalid table style field');
   if(s.background!=null){if(!canonicalRGB(s.background))throw Error('Invalid table background');el.style.backgroundColor=s.background;}
-  if(s.border!=null)el.style.border=styleBorder(s.border);
+  if(s.border!=null)applyStyleBorder(el,s.border);
   if(s.collapse!=null){if(!['separate','collapse'].includes(s.collapse))throw Error('Invalid border collapse');el.style.borderCollapse=s.collapse;}
   if(s.margins!=null)styleEdges(el,'margin',s.margins);
   if(s.float_side!=null&&!['left','right'].includes(s.float_side))throw Error('Invalid table float side');
@@ -478,7 +501,7 @@ function applyCellStyle(el,value){
   const s=styleObject(value);if(!s)return;
   for(const key of Object.keys(s))if(!['border','padding','text_align','width','min_width','vertical_align','line_height'].includes(key))throw Error('Invalid cell style field');
   validateCellMetrics(s);
-  if(s.border!=null)el.style.border=styleBorder(s.border);
+  if(s.border!=null)applyStyleBorder(el,s.border);
   if(s.padding!=null)styleEdges(el,'padding',s.padding);
   if(s.text_align!=null){if(!['left','center','right'].includes(s.text_align))throw Error('Invalid cell text alignment');el.style.textAlign=s.text_align;}
   if(s.width)el.style.width=s.width.unit==='percent'?s.width.value+'%':styleLength(s.width);

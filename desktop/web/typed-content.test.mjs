@@ -71,13 +71,14 @@ test('rich content enforces independent depth budget and authoritative caption s
  assert.throws(()=>decode(wire('J',[block('J',{flow:list([flow])})]),{}));
  assert.throws(()=>decode(wire('J',[block('J',{table:table('J',{caption:[textSpan('J')],captionBlocks:[]})})]),{}));
 });
-test('known H I J K L dictionary index gates preserve unknown future refusal',async()=>{
- for(const version of ['H','I','J','K','L']){
+test('known H through M headers index and decode compatible records; future headers stay refused',async()=>{
+ for(const version of ['H','I','J','K','L','M']){
   const payload=wire(version,[block(version)]);let n=payload.length;const varint=[];do{let b=n%128;n=Math.floor(n/128);if(n)b|=128;varint.push(b);}while(n);
   const bytes=cat(Buffer.from('WIKBLB08'),[7],Buffer.from('Entry\0'),varint,payload);
   const index=await buildIndex(new RawSource(new Blob([bytes])));assert.equal(index.rows.length,1);
+  assert.equal(decode(payload,index.metadata).presentation_version,'DPR'+version);
  }
- for(const version of ['M','N','O','P','Q','R','S','T'])assert.throws(()=>decode(wire(version,[]),{}));
+ for(const version of ['N','O','P','Q','R','S','T'])assert.throws(()=>decode(wire(version,[]),{}));
 });
 
 const lContainer=(children,style=short(0))=>block('L',{container:cat(style,list(children))});
@@ -225,4 +226,22 @@ test('K dark filter refuses unknown enum reserved bit truncation and old J grant
  assert.equal(valid[enumAt],0);
  assert.throws(()=>decode(valid.subarray(0,enumAt),{}));
  assert.throws(()=>decode(cat(valid,[0]),{}));
+});
+
+test('DPRM preserves physical table and cell border edges in wire order', () => {
+ const line=(tag,width,color)=>cat([tag],length(width),s(color));
+ const border=cat([2,0,1],line(2,1,'#123456'),line(3,2,'#abcdef'));
+ const make=(version,border)=>{
+  const styledCell=cat([0,1,0,1,0,0],u(0),[0,0,1,1],border);
+  const styledTable=table(version,{cells:[styledCell],style:cat([1,2,0],border)});
+  return wire(version,[block(version,{table:styledTable})]);
+ };
+ const expected={edges:{top:{none:{}},right:{hidden:{}},bottom:{solid:{width:{unit:'px',value:1},color:'#123456'}},left:{dotted:{width:{unit:'px',value:2},color:'#abcdef'}}}};
+ const value=decode(make('M',border),{}).sections[0].blocks[0].table;
+ assert.deepEqual(value.style.border,expected);
+ assert.deepEqual(value.rows[0].cells[0].style.border,expected);
+ for(const invalid of [cat([2,0,0,0,4]),cat([2,0,0,0],line(2,-1,'#123456')),cat([2,0,0,0],line(3,2,'#abcdef\n')),cat([3,0,0,0,0])]){
+  assert.throws(()=>decode(make('M',invalid),{}));
+ }
+ assert.throws(()=>decode(make('L',border),{}));
 });
