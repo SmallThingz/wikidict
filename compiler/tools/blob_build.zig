@@ -60,6 +60,7 @@ const Options = struct {
     failure_receipt: ?[]const u8 = null,
     invocation_id: ?[]const u8 = null,
     reviewed_nonlexical: ?[]const u8 = null,
+    bzip2_source_directory: ?[]const u8 = null,
     // Borrowed CLI arguments. Each output is ordinal, index offset, exact row
     // SHA256 (including its LF), and a single output-directory component.
     indexed_output_args: []const []const u8 = &.{},
@@ -3650,7 +3651,11 @@ fn parseOptions(args: []const []const u8) !Options {
     var index: usize = 3;
     while (index < args.len) {
         const arg = args[index];
-        if (std.mem.eql(u8, arg, "--reviewed-nonlexical")) {
+        if (std.mem.eql(u8, arg, "--bzip2-source-directory")) {
+            index += 1;
+            if (index >= args.len or out.bzip2_source_directory != null or args[index].len == 0) return error.Usage;
+            out.bzip2_source_directory = args[index];
+        } else if (std.mem.eql(u8, arg, "--reviewed-nonlexical")) {
             index += 1;
             if (index >= args.len or out.reviewed_nonlexical != null or args[index].len == 0) return error.Usage;
             out.reviewed_nonlexical = args[index];
@@ -4527,14 +4532,12 @@ fn runBlobBuild(io: std.Io, a: std.mem.Allocator, args: []const []const u8, opti
     defer if (redirects) |*snapshot| snapshot.deinit();
     const stream_index_path = try std.fs.path.join(a, &.{ options.expander_root, "dump-streams.tsv" });
     defer a.free(stream_index_path);
-    var dump = try dump_source.SourceReader.open(
-        io,
-        a,
-        a,
-        args[1],
-        page_index_kind,
+    // Reviewed evidence authenticates one physical dump, not a sidecar/part set.
+    if (options.bzip2_source_directory != null and options.reviewed_nonlexical != null) return error.UnsupportedReviewedBzip2Transport;
+    var dump = try dump_source.SourceReader.openForRoot(io, a, a,
+        options.expander_root, args[1], page_index_kind, page_index.bytes,
         if (dump_source.isMultistream(page_index_kind)) stream_index_path else null,
-    );
+        if (options.bzip2_source_directory) |directory| .{ .original_bzip2 = directory } else .legacy);
     defer dump.deinit();
 
     // Resolve the exact indexed Common.css once. Writers borrow only its

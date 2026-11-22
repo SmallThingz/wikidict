@@ -400,7 +400,10 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("compiler/tools/bundle_build.zig"),
             .target = b.graph.host,
             .optimize = test_optimize,
-            .imports = &.{.{ .name = "pipeline_paths", .module = pipeline_unit_paths.createModule() }},
+            .imports = &.{
+                .{ .name = "pipeline_paths", .module = pipeline_unit_paths.createModule() },
+                .{ .name = "wikimedia_dump", .module = wikimedia_dump_mod_test },
+            },
         }),
         .test_runner = .{ .path = test_runner, .mode = .simple },
     });

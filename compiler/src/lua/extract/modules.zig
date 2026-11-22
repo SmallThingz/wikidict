@@ -40,7 +40,60 @@ fn sliceOffset(container: []const u8, slice: []const u8) !usize {
     return offset;
 }
 
+// Physical bzip2 block boundaries are unrelated to XML page boundaries.
+// Keep only the unfinished XML suffix; yielded PageView bytes remain borrowed
+// through this iteration, exactly like the existing compressed-member path.
+const OriginalXmlPages = struct {
+    reader: wikimedia_dump.SourceReader,
+    a: std.mem.Allocator,
+    carry: std.ArrayList(u8) = .empty,
+    cursor: usize = 0,
+    base: u64 = 0,
+    block: usize = 0,
+    schema: @FieldType(wikimedia_dump.PageIterator, "size_schema") = .unknown,
+
+    fn deinit(self: *OriginalXmlPages) void {
+        self.carry.deinit(self.a);
+        self.reader.deinit();
+    }
+
+    fn next(self: *OriginalXmlPages) !?PageItem {
+        while (true) {
+            var pages: wikimedia_dump.PageIterator = .{ .bytes = self.carry.items, .pos = self.cursor, .size_schema = self.schema };
+            const capture = pages.next() catch |err| switch (err) {
+                error.TruncatedXml => if (self.block == self.reader.original_bzip2.?.blocks.len) return err else null,
+                else => return err,
+            };
+            if (capture) |page| {
+                self.cursor = pages.pos;
+                self.schema = pages.size_schema;
+                const text = page.text_raw orelse "";
+                return .{ .capture = page, .source = .{ .raw_xml = .{
+                    .offset = if (text.len == 0) 0 else self.base + try sliceOffset(self.carry.items, text), .len = text.len,
+                } } };
+            }
+            if (self.block == self.reader.original_bzip2.?.blocks.len) {
+                try self.reader.original_bzip2.?.checkCurrent();
+                return null;
+            }
+            const tail = self.carry.items.len - self.cursor;
+            std.mem.copyForwards(u8, self.carry.items[0..tail], self.carry.items[self.cursor..]);
+            self.carry.items.len = tail;
+            self.base += self.cursor;
+            self.cursor = 0;
+            const block = self.reader.original_bzip2.?.blocks[self.block];
+            self.block += 1;
+            const len: usize = @intCast(block.row[2]);
+            if (len > 128 * 1024 * 1024 - self.carry.items.len) return error.XmlPageTooLarge;
+            const bytes = try self.reader.readAlloc(self.a, .{ .raw_xml = .{ .offset = block.raw_start, .len = len } });
+            defer self.a.free(bytes);
+            try self.carry.appendSlice(self.a, bytes);
+        }
+    }
+};
+
 const InputPages = union(enum) {
+    original: OriginalXmlPages,
     raw: struct {
         mapped: Mapped,
         pages: wikimedia_dump.PageIterator,
@@ -63,8 +116,13 @@ const InputPages = union(enum) {
         return .{ .raw = .{ .mapped = mapped, .pages = .{ .bytes = mapped.bytes } } };
     }
 
+    fn openOriginal(io: std.Io, allocator: std.mem.Allocator, path: []const u8, directory: []const u8) !InputPages {
+        return .{ .original = .{ .a = allocator, .reader = try wikimedia_dump.SourceReader.openOriginalBzip2(io, allocator, allocator, path, directory, .raw_xml, "", null) } };
+    }
+
     fn deinit(self: *InputPages) void {
         switch (self.*) {
+            .original => |*original| original.deinit(),
             .raw => |*raw| raw.mapped.deinit(),
             .compressed => |*compressed| compressed.walker.deinit(),
         }
@@ -73,6 +131,7 @@ const InputPages = union(enum) {
 
     fn next(self: *InputPages) !?PageItem {
         switch (self.*) {
+            .original => |*original| return original.next(),
             .raw => |*raw| {
                 const capture = try raw.pages.next() orelse return null;
                 const text = capture.text_raw orelse "";
@@ -111,7 +170,7 @@ const InputPages = union(enum) {
 
     fn consumedStreamCount(self: *const InputPages) ?usize {
         return switch (self.*) {
-            .raw => null,
+            .raw, .original => null,
             .compressed => |compressed| @intCast(compressed.walker.streams.stream_id),
         };
     }
@@ -318,6 +377,9 @@ fn snapshotHash(io: std.Io, a: std.mem.Allocator, root: []const u8, name: []cons
     return hash;
 }
 fn sourceReceipt(io: std.Io, a: std.mem.Allocator, input: []const u8, root: []const u8, registry: *const namespace_registry.Registry, expected_source: ?FileIdentity) ![]const u8 {
+    return sourceReceiptForTransport(io, a, input, root, registry, expected_source, null);
+}
+fn sourceReceiptForTransport(io: std.Io, a: std.mem.Allocator, input: []const u8, root: []const u8, registry: *const namespace_registry.Registry, expected_source: ?FileIdentity, transport: ?wikimedia_dump.SourceTransport.Binding) ![]const u8 {
     var identities: [3]?FileIdentity = .{ null, null, null };
     const names = [_][]const u8{ "page-index.tsv", wikimedia_dump.page_title_index_filename, "dump-streams.tsv" };
     for (names, 0..) |name, i| {
@@ -333,12 +395,16 @@ fn sourceReceipt(io: std.Io, a: std.mem.Allocator, input: []const u8, root: []co
     if (expected_source) |expected| if (!std.meta.eql(expected, source)) return error.ExtractionSourceChanged;
     const namespace = try snapshotHash(io, a, root, "namespace-registry.tsv", false);
     if (!std.mem.eql(u8, &namespace.?, &registry.source_sha256)) return error.ExtractionSourceChanged;
+    if (transport) |binding| return std.json.Stringify.valueAlloc(a, .{ .version = 3, .source = source, .indexes = identities, .namespace_sha256 = namespace, .redirects_sha256 = try snapshotHash(io, a, root, "transclusion-redirects.tsv", true), .transport = binding }, .{});
     return std.json.Stringify.valueAlloc(a, .{ .version = 2, .source = source, .indexes = identities, .namespace_sha256 = namespace, .redirects_sha256 = try snapshotHash(io, a, root, "transclusion-redirects.tsv", true) }, .{});
 }
 fn rebuildUsage(io: std.Io, a: std.mem.Allocator, input: []const u8, root: []const u8, registry: *const namespace_registry.Registry) !void {
     const receipt_path = try std.fs.path.join(a, &.{ root, "extraction-source.json" });
     const recorded = try std.Io.Dir.cwd().readFileAlloc(io, receipt_path, a, .limited(16384));
-    const before = try sourceReceipt(io, a, input, root, registry, null);
+    var transport = try wikimedia_dump.SourceTransport.load(io, a, root, input);
+    defer if (transport) |*selected| selected.deinit();
+    const binding: ?wikimedia_dump.SourceTransport.Binding = if (transport) |selected| selected.binding else null;
+    const before = try sourceReceiptForTransport(io, a, input, root, registry, null, binding);
     if (!std.mem.eql(u8, recorded, before)) return error.ExtractionSourceChanged;
     const rows_path = try std.fs.path.join(a, &.{ root, "page-index.tsv" });
     var rows = try mmapPath(rows_path);
@@ -350,7 +416,7 @@ fn rebuildUsage(io: std.Io, a: std.mem.Allocator, input: []const u8, root: []con
     const kind = wikimedia_dump.pageIndexKind(rows.bytes);
     if (index.page_index_size != rows.bytes.len or index.kind != kind) return error.InvalidPageTitleIndex;
     const streams_path = try std.fs.path.join(a, &.{ root, "dump-streams.tsv" });
-    var reader = try wikimedia_dump.SourceReader.open(io, std.heap.smp_allocator, std.heap.smp_allocator, input, kind, if (kind == .raw_xml) null else streams_path);
+    var reader = try wikimedia_dump.SourceReader.openForRoot(io, std.heap.smp_allocator, std.heap.smp_allocator, root, input, kind, rows.bytes, if (kind == .raw_xml) null else streams_path, .root_receipt);
     var reader_open = true;
     defer if (reader_open) reader.deinit();
     const usage_path = try std.fs.path.join(a, &.{ root, "lua-usage.tsv" });
@@ -404,7 +470,7 @@ fn rebuildUsage(io: std.Io, a: std.mem.Allocator, input: []const u8, root: []con
     try writer.flush();
     try output.interface.flush();
     try atomic.file.sync(io);
-    const after = try sourceReceipt(io, a, input, root, registry, null);
+    const after = try sourceReceiptForTransport(io, a, input, root, registry, null, binding);
     if (!std.mem.eql(u8, before, after)) return error.ExtractionSourceChanged;
     var previous = try std.Io.Dir.cwd().openFile(io, usage_path, .{});
     defer previous.close(io);
@@ -436,12 +502,23 @@ pub fn main(init: std.process.Init) !void {
 }
 
 fn extract(init: struct { io: std.Io, arena: *std.heap.ArenaAllocator }, args: []const []const u8) !void {
-    if (args.len < 3 or args.len > 4) return error.Usage;
-    const option = if (args.len == 4) args[3] else "";
-    const indexes_only = std.mem.eql(u8, option, "--indexes-only");
-    const emit_page_index = indexes_only or std.mem.eql(u8, option, "--page-index");
-    const usage_only = std.mem.eql(u8, option, "--usage-only");
-    if (args.len == 4 and !emit_page_index and !usage_only) return error.Usage;
+    if (args.len < 3) return error.Usage;
+    var mode: ?[]const u8 = null;
+    var source_directory: ?[]const u8 = null;
+    var arg: usize = 3;
+    while (arg < args.len) : (arg += 1) {
+        if (std.mem.eql(u8, args[arg], "--bzip2-source-directory")) {
+            arg += 1;
+            if (arg >= args.len or source_directory != null or !std.fs.path.isAbsolute(args[arg]) or !std.fs.path.isAbsolute(args[1])) return error.Usage;
+            source_directory = args[arg];
+        } else if (std.mem.eql(u8, args[arg], "--indexes-only") or std.mem.eql(u8, args[arg], "--page-index") or std.mem.eql(u8, args[arg], "--usage-only")) {
+            if (mode != null) return error.Usage;
+            mode = args[arg];
+        } else return error.Usage;
+    }
+    const indexes_only = if (mode) |m| std.mem.eql(u8, m, "--indexes-only") else false;
+    const emit_page_index = indexes_only or if (mode) |m| std.mem.eql(u8, m, "--page-index") else false;
+    const usage_only = if (mode) |m| std.mem.eql(u8, m, "--usage-only") else false;
     const input_path = args[1];
     const output_root = args[2];
     const lock_path = try std.fs.path.join(init.arena.allocator(), &.{ output_root, ".compiler-inputs.lock" });
@@ -458,6 +535,21 @@ fn extract(init: struct { io: std.Io, arena: *std.heap.ArenaAllocator }, args: [
     var inputs_lock = if (usage_only) try std.Io.Dir.cwd().openFile(init.io, lock_path, .{ .lock = .exclusive, .lock_nonblocking = true, .follow_symlinks = false }) else try std.Io.Dir.cwd().createFile(init.io, lock_path, .{ .truncate = false, .lock = .exclusive });
     defer inputs_lock.close(init.io);
     const original_source = try pathIdentity(init.io, input_path);
+    var fresh_transport: ?wikimedia_dump.SourceTransport.Selected = null;
+    defer if (fresh_transport) |*selected| selected.deinit();
+    if (!usage_only) {
+        if (source_directory) |directory| {
+            fresh_transport = try wikimedia_dump.SourceTransport.forFreshExtraction(init.io, init.arena.allocator(), output_root, input_path, directory);
+        } else {
+            const descriptor = try std.fs.path.join(init.arena.allocator(), &.{ output_root, "source-transport.json" });
+            if (std.Io.Dir.cwd().access(init.io, descriptor, .{})) |_| return error.ExplicitSourceTransportRequired else |err| switch (err) { error.FileNotFound => {}, else => return err }
+        }
+    } else if (source_directory) |directory| {
+        var selected = (try wikimedia_dump.SourceTransport.load(init.io, init.arena.allocator(), output_root, input_path)) orelse return error.MissingBzip2SourceTransport;
+        defer selected.deinit();
+        if (!std.mem.eql(u8, selected.descriptor.value.source_directory, directory)) return error.SourceTransportMismatch;
+    }
+    const transport_binding: ?wikimedia_dump.SourceTransport.Binding = if (fresh_transport) |selected| selected.binding else null;
     const original_redirects = try snapshotHash(init.io, init.arena.allocator(), output_root, "transclusion-redirects.tsv", true);
     var registry = try namespace_registry.Registry.load(init.io, std.heap.smp_allocator, output_root);
     defer registry.deinit();
@@ -482,7 +574,7 @@ fn extract(init: struct { io: std.Io, arena: *std.heap.ArenaAllocator }, args: [
         error.FileNotFound => {},
         else => return err,
     };
-    const compressed = std.mem.endsWith(u8, input_path, ".bz2") or std.mem.endsWith(u8, input_path, ".xml.zst");
+    const compressed = source_directory == null and (std.mem.endsWith(u8, input_path, ".bz2") or std.mem.endsWith(u8, input_path, ".xml.zst"));
     const zstd = std.mem.endsWith(u8, input_path, ".xml.zst");
     const multistream_index_path: ?[]const u8 = if (compressed)
         try wikimedia_dump.deriveMultistreamIndexPath(init.arena.allocator(), input_path)
@@ -548,7 +640,7 @@ fn extract(init: struct { io: std.Io, arena: *std.heap.ArenaAllocator }, args: [
     var manifest_writer = if (manifest_file) |*file| file.writer(init.io, &manifest_buf) else null;
     const mw: ?*std.Io.Writer = if (manifest_writer) |*writer| &writer.interface else null;
 
-    var input = try InputPages.open(init.io, std.heap.smp_allocator, input_path, multistream_index_path);
+    var input = if (source_directory) |directory| try InputPages.openOriginal(init.io, std.heap.smp_allocator, input_path, directory) else try InputPages.open(init.io, std.heap.smp_allocator, input_path, multistream_index_path);
     var input_open = true;
     defer if (input_open) input.deinit();
     var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
@@ -742,6 +834,13 @@ fn extract(init: struct { io: std.Io, arena: *std.heap.ArenaAllocator }, args: [
         try wikimedia_dump.buildPageTitleIndex(init.io, std.heap.smp_allocator, page_index_path, title_index_path);
         const title_index_elapsed_ms = @divTrunc(std.Io.Clock.awake.now(init.io).toNanoseconds() - title_index_started_ns, std.time.ns_per_ms);
         std.debug.print("PAGE_TITLE_INDEX complete pages={d} elapsed_ms={d}\n", .{ pages, title_index_elapsed_ms });
+        if (transport_binding) |binding| {
+            // Required by query-local usage reads, but not a completed cache or
+            // ready generation; publication still follows the final checks.
+            const provisional = try sourceReceiptForTransport(init.io, init.arena.allocator(), input_path, output_root, &registry, original_source, binding);
+            const receipt_path = try std.fs.path.join(init.arena.allocator(), &.{ output_root, "extraction-source.json" });
+            try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = receipt_path, .data = provisional });
+        }
         if (uw) |usage_out| {
             const closure = try usage_closure.complete(init.io, std.heap.smp_allocator, &registry, input_path, output_root, &root_template_usage, usage_out);
             dynamic_root_module = dynamic_root_module or closure.retain_all_modules;
@@ -758,7 +857,7 @@ fn extract(init: struct { io: std.Io, arena: *std.heap.ArenaAllocator }, args: [
     if (emit_page_index) {
         if (!std.meta.eql(original_source, try pathIdentity(init.io, input_path))) return error.ExtractionSourceChanged;
         if (!std.meta.eql(original_redirects, try snapshotHash(init.io, init.arena.allocator(), output_root, "transclusion-redirects.tsv", true))) return error.ExtractionSourceChanged;
-        const receipt = try sourceReceipt(init.io, init.arena.allocator(), input_path, output_root, &registry, original_source);
+        const receipt = try sourceReceiptForTransport(init.io, init.arena.allocator(), input_path, output_root, &registry, original_source, transport_binding);
         const receipt_path = try std.fs.path.join(init.arena.allocator(), &.{ output_root, "extraction-source.json" });
         try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = receipt_path, .data = receipt });
         if (completed_stream_count) |consumed| {
@@ -1038,4 +1137,66 @@ test "indexes-only keeps truncation refusal and immutable option boundaries with
     try writeAllFile(std.testing.io, try std.fs.path.join(a, &.{root, ".complete.json"}), "immutable witness");
     try std.testing.expectError(error.ImmutableExtractionCache, IndexesOnlyFixture.run(&arena, dump, root, "--indexes-only"));
     try std.testing.expectEqualStrings("immutable witness", try IndexesOnlyFixture.read(a, root, ".complete.json"));
+}
+
+
+test "fresh original bzip2 extraction carries complete XML into new raw indexes and v3 receipt" {
+    const io = std.testing.io;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(io, .{ .sub_path = "part-a.bz2", .data = wikimedia_dump.OriginalBzipTestData.part_a });
+    try tmp.dir.writeFile(io, .{ .sub_path = "part-b.bz2", .data = wikimedia_dump.OriginalBzipTestData.part_b });
+    try tmp.dir.writeFile(io, .{ .sub_path = "blocks.json", .data = wikimedia_dump.OriginalBzipTestData.directory });
+    var root_buffer: [4096]u8 = undefined;
+    const root = root_buffer[0..try tmp.dir.realPath(io, &root_buffer)];
+    const directory = try std.fs.path.join(a, &.{ root, "blocks.json" });
+    {
+        var input = try InputPages.openOriginal(io, std.testing.allocator, directory, root);
+        defer input.deinit();
+        const first_part_bytes = input.original.reader.original_bzip2.?.parsed.value.parts[0].xml_bytes;
+        const first = (try input.next()).?;
+        try std.testing.expectEqualStrings("first", first.capture.title_raw.?);
+        try std.testing.expectEqual(@as(usize, 216000), first.capture.text_raw.?.len);
+        try std.testing.expectEqual(@as(?u64, 216000), first.capture.revision_size);
+        const second = (try input.next()).?;
+        try std.testing.expectEqualStrings("second", second.capture.title_raw.?);
+        try std.testing.expectEqualStrings("tail", second.capture.text_raw.?);
+        try std.testing.expectEqual(@as(?u64, 4), second.capture.revision_size);
+        try std.testing.expect(second.source.raw_xml.offset > first_part_bytes);
+        try std.testing.expect((try input.next()) == null);
+    }
+    const output = try IndexesOnlyFixture.root(a, root, "output");
+    const descriptor = try std.json.Stringify.valueAlloc(a, .{
+        .format = "wikidict-source-transport-v1", .transport = "bzip2-blocks",
+        .block_directory = directory, .source_directory = root,
+    }, .{});
+    try writeAllFile(io, try std.fs.path.join(a, &.{ output, "source-transport.json" }), descriptor);
+    try extract(.{ .io = io, .arena = &arena }, &.{ "dict-module-extract", directory, output, "--page-index", "--bzip2-source-directory", root });
+    const rows = try IndexesOnlyFixture.read(a, output, "page-index.tsv");
+    try std.testing.expectEqual(wikimedia_dump.PageIndexKind.raw_xml, wikimedia_dump.pageIndexKind(rows));
+    var lines = std.mem.splitScalar(u8, rows, '\n');
+    var count: usize = 0;
+    while (lines.next()) |line| {
+        if (line.len == 0) continue;
+        const page = try wikimedia_dump.parsePageIndexLine(.raw_xml, line);
+        if (count == 0) try std.testing.expectEqualStrings("first", page.title) else try std.testing.expectEqualStrings("second", page.title);
+        count += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 2), count);
+    const receipt_bytes = try IndexesOnlyFixture.read(a, output, "extraction-source.json");
+    const receipt = try std.json.parseFromSlice(struct { version: u32, transport: wikimedia_dump.SourceTransport.Binding }, a, receipt_bytes, .{ .ignore_unknown_fields = true });
+    defer receipt.deinit();
+    try std.testing.expectEqual(@as(u32, 3), receipt.value.version);
+    try std.testing.expectEqualStrings("bzip2-blocks", receipt.value.transport.kind);
+    var selected = (try wikimedia_dump.SourceTransport.load(io, a, output, directory)) orelse return error.TestUnexpectedResult;
+    defer selected.deinit();
+    try std.testing.expectEqualSlices(u8, &selected.binding.descriptor_sha256, &receipt.value.transport.descriptor_sha256);
+    try std.testing.expectEqualSlices(u8, &selected.binding.block_directory_sha256, &receipt.value.transport.block_directory_sha256);
+    try std.testing.expectEqualStrings("complete\n", try IndexesOnlyFixture.read(a, output, "compiler-inputs.ready"));
+    // The ordinary usage-only path selects the same authenticated transport.
+    try extract(.{ .io = io, .arena = &arena }, &.{ "dict-module-extract", directory, output, "--usage-only" });
+    try std.testing.expectEqualStrings(receipt_bytes, try IndexesOnlyFixture.read(a, output, "extraction-source.json"));
 }

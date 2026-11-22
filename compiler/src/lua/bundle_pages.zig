@@ -1039,7 +1039,7 @@ pub const Provider = struct {
         else
             null;
         defer if (stream_index_path) |path| self.a.free(path);
-        var reader = try wikimedia_dump.SourceReader.open(self.io, self.a, std.heap.smp_allocator, dump_path, kind, stream_index_path);
+        var reader = try wikimedia_dump.SourceReader.openForRoot(self.io, self.a, std.heap.smp_allocator, self.root, dump_path, kind, mapped.bytes, stream_index_path, .root_receipt);
         errdefer reader.deinit();
 
         var title_index_storage = try self.mapOptional(wikimedia_dump.page_title_index_filename);

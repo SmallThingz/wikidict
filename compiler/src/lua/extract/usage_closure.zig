@@ -91,7 +91,7 @@ pub fn complete(io: std.Io, a: A, registry: *const Registry, dump_path: []const 
     const index = try dump.PageTitleIndex.init(mapped_index.bytes);
     if (index.page_index_size != rows.bytes.len or index.kind != dump.pageIndexKind(rows.bytes)) return error.InvalidPageTitleIndex;
     const streams_path = try std.fs.path.join(persistent, &.{ root, "dump-streams.tsv" });
-    var reader = try dump.SourceReader.open(io, a, std.heap.smp_allocator, dump_path, index.kind, if (index.kind == .raw_xml) null else streams_path);
+    var reader = try dump.SourceReader.openForRoot(io, a, std.heap.smp_allocator, root, dump_path, index.kind, rows.bytes, if (index.kind == .raw_xml) null else streams_path, .root_receipt);
     defer reader.deinit();
     var closure: Closure = .{ .a = a, .registry = registry, .index = index, .rows = rows.bytes, .writer = writer, .visited = try .initEmpty(a, index.row_count) };
     defer closure.visited.deinit(a);

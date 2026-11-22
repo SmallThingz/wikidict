@@ -53,6 +53,7 @@ const Options = struct {
     extraction_cache_root: ?[]const u8 = null,
     verified_dump_sha256: ?[]const u8 = null,
     verified_index_sha256: ?[]const u8 = null,
+    bzip2_source_directory: ?[]const u8 = null,
 };
 
 fn parseOptions(args: []const []const u8) !Options {
@@ -60,7 +61,11 @@ fn parseOptions(args: []const []const u8) !Options {
     var options: Options = .{ .dump = args[0], .root = args[1], .parse_workers = @min(4, std.Thread.getCpuCount() catch 1) };
     var index: usize = 2;
     while (index < args.len) : (index += 1) {
-        if (std.mem.eql(u8, args[index], "--namespace-registry-snapshot")) {
+        if (std.mem.eql(u8, args[index], "--bzip2-source-directory")) {
+            index += 1;
+            if (index >= args.len or options.bzip2_source_directory != null or !std.fs.path.isAbsolute(args[index]) or std.mem.indexOfScalar(u8, args[index], 0) != null) return error.Usage;
+            options.bzip2_source_directory = args[index];
+        } else if (std.mem.eql(u8, args[index], "--namespace-registry-snapshot")) {
             index += 1;
             if (index >= args.len or options.namespace_registry_snapshot != null) return error.Usage;
             options.namespace_registry_snapshot = args[index];
@@ -253,6 +258,8 @@ fn parseOptions(args: []const []const u8) !Options {
             }
         }
     }
+    if (options.bzip2_source_directory != null and
+        (!std.fs.path.isAbsolute(options.dump) or std.mem.indexOfScalar(u8, options.dump, 0) != null or options.reviewed_nonlexical != null)) return error.Usage;
     // This execution manifest is consumed only by the final blob stage.
     // Refuse to accept approval input that an expander-only build cannot use.
     if (options.expander_only and options.reviewed_nonlexical != null) return error.Usage;
@@ -287,6 +294,11 @@ fn blobStageArgv(
         buffer[12] = manifest;
         return buffer[0..13];
     }
+    if (options.bzip2_source_directory) |directory| {
+        buffer[11] = "--bzip2-source-directory";
+        buffer[12] = directory;
+        return buffer[0..13];
+    }
     return buffer[0..11];
 }
 
@@ -314,6 +326,59 @@ fn stage(io: std.Io, marker: []const u8, name: []const u8, argv: []const []const
     std.debug.print("dictionary build completed: {s} elapsed_ms={d}\n", .{ name, elapsed_ms });
 }
 
+const OriginalSourceDirectory = struct {
+    format: []const u8,
+    zstd_frame_bridge: ?struct {
+        dump_bytes: u64,
+        dump_sha256: []const u8,
+        offset_index_bytes: u64,
+        offset_index_sha256: []const u8,
+    } = null,
+};
+
+fn originalTransportDescriptorBytes(a: std.mem.Allocator, options: Options) ![]u8 {
+    const source_directory = options.bzip2_source_directory orelse return error.Usage;
+    if (!std.fs.path.isAbsolute(options.dump) or !std.fs.path.isAbsolute(source_directory)) return error.Usage;
+    return std.json.Stringify.valueAlloc(a, .{
+        .format = "wikidict-source-transport-v1", .transport = "bzip2-blocks",
+        .block_directory = options.dump, .source_directory = source_directory,
+    }, .{});
+}
+
+fn installOriginalTransport(io: std.Io, a: std.mem.Allocator, options: Options, root: []const u8) !void {
+    if (options.bzip2_source_directory == null) return;
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(io, options.dump, a, .limited(64 * 1024 * 1024));
+    defer a.free(bytes);
+    const directory = try std.json.parseFromSlice(OriginalSourceDirectory, a, bytes, .{ .ignore_unknown_fields = true });
+    defer directory.deinit();
+    if (!std.mem.eql(u8, directory.value.format, "wikidict-bzip2-blocks-v1")) return error.InvalidBzip2Directory;
+    if (options.extraction_cache_root != null) {
+        // Cache coordinates name the independently reproduced logical stage,
+        // never the physical archive or descriptor bytes.
+        const bridge = directory.value.zstd_frame_bridge orelse return error.MissingBzip2Bridge;
+        if (bridge.dump_bytes == 0 or bridge.offset_index_bytes == 0 or
+            !std.mem.eql(u8, bridge.dump_sha256, options.verified_dump_sha256.?) or
+            !std.mem.eql(u8, bridge.offset_index_sha256, options.verified_index_sha256.?)) return error.Bzip2BridgeIdentityMismatch;
+    }
+    const descriptor = try originalTransportDescriptorBytes(a, options);
+    defer a.free(descriptor);
+    const path = try std.fs.path.join(a, &.{ root, "source-transport.json" });
+    defer a.free(path);
+    // root is a newly created ordinary work directory. Install before probe;
+    // normal v3 cache/receipt validation authenticates this exact regular file.
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = descriptor });
+}
+
+fn extractionStageArgv(buffer: *[6][]const u8, executable: []const u8, dump: []const u8, root: []const u8, source_directory: ?[]const u8) []const []const u8 {
+    buffer.* = .{ executable, dump, root, "--page-index", "", "" };
+    if (source_directory) |directory| {
+        buffer[4] = "--bzip2-source-directory";
+        buffer[5] = directory;
+        return buffer[0..6];
+    }
+    return buffer[0..4];
+}
+
 // One owner waits/reaps the extractor. The compiler may start after its inputs
 // are flushed while extraction finishes the independent title index. Always
 // join, including compiler errors, so no child outlives a failed pipeline.
@@ -339,7 +404,7 @@ fn boundedParseWorkers(requested: usize, cpu_limit: usize, extractor_running: bo
     return @min(requested, @max(@as(usize, 1), cpu_limit -| reserved));
 }
 
-fn extractAndCompile(io: std.Io, a: std.mem.Allocator, marker: []const u8, dump: []const u8, root: []const u8, llvm_dir: []const u8, workers: usize, cpu_limit: usize, leaf_bc: []const u8) !void {
+fn extractAndCompile(io: std.Io, a: std.mem.Allocator, marker: []const u8, dump: []const u8, root: []const u8, llvm_dir: []const u8, workers: usize, cpu_limit: usize, leaf_bc: []const u8, source_directory: ?[]const u8) !void {
     const ready = try std.fs.path.join(a, &.{ root, "compiler-inputs.ready" });
     const manifest = try std.fs.path.join(a, &.{ root, "manifest.jsonl" });
     // A failed prior build can leave a readiness marker in a reused output
@@ -350,9 +415,10 @@ fn extractAndCompile(io: std.Io, a: std.mem.Allocator, marker: []const u8, dump:
         else => return err,
     };
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = marker, .data = "extract compiler inputs" });
+    var extraction_argv: [6][]const u8 = undefined;
     var extraction: Extraction = .{
         .io = io,
-        .child = try std.process.spawn(io, .{ .argv = &.{ paths.modules, dump, root, "--page-index" }, .stdin = .ignore }),
+        .child = try std.process.spawn(io, .{ .argv = extractionStageArgv(&extraction_argv, paths.modules, dump, root, source_directory), .stdin = .ignore }),
     };
     const thread = std.Thread.spawn(.{}, Extraction.wait, .{&extraction}) catch |err| {
         extraction.child.kill(io);
@@ -1278,6 +1344,7 @@ pub fn main(init: std.process.Init) !void {
     try std.Io.Dir.cwd().createDir(init.io, expander_root, .default_dir);
     const expander_marker = try std.fs.path.join(a, &.{ expander_root, ".incomplete" });
     try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = expander_marker, .data = "building" });
+    try installOriginalTransport(init.io, a, options, expander_root);
     // Fail missing/unreadable input before starting extraction. Keep the
     // incomplete marker so the caller still has durable failed-build state.
     try std.Io.Dir.cwd().access(init.io, dump, .{});
@@ -1360,7 +1427,7 @@ pub fn main(init: std.process.Init) !void {
         const worker_text = try std.fmt.allocPrint(a, "{d}", .{parse_workers});
         try stage(init.io, marker, "parse/analyze Lua from verified extraction cache", &.{ paths.llvm, manifest, expander_root, llvm_dir, "--parse-workers", worker_text, "--value-leaf-bc", leaf_bc });
     } else if (!cache_hit) {
-        try extractAndCompile(init.io, a, marker, dump, expander_root, llvm_dir, options.parse_workers, cpu_limit, leaf_bc);
+        try extractAndCompile(init.io, a, marker, dump, expander_root, llvm_dir, options.parse_workers, cpu_limit, leaf_bc, options.bzip2_source_directory);
         // compiler-inputs.ready follows indexed transclusion closure. Publish
         // only after the extractor has exited successfully.
         if (options.extraction_cache_root) |cache|
@@ -1733,4 +1800,71 @@ test "abandoned object cache session is killed and reaped without publication" {
     try std.testing.expect(session.child.id == null);
     try std.testing.expect(session.child.stdin == null and session.child.stdout == null);
     session.child.kill(io); // Cleanup after a joined child is harmless.
+}
+
+
+test "original archive caller keeps descriptor and extractor Writer flags explicit" {
+    const a = std.testing.allocator;
+    const options = try parseOptions(&.{ "/original/blocks.json", "/work/new", "--bzip2-source-directory", "/original/parts" });
+    const bytes = try originalTransportDescriptorBytes(a, options);
+    defer a.free(bytes);
+    const descriptor = try std.json.parseFromSlice(struct { format: []const u8, transport: []const u8, block_directory: []const u8, source_directory: []const u8 }, a, bytes, .{});
+    defer descriptor.deinit();
+    try std.testing.expectEqualStrings("wikidict-source-transport-v1", descriptor.value.format);
+    try std.testing.expectEqualStrings("bzip2-blocks", descriptor.value.transport);
+    try std.testing.expectEqualStrings("/original/blocks.json", descriptor.value.block_directory);
+    try std.testing.expectEqualStrings("/original/parts", descriptor.value.source_directory);
+    var extraction: [6][]const u8 = undefined;
+    const expected = [_][]const u8{ "module-extract-token", "/original/blocks.json", "/work/expander", "--page-index", "--bzip2-source-directory", "/original/parts" };
+    const selected = extractionStageArgv(&extraction, "module-extract-token", options.dump, "/work/expander", options.bzip2_source_directory);
+    try std.testing.expectEqual(@as(usize, expected.len), selected.len);
+    for (expected, selected) |wanted, actual| try std.testing.expectEqualStrings(wanted, actual);
+    try std.testing.expectEqual(@as(usize, 4), extractionStageArgv(&extraction, "module-extract-token", "legacy.xml", "legacy-root", null).len);
+    var blob: [13][]const u8 = undefined;
+    const argv = blobStageArgv(&blob, options, null, "/work/expander", "1", "600000", "100");
+    try std.testing.expectEqualStrings("/original/blocks.json", argv[1]);
+    try std.testing.expectEqualStrings("--bzip2-source-directory", argv[11]);
+    try std.testing.expectEqualStrings("/original/parts", argv[12]);
+    try std.testing.expectError(error.Usage, parseOptions(&.{ "relative.json", "/work/new", "--bzip2-source-directory", "/original/parts" }));
+    try std.testing.expectError(error.Usage, parseOptions(&.{ "/original/blocks.json", "/work/new", "--bzip2-source-directory", "relative" }));
+    try std.testing.expectError(error.Usage, parseOptions(&.{ "/original/blocks.json", "/work/new", "--bzip2-source-directory", "/original/parts", "--bzip2-source-directory", "/elsewhere" }));
+    try std.testing.expectError(error.Usage, parseOptions(&.{ "/original/blocks.json", "/work/new", "--bzip2-source-directory", "/original/parts", "--reviewed-nonlexical", "legacy-evidence" }));
+}
+
+
+test "archive descriptor precedes cache probe and refuses fabricated virtual identities" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(io, .{ .sub_path = "blocks.json", .data = @import("wikimedia_dump").OriginalBzipTestData.directory });
+    try tmp.dir.createDir(io, "work", .default_dir);
+    var buffer: [4096]u8 = undefined;
+    const root = buffer[0..try tmp.dir.realPath(io, &buffer)];
+    const input = try std.fs.path.join(a, &.{ root, "blocks.json" });
+    defer a.free(input);
+    const work = try std.fs.path.join(a, &.{ root, "work" });
+    defer a.free(work);
+    const descriptor = try std.fs.path.join(a, &.{ work, "source-transport.json" });
+    defer a.free(descriptor);
+    var options: Options = .{ .dump = input, .root = work, .bzip2_source_directory = root };
+    try installOriginalTransport(io, a, options, work);
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(io, descriptor, a, .limited(16 * 1024));
+    defer a.free(bytes);
+    const expected = try originalTransportDescriptorBytes(a, options);
+    defer a.free(expected);
+    try std.testing.expectEqualStrings(expected, bytes);
+    const zeros = "0000000000000000000000000000000000000000000000000000000000000000";
+    options.extraction_cache_root = "/not-opened-cache";
+    options.verified_dump_sha256 = zeros;
+    options.verified_index_sha256 = zeros;
+    try std.testing.expectError(error.MissingBzip2Bridge, installOriginalTransport(io, a, options, work));
+    try tmp.dir.writeFile(io, .{ .sub_path = "blocks.json", .data = "{\"format\":\"wikidict-bzip2-blocks-v1\",\"zstd_frame_bridge\":{\"dump_bytes\":1,\"offset_index_bytes\":1,\"dump_sha256\":\"different\",\"offset_index_sha256\":\"different\"}}" });
+    try std.testing.expectError(error.Bzip2BridgeIdentityMismatch, installOriginalTransport(io, a, options, work));
+    const after = try std.Io.Dir.cwd().readFileAlloc(io, descriptor, a, .limited(16 * 1024));
+    defer a.free(after);
+    try std.testing.expectEqualStrings(bytes, after);
+    options.bzip2_source_directory = null;
+    options.dump = "/legacy-input-not-opened";
+    try installOriginalTransport(io, a, options, "/legacy-root-not-opened");
 }

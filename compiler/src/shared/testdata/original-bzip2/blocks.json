@@ -1,0 +1,1 @@
+{"format":"wikidict-bzip2-blocks-v1","xml_bytes":216736,"parts":[{"name":"part-a.bz2","size":744,"sha1":"f1033a844380972becbda471ff14faa5524aeaed","xml_bytes":216368,"blocks":[[32,3143,99981,1],[3175,1262,99981,1],[4437,1429,16406,1]]},{"name":"part-b.bz2","size":271,"sha1":"e44a79c4e761ac9fae87105dd776e70f42e1a1fc","xml_bytes":368,"blocks":[[32,2049,368,1]]}],"source_pages":2}

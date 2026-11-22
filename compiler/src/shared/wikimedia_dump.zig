@@ -34,6 +34,14 @@ extern fn BZ2_bzDecompressEnd(stream: *BzStream) c_int;
 pub const TemplateSource = @import("template_source.zig").TemplateSource;
 pub const TemplateSourceWriter = @import("template_source.zig").Writer;
 
+// Shared fixture visibility stays inside this package; production has no test
+// data declarations or embedded fixture input.
+pub const OriginalBzipTestData = if (@import("builtin").is_test) struct {
+    pub const part_a = @embedFile("testdata/original-bzip2/part-a.bz2");
+    pub const part_b = @embedFile("testdata/original-bzip2/part-b.bz2");
+    pub const directory = @embedFile("testdata/original-bzip2/blocks.json");
+} else struct {};
+
 pub const page_index_v2_header = "# dict-page-index-v2\tmultistream-bz2";
 pub const page_index_v3_header = "# dict-page-index-v3\tmultistream-zstd";
 pub const stream_index_header = "# dict-dump-streams-v1";
@@ -1981,3 +1989,57 @@ pub const PagedTitleIndex = struct {
         return error.InvalidPageTitleIndex;
     }
 };
+
+
+test "portable original bzip2 lookup spans blocks and parts with owned bounded cache" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(io, .{ .sub_path = "part-a.bz2", .data = @embedFile("testdata/original-bzip2/part-a.bz2") });
+    try tmp.dir.writeFile(io, .{ .sub_path = "part-b.bz2", .data = @embedFile("testdata/original-bzip2/part-b.bz2") });
+    try tmp.dir.writeFile(io, .{ .sub_path = "blocks.json", .data = @embedFile("testdata/original-bzip2/blocks.json") });
+    var root_buffer: [4096]u8 = undefined;
+    const root = root_buffer[0..try tmp.dir.realPath(io, &root_buffer)];
+    const path = try std.fs.path.join(a, &.{ root, "blocks.json" });
+    defer a.free(path);
+    var reader = try SourceReader.openOriginalBzip2(io, a, a, path, root, .raw_xml, "", null);
+    defer reader.deinit();
+    try std.testing.expectEqual(@as(?u64, 2), reader.original_bzip2.?.parsed.value.source_pages);
+    const first_len = reader.original_bzip2.?.parsed.value.parts[0].xml_bytes;
+    const raw = try reader.readAlloc(a, .{ .raw_xml = .{ .offset = 0, .len = @intCast(first_len) } });
+    defer a.free(raw);
+    var pages: PageIterator = .{ .bytes = raw };
+    const page = (try pages.next()).?;
+    try std.testing.expectEqualStrings("first", page.title_raw.?);
+    try std.testing.expectEqual(@as(?u64, 216000), page.revision_size);
+    const attribute = " xml:space=\"preserve\"";
+    const at = std.mem.indexOf(u8, raw, attribute).?;
+    var no_space: std.ArrayList(u8) = .empty;
+    defer no_space.deinit(a);
+    try no_space.appendSlice(a, raw[0..at]);
+    try no_space.appendSlice(a, raw[at + attribute.len ..]);
+    var unproven: PageIterator = .{ .bytes = no_space.items };
+    try std.testing.expect((try unproven.next()).?.revision_size == null);
+    const text = page.text_raw.?;
+    try std.testing.expectEqual(@as(usize, 216000), text.len);
+    const pattern = "abcdefghijklmnopqrstuvwxyz0123456789";
+    for (text, 0..) |c, i| try std.testing.expectEqual(pattern[i % pattern.len], c);
+    const source_offset = @intFromPtr(text.ptr) - @intFromPtr(raw.ptr);
+    const tiny = try reader.readAlloc(a, .{ .raw_xml = .{ .offset = source_offset, .len = 36 } });
+    defer a.free(tiny);
+    const decoded = reader.original_bzip2.?.decoded_block_count;
+    const again = try reader.readAlloc(a, .{ .raw_xml = .{ .offset = source_offset, .len = 36 } });
+    defer a.free(again);
+    try std.testing.expectEqualStrings(pattern, tiny);
+    try std.testing.expectEqualStrings(pattern, again);
+    try std.testing.expectEqual(decoded, reader.original_bzip2.?.decoded_block_count);
+    const cross = try reader.readAlloc(a, .{ .raw_xml = .{ .offset = first_len - 12, .len = 24 } });
+    defer a.free(cross);
+    try std.testing.expectEqualStrings("/mediawiki>\n<mediawiki x", cross);
+    try std.testing.expectEqual(@as(usize, 5), reader.original_bzip2.?.decoded_block_count);
+    try std.testing.expectEqual(@as(usize, 216000), text.len);
+    try std.testing.expectEqual(@as(u8, 'a'), text[0]);
+    try std.testing.expectEqual(@as(u8, '9'), text[text.len - 1]);
+    try reader.original_bzip2.?.checkCurrent();
+}

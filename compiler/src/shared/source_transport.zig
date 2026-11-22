@@ -82,3 +82,27 @@ pub fn load(io: std.Io, a: std.mem.Allocator, root: []const u8, requested_dump: 
         !std.meta.eql(before, try pathIdentity(io, requested_dump))) return error.SourceTransportChanged;
     return .{ .descriptor = descriptor, .binding = .{ .kind = "bzip2-blocks", .descriptor_sha256 = selected_binding.descriptor_sha256, .block_directory_sha256 = selected_binding.block_directory_sha256 } };
 }
+
+// Only the explicit fresh extractor path uses this constructor. The ordinary
+// caller creates the descriptor before probe; completion/receipt publication is
+// still withheld until extraction and its original input checks have succeeded.
+pub fn forFreshExtraction(io: std.Io, a: std.mem.Allocator, root: []const u8, requested_dump: []const u8, source_directory: []const u8) !Selected {
+    const path = try std.fs.path.join(a, &.{ root, "source-transport.json" });
+    defer a.free(path);
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, a, .limited(16 * 1024));
+    defer a.free(bytes);
+    var descriptor = try std.json.parseFromSlice(Descriptor, a, bytes, .{ .allocate = .alloc_always });
+    errdefer descriptor.deinit();
+    const d = descriptor.value;
+    if (!std.mem.eql(u8, d.format, "wikidict-source-transport-v1") or !std.mem.eql(u8, d.transport, "bzip2-blocks") or
+        !std.fs.path.isAbsolute(d.block_directory) or !std.fs.path.isAbsolute(d.source_directory) or
+        std.mem.indexOfScalar(u8, d.block_directory, 0) != null or std.mem.indexOfScalar(u8, d.source_directory, 0) != null or
+        !std.mem.eql(u8, d.block_directory, requested_dump) or !std.mem.eql(u8, d.source_directory, source_directory)) return error.SourceTransportMismatch;
+    const before = try pathIdentity(io, requested_dump);
+    const directory_bytes = try std.Io.Dir.cwd().readFileAlloc(io, requested_dump, a, .limited(64 * 1024 * 1024));
+    defer a.free(directory_bytes);
+    if (!std.meta.eql(before, try pathIdentity(io, requested_dump))) return error.SourceTransportChanged;
+    return .{ .descriptor = descriptor, .binding = .{
+        .kind = "bzip2-blocks", .descriptor_sha256 = digest(bytes), .block_directory_sha256 = digest(directory_bytes),
+    } };
+}

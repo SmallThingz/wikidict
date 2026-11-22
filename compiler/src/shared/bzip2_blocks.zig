@@ -23,6 +23,7 @@ const Part = struct {
 const Directory = struct {
     format: []const u8,
     xml_bytes: u64,
+    source_pages: ?u64 = null,
     parts: []const Part,
     zstd_frame_bridge: ?Bridge = null,
 };
