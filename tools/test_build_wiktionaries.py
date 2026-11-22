@@ -149,6 +149,7 @@ class ShardSourceIdentityTests(PreparedToolsFixture):
             'build.zig':b'build graph', 'build.zig.zon':b'package dependencies',
             'src/producer.zig':b'ordinary producer', 'src/lua/runtime/abi.h':b'ABI layout',
             'tools/extraction_cache.py':b'production cache helper',
+            'tools/reviewed_language_aliases.json':b'{"records":[]}',
             'tools/corpus_controller.py':b'controller timing',
             'tools/test_corpus_controller.py':b'controller timing tests',
             'tools/native_qualification.py':b'standalone native qualification',
@@ -309,6 +310,7 @@ class ShardSourceIdentityTests(PreparedToolsFixture):
 
     def test_producer_abi_other_tests_and_input_changes_invalidate_native_state(self):
         changes=('src/producer.zig','src/lua/runtime/abi.h','tools/extraction_cache.py',
+                 'tools/reviewed_language_aliases.json',
                  'tools/test_other.py','tools/nested/corpus_controller.py',
                  'tools/nested/native_qualification.py','tools/nested/test_native_qualification.py','registry','dump')
         for changed in changes:

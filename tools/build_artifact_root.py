@@ -30,7 +30,7 @@ def repository_path(path, repository):
 
 
 EXECUTION_ROLES = ('state', 'output', 'raw', 'cache')
-PRODUCER_SOURCE_FILES = ('build.zig', 'build.zig.zon')
+PRODUCER_SOURCE_FILES = ('build.zig', 'build.zig.zon', 'tools/reviewed_language_aliases.json')
 PRODUCER_SOURCE_DIRECTORIES = ('src', 'tools')
 
 
