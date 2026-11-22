@@ -16,7 +16,7 @@ const web = path.dirname(fileURLToPath(import.meta.url));
 const repo = path.resolve(web, '../..');
 const widths = [1000, 640];
 if (process.argv.slice(2).join(' ') === '--help') {
-  console.log('node desktop/web/check-edition-layout.mjs INVENTORY.tsv NEW_OUTPUT_DIR EDITION... [--resume] [--pause-after-members N] [--scroll-review CASES.json] [--figure-witness FILE.json]');
+  console.log('node desktop/web/check-edition-layout.mjs INVENTORY.tsv NEW_OUTPUT_DIR EDITION... [--resume] [--compare-transport] [--pause-after-members N] [--scroll-review CASES.json] [--figure-witness FILE.json]');
   console.log('A fresh directory records an atomic checkpoint after each member. --resume reuses completed members under the same inputs and renderer. --pause-after-members N stops cleanly with exit 75 for a bounded run.');
   console.log('Reads an existing local edition inventory and its sibling Reader checks, then writes editions.jsonl, issues.jsonl, progress.jsonl and sampled viewport PNGs. Exit 2 means enumeration or a required layout check was incomplete.');
   process.exit(0);
@@ -31,6 +31,7 @@ function option(name, takesValue = false) {
 }
 const scrollFile = option('--scroll-review',true);
 const scrollCases = scrollFile ? JSON.parse(await readFile(scrollFile,'utf8')) : null;
+const compareTransport=option('--compare-transport');
 const resume = option('--resume');
 const pause = option('--pause-after-members', true);
 if (pause !== null) assert(/^[1-9]\d*$/.test(pause) && Number.isSafeInteger(Number(pause)));
@@ -112,16 +113,18 @@ async function journal(name) {
   };
 }
 const failures = await journal('issues'), summary = await journal('editions'), progress = await journal('progress');
-const productBundle = await build({stdin: {contents: "export {renderEntry} from './renderer.js'; export {mediaView,loadInlineImage,inlineImageActionURL} from './media.js';", resolveDir: web}, bundle: true, format: 'iife', globalName: 'Product', write: false});
+const productBundle = await build({stdin: {contents: "export {linkNameCandidate} from './check-edition-link-name.js'; export {renderEntry} from './renderer.js'; export {mediaView,loadInlineImage,inlineImageActionURL} from './media.js';", resolveDir: web}, bundle: true, format: 'iife', globalName: 'Product', write: false});
 const js = productBundle.outputFiles[0].text;
 const css = await readFile(path.join(web, 'style.css'), 'utf8');
 const font = await readFile(path.join(web, 'reader.ttf'));
 const browser = await chromium.launch({executablePath: process.env.CHROMIUM || '/opt/brave-bin/brave', headless: true, args: ['--no-sandbox']});
 
 // Executed inside the real browser. Only compact counts and defect samples cross back.
-async function inspectBatch({entries, edition, measureFigure = false}) {
+async function inspectBatch(payload) {
+  const {entries,edition,measureFigure=false}=typeof payload==='string' ? JSON.parse(payload) : payload;
   const normalize = value => value.normalize('NFC').replace(/\s+/gu, ' ').trim();
   const main = document.querySelector('main');
+  const batchStarted=performance.now();
   const results = [];
   for (const entry of entries) {
     try {
@@ -158,7 +161,7 @@ async function inspectBatch({entries, edition, measureFigure = false}) {
       const overflowing = [...cells].filter(el => el.scrollWidth > el.clientWidth + 1).length;
       if (overflowing) problems.cellOverflowCandidates = overflowing;
       const links = [...main.querySelectorAll('a')].filter(a => a.getClientRects().length);
-      const unnamed = links.filter(a => !normalize(a.textContent || a.getAttribute('aria-label') || [...a.querySelectorAll('img,[role="img"]')].map(x=>x.alt || x.getAttribute('aria-label') || '').join(' '))).length;
+      const unnamed = links.filter(a => !Product.linkNameCandidate(a)).length;
       if (unnamed) problems.unnamedLinkCandidates = unnamed;
       const walker = document.createTreeWalker(main, NodeFilter.SHOW_TEXT);
       let bodyNodes = 0, outside = 0, splitWords = 0, node;
@@ -197,11 +200,12 @@ async function inspectBatch({entries, edition, measureFigure = false}) {
       results.push({figure, problems, cells: cells.length, links: links.length, bodyNodes, keyboardLink: links.some(a => a.getAttribute('href')?.startsWith('#') && normalize(a.textContent))});
     } catch (e) { results.push({error: String(e.message || e)}); }
   }
+  if (results.length) results[0].batchExecutionMs=performance.now()-batchStarted;
   return results;
 }
 
-async function inspectEntries(page, edition, entries) {
-  try { return await page.evaluate(inspectBatch, {edition, entries}); }
+async function inspectEntries(page, edition, entries, encoded=JSON.stringify({edition,entries})) {
+  try { return await page.evaluate(inspectBatch, encoded); }
   catch (e) {
     if (page.isClosed() || !browser.isConnected()) throw e;
     if (entries.length === 1) return [{error: String(e.message || e)}];
@@ -276,7 +280,7 @@ async function activateLink(page,link) {
       await page.evaluate(id => document.getElementById(id) === document.activeElement, localTarget);
     const exactLocalHash = actions.length === 0 && localTarget && before.hash !== after.hash &&
       decodeURIComponent(after.hash.slice(1)) === localTarget && await page.evaluate(id=>!!document.getElementById(id),localTarget);
-    
+
     return {href, before, after, expectedParts, confirmedBy: exactDispatch ? 'matching dispatch' : exactLocalFocus ? 'focus moved to target' : exactLocalHash ? 'hash moved to target' : null,
       unconfirmed: !(exactDispatch || exactLocalFocus || exactLocalHash)};
 }
@@ -322,7 +326,7 @@ try {
   for (const file of inputPaths) sources[file] = await fileDigest(path.join(web,file));
   const binding = {version:1, selected, inventory:digest(inventoryBytes), reader:digest(readerTable), sources,
     bundle:digest(js), css:digest(css), font:digest(font), browser:browser.version(),
-    executable:await fileDigest(process.env.CHROMIUM || '/opt/brave-bin/brave'), node:process.version, widths, scrollCasesSha256:scrollCases ? digest(JSON.stringify(scrollCases)) : null, figureWitness:figureWitness ?? null};
+    executable:await fileDigest(process.env.CHROMIUM || '/opt/brave-bin/brave'), node:process.version, widths, compareTransport:!!compareTransport, scrollCasesSha256:scrollCases ? digest(JSON.stringify(scrollCases)) : null, figureWitness:figureWitness ?? null};
   let scrollDigest=saved?.scrollDigest ?? null;
   let witnessDigest = saved?.witnessDigest ?? null;
   const syncFile = async filename => {const f=await open(filename,'r'); try {await f.sync();} finally {await f.close();}};
@@ -383,6 +387,42 @@ try {
           const entry=decode(await source.read(row.offset,row.length),{...index.metadata,title:row.title}); entry.source_title=row.title;entry.source_edition=group.edition;
           const page=pages[widths.indexOf(j.width)];
           const [layout]=await page.evaluate(inspectBatch,{entries:[entry],edition:group.edition});
+          if (j.fileAction) {
+            const {href,name,box}=j.fileAction;
+            assert.equal(layout.problems.unnamedLinkCandidates ?? 0,0);
+            const link=page.getByRole('link',{name,exact:true});assert.equal(await link.count(),1);
+            const details=await link.evaluate(a=>({href:a.getAttribute('href'),text:a.textContent,box:a.getBoundingClientRect().toJSON(),label:a.getAttribute('aria-label')}));
+            assert.equal(details.href,href);assert.equal(details.label,name);assert.equal(details.text,' ');
+            for (const key of ['x','y','width','height']) assert.equal(details.box[key],box[key]);
+            const accessibility=await link.ariaSnapshot();const activation=await activateLink(page,link);assert.equal(activation.confirmedBy,'matching dispatch');
+            const fileSpans=[]; let inlineImages=0;
+            function visit(value) {
+              if (!value || typeof value!=='object') return;
+              if (value.image?.file===name.slice(5)) ++inlineImages;
+              if (value.kind==='link' && value.target===name) fileSpans.push({text:value.text,trail:value.trail,inlineImage:value.image?.file ?? null});
+              for (const child of Object.values(value)) visit(child);
+            }
+            visit(entry);const media=(entry.media || []).filter(item=>item.file===name.slice(5));
+            await reviewed.writeFile(JSON.stringify({edition:group.edition,member,...j,details,accessibility,activation,fileSpans,inlineImages,media})+'\n');
+            continue;
+          }
+          if (j.unnamedLinks) {
+            assert.equal(layout.problems.unnamedLinkCandidates,j.unnamedLinks);
+            const links=page.locator('main a');
+            const indexes=await links.evaluateAll(nodes=>nodes.flatMap((a,i)=>{
+              return a.getClientRects().length && !Product.linkNameCandidate(a) ? [i] : [];
+            }));
+            assert.equal(indexes.length,j.unnamedLinks);
+            for (const index of indexes) {
+              const link=links.nth(index);
+              const details=await link.evaluate(a=>({href:a.getAttribute('href'),tooltip:a.title,outer:a.outerHTML.slice(0,2048),bounds:a.getBoundingClientRect().toJSON()}));
+              details.accessibility=await link.ariaSnapshot();
+              await link.focus(); details.receivesFocus=await link.evaluate(a=>document.activeElement===a);
+              if (details.href?.startsWith('#')) details.activation=await activateLink(page,link);
+              await reviewed.writeFile(JSON.stringify({edition:group.edition,member,...j,index,...details})+'\n');
+            }
+            continue;
+          }
           assert.equal(layout.problems.outsideViewportCandidates,j.expected);
           const measured=await page.evaluate(inspectScroll);assert.equal(measured.outsideNodes,j.expected);
           if (measured.keyboardTarget) {
@@ -447,6 +487,7 @@ try {
     const screens = widths.map((_,i) => new Set(previous?.screens?.[i]));
     stat.layout ??= widths.map(width => ({width, bodyTextNodes:0, visibleLinks:0, tableCells:0, emptyBodyViews:0}));
     const priorSeconds=stat.elapsedSeconds ?? 0;
+    const costs=stat.costMs ??= {memberInput:0,readAndDecode:0,batchWall:0,batchBrowser:0,samples:0,batches:0};
     const firstMember = previous?.nextMember ?? 0;
     assert(Number.isSafeInteger(firstMember) && firstMember >= 0 && firstMember <= members.length);
     assert.equal(stat.completedMembers + stat.indexFailures,firstMember);
@@ -455,11 +496,13 @@ try {
       assert(!path.isAbsolute(member) && member.split('/').every(s => s && s !== '..' && s !== '.'));
       const filename = path.join(root,member);
       let source, index;
+      const memberStarted=performance.now();
       try {
         const blob = await openAsBlob(filename);
         assert.equal(blob.size, authority.size); assert.equal(await fileDigest(filename), authority.sha256);
         source = await openSource(blob); index = await buildIndex(source);
       } catch(e) { ++stat.indexFailures; await issue({member}, {archiveOrIndex: String(e.message||e)}); }
+      costs.memberInput+=performance.now()-memberStarted;
       if (index) {
         stat.indexed += index.rows.length;
         const kind = index.metadata.kind;
@@ -471,10 +514,25 @@ try {
         }
         async function flush() {
           if (!batch.length) return;
+          const entries=batch.map(r=>r.entry);
+          const encodeStarted=performance.now();
+          const encoded=JSON.stringify({edition,entries});
+          costs.encode=(costs.encode || 0)+performance.now()-encodeStarted;
           for (const [i, page] of pages.entries()) {
             const width = widths[i];
-            const entries = batch.map(r => r.entry);
-            const rows = await inspectEntries(page, edition, entries);
+            const batchStarted=performance.now();
+            const rows = await inspectEntries(page,edition,entries,encoded);
+            const encodedMs=performance.now()-batchStarted;
+            if (compareTransport && entries.length>=12 && !stat.transportParity?.some(v=>v.width===width)) {
+              const referenceStart=performance.now(),reference=await page.evaluate(inspectBatch,{edition,entries});
+              const objectMs=performance.now()-referenceStart;
+              const metricsOnly=rows=>rows.map(({batchExecutionMs,...metrics})=>metrics);
+              assert.deepEqual(metricsOnly(rows),metricsOnly(reference),'Batch transport changed layout');
+              (stat.transportParity ??= []).push({width,member,rows:rows.length,encodedBytes:Buffer.byteLength(encoded),encodedMs,objectMs,
+                encodedBrowserMs:rows[0].batchExecutionMs,objectBrowserMs:reference[0].batchExecutionMs});
+            }
+            costs.batchWall+=encodedMs; ++costs.batches;
+            for (const metrics of rows) costs.batchBrowser+=metrics.batchExecutionMs || 0;
             assert.equal(rows.length, batch.length);
             for (const [n, metrics] of rows.entries()) {
               const {entry, identity} = batch[n];
@@ -502,7 +560,9 @@ try {
               screens[i].add('first'); screens[i].add(reason);
               if (metrics.keyboardLink) screens[i].add('keyboard');
               try {
+                const sampleStarted=performance.now();
                 const frame = await sample(page, {edition, entries:[entry]}, `${edition}-${width}-${reason}.png`, metrics.keyboardLink);
+                costs.samples+=performance.now()-sampleStarted;
                 stat.samples.push({...where, reason, ...frame});
                 if (frame.renderError || frame.keyboard?.unconfirmed) await issue(where, {sample: frame.renderError || 'Keyboard activation unconfirmed'});
               } catch(e) {await issue(where, {sample: String(e.message || e)});}
@@ -517,13 +577,15 @@ try {
           // A single oversized entry still gets its own batch.
           if (batch.length && (batch.length >= 24 || batchBytes + row.length > 256*1024)) await flush();
           try {
-            const payload = await source.read(row.offset,row.length);
+            const readStarted=performance.now();
+          const payload = await source.read(row.offset,row.length);
             const alias = index.metadata.kind === 'alias' ? decodeAlias(payload, row.raw_key ?? row.title) : null;
             const entry = alias ? alias.entry : decode(payload, {...index.metadata, title:row.title});
             // A raw alias presentation and its destination have distinct stored bodies.
             entry.source_edition = edition;
             entry.source_title = alias ? alias.alias.source_title : ['language','supplemental'].includes(index.metadata.kind) ? row.title : null;
             batch.push({entry,identity}); batchBytes += row.length; ++stat.decoded;
+            costs.readAndDecode+=performance.now()-readStarted;
           } catch(e) {await issue(identity,{decodeError: String(e.message || e)});}
         }
         await flush(); ++stat.completedMembers; await checkpointThrough(index.rows.length - 1);

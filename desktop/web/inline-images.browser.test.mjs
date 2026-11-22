@@ -7,6 +7,22 @@ const media=await build({entryPoints:[new URL('./media.js',import.meta.url).path
 const browser=await chromium.launch({executablePath:process.env.CHROMIUM||'/opt/brave-bin/brave',headless:true,args:['--no-sandbox']});
 try{
  const page=await browser.newPage();await page.route('**/*',r=>r.abort());await page.setContent('<main></main>');await page.addScriptTag({content:renderer.outputFiles[0].text});await page.addScriptTag({content:media.outputFiles[0].text});
+ const names = await page.evaluate(() => {
+   const main = document.querySelector('main');
+   const action = {kind:'link',target:'File:Sugar-485057.jpg',text:' ',trail:''};
+   const values = [action,{...action,text:'Sugar caption'},{...action,tooltip:'Authored tooltip'},
+     {...action,target_fragment:'detail'},{...action,target:'Ordinary target'}];
+   main.replaceChildren(Renderer.spans(values,()=>{},true));
+   return [...main.querySelectorAll('a')].map(a=>[a.getAttribute('aria-label'),a.textContent,a.title]);
+ });
+ assert.deepEqual(names,[['File:Sugar-485057.jpg',' ',''],[null,'Sugar caption',''],[null,' ','Authored tooltip'],
+   ['File:Sugar-485057.jpg#detail',' ',''],[null,' ','']]);
+ assert.equal(await page.getByRole('link',{name:'File:Sugar-485057.jpg',exact:true}).count(),1);
+ assert.equal(await page.getByRole('link',{name:'Sugar caption',exact:true}).count(),1);
+ assert.equal(await page.getByRole('link',{name:'Authored tooltip',exact:true}).count(),1);
+ assert.match(await page.getByRole('link',{name:'Authored tooltip',exact:true}).ariaSnapshot(),/link "Authored tooltip"/);
+
+ if (!process.argv.includes('--file-action-names-only')) {
  if(process.env.WIKIDICT_WEB_IMAGE_THEME_ONLY!=='1'&&process.env.WIKIDICT_WEB_CAPTION_ONLY!=='1'){
  if(process.env.WIKIDICT_WEB_RICH_ONLY!=='1'){
  const disabled=await page.evaluate(async()=>{
@@ -392,4 +408,5 @@ try{
  }
  assert.equal(await page.evaluate(()=>JSON.stringify(captionEntry)===captionBefore),true);assert.equal(await page.evaluate(()=>captionCalls),2);
  await (await import('node:fs/promises')).writeFile(new URL('../artifacts/web/caption10-observations.json',import.meta.url),JSON.stringify({captionObservations,sourceUnchanged:true,metadataAndBlobRequests:2,explicitLowContrastColorPreserved:true},null,2)+'\n');
+ }
 }finally{await browser.close();}
