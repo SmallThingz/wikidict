@@ -126,3 +126,79 @@ export function validateContainerBlock(block,options){
     if(!child||child.kind==='heading'||child.style?.margins?.top.value||child.style?.margins?.bottom.value)containerError();
   }
 }
+
+// DPRS retains explicit base/annotation associations; no text flattening or
+// annotation-offset inference is permitted at the reader boundary.
+const rubyFailure=()=>{throw Error('Invalid compiled ruby');};
+const rubyObject=(value,keys,required=keys)=>{
+  if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).some(k=>!keys.includes(k))||required.some(k=>!Object.hasOwn(value,k)))rubyFailure();
+};
+const rubyArray=value=>{if(!Array.isArray(value)||value.length>1048576)rubyFailure();};
+const rubyString=value=>{if(typeof value!=='string'||/[\ud800-\udfff]/u.test(value))rubyFailure();};
+const rubyRGB=value=>{if(value!=null&&(typeof value!=='string'||!/^#[0-9a-f]{6}$/.test(value)))rubyFailure();};
+export function validateRubyOwner(value){
+  rubyObject(value,['font','direction','inline_style','foreground','background']);
+  const font=value.font;const flags=['small','superscript','subscript','font_normalized','bold','italic','code'];
+  rubyObject(font,['font_scale','font_scale_basis',...flags,'language','classes','role','font_features','font_family'],[...flags,'language','classes','role','font_features']);
+  for(const name of flags)if(typeof font[name]!=='boolean')rubyFailure();
+  for(const name of ['language','classes']){rubyString(font[name]);if(font[name].includes('\0'))rubyFailure();}
+  if(!['normal','label','pronunciation','headword','example','quotation','citation','reference'].includes(font.role))rubyFailure();
+  const basis=font.font_scale_basis??'context';if(!['context','normal_body','css_px'].includes(basis))rubyFailure();
+  if(font.font_scale==null){if(basis!=='context'||font.font_normalized)rubyFailure();}
+  else if(typeof font.font_scale!=='number'||!Number.isFinite(font.font_scale)||font.font_scale<0||font.font_scale>3.4028234663852886e38||(font.font_normalized&&basis==='context'))rubyFailure();
+  if(font.font_features!=null||font.font_family!=null)throw Error('Unsupported ruby owner typography');
+  if(value.inline_style!=null){
+    const style=value.inline_style;rubyObject(style,['decoration','line_height','baseline_shift','font_normalized','cursor','wrap'],['decoration','line_height','baseline_shift','font_normalized','cursor']);
+    if(style.decoration!=null||style.baseline_shift!=null||style.cursor!=null||style.wrap!=null)throw Error('Unsupported ruby owner inline style');
+    if(typeof style.font_normalized!=='boolean'||(style.font_normalized&&!font.font_normalized))rubyFailure();
+    if(style.line_height==null){if(!style.font_normalized)rubyFailure();}
+    else{
+      const height=style.line_height;rubyObject(height,['computed','font_relative'],[]);if(Object.keys(height).length!==1)rubyFailure();
+      if(height.computed){const n=height.computed;rubyObject(n,['value','font_scale_basis']);if(!Number.isFinite(n.value)||n.value<0||!['normal_body','css_px'].includes(n.font_scale_basis))rubyFailure();}
+      else{
+        const n=height.font_relative;rubyObject(n,['factor','font']);if(!Number.isFinite(n.factor)||n.factor<0)rubyFailure();
+        const same=(a,b)=>{const keys=new Set([...Object.keys(a),...Object.keys(b)]);return [...keys].every(k=>(a[k]??(k==='font_scale_basis'?'context':null))===(b[k]??(k==='font_scale_basis'?'context':null)));};
+        if(!same(n.font,font))rubyFailure();
+      }
+    }
+  }
+  if(!['','ltr','rtl','auto'].includes(value.direction))rubyFailure();rubyRGB(value.foreground);rubyRGB(value.background);
+}
+export function validateRuby(value,depth=0,state={items:0}){
+  if(depth>=16||++state.items>1048576)rubyFailure();rubyObject(value,['segments']);rubyArray(value.segments);if(!value.segments.length)rubyFailure();
+  const children=(spans,gap=false)=>{
+    rubyArray(spans);
+    for(const span of spans){
+      if(++state.items>1048576||!span||!['text','link','external_link'].includes(span.kind)||span.image!=null||span.audio_control!=null||span.inline_padding_group!=null||span.inline_action_group!=null||span.inline_box_group!=null||span.clipped_absolute!=null)rubyFailure();
+      for(const name of ['text','target','trail','language','classes','direction','explanation'])rubyString(span[name]??'');
+      if(span.kind==='text'?!!span.target:!span.target)rubyFailure();
+      if((span.classes??'').split(/[ \t\r\n\f]+/).some(token=>token==='wikidict-media'||token.startsWith('wikidict-media-file-')))rubyFailure();
+      if(!['','ltr','rtl','auto'].includes(span.direction??''))rubyFailure();rubyRGB(span.foreground);rubyRGB(span.background);
+      if(span.target_fragment!=null){if(span.kind!=='link')rubyFailure();rubyString(span.target_fragment);}
+      if(span.tooltip!=null)rubyString(span.tooltip);
+      if(span.inline_style!=null||span.font_features!=null||span.font_family!=null||span.link_paint!=null)throw Error('Unsupported ruby child typography');
+      if(gap){if(span.kind!=='text'||span.target_fragment!=null||span.trail||span.ruby!=null||/[^ \t\n\r\f]/u.test(span.text))rubyFailure();}
+      else if(/[\t\n\r\f]/u.test((span.text??'')+(span.trail??'')))rubyFailure();
+      if(span.ruby!=null){validateRubySpan(span);validateRuby(span.ruby,depth+1,state);}
+    }
+  };
+  value.segments.forEach((segment,segmentIndex)=>{
+    rubyObject(segment,['gap_before','bases','annotations']);children(segment.gap_before,true);if(segmentIndex===0&&segment.gap_before.length)rubyFailure();rubyArray(segment.bases);rubyArray(segment.annotations);if(!segment.bases.length)rubyFailure();
+    segment.bases.forEach((base,index)=>{if(++state.items>1048576)rubyFailure();rubyObject(base,['owner','gap_before','spans']);validateRubyOwner(base.owner);children(base.gap_before,true);if(index===0&&base.gap_before.length)rubyFailure();children(base.spans);});
+    let level=0,end=0;
+    segment.annotations.forEach((annotation,index)=>{
+      if(++state.items>1048576)rubyFailure();rubyObject(annotation,['base_start','base_count','level','owner','gap_before','spans','fallback_before','fallback_after','explicit_fallback']);
+      for(const name of ['base_start','base_count','level'])if(!Number.isInteger(annotation[name])||annotation[name]<0||annotation[name]>0xffffffff)rubyFailure();
+      if(!annotation.base_count||annotation.base_start+annotation.base_count>segment.bases.length||typeof annotation.explicit_fallback!=='boolean')rubyFailure();
+      if(index===0){if(annotation.level!==0||annotation.gap_before.length)rubyFailure();}
+      else if(annotation.level!==level){if(annotation.level!==level+1||annotation.gap_before.length)rubyFailure();end=0;}
+      if(annotation.base_start<end)rubyFailure();level=annotation.level;end=annotation.base_start+annotation.base_count;
+      validateRubyOwner(annotation.owner);children(annotation.gap_before,true);for(const name of ['spans','fallback_before','fallback_after'])children(annotation[name]);
+      if(!annotation.explicit_fallback&&(annotation.fallback_before.length||annotation.fallback_after.length))rubyFailure();
+    });
+  });
+}
+export function validateRubySpan(span){
+  if(span.kind!=='text'||span.text!==''||span.target!==''||(span.trail??'')!==''||span.target_fragment!=null||span.image!=null||span.inline_padding_group!=null||span.inline_action_group!=null||span.inline_box_group!=null||span.clipped_absolute!=null||span.audio_control!=null)rubyFailure();
+  if(span.inline_style!=null||span.font_features!=null||span.font_family!=null||span.link_paint!=null)throw Error('Unsupported ruby root typography');
+}

@@ -1,0 +1,46 @@
+{
+  "passed": true,
+  "argv": [
+    "/home/a/wikidict-ml-current01/native-fleet01/install/bin/wikidict",
+    "export",
+    "--root",
+    "/home/a/.tmp/wikidict-web-ruby01/witness02/dictionary",
+    "--format",
+    "json",
+    "--language",
+    "Unclassified",
+    "--case-sensitive",
+    "--",
+    "女ぬ子"
+  ],
+  "native_returncode": 0,
+  "metadata": {
+    "title": "女ぬ子",
+    "kind": "language",
+    "language": "Unclassified",
+    "language_code": ""
+  },
+  "payload": {
+    "path": "/home/a/.tmp/wikidict-web-ruby01/witness02/payload01.bin",
+    "bytes": 8606,
+    "sha256": "2a96d866d3398b5fd3c9ad3a7e4856eeef73e61b23719d50e0693d98c1fc86dd"
+  },
+  "native_response": {
+    "path": "/home/a/.tmp/wikidict-web-ruby01/witness02/native-response01.json",
+    "bytes": 121707,
+    "sha256": "50ca74c6a3662bd94d8fd136b7fb1ce6943156c545e4d1ca6948fa50a85d6605"
+  },
+  "source_selection": {
+    "path": "/home/a/.tmp/wikidict-web-ruby01/witness02/selection01.json",
+    "bytes": 1261,
+    "sha256": "301cace69614ff512ca5f72d4a65834934effe46ac2d1a7ec729c43f06a84aaf"
+  },
+  "source_member": {
+    "bytes": 38928,
+    "path": "/mnt/downloads/dev/wikidict/data/corpus-campaign-current01/artifacts/dictionaries-blk-kayan01/blkwiktionary/20261001/languages/1372a3810da5224a8d1007de41ff5f9bc16030f824f09ed65e954e00a1ade1a6.wikblb.xz",
+    "sha256": "f44da1ca364218cad67bb605b306c8102703b8ca9acb98e6d3720ce038dde154"
+  },
+  "no_native_compile": true,
+  "no_inventory_rescan": true,
+  "private_view": "exact original member plus exact selected heading row; original source never modified"
+}

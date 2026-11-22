@@ -5,7 +5,7 @@ const contrastInk=background=>{
   const luminance=.2126*rgb[0]+.7152*rgb[1]+.0722*rgb[2];
   return (luminance+.05)/.05>=1.05/(luminance+.05)?'#000000':'#ffffff';
 };
-import {safeURL,linkTargetParts,bookSourcesURL,validateContainerBlock,validateCellMetrics} from './validate.js';
+import {safeURL,linkTargetParts,bookSourcesURL,validateContainerBlock,validateCellMetrics,validateRuby,validateRubyOwner,validateRubySpan} from './validate.js';
 import {previewBlocks} from './preview.js';
 const node = (tag, text, cls) => { const el = document.createElement(tag); if (text != null) el.textContent = text; if (cls) el.className = cls; return el; };
 let explanationSequence = 0;
@@ -75,9 +75,15 @@ function poemSpans(values,onLink,explanations,withinSummary,cellBackground) {
 }
 // Normal-body basis shares the same configured size as .block in style.css.
 // Keep context-relative em sizing for legacy and inline heading spans.
-function semanticFontSize(span) {
+function semanticFontSize(span,declaringFont=null) {
   const basis=span.font_scale_basis===undefined?'context':span.font_scale_basis,scale=span.font_scale;
   if(!['context','normal_body','css_px'].includes(basis))throw new Error('invalid semantic font scale basis');
+  if(declaringFont!==null&&basis==='context'){
+    if((declaringFont.font_scale_basis??'context')!=='context')throw Error('Unsupported ruby contextual font basis');
+    const owner=declaringFont.font_scale??1;if(!Number.isFinite(owner)||owner<=0)throw Error('Unsupported ruby declaring font size');
+    const ratio=(scale??1)/owner;if(!Number.isFinite(ratio)||ratio<0)throw Error('Invalid ruby font ratio');
+    return ratio===1?null:ratio===0?'0px':`min(10000px, ${ratio}em)`;
+  }
   if(scale===undefined||scale===null){if(basis!=='context')throw new Error('normal body scale is absent');return null;}
   if(typeof scale!=='number'||!Number.isFinite(scale)||scale<0)throw new Error('invalid semantic font scale');
   const size=basis==='css_px'?`${scale}px`:basis==='normal_body'?`calc(var(--wikidict-normal-body-size) * ${scale})`:(scale===1?null:`${scale}em`);
@@ -101,20 +107,53 @@ function inlineImageElement(image,load,options={}){
   if(options.figureImage)el.style.border='0';
   el.dataset.mediaState='pending';load?.(el,image,options.sizing==null?{}:{sizing:options.sizing});return el;
 }
-export function spans(values = [], onLink = () => {}, preserve = false, explanations = null, withinSummary = false, cellBackground = null) {
+function rubyOwnerStyle(el,owner,contextFont){
+  validateRubyOwner(owner);const font=owner.font;
+  if(font.small||font.superscript||font.subscript)throw Error('Unsupported ruby owner script metrics');
+  const size=semanticFontSize(font,contextFont);el.style.fontSize=size??'inherit';el.style.fontWeight=font.bold?'bold':'normal';el.style.fontStyle=font.italic?'italic':'normal';
+  if(font.code)el.style.fontFamily='monospace';if(font.language)el.lang=font.language;
+  if(owner.direction){el.dir=owner.direction;el.style.unicodeBidi='isolate';}
+  if(owner.foreground!=null)el.style.color=owner.foreground;if(owner.background!=null)el.style.backgroundColor=owner.background;
+  const height=owner.inline_style?.line_height;
+  if(height?.font_relative)el.style.lineHeight=String(height.font_relative.factor);
+  if(height?.computed){const n=height.computed;el.style.lineHeight=n.font_scale_basis==='css_px'?n.value+'px':`calc(var(--wikidict-normal-body-size) * ${n.value})`;}
+}
+function rubySpans(value,onLink,explanations,withinSummary,cellBackground,contextFont){
+  validateRuby(value);
+  if(value.segments.some(segment=>segment.annotations.some(annotation=>annotation.level!==0)))throw Error('Unsupported multilevel ruby association');
+  const out=document.createDocumentFragment();
+  const children=(values,font=contextFont)=>spans(values,onLink,true,explanations,withinSummary,cellBackground,font);
+  const base=value=>{const el=node('span',null,'compiled-ruby-base');rubyOwnerStyle(el,value.owner,contextFont);el.append(children(value.spans,value.owner.font));return el;};
+  for(const segment of value.segments){
+    out.append(children(segment.gap_before));let index=0;
+    for(const annotation of segment.annotations){
+      while(index<annotation.base_start){out.append(children(segment.bases[index].gap_before),base(segment.bases[index]));index++;}
+      const ruby=node('ruby',null,'compiled-ruby');ruby.style.rubyPosition='over';
+      const end=annotation.base_start+annotation.base_count;
+      while(index<end){ruby.append(children(segment.bases[index].gap_before),base(segment.bases[index]));index++;}
+      if(annotation.explicit_fallback){const rp=node('rp');rp.append(children(annotation.fallback_before));ruby.append(rp);}
+      const rt=node('rt',null,'compiled-ruby-annotation');rubyOwnerStyle(rt,annotation.owner,contextFont);rt.append(children(annotation.gap_before,annotation.owner.font),children(annotation.spans,annotation.owner.font));ruby.append(rt);
+      if(annotation.explicit_fallback){const rp=node('rp');rp.append(children(annotation.fallback_after));ruby.append(rp);}
+      out.append(ruby);
+    }
+    while(index<segment.bases.length){out.append(children(segment.bases[index].gap_before),base(segment.bases[index]));index++;}
+  }
+  return out;
+}
+export function spans(values = [], onLink = () => {}, preserve = false, explanations = null, withinSummary = false, cellBackground = null, rubyFontContext = null) {
   for(const value of values)if(value.target_fragment!=null){if(value.kind!=='link')throw Error('Invalid target fragment kind');linkTargetParts(value.target,value.target_fragment);}
   if (!preserve && values.some(isPoem)) return poemSpans(values,onLink,explanations,withinSummary,cellBackground);
   const fragment = document.createDocumentFragment();
   const compact=[];
-  const scaled=span=>semanticFontSize(span)!==null;
-  values.forEach(value=>{semanticFontSize(value);if(value.image&&(value.text!==''||(value.trail??'')!==''||!['text','link','external_link'].includes(value.kind)||(value.kind==='text'?!!value.target:!value.target)))throw Error('Invalid inline image action');});
+  const scaled=span=>semanticFontSize(span,rubyFontContext)!==null;
+  values.forEach(value=>{semanticFontSize(value,rubyFontContext);if(value.ruby!=null){validateRubySpan(value);validateRuby(value.ruby);}if(value.image&&(value.text!==''||(value.trail??'')!==''||!['text','link','external_link'].includes(value.kind)||(value.kind==='text'?!!value.target:!value.target)))throw Error('Invalid inline image action');});
   const blank=value=>!(value||'').includes('\u00a0')&&!(value||'').trim();
   for(const span of values){
     if(span.kind==='line_break' && !span.trail && (!compact.length||compact.at(-1).kind==='line_break'))continue;
-    if(!span.image&&!scaled(span)&&!canonicalRGB(span.background)&&span.kind==='text'&&blank(span.text)&&blank(span.trail)&&(!compact.length||compact.at(-1).kind==='line_break'))continue;
+    if(!span.ruby&&!span.image&&!scaled(span)&&!canonicalRGB(span.background)&&span.kind==='text'&&blank(span.text)&&blank(span.trail)&&(!compact.length||compact.at(-1).kind==='line_break'))continue;
     compact.push(span);
   }
-  while(compact.length&&!compact.at(-1).image&&!scaled(compact.at(-1))&&!canonicalRGB(compact.at(-1).background)&&((compact.at(-1).kind==='line_break'&&blank(compact.at(-1).trail))||(blank(compact.at(-1).text)&&blank(compact.at(-1).trail))))compact.pop();
+  while(compact.length&&!compact.at(-1).ruby&&!compact.at(-1).image&&!scaled(compact.at(-1))&&!canonicalRGB(compact.at(-1).background)&&((compact.at(-1).kind==='line_break'&&blank(compact.at(-1).trail))||(blank(compact.at(-1).text)&&blank(compact.at(-1).trail))))compact.pop();
   const visible = preserve||explanations?.preserveFlowSpacing?values:compact, described = new Map();
   for (let i=0;i<visible.length;) {
     const explanation=visible[i].explanation;
@@ -147,11 +186,13 @@ export function spans(values = [], onLink = () => {}, preserve = false, explanat
     if (span.kind === 'line_break') {
       const trail=trailNode(span,i);
       if(scaled(span)){
-        const wrapper=node('span');wrapper.style.fontSize=semanticFontSize(span);wrapper.append(trail);fragment.append(node('br'),wrapper);
+        const wrapper=node('span');wrapper.style.fontSize=semanticFontSize(span,rubyFontContext);wrapper.append(trail);fragment.append(node('br'),wrapper);
       }else fragment.append(node('br'),trail);
       continue;
     }
     let el = node('span', span.text || '');
+    if(span.ruby!=null)el.append(rubySpans(span.ruby,onLink,explanations,withinSummary,cellBackground,span));
+    if(rubyFontContext){el.style.fontWeight=span.bold?'bold':'normal';el.style.fontStyle=span.italic?'italic':'normal';}
     if(span.image){const image=inlineImageElement(span.image,explanations?.inlineImage,{sizing:explanations?.figureSizing,figureImage:explanations?.figureImage});el.append(span.image.map?mappedImage(image,span.image,onLink,explanations):image);}
     if(inkFor(span))el.style.color=inkFor(span);
     if(!canonicalRGB(span.foreground)&&inkFor(span)&&((span.kind==='link'&&(span.target||span.target_fragment))||(span.kind==='external_link'&&safeURL(span.target))))el.style.textDecoration='underline';
@@ -181,7 +222,7 @@ export function spans(values = [], onLink = () => {}, preserve = false, explanat
     }
     if(described.has(i) && el.tagName==='A')el.setAttribute('aria-describedby',described.get(i));
     const trail=trailNode(span,i);
-    const fontSize=semanticFontSize(span);
+    const fontSize=semanticFontSize(span,rubyFontContext);
     if(span.tooltip!=null){if(typeof span.tooltip!=='string')throw Error('Invalid compiled tooltip');el.title=span.tooltip;}
     if(fontSize!==null){
       const scaled=node('span');scaled.style.fontSize=fontSize;
@@ -217,7 +258,7 @@ function destination(el, value, legacy = '') {
 }
 function legacyDestinations(entry) {
   const candidates = [], counts = new Map();
-  if (['DPR5','DPR6','DPR7','DPR8','DPR9','DPRA','DPRB','DPRC','DPRD','DPRE','DPRF','DPRG','DPRH','DPRI','DPRJ','DPRK','DPRL','DPRM'].includes(entry.presentation_version)) return new Map();
+  if (['DPR5','DPR6','DPR7','DPR8','DPR9','DPRA','DPRB','DPRC','DPRD','DPRE','DPRF','DPRG','DPRH','DPRI','DPRJ','DPRK','DPRL','DPRM','DPRS'].includes(entry.presentation_version)) return new Map();
   const add = (value, label) => {
     if (value.anchor || value.anchor_fallback) return;
     const id = label.replaceAll(' ','_');
@@ -264,6 +305,7 @@ function validateRichEntry(entry){
   const span=value=>{
     if(!value||typeof value!=='object')richError();
     if(value.tooltip!=null)string(value.tooltip);
+    if(value.ruby!=null){validateRubySpan(value);validateRuby(value.ruby);}
     if(value.target_fragment!=null&&value.kind!=='link')richError();
     if(!value.image)return;
     const image=richObject(value.image,['file','width_px','height_px','alt','tooltip','border','map','dark_mode_filter'],['file']);
@@ -340,7 +382,7 @@ function validateRichEntry(entry){
     if(depth>16)richError();
     for(const block of array(values)){
       spanList(block.spans);const owner=richListKinds.has(block.kind)||(block.kind==='paragraph'&&!(block.depth||0)&&!block.list_path);
-      if(block.kind==='container'||block.container!=null){validateContainerBlock(block,{containerFonts:entry.presentation_version==='DPRM'});blocks(block.container.blocks,tableDepth,depth+1,inReference);}
+      if(block.kind==='container'||block.container!=null){validateContainerBlock(block,{containerFonts:['DPRM','DPRS'].includes(entry.presentation_version)});blocks(block.container.blocks,tableDepth,depth+1,inReference);}
       if(block.flow!=null){if(!owner||block.spans?.length||block.table!=null||block.feature!=null||block.figure!=null)richError();flow(block.flow,tableDepth,depth+1,inReference);}
       if(block.figure!=null){if(!owner||block.spans?.length||block.table!=null||block.feature!=null||block.style!=null)richError();figure(block.figure,tableDepth,depth,inReference);}
       if(block.style!=null){if(block.kind!=='paragraph'||block.depth||block.list_path||block.table!=null||block.feature!=null)richError();richObject(block.style,['margins','padding']);if(block.style.margins==null&&block.style.padding==null)richError();for(const key of ['margins','padding'])if(block.style[key]!=null)richEdges(block.style[key]);}

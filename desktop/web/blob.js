@@ -1,6 +1,6 @@
 // WIKBLB08 contains compiled semantic pages or typed DAL1 redirect envelopes.
 // A leading U+FEFF belongs to a compiled title or field, not a file BOM.
-import {validateContainerBlock,validateCellMetrics} from './validate.js';
+import {validateContainerBlock,validateCellMetrics,validateRuby,validateRubyOwner,validateRubySpan} from './validate.js';
 const utf8 = new TextDecoder('utf-8', {fatal:true,ignoreBOM:true});
 const kinds = ['language','thesaurus','citations','reconstruction','rhymes','sign_gloss','supplemental','alias'];
 const blocks = ['paragraph','blank','definition','example','quotation','list_item','list_detail','indent','term','heading','preformatted','rule','table','container'];
@@ -8,7 +8,7 @@ const validInlineImageFile=value=>typeof value==='string'&&value.length>0&&new T
 const roles = ['normal','label','pronunciation','headword','example','quotation','citation','reference'];
 const require = (ok, message='Invalid compiled dictionary') => { if (!ok) throw Error(message); };
 export function decode(bytes, metadata) {
-  let p=0, budget=1000000, explained=false, colored=false, anchored=false, painted=false, nested=false, ordered=false, scaled=false, based=false, referenceItems=false, referenceBlocks=false, imageBorder=false, aligned=false, componentTargets=false, dynamicCatalogue=false, tooltips=false, blockGeometry=false, rich=false, inlineTableStyles=false, containers=false, containerFonts=false, contentDepth=0, mapStringBudget=32*1024*1024;
+  let p=0, budget=1000000, explained=false, colored=false, anchored=false, painted=false, nested=false, ordered=false, scaled=false, based=false, referenceItems=false, referenceBlocks=false, imageBorder=false, aligned=false, componentTargets=false, dynamicCatalogue=false, tooltips=false, blockGeometry=false, rich=false, inlineTableStyles=false, containers=false, containerFonts=false, contentDepth=0, rubyDepth=0, rubyCount=0, rubyEnabled=false, mapStringBudget=32*1024*1024;
   const view=new DataView(bytes.buffer,bytes.byteOffset,bytes.byteLength);
   const take=n=>{require(n>=0 && n<=bytes.length-p);const start=p;p+=n;return bytes.subarray(start,p);};
   const byte=()=>take(1)[0], u16=()=>{const at=p;take(2);return view.getUint16(at,true);}, u32=()=>{const at=p;take(4);return view.getUint32(at,true);};
@@ -46,10 +46,41 @@ export function decode(bytes, metadata) {
     }
     if(componentTargets&&presence()){require(kind==='link','Invalid target fragment kind');s.target_fragment=string();}
     if(tooltips)s.tooltip=presence()?string():null;
+    if(rubyEnabled&&presence()){s.ruby=rubyValue();validateRubySpan(s);}
     ['bold','italic','code','small','superscript','subscript','strike','underline'].forEach((f,i)=>s[f]=!!(flags&(1<<i)));return s;
   };
   const spans=()=>list(tooltips?37:componentTargets?36:referenceBlocks?35:scaled?34:painted?33:colored?32:explained?31:27,spanValue);
   const styleLength=()=>{const unit=tag(['px','em']),at=p;take(4);const value=view.getFloat32(at,true);require(Number.isFinite(value)&&value>=0,'Invalid style length');return {unit,value};};
+  const rubyFontSnapshot=()=>{
+    const fields=byte();require((fields&~31)===0,'Invalid ruby font flags');
+    const value={small:!!(fields&2),superscript:!!(fields&4),subscript:!!(fields&8),font_normalized:!!(fields&16)};
+    if(fields&1){const scale=f32(),basis=tag(['context','normal_body','css_px']);require(Number.isFinite(scale)&&scale>=0);if(scale!==1||basis!=='context')value.font_scale=scale;if(basis!=='context')value.font_scale_basis=basis;}
+    const face=byte();require((face&~7)===0,'Unsupported ruby owner font policy');
+    value.bold=!!(face&1);value.italic=!!(face&2);value.code=!!(face&4);value.language=string();value.classes=string();value.role=tag(roles);value.font_features=null;
+    return value;
+  };
+  const rubyInlineStyle=()=>{
+    const fields=byte();require(fields!==0&&(fields&~10)===0,'Unsupported ruby owner inline style');
+    let line_height=null;
+    if(fields&2){const kind=tag(['computed','font_relative']);line_height=kind==='computed'?{computed:{value:f32(),font_scale_basis:tag(['context','normal_body','css_px'])}}:{font_relative:{factor:f32(),font:rubyFontSnapshot()}};}
+    return {decoration:null,line_height,baseline_shift:null,font_normalized:!!(fields&8),cursor:null};
+  };
+  const rubyOwner=()=>{
+    charge();require(bytes.length-p>=18);const font=rubyFontSnapshot(),direction=string(),inline_style=presence()?rubyInlineStyle():null;
+    const value={font,direction,inline_style,foreground:presence()?string():null,background:presence()?string():null};validateRubyOwner(value);return value;
+  };
+  const rubyValue=()=>{
+    require(rubyDepth<16&&contentDepth<16,'Ruby depth exceeds limit');rubyDepth++;contentDepth++;rubyCount++;
+    try{
+      const segments=list(38,()=>{
+        const gap_before=spans();const bases=list(26,()=>({gap_before:spans(),owner:rubyOwner(),spans:spans()}));
+        const annotations=list(47,()=>{
+          const base_start=u32(),base_count=u32(),level=u32(),owner=rubyOwner(),gap_before=spans(),values=spans(),fallback_before=spans(),fallback_after=spans(),flags=byte();
+          require((flags&~1)===0,'Invalid ruby annotation flags');return {base_start,base_count,level,owner,gap_before,spans:values,fallback_before,fallback_after,explicit_fallback:!!(flags&1)};
+        });return {gap_before,bases,annotations};
+      });const value={segments};validateRuby(value);return value;
+    }finally{rubyDepth--;contentDepth--;}
+  };
   const edges=()=>({top:styleLength(),right:styleLength(),bottom:styleLength(),left:styleLength()});
   const containerWidth=()=>{const kind=tag(['auto','length','fit_content']);return {[kind]:kind==='length'?{unit:tag(['px','em','percent']),value:f32()}: {}};};
   const containerMaxWidth=()=>presence()?{length:{unit:tag(['px','em','percent']),value:f32()}}:{none:{}};
@@ -176,12 +207,13 @@ export function decode(bytes, metadata) {
       value.container=content(()=>({style:containerStyle(),blocks:list(blockMinimum(),()=>block(tableDepth))}));
       validateContainerBlock(value,{containerFonts});
     }
+    if(rubyEnabled&&kind==='rule')require(byte()===0,'Unsupported ruby-record rule style');
     return value;
   };
   const contentContext=value=>['list_item','definition','example','quotation','term','list_detail','indent'].includes(value.kind)||(value.kind==='paragraph'&&value.depth===0&&value.path==='');
   const magic=utf8.decode(take(4));
-  require(magic==='DPR2'||magic==='DPR3'||magic==='DPR4'||magic==='DPR5'||magic==='DPR6'||magic==='DPR7'||magic==='DPR8'||magic==='DPR9'||magic==='DPRA'||magic==='DPRB'||magic==='DPRC'||magic==='DPRD'||magic==='DPRE'||magic==='DPRF'||magic==='DPRG'||magic==='DPRH'||magic==='DPRI'||magic==='DPRJ'||magic==='DPRK'||magic==='DPRL'||magic==='DPRM','Dictionary contains uncompiled records');
-  containerFonts=magic==='DPRM';containers=magic==='DPRL'||containerFonts;inlineTableStyles=magic==='DPRK'||containers;rich=magic==='DPRJ'||inlineTableStyles;blockGeometry=magic==='DPRI'||rich;tooltips=magic==='DPRH'||blockGeometry;dynamicCatalogue=magic==='DPRG'||tooltips;componentTargets=magic==='DPRF'||dynamicCatalogue;aligned=magic==='DPRE'||componentTargets;imageBorder=magic==='DPRD'||aligned;referenceBlocks=magic==='DPRC'||imageBorder;based=magic==='DPRB'||referenceBlocks;scaled=magic==='DPRA'||based;referenceItems=magic==='DPR9'||scaled;ordered=magic==='DPR8'||referenceItems;nested=magic==='DPR7'||ordered;if(nested)budget=1<<20;painted=magic==='DPR6'||nested;anchored=magic==='DPR5'||painted;colored=magic==='DPR4'||anchored;explained=magic!=='DPR2';
+  require(magic==='DPR2'||magic==='DPR3'||magic==='DPR4'||magic==='DPR5'||magic==='DPR6'||magic==='DPR7'||magic==='DPR8'||magic==='DPR9'||magic==='DPRA'||magic==='DPRB'||magic==='DPRC'||magic==='DPRD'||magic==='DPRE'||magic==='DPRF'||magic==='DPRG'||magic==='DPRH'||magic==='DPRI'||magic==='DPRJ'||magic==='DPRK'||magic==='DPRL'||magic==='DPRM'||magic==='DPRS','Dictionary contains uncompiled records');
+  rubyEnabled=magic==='DPRS';containerFonts=magic==='DPRM'||rubyEnabled;containers=magic==='DPRL'||containerFonts;inlineTableStyles=magic==='DPRK'||containers;rich=magic==='DPRJ'||inlineTableStyles;blockGeometry=magic==='DPRI'||rich;tooltips=magic==='DPRH'||blockGeometry;dynamicCatalogue=magic==='DPRG'||tooltips;componentTargets=magic==='DPRF'||dynamicCatalogue;aligned=magic==='DPRE'||componentTargets;imageBorder=magic==='DPRD'||aligned;referenceBlocks=magic==='DPRC'||imageBorder;based=magic==='DPRB'||referenceBlocks;scaled=magic==='DPRA'||based;referenceItems=magic==='DPR9'||scaled;ordered=magic==='DPR8'||referenceItems;nested=magic==='DPR7'||ordered;if(nested)budget=1<<20;painted=magic==='DPR6'||nested;anchored=magic==='DPR5'||painted;colored=magic==='DPR4'||anchored;explained=magic!=='DPR2';
   const entry={...metadata,presentation_version:magic,display_title:spans(),sections:list(anchored?17:9,()=>({level:byte(),title:string(),anchor:anchored?string():'',anchor_fallback:anchored?string():'',blocks:list(blockMinimum(),()=>block())})),preamble_spans:spans()};
   const childPath=(values,root)=>{
     const n=count(4);require(n<=16);let value=values[root];
@@ -214,6 +246,7 @@ export function decode(bytes, metadata) {
     return reference;
   });
   entry.media=list(9,()=>({file:string(),kind:tag(['image','audio']),caption:string()}));
+  if(rubyEnabled){require(byte()===0,'Unsupported ruby-record body feature');require(rubyCount>0,'DPRS requires ruby payload');}
   const images=[];
   const inspect=values=>{for(const span of values||[])if(span.image)images.push(span.image);};
   const inspectTable=value=>{inspect(value.caption);if(value.caption_blocks)inspectBlocks(value.caption_blocks);for(const row of value.rows)for(const cell of row.cells){inspect(cell.spans);if(cell.blocks)inspectBlocks(cell.blocks);if(cell.nested_table)inspectTable(cell.nested_table);}};
@@ -290,7 +323,7 @@ export async function buildIndex(source) {
       rows.push({title:alias.source_key,raw_key:title,source_kind:alias.source_kind,source_title:alias.source_title,offset:p,length});
     }else{
       const magic=utf8.decode(await recordBytes(4));
-      require(magic==='DPR2'||magic==='DPR3'||magic==='DPR4'||magic==='DPR5'||magic==='DPR6'||magic==='DPR7'||magic==='DPR8'||magic==='DPR9'||magic==='DPRA'||magic==='DPRB'||magic==='DPRC'||magic==='DPRD'||magic==='DPRE'||magic==='DPRF'||magic==='DPRG'||magic==='DPRH'||magic==='DPRI'||magic==='DPRJ'||magic==='DPRK'||magic==='DPRL'||magic==='DPRM');
+      require(magic==='DPR2'||magic==='DPR3'||magic==='DPR4'||magic==='DPR5'||magic==='DPR6'||magic==='DPR7'||magic==='DPR8'||magic==='DPR9'||magic==='DPRA'||magic==='DPRB'||magic==='DPRC'||magic==='DPRD'||magic==='DPRE'||magic==='DPRF'||magic==='DPRG'||magic==='DPRH'||magic==='DPRI'||magic==='DPRJ'||magic==='DPRK'||magic==='DPRL'||magic==='DPRM'||magic==='DPRS');
       rows.push({title,offset:p,length});
     }
     require(rows.length<=10000000);p+=length;
