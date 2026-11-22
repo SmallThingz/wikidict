@@ -3,7 +3,7 @@
 ## Repository rules
 
 - `main` is the only local branch. Work directly on it; do not create branches/worktrees unless the user explicitly asks.
-- Do not push unless the user explicitly asks.
+- Push verified source changes to `origin/main` as requested.
 - When using collaboration tools, activate follow-up work on an idle or completed agent with `followup_task`. `send_message` only delivers a message; it does not wake the agent. Check actual owner/task status before waiting for a review or job, and reuse the existing owner instead of starting a duplicate.
 - Do not publish GitHub releases, including prereleases, until the user explicitly approves publication again. The application is not production-ready until the user says it is; passing tests or packaging artifacts does not grant release approval.
 - Corpus builds budget 8 GiB independently of host free RAM. The default requires private cgroup limits; explicit `--resource-mode=watchdog` uses sampled best-effort memory/task limits, bounded CPU affinity and a finite deadline when the user accepts that fallback.
@@ -12,13 +12,13 @@
 - Incremental admission uses the new job's allocation plus its reserve against current available memory. Do not automatically add every already-admitted job's full maximum to that threshold. Reconcile owners and serialize the final check/start; this policy does not promise that all concurrent jobs can grow to their maximum simultaneously. A separate full-budget reservation policy must be explicitly selected, not silently inherited from a previous launcher.
 - Unless the user or a matched benchmark requires specific CPUs, use an available subset of the allowed CPUs before waiting solely on a historical affinity assignment. Verify actual owners, keep the same CPU count and all memory/task/time limits, and rebind the existing unstarted invocation; preserve its original configuration. Never change an admitted job's affinity or interrupt another owner to make room.
 - Qualify task-owned private candidates as soon as ownership, matching source, syntax and resource checks pass; independent source review can run alongside compilation and tests. Keep the required review and test evidence before canonical integration. Do not add serial approval handoffs for an unchanged runner or already-authenticated metadata.
-- When a corpus build uses the ordinary checkout fingerprint, coordinate edits against the files `_source_fingerprints` actually reads through the final publication check. It hashes `build.zig`, `build.zig.zon`, and matching source files throughout `src/` and `tools/`, including Python tests, even when every executed program has an explicit path and digest. A fresh expansion worker can use this path with retained native tools. Check the selected builder's `PROJECT` and source mode when handing off a running job. Private candidates outside that tree can proceed during the build.
+- When a corpus build uses the ordinary checkout fingerprint, coordinate edits against the files `_source_fingerprints` actually reads through the final publication check. It hashes `build.zig`, `build.zig.zon`, and matching source files throughout `compiler/src/`, `compiler/tools/` and `renderer/src/`, including Python tests, even when every executed program has an explicit path and digest. A fresh expansion worker can use this path with retained native tools. Check the selected builder's `PROJECT` and source mode when handing off a running job. Private candidates outside that tree can proceed during the build.
 - Cleanup may signal only individually verified task-owned PIDs with matching start times and exclusive job ownership. Never signal process groups, ancestors, RD, plugins, servers, tunnels or shared infrastructure. Preserve an unknown cleanup outcome rather than targeting an unverified process.
 - Make regular, small commits after coherent validated steps. Stage only files owned by the current task; preserve unrelated shared dirty work.
 - Keep temporary files under `.tmp/` and remove them before finishing.
-- For focused Zig tests, pass the selected `prepare-tests` arguments to `test_cache_report_command` in `tools/native_qualification.py`. For named Encoder or Tools tests, use `-Dprepare-test-group=encoder` or `-Dprepare-test-group=tools`. Physical partitions such as `tools_core` supply their own filters. Set `ZIG_GLOBAL_CACHE_DIR` in the child environment and pass the local path with `--cache-dir`. Run the returned `qualification-cache-artifacts` command and use its reported executable for each group's test discovery and execution. This avoids a second ELF in each run directory. When a diagnostic needs a standalone `-femit-bin` copy, release it after the last borrower finishes and keep the source, test results and failure output.
+- For focused Zig tests, pass the selected `prepare-tests` arguments to `test_cache_report_command` in `compiler/tools/native_qualification.py`. For named Encoder or Tools tests, use `-Dprepare-test-group=encoder` or `-Dprepare-test-group=tools`. Physical partitions such as `tools_core` supply their own filters. Set `ZIG_GLOBAL_CACHE_DIR` in the child environment and pass the local path with `--cache-dir`. Run the returned `qualification-cache-artifacts` command and use its reported executable for each group's test discovery and execution. This avoids a second ELF in each run directory. When a diagnostic needs a standalone `-femit-bin` copy, release it after the last borrower finishes and keep the source, test results and failure output.
 - `.tmp/` is shared by long-running qualification jobs. Never delete it wholesale; remove only task-owned paths after checking that no live process owns them and that any required acceptance audit has completed.
-- Keep shared core, compiler and CLI/TUI code under `src/`, native applications under `apps/desktop/` and `apps/android/`, and build/integration utilities under `tools/`. Preserve the imported application histories and follow their local instructions.
+- Keep producer code and tooling under `compiler/`, the shared format and readers under `renderer/`, and the apps under `desktop/` and `android/`. Preserve the imported application histories and follow their local instructions.
 - Delete dead experiments and compatibility layers instead of parking alternate architectures in the repository.
 
 ## Product / bundle boundary
@@ -33,11 +33,11 @@
 ## Build-time Lua architecture
 
 - There is one Lua execution path used by the bundler: `Lua source -> AST -> LLVM module -> LLVM bitcode -> native code`.
-- `src/lua/parser/` owns Lua 5.1 syntax and ASTs.
-- `src/lua/direct/` owns whole-program static analysis and direct LLVM module emission. Analysis metadata is allowed; a second executable/custom instruction IR is not.
-- `src/lua/abi/` owns small stable compiler/runtime layouts such as global and native-namespace slots.
-- `src/lua/runtime/` owns Zig primitives and the C ABI used by generated LLVM during bundling.
-- `src/lua/wikitext/` and `src/lua/extract/` own MediaWiki preprocessing and dump extraction used during bundling.
+- `compiler/src/lua/parser/` owns Lua 5.1 syntax and ASTs.
+- `compiler/src/lua/direct/` owns whole-program static analysis and direct LLVM module emission. Analysis metadata is allowed; a second executable/custom instruction IR is not.
+- `compiler/src/lua/abi/` owns small stable compiler/runtime layouts such as global and native-namespace slots.
+- `compiler/src/lua/runtime/` owns Zig primitives and the C ABI used by generated LLVM during bundling.
+- `compiler/src/lua/wikitext/` and `compiler/src/lua/extract/` own MediaWiki preprocessing and dump extraction used during bundling.
 - Never introduce a VM, bytecode, serialized executable program, generated-Zig Lua functions, or a fallback execution engine.
 
 ## Native optimization rules
@@ -70,5 +70,5 @@
 - Run full `zig build test` when unrelated shared edits do not block it.
 - Run `git diff --check` before every commit.
 - The representative English 100k benchmark is the first 100,000 rows of the official 2026-09-01 multistream index (row-window SHA-256 `abf923c141deef52263527cc8e00f81acc83eb6017a7f9d58c152f6638cc866e`). Build the expander from the full dump first, then run the blob stage with `--limit-pages 100000`; the standalone 100k XML shard has no Module namespace and is not a valid Lua-performance oracle.
-- Reader UX changes should exercise the actual CLI and PTY, including narrow terminals, resize, Unicode input, terminal restoration, and concurrent state saves when relevant. `test-reader` generates marked synthetic fixtures for `tools/verify_reader_ux.py`; never run destructive state checks against user dictionaries.
+- Reader UX changes should exercise the actual CLI and PTY, including narrow terminals, resize, Unicode input, terminal restoration, and concurrent state saves when relevant. `test-reader` generates marked synthetic fixtures for `compiler/tools/verify_reader_ux.py`; never run destructive state checks against user dictionaries.
 - Terminal media work owns and joins its background tasks before releasing arguments or state. Preserve I/O cancellation errors through the media helpers.

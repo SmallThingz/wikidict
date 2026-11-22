@@ -32,22 +32,14 @@ shipped in a dictionary.
 - **Raw and seekable XZ storage** with derived random-access indexes.
 - **Corpus tooling** for downloading, building, verifying and publishing editions.
 
-The applications share this repository:
-
-| Directory | Contents |
+| Component | Contents |
 | --- | --- |
-| `src/` | Zig compiler, semantic encoder/decoder, CLI/TUI and C ABI |
-| `tools/` | Corpus builds, verification and development utilities |
-| [apps/desktop](apps/desktop/) | Native Qt desktop application and its tests |
-| [apps/android](apps/android/) | Native Compose Android application and its tests |
-| `docs/` | Format and development documentation |
-| `data/` | Local inputs and dictionary outputs, excluded from Git |
-| `.tmp/` | Owned development scratch and qualification evidence, excluded from Git |
+| [compiler](compiler/) | Wiktionary dump processing, Lua and template expansion, dictionary compilation, and corpus tools |
+| [renderer](renderer/) | Shared dictionary format, decoder, native storage, C ABI, command-line and terminal readers, and shared fonts |
+| [desktop](desktop/) | Qt desktop app and web reader |
+| [android](android/) | Android 12+ app, including the Kotlin decoder and Compose rendering |
 
-Both application repositories were merged with their original commit histories.
-Their build systems remain independent. Desktop uses the core C ABI; Android
-decodes semantic records on demand and renders with Compose, with native shaping
-for Egyptian glyphs. Neither application executes dictionary source code.
+Desktop links the renderer’s native C ABI. Android reads the same stored format with its Kotlin decoder and uses the renderer’s [native glyph shaper](renderer/src/shaping/android/egyptian_shape.cpp). Both application histories are part of this repository. The original desktop tag `0.16.0` is preserved as `desktop/0.16.0` alongside WikiDict’s own tag of the same version. Local dumps and generated dictionaries live in the Git-ignored `data/` directory.
 
 The application remains under development. Release publication requires explicit
 user approval.
@@ -90,7 +82,7 @@ title, and a visible phrase from the original definition. For example, this
 checks both terminal widths on a Zhuang edition and saves the rendered screens:
 
 ```sh
-python3 tools/verify_edition_terminal.py --binary zig-out/bin/wikidict \
+python3 compiler/tools/verify_edition_terminal.py --binary zig-out/bin/wikidict \
   --root "$EDITION_DIR" --language Vahgun --entry 梯田 --witness nazbanzseuj \
   --report .tmp/edition-terminal
 ```
@@ -120,7 +112,7 @@ example, this opens the Norwegian Bokmål definition of `green` from the Serbian
 edition at both terminal widths.
 
 ```sh
-python3 tools/verify_edition_terminal.py --binary zig-out/bin/wikidict \
+python3 compiler/tools/verify_edition_terminal.py --binary zig-out/bin/wikidict \
   --indexed-page "$CASE_DIR" --language 'Norwegian Bokmål' --entry green \
   --witness 'the closely mown area surrounding each hole' --report .tmp/green-pty
 ```
@@ -137,7 +129,7 @@ zig build ffi -Doptimize=fast
 
 The public header is installed as `zig-out/include/dict/dict.h`.
 
-For the desktop app, configure CMake with the project's patched Qt and install the executable, GUI component and matching Qt runtime together. Follow the [desktop build and install instructions](apps/desktop/README.md). With the prefix used there, launch the app from the repository root:
+For the desktop app, configure CMake with the project's patched Qt and install the executable, GUI component and matching Qt runtime together. Follow the [desktop build and install instructions](desktop/README.md). With the prefix used there, launch the app from the repository root:
 
 ```sh
 ./.tmp/desktop-install/bin/wikidict-gio
@@ -146,7 +138,7 @@ For the desktop app, configure CMake with the project's patched Qt and install t
 Build Android using its own Gradle root:
 
 ```sh
-./apps/android/gradlew -p apps/android :app:assembleDebug
+./android/gradlew -p android :app:assembleDebug
 ```
 
 See each application's README for platform dependencies and qualification steps.
@@ -165,8 +157,8 @@ Corpus staging requires Python 3.14's `compression.zstd`; the native build tools
 link against libbz2 and libzstd.
 
 ```sh
-python tools/download_wiktionaries.py --out data/dumps --wikis enwiktionary
-python tools/build_wiktionaries.py --in data/dumps --out data/dictionaries \
+python compiler/tools/download_wiktionaries.py --out data/dumps --wikis enwiktionary
+python compiler/tools/build_wiktionaries.py --in data/dumps --out data/dictionaries \
   --wikis enwiktionary
 ```
 
@@ -467,13 +459,13 @@ and selected context when available. Otherwise use the existing collector's
 observed keys as full-edition coverage. For example, with matching prepared inputs:
 
 ```sh
-python3 -B tools/prepare_language_messages_v2.py capture \
+python3 -B compiler/tools/prepare_language_messages_v2.py capture \
   --wiki jawiktionary --date 20261001 \
   --namespace-registry data/inputs/ja/namespace-registry.tsv \
   --languages en ja --complete-messages \
   --api-sources data/inputs/mediawiki-message-sources \
   --output data/inputs/ja/messages-complete01
-python3 -B tools/prepare_language_messages_v2.py verify \
+python3 -B compiler/tools/prepare_language_messages_v2.py verify \
   data/inputs/ja/messages-complete01
 ```
 
@@ -487,7 +479,7 @@ responses, explicit missing values, empty values and fallback evidence.
 
 Keep the complete generation directory and select **both** its
 `interface-messages.tsv` and `language-fallbacks.tsv`, using the corresponding
-snapshot flags above. In `tools/corpus_controller.py` configuration, place their
+snapshot flags above. In `compiler/tools/corpus_controller.py` configuration, place their
 exact `{path, bytes, sha256}` descriptors under
 `edition_options.<wiki>.auxiliary_snapshots`, with keys `interface-messages` and
 `language-fallbacks`. Merge these into existing edition options. Both explicit
@@ -503,16 +495,16 @@ enumeration; exact observed extras can be supplied with `--messages` alongside
 `--complete-messages`. An unobserved key is not an authoritative missing value.
 
 CategoryTree snapshots can be generated from matching Wikimedia SQL/XML dumps with
-`tools/category_tree_snapshot.py`.
+`compiler/tools/category_tree_snapshot.py`.
 
-`tools/category_stats_snapshot.py` streams category counts from a dated
+`compiler/tools/category_stats_snapshot.py` streams category counts from a dated
 `category.sql.gz` file. It verifies the compressed source against the download
 manifest and records the output hash, row count and source identity alongside the
 TSV. Category counts and CategoryTree membership use separate snapshots.
 
 The Python build controller accepts the same auxiliary snapshot options and
 includes each TSV's SHA-256 in its shard and publication identity. For a current
-interwiki map, run `python3 tools/download_wiktionaries.py --output DIR --wikis
+interwiki map, run `python3 compiler/tools/download_wiktionaries.py --output DIR --wikis
 enwiktionary --interwiki-map-only`. This saves the exact API response, the
 six-column `interwiki-map.tsv`, and a provenance file with the retrieval time
 and both hashes. Siteinfo is current at retrieval time; this snapshot is not a
@@ -560,7 +552,7 @@ The [full-edition attempt log](data/corpus-campaign-current01/local-full-build-a
 lists the retained native driver's completed invocations, including failures. It
 reports production time only when the builder recorded its end. Command time
 includes setup and shutdown. A successful build can appear in both tables.
-To update the attempt log, run `python3 tools/index_corpus_attempts.py
+To update the attempt log, run `python3 compiler/tools/index_corpus_attempts.py
 --receipts DRIVER_DIR --output ATTEMPTS.tsv --add ATTEMPT_DIR` from the checkout
 root. Supply the attempt directory name relative to the retained driver. The
 command checks every numbered execution in that directory against its original
@@ -627,7 +619,7 @@ Readers accept raw `.wikblb` files and independently blocked `.wikblb.xz` files.
 Publish compressed files with the repository tool:
 
 ```sh
-python3 tools/compress_blobs.py path/language.wikblb
+python3 compiler/tools/compress_blobs.py path/language.wikblb
 ```
 
 Or create compatible XZ manually:
@@ -645,19 +637,19 @@ rebuild it when necessary.
 Resolve the newest complete snapshot for every Wiktionary edition:
 
 ```sh
-python3 tools/download_wiktionaries.py --plan
+python3 compiler/tools/download_wiktionaries.py --plan
 ```
 
 Download selected editions:
 
 ```sh
-python3 tools/download_wiktionaries.py --wikis enwiktionary simplewiktionary
+python3 compiler/tools/download_wiktionaries.py --wikis enwiktionary simplewiktionary
 ```
 
 Build downloaded snapshots:
 
 ```sh
-python3 tools/build_wiktionaries.py --in data/dumps --out data/dictionaries
+python3 compiler/tools/build_wiktionaries.py --in data/dumps --out data/dictionaries
 ```
 
 Whole-edition discovery also snapshots authoritative language names. It needs the
@@ -667,7 +659,7 @@ equivalent file. The resulting per-edition registry is pinned alongside the dump
 snapshot and reused on resume.
 
 Catalogue format and publishing details are documented in
-[docs/catalogues.md](docs/catalogues.md).
+[compiler/docs/catalogues.md](compiler/docs/catalogues.md).
 
 The reader can inspect a catalogue or install a dictionary directly:
 
@@ -681,22 +673,6 @@ release files retain that scope; the CLI refuses imports from another edition
 or unlabelled files into a scoped root. Unlabelled local files remain supported
 in their own unscoped root.
 
-## Repository layout
+## Reader documentation
 
-```text
-src/
-├── decoder/    WIKBLB08 decoding and query APIs
-├── encoder/    dictionary and presentation compilation
-├── ffi/        public C header
-├── frontend/   CLI, TUI and C ABI implementation
-├── lua/        build-time Lua/Scribunto compiler and runtime
-├── native/     storage and native helpers
-└── shared/     shared codecs and utilities
-
-tools/          corpus, build and validation tooling
-docs/           catalogue, rendering and reader notes
-```
-
-For reader/platform coverage, see [docs/reader-parity.md](docs/reader-parity.md).
-For rendering checks, see
-[docs/rendering-validation.md](docs/rendering-validation.md).
+See [reader and platform coverage](renderer/docs/reader-parity.md) and [rendering validation](renderer/docs/rendering-validation.md).

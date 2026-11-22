@@ -29,36 +29,36 @@ pub fn build(b: *std.Build) void {
     const unicode_lower_mod = namespace_registry_mod.import_table.get("unicode_lower").?;
     const unicode_lower_test_mod = namespace_registry_test_mod.import_table.get("unicode_lower").?;
     const language_metadata_parser_mod = b.createModule(.{
-        .root_source_file = b.path("src/lua/parser/root.zig"),
+        .root_source_file = b.path("compiler/src/lua/parser/root.zig"),
         .target = target,
         .optimize = optimize,
     });
     const language_metadata_parser_test_mod = b.createModule(.{
-        .root_source_file = b.path("src/lua/parser/root.zig"),
+        .root_source_file = b.path("compiler/src/lua/parser/root.zig"),
         .target = b.graph.host,
         .optimize = test_optimize,
     });
     // Build-only occurrence coordinates are shared by producer and receiver.
-    const missing_dependency_mod = b.createModule(.{ .root_source_file = b.path("src/shared/missing_dependency.zig"), .target = target, .optimize = optimize });
-    const missing_dependency_test_mod = b.createModule(.{ .root_source_file = b.path("src/shared/missing_dependency.zig"), .target = target, .optimize = test_optimize });
+    const missing_dependency_mod = b.createModule(.{ .root_source_file = b.path("compiler/src/shared/missing_dependency.zig"), .target = target, .optimize = optimize });
+    const missing_dependency_test_mod = b.createModule(.{ .root_source_file = b.path("compiler/src/shared/missing_dependency.zig"), .target = target, .optimize = test_optimize });
     const shared_xml_decode_mod = b.createModule(.{
-        .root_source_file = b.path("src/shared/xml_decode.zig"),
+        .root_source_file = b.path("compiler/src/shared/xml_decode.zig"),
         .target = target,
         .optimize = optimize,
     });
     const shared_xml_decode_mod_test = b.createModule(.{
-        .root_source_file = b.path("src/shared/xml_decode.zig"),
+        .root_source_file = b.path("compiler/src/shared/xml_decode.zig"),
         .target = target,
         .optimize = test_optimize,
     });
     const wikimedia_dump_mod = b.createModule(.{
-        .root_source_file = b.path("src/shared/wikimedia_dump.zig"),
+        .root_source_file = b.path("compiler/src/shared/wikimedia_dump.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,
     });
     const wikimedia_dump_mod_test = b.createModule(.{
-        .root_source_file = b.path("src/shared/wikimedia_dump.zig"),
+        .root_source_file = b.path("compiler/src/shared/wikimedia_dump.zig"),
         .target = target,
         .optimize = test_optimize,
         .link_libc = true,
@@ -66,45 +66,45 @@ pub fn build(b: *std.Build) void {
     // Parent bundle processes share the worker's bounded single-write logger.
     // This standalone module does not pull the Lua runtime into blob building.
     const build_diagnostics_mod = b.createModule(.{
-        .root_source_file = b.path("src/lua/runtime/work_stats.zig"),
+        .root_source_file = b.path("compiler/src/lua/runtime/work_stats.zig"),
         .target = target,
         .optimize = optimize,
     });
     const build_diagnostics_test_mod = b.createModule(.{
-        .root_source_file = b.path("src/lua/runtime/work_stats.zig"),
+        .root_source_file = b.path("compiler/src/lua/runtime/work_stats.zig"),
         .target = b.graph.host,
         .optimize = test_optimize,
     });
     const bundle_protocol_mod = b.createModule(.{
-        .root_source_file = b.path("src/lua/bundle_protocol.zig"),
+        .root_source_file = b.path("compiler/src/lua/bundle_protocol.zig"),
         .target = target,
         .optimize = optimize,
     });
     const bundle_protocol_mod_test = b.createModule(.{
-        .root_source_file = b.path("src/lua/bundle_protocol.zig"),
+        .root_source_file = b.path("compiler/src/lua/bundle_protocol.zig"),
         .target = b.graph.host,
         .optimize = test_optimize,
     });
     const blob_encoder_mod = b.addModule("blob_encoder", .{
-        .root_source_file = b.path("src/encoder/blob_root.zig"),
+        .root_source_file = b.path("renderer/src/format/blob_root.zig"),
         .target = target,
         .optimize = optimize,
     });
     const blob_encoder_mod_test = b.createModule(.{
-        .root_source_file = b.path("src/encoder/blob_root.zig"),
+        .root_source_file = b.path("renderer/src/format/blob_root.zig"),
         .target = target,
         .optimize = test_optimize,
     });
-    const blob_xz_mod = b.createModule(.{ .root_source_file = b.path("src/native/xz.zig"), .target = target, .optimize = optimize });
-    const storage_mod = b.createModule(.{ .root_source_file = b.path("src/native/storage.zig"), .target = target, .optimize = optimize, .imports = &.{.{ .name = "blob_encoder", .module = blob_encoder_mod }} });
-    const lzma = b.addTranslateC(.{ .root_source_file = b.path("src/native/lzma.h"), .target = target, .optimize = optimize });
+    const blob_xz_mod = b.createModule(.{ .root_source_file = b.path("renderer/src/native/xz.zig"), .target = target, .optimize = optimize });
+    const storage_mod = b.createModule(.{ .root_source_file = b.path("renderer/src/native/storage.zig"), .target = target, .optimize = optimize, .imports = &.{.{ .name = "blob_encoder", .module = blob_encoder_mod }} });
+    const lzma = b.addTranslateC(.{ .root_source_file = b.path("renderer/src/native/lzma.h"), .target = target, .optimize = optimize });
     lzma.addSystemIncludePath(.{ .cwd_relative = "/usr/include" });
     storage_mod.addImport("lzma", lzma.createModule());
     blob_xz_mod.addImport("lzma", lzma.createModule());
-    const storage_test = b.createModule(.{ .root_source_file = b.path("src/native/storage.zig"), .target = target, .optimize = test_optimize, .imports = &.{.{ .name = "blob_encoder", .module = blob_encoder_mod_test }} });
+    const storage_test = b.createModule(.{ .root_source_file = b.path("renderer/src/native/storage.zig"), .target = target, .optimize = test_optimize, .imports = &.{.{ .name = "blob_encoder", .module = blob_encoder_mod_test }} });
     storage_test.addImport("lzma", lzma.createModule());
     const encoder_mod = b.addModule("encoder", .{
-        .root_source_file = b.path("src/encoder/root.zig"),
+        .root_source_file = b.path("compiler/src/encoder/root.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -115,7 +115,7 @@ pub fn build(b: *std.Build) void {
     encoder_mod.addImport("missing_dependency", missing_dependency_mod);
 
     const encoder_mod_test = b.addModule("encoder_test", .{
-        .root_source_file = b.path("src/encoder/root.zig"),
+        .root_source_file = b.path("compiler/src/encoder/root.zig"),
         .target = target,
         .optimize = test_optimize,
     });
@@ -126,38 +126,38 @@ pub fn build(b: *std.Build) void {
     encoder_mod_test.addImport("missing_dependency", missing_dependency_test_mod);
 
     const blob_decoder_mod = b.addModule("blob_decoder", .{
-        .root_source_file = b.path("src/decoder/blob_root.zig"),
+        .root_source_file = b.path("renderer/src/decoder/blob_root.zig"),
         .target = target,
         .optimize = optimize,
     });
     blob_decoder_mod.addImport("blob_encoder", blob_encoder_mod);
     const blob_decoder_mod_test = b.createModule(.{
-        .root_source_file = b.path("src/decoder/blob_root.zig"),
+        .root_source_file = b.path("renderer/src/decoder/blob_root.zig"),
         .target = target,
         .optimize = test_optimize,
     });
     blob_decoder_mod_test.addImport("blob_encoder", blob_encoder_mod_test);
     const blob_wasm_target = b.resolveTargetQuery(.{ .cpu_arch = .wasm32, .os_tag = .freestanding });
     const blob_encoder_mod_wasm = b.createModule(.{
-        .root_source_file = b.path("src/encoder/blob_root.zig"),
+        .root_source_file = b.path("renderer/src/format/blob_root.zig"),
         .target = blob_wasm_target,
         .optimize = test_optimize,
     });
     const blob_decoder_mod_wasm = b.createModule(.{
-        .root_source_file = b.path("src/decoder/blob_root.zig"),
+        .root_source_file = b.path("renderer/src/decoder/blob_root.zig"),
         .target = blob_wasm_target,
         .optimize = test_optimize,
     });
     blob_decoder_mod_wasm.addImport("blob_encoder", blob_encoder_mod_wasm);
 
     const lua_usage_mod = b.createModule(.{
-        .root_source_file = b.path("src/lua/usage.zig"),
+        .root_source_file = b.path("compiler/src/lua/usage.zig"),
         .target = target,
         .optimize = optimize,
     });
     lua_usage_mod.addImport("namespace_registry", namespace_registry_mod);
     lua_usage_mod.addImport("missing_dependency", missing_dependency_mod);
-    const module_extract_exe = addCliExecutable(b, "dict-module-extract", b.path("src/lua/module_extract_main.zig"), target, optimize, &.{
+    const module_extract_exe = addCliExecutable(b, "dict-module-extract", b.path("compiler/src/lua/module_extract_main.zig"), target, optimize, &.{
         .{ .name = "xml_decode", .module = shared_xml_decode_mod },
         .{ .name = "lua_usage", .module = lua_usage_mod },
         .{ .name = "wikimedia_dump", .module = wikimedia_dump_mod },
@@ -166,13 +166,13 @@ pub fn build(b: *std.Build) void {
     module_extract_exe.root_module.link_libc = true;
     module_extract_exe.root_module.linkSystemLibrary("bz2", .{});
     module_extract_exe.root_module.linkSystemLibrary("zstd", .{});
-    const page_title_index_exe = addCliExecutable(b, "dict-page-title-index", b.path("tools/page_title_index.zig"), target, optimize, &.{
+    const page_title_index_exe = addCliExecutable(b, "dict-page-title-index", b.path("compiler/tools/page_title_index.zig"), target, optimize, &.{
         .{ .name = "wikimedia_dump", .module = wikimedia_dump_mod },
     });
     page_title_index_exe.root_module.link_libc = true;
     page_title_index_exe.root_module.linkSystemLibrary("bz2", .{});
     page_title_index_exe.root_module.linkSystemLibrary("zstd", .{});
-    const blob_build_exe = addCliExecutable(b, "dict-blob-build", b.path("tools/blob_build.zig"), target, optimize, &.{
+    const blob_build_exe = addCliExecutable(b, "dict-blob-build", b.path("compiler/tools/blob_build.zig"), target, optimize, &.{
         .{ .name = "encoder", .module = encoder_mod },
         .{ .name = "lua_parser", .module = language_metadata_parser_mod },
         .{ .name = "xml_decode", .module = shared_xml_decode_mod },
@@ -190,13 +190,13 @@ pub fn build(b: *std.Build) void {
     addPublicRunStep(b, "build-blobs", "Encode blobs with an already compiled bundle expander", addRunArtifactCommand(b, blob_build_exe, &.{}), &.{});
     blob_build_exe.root_module.addImport("namespace_registry", namespace_registry_mod);
     blob_build_exe.root_module.addImport("missing_dependency", missing_dependency_mod);
-    const blob_merge_exe = addCliExecutable(b, "dict-blob-merge", b.path("tools/blob_merge.zig"), target, optimize, &.{
+    const blob_merge_exe = addCliExecutable(b, "dict-blob-merge", b.path("compiler/tools/blob_merge.zig"), target, optimize, &.{
         .{ .name = "encoder", .module = blob_encoder_mod },
     });
     blob_merge_exe.root_module.addImport("xz", blob_xz_mod);
     blob_merge_exe.root_module.link_libc = true;
     addPublicRunStep(b, "merge-blobs", "Merge non-overlapping compiled blob shards", addRunArtifactCommand(b, blob_merge_exe, &.{}), &.{});
-    const blob_verify_exe = addCliExecutable(b, "dict-blob-verify", b.path("tools/blob_verify.zig"), target, optimize, &.{
+    const blob_verify_exe = addCliExecutable(b, "dict-blob-verify", b.path("compiler/tools/blob_verify.zig"), target, optimize, &.{
         .{ .name = "encoder", .module = blob_encoder_mod },
     });
     blob_verify_exe.root_module.addImport("xz", blob_xz_mod);
@@ -215,7 +215,7 @@ pub fn build(b: *std.Build) void {
             // Record the actual compiler LazyPath, without searching cache indexes.
             const report = b.addSystemCommand(&.{"python3"});
             report.has_side_effects = true;
-            report.addFileArg2(b.path("tools/native_qualification.py"), .{ .make_absolute = true });
+            report.addFileArg2(b.path("compiler/tools/native_qualification.py"), .{ .make_absolute = true });
             report.addArg("record-installed-cache");
             report.addDirectoryArg2(.{ .relative = .{ .base = .install_prefix, .sub_path = "" } }, .{ .make_absolute = true });
             report.addDirectoryArg2(std.Build.LazyPath.cache_root, .{ .make_absolute = true });
@@ -233,7 +233,7 @@ pub fn build(b: *std.Build) void {
     const llvm_obj = b.addObject(.{
         .name = "dict-llvm-build-core",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/lua/llvm_build_main.zig"),
+            .root_source_file = b.path("compiler/src/lua/llvm_build_main.zig"),
             .target = target,
             .optimize = optimize,
             .link_libc = true,
@@ -247,7 +247,7 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
     llvm_exe_mod.addCSourceFile(.{
-        .file = b.path("tools/llvm_build_main.c"),
+        .file = b.path("compiler/tools/llvm_build_main.c"),
         .flags = &.{ "-std=c11", "-Wall", "-Wextra", "-Werror" },
     });
     llvm_exe_mod.addObject(llvm_obj);
@@ -279,7 +279,7 @@ pub fn build(b: *std.Build) void {
     pipeline_paths.addOptionPath("value_leaf_bc", value_leaf_object.getEmittedLlvmBc());
     const native_inputs = b.addWriteFiles();
     pipeline_paths.addOptionPath("worker_main_c", native_inputs.addCopyFile(
-        b.path("src/lua/bundle_worker_main.c"),
+        b.path("compiler/src/lua/bundle_worker_main.c"),
         "bundle_worker_main.c",
     ));
     pipeline_paths.addOptionPath("modules", module_extract_exe.getEmittedBin());
@@ -288,7 +288,7 @@ pub fn build(b: *std.Build) void {
     pipeline_paths.addOption([]const u8, "clang", "clang");
     pipeline_paths.addOptionPathUntracked("project_root", b.path("."));
     pipeline_paths.addOptionPath("blobs", blob_build_exe.getEmittedBin());
-    const pipeline_exe = addCliExecutable(b, "dict-bundle-build", b.path("tools/bundle_build.zig"), target, optimize, &.{.{ .name = "pipeline_paths", .module = pipeline_paths.createModule() }});
+    const pipeline_exe = addCliExecutable(b, "dict-bundle-build", b.path("compiler/tools/bundle_build.zig"), target, optimize, &.{.{ .name = "pipeline_paths", .module = pipeline_paths.createModule() }});
     // The caller authenticates each retained role and its original producer.
     // This selection compiles only the maintained driver and its path options;
     // it neither rebuilds nor grants qualification to the supplied artifacts.
@@ -309,20 +309,20 @@ pub fn build(b: *std.Build) void {
         selected_paths.addOption([]const u8, "zig", b.graph.zig_exe);
         selected_paths.addOption([]const u8, "clang", "clang");
         selected_paths.addOptionPathUntracked("project_root", b.path("."));
-        break :blk addCliExecutable(b, "dict-bundle-build", b.path("tools/bundle_build.zig"), target, optimize,
+        break :blk addCliExecutable(b, "dict-bundle-build", b.path("compiler/tools/bundle_build.zig"), target, optimize,
             &.{.{ .name = "pipeline_paths", .module = selected_paths.createModule() }});
     } else pipeline_exe;
     const install_bundle_driver = b.addInstallArtifact(prepared_bundle_driver, .{});
     b.step("prepare-bundle-driver", "Install the normal bundle driver, optionally using qualified retained native inputs").dependOn(&install_bundle_driver.step);
     addPublicRunStep(b, "build-dictionary", "Pre-expand templates/modules and emit data-only dictionary blobs", addRunArtifactCommand(b, pipeline_exe, &.{}), &.{});
-    const blob_files_mod = b.createModule(.{ .root_source_file = b.path("src/encoder/blob_files.zig"), .target = target, .optimize = optimize, .imports = &.{.{ .name = "blob_encoder", .module = blob_encoder_mod }} });
-    const blob_files_mod_test = b.createModule(.{ .root_source_file = b.path("src/encoder/blob_files.zig"), .target = target, .optimize = test_optimize, .imports = &.{.{ .name = "blob_encoder", .module = blob_encoder_mod_test }} });
+    const blob_files_mod = b.createModule(.{ .root_source_file = b.path("renderer/src/format/blob_files.zig"), .target = target, .optimize = optimize, .imports = &.{.{ .name = "blob_encoder", .module = blob_encoder_mod }} });
+    const blob_files_mod_test = b.createModule(.{ .root_source_file = b.path("renderer/src/format/blob_files.zig"), .target = target, .optimize = test_optimize, .imports = &.{.{ .name = "blob_encoder", .module = blob_encoder_mod_test }} });
     // Encoder and readers share one module identity for this source file.
     blob_verify_exe.root_module.addImport("blob_files", blob_files_mod);
     encoder_mod.addImport("blob_files", blob_files_mod);
     encoder_mod_test.addImport("blob_files", blob_files_mod_test);
     const reader_name = if (target.result.os.tag == .windows or target.result.os.tag == .wasi) "dict" else "wikidict";
-    const blob_query_exe = addCliExecutable(b, reader_name, b.path("src/frontend/main.zig"), target, optimize, &.{
+    const blob_query_exe = addCliExecutable(b, reader_name, b.path("renderer/src/frontend/main.zig"), target, optimize, &.{
         .{ .name = "blob_encoder", .module = blob_encoder_mod },
         .{ .name = "blob_decoder", .module = blob_decoder_mod },
         .{ .name = "blob_files", .module = blob_files_mod },
@@ -351,7 +351,7 @@ pub fn build(b: *std.Build) void {
     }
 
     const ffi_mod = b.createModule(.{
-        .root_source_file = b.path("src/frontend/c_api.zig"),
+        .root_source_file = b.path("renderer/src/frontend/c_api.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,
@@ -365,11 +365,11 @@ pub fn build(b: *std.Build) void {
     });
     const ffi_lib = b.addLibrary(.{ .name = "dictffi", .root_module = ffi_mod, .linkage = .dynamic, .use_llvm = true, .use_lld = true });
     const ffi_install = b.addInstallArtifact(ffi_lib, .{});
-    const ffi_header_install = b.addInstallHeaderFile(b.path("src/ffi/dict.h"), "dict/dict.h");
+    const ffi_header_install = b.addInstallHeaderFile(b.path("renderer/src/ffi/dict.h"), "dict/dict.h");
 
     const ffi_test_mod = b.createModule(.{ .target = b.graph.host, .optimize = test_optimize, .link_libc = true });
-    ffi_test_mod.addCSourceFile(.{ .file = b.path("tools/ffi_integration_test.c"), .flags = &.{ "-std=c11", "-Wall", "-Wextra", "-Werror" } });
-    ffi_test_mod.addIncludePath(b.path("src/ffi"));
+    ffi_test_mod.addCSourceFile(.{ .file = b.path("compiler/tools/ffi_integration_test.c"), .flags = &.{ "-std=c11", "-Wall", "-Wextra", "-Werror" } });
+    ffi_test_mod.addIncludePath(b.path("renderer/src/ffi"));
     ffi_test_mod.linkLibrary(ffi_lib);
     const ffi_test_exe = b.addExecutable(.{ .name = "dict-ffi-integration-test", .root_module = ffi_test_mod, .use_llvm = true, .use_lld = true });
 
@@ -389,7 +389,7 @@ pub fn build(b: *std.Build) void {
     addPublicRunStep(b, "query-blobs", "Query per-language and feature Wiktionary blobs", blob_query_run, &.{});
     addPublicRunStep(b, "dict", "Run the dictionary frontend CLI", blob_query_run, &.{});
 
-    const test_runner = b.path("tools/test_runner.zig");
+    const test_runner = b.path("compiler/tools/test_runner.zig");
     // Unit tests invoke real Clang for owned-child cleanup, but only inspect
     // the blob command's argv. Do not build production tools for those tokens.
     const pipeline_unit_paths = b.addOptions();
@@ -397,7 +397,7 @@ pub fn build(b: *std.Build) void {
     pipeline_unit_paths.addOption([]const u8, "blobs", "dict-blob-build-unit-test-argv-token");
     const bundle_pipeline_tests = b.addTest(.{
         .root_module = b.createModule(.{
-            .root_source_file = b.path("tools/bundle_build.zig"),
+            .root_source_file = b.path("compiler/tools/bundle_build.zig"),
             .target = b.graph.host,
             .optimize = test_optimize,
             .imports = &.{.{ .name = "pipeline_paths", .module = pipeline_unit_paths.createModule() }},
@@ -409,7 +409,7 @@ pub fn build(b: *std.Build) void {
 
     const blob_build_test_options: std.Build.TestOptions = .{
         .root_module = b.createModule(.{
-            .root_source_file = b.path("tools/blob_build.zig"),
+            .root_source_file = b.path("compiler/tools/blob_build.zig"),
             .target = b.graph.host,
             .optimize = test_optimize,
             .link_libc = true,
@@ -462,7 +462,7 @@ pub fn build(b: *std.Build) void {
 
     const blob_file_tools_tests = b.addTest(.{
         .root_module = b.createModule(.{
-            .root_source_file = b.path("tools/blob_file_tools_test.zig"),
+            .root_source_file = b.path("compiler/tools/blob_file_tools_test.zig"),
             .target = b.graph.host,
             .optimize = test_optimize,
             .link_libc = true,
@@ -473,8 +473,8 @@ pub fn build(b: *std.Build) void {
         }),
         .test_runner = .{ .path = test_runner, .mode = .simple },
     });
-    const blob_xz_test_mod = b.createModule(.{ .root_source_file = b.path("src/native/xz.zig"), .target = b.graph.host, .optimize = test_optimize });
-    const blob_xz_test_lzma = b.addTranslateC(.{ .root_source_file = b.path("src/native/lzma.h"), .target = b.graph.host, .optimize = test_optimize });
+    const blob_xz_test_mod = b.createModule(.{ .root_source_file = b.path("renderer/src/native/xz.zig"), .target = b.graph.host, .optimize = test_optimize });
+    const blob_xz_test_lzma = b.addTranslateC(.{ .root_source_file = b.path("renderer/src/native/lzma.h"), .target = b.graph.host, .optimize = test_optimize });
     blob_xz_test_lzma.addSystemIncludePath(.{ .cwd_relative = "/usr/include" });
     blob_xz_test_mod.addImport("lzma", blob_xz_test_lzma.createModule());
     blob_file_tools_tests.root_module.addImport("xz", blob_xz_test_mod);
@@ -506,7 +506,7 @@ pub fn build(b: *std.Build) void {
     wikimedia_dump_tests.root_module.linkSystemLibrary("zstd", .{});
     const blob_query_tests = b.addTest(.{
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/frontend/main.zig"),
+            .root_source_file = b.path("renderer/src/frontend/main.zig"),
             .target = target,
             .optimize = test_optimize,
             .imports = &.{
@@ -525,7 +525,7 @@ pub fn build(b: *std.Build) void {
     blob_query_tests.use_lld = true;
     const lua_test_options: std.Build.TestOptions = .{
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/lua/tests.zig"),
+            .root_source_file = b.path("compiler/src/lua/tests.zig"),
             .target = target,
             .optimize = test_optimize,
             .link_libc = true,
@@ -544,28 +544,28 @@ pub fn build(b: *std.Build) void {
     lua_tests.root_module.linkSystemLibrary("bz2", .{});
     lua_tests.root_module.linkSystemLibrary("zstd", .{});
     const lua_static_fields_test_mod = b.createModule(.{
-        .root_source_file = b.path("src/lua/abi/static_fields.zig"),
+        .root_source_file = b.path("compiler/src/lua/abi/static_fields.zig"),
         .target = target,
         .optimize = test_optimize,
     });
     const lua_globals_test_mod = b.createModule(.{
-        .root_source_file = b.path("src/lua/abi/globals.zig"),
+        .root_source_file = b.path("compiler/src/lua/abi/globals.zig"),
         .target = target,
         .optimize = test_optimize,
     });
     const lua_wikitext_preprocess_test_mod = b.createModule(.{
-        .root_source_file = b.path("src/lua/wikitext/preprocess.zig"),
+        .root_source_file = b.path("compiler/src/lua/wikitext/preprocess.zig"),
         .target = target,
         .optimize = test_optimize,
     });
     const lua_wikitext_expression_test_mod = b.createModule(.{
-        .root_source_file = b.path("src/lua/wikitext/expression.zig"),
+        .root_source_file = b.path("compiler/src/lua/wikitext/expression.zig"),
         .target = target,
         .optimize = test_optimize,
     });
     lua_wikitext_preprocess_test_mod.addImport("missing_dependency", missing_dependency_test_mod);
     const zig_runtime_test_mod = b.createModule(.{
-        .root_source_file = b.path("src/lua/runtime/core.zig"),
+        .root_source_file = b.path("compiler/src/lua/runtime/core.zig"),
         .target = target,
         .optimize = test_optimize,
         .link_libc = true,
@@ -574,7 +574,7 @@ pub fn build(b: *std.Build) void {
     zig_runtime_test_mod.addImport("missing_dependency", missing_dependency_test_mod);
     zig_runtime_test_mod.addImport("lua_static_fields", lua_static_fields_test_mod);
     const value_leaf_test_mod = b.createModule(.{
-        .root_source_file = b.path("src/lua/value_leaf_build.zig"),
+        .root_source_file = b.path("compiler/src/lua/value_leaf_build.zig"),
         .target = target,
         .optimize = .fast,
         // Match the stripped production leaf bitcode producer. Debug metadata
@@ -597,7 +597,7 @@ pub fn build(b: *std.Build) void {
     const lua_core_tests = b.addTest(lua_core_test_options);
     const lua_core_tests_standalone = b.addTest(lua_core_test_options);
     const global_index_test_mod = b.createModule(.{
-        .root_source_file = b.path("src/lua/runtime/global_shape_index.zig"),
+        .root_source_file = b.path("compiler/src/lua/runtime/global_shape_index.zig"),
         .target = target,
         .optimize = test_optimize,
         .imports = &.{.{ .name = "lua_globals", .module = lua_globals_test_mod }},
@@ -611,12 +611,12 @@ pub fn build(b: *std.Build) void {
         .test_runner = .{ .path = test_runner, .mode = .simple },
     });
     const program_metadata_test_mod = b.createModule(.{
-        .root_source_file = b.path("src/lua/program_metadata.zig"),
+        .root_source_file = b.path("compiler/src/lua/program_metadata.zig"),
         .target = target,
         .optimize = test_optimize,
     });
     const program_shapes_test_mod = b.createModule(.{
-        .root_source_file = b.path("src/lua/runtime/program_shapes.zig"),
+        .root_source_file = b.path("compiler/src/lua/runtime/program_shapes.zig"),
         .target = target,
         .optimize = test_optimize,
         .link_libc = true,
@@ -631,12 +631,12 @@ pub fn build(b: *std.Build) void {
     });
     const run_program_shapes_tests = b.addRunArtifact(program_shapes_tests);
     const static_literal_format_test_mod = b.createModule(.{
-        .root_source_file = b.path("src/lua/runtime/static_literal_format.zig"),
+        .root_source_file = b.path("compiler/src/lua/runtime/static_literal_format.zig"),
         .target = target,
         .optimize = test_optimize,
     });
     const static_literal_decode_test_mod = b.createModule(.{
-        .root_source_file = b.path("src/lua/runtime/static_literal_decode.zig"),
+        .root_source_file = b.path("compiler/src/lua/runtime/static_literal_decode.zig"),
         .target = target,
         .optimize = test_optimize,
         .imports = &.{
@@ -645,7 +645,7 @@ pub fn build(b: *std.Build) void {
         },
     });
     const lua_abi_test_mod = b.createModule(.{
-        .root_source_file = b.path("src/lua/runtime/llvm_abi.zig"),
+        .root_source_file = b.path("compiler/src/lua/runtime/llvm_abi.zig"),
         .target = target,
         .optimize = test_optimize,
         .link_libc = true,
@@ -663,7 +663,7 @@ pub fn build(b: *std.Build) void {
     const lua_abi_tests_standalone = b.addTest(lua_abi_test_options);
     const lua_stdlib_test_options: std.Build.TestOptions = .{
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/lua/runtime/stdlib.zig"),
+            .root_source_file = b.path("compiler/src/lua/runtime/stdlib.zig"),
             .target = target,
             .optimize = test_optimize,
             .link_libc = true,
@@ -677,7 +677,7 @@ pub fn build(b: *std.Build) void {
     const lua_stdlib_tests = b.addTest(lua_stdlib_test_options);
     const lua_ustring_tests = b.addTest(.{
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/lua/runtime/ustring.zig"),
+            .root_source_file = b.path("compiler/src/lua/runtime/ustring.zig"),
             .target = target,
             .optimize = test_optimize,
             .link_libc = true,
@@ -687,7 +687,7 @@ pub fn build(b: *std.Build) void {
     });
     const lua_scribunto_tests = b.addTest(.{
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/lua/runtime/scribunto.zig"),
+            .root_source_file = b.path("compiler/src/lua/runtime/scribunto.zig"),
             .target = target,
             .optimize = test_optimize,
             .link_libc = true,
@@ -705,7 +705,7 @@ pub fn build(b: *std.Build) void {
     lua_scribunto_tests.root_module.addImport("missing_dependency", missing_dependency_test_mod);
     const lua_wikitext_test_options: std.Build.TestOptions = .{
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/lua/runtime/wikitext.zig"),
+            .root_source_file = b.path("compiler/src/lua/runtime/wikitext.zig"),
             .target = target,
             .optimize = test_optimize,
             .link_libc = true,
@@ -724,7 +724,7 @@ pub fn build(b: *std.Build) void {
     const blob_wasm_smoke = b.addObject(.{
         .name = "dict-blob-wasm-smoke",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("tools/blob_wasm_smoke.zig"),
+            .root_source_file = b.path("compiler/tools/blob_wasm_smoke.zig"),
             .target = blob_wasm_target,
             .optimize = test_optimize,
             .imports = &.{
@@ -783,7 +783,7 @@ pub fn build(b: *std.Build) void {
     b.step("test-namespace-registry", "Validate edition namespace and title resolution").dependOn(&run_namespace_registry_tests.step);
     addTestOrder(test_step, &lua_tests.step, &run_namespace_registry_tests.step, test_step_memory != 0);
     const program_provider_test_mod = b.createModule(.{
-        .root_source_file = b.path("src/lua/runtime/llvm_program.zig"),
+        .root_source_file = b.path("compiler/src/lua/runtime/llvm_program.zig"),
         .target = target,
         .optimize = test_optimize,
         .link_libc = true,
@@ -797,7 +797,7 @@ pub fn build(b: *std.Build) void {
         },
     });
     const page_language_provider_mod = b.createModule(.{
-        .root_source_file = b.path("tools/page_language.zig"), .target = target, .optimize = test_optimize,
+        .root_source_file = b.path("compiler/tools/page_language.zig"), .target = target, .optimize = test_optimize,
         .imports = &.{
             .{ .name = "namespace_registry", .module = namespace_registry_test_mod },
             // The prefix parser uses the shared data-only syntax API.
@@ -805,7 +805,7 @@ pub fn build(b: *std.Build) void {
         },
     });
     const provider_tests = b.addTest(.{ .root_module = b.createModule(.{
-        .root_source_file = b.path("src/lua/bundle_pages.zig"),
+        .root_source_file = b.path("compiler/src/lua/bundle_pages.zig"),
         .target = target,
         .optimize = test_optimize,
         .link_libc = true,
@@ -822,7 +822,7 @@ pub fn build(b: *std.Build) void {
     const run_provider_tests = b.addRunArtifact(provider_tests);
     b.step("test-bundle-pages", "Test source provider and namespace identities").dependOn(&run_provider_tests.step);
     const closure_tests = b.addTest(.{ .root_module = b.createModule(.{
-        .root_source_file = b.path("src/lua/extract/usage_closure.zig"),
+        .root_source_file = b.path("compiler/src/lua/extract/usage_closure.zig"),
         .target = target,
         .optimize = test_optimize,
         .link_libc = true,
@@ -855,9 +855,9 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_closure_tests.step);
     test_step.dependOn(&run_provider_tests.step);
     b.step("test-bundle-pipeline", "Run bundle build scheduler and cache bitmap unit tests only").dependOn(&run_bundle_pipeline_tests_only.step);
-    const media_fetch_exe = addCliExecutable(b, "dict-media-fetch", b.path("tools/media_fetch.zig"), target, optimize, &.{ .{ .name = "media_types", .module = b.createModule(.{ .root_source_file = b.path("src/frontend/media_types.zig"), .target = target, .optimize = optimize }) }, .{ .name = "shared_xml_decode", .module = shared_xml_decode_mod } });
+    const media_fetch_exe = addCliExecutable(b, "dict-media-fetch", b.path("compiler/tools/media_fetch.zig"), target, optimize, &.{ .{ .name = "media_types", .module = b.createModule(.{ .root_source_file = b.path("renderer/src/frontend/media_types.zig"), .target = target, .optimize = optimize }) }, .{ .name = "shared_xml_decode", .module = shared_xml_decode_mod } });
     addPublicRunStep(b, "fetch-media", "Download bounded attributed Wikimedia assets for an export", addRunArtifactCommand(b, media_fetch_exe, &.{}), &.{});
-    const bundle_test_exe = addCliExecutable(b, "dict-bundle-integration-test", b.path("tools/bundle_integration_test.zig"), b.graph.host, test_optimize, &.{ .{ .name = "bundle_protocol", .module = bundle_protocol_mod_test }, .{ .name = "namespace_registry", .module = namespace_registry_test_mod } });
+    const bundle_test_exe = addCliExecutable(b, "dict-bundle-integration-test", b.path("compiler/tools/bundle_integration_test.zig"), b.graph.host, test_optimize, &.{ .{ .name = "bundle_protocol", .module = bundle_protocol_mod_test }, .{ .name = "namespace_registry", .module = namespace_registry_test_mod } });
     bundle_test_exe.root_module.addImport("build_diagnostics", build_diagnostics_test_mod);
     bundle_test_exe.root_module.addImport("encoder", encoder_mod_test);
     bundle_test_exe.root_module.addImport("wikimedia_dump", wikimedia_dump_mod_test);
@@ -872,7 +872,7 @@ pub fn build(b: *std.Build) void {
     bundle_test_run.addFileArg(value_leaf_test_bc);
     bundle_test_run.addFileArg(module_extract_exe.getEmittedBin());
     b.step("test-bundle", "Exercise build-time Lua/template expansion into data-only blobs").dependOn(&bundle_test_run.step);
-    const reader_test_exe = addCliExecutable(b, "dict-reader-integration-test", b.path("tools/reader_integration_test.zig"), b.graph.host, test_optimize, &.{.{ .name = "blob_encoder", .module = blob_encoder_mod_test }});
+    const reader_test_exe = addCliExecutable(b, "dict-reader-integration-test", b.path("compiler/tools/reader_integration_test.zig"), b.graph.host, test_optimize, &.{.{ .name = "blob_encoder", .module = blob_encoder_mod_test }});
     reader_test_exe.root_module.addImport("encoder", encoder_mod_test);
     const reader_test_run = b.addRunArtifact(reader_test_exe);
     reader_test_run.addFileArg(blob_query_exe.getEmittedBin());
@@ -880,12 +880,12 @@ pub fn build(b: *std.Build) void {
     reader_test_run.setCwd(b.path("."));
     reader_test_run.addDirectoryArg2(std.Build.LazyPath.cache_root, .{ .make_absolute = true });
     b.step("test-reader", "Exercise precompiled data-only reading through CLI and C FFI").dependOn(&reader_test_run.step);
-    const index_blobs_exe = addCliExecutable(b, "dict-index-blobs", b.path("tools/index_blobs.zig"), target, optimize, &.{.{ .name = "blob_storage", .module = storage_mod }});
+    const index_blobs_exe = addCliExecutable(b, "dict-index-blobs", b.path("compiler/tools/index_blobs.zig"), target, optimize, &.{.{ .name = "blob_storage", .module = storage_mod }});
     index_blobs_exe.root_module.link_libc = true;
     index_blobs_exe.use_llvm = true;
     index_blobs_exe.use_lld = true;
     addPublicRunStep(b, "index-blobs", "Build or reuse external raw/XZ record indexes after compression", addRunArtifactCommand(b, index_blobs_exe, &.{}), &.{});
-    const storage_exe = addCliExecutable(b, "dict-storage-integration-test", b.path("tools/storage_integration_test.zig"), target, test_optimize, &.{ .{ .name = "blob_encoder", .module = blob_encoder_mod_test }, .{ .name = "blob_storage", .module = storage_test } });
+    const storage_exe = addCliExecutable(b, "dict-storage-integration-test", b.path("compiler/tools/storage_integration_test.zig"), target, test_optimize, &.{ .{ .name = "blob_encoder", .module = blob_encoder_mod_test }, .{ .name = "blob_storage", .module = storage_test } });
     storage_exe.root_module.link_libc = true;
     storage_exe.use_llvm = true;
     storage_exe.use_lld = true;
@@ -1097,12 +1097,12 @@ fn bundleValueLeafObject(b: *std.Build) *std.Build.Step.Compile {
     const target = b.resolveTargetQuery(.{ .cpu_model = .baseline });
     const namespace = namespaceRegistryModule(b, target, .fast);
     const fields = b.createModule(.{
-        .root_source_file = b.path("src/lua/abi/static_fields.zig"),
+        .root_source_file = b.path("compiler/src/lua/abi/static_fields.zig"),
         .target = target,
         .optimize = .fast,
     });
     const runtime = b.createModule(.{
-        .root_source_file = b.path("src/lua/runtime/core.zig"),
+        .root_source_file = b.path("compiler/src/lua/runtime/core.zig"),
         .target = target,
         .optimize = .fast,
         .imports = &.{
@@ -1110,11 +1110,11 @@ fn bundleValueLeafObject(b: *std.Build) *std.Build.Step.Compile {
             .{ .name = "namespace_registry", .module = namespace },
         },
     });
-    runtime.addImport("missing_dependency", b.createModule(.{ .root_source_file = b.path("src/shared/missing_dependency.zig"), .target = target, .optimize = .fast }));
+    runtime.addImport("missing_dependency", b.createModule(.{ .root_source_file = b.path("compiler/src/shared/missing_dependency.zig"), .target = target, .optimize = .fast }));
     return b.addObject(.{
         .name = "value_leaf_build",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/lua/value_leaf_build.zig"),
+            .root_source_file = b.path("compiler/src/lua/value_leaf_build.zig"),
             .target = target,
             .optimize = .fast,
             .strip = true,
@@ -1130,50 +1130,50 @@ fn bundleValueLeafObject(b: *std.Build) *std.Build.Step.Compile {
 // graph independent of caller target/optimization and of safe test modules.
 fn bundleWorkerObject(b: *std.Build) *std.Build.Step.Compile {
     const namespace = namespaceRegistryModule(b, b.graph.host, .fast);
-    const fields = workerModule(b, "src/lua/abi/static_fields.zig");
-    const globals = workerModule(b, "src/lua/abi/globals.zig");
-    const metadata = workerModule(b, "src/lua/program_metadata.zig");
-    const static_format = workerModule(b, "src/lua/runtime/static_literal_format.zig");
-    const preprocess = workerModule(b, "src/lua/wikitext/preprocess.zig");
-    const expression = workerModule(b, "src/lua/wikitext/expression.zig");
-    const xml = workerModule(b, "src/shared/xml_decode.zig");
-    const dump = workerModule(b, "src/shared/wikimedia_dump.zig");
-    const missing_dependency = workerModule(b, "src/shared/missing_dependency.zig");
+    const fields = workerModule(b, "compiler/src/lua/abi/static_fields.zig");
+    const globals = workerModule(b, "compiler/src/lua/abi/globals.zig");
+    const metadata = workerModule(b, "compiler/src/lua/program_metadata.zig");
+    const static_format = workerModule(b, "compiler/src/lua/runtime/static_literal_format.zig");
+    const preprocess = workerModule(b, "compiler/src/lua/wikitext/preprocess.zig");
+    const expression = workerModule(b, "compiler/src/lua/wikitext/expression.zig");
+    const xml = workerModule(b, "compiler/src/shared/xml_decode.zig");
+    const dump = workerModule(b, "compiler/src/shared/wikimedia_dump.zig");
+    const missing_dependency = workerModule(b, "compiler/src/shared/missing_dependency.zig");
     preprocess.addImport("missing_dependency", missing_dependency);
-    const runtime = workerModule(b, "src/lua/runtime/core.zig");
+    const runtime = workerModule(b, "compiler/src/lua/runtime/core.zig");
     runtime.addImport("lua_static_fields", fields);
     runtime.addImport("namespace_registry", namespace);
     runtime.addImport("missing_dependency", missing_dependency);
-    const static_decode = workerModule(b, "src/lua/runtime/static_literal_decode.zig");
+    const static_decode = workerModule(b, "compiler/src/lua/runtime/static_literal_decode.zig");
     static_decode.addImport("zig_runtime", runtime);
     static_decode.addImport("lua_static_literal_format", static_format);
-    const stdlib = workerModule(b, "src/lua/runtime/stdlib.zig");
+    const stdlib = workerModule(b, "compiler/src/lua/runtime/stdlib.zig");
     stdlib.addImport("zig_runtime", runtime);
     stdlib.addImport("lua_globals", globals);
-    const scribunto = workerModule(b, "src/lua/runtime/scribunto.zig");
+    const scribunto = workerModule(b, "compiler/src/lua/runtime/scribunto.zig");
     scribunto.addImport("zig_runtime", runtime);
     scribunto.addImport("zig_stdlib", stdlib);
     scribunto.addImport("lua_wikitext_preprocess", preprocess);
     scribunto.addImport("lua_wikitext_expression", expression);
     scribunto.addImport("shared_xml_decode", xml);
     scribunto.addImport("missing_dependency", missing_dependency);
-    const program = workerModule(b, "src/lua/runtime/llvm_program.zig");
+    const program = workerModule(b, "compiler/src/lua/runtime/llvm_program.zig");
     program.addImport("zig_runtime", runtime);
     program.addImport("zig_stdlib", stdlib);
     program.addImport("zig_scribunto", scribunto);
     program.addImport("lua_globals", globals);
     program.addImport("lua_program_metadata", metadata);
     program.addImport("lua_static_literal_decode", static_decode);
-    const abi = workerModule(b, "src/lua/runtime/llvm_abi.zig");
+    const abi = workerModule(b, "compiler/src/lua/runtime/llvm_abi.zig");
     abi.addImport("zig_runtime", runtime);
     abi.addImport("lua_static_literal_decode", static_decode);
     abi.addImport("lua_static_literal_format", static_format);
-    const page_language_provider = workerModule(b, "tools/page_language.zig");
+    const page_language_provider = workerModule(b, "compiler/tools/page_language.zig");
     page_language_provider.addImport("namespace_registry", namespace);
     // The prefix parser shares the data-only syntax API with provider tests.
-    const page_language_encoder = workerModule(b, "src/encoder/blob_root.zig");
+    const page_language_encoder = workerModule(b, "renderer/src/format/blob_root.zig");
     page_language_provider.addImport("encoder", page_language_encoder);
-    const root = workerModule(b, "src/lua/bundle_worker.zig");
+    const root = workerModule(b, "compiler/src/lua/bundle_worker.zig");
     root.addImport("page_language", page_language_provider);
     root.link_libc = true;
     root.addImport("lua_program", program);
@@ -1241,8 +1241,8 @@ fn addPublicRunStep(
 }
 
 fn namespaceRegistryModule(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.Optimize) *std.Build.Module {
-    const unicode = b.createModule(.{ .root_source_file = b.path("src/frontend/unicode_lower.zig"), .target = target, .optimize = optimize });
-    return b.createModule(.{ .root_source_file = b.path("src/shared/namespace_registry_module.zig"), .target = target, .optimize = optimize, .link_libc = true, .imports = &.{.{ .name = "unicode_lower", .module = unicode }} });
+    const unicode = b.createModule(.{ .root_source_file = b.path("renderer/src/frontend/unicode_lower.zig"), .target = target, .optimize = optimize });
+    return b.createModule(.{ .root_source_file = b.path("compiler/src/shared/namespace_registry_module.zig"), .target = target, .optimize = optimize, .link_libc = true, .imports = &.{.{ .name = "unicode_lower", .module = unicode }} });
 }
 
 const PreparedTestGroup = enum {
@@ -1376,7 +1376,7 @@ test "prepared test no emission retains partition filters and normal test option
     original.root_module = &module;
     original.step.max_rss = 321;
     original.filters = encoder_partitions[0].filters;
-    original.test_runner = .{ .path = .{ .cwd_relative = "tools/test_runner.zig" }, .mode = .simple };
+    original.test_runner = .{ .path = .{ .cwd_relative = "compiler/tools/test_runner.zig" }, .mode = .simple };
     original.use_llvm = true;
     original.use_lld = true;
     original.zig_lib_dir = null;
@@ -1386,7 +1386,7 @@ test "prepared test no emission retains partition filters and normal test option
     try std.testing.expect(options.filters.ptr == original.filters.ptr);
     try std.testing.expectEqualStrings("presentation_compile.test.", options.filters[0]);
     try std.testing.expectEqualStrings(encoder_discovery_filter, options.filters[1]);
-    try std.testing.expectEqualStrings("tools/test_runner.zig", options.test_runner.?.path.cwd_relative);
+    try std.testing.expectEqualStrings("compiler/tools/test_runner.zig", options.test_runner.?.path.cwd_relative);
     try std.testing.expect(options.test_runner.?.mode == .simple);
     try std.testing.expectEqual(@as(?bool, true), options.use_llvm);
     try std.testing.expectEqual(@as(?bool, true), options.use_lld);
@@ -1472,7 +1472,7 @@ test "prepared test options preserve normal modules backend runner and limits" {
     original.root_module = &module;
     original.step.max_rss = 321;
     original.filters = &.{};
-    original.test_runner = .{ .path = .{ .cwd_relative = "tools/test_runner.zig" }, .mode = .simple };
+    original.test_runner = .{ .path = .{ .cwd_relative = "compiler/tools/test_runner.zig" }, .mode = .simple };
     original.use_llvm = true;
     original.use_lld = true;
     original.zig_lib_dir = .{ .cwd_relative = "zig-lib" };
@@ -1482,7 +1482,7 @@ test "prepared test options preserve normal modules backend runner and limits" {
     try std.testing.expectEqual(@as(u64, 321), options.max_rss);
     try std.testing.expectEqual(@as(?bool, true), options.use_llvm);
     try std.testing.expectEqual(@as(?bool, true), options.use_lld);
-    try std.testing.expectEqualStrings("tools/test_runner.zig", options.test_runner.?.path.cwd_relative);
+    try std.testing.expectEqualStrings("compiler/tools/test_runner.zig", options.test_runner.?.path.cwd_relative);
     try std.testing.expect(options.test_runner.?.mode == .simple);
     try std.testing.expectEqualStrings("zig-lib", options.zig_lib_dir.?.cwd_relative);
     try std.testing.expectEqualStrings("one", options.filters[0]);
@@ -1861,21 +1861,21 @@ const tools_partitions = [_]ToolsPartition{
 };
 
 const tools_test_files = [_][]const u8{
-    "tools/blob_build.zig",
-    "tools/figure_page_observations.zig",
-    "tools/expansion_deadline.zig",
-    "tools/bundle_expander.zig",
-    "tools/page_source_context.zig",
-    "tools/source_internal_link.zig",
-    "tools/page_language.zig",
-    "tools/page_language_prefix.zig",
-    "tools/source_title_variant.zig",
-    "tools/source_table_styles.zig",
-    "tools/source_stylesheet_imports.zig",
-    "tools/source_default_gadgets.zig",
-    "tools/language_registry.zig",
-    "tools/reviewed_nonlexical.zig",
-    "tools/figure_sizing.zig",
+    "compiler/tools/blob_build.zig",
+    "compiler/tools/figure_page_observations.zig",
+    "compiler/tools/expansion_deadline.zig",
+    "compiler/tools/bundle_expander.zig",
+    "compiler/tools/page_source_context.zig",
+    "compiler/tools/source_internal_link.zig",
+    "compiler/tools/page_language.zig",
+    "compiler/tools/page_language_prefix.zig",
+    "compiler/tools/source_title_variant.zig",
+    "compiler/tools/source_table_styles.zig",
+    "compiler/tools/source_stylesheet_imports.zig",
+    "compiler/tools/source_default_gadgets.zig",
+    "compiler/tools/language_registry.zig",
+    "compiler/tools/reviewed_nonlexical.zig",
+    "compiler/tools/figure_sizing.zig",
 };
 
 fn isToolsPartition(group: PreparedTestGroup) bool {

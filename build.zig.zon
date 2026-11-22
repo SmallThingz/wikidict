@@ -8,7 +8,8 @@
         "README.md",
         "build.zig",
         "build.zig.zon",
-        "src",
-        "tools",
+        "compiler/src",
+        "compiler/tools",
+        "renderer/src",
     },
 }

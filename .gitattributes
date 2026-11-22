@@ -1,439 +1,439 @@
 # Captured upstream fixtures retain their original whitespace for regression tests.
-tools/fixtures/nds-kardinaltalen.lua -whitespace
-tools/reviewed_alias_p10_r229761.wikitext -whitespace
-tools/testdata/shy-nom-data.lua -whitespace
-tools/testdata/hr-intrigantan/* -whitespace
-tools/testdata/mnw-kewk/* -whitespace
-tools/testdata/ia-styled-close/* -whitespace
-tools/testdata/mnw-ost/* -whitespace
-tools/testdata/sa-likhati/* -whitespace
-tools/testdata/sr-tako/* -whitespace
-tools/testdata/tr-sunuk/* -whitespace
-tools/testdata/vi-gazeta/* -whitespace
-src/encoder/pt-bor-common-css.css -whitespace
-tools/testdata/sv-bard/* -whitespace
-tools/testdata/es-ousia/* -whitespace
-tools/testdata/pt-bor/* -whitespace
-tools/testdata/pt-css-imports/* -whitespace
-tools/testdata/fi-jaamerenvoikukat/* -whitespace
-tools/testdata/it-per/* -whitespace
-tools/testdata/ku-qaz/* -whitespace
-tools/testdata/core-default-styles/common.css -whitespace
-tools/testdata/es-ataujia/* -whitespace
-src/encoder/es-ataujia-expanded.wikitext -whitespace
-src/encoder/es-ataujia-namespace.tsv -whitespace
-tools/testdata/ko-ashnu/ko-common.css -whitespace
-tools/testdata/zh-magal/language-names.tsv -whitespace
-tools/testdata/zh-magal/language-registry.tsv -whitespace
-src/encoder/testdata/hy-kalatsekh/page.expanded.wikitext -whitespace
-src/encoder/testdata/hy-kalatsekh/page.raw.wikitext -whitespace
-src/encoder/testdata/hy-kalatsekh/page.reference.wikitext -whitespace
-tools/testdata/cs-homosexual/language-names.tsv -whitespace
-tools/testdata/de-polish-states/common.css -whitespace
-tools/testdata/de-polish-states/page.expanded.wikitext -whitespace
-tools/testdata/de-polish-states/page.raw.wikitext -whitespace
-tools/testdata/sr-admiral/raw.wikitext -whitespace
-tools/testdata/sr-admiral/expanded.wikitext -whitespace
-src/encoder/testdata/et-contraction/source.raw.wikitext -whitespace
-src/encoder/testdata/et-contraction/source.static-template-derived.wikitext -whitespace
-tools/testdata/hy-ten49/raw.wikitext -whitespace
-tools/testdata/hy-ten49/expanded.wikitext -whitespace
-src/encoder/testdata/hy-hogin-batsvel/page.expanded.wikitext -whitespace
-src/encoder/testdata/hy-hogin-batsvel/page.raw.wikitext -whitespace
-src/encoder/testdata/it-uccidere/page.expanded.wikitext -whitespace
-src/encoder/testdata/it-uccidere/page.reference.wikitext -whitespace
-tools/testdata/ko-defamation/page.expanded.wikitext -whitespace
-tools/testdata/ko-defamation/page.raw.wikitext -whitespace
-tools/testdata/sr-serbia51/expanded.wikitext -whitespace
-tools/testdata/sr-serbia51/raw.wikitext -whitespace
-tools/testdata/pt-uran52/expanded.wikitext -whitespace
-tools/testdata/sw-ghuni/sw-language-names.tsv -whitespace
-src/encoder/testdata/uk-tomato/imen-eo.xmlencoded.wikitext -whitespace
+compiler/tools/fixtures/nds-kardinaltalen.lua -whitespace
+compiler/tools/reviewed_alias_p10_r229761.wikitext -whitespace
+compiler/tools/testdata/shy-nom-data.lua -whitespace
+compiler/tools/testdata/hr-intrigantan/* -whitespace
+compiler/tools/testdata/mnw-kewk/* -whitespace
+compiler/tools/testdata/ia-styled-close/* -whitespace
+compiler/tools/testdata/mnw-ost/* -whitespace
+compiler/tools/testdata/sa-likhati/* -whitespace
+compiler/tools/testdata/sr-tako/* -whitespace
+compiler/tools/testdata/tr-sunuk/* -whitespace
+compiler/tools/testdata/vi-gazeta/* -whitespace
+compiler/src/encoder/pt-bor-common-css.css -whitespace
+compiler/tools/testdata/sv-bard/* -whitespace
+compiler/tools/testdata/es-ousia/* -whitespace
+compiler/tools/testdata/pt-bor/* -whitespace
+compiler/tools/testdata/pt-css-imports/* -whitespace
+compiler/tools/testdata/fi-jaamerenvoikukat/* -whitespace
+compiler/tools/testdata/it-per/* -whitespace
+compiler/tools/testdata/ku-qaz/* -whitespace
+compiler/tools/testdata/core-default-styles/common.css -whitespace
+compiler/tools/testdata/es-ataujia/* -whitespace
+compiler/src/encoder/es-ataujia-expanded.wikitext -whitespace
+compiler/src/encoder/es-ataujia-namespace.tsv -whitespace
+compiler/tools/testdata/ko-ashnu/ko-common.css -whitespace
+compiler/tools/testdata/zh-magal/language-names.tsv -whitespace
+compiler/tools/testdata/zh-magal/language-registry.tsv -whitespace
+compiler/src/encoder/testdata/hy-kalatsekh/page.expanded.wikitext -whitespace
+compiler/src/encoder/testdata/hy-kalatsekh/page.raw.wikitext -whitespace
+compiler/src/encoder/testdata/hy-kalatsekh/page.reference.wikitext -whitespace
+compiler/tools/testdata/cs-homosexual/language-names.tsv -whitespace
+compiler/tools/testdata/de-polish-states/common.css -whitespace
+compiler/tools/testdata/de-polish-states/page.expanded.wikitext -whitespace
+compiler/tools/testdata/de-polish-states/page.raw.wikitext -whitespace
+compiler/tools/testdata/sr-admiral/raw.wikitext -whitespace
+compiler/tools/testdata/sr-admiral/expanded.wikitext -whitespace
+compiler/src/encoder/testdata/et-contraction/source.raw.wikitext -whitespace
+compiler/src/encoder/testdata/et-contraction/source.static-template-derived.wikitext -whitespace
+compiler/tools/testdata/hy-ten49/raw.wikitext -whitespace
+compiler/tools/testdata/hy-ten49/expanded.wikitext -whitespace
+compiler/src/encoder/testdata/hy-hogin-batsvel/page.expanded.wikitext -whitespace
+compiler/src/encoder/testdata/hy-hogin-batsvel/page.raw.wikitext -whitespace
+compiler/src/encoder/testdata/it-uccidere/page.expanded.wikitext -whitespace
+compiler/src/encoder/testdata/it-uccidere/page.reference.wikitext -whitespace
+compiler/tools/testdata/ko-defamation/page.expanded.wikitext -whitespace
+compiler/tools/testdata/ko-defamation/page.raw.wikitext -whitespace
+compiler/tools/testdata/sr-serbia51/expanded.wikitext -whitespace
+compiler/tools/testdata/sr-serbia51/raw.wikitext -whitespace
+compiler/tools/testdata/pt-uran52/expanded.wikitext -whitespace
+compiler/tools/testdata/sw-ghuni/sw-language-names.tsv -whitespace
+compiler/src/encoder/testdata/uk-tomato/imen-eo.xmlencoded.wikitext -whitespace
 
 # Preserve exact captured JA/KU regression source bytes.
-src/encoder/testdata/ja-gyosha/common.css -whitespace
-tools/testdata/ku-malper/page.expanded.wikitext -whitespace
+compiler/src/encoder/testdata/ja-gyosha/common.css -whitespace
+compiler/tools/testdata/ku-malper/page.expanded.wikitext -whitespace
 
 # Preserve exact captured font/FI/HY/IT/SR regression bytes.
-src/encoder/testdata/computed-font/ko-common.css -whitespace
-tools/testdata/fi-laata-fidelity/page.expanded.wikitext -whitespace
-tools/testdata/hy-kheght62/common.css -whitespace
-tools/testdata/hy-kheght62/expanded.wikitext -whitespace
-tools/testdata/it-consistente/expanded.wikitext -whitespace
-tools/testdata/it-consistente/it-common.css -whitespace
-tools/testdata/it-consistente/raw.wikitext -whitespace
-tools/testdata/sr-nedelja/common.css -whitespace
-tools/testdata/sr-nedelja/page.expanded.wikitext -whitespace
-tools/testdata/sr-nedelja/reference.expanded.wikitext -whitespace
-src/encoder/testdata/ta-commonjs-expanded.wikitext -whitespace
-src/encoder/testdata/ta-commonjs-raw.wikitext -whitespace
-src/encoder/testdata/uk-podoprygora/common.css -whitespace
-src/encoder/testdata/uk-podoprygora/source.expanded.wikitext -whitespace
-src/encoder/testdata/uk-podoprygora/source.raw.wikitext -whitespace
-tools/testdata/hy-audit-table/03.expanded.wikitext -whitespace
-tools/testdata/hy-audit-table/06.expanded.wikitext -whitespace
-tools/testdata/hy-audit-table/07.expanded.wikitext -whitespace
-tools/testdata/hy-audit-table/08.expanded.wikitext -whitespace
-tools/testdata/hy-empty-audit/02.expanded.wikitext -whitespace
-tools/testdata/hy-empty-audit/04.expanded.wikitext -whitespace
-tools/testdata/hy-empty-audit/05.expanded.wikitext -whitespace
-tools/testdata/hy-heading-audit10/expanded.wikitext -whitespace
-tools/testdata/hy-heading-audit10/raw.wikitext -whitespace
-tools/testdata/hy-inline-audit11/expanded.wikitext -whitespace
-tools/testdata/hy-inline-audit11/raw.wikitext -whitespace
-tools/testdata/hy-invalid-link09/expanded.wikitext -whitespace
-tools/testdata/hy-invalid-link09/raw.wikitext -whitespace
-tools/testdata/it-vigilia/expanded.wikitext -whitespace
-tools/testdata/it-vigilia/raw.wikitext -whitespace
+compiler/src/encoder/testdata/computed-font/ko-common.css -whitespace
+compiler/tools/testdata/fi-laata-fidelity/page.expanded.wikitext -whitespace
+compiler/tools/testdata/hy-kheght62/common.css -whitespace
+compiler/tools/testdata/hy-kheght62/expanded.wikitext -whitespace
+compiler/tools/testdata/it-consistente/expanded.wikitext -whitespace
+compiler/tools/testdata/it-consistente/it-common.css -whitespace
+compiler/tools/testdata/it-consistente/raw.wikitext -whitespace
+compiler/tools/testdata/sr-nedelja/common.css -whitespace
+compiler/tools/testdata/sr-nedelja/page.expanded.wikitext -whitespace
+compiler/tools/testdata/sr-nedelja/reference.expanded.wikitext -whitespace
+compiler/src/encoder/testdata/ta-commonjs-expanded.wikitext -whitespace
+compiler/src/encoder/testdata/ta-commonjs-raw.wikitext -whitespace
+compiler/src/encoder/testdata/uk-podoprygora/common.css -whitespace
+compiler/src/encoder/testdata/uk-podoprygora/source.expanded.wikitext -whitespace
+compiler/src/encoder/testdata/uk-podoprygora/source.raw.wikitext -whitespace
+compiler/tools/testdata/hy-audit-table/03.expanded.wikitext -whitespace
+compiler/tools/testdata/hy-audit-table/06.expanded.wikitext -whitespace
+compiler/tools/testdata/hy-audit-table/07.expanded.wikitext -whitespace
+compiler/tools/testdata/hy-audit-table/08.expanded.wikitext -whitespace
+compiler/tools/testdata/hy-empty-audit/02.expanded.wikitext -whitespace
+compiler/tools/testdata/hy-empty-audit/04.expanded.wikitext -whitespace
+compiler/tools/testdata/hy-empty-audit/05.expanded.wikitext -whitespace
+compiler/tools/testdata/hy-heading-audit10/expanded.wikitext -whitespace
+compiler/tools/testdata/hy-heading-audit10/raw.wikitext -whitespace
+compiler/tools/testdata/hy-inline-audit11/expanded.wikitext -whitespace
+compiler/tools/testdata/hy-inline-audit11/raw.wikitext -whitespace
+compiler/tools/testdata/hy-invalid-link09/expanded.wikitext -whitespace
+compiler/tools/testdata/hy-invalid-link09/raw.wikitext -whitespace
+compiler/tools/testdata/it-vigilia/expanded.wikitext -whitespace
+compiler/tools/testdata/it-vigilia/raw.wikitext -whitespace
 # Preserve the exact retained FA progressive source and Common.css bytes.
-src/encoder/testdata/fa-progressive/* -whitespace
+compiler/src/encoder/testdata/fa-progressive/* -whitespace
 
 # Retained MG115 original source bytes are the full-page oracle.
-tools/testdata/mg-tope/raw.wikitext -whitespace
-tools/testdata/mg-tope/expanded.wikitext -whitespace
+compiler/tools/testdata/mg-tope/raw.wikitext -whitespace
+compiler/tools/testdata/mg-tope/expanded.wikitext -whitespace
 
 # Preserve exact retained BN longingly source and genuine stylesheet bytes.
-src/encoder/testdata/bn-longingly/* -whitespace
+compiler/src/encoder/testdata/bn-longingly/* -whitespace
 
 # Preserve exact retained NO and ML source/metadata fixture bytes.
-tools/testdata/no-guarani/* -whitespace
-tools/testdata/ml-to/** -whitespace
-src/encoder/testdata/mnw-ost-pos/expanded.wikitext -whitespace
+compiler/tools/testdata/no-guarani/* -whitespace
+compiler/tools/testdata/ml-to/** -whitespace
+compiler/src/encoder/testdata/mnw-ost-pos/expanded.wikitext -whitespace
 
 # Preserve authenticated G/SR/UK/FA/TA/VI fixture whitespace byte for byte.
-tools/testdata/id-swadesh-jawa/common.css -whitespace
-tools/testdata/id-swadesh-jawa/language-names.tsv -whitespace
-tools/testdata/id-swadesh-jawa/page.expanded.wikitext -whitespace
-tools/testdata/lt-heading-authority/category-toc.wikitext -whitespace
-tools/testdata/lt-ispanija/common.css -whitespace
-tools/testdata/lt-ispanija/language-names.tsv -whitespace
-tools/testdata/lt-ispanija/page.expanded.wikitext -whitespace
-tools/testdata/lt-ispanija/page.raw.wikitext -whitespace
-tools/testdata/sr-eu96/page.expanded.wikitext -whitespace
-tools/testdata/sr-eu96/page.raw.wikitext -whitespace
-tools/testdata/ta-importer99/common.css -whitespace
-tools/testdata/ta-importer99/language-names.tsv -whitespace
-tools/testdata/ta-importer99/page.expanded.wikitext -whitespace
-tools/testdata/ta-importer99/page.raw.wikitext -whitespace
-tools/testdata/uk-episcopal97/common.css -whitespace
-tools/testdata/uk-episcopal97/language-names.tsv -whitespace
-tools/testdata/uk-episcopal97/page.expanded.wikitext -whitespace
-tools/testdata/uk-episcopal97/page.raw.wikitext -whitespace
-tools/testdata/vi-dau100/common.css -whitespace
-tools/testdata/vi-dau100/language-names.tsv -whitespace
-src/encoder/testdata/gl-servizo/* -whitespace
+compiler/tools/testdata/id-swadesh-jawa/common.css -whitespace
+compiler/tools/testdata/id-swadesh-jawa/language-names.tsv -whitespace
+compiler/tools/testdata/id-swadesh-jawa/page.expanded.wikitext -whitespace
+compiler/tools/testdata/lt-heading-authority/category-toc.wikitext -whitespace
+compiler/tools/testdata/lt-ispanija/common.css -whitespace
+compiler/tools/testdata/lt-ispanija/language-names.tsv -whitespace
+compiler/tools/testdata/lt-ispanija/page.expanded.wikitext -whitespace
+compiler/tools/testdata/lt-ispanija/page.raw.wikitext -whitespace
+compiler/tools/testdata/sr-eu96/page.expanded.wikitext -whitespace
+compiler/tools/testdata/sr-eu96/page.raw.wikitext -whitespace
+compiler/tools/testdata/ta-importer99/common.css -whitespace
+compiler/tools/testdata/ta-importer99/language-names.tsv -whitespace
+compiler/tools/testdata/ta-importer99/page.expanded.wikitext -whitespace
+compiler/tools/testdata/ta-importer99/page.raw.wikitext -whitespace
+compiler/tools/testdata/uk-episcopal97/common.css -whitespace
+compiler/tools/testdata/uk-episcopal97/language-names.tsv -whitespace
+compiler/tools/testdata/uk-episcopal97/page.expanded.wikitext -whitespace
+compiler/tools/testdata/uk-episcopal97/page.raw.wikitext -whitespace
+compiler/tools/testdata/vi-dau100/common.css -whitespace
+compiler/tools/testdata/vi-dau100/language-names.tsv -whitespace
+compiler/src/encoder/testdata/gl-servizo/* -whitespace
 
 # Preserve exact retained standalone source fixtures.
-src/encoder/testdata/eo-eimer/source.expanded.wikitext -whitespace
-tools/testdata/az-paris/common.css -whitespace
-tools/testdata/az-paris/expanded.wikitext -whitespace
-tools/testdata/az-paris/raw.wikitext -whitespace
-tools/testdata/km-ignorance46/common.css -whitespace
-tools/testdata/ms-february/language-names.tsv -whitespace
-tools/testdata/sg-belasting/expanded.wikitext -whitespace
-tools/testdata/te-apsarasa/expanded.wikitext -whitespace
-tools/testdata/te-apsarasa/raw.wikitext -whitespace
-tools/testdata/uz-baqiroq/expanded.wikitext -whitespace
-tools/testdata/uz-baqiroq/raw.wikitext -whitespace
+compiler/src/encoder/testdata/eo-eimer/source.expanded.wikitext -whitespace
+compiler/tools/testdata/az-paris/common.css -whitespace
+compiler/tools/testdata/az-paris/expanded.wikitext -whitespace
+compiler/tools/testdata/az-paris/raw.wikitext -whitespace
+compiler/tools/testdata/km-ignorance46/common.css -whitespace
+compiler/tools/testdata/ms-february/language-names.tsv -whitespace
+compiler/tools/testdata/sg-belasting/expanded.wikitext -whitespace
+compiler/tools/testdata/te-apsarasa/expanded.wikitext -whitespace
+compiler/tools/testdata/te-apsarasa/raw.wikitext -whitespace
+compiler/tools/testdata/uz-baqiroq/expanded.wikitext -whitespace
+compiler/tools/testdata/uz-baqiroq/raw.wikitext -whitespace
 # Preserve exact captured ZH module source whitespace.
-tools/testdata/zh-magal/module-1363240.lua -whitespace
-src/encoder/testdata/vi-dau100/common.css -whitespace
-src/encoder/testdata/ja-partir-quote/expanded.wikitext -whitespace
-tools/testdata/ku-leker108/page.expanded.wikitext -whitespace
-tools/testdata/hu-louisiana111/common.css -whitespace
-tools/testdata/hu-louisiana111/expanded.wikitext -whitespace
-tools/testdata/hu-louisiana111/language-names.tsv -whitespace
-tools/testdata/pl-jedzenie112/language-names.tsv -whitespace
-tools/testdata/pl-jedzenie112/page.expanded.wikitext -whitespace
-tools/testdata/pl-jedzenie112/page.file-alias-reference.wikitext -whitespace
-tools/testdata/pl-jedzenie112/page.raw.wikitext -whitespace
-tools/testdata/pl-jedzenie112/source-cell-text.tsv -whitespace
+compiler/tools/testdata/zh-magal/module-1363240.lua -whitespace
+compiler/src/encoder/testdata/vi-dau100/common.css -whitespace
+compiler/src/encoder/testdata/ja-partir-quote/expanded.wikitext -whitespace
+compiler/tools/testdata/ku-leker108/page.expanded.wikitext -whitespace
+compiler/tools/testdata/hu-louisiana111/common.css -whitespace
+compiler/tools/testdata/hu-louisiana111/expanded.wikitext -whitespace
+compiler/tools/testdata/hu-louisiana111/language-names.tsv -whitespace
+compiler/tools/testdata/pl-jedzenie112/language-names.tsv -whitespace
+compiler/tools/testdata/pl-jedzenie112/page.expanded.wikitext -whitespace
+compiler/tools/testdata/pl-jedzenie112/page.file-alias-reference.wikitext -whitespace
+compiler/tools/testdata/pl-jedzenie112/page.raw.wikitext -whitespace
+compiler/tools/testdata/pl-jedzenie112/source-cell-text.tsv -whitespace
 
 # Exact retained EL110 source/metadata fixture bytes.
-tools/testdata/el-katasvestir110/language-names.tsv -whitespace
-tools/testdata/el-katasvestir110/module-Languages.lua -whitespace
-tools/testdata/el-katasvestir110/page.expanded.wikitext -whitespace
+compiler/tools/testdata/el-katasvestir110/language-names.tsv -whitespace
+compiler/tools/testdata/el-katasvestir110/module-Languages.lua -whitespace
+compiler/tools/testdata/el-katasvestir110/page.expanded.wikitext -whitespace
 # Exact retained DE113 source/metadata fixture bytes.
-tools/testdata/de-saint-vincent113/language-names.tsv -whitespace
-tools/testdata/de-saint-vincent113/page.expanded.wikitext -whitespace
-tools/testdata/tr-an103/* -whitespace
+compiler/tools/testdata/de-saint-vincent113/language-names.tsv -whitespace
+compiler/tools/testdata/de-saint-vincent113/page.expanded.wikitext -whitespace
+compiler/tools/testdata/tr-an103/* -whitespace
 
 # Preserve exact retained IT105 source and metadata bytes.
-tools/testdata/it-giunto105/raw.wikitext -whitespace
-tools/testdata/it-giunto105/expanded.wikitext -whitespace
-tools/testdata/it-giunto105/index-row.tsv -whitespace
-tools/testdata/it-giunto105/language-names.tsv -whitespace
-tools/testdata/fr-abbreviations116/raw.wikitext -text
-tools/testdata/fr-abbreviations116/expanded.wikitext -text
-tools/testdata/fr-abbreviations116/index-row.tsv -text
-tools/testdata/fr-abbreviations116/common.css -text
-tools/testdata/fr-abbreviations116/namespace-registry.tsv -text
-tools/testdata/fr-abbreviations116/interwiki-map.tsv -text
-tools/testdata/fr-abbreviations116/behavior-switches.tsv -text
-tools/testdata/fr-abbreviations116/image-options.tsv -text
-tools/testdata/fr-abbreviations116/namespace-siteinfo.raw.json -text
-tools/testdata/fr-abbreviations116/language-registry.tsv -text
-tools/testdata/fr-abbreviations116/language-names.tsv -text
-tools/testdata/fr-abbreviations116/first-cells.txt -text
-tools/testdata/fr-abbreviations116/expanded.wikitext -whitespace
-tools/testdata/fr-abbreviations116/language-names.tsv -whitespace
-tools/testdata/fr-abbreviations116/raw.wikitext -whitespace
-tools/testdata/ru-denaske114/common.css -whitespace
-tools/testdata/ru-denaske114/page.expanded.wikitext -whitespace
-tools/testdata/ru-denaske114/page.raw.wikitext -whitespace
-tools/testdata/th-kip-role/language-names.tsv -whitespace
-tools/testdata/th-kip-role/module-272817.lua -whitespace
-tools/testdata/th-kip-role/module-324680.lua -whitespace
-tools/testdata/th-kip-role/module-36044.lua -whitespace
-tools/testdata/tr-an103/an.expanded.wikitext -whitespace
-tools/testdata/tr-an103/an.raw.wikitext -whitespace
-tools/testdata/ms-tooth124/raw.wikitext -whitespace
-tools/testdata/ms-tooth124/expanded.wikitext -whitespace
-tools/testdata/fa-hesabdari125/raw.wikitext -whitespace
-tools/testdata/fa-hesabdari125/expanded.wikitext -whitespace
+compiler/tools/testdata/it-giunto105/raw.wikitext -whitespace
+compiler/tools/testdata/it-giunto105/expanded.wikitext -whitespace
+compiler/tools/testdata/it-giunto105/index-row.tsv -whitespace
+compiler/tools/testdata/it-giunto105/language-names.tsv -whitespace
+compiler/tools/testdata/fr-abbreviations116/raw.wikitext -text
+compiler/tools/testdata/fr-abbreviations116/expanded.wikitext -text
+compiler/tools/testdata/fr-abbreviations116/index-row.tsv -text
+compiler/tools/testdata/fr-abbreviations116/common.css -text
+compiler/tools/testdata/fr-abbreviations116/namespace-registry.tsv -text
+compiler/tools/testdata/fr-abbreviations116/interwiki-map.tsv -text
+compiler/tools/testdata/fr-abbreviations116/behavior-switches.tsv -text
+compiler/tools/testdata/fr-abbreviations116/image-options.tsv -text
+compiler/tools/testdata/fr-abbreviations116/namespace-siteinfo.raw.json -text
+compiler/tools/testdata/fr-abbreviations116/language-registry.tsv -text
+compiler/tools/testdata/fr-abbreviations116/language-names.tsv -text
+compiler/tools/testdata/fr-abbreviations116/first-cells.txt -text
+compiler/tools/testdata/fr-abbreviations116/expanded.wikitext -whitespace
+compiler/tools/testdata/fr-abbreviations116/language-names.tsv -whitespace
+compiler/tools/testdata/fr-abbreviations116/raw.wikitext -whitespace
+compiler/tools/testdata/ru-denaske114/common.css -whitespace
+compiler/tools/testdata/ru-denaske114/page.expanded.wikitext -whitespace
+compiler/tools/testdata/ru-denaske114/page.raw.wikitext -whitespace
+compiler/tools/testdata/th-kip-role/language-names.tsv -whitespace
+compiler/tools/testdata/th-kip-role/module-272817.lua -whitespace
+compiler/tools/testdata/th-kip-role/module-324680.lua -whitespace
+compiler/tools/testdata/th-kip-role/module-36044.lua -whitespace
+compiler/tools/testdata/tr-an103/an.expanded.wikitext -whitespace
+compiler/tools/testdata/tr-an103/an.raw.wikitext -whitespace
+compiler/tools/testdata/ms-tooth124/raw.wikitext -whitespace
+compiler/tools/testdata/ms-tooth124/expanded.wikitext -whitespace
+compiler/tools/testdata/fa-hesabdari125/raw.wikitext -whitespace
+compiler/tools/testdata/fa-hesabdari125/expanded.wikitext -whitespace
 
 # Exact retained TE122 physical whitespace.
-tools/testdata/te-muttadi122/raw.wikitext -whitespace
-tools/testdata/te-muttadi122/expanded.wikitext -whitespace
+compiler/tools/testdata/te-muttadi122/raw.wikitext -whitespace
+compiler/tools/testdata/te-muttadi122/expanded.wikitext -whitespace
 
-tools/testdata/gl-servizo-owner124/* -whitespace
+compiler/tools/testdata/gl-servizo-owner124/* -whitespace
 
 # Exact upstream AZ module snapshots preserve authored whitespace.
-tools/testdata/az-vladenie/modules/58057.lua -whitespace
-tools/testdata/az-vladenie/modules/58059.lua -whitespace
-tools/testdata/az-vladenie/modules/58067.lua -whitespace
-tools/testdata/az-vladenie/modules/58184.lua -whitespace
-tools/testdata/az-vladenie/modules/58347.lua -whitespace
-tools/testdata/az-vladenie/modules/58358.lua -whitespace
-tools/testdata/az-vladenie/modules/58368.lua -whitespace
-tools/testdata/az-vladenie/modules/69114.lua -whitespace
+compiler/tools/testdata/az-vladenie/modules/58057.lua -whitespace
+compiler/tools/testdata/az-vladenie/modules/58059.lua -whitespace
+compiler/tools/testdata/az-vladenie/modules/58067.lua -whitespace
+compiler/tools/testdata/az-vladenie/modules/58184.lua -whitespace
+compiler/tools/testdata/az-vladenie/modules/58347.lua -whitespace
+compiler/tools/testdata/az-vladenie/modules/58358.lua -whitespace
+compiler/tools/testdata/az-vladenie/modules/58368.lua -whitespace
+compiler/tools/testdata/az-vladenie/modules/69114.lua -whitespace
 
 # Retained registry columns and original captured page whitespace.
-tools/testdata/az-vladenie/language-names.tsv -whitespace
-tools/testdata/az-vladenie/page.expanded.wikitext -whitespace
-tools/testdata/az-vladenie/page.raw.wikitext -whitespace
-tools/testdata/no-bibringe/page.expanded.wikitext -whitespace
-tools/testdata/uz-ipak125/31257.lua -whitespace
-tools/testdata/uz-ipak125/interface-messages.tsv -whitespace
-tools/testdata/uz-ipak125/language-fallbacks.tsv -whitespace
-tools/testdata/uz-ipak125/original-interface-messages.tsv -whitespace
+compiler/tools/testdata/az-vladenie/language-names.tsv -whitespace
+compiler/tools/testdata/az-vladenie/page.expanded.wikitext -whitespace
+compiler/tools/testdata/az-vladenie/page.raw.wikitext -whitespace
+compiler/tools/testdata/no-bibringe/page.expanded.wikitext -whitespace
+compiler/tools/testdata/uz-ipak125/31257.lua -whitespace
+compiler/tools/testdata/uz-ipak125/interface-messages.tsv -whitespace
+compiler/tools/testdata/uz-ipak125/language-fallbacks.tsv -whitespace
+compiler/tools/testdata/uz-ipak125/original-interface-messages.tsv -whitespace
 
 # Exact retained JA/ID/EL/KU/HU input whitespace.
-src/encoder/id-rampai129-expanded.wikitext -whitespace
-tools/testdata/el-regex130/common.css -whitespace
-tools/testdata/el-regex130/language-names.tsv -whitespace
-tools/testdata/el-regex130/modules/442770.lua -whitespace
-tools/testdata/el-regex130/page.expanded.wikitext -whitespace
-tools/testdata/hu-atlanta132/raw.wikitext -whitespace
-tools/testdata/id-rampai129/language-names.tsv -whitespace
-tools/testdata/id-rampai129/page.expanded.wikitext -whitespace
-tools/testdata/ja-partir130/common.css -whitespace
-tools/testdata/ja-partir130/language-names.tsv -whitespace
-tools/testdata/ja-partir130/modules/121395.lua -whitespace
-tools/testdata/ja-partir130/modules/138787.lua -whitespace
-tools/testdata/ja-partir130/modules/174693.lua -whitespace
-tools/testdata/ja-partir130/modules/304953.lua -whitespace
-tools/testdata/ja-partir130/modules/316762.lua -whitespace
-tools/testdata/ja-partir130/modules/322294.lua -whitespace
-tools/testdata/ja-partir130/modules/325557.lua -whitespace
-tools/testdata/ja-partir130/modules/325565.lua -whitespace
-tools/testdata/ja-partir130/modules/569571.lua -whitespace
-tools/testdata/ja-partir130/page.expanded.wikitext -whitespace
-tools/testdata/ku-rengder131/page.expanded.wikitext -whitespace
+compiler/src/encoder/id-rampai129-expanded.wikitext -whitespace
+compiler/tools/testdata/el-regex130/common.css -whitespace
+compiler/tools/testdata/el-regex130/language-names.tsv -whitespace
+compiler/tools/testdata/el-regex130/modules/442770.lua -whitespace
+compiler/tools/testdata/el-regex130/page.expanded.wikitext -whitespace
+compiler/tools/testdata/hu-atlanta132/raw.wikitext -whitespace
+compiler/tools/testdata/id-rampai129/language-names.tsv -whitespace
+compiler/tools/testdata/id-rampai129/page.expanded.wikitext -whitespace
+compiler/tools/testdata/ja-partir130/common.css -whitespace
+compiler/tools/testdata/ja-partir130/language-names.tsv -whitespace
+compiler/tools/testdata/ja-partir130/modules/121395.lua -whitespace
+compiler/tools/testdata/ja-partir130/modules/138787.lua -whitespace
+compiler/tools/testdata/ja-partir130/modules/174693.lua -whitespace
+compiler/tools/testdata/ja-partir130/modules/304953.lua -whitespace
+compiler/tools/testdata/ja-partir130/modules/316762.lua -whitespace
+compiler/tools/testdata/ja-partir130/modules/322294.lua -whitespace
+compiler/tools/testdata/ja-partir130/modules/325557.lua -whitespace
+compiler/tools/testdata/ja-partir130/modules/325565.lua -whitespace
+compiler/tools/testdata/ja-partir130/modules/569571.lua -whitespace
+compiler/tools/testdata/ja-partir130/page.expanded.wikitext -whitespace
+compiler/tools/testdata/ku-rengder131/page.expanded.wikitext -whitespace
 
 # Literal authored fixture whitespace retained for selected renderer controls.
-tools/testdata/az-alphabet133/alphabet-template.wikitext -whitespace
-tools/testdata/az-alphabet133/case-02/expanded.wikitext -whitespace
-tools/testdata/az-alphabet133/case-03/expanded.wikitext -whitespace
-tools/testdata/az-alphabet133/case-04/expanded.wikitext -whitespace
-tools/testdata/az-alphabet133/expanded.wikitext -whitespace
-tools/testdata/id-rampai129/common.css -whitespace
-tools/testdata/zh-ciriciring132/module-1363236.lua -whitespace
-tools/testdata/ms-kaeru136/raw.wikitext -text
-tools/testdata/ms-kaeru136/expanded.wikitext -text
-tools/testdata/ms-kaeru136/display-title.wikitext -text
-tools/testdata/ms-kaeru136/index-row.tsv -text
-tools/testdata/ms-kaeru136/capture.json -text
+compiler/tools/testdata/az-alphabet133/alphabet-template.wikitext -whitespace
+compiler/tools/testdata/az-alphabet133/case-02/expanded.wikitext -whitespace
+compiler/tools/testdata/az-alphabet133/case-03/expanded.wikitext -whitespace
+compiler/tools/testdata/az-alphabet133/case-04/expanded.wikitext -whitespace
+compiler/tools/testdata/az-alphabet133/expanded.wikitext -whitespace
+compiler/tools/testdata/id-rampai129/common.css -whitespace
+compiler/tools/testdata/zh-ciriciring132/module-1363236.lua -whitespace
+compiler/tools/testdata/ms-kaeru136/raw.wikitext -text
+compiler/tools/testdata/ms-kaeru136/expanded.wikitext -text
+compiler/tools/testdata/ms-kaeru136/display-title.wikitext -text
+compiler/tools/testdata/ms-kaeru136/index-row.tsv -text
+compiler/tools/testdata/ms-kaeru136/capture.json -text
 
 # Exact retained LT128/SR129/VI129 source fixture whitespace.
-tools/testdata/lt-ziyou128/page.expanded.wikitext -whitespace
-tools/testdata/lt-ziyou128/page.raw.wikitext -whitespace
-tools/testdata/sr-iniuria129/common.css -whitespace
-tools/testdata/sr-iniuria129/language-names.tsv -whitespace
-tools/testdata/sr-iniuria129/modules/234807.lua -whitespace
-tools/testdata/sr-iniuria129/modules/234862.lua -whitespace
-tools/testdata/sr-iniuria129/modules/235985.lua -whitespace
-tools/testdata/sr-iniuria129/modules/235989.lua -whitespace
-tools/testdata/sr-iniuria129/modules/290117.lua -whitespace
-tools/testdata/sr-iniuria129/modules/29322.lua -whitespace
-tools/testdata/sr-iniuria129/modules/318829.lua -whitespace
-tools/testdata/sr-iniuria129/modules/329783.lua -whitespace
-tools/testdata/sr-iniuria129/modules/329788.lua -whitespace
-tools/testdata/sr-iniuria129/modules/329790.lua -whitespace
-tools/testdata/sr-iniuria129/modules/329802.lua -whitespace
-tools/testdata/sr-iniuria129/page.expanded.wikitext -whitespace
-tools/testdata/sr-iniuria129/page.raw.wikitext -whitespace
-tools/testdata/vi-istoricheskij129/common.css -whitespace
-tools/testdata/vi-istoricheskij129/expanded.wikitext -whitespace
-tools/testdata/vi-istoricheskij129/raw.wikitext -whitespace
+compiler/tools/testdata/lt-ziyou128/page.expanded.wikitext -whitespace
+compiler/tools/testdata/lt-ziyou128/page.raw.wikitext -whitespace
+compiler/tools/testdata/sr-iniuria129/common.css -whitespace
+compiler/tools/testdata/sr-iniuria129/language-names.tsv -whitespace
+compiler/tools/testdata/sr-iniuria129/modules/234807.lua -whitespace
+compiler/tools/testdata/sr-iniuria129/modules/234862.lua -whitespace
+compiler/tools/testdata/sr-iniuria129/modules/235985.lua -whitespace
+compiler/tools/testdata/sr-iniuria129/modules/235989.lua -whitespace
+compiler/tools/testdata/sr-iniuria129/modules/290117.lua -whitespace
+compiler/tools/testdata/sr-iniuria129/modules/29322.lua -whitespace
+compiler/tools/testdata/sr-iniuria129/modules/318829.lua -whitespace
+compiler/tools/testdata/sr-iniuria129/modules/329783.lua -whitespace
+compiler/tools/testdata/sr-iniuria129/modules/329788.lua -whitespace
+compiler/tools/testdata/sr-iniuria129/modules/329790.lua -whitespace
+compiler/tools/testdata/sr-iniuria129/modules/329802.lua -whitespace
+compiler/tools/testdata/sr-iniuria129/page.expanded.wikitext -whitespace
+compiler/tools/testdata/sr-iniuria129/page.raw.wikitext -whitespace
+compiler/tools/testdata/vi-istoricheskij129/common.css -whitespace
+compiler/tools/testdata/vi-istoricheskij129/expanded.wikitext -whitespace
+compiler/tools/testdata/vi-istoricheskij129/raw.wikitext -whitespace
 
 # Exact newly joined source fixture whitespace is intentional.
-tools/testdata/hu-atlanta132/eng.decoded.wikitext -whitespace
+compiler/tools/testdata/hu-atlanta132/eng.decoded.wikitext -whitespace
 
 # Exact retained IT source whitespace is intentional.
-tools/testdata/it-diritti140/expanded.wikitext -whitespace
-tools/testdata/ja-partir130/modules/173886.lua -whitespace
-tools/testdata/ja-partir130/modules/212420.lua -whitespace
-tools/testdata/ja-partir130/modules/309845.lua -whitespace
-tools/testdata/ja-partir130/modules/325560.lua -whitespace
-tools/testdata/ms-kaeru136/expanded.wikitext -whitespace
-tools/testdata/sr-iniuria129/modules/235992.lua -whitespace
-tools/testdata/sr-iniuria129/modules/235995.lua -whitespace
-tools/testdata/sr-iniuria129/modules/329775.lua -whitespace
-tools/testdata/sr-iniuria129/modules/329777.lua -whitespace
-tools/testdata/te-muttadi135-role/linked-class.wikitext -whitespace
+compiler/tools/testdata/it-diritti140/expanded.wikitext -whitespace
+compiler/tools/testdata/ja-partir130/modules/173886.lua -whitespace
+compiler/tools/testdata/ja-partir130/modules/212420.lua -whitespace
+compiler/tools/testdata/ja-partir130/modules/309845.lua -whitespace
+compiler/tools/testdata/ja-partir130/modules/325560.lua -whitespace
+compiler/tools/testdata/ms-kaeru136/expanded.wikitext -whitespace
+compiler/tools/testdata/sr-iniuria129/modules/235992.lua -whitespace
+compiler/tools/testdata/sr-iniuria129/modules/235995.lua -whitespace
+compiler/tools/testdata/sr-iniuria129/modules/329775.lua -whitespace
+compiler/tools/testdata/sr-iniuria129/modules/329777.lua -whitespace
+compiler/tools/testdata/te-muttadi135-role/linked-class.wikitext -whitespace
 
-tools/testdata/uz-ipak125-figure/figure-siteinfo.raw.json -text
-tools/testdata/uz-ipak125-figure/figure-sizing.raw.json -text
-tools/testdata/uz-ipak125-figure/figure-sizing.site.json -text
-tools/testdata/de-estroncio132/page.raw.wikitext -whitespace
-tools/testdata/de-estroncio132/page.expanded.wikitext -whitespace
-tools/testdata/de-estroncio132/page.index-row.tsv -whitespace
-tools/testdata/th-da141/expanded.wikitext -whitespace
-tools/testdata/ru-ugol143/raw.wikitext -whitespace
-tools/testdata/ru-ugol143/expanded.wikitext -whitespace
-src/encoder/testdata/ms-kaeru-reader146/reader.ja.json -whitespace
-src/encoder/testdata/az-letter-reader145/reader-01.json -whitespace
-src/encoder/testdata/az-letter-reader145/reader-02.json -whitespace
-src/encoder/testdata/az-letter-reader145/reader-03.json -whitespace
-src/encoder/testdata/az-letter-reader145/reader-04.json -whitespace
-tools/testdata/lt-owner148/jav.wikitext -whitespace
-tools/testdata/lt-owner148/yuev.wikitext -whitespace
-tools/testdata/lt-owner148/cmnv.wikitext -whitespace
-tools/testdata/lt-owner148/lang-ja.wikitext -whitespace
-tools/testdata/lt-owner148/lang-yue.wikitext -whitespace
-tools/testdata/lt-owner148/lang-cmn.wikitext -whitespace
-tools/testdata/lt-owner148/japanese-category.wikitext -whitespace
-tools/testdata/lt-owner148/cantonese-category.wikitext -whitespace
-tools/testdata/lt-owner148/mandarin-category.wikitext -whitespace
-src/encoder/testdata/lt-reader148/ziyou.json -whitespace
-tools/testdata/sr-woman149/raw.wikitext -whitespace
-tools/testdata/sr-woman149/expanded.wikitext -whitespace
-tools/testdata/bn-longingly-organization/common.css -whitespace
-src/encoder/testdata/ku-misk153/expanded.wikitext -whitespace
-tools/testdata/ku-misk153/page.expanded.wikitext -whitespace
-tools/testdata/it-grafica152/expanded.wikitext -whitespace
-tools/testdata/shy-nom-owner/langues.lua -whitespace
-tools/testdata/shy-nom-owner/section-langue.lua -whitespace
-tools/testdata/shy-nom-owner/bases.lua -whitespace
-src/encoder/testdata/ga-sd-organization/sd-00.wikitext -whitespace
-src/encoder/testdata/hr-skakavica-figure/common.css -whitespace
-tools/testdata/figure-inputs198/sr/common.css -whitespace
-tools/testdata/tt-autonym-capitalization/language-names.tsv -whitespace
-tools/testdata/hu-klavulansav158/raw.wikitext -whitespace
-tools/testdata/hu-klavulansav158/expanded.wikitext -whitespace
-tools/testdata/el-aston156/page.expanded.wikitext -whitespace
-tools/testdata/mg-blo160/raw.wikitext -whitespace
-tools/testdata/mg-blo160/expanded.wikitext -whitespace
-tools/testdata/ru-page-language201/page-language.json -whitespace
-tools/testdata/ru-page-language201/page-language-without-prefix.json -whitespace
-tools/testdata/ru-page-language201/response.raw.json -whitespace
-tools/testdata/ru-page-language201/response.prefix.html -whitespace
-tools/testdata/fr-kaitra161/raw.wikitext -whitespace
-tools/testdata/fr-kaitra161/expanded.wikitext -whitespace
-tools/testdata/en-empty-element271/language-names.tsv -whitespace
-tools/testdata/az-head-owner145/modules/58051.lua -whitespace
-tools/testdata/az-head-owner145/modules/58053.lua -whitespace
-tools/testdata/az-head-owner145/modules/58055.lua -whitespace
-tools/testdata/sr-apatin223/expanded.wikitext -whitespace
-tools/testdata/sr-gif226/valjevo/raw.wikitext -whitespace
-tools/testdata/sr-gif226/valjevo/expanded.wikitext -whitespace
-tools/testdata/sr-gif226/ben/raw.wikitext -whitespace
-tools/testdata/sr-gif226/ben/expanded.wikitext -whitespace
-tools/testdata/sr-gif226/guo/raw.wikitext -whitespace
-tools/testdata/sr-gif226/guo/expanded.wikitext -whitespace
-tools/testdata/sr-gif226/ji/raw.wikitext -whitespace
-tools/testdata/sr-gif226/ji/expanded.wikitext -whitespace
-tools/testdata/sr-gif226/de/expanded.wikitext -whitespace
-tools/testdata/sr-svg226/novi-sad/expanded.wikitext -whitespace
-tools/testdata/sr-svg226/nis/raw.wikitext -whitespace
-tools/testdata/sr-svg226/nis/expanded.wikitext -whitespace
-tools/testdata/sr-svg226/pristina/raw.wikitext -whitespace
-tools/testdata/sr-svg226/pristina/expanded.wikitext -whitespace
-tools/testdata/sr-svg226/beograd/raw.wikitext -whitespace
-tools/testdata/sr-svg226/beograd/expanded.wikitext -whitespace
-tools/testdata/sr-audit226-manual-25/* -whitespace
-tools/testdata/sr-audit226-manual-242/* -whitespace
-tools/testdata/sr-audit226-manual-243/* -whitespace
-tools/testdata/sr-egypt1240/* -whitespace
-tools/testdata/sr-png258/shang/raw.wikitext -whitespace
-tools/testdata/sr-png258/shang/expanded.wikitext -whitespace
-tools/testdata/ku-serbajar227/* -text
-src/lua/testdata/parser-functions/hu-viz.wikitext -whitespace
-tools/testdata/it-nero227/raw.wikitext -whitespace
-tools/testdata/it-nero227/expanded.wikitext -whitespace
-tools/testdata/it-nero227/modules/491823.lua -whitespace
-tools/testdata/it-nero227/modules/491824.lua -whitespace
-tools/testdata/it-nero227/modules/491828.lua -whitespace
-tools/testdata/vi-wikipedia227/modules/256179.lua -whitespace
-tools/testdata/vi-wikipedia227/modules/256182.lua -whitespace
-tools/testdata/vi-wikipedia227/modules/256762.lua -whitespace
-tools/testdata/vi-wikipedia227/modules/270567.lua -whitespace
-tools/testdata/vi-wikipedia227/modules/272283.lua -whitespace
-tools/testdata/vi-wikipedia227/modules/272288.lua -whitespace
-tools/testdata/vi-wikipedia227/modules/272289.lua -whitespace
-tools/testdata/vi-wikipedia227/modules/272294.lua -whitespace
-tools/testdata/vi-wikipedia227/modules/272295.lua -whitespace
-tools/testdata/it-basco238/raw.wikitext -whitespace
-tools/testdata/it-basco238/expanded.wikitext -whitespace
-tools/testdata/vi-multi-flat241/210-raw.wikitext -whitespace
-tools/testdata/vi-multi-flat241/210-expanded.wikitext -whitespace
-tools/testdata/vi-multi-flat241/211-raw.wikitext -whitespace
-tools/testdata/vi-multi-flat241/211-expanded.wikitext -whitespace
-tools/testdata/vi-multi-flat241/212-raw.wikitext -whitespace
-tools/testdata/vi-multi-flat241/212-expanded.wikitext -whitespace
-tools/testdata/vi-multi-flat241/214-raw.wikitext -whitespace
-tools/testdata/vi-multi-flat241/214-expanded.wikitext -whitespace
-tools/testdata/ku-iro238/* -text -whitespace
-tools/testdata/vi-beech22/raw.wikitext -whitespace
-tools/testdata/vi-beech22/expanded.wikitext -whitespace
-tools/testdata/ku-serbajar227/page.expanded.wikitext -whitespace
-tools/testdata/vi-wikipedia227/modules/271066.lua -whitespace
-tools/testdata/vi-wikipedia227/modules/272293.lua -whitespace
-tools/testdata/vi-frame250/raw.wikitext -whitespace
-tools/testdata/vi-frame250/expanded.wikitext -whitespace
-tools/testdata/wo-page-language242/response.prefix.html -whitespace
-tools/testdata/wo-page-language242/expanded.wikitext -whitespace
-tools/testdata/wo-page-language242/response-no-toc.prefix.html -whitespace
-tools/testdata/sr-dr242/raw.wikitext -whitespace
-tools/testdata/sr-dr242/expanded.wikitext -whitespace
-src/encoder/testdata/bew-term/head.lua -whitespace
-tools/testdata/ku-jin247/page.raw.wikitext -whitespace
-tools/testdata/ku-jin247/page.expanded.wikitext -whitespace
+compiler/tools/testdata/uz-ipak125-figure/figure-siteinfo.raw.json -text
+compiler/tools/testdata/uz-ipak125-figure/figure-sizing.raw.json -text
+compiler/tools/testdata/uz-ipak125-figure/figure-sizing.site.json -text
+compiler/tools/testdata/de-estroncio132/page.raw.wikitext -whitespace
+compiler/tools/testdata/de-estroncio132/page.expanded.wikitext -whitespace
+compiler/tools/testdata/de-estroncio132/page.index-row.tsv -whitespace
+compiler/tools/testdata/th-da141/expanded.wikitext -whitespace
+compiler/tools/testdata/ru-ugol143/raw.wikitext -whitespace
+compiler/tools/testdata/ru-ugol143/expanded.wikitext -whitespace
+compiler/src/encoder/testdata/ms-kaeru-reader146/reader.ja.json -whitespace
+compiler/src/encoder/testdata/az-letter-reader145/reader-01.json -whitespace
+compiler/src/encoder/testdata/az-letter-reader145/reader-02.json -whitespace
+compiler/src/encoder/testdata/az-letter-reader145/reader-03.json -whitespace
+compiler/src/encoder/testdata/az-letter-reader145/reader-04.json -whitespace
+compiler/tools/testdata/lt-owner148/jav.wikitext -whitespace
+compiler/tools/testdata/lt-owner148/yuev.wikitext -whitespace
+compiler/tools/testdata/lt-owner148/cmnv.wikitext -whitespace
+compiler/tools/testdata/lt-owner148/lang-ja.wikitext -whitespace
+compiler/tools/testdata/lt-owner148/lang-yue.wikitext -whitespace
+compiler/tools/testdata/lt-owner148/lang-cmn.wikitext -whitespace
+compiler/tools/testdata/lt-owner148/japanese-category.wikitext -whitespace
+compiler/tools/testdata/lt-owner148/cantonese-category.wikitext -whitespace
+compiler/tools/testdata/lt-owner148/mandarin-category.wikitext -whitespace
+compiler/src/encoder/testdata/lt-reader148/ziyou.json -whitespace
+compiler/tools/testdata/sr-woman149/raw.wikitext -whitespace
+compiler/tools/testdata/sr-woman149/expanded.wikitext -whitespace
+compiler/tools/testdata/bn-longingly-organization/common.css -whitespace
+compiler/src/encoder/testdata/ku-misk153/expanded.wikitext -whitespace
+compiler/tools/testdata/ku-misk153/page.expanded.wikitext -whitespace
+compiler/tools/testdata/it-grafica152/expanded.wikitext -whitespace
+compiler/tools/testdata/shy-nom-owner/langues.lua -whitespace
+compiler/tools/testdata/shy-nom-owner/section-langue.lua -whitespace
+compiler/tools/testdata/shy-nom-owner/bases.lua -whitespace
+compiler/src/encoder/testdata/ga-sd-organization/sd-00.wikitext -whitespace
+compiler/src/encoder/testdata/hr-skakavica-figure/common.css -whitespace
+compiler/tools/testdata/figure-inputs198/sr/common.css -whitespace
+compiler/tools/testdata/tt-autonym-capitalization/language-names.tsv -whitespace
+compiler/tools/testdata/hu-klavulansav158/raw.wikitext -whitespace
+compiler/tools/testdata/hu-klavulansav158/expanded.wikitext -whitespace
+compiler/tools/testdata/el-aston156/page.expanded.wikitext -whitespace
+compiler/tools/testdata/mg-blo160/raw.wikitext -whitespace
+compiler/tools/testdata/mg-blo160/expanded.wikitext -whitespace
+compiler/tools/testdata/ru-page-language201/page-language.json -whitespace
+compiler/tools/testdata/ru-page-language201/page-language-without-prefix.json -whitespace
+compiler/tools/testdata/ru-page-language201/response.raw.json -whitespace
+compiler/tools/testdata/ru-page-language201/response.prefix.html -whitespace
+compiler/tools/testdata/fr-kaitra161/raw.wikitext -whitespace
+compiler/tools/testdata/fr-kaitra161/expanded.wikitext -whitespace
+compiler/tools/testdata/en-empty-element271/language-names.tsv -whitespace
+compiler/tools/testdata/az-head-owner145/modules/58051.lua -whitespace
+compiler/tools/testdata/az-head-owner145/modules/58053.lua -whitespace
+compiler/tools/testdata/az-head-owner145/modules/58055.lua -whitespace
+compiler/tools/testdata/sr-apatin223/expanded.wikitext -whitespace
+compiler/tools/testdata/sr-gif226/valjevo/raw.wikitext -whitespace
+compiler/tools/testdata/sr-gif226/valjevo/expanded.wikitext -whitespace
+compiler/tools/testdata/sr-gif226/ben/raw.wikitext -whitespace
+compiler/tools/testdata/sr-gif226/ben/expanded.wikitext -whitespace
+compiler/tools/testdata/sr-gif226/guo/raw.wikitext -whitespace
+compiler/tools/testdata/sr-gif226/guo/expanded.wikitext -whitespace
+compiler/tools/testdata/sr-gif226/ji/raw.wikitext -whitespace
+compiler/tools/testdata/sr-gif226/ji/expanded.wikitext -whitespace
+compiler/tools/testdata/sr-gif226/de/expanded.wikitext -whitespace
+compiler/tools/testdata/sr-svg226/novi-sad/expanded.wikitext -whitespace
+compiler/tools/testdata/sr-svg226/nis/raw.wikitext -whitespace
+compiler/tools/testdata/sr-svg226/nis/expanded.wikitext -whitespace
+compiler/tools/testdata/sr-svg226/pristina/raw.wikitext -whitespace
+compiler/tools/testdata/sr-svg226/pristina/expanded.wikitext -whitespace
+compiler/tools/testdata/sr-svg226/beograd/raw.wikitext -whitespace
+compiler/tools/testdata/sr-svg226/beograd/expanded.wikitext -whitespace
+compiler/tools/testdata/sr-audit226-manual-25/* -whitespace
+compiler/tools/testdata/sr-audit226-manual-242/* -whitespace
+compiler/tools/testdata/sr-audit226-manual-243/* -whitespace
+compiler/tools/testdata/sr-egypt1240/* -whitespace
+compiler/tools/testdata/sr-png258/shang/raw.wikitext -whitespace
+compiler/tools/testdata/sr-png258/shang/expanded.wikitext -whitespace
+compiler/tools/testdata/ku-serbajar227/* -text
+compiler/src/lua/testdata/parser-functions/hu-viz.wikitext -whitespace
+compiler/tools/testdata/it-nero227/raw.wikitext -whitespace
+compiler/tools/testdata/it-nero227/expanded.wikitext -whitespace
+compiler/tools/testdata/it-nero227/modules/491823.lua -whitespace
+compiler/tools/testdata/it-nero227/modules/491824.lua -whitespace
+compiler/tools/testdata/it-nero227/modules/491828.lua -whitespace
+compiler/tools/testdata/vi-wikipedia227/modules/256179.lua -whitespace
+compiler/tools/testdata/vi-wikipedia227/modules/256182.lua -whitespace
+compiler/tools/testdata/vi-wikipedia227/modules/256762.lua -whitespace
+compiler/tools/testdata/vi-wikipedia227/modules/270567.lua -whitespace
+compiler/tools/testdata/vi-wikipedia227/modules/272283.lua -whitespace
+compiler/tools/testdata/vi-wikipedia227/modules/272288.lua -whitespace
+compiler/tools/testdata/vi-wikipedia227/modules/272289.lua -whitespace
+compiler/tools/testdata/vi-wikipedia227/modules/272294.lua -whitespace
+compiler/tools/testdata/vi-wikipedia227/modules/272295.lua -whitespace
+compiler/tools/testdata/it-basco238/raw.wikitext -whitespace
+compiler/tools/testdata/it-basco238/expanded.wikitext -whitespace
+compiler/tools/testdata/vi-multi-flat241/210-raw.wikitext -whitespace
+compiler/tools/testdata/vi-multi-flat241/210-expanded.wikitext -whitespace
+compiler/tools/testdata/vi-multi-flat241/211-raw.wikitext -whitespace
+compiler/tools/testdata/vi-multi-flat241/211-expanded.wikitext -whitespace
+compiler/tools/testdata/vi-multi-flat241/212-raw.wikitext -whitespace
+compiler/tools/testdata/vi-multi-flat241/212-expanded.wikitext -whitespace
+compiler/tools/testdata/vi-multi-flat241/214-raw.wikitext -whitespace
+compiler/tools/testdata/vi-multi-flat241/214-expanded.wikitext -whitespace
+compiler/tools/testdata/ku-iro238/* -text -whitespace
+compiler/tools/testdata/vi-beech22/raw.wikitext -whitespace
+compiler/tools/testdata/vi-beech22/expanded.wikitext -whitespace
+compiler/tools/testdata/ku-serbajar227/page.expanded.wikitext -whitespace
+compiler/tools/testdata/vi-wikipedia227/modules/271066.lua -whitespace
+compiler/tools/testdata/vi-wikipedia227/modules/272293.lua -whitespace
+compiler/tools/testdata/vi-frame250/raw.wikitext -whitespace
+compiler/tools/testdata/vi-frame250/expanded.wikitext -whitespace
+compiler/tools/testdata/wo-page-language242/response.prefix.html -whitespace
+compiler/tools/testdata/wo-page-language242/expanded.wikitext -whitespace
+compiler/tools/testdata/wo-page-language242/response-no-toc.prefix.html -whitespace
+compiler/tools/testdata/sr-dr242/raw.wikitext -whitespace
+compiler/tools/testdata/sr-dr242/expanded.wikitext -whitespace
+compiler/src/encoder/testdata/bew-term/head.lua -whitespace
+compiler/tools/testdata/ku-jin247/page.raw.wikitext -whitespace
+compiler/tools/testdata/ku-jin247/page.expanded.wikitext -whitespace
 # Complete retained TH next13 source and normal Figure package.
-tools/testdata/th-achk-next13/** -text -whitespace
-tools/testdata/sr-sampa-tt/* -whitespace
-src/shared/testdata/sr-sampa-tt/* -whitespace
-tools/testdata/uz-ipak125-figure/figure-sizing.json -text
+compiler/tools/testdata/th-achk-next13/** -text -whitespace
+compiler/tools/testdata/sr-sampa-tt/* -whitespace
+compiler/src/shared/testdata/sr-sampa-tt/* -whitespace
+compiler/tools/testdata/uz-ipak125-figure/figure-sizing.json -text
 # Exact completed MS146 Reader snapshot; retained field whitespace.
 # Exact completed AZ145 Reader snapshots; retained field whitespace.
 # Exact retained LT source declarations and completed Reader snapshot.
-src/encoder/testdata/ga-sd-organization/ga-role-source-2.wikitext -whitespace
+compiler/src/encoder/testdata/ga-sd-organization/ga-role-source-2.wikitext -whitespace
 # Complete retained HSB source roles and normal Figure package.
-tools/testdata/hsb-figure242/** -text -whitespace
+compiler/tools/testdata/hsb-figure242/** -text -whitespace
 # Exact supplied-page observation and retained full-page fixtures.
-tools/testdata/figure-page-observations/** -text -whitespace
-tools/testdata/it-poliziotto-observed251/** -text -whitespace
+compiler/tools/testdata/figure-page-observations/** -text -whitespace
+compiler/tools/testdata/it-poliziotto-observed251/** -text -whitespace
 # Exact supplied-source HSB anchor reference HTML.
-tools/testdata/hsb-observed-anchor251/** -text -whitespace
+compiler/tools/testdata/hsb-observed-anchor251/** -text -whitespace
 # Complete retained ZH dan source and ordinary language metadata roles.
-tools/testdata/zh-dan-nextnormal3/** -text -whitespace
-tools/testdata/ku-wan248/page.raw.wikitext -whitespace
-tools/testdata/ku-wan248/page.expanded.wikitext -whitespace
+compiler/tools/testdata/zh-dan-nextnormal3/** -text -whitespace
+compiler/tools/testdata/ku-wan248/page.raw.wikitext -whitespace
+compiler/tools/testdata/ku-wan248/page.expanded.wikitext -whitespace
 # Exact retained VI Asia source and normal complete-batch metadata.
-tools/testdata/vi-asia7/** -text -whitespace
+compiler/tools/testdata/vi-asia7/** -text -whitespace
 # Exact complete retained MG citation pages.
-tools/testdata/mg-citation253/** -text -whitespace
+compiler/tools/testdata/mg-citation253/** -text -whitespace
 # Exact closed SR abulija source and normal complete-batch media input.
 # Retained complete SR defaultless conversion source
 # Exact retained SR zarok source and index.
@@ -446,192 +446,192 @@ tools/testdata/mg-citation253/** -text -whitespace
 # Complete retained SR skaredy repeated rowless conversion regression.
 
 # Preserve exact upstream whitespace in newly qualified captured fixtures.
-tools/testdata/en-missing-tayassu/expanded.wikitext -whitespace
-tools/testdata/ku-dushem-next268/dushem.expanded.wikitext -whitespace
-tools/testdata/ku-hev-next268/hev-prefix.expanded.wikitext -whitespace
-tools/testdata/ku-hev-next268/hev-prefix.raw.wikitext -whitespace
-tools/testdata/ku-kurmanc-next268/page.expanded.wikitext -whitespace
-tools/testdata/ku-mer-next268/page.expanded.wikitext -whitespace
-tools/testdata/sr-abulija253/page.expanded.wikitext -whitespace
-tools/testdata/sr-alaman253/page.expanded.wikitext -whitespace
-tools/testdata/sr-boziji253/expanded.wikitext -whitespace
-tools/testdata/sr-literal-caption253/expanded.wikitext -whitespace
-tools/testdata/sr-liudyna253/page.expanded.wikitext -whitespace
-tools/testdata/sr-liudyna253/page.raw.wikitext -whitespace
-tools/testdata/sr-pracovat253/expanded.wikitext -whitespace
-tools/testdata/sr-rule-free-caption253/cyr/expanded.wikitext -whitespace
-tools/testdata/sr-rule-free-caption253/cyr/raw.wikitext -whitespace
-tools/testdata/sr-rule-free-caption253/lat/expanded.wikitext -whitespace
-tools/testdata/sr-skaredy253/expanded.wikitext -whitespace
-tools/testdata/sr-skola253/page.expanded.wikitext -whitespace
-tools/testdata/sr-vediet268/expanded.wikitext -whitespace
-tools/testdata/sr-zabudnut268/expanded.wikitext -whitespace
-tools/testdata/vi-cubeb268/expanded.wikitext -whitespace
+compiler/tools/testdata/en-missing-tayassu/expanded.wikitext -whitespace
+compiler/tools/testdata/ku-dushem-next268/dushem.expanded.wikitext -whitespace
+compiler/tools/testdata/ku-hev-next268/hev-prefix.expanded.wikitext -whitespace
+compiler/tools/testdata/ku-hev-next268/hev-prefix.raw.wikitext -whitespace
+compiler/tools/testdata/ku-kurmanc-next268/page.expanded.wikitext -whitespace
+compiler/tools/testdata/ku-mer-next268/page.expanded.wikitext -whitespace
+compiler/tools/testdata/sr-abulija253/page.expanded.wikitext -whitespace
+compiler/tools/testdata/sr-alaman253/page.expanded.wikitext -whitespace
+compiler/tools/testdata/sr-boziji253/expanded.wikitext -whitespace
+compiler/tools/testdata/sr-literal-caption253/expanded.wikitext -whitespace
+compiler/tools/testdata/sr-liudyna253/page.expanded.wikitext -whitespace
+compiler/tools/testdata/sr-liudyna253/page.raw.wikitext -whitespace
+compiler/tools/testdata/sr-pracovat253/expanded.wikitext -whitespace
+compiler/tools/testdata/sr-rule-free-caption253/cyr/expanded.wikitext -whitespace
+compiler/tools/testdata/sr-rule-free-caption253/cyr/raw.wikitext -whitespace
+compiler/tools/testdata/sr-rule-free-caption253/lat/expanded.wikitext -whitespace
+compiler/tools/testdata/sr-skaredy253/expanded.wikitext -whitespace
+compiler/tools/testdata/sr-skola253/page.expanded.wikitext -whitespace
+compiler/tools/testdata/sr-vediet268/expanded.wikitext -whitespace
+compiler/tools/testdata/sr-zabudnut268/expanded.wikitext -whitespace
+compiler/tools/testdata/vi-cubeb268/expanded.wikitext -whitespace
 
 # Complete retained IT wo source and original normal Figure metadata.
-tools/testdata/it-wo275/** -text -whitespace
-tools/testdata/figure-text-class-scope/** -text -whitespace
-tools/testdata/figure-outer-context/** -text -whitespace
+compiler/tools/testdata/it-wo275/** -text -whitespace
+compiler/tools/testdata/figure-text-class-scope/** -text -whitespace
+compiler/tools/testdata/figure-outer-context/** -text -whitespace
 
-tools/testdata/mg-apto296/* -whitespace
-tools/testdata/de-mai301/** -text -whitespace
+compiler/tools/testdata/mg-apto296/* -whitespace
+compiler/tools/testdata/de-mai301/** -text -whitespace
 
 # Preserve exact upstream whitespace in the normal VI/MG regression fixtures.
-src/encoder/testdata/vi-cubeb-display/common.css -whitespace
-tools/testdata/mg-lie-upon268/expanded.wikitext -whitespace
-tools/testdata/mg-lie-upon268/raw.wikitext -whitespace
+compiler/src/encoder/testdata/vi-cubeb-display/common.css -whitespace
+compiler/tools/testdata/mg-lie-upon268/expanded.wikitext -whitespace
+compiler/tools/testdata/mg-lie-upon268/raw.wikitext -whitespace
 
 # Preserve exact bytes in the integrated source-bound regression fixtures.
-tools/testdata/th-peili-default-page/* -text
-tools/testdata/figure-page-observations/el-relations/* -text
-tools/testdata/figure-page-observations/el-relations-outer/* -text
-src/encoder/testdata/vi-huis-entity/* -text
-src/encoder/testdata/fr-borracho-organization/* -text
-tools/testdata/vi-acceleration18/* -text
-tools/testdata/hu-te-linked-owners/* -text
-tools/testdata/mg-kampi335/* -text
-tools/testdata/de-mai-page-styles/* -text -whitespace
-tools/testdata/th-current-four/* -text -whitespace
-tools/testdata/th-page-palette/* -text -whitespace
-tools/testdata/th-page-palette-current/* -text -whitespace
-tools/testdata/vi-all12-capabilities/* -text -whitespace
-tools/testdata/vi-imidazole-fit/* -text -whitespace
-tools/testdata/vi-imidazole-context/* -text -whitespace
-tools/testdata/ru-root-language93/* -text
-tools/testdata/it-two-svg/* -text -whitespace
+compiler/tools/testdata/th-peili-default-page/* -text
+compiler/tools/testdata/figure-page-observations/el-relations/* -text
+compiler/tools/testdata/figure-page-observations/el-relations-outer/* -text
+compiler/src/encoder/testdata/vi-huis-entity/* -text
+compiler/src/encoder/testdata/fr-borracho-organization/* -text
+compiler/tools/testdata/vi-acceleration18/* -text
+compiler/tools/testdata/hu-te-linked-owners/* -text
+compiler/tools/testdata/mg-kampi335/* -text
+compiler/tools/testdata/de-mai-page-styles/* -text -whitespace
+compiler/tools/testdata/th-current-four/* -text -whitespace
+compiler/tools/testdata/th-page-palette/* -text -whitespace
+compiler/tools/testdata/th-page-palette-current/* -text -whitespace
+compiler/tools/testdata/vi-all12-capabilities/* -text -whitespace
+compiler/tools/testdata/vi-imidazole-fit/* -text -whitespace
+compiler/tools/testdata/vi-imidazole-context/* -text -whitespace
+compiler/tools/testdata/ru-root-language93/* -text
+compiler/tools/testdata/it-two-svg/* -text -whitespace
 
 # These authenticated upstream fixture bytes include significant retained whitespace.
-src/encoder/testdata/fr-borracho-organization/expanded.wikitext -text -whitespace
-src/encoder/testdata/hu-root-literal/motor.expanded.wikitext -text -whitespace
-src/encoder/testdata/hu-root-literal/motor.prepared-expanded.wikitext -text -whitespace
-src/encoder/testdata/hu-root-literal/te.expanded.wikitext -text -whitespace
-src/encoder/testdata/hu-root-literal/te.prepared-expanded.wikitext -text -whitespace
-src/encoder/testdata/mg-kampi-noun/page.expanded.wikitext -text -whitespace
-src/encoder/testdata/vi-huis-entity/common.css -text -whitespace
-src/encoder/testdata/vi-huis-entity/expanded.wikitext -text -whitespace
-src/lua/runtime/testdata/hu-root-literal/motor.expanded.wikitext -text -whitespace
-src/lua/runtime/testdata/hu-root-literal/motor.prepared-expanded.wikitext -text -whitespace
-src/lua/runtime/testdata/hu-root-literal/te.expanded.wikitext -text -whitespace
-src/lua/runtime/testdata/hu-root-literal/te.prepared-expanded.wikitext -text -whitespace
-src/lua/wikitext/testdata/hu-root-literal/motor.raw.wikitext -text -whitespace
-src/lua/wikitext/testdata/hu-root-literal/te.raw.wikitext -text -whitespace
-tools/testdata/en-koukang-imagemap/language-fallbacks.tsv -text -whitespace
-tools/testdata/fr-named-owner/language-names.tsv -text -whitespace
-tools/testdata/hu-root-literal328/motor.expanded.wikitext -text -whitespace
-tools/testdata/hu-root-literal328/motor.prepared-expanded.wikitext -text -whitespace
-tools/testdata/hu-root-literal328/motor.raw.wikitext -text -whitespace
-tools/testdata/hu-root-literal328/te.expanded.wikitext -text -whitespace
-tools/testdata/hu-root-literal328/te.prepared-expanded.wikitext -text -whitespace
-tools/testdata/hu-root-literal328/te.raw.wikitext -text -whitespace
-tools/testdata/it-static-poster/cranio/expanded.wikitext -text -whitespace
-tools/testdata/it-static-poster/cranio/raw.wikitext -text -whitespace
-tools/testdata/it-static-poster/language-fallbacks.tsv -text -whitespace
-tools/testdata/it-static-poster/tibia/expanded.wikitext -text -whitespace
-tools/testdata/mg-kampi335/expanded.wikitext -text -whitespace
-tools/testdata/ru-root-language93/page-language.html -text -whitespace
-tools/testdata/ru-root-language93/prior-nine.html -text -whitespace
-tools/testdata/th-jian-normal/module-36374.lua -text -whitespace
-tools/testdata/th-peili-default-page/expanded.wikitext -text -whitespace
-tools/testdata/vi-acceleration-resolved-context/expanded.wikitext -text -whitespace
-tools/testdata/vi-acceleration18/expanded.wikitext -text -whitespace
-tools/testdata/vi-acceleration18/raw.wikitext -text -whitespace
+compiler/src/encoder/testdata/fr-borracho-organization/expanded.wikitext -text -whitespace
+compiler/src/encoder/testdata/hu-root-literal/motor.expanded.wikitext -text -whitespace
+compiler/src/encoder/testdata/hu-root-literal/motor.prepared-expanded.wikitext -text -whitespace
+compiler/src/encoder/testdata/hu-root-literal/te.expanded.wikitext -text -whitespace
+compiler/src/encoder/testdata/hu-root-literal/te.prepared-expanded.wikitext -text -whitespace
+compiler/src/encoder/testdata/mg-kampi-noun/page.expanded.wikitext -text -whitespace
+compiler/src/encoder/testdata/vi-huis-entity/common.css -text -whitespace
+compiler/src/encoder/testdata/vi-huis-entity/expanded.wikitext -text -whitespace
+compiler/src/lua/runtime/testdata/hu-root-literal/motor.expanded.wikitext -text -whitespace
+compiler/src/lua/runtime/testdata/hu-root-literal/motor.prepared-expanded.wikitext -text -whitespace
+compiler/src/lua/runtime/testdata/hu-root-literal/te.expanded.wikitext -text -whitespace
+compiler/src/lua/runtime/testdata/hu-root-literal/te.prepared-expanded.wikitext -text -whitespace
+compiler/src/lua/wikitext/testdata/hu-root-literal/motor.raw.wikitext -text -whitespace
+compiler/src/lua/wikitext/testdata/hu-root-literal/te.raw.wikitext -text -whitespace
+compiler/tools/testdata/en-koukang-imagemap/language-fallbacks.tsv -text -whitespace
+compiler/tools/testdata/fr-named-owner/language-names.tsv -text -whitespace
+compiler/tools/testdata/hu-root-literal328/motor.expanded.wikitext -text -whitespace
+compiler/tools/testdata/hu-root-literal328/motor.prepared-expanded.wikitext -text -whitespace
+compiler/tools/testdata/hu-root-literal328/motor.raw.wikitext -text -whitespace
+compiler/tools/testdata/hu-root-literal328/te.expanded.wikitext -text -whitespace
+compiler/tools/testdata/hu-root-literal328/te.prepared-expanded.wikitext -text -whitespace
+compiler/tools/testdata/hu-root-literal328/te.raw.wikitext -text -whitespace
+compiler/tools/testdata/it-static-poster/cranio/expanded.wikitext -text -whitespace
+compiler/tools/testdata/it-static-poster/cranio/raw.wikitext -text -whitespace
+compiler/tools/testdata/it-static-poster/language-fallbacks.tsv -text -whitespace
+compiler/tools/testdata/it-static-poster/tibia/expanded.wikitext -text -whitespace
+compiler/tools/testdata/mg-kampi335/expanded.wikitext -text -whitespace
+compiler/tools/testdata/ru-root-language93/page-language.html -text -whitespace
+compiler/tools/testdata/ru-root-language93/prior-nine.html -text -whitespace
+compiler/tools/testdata/th-jian-normal/module-36374.lua -text -whitespace
+compiler/tools/testdata/th-peili-default-page/expanded.wikitext -text -whitespace
+compiler/tools/testdata/vi-acceleration-resolved-context/expanded.wikitext -text -whitespace
+compiler/tools/testdata/vi-acceleration18/expanded.wikitext -text -whitespace
+compiler/tools/testdata/vi-acceleration18/raw.wikitext -text -whitespace
 
 # Exact retained EL source and Reader fixtures.
-src/encoder/testdata/el-lekani-hash-border/* -text -whitespace
-src/encoder/testdata/el-lekani-synonym/* -text -whitespace
+compiler/src/encoder/testdata/el-lekani-hash-border/* -text -whitespace
+compiler/src/encoder/testdata/el-lekani-synonym/* -text -whitespace
 
-tools/testdata/figure-page-observations/sr-fuhe-served-set/* -text -whitespace
+compiler/tools/testdata/figure-page-observations/sr-fuhe-served-set/* -text -whitespace
 
-tools/testdata/it-book-conjunction/* -text -whitespace
+compiler/tools/testdata/it-book-conjunction/* -text -whitespace
 
-src/encoder/is-aktin-current-reader.json -text
+compiler/src/encoder/is-aktin-current-reader.json -text
 
-tools/testdata/is-paragraph-owner/* -text -whitespace
+compiler/tools/testdata/is-paragraph-owner/* -text -whitespace
 
-src/encoder/testdata/sr-fuhe-senses/* -text -whitespace
+compiler/src/encoder/testdata/sr-fuhe-senses/* -text -whitespace
 
-tools/testdata/zh-dikhana-preceding-sibling01/* -text -whitespace
+compiler/tools/testdata/zh-dikhana-preceding-sibling01/* -text -whitespace
 
-tools/testdata/it-cediglia-right-default/* -text -whitespace
-tools/testdata/mg-cozeulodorieso/raw.wikitext -text -whitespace
-tools/testdata/mg-cozeulodorieso/expanded.wikitext -text -whitespace
-tools/testdata/mg-cozeulodorieso/missing-dependency.json -text -whitespace
-tools/testdata/mg-aiaia-colon/raw.wikitext -text -whitespace
-tools/testdata/mg-aiaia-colon/expanded.wikitext -text -whitespace
-tools/testdata/mg-aiaia-colon/missing-dependency.json -text -whitespace
-tools/testdata/figure-page-observations/fr-cauannos-alias/behavior-switches.tsv -text -whitespace
-tools/testdata/figure-page-observations/fr-cauannos-alias/figure-page-observations.json -text -whitespace
-tools/testdata/figure-page-observations/fr-cauannos-alias/image-options.tsv -text -whitespace
-tools/testdata/figure-page-observations/fr-cauannos-alias/jupiter-expanded.wikitext -text -whitespace
-tools/testdata/figure-page-observations/fr-cauannos-alias/jupiter-raw.wikitext -text -whitespace
-tools/testdata/figure-page-observations/fr-cauannos-alias/namespace-registry.tsv -text -whitespace
-tools/testdata/figure-page-observations/fr-cauannos-alias/page.raw.wikitext -text -whitespace
-tools/testdata/el-relation-style-conjunction/empty-page.raw.wikitext -text -whitespace
-src/encoder/testdata/mg-fille-boundary/raw.wikitext -text -whitespace
-src/encoder/testdata/mg-affix-form-organization/an.raw.wikitext -text -whitespace
-src/encoder/testdata/mg-affix-form-organization/lunsj.raw.wikitext -text -whitespace
+compiler/tools/testdata/it-cediglia-right-default/* -text -whitespace
+compiler/tools/testdata/mg-cozeulodorieso/raw.wikitext -text -whitespace
+compiler/tools/testdata/mg-cozeulodorieso/expanded.wikitext -text -whitespace
+compiler/tools/testdata/mg-cozeulodorieso/missing-dependency.json -text -whitespace
+compiler/tools/testdata/mg-aiaia-colon/raw.wikitext -text -whitespace
+compiler/tools/testdata/mg-aiaia-colon/expanded.wikitext -text -whitespace
+compiler/tools/testdata/mg-aiaia-colon/missing-dependency.json -text -whitespace
+compiler/tools/testdata/figure-page-observations/fr-cauannos-alias/behavior-switches.tsv -text -whitespace
+compiler/tools/testdata/figure-page-observations/fr-cauannos-alias/figure-page-observations.json -text -whitespace
+compiler/tools/testdata/figure-page-observations/fr-cauannos-alias/image-options.tsv -text -whitespace
+compiler/tools/testdata/figure-page-observations/fr-cauannos-alias/jupiter-expanded.wikitext -text -whitespace
+compiler/tools/testdata/figure-page-observations/fr-cauannos-alias/jupiter-raw.wikitext -text -whitespace
+compiler/tools/testdata/figure-page-observations/fr-cauannos-alias/namespace-registry.tsv -text -whitespace
+compiler/tools/testdata/figure-page-observations/fr-cauannos-alias/page.raw.wikitext -text -whitespace
+compiler/tools/testdata/el-relation-style-conjunction/empty-page.raw.wikitext -text -whitespace
+compiler/src/encoder/testdata/mg-fille-boundary/raw.wikitext -text -whitespace
+compiler/src/encoder/testdata/mg-affix-form-organization/an.raw.wikitext -text -whitespace
+compiler/src/encoder/testdata/mg-affix-form-organization/lunsj.raw.wikitext -text -whitespace
 
 # Exact retained EL source and MG returned-HTML prefix: preserve trailing capture whitespace.
-src/encoder/testdata/el-feminismos-starred/expanded.wikitext whitespace=-blank-at-eol
-src/encoder/testdata/el-remaining-organization/diafanis/expanded.wikitext whitespace=-blank-at-eol
-src/encoder/testdata/el-remaining-organization/diafanis/raw.wikitext whitespace=-blank-at-eol
-src/encoder/testdata/el-remaining-organization/psaropouli/expanded.wikitext whitespace=-blank-at-eol
-tools/testdata/mg-prefix-ac/mg-prefix.candidate.html whitespace=-blank-at-eol
-tools/testdata/fr-prefix-symbol/fr-prefix.candidate.html whitespace=-blank-at-eol
-tools/testdata/hu-direct-source-context01/1153-raw.wikitext whitespace=-blank-at-eol
-tools/testdata/hu-direct-source-context01/1153-expanded.wikitext whitespace=-blank-at-eol
-tools/testdata/hu-direct-source-context01/1563-raw.wikitext whitespace=-blank-at-eol
-tools/testdata/hu-direct-source-context01/1563-expanded.wikitext whitespace=-blank-at-eol
-tools/testdata/hu-direct-source-context01/4021-raw.wikitext whitespace=-blank-at-eol
-tools/testdata/hu-direct-source-context01/4021-expanded.wikitext whitespace=-blank-at-eol
-src/encoder/testdata/ku-table-opener53658/source.wikitext whitespace=-blank-at-eol
-src/encoder/testdata/sr-alexander-rule01/source.expanded.wikitext whitespace=-blank-at-eol
-tools/testdata/sr-authored-head/source.expanded.wikitext whitespace=-blank-at-eol
-src/encoder/testdata/el-cell-line-height/page.expanded.wikitext whitespace=-blank-at-eol
-src/encoder/testdata/th-nested-prefix/page.expanded.wikitext whitespace=-blank-at-eol
-src/encoder/testdata/mg-in-external-angle/page.expanded.wikitext whitespace=-blank-at-eol
+compiler/src/encoder/testdata/el-feminismos-starred/expanded.wikitext whitespace=-blank-at-eol
+compiler/src/encoder/testdata/el-remaining-organization/diafanis/expanded.wikitext whitespace=-blank-at-eol
+compiler/src/encoder/testdata/el-remaining-organization/diafanis/raw.wikitext whitespace=-blank-at-eol
+compiler/src/encoder/testdata/el-remaining-organization/psaropouli/expanded.wikitext whitespace=-blank-at-eol
+compiler/tools/testdata/mg-prefix-ac/mg-prefix.candidate.html whitespace=-blank-at-eol
+compiler/tools/testdata/fr-prefix-symbol/fr-prefix.candidate.html whitespace=-blank-at-eol
+compiler/tools/testdata/hu-direct-source-context01/1153-raw.wikitext whitespace=-blank-at-eol
+compiler/tools/testdata/hu-direct-source-context01/1153-expanded.wikitext whitespace=-blank-at-eol
+compiler/tools/testdata/hu-direct-source-context01/1563-raw.wikitext whitespace=-blank-at-eol
+compiler/tools/testdata/hu-direct-source-context01/1563-expanded.wikitext whitespace=-blank-at-eol
+compiler/tools/testdata/hu-direct-source-context01/4021-raw.wikitext whitespace=-blank-at-eol
+compiler/tools/testdata/hu-direct-source-context01/4021-expanded.wikitext whitespace=-blank-at-eol
+compiler/src/encoder/testdata/ku-table-opener53658/source.wikitext whitespace=-blank-at-eol
+compiler/src/encoder/testdata/sr-alexander-rule01/source.expanded.wikitext whitespace=-blank-at-eol
+compiler/tools/testdata/sr-authored-head/source.expanded.wikitext whitespace=-blank-at-eol
+compiler/src/encoder/testdata/el-cell-line-height/page.expanded.wikitext whitespace=-blank-at-eol
+compiler/src/encoder/testdata/th-nested-prefix/page.expanded.wikitext whitespace=-blank-at-eol
+compiler/src/encoder/testdata/mg-in-external-angle/page.expanded.wikitext whitespace=-blank-at-eol
 
 # Preserve exact authenticated upstream bytes in current renderer regression fixtures.
-src/encoder/testdata/mg-ti-pos/expanded.wikitext -whitespace
-src/encoder/testdata/mg-ti-pos/raw.wikitext -whitespace
-src/encoder/testdata/sr-naslov-owner/page.expanded.wikitext -whitespace
-src/encoder/testdata/sr-naslov-owner/page.raw.wikitext -whitespace
-src/encoder/testdata/zh-gugli176-expanded.wikitext -whitespace
-src/encoder/testdata/zh-gugli176-reference.wikitext -whitespace
-tools/testdata/sr-centered-missing-cell/page.expanded.wikitext -whitespace
-tools/testdata/sr-centered-missing-cell/response.html -whitespace
-src/encoder/testdata/ku-leker-display188/failure-00000001-expanded.wikitext -whitespace
-src/encoder/testdata/sr-ri207-padding/expanded.wikitext -whitespace
-src/encoder/testdata/sr-ri207-padding/common.css -whitespace
-src/encoder/testdata/mg208-reference/expanded.wikitext -whitespace
-src/encoder/testdata/zh-nokango176/failure-00000001-expanded.wikitext -whitespace
-tools/testdata/sr-centered-missing-cell/page.raw.wikitext -whitespace
+compiler/src/encoder/testdata/mg-ti-pos/expanded.wikitext -whitespace
+compiler/src/encoder/testdata/mg-ti-pos/raw.wikitext -whitespace
+compiler/src/encoder/testdata/sr-naslov-owner/page.expanded.wikitext -whitespace
+compiler/src/encoder/testdata/sr-naslov-owner/page.raw.wikitext -whitespace
+compiler/src/encoder/testdata/zh-gugli176-expanded.wikitext -whitespace
+compiler/src/encoder/testdata/zh-gugli176-reference.wikitext -whitespace
+compiler/tools/testdata/sr-centered-missing-cell/page.expanded.wikitext -whitespace
+compiler/tools/testdata/sr-centered-missing-cell/response.html -whitespace
+compiler/src/encoder/testdata/ku-leker-display188/failure-00000001-expanded.wikitext -whitespace
+compiler/src/encoder/testdata/sr-ri207-padding/expanded.wikitext -whitespace
+compiler/src/encoder/testdata/sr-ri207-padding/common.css -whitespace
+compiler/src/encoder/testdata/mg208-reference/expanded.wikitext -whitespace
+compiler/src/encoder/testdata/zh-nokango176/failure-00000001-expanded.wikitext -whitespace
+compiler/tools/testdata/sr-centered-missing-cell/page.raw.wikitext -whitespace
 # Preserve authenticated source whitespace in retained MG and SR regression fixtures.
-src/encoder/testdata/mg-karbord-etymology210/page.raw.wikitext -whitespace
-src/encoder/testdata/mg-karbord-etymology210/page.expanded.wikitext -whitespace
-src/encoder/testdata/sr-ji-affix210/page.expanded.wikitext -whitespace
-src/encoder/testdata/sr-ji-mul210/page.expanded.wikitext -whitespace
-src/encoder/testdata/sr-ji-mul210/common.css -whitespace
+compiler/src/encoder/testdata/mg-karbord-etymology210/page.raw.wikitext -whitespace
+compiler/src/encoder/testdata/mg-karbord-etymology210/page.expanded.wikitext -whitespace
+compiler/src/encoder/testdata/sr-ji-affix210/page.expanded.wikitext -whitespace
+compiler/src/encoder/testdata/sr-ji-mul210/page.expanded.wikitext -whitespace
+compiler/src/encoder/testdata/sr-ji-mul210/common.css -whitespace
 # Corsican template captures retain their authenticated trailing spaces.
-src/encoder/testdata/co-pos-labels/template-verb.wikitext -text whitespace=-blank-at-eol
-src/encoder/testdata/co-pos-labels/template-adj.wikitext -text whitespace=-blank-at-eol
+compiler/src/encoder/testdata/co-pos-labels/template-verb.wikitext -text whitespace=-blank-at-eol
+compiler/src/encoder/testdata/co-pos-labels/template-adj.wikitext -text whitespace=-blank-at-eol
 # Retained ZA source and registry fixtures preserve their authenticated trailing bytes.
-tools/testdata/za-prefix-owner/language-registry.tsv whitespace=-blank-at-eol
-tools/testdata/za-prefix-owner/page-Australia.wikitext whitespace=-blank-at-eol
-tools/testdata/za-prefix-owner/page-France.wikitext whitespace=-blank-at-eol
-tools/testdata/za-prefix-owner/page-football.wikitext whitespace=-blank-at-eol
-tools/testdata/za-prefix-owner/page-potassium.wikitext whitespace=-blank-at-eol
-tools/testdata/za-prefix-owner/page-train.wikitext whitespace=-blank-at-eol
-src/encoder/testdata/an-decimal-noun/*.wikitext whitespace=-blank-at-eof
-tools/testdata/an-decimal-noun/*.wikitext whitespace=-blank-at-eof
+compiler/tools/testdata/za-prefix-owner/language-registry.tsv whitespace=-blank-at-eol
+compiler/tools/testdata/za-prefix-owner/page-Australia.wikitext whitespace=-blank-at-eol
+compiler/tools/testdata/za-prefix-owner/page-France.wikitext whitespace=-blank-at-eol
+compiler/tools/testdata/za-prefix-owner/page-football.wikitext whitespace=-blank-at-eol
+compiler/tools/testdata/za-prefix-owner/page-potassium.wikitext whitespace=-blank-at-eol
+compiler/tools/testdata/za-prefix-owner/page-train.wikitext whitespace=-blank-at-eol
+compiler/src/encoder/testdata/an-decimal-noun/*.wikitext whitespace=-blank-at-eof
+compiler/tools/testdata/an-decimal-noun/*.wikitext whitespace=-blank-at-eof
 
 # Retain the authenticated Lithuanian page's original trailing spaces.
-src/encoder/testdata/lt-direct-senses/ambasada.wikitext whitespace=-blank-at-eol
+compiler/src/encoder/testdata/lt-direct-senses/ambasada.wikitext whitespace=-blank-at-eol
 
 # These source-page and stylesheet captures are checked byte for byte.
-src/encoder/testdata/io-labeled-open-link01/page0[123].wikitext whitespace=-blank-at-eol
-src/encoder/testdata/zh-piasu381-pitch/Gadget-Site.css whitespace=-blank-at-eol
-src/encoder/testdata/zh-piasu381-pitch/expanded.wikitext whitespace=-blank-at-eol
+compiler/src/encoder/testdata/io-labeled-open-link01/page0[123].wikitext whitespace=-blank-at-eol
+compiler/src/encoder/testdata/zh-piasu381-pitch/Gadget-Site.css whitespace=-blank-at-eol
+compiler/src/encoder/testdata/zh-piasu381-pitch/expanded.wikitext whitespace=-blank-at-eol
 
 # Preserve the verified upstream font notice byte for byte.
-apps/shared/fonts/NotoSansThaana-OFL.txt whitespace=-blank-at-eol
+renderer/fonts/NotoSansThaana-OFL.txt whitespace=-blank-at-eol
