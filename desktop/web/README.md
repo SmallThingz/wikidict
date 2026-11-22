@@ -1,6 +1,6 @@
 # Binary web reader
 
-The decoder accepts compiled DPR2 through DPRL records and rejects newer formats. DPR2 spans retain empty explanations; DPR3 and later preserve authored plain-text explanations across titles, body, table captions/cells, preambles and references. Compact labels and link actions stay separate from the keyboard/touch-accessible **Text details** disclosure. No source markup is interpreted.
+The decoder accepts compiled DPR2 through DPRL records and the DPRM font/metric profile described below. Unsupported policies and newer formats are rejected. DPR2 spans retain empty explanations; DPR3 and later preserve authored plain-text explanations across titles, body, table captions/cells, preambles and references. Compact labels and link actions stay separate from the keyboard/touch-accessible **Text details** disclosure. No source markup is interpreted.
 
 Run `pnpm install && pnpm build`, then serve `../build/web` over localhost or HTTPS. `pnpm test` covers binary/XZ decoding and malformed inputs; `pnpm test:browser` exercises the real browser with the Android binary fixture. Set `WIKBLB_FIXTURE` to override its path.
 
@@ -36,12 +36,22 @@ existing `WIKIDICT_WEB_TYPED_CASES` payload/Reader-JSON route supplies that sepa
 comparison. The complete Node suite and this focused headless rendering suite
 have passed for L; genuine DPRL corpus interoperability remains unqualified.
 
-Later formats remain unsupported because they add semantic fields, not just new
-version labels:
+DPRM additionally decodes 32-bit container flags, owner font scale, authored flow
+margins, CSS-pixel span sizes, cell width/minimum width, vertical alignment
+and independent cell strut/line-height metrics. These values survive into native
+CSS layout; the genuine Gun `okpli` comparison exercises its complete modeled
+graph rather than just checking a version label. Other M policies remain rejected
+until their decoding and rendering are implemented, including the following work:
+
+For the focused genuine Gun `okpli` rendering check, select its one case with `blob` and
+`reader_json` in `WIKIDICT_WEB_TYPED_CASES`, set `WIKIDICT_CONTAINER_FONTS_REPORT`
+to a fresh absolute output directory, and run `pnpm test:container-fonts`.
+It indexes and decodes the actual blob, checks 640/1000px layout and keyboard
+activation, and saves frames without enabling network media.
 
 | Format | Remaining consumer work |
 | --- | --- |
-| M | Container font/height/columns/positioning and signed/auto margins; font families/features and CSS-pixel scales; link paint and expanded cell/figure metrics |
+| M | Container height/columns/positioning and signed/auto margins; per-edge borders, font families/features, link paint and expanded figure/viewport policies |
 | N | Authored rule geometry and paint |
 | O | Inline text style, declaring-font metrics and baseline shifts |
 | P | Adjoining block/heading styles, family stacks and cell owner-font metrics |
