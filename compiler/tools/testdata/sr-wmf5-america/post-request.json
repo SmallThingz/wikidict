@@ -1,0 +1,46 @@
+{
+  "content_type": "application/x-www-form-urlencoded; charset=utf-8",
+  "controlled_single_token": false,
+  "form": {
+    "bytes": 91203,
+    "path": "/home/a/wikidict-america-context01/post01/request01.form",
+    "sha256": "51244748bb2df558a64613e46aec19738fb32fc117db48ee3d024a975e32ca1a"
+  },
+  "full_supplied_expanded_page": true,
+  "historical_transclusions": false,
+  "input_data": {
+    "bytes": 8518,
+    "path": "/home/a/wikidict-america-context01/observation-data01.json",
+    "sha256": "91b866dafdfb41c87fa96a1811417e2d133e70609e8cf4fc86c19754294b9057"
+  },
+  "method": "POST",
+  "page_id": 11827,
+  "parameters_except_text": {
+    "action": "parse",
+    "contentmodel": "wikitext",
+    "format": "json",
+    "formatversion": "2",
+    "maxlag": "5",
+    "parser": "legacy",
+    "prop": "text|wikitext|revid|displaytitle|headhtml|modules|jsconfigvars",
+    "revid": "711271",
+    "title": "America",
+    "usearticle": "1",
+    "useskin": "vector-2022"
+  },
+  "parse_core_binding_proven": false,
+  "request_contract": {
+    "bytes": 1926,
+    "path": "/home/a/wikidict-america-context01/request-contract01.json",
+    "sha256": "df3eb5107d960836bed17bd76ca474becfbe606054d8e28adec71b085f50832b"
+  },
+  "request_count": 1,
+  "requested_revision_id": 711271,
+  "schema": "wikidict.supplied-expanded-page-request.v1",
+  "text_source": {
+    "bytes": 51250,
+    "path": "/home/a/wikidict-america-ordinary05/data/page-0000/data/.presentation-first-failure/failure-00000001-expanded.wikitext",
+    "sha256": "d1cc23d0a561daa19b0ee75c68e33d29a5aeaa93838d76f5c7be8c6681f45d5b"
+  },
+  "url": "https://sr.wiktionary.org/w/api.php"
+}

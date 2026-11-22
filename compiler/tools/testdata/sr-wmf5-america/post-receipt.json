@@ -1,0 +1,28 @@
+{
+  "accepted": true,
+  "ended_utc": "2026-11-21T21:49:04.893767+00:00",
+  "headers": {
+    "content-encoding": "gzip",
+    "content-type": "application/json; charset=utf-8",
+    "date": "Sat, 21 Nov 2026 21:49:02 GMT",
+    "server": "mw-api-ext.codfw.main-85c7b665c6-t4gs8",
+    "x-cache": "cp5023 miss, cp5023 pass",
+    "x-cache-status": "pass",
+    "x-request-id": "357d13c5-16a6-41e9-8890-1d3981803eb4"
+  },
+  "redirects": false,
+  "request": {
+    "bytes": 1633,
+    "path": "/home/a/wikidict-america-context01/post01/request01.json",
+    "sha256": "419f740fcde8fcb7dba6a8fa2b7e23935dac0a780bb44a9d698b5c94f35e0c64"
+  },
+  "request_count": 1,
+  "response": {
+    "bytes": 153707,
+    "path": "/home/a/wikidict-america-context01/post01/response01.raw.json",
+    "sha256": "c603d074ce5709e3cf5b52db23273392b5bdb9e2875f5e1de1348b9fa5f83dea"
+  },
+  "retries": false,
+  "started_utc": "2026-11-21T21:49:01.299852+00:00",
+  "status": 200
+}

@@ -8987,12 +8987,46 @@ const ObservedOuterContext = struct {
 fn observedOuterClasses(a: A, ns: *const namespaces.Registry, page: RawPage, outer: RawOuterContext, scope: profile.BoundedTextClassScope) ![]const u8 {
     return (try observedOuterContext(a, ns, page, outer, scope)).classes;
 }
+// This selected-oldid branch binds the observed SR wrapper, not a generic WMF5
+// profile. The supplied parse remains an input echo, not revision evidence.
+fn selectedSrWmf5Outer(a: A, ns: *const namespaces.Registry, page: RawPage, outer: RawOuterContext) !void {
+    if (!equal(ns.wiki, "srwiktionary") or !equal(ns.content_language, "sr") or page.namespace_id != 0 or
+        outer.selected_body != .full_get_root or outer.current_identity != null or currentGetLiteral(page) or
+        page.missing_head_context != null or page.authored_head_context != null) return invalid;
+    const observed = try observedOuterPrefix(a, outer.response, true);
+    const end = observed.root_open_end orelse return invalid;
+    const identity = @import("page_language_prefix.zig").parseSrWmf5SelectedOldidAlloc(a, outer.response[0..end],
+        page.page_id, page.revision_id, page.namespace_id, page.title) catch |err| switch (err) {
+        error.OutOfMemory => return err, else => return invalid,
+    };
+    if (!equal(identity.root_language, "sr")) return invalid;
+    const original = try observedOuterPrefix(a, try suppliedPageHead(a, page), false);
+    if (original.ancestors.len != 2 or observed.ancestors.len != 8 or
+        !equal(original.generator, "MediaWiki 1.48.0-wmf.5") or !equal(observed.generator, original.generator) or
+        !outerSameAttributes(original.ancestors[0].attributes, observed.ancestors[0].attributes, true) or
+        !outerRootClassesCompatible(original.ancestors[0].attributes.get("class") orelse "",
+            observed.ancestors[0].attributes.get("class") orelse "") or
+        !outerSameAttributes(original.ancestors[1].attributes, observed.ancestors[1].attributes, false)) return invalid;
+    const parsed = try field(try json(a, page.response), "parse");
+    const supplied_html = try string(parsed, "text");
+    const supplied_tag = syntax.tagAt(supplied_html, 0) orelse return invalid;
+    if (!supplied_tag.is("div") or supplied_tag.closing or supplied_tag.self_closing) return invalid;
+    const supplied_root = try outerInventory(a, supplied_tag);
+    const root = observed.root orelse return invalid;
+    if (root.attributes.len != 3 or !outerSameAttributes(supplied_root, root, false) or
+        !equal(root.get("class") orelse "", "mw-content-ltr mw-parser-output") or
+        !equal(root.get("lang") orelse "", "sr") or !equal(root.get("dir") orelse "", "ltr")) return invalid;
+}
+
 fn observedOuterContext(a: A, ns: *const namespaces.Registry, page: RawPage, outer: RawOuterContext, scope: profile.BoundedTextClassScope) !ObservedOuterContext {
     const expected_generator: []const u8 = if (equal(outer.profile, "mediawiki-vector-2022-1.48.0-wmf.3"))
         "MediaWiki 1.48.0-wmf.3"
     else if (equal(outer.profile, "mediawiki-vector-2022-1.48.0-wmf.4"))
         "MediaWiki 1.48.0-wmf.4"
-    else return invalid;
+    else if (equal(outer.profile, "mediawiki-vector-2022-1.48.0-wmf.5")) sr: {
+        try selectedSrWmf5Outer(a, ns, page, outer);
+        break :sr "MediaWiki 1.48.0-wmf.5";
+    } else return invalid;
     if (!page.text_class_scope) return invalid;
     const url = if (currentGetLiteral(page)) literal: {
         if (outer.receipt.len != 0) return invalid;
@@ -27563,4 +27597,99 @@ test "closed inline sibling edit rules preserve full body actions and codec thro
     try std.testing.expectEqualSlices(u8, encoded, try codec.encodeAlloc(a, decoded));
     try std.testing.expect(!reference_report.any());
     try std.testing.expect(!report.any());
+}
+
+const SrWmf5OuterTesting = if (@import("builtin").is_test) struct {
+    fn outer() RawOuterContext {
+        return .{ .profile = "mediawiki-vector-2022-1.48.0-wmf.5", .selected_body = .full_get_root,
+            .receipt = @embedFile("testdata/sr-wmf5-america/get-receipt.json"),
+            .response = @embedFile("testdata/sr-wmf5-america/get.html") };
+    }
+    fn page() RawPage {
+        return .{ .namespace_id = 0, .page_id = 11827, .revision_id = 711271, .title = "America",
+            .raw_sha256 = "777bd943827fce434c8ca97fd69055ef3386ad8e92df899578ff9d8cce52137c",
+            .text_class_scope = true, .occurrences = &.{}, .outer_context = outer(),
+            .request = @embedFile("testdata/sr-wmf5-america/post-request.json"),
+            .form_body = @embedFile("testdata/sr-wmf5-america/post.form"),
+            .receipt = @embedFile("testdata/sr-wmf5-america/post-receipt.json"),
+            .response = @embedFile("testdata/sr-wmf5-america/post-response.json") };
+    }
+    // This is only the exact captured root operand for the outer-context unit.
+    // It is not a complete body census or an issued operation/selector proof.
+    const scope: profile.BoundedTextClassScope = .{ .root_tag = "div",
+        .root_classes = "mw-content-ltr mw-parser-output", .subtree_classes = "" };
+} else struct {};
+
+test "SR WMF5 selected oldid wrapper retains actual GET and independent POST head" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile("testdata/sr-wmf5-america/namespace-registry.tsv")); defer ns.deinit();
+    const page = SrWmf5OuterTesting.page(); const outer = SrWmf5OuterTesting.outer();
+    try std.testing.expect(digestMatches(outer.response, "3a70a1c524897fc65a6de6ee1e981d96481d782dc6a9f3b935d923d81c11d155"));
+    try std.testing.expect(digestMatches(page.response, "c603d074ce5709e3cf5b52db23273392b5bdb9e2875f5e1de1348b9fa5f83dea"));
+    const context = try observedOuterContext(a, &ns, page, outer, SrWmf5OuterTesting.scope);
+    const tags = [_][]const u8{ "html", "body", "div", "div", "div", "main", "div", "div" };
+    try std.testing.expectEqual(tags.len, context.ancestors.len);
+    for (context.ancestors, tags) |node, tag| try std.testing.expectEqualStrings(tag, node.tag);
+    const original = try observedOuterPrefix(a, try suppliedPageHead(a, page), false);
+    try std.testing.expect(!profile.Profile.hasClass(original.ancestors[0].attributes.get("class").?, "vector-toc-available"));
+    try std.testing.expect(profile.Profile.hasClass(context.ancestors[0].attributes.get("class").?, "vector-toc-available"));
+    try std.testing.expectEqual(@as(u64, 711271), page.revision_id);
+    // No page body/style/Book load, JavaScript, tooltip callback or Writer is run.
+    try std.testing.expect(page.page_styles == null and page.authored_style_operations == null);
+}
+
+test "SR WMF5 wrapper refuses crossed generation identity program and root operands" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile("testdata/sr-wmf5-america/namespace-registry.tsv")); defer ns.deinit();
+    const page = SrWmf5OuterTesting.page(); const outer = SrWmf5OuterTesting.outer();
+    const scope = SrWmf5OuterTesting.scope;
+    var changed_page = page; changed_page.revision_id += 1;
+    try std.testing.expectError(invalid, observedOuterContext(a, &ns, changed_page, outer, scope));
+    changed_page = page; changed_page.namespace_id = 1;
+    try std.testing.expectError(invalid, observedOuterContext(a, &ns, changed_page, outer, scope));
+    changed_page = page; changed_page.text_class_scope = false;
+    try std.testing.expectError(invalid, observedOuterContext(a, &ns, changed_page, outer, scope));
+    var changed_outer = outer; changed_outer.selected_body = null;
+    try std.testing.expectError(invalid, observedOuterContext(a, &ns, page, changed_outer, scope));
+    changed_outer = outer; changed_outer.selected_body = .current_get_literal;
+    try std.testing.expectError(invalid, observedOuterContext(a, &ns, page, changed_outer, scope));
+    changed_outer = outer; changed_outer.current_identity = .{ .mode = "canonical-current-v1", .historical = false,
+        .api_request = "", .api_receipt = "", .api_response = "", .received_prefix = "", .prefix_receipt = "" };
+    try std.testing.expectError(invalid, observedOuterContext(a, &ns, page, changed_outer, scope));
+    for ([_][]const u8{ "mediawiki-vector-2022-1.48.0-wmf.4", "mediawiki-vector-2022-1.48.0-wmf.50", "" }) |name| {
+        changed_outer = outer; changed_outer.profile = name;
+        try std.testing.expectError(invalid, observedOuterContext(a, &ns, page, changed_outer, scope));
+    }
+    for ([_][2][]const u8{
+        .{ "srwiktionarymwclientpreferences", "ruwiktionarymwclientpreferences" },
+        .{ "var cookie=", "var cookix=" },
+        .{ "RLCONF=", "void 0;RLCONF=" },
+        .{ "content=\"MediaWiki 1.48.0-wmf.5\"", "content=\"MediaWiki 1.48.0-wmf.4\"" },
+        .{ "id=\"bodyContent\"", "id=\"wrongContent\"" },
+        .{ "</head>", "</br></head>" },
+        .{ "<div class=\"mw-content-ltr mw-parser-output\" lang=\"sr\" dir=\"ltr\">",
+           "<div class=\"mw-content-ltr mw-parser-output\" lang=\"sr\" dir=\"ltr\" data-extra=\"x\">" },
+    }) |pair| {
+        const mutated = try OuterContextTesting.replaced(a, outer, pair[0], pair[1]);
+        changed_page = page; changed_page.outer_context = mutated;
+        try std.testing.expectError(invalid, observedOuterContext(a, &ns, changed_page, mutated, scope));
+    }
+}
+
+test "page stylesheet join bounds emitted parent and authored selector groups separately" {
+    const a = std.testing.allocator;
+    // Each source contributes 2,049 selectors within 683 declaration blocks.
+    const rule = "span,div,p{display:inline}";
+    var css: [rule.len * 683]u8 = undefined;
+    for (0..683) |i| @memcpy(css[i * rule.len ..][0..rule.len], rule);
+    const half: profile.Source = .{ .css = &css, .base_url = "" };
+    var parent = try profile.parseForTargetAlloc(a, half.css, .screen);
+    defer parent.deinit();
+    var joined = try profile.joinPageSourcesAlloc(a, &parent, &.{half}, &.{half});
+    defer joined.deinit();
+    try std.testing.expectEqual(@as(usize, 3 * 2049), joined.block_rules.len);
+    const oversized = [_]profile.Source{ half, half };
+    try std.testing.expectError(error.StyleProfileLimit, profile.parseSourcesForTargetAlloc(a, &oversized, .screen));
+    try std.testing.expectError(error.StyleProfileLimit, profile.joinPageSourcesAlloc(a, &parent, &oversized, &.{}));
+    try std.testing.expectError(error.StyleProfileLimit, profile.joinPageSourcesAlloc(a, &parent, &.{}, &oversized));
 }

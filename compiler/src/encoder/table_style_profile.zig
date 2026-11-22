@@ -11564,6 +11564,7 @@ const Builder = struct {
     classes: std.ArrayList([]const u8) = .empty,
     ancestor_classes: std.ArrayList([]const u8) = .empty,
     numbers: std.ArrayList(u32) = .empty,
+    selector_limit: usize = max_rules,
     number: u32 = 0,
     declaration_order: u32 = 0,
     unsupported: bool = false,
@@ -12028,7 +12029,7 @@ const Builder = struct {
         var pending: std.ArrayList(ObservedFigureRule) = .empty;
         var list_uncertain = false;
         while (try selectors.nextAlloc(self.a)) |raw| {
-            if (self.observed_figure_rules.items.len + pending.items.len == max_rules) return error.StyleProfileLimit;
+            if (self.observed_figure_rules.items.len + pending.items.len >= self.selector_limit) return error.StyleProfileLimit;
             const owned = try self.a.dupe(u8, raw);
             const projected = try self.generatedFigureSelector(owned);
             list_uncertain = list_uncertain or projected == null or !projected.?.syntax_known;
@@ -12369,7 +12370,7 @@ const Builder = struct {
             // supported only as one exact sole selector.
             if (selectors.items.len != 1) selected.adjacent_sibling = null;
             if (uncertain_list) { selected.uncertain = true; selected.specificity = std.math.maxInt(u64); }
-            if (self.container_rules.items.len == max_rules) return error.StyleProfileLimit;
+            if (self.container_rules.items.len >= self.selector_limit) return error.StyleProfileLimit;
             try self.container_rules.append(self.a, .{ .selector = selected, .css = css, .order = order, .viewport = self.container_viewport, .rank_unknown = self.container_rank_unknown,
                 .provenance = .{ .selector = selector_text, .conditions = self.container_conditions,
                     .source_index = self.container_source_index, .css_byte_start = css_byte_start } });
@@ -12391,7 +12392,7 @@ const Builder = struct {
         for (selectors.items) |selector_value| {
             var selected = selector_value;
             if (uncertain_list) { selected.uncertain = true; selected.specificity = std.math.maxInt(u64); }
-            if (destination.items.len == max_rules) return error.StyleProfileLimit;
+            if (destination.items.len >= self.selector_limit) return error.StyleProfileLimit;
             try destination.append(self.a, .{ .selector = selected, .css = css, .order = order });
         }
     }
@@ -13016,11 +13017,11 @@ const Builder = struct {
             if (uncertain_list) { selected.uncertain = true; selected.specificity = std.math.maxInt(u64); }
             const rule: TextRule = .{ .selector = selected, .css = css, .order = order, .figure_root_alignment_only = root_alignment_only, .figure_language_baseline_only = language_baseline_only };
             if (relevant) {
-                if (self.figure_rules.items.len == max_rules) return error.StyleProfileLimit;
+                if (self.figure_rules.items.len >= self.selector_limit) return error.StyleProfileLimit;
                 try self.figure_rules.append(self.a, rule);
             }
             if (missing_link_custom) {
-                if (self.missing_link_custom_rules.items.len == max_rules) return error.StyleProfileLimit;
+                if (self.missing_link_custom_rules.items.len >= self.selector_limit) return error.StyleProfileLimit;
                 try self.missing_link_custom_rules.append(self.a, rule);
             }
         }
@@ -13170,7 +13171,7 @@ const Builder = struct {
         var parts: SelectorList = .{ .source = prelude };
         var uncertain = false;
         while (try parts.nextAlloc(self.a)) |raw| {
-            if (self.display_rules.items.len + selectors.items.len == max_rules) return error.StyleProfileLimit;
+            if (self.display_rules.items.len + selectors.items.len >= self.selector_limit) return error.StyleProfileLimit;
             var selector_value = try self.displaySelector(raw, conditional);
             selector_value.required_parent_tag = try self.displayRequiredParentTag(raw);
             uncertain = uncertain or selector_value.uncertain;
@@ -13497,7 +13498,7 @@ const Builder = struct {
                     selector_value.unsupported = true;
                     selector_value.specificity = std.math.maxInt(u64);
                 }
-                if (self.rules.items.len == max_rules) return error.StyleProfileLimit;
+                if (self.rules.items.len >= self.selector_limit) return error.StyleProfileLimit;
                 if (selector_value.unsupported) self.unsupported = true;
                 for (declarations.items) |declaration| if (declaration.value == .unsupported) { self.unsupported = true; };
                 try self.rules.append(self.a, .{ .selector = selector_value, .declarations = declarations.items, .number = self.number });
@@ -13608,6 +13609,12 @@ pub fn parseSourcesAlloc(a: std.mem.Allocator, sources: []const Source) !Profile
 }
 
 pub fn parseSourcesForTargetAlloc(a: std.mem.Allocator, sources: []const Source, target: ReadingTarget) !Profile {
+    return parseSourceGroups(a, sources, target, null);
+}
+
+const PageSourceBoundaries = struct { parent: usize, authored: usize };
+
+fn parseSourceGroups(a: std.mem.Allocator, sources: []const Source, target: ReadingTarget, page: ?PageSourceBoundaries) !Profile {
     var total: usize = 0;
     for (sources) |source| {
         total = std.math.add(usize, total, source.css.len) catch return error.StyleProfileLimit;
@@ -13625,6 +13632,12 @@ pub fn parseSourcesForTargetAlloc(a: std.mem.Allocator, sources: []const Source,
     for (sources) |source| try builder.parse(source.css, source.unknown_applicability, 0, true);
     var ranges: std.ArrayList(SourceRange) = .empty;
     for (sources, 0..) |source, source_index| {
+        // block_rules records every selector; the other inventories project
+        // subsets of that census. Each complete source group gets the same
+        // finite budget as a standalone profile, preserving cascade order.
+        if (page) |boundaries| if (source_index == boundaries.parent or source_index == boundaries.authored) {
+            builder.selector_limit = builder.block_rules.items.len + max_rules;
+        };
         builder.container_source = source.css;
         builder.container_source_index = source_index;
         builder.container_source_byte_start = source.byte_start;
@@ -13651,7 +13664,7 @@ pub fn joinPageSourcesAlloc(a: std.mem.Allocator, parent: *const Profile, emitte
     const global_end = emitted.len + parent.retained_sources.len;
     @memcpy(sources[emitted.len..global_end], parent.retained_sources);
     @memcpy(sources[global_end..], authored);
-    var result = try parseSourcesForTargetAlloc(a, sources, .screen);
+    var result = try parseSourceGroups(a, sources, .screen, .{ .parent = emitted.len, .authored = global_end });
     result.page_style_parent = parent;
     return result;
 }

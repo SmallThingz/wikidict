@@ -84,7 +84,7 @@ fn jsonEnd(text: []const u8, start: usize) !usize {
 fn configuration(a: A, text: []const u8, page_id: u64, revision_id: u64) !bool {
     return configurationForPage(a, text, page_id, revision_id, null);
 }
-const SelectedPage = struct { namespace_id: i32, title: []const u8 };
+const SelectedPage = struct { namespace_id: i32, title: []const u8, sr_wmf5_prelude: bool = false };
 fn configurationForPage(a: A, text: []const u8, page_id: u64, revision_id: u64, current_title: ?[]const u8) !bool {
     return configurationForSelectedPage(a, text, page_id, revision_id, current_title, null, "");
 }
@@ -92,11 +92,14 @@ fn configurationForSelectedPage(a: A, text: []const u8, page_id: u64, revision_i
     current_title: ?[]const u8, selected: ?SelectedPage, html_classes: []const u8) !bool
 {
     const at = std.mem.indexOf(u8, text, "RLCONF=") orelse return false;
+    const sr_wmf5 = if (selected) |value| value.sr_wmf5_prelude else false;
+    if (sr_wmf5 and at != 952) return invalid;
     if (at != 0) {
         if (at != 952 and at != 956 and !(selected != null and at == 960)) return invalid;
         var digest: [32]u8 = undefined;
         std.crypto.hash.sha2.Sha256.hash(text[0..at], &digest, .{});
         const hash = std.fmt.bytesToHex(digest, .lower);
+        if (sr_wmf5 and !std.mem.eql(u8, &hash, "ff0406678d57587b7409bfba7f818a44a9ec8dd418eb27da4b32823b3e19ed0d")) return invalid;
         // Complete observed preludes differ only in the literal wiki cookie
         // name (ru/wo/el/sr) and TOC availability class. Each closes the IIFE
         // before RLCONF; unknown programs remain rejected.
@@ -169,6 +172,15 @@ pub fn parseSelectedOldidAlloc(a: A, bytes: []const u8, page_id: u64, revision_i
     namespace_id: i32, title: []const u8) !Observation
 {
     return parseForSelectedPage(a, bytes, page_id, revision_id, null, .{ .namespace_id = namespace_id, .title = title });
+}
+// The SR WMF5 Book path requires its exact observed static program. Older
+// APIs retain their existing prelude choices and direct-assignment behavior.
+pub fn parseSrWmf5SelectedOldidAlloc(a: A, bytes: []const u8, page_id: u64, revision_id: u64,
+    namespace_id: i32, title: []const u8) !Observation
+{
+    if (namespace_id != 0) return invalid;
+    return parseForSelectedPage(a, bytes, page_id, revision_id, null,
+        .{ .namespace_id = namespace_id, .title = title, .sr_wmf5_prelude = true });
 }
 fn parseForPage(a: A, bytes: []const u8, page_id: u64, revision_id: u64, current_title: ?[]const u8) !Observation {
     return parseForSelectedPage(a, bytes, page_id, revision_id, current_title, null);
@@ -492,4 +504,42 @@ test "page prefix exact retained SR available TOC program preserves revision and
         try std.testing.expect(!std.mem.eql(u8, script, altered));
         try std.testing.expectError(invalid, configurationForPage(a, altered, 12600, 676512, "Alexander"));
     }
+}
+
+test "selected SR WMF5 oldid prefix retains actual program and refuses crossed operands" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const actual = @embedFile("testdata/sr-wmf5-america/get-prefix.html");
+    const result = try parseSrWmf5SelectedOldidAlloc(a, actual, 11827, 711271, 0, "America");
+    try std.testing.expectEqualStrings("sr", result.root_language);
+    try std.testing.expectEqual(@as(usize, 8), result.outer_languages.len);
+    try std.testing.expectError(invalid, parseSrWmf5SelectedOldidAlloc(a, actual, 11828, 711271, 0, "America"));
+    try std.testing.expectError(invalid, parseSrWmf5SelectedOldidAlloc(a, actual, 11827, 711272, 0, "America"));
+    try std.testing.expectError(invalid, parseSrWmf5SelectedOldidAlloc(a, actual, 11827, 711271, 1, "America"));
+    try std.testing.expectError(invalid, parseSrWmf5SelectedOldidAlloc(a, actual, 11827, 711271, 0, "Elsewhere"));
+    for ([_][2][]const u8{
+        .{ "srwiktionarymwclientpreferences", "ruwiktionarymwclientpreferences" },
+        .{ "srwiktionarymwclientpreferences", "xxwiktionarymwclientpreferences" },
+        .{ "var cookie=", "var cookix=" },
+        .{ "RLCONF=", "void 0;RLCONF=" },
+        .{ "RLCONF=", "if(false)RLCONF=" },
+        .{ "\"wgRevisionId\":711271", "\"wgRevisionId\":0" },
+        .{ "\"wgNamespaceNumber\":0", "\"wgNamespaceNumber\":1" },
+        .{ "\"wgAction\":\"view\"", "\"wgAction\":\"edit\"" },
+        .{ "<script>", "<script type=\"text/plain\">" },
+        .{ "</head>", "</br></head>" },
+    }) |pair| {
+        const changed = try std.mem.replaceOwned(u8, a, actual, pair[0], pair[1]);
+        try std.testing.expect(!std.mem.eql(u8, actual, changed));
+        try std.testing.expectError(invalid, parseSrWmf5SelectedOldidAlloc(a, changed, 11827, 711271, 0, "America"));
+    }
+    // Direct RLCONF remains valid for old APIs but cannot substitute for this
+    // explicitly observed program; the POST head's 931B program is also distinct.
+    const script = @embedFile("testdata/sr-wmf5-america/get-config.js");
+    const marker = std.mem.indexOf(u8, script, "RLCONF=") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 952), marker);
+    const html_class = @embedFile("testdata/sr-wmf5-america/get-html-class.txt");
+    const selected: SelectedPage = .{ .namespace_id = 0, .title = "America", .sr_wmf5_prelude = true };
+    try std.testing.expectError(invalid, configurationForSelectedPage(a, script[marker..], 11827, 711271, null, selected, html_class));
+    const post = @embedFile("testdata/sr-wmf5-america/post-config.js");
+    try std.testing.expectError(invalid, configurationForSelectedPage(a, post, 11827, 711271, null, selected, html_class));
 }
