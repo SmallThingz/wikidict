@@ -3026,6 +3026,22 @@ fn amharicNounGloss(sections: anytype, index: usize, owner: ?[]const u8, code: [
     return false;
 }
 
+// The Gun dictionary defines the two noun labels on pages 1272 and 1855,
+// and the verb label on page 858, with English and French translations.
+fn gunDefinitionPart(section: anytype) ?[]const u8 {
+    if (section.level != 2) return null;
+    const S = @TypeOf(section);
+    if (!@hasField(S, "is_heading") or !@hasField(S, "title_depth") or !@hasField(S, "title_list_path")) return null;
+    if (!section.is_heading or section.title_depth != 0 or section.title_list_path.len != 0) return null;
+    const kind: []const u8 = if (std.mem.eql(u8, section.title, "Yinkọgbe") or std.mem.eql(u8, section.title, "Nyǐkɔgbe"))
+        "Noun"
+    else if (std.mem.eql(u8, section.title, "Nuwagbe"))
+        "Verb"
+    else
+        return null;
+    return if (hasTopLevelNumberedGloss(section.blocks)) kind else null;
+}
+
 fn quechuaDefinitionPart(section: anytype) ?[]const u8 {
     if (section.level != 3) return null;
     const headings = .{
@@ -3079,7 +3095,8 @@ pub fn buildForEntryWithClassifiedCode(a: A, sections: anytype, unclassified: bo
             (aromanian_noun and aromanianNounWithoutGloss(sections, i, page_title, owner, wiki_id)))) aromanian_part else null;
         const amharic_noun = !unclassified and amharicNounGloss(sections, i, owner, owner_code, wiki_id);
         const spanish_part = if (unclassified) null else spanishDefinitionPart(section, owner, owner_code, wiki_id);
-        const declared_kind = if (unclassified and section.level == 2) null else
+        const gun_part = if (std.mem.eql(u8, wiki_id, "guwwiktionary")) gunDefinitionPart(section) else null;
+        const declared_kind = gun_part orelse if (unclassified and section.level == 2) null else
             partOfSpeech(section.title) orelse spanish_part orelse if (quechua) quechuaDefinitionPart(section) else if
                 (dictionaryNounSection(section, owner, wiki_id) or amharic_noun or (owned_noun_label != null and classifiedNounSection(sections, i, owner.?, owned_noun_label.?))) @as(?[]const u8, "Noun") else declared_aromanian;
         const grammar_kind = if (unclassified) null else ownedBulgarianVerbPart(section, owner);
@@ -3602,6 +3619,59 @@ test "Quechua dictionary POS headings organize authored definitions and preserve
     const meaning = try renderer.renderBody("# [[yaku]]");
     try std.testing.expect(quechuaDefinitionPart(Section{ .title = "Suti", .level = 2, .blocks = meaning }) == null);
     try std.testing.expect(quechuaDefinitionPart(Section{ .title = "Rikuy ima", .level = 3, .blocks = meaning }) == null);
+}
+
+test "Gun dictionary noun and verb headings preserve anonymous senses and translation boundaries" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const encoder = @import("blob_encoder");
+    const Section = struct { title: []const u8, level: u8 = 2, blocks: []const wiki.Block, is_heading: bool = true, title_depth: u8 = 0, title_list_path: []const u8 = "" };
+    var renderer: wiki.Renderer = .{ .a = a, .context = .{} };
+    // GUW Abọ̀húsun, 13/16768. No heading declares an entry language.
+    const body = try renderer.renderBody("# '''Abọ̀húsun''' yin osun widopotọ to owhe mẹ.\n#: ''[[jikun|Jikun]] susu ma nọ ja to '''Abọ̀húsun''' mẹ.''");
+    var sections = [_]Section{
+        .{ .title = "Yinkọgbe", .blocks = body },
+        .{ .title = "Ogbè devo lẹ", .blocks = &.{} },
+        .{ .title = "Glẹnsigbe", .level = 3, .blocks = try renderer.renderBody("*[[wikt:en:November|November]]") },
+        .{ .title = "Flansegbe", .level = 3, .blocks = try renderer.renderBody("*[[wikt:fr:novembre|novembre]]") },
+    };
+    const layout = try buildForDictionary(a, &sections, true, null, null, "guwwiktionary");
+    const bytes = try encoder.presentation_codec.encodeBuildAlloc(a, @as([]const wiki.Span, &.{}), &sections, layout, @as([]const encoder.presentation_types.Reference, &.{}), @as([]const encoder.presentation_types.Media, &.{}));
+    const stored = try encoder.presentation_codec.decodeAlloc(a, bytes, "Abọ̀húsun", .language, .{ .heading = "Unclassified", .code = "" });
+    try std.testing.expectEqualSlices(u8, bytes, try encoder.presentation_codec.encodeAlloc(a, stored));
+    const item = stored.entry;
+    try std.testing.expectEqualStrings("", item.language_code);
+    try std.testing.expectEqual(@as(usize, 1), item.organization.lexemes.len);
+    const noun = item.organization.lexemes[0];
+    try std.testing.expectEqualStrings("Noun", noun.kind);
+    try std.testing.expectEqualStrings("", noun.language);
+    try std.testing.expectEqual(@as(usize, 1), noun.definitions.len);
+    const sense = noun.definitions[0];
+    const blocks = item.sections[noun.section].blocks;
+    try std.testing.expectEqualStrings("Abọ̀húsun", blocks[sense.block].spans[0].text);
+    try std.testing.expect(blocks[sense.block].spans[0].bold);
+    try std.testing.expectEqual(@as(usize, 1), sense.examples.len);
+    const example = blocks[sense.examples[0]].spans[0];
+    try std.testing.expectEqualStrings("jikun", example.target);
+    try std.testing.expect(example.italic);
+    try std.testing.expectEqualSlices(usize, &.{ 1, 2, 3 }, layout.other_sections);
+    try std.testing.expectEqual(@as(usize, 0), (try buildForDictionary(a, &sections, true, null, null, "otherwiktionary")).lexemes.len);
+    sections[0].title = "Nyǐkɔgbe";
+    try std.testing.expectEqualStrings("Noun", gunDefinitionPart(sections[0]).?);
+    sections[0].title = "Nuwagbe";
+    try std.testing.expectEqualStrings("Verb", gunDefinitionPart(sections[0]).?);
+    sections[0].title = "Nuwagbe-zẹẹmẹ";
+    try std.testing.expect(gunDefinitionPart(sections[0]) == null);
+    sections[0].title = "Yinkọgbe";
+    sections[0].level = 3;
+    try std.testing.expect(gunDefinitionPart(sections[0]) == null);
+    sections[0].level = 2;
+    sections[0].is_heading = false;
+    try std.testing.expect(gunDefinitionPart(sections[0]) == null);
+    sections[0].is_heading = true;
+    sections[0].blocks = try renderer.renderBody("* [[jikun]]");
+    try std.testing.expect(gunDefinitionPart(sections[0]) == null);
 }
 
 test "Hungarian noun heading organizes senses without choosing the record language" {
