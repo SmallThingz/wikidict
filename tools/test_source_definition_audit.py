@@ -235,13 +235,28 @@ class SourceDefinitionTests(unittest.TestCase):
                          ('këmbë (skaj)', ((0, 5, 'këmbë'),), (7, 11, 'italic')))
         self.assertEqual(source_line("'''[[حاسد]]''' کی جمع", 'حساد'),
                          ('حاسد کی جمع', ((0, 4, 'حاسد'),), (0, 4, 'bold')))
-        for invalid in ("[[cat|''cat'']]", "''a'''", "''a'' and ''b''", "'''''x'''''", "''' '''"):
+        for invalid in ("[[cat|''cat'']]", "''a'''", "''a'' and ''b''", "'''''x'''", "''''x''''", "''' '''"):
             self.assertIsNone(source_line(invalid, 'other'))
         spans = [dict(text='  a '), dict(text='猫', italic=True), dict(text='s', italic=True), dict(text='! ')]
         self.assertEqual(compiled_emphasis(spans), (2, 4, 'italic'))
         self.assertIsNone(compiled_emphasis([*spans, dict(text='another run', italic=True)]))
         spans[2]['bold'] = True
         self.assertIsNone(compiled_emphasis(spans))
+
+    def test_gun_combined_emphasis_requires_both_styles_over_the_same_text(self):
+        text = 'Awusọhia Yọnnu de tọn'
+        source = "Awusọhia '''''Yọnnu''''' de tọn"
+        expected = (9, 14, 'bold-italic')
+        self.assertEqual(source_line(source, 'yọnnu'), (text, (), expected))
+        spans = [dict(text='Awusọhia '), dict(text='Yọ', bold=True, italic=True),
+                 dict(text='nnu', bold=True, italic=True), dict(text=' de tọn')]
+        self.assertEqual(compiled_emphasis(spans), expected)
+        for removed in ('bold', 'italic'):
+            damaged = [s | {removed: False} for s in spans]
+            self.assertNotEqual(compiled_emphasis(damaged), expected)
+            self.assertIsNone(compiled_emphasis([*spans[:2], damaged[2], spans[3]]))
+        self.assertEqual(source_line("'''''[[oyìn|Oyìn]]''''' asi", 'oyìnvu'),
+                         ('Oyìn asi', ((0, 4, 'oyìn'),), (0, 4, 'bold-italic')))
 
     def test_real_dump_hash_owner_definition_actions_and_order(self):
         with tempfile.TemporaryDirectory() as directory:

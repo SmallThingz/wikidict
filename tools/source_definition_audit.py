@@ -189,7 +189,8 @@ def source_line(source, title, trail_rule=None):
     if len(parts) != 5:
         return None
     before, opening, marked, closing, after = parts
-    if opening != closing or opening not in ("''", "'''") or not marked.strip():
+    style = {"''": 'italic', "'''": 'bold', "'''''": 'bold-italic'}.get(opening)
+    if opening != closing or style is None or not marked.strip():
         return None
     unmarked = before + marked + after
     if LABELED_URL.search(unmarked):
@@ -212,7 +213,7 @@ def source_line(source, title, trail_rule=None):
                 return None
             if link.end() <= at:
                 display_offsets[i] -= len(link[0]) - len(link[2] or link[1])
-    return (*plain, (*display_offsets, 'italic' if opening == "''" else 'bold'))
+    return (*plain, (*display_offsets, style))
 
 
 def compiled_emphasis(spans):
@@ -231,8 +232,9 @@ def compiled_emphasis(spans):
         if start >= end or not (span.get('bold') or span.get('italic')):
             continue
         if span.get('bold') and span.get('italic'):
-            return None
-        style = 'bold' if span.get('bold') else 'italic'
+            style = 'bold-italic'
+        else:
+            style = 'bold' if span.get('bold') else 'italic'
         if interval is None:
             interval = (start - first, end - first, style)
         elif interval[1:] == (start - first, style):
@@ -509,7 +511,7 @@ class SourceDefinitions:
                     language_registry_sha256=self.registry_sha256,
                     has_source_evidence=count > 0,
                     examples=examples, matched_example=self.matched_example,
-                    scope='Compare simple numbered lines under exact plain or unpiped linked language headings on template-free pages, ignoring standalone plain editor comments, to ordered definition blocks at their authored nesting depth. A single bold or italic run must occupy its exact source range. Require the registered code for a unique primary name or its explicitly listed initial-capital spelling. Unmatched items need source review; numbered examples and related terms can be intentional.')
+                    scope='Compare simple numbered lines under exact plain or unpiped linked language headings on template-free pages, ignoring standalone plain editor comments, to ordered definition blocks at their authored nesting depth. A single run of bold, italic or combined bold and italic must occupy its exact source range. Require the registered code for a unique primary name or its explicitly listed initial-capital spelling. Unmatched items need source review; numbered examples and related terms can be intentional.')
 
     def unmatched_locations(self, *, after_examples):
         rows = self.db.execute('SELECT title,owner,page,revision,line FROM sense WHERE matched=0 '
