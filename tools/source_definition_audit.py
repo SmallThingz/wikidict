@@ -6,6 +6,7 @@ import hashlib
 import json
 import re
 import sqlite3
+import unicodedata
 import xml.etree.ElementTree as ET
 
 
@@ -68,7 +69,7 @@ def registry_link_trail(raw):
     return re.compile('(?:' + '|'.join(alternatives) + ')+') if alternatives else re.compile('(?!)')
 
 
-def simple_line(source, title, trail_rule=None):
+def simple_line(source, title, trail_rule=None, *, case_sensitive_titles=False):
     """Return visible prose and the code-point range of each authored link."""
     if '://' in source:
         if '[' in source:
@@ -104,7 +105,9 @@ def simple_line(source, title, trail_rule=None):
             if (match[2] is None or not page or not fragment or '#' in fragment or
                     page.strip() != page or fragment.strip() != fragment):
                 return None
-        if (target.strip() != target or target.casefold() == title.casefold() or "''" in label
+        same_title = (unicodedata.normalize('NFC', target) == unicodedata.normalize('NFC', title)
+                      if case_sensitive_titles else target.casefold() == title.casefold())
+        if (target.strip() != target or same_title or "''" in label
                 or (trail_rule is None and match.end() < len(source) and source[match.end()].isalpha())):
             # A self-link may lose its action. Link trails depend on the edition.
             return None
@@ -179,8 +182,8 @@ def compiled_line(spans):
     return text[leading:end], tuple((start - leading, stop - leading, *action) for start, stop, *action in links)
 
 
-def source_line(source, title, trail_rule=None):
-    plain = simple_line(source, title, trail_rule)
+def source_line(source, title, trail_rule=None, *, case_sensitive_titles=False):
+    plain = simple_line(source, title, trail_rule, case_sensitive_titles=case_sensitive_titles)
     if plain is not None:
         return (*plain, None)
     # Paired markers can establish exact style ranges without expanding a page.
@@ -213,7 +216,7 @@ def source_line(source, title, trail_rule=None):
     unmarked = ''.join(parts[::2])
     if LABELED_URL.search(unmarked):
         return None  # Emphasis offsets require mapping through the bracketed URL and its label.
-    plain = simple_line(unmarked, title, trail_rule)
+    plain = simple_line(unmarked, title, trail_rule, case_sensitive_titles=case_sensitive_titles)
     if plain is None:
         return None
     for action in plain[1]:
@@ -291,7 +294,7 @@ def source_actions_match(expected, actual):
     return pos == len(actual)
 
 
-def definitions(text, title, headings, trail_rule=None):
+def definitions(text, title, headings, trail_rule=None, *, case_sensitive_titles=False):
     # Only inspect unambiguous source. Templates and protected or table text can
     # emit headings or consume later lines. Never assign those lines a language.
     if '#' not in text:
@@ -322,7 +325,7 @@ def definitions(text, title, headings, trail_rule=None):
         if body.startswith((':', '*', ';')):
             continue
         list_path = line[:len(line) - len(body)]
-        witness = source_line(body.strip(), title, trail_rule)
+        witness = source_line(body.strip(), title, trail_rule, case_sensitive_titles=case_sensitive_titles)
         if witness is not None:
             yield owner, number, list_path, *witness
 
@@ -446,9 +449,14 @@ class SourceDefinitions:
         insert = 'INSERT INTO sense (title,owner,code,line,list_path,text,links,emphasis,page,revision) VALUES (?,?,?,?,?,?,?,?,?,?)'
         rows = []
         characters = 0
+        case_sensitive_titles = None
         for event, page in events:
             if event != 'end' or page.tag.rsplit('}', 1)[-1] != 'page':
                 continue
+            if case_sensitive_titles is None:
+                # Look up the main namespace once per authenticated dump member.
+                main = root.findall("{*}siteinfo/{*}namespaces/{*}namespace[@key='0']")
+                case_sensitive_titles = len(main) == 1 and main[0].get('case') == 'case-sensitive'
             # Read each group of direct children once, preserving the first local
             # name just as ElementTree's wildcard find/findtext do.
             fields = {}
@@ -460,7 +468,9 @@ class SourceDefinitions:
                 if revision is None or not title:
                     raise ValueError('Main-namespace source page lacks a title or revision')
                 origin = None
-                for owner, n, list_path, text, links, emphasis in definitions(revision.findtext('{*}text', ''), title, headings, self.trail_rule):
+                for owner, n, list_path, text, links, emphasis in definitions(
+                        revision.findtext('{*}text', ''), title, headings, self.trail_rule,
+                        case_sensitive_titles=case_sensitive_titles):
                     if origin is None:
                         origin = page.findtext('{*}id'), revision.findtext('{*}id')
                         self._source_title_buckets[hash(title) % len(self._source_title_buckets)] = 1

@@ -13,6 +13,37 @@ from source_definition_audit import (SourceDefinitions, compiled_emphasis, compi
 
 
 class SourceDefinitionTests(unittest.TestCase):
+    def test_main_namespace_case_controls_the_jiawu_link_in_the_dump(self):
+        self.assertIsNone(simple_line('[[e\u0301]]', 'é', case_sensitive_titles=True))
+        self.assertIsNone(simple_line('[[Jiawu]]', 'Jiawu', case_sensitive_titles=True))
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            dump = root / 'wiki-date-pages-meta-current.xml.bz2'
+            (root / 'languages.tsv').write_text('heading\nGun\n')
+            for ns_case, eligible in [('case-sensitive', 1), ('first-letter', 0), ('', 0)]:
+                with self.subTest(ns_case=ns_case):
+                    xml = ET.fromstring('<mediawiki xmlns="urn:test"><siteinfo><namespaces>'
+                                        f'<namespace key="0" case="{ns_case}"/></namespaces></siteinfo>'
+                                        '<page><title>Jiawu</title><ns>0</ns><id>42</id><revision><id>15750</id>'
+                                        "<text>==Gun==\n# '''Jiawu''' yin [[jiawu]] .\n# [[Jiawu]]</text>"
+                                        '</revision></page></mediawiki>')
+                    data = bz2.compress(ET.tostring(xml))
+                    dump.write_bytes(data)
+                    member = ['wiki', 'date', dump.name, len(data), hashlib.sha1(data).hexdigest()]
+                    (root / 'complete.json').write_text(json.dumps(dict(edition='wiki', date='date', build_inputs=dict(files=[member]))))
+                    with closing(SourceDefinitions('', root, [dump])) as audit:
+                        self.assertEqual(audit.report()['eligible'], eligible)
+                        if eligible:
+                            spans = [dict(kind='text', text='Jiawu', bold=True), dict(kind='text', text=' yin '),
+                                     dict(kind='link', text='jiawu', target='Jiawu'), dict(kind='text', text=' .')]
+                            entry = dict(kind='language', title='Jiawu', language='Gun',
+                                         sections=[dict(blocks=[dict(kind='definition', list_path='#', spans=spans)])])
+                            audit.observe(entry)
+                            self.assertEqual(audit.report()['matched'], 0)
+                            spans[2]['target'] = 'jiawu'
+                            audit.observe(entry)
+                            self.assertEqual(audit.report()['matched'], 1)
+
     def test_hindi_link_trail_stops_at_the_source_boundary(self):
         rule = registry_link_trail(b'# link-trail-ranges\t002D,0061-007A,0900-0963,0966-A8E0,A8FF\n')
         mark = '\u200e'
