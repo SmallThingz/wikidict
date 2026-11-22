@@ -235,13 +235,51 @@ class SourceDefinitionTests(unittest.TestCase):
                          ('këmbë (skaj)', ((0, 5, 'këmbë'),), (7, 11, 'italic')))
         self.assertEqual(source_line("'''[[حاسد]]''' کی جمع", 'حساد'),
                          ('حاسد کی جمع', ((0, 4, 'حاسد'),), (0, 4, 'bold')))
-        for invalid in ("[[cat|''cat'']]", "''a'''", "''a'' and ''b''", "'''''x'''", "''''x''''", "''' '''"):
+        for invalid in ("[[cat|''cat'']]", "''a'''", "''a'' and '''b''", "'''''x'''", "''''x''''", "''' '''"):
             self.assertIsNone(source_line(invalid, 'other'))
         spans = [dict(text='  a '), dict(text='猫', italic=True), dict(text='s', italic=True), dict(text='! ')]
         self.assertEqual(compiled_emphasis(spans), (2, 4, 'italic'))
-        self.assertIsNone(compiled_emphasis([*spans, dict(text='another run', italic=True)]))
+        self.assertEqual(compiled_emphasis([*spans, dict(text='another run', italic=True)]),
+                         ((2, 4, 'italic'), (6, 17, 'italic')))
         spans[2]['bold'] = True
         self.assertIsNone(compiled_emphasis(spans))
+
+    def test_disjoint_gun_emphasis_keeps_the_link_and_every_styled_occurrence(self):
+        source = "[[sunnu]] wẹ '''sunnusi''' kavi '''sun'si'''."
+        spans = [dict(kind='link', text='sunnu', target='sunnu'), dict(kind='text', text=' wẹ '),
+                 dict(kind='text', text='sunnusi', bold=True), dict(kind='text', text=' kavi '),
+                 dict(kind='text', text="sun'si", bold=True), dict(kind='text', text='.')]
+        expected = source_line(source, 'other')
+        self.assertEqual(expected, ("sunnu wẹ sunnusi kavi sun'si.", ((0, 5, 'sunnu'),),
+                                    ((9, 16, 'bold'), (22, 28, 'bold'))))
+        self.assertEqual((*compiled_line(spans), compiled_emphasis(spans)), expected)
+        for index in (2, 4):
+            damaged = list(spans)
+            damaged[index] = {**spans[index], 'bold': False}
+            self.assertNotEqual((*compiled_line(damaged), compiled_emphasis(damaged)), expected)
+        damaged = [{**spans[0], 'target': 'other'}, *spans[1:]]
+        self.assertNotEqual((*compiled_line(damaged), compiled_emphasis(damaged)), expected)
+        self.assertIsNone(source_line("''one'' [[word|''two'']]", 'other'))
+        self.assertIsNone(source_line("''one'' and '''another ''inside'''''", 'other'))
+
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            dump = root / 'wiki-date-pages-meta-current.xml.bz2'
+            xml = ET.fromstring('<mediawiki><page><title>other</title><ns>0</ns><id>1</id>'
+                                '<revision><id>2</id><text/></revision></page></mediawiki>')
+            xml.find('.//text').text = '== French ==\n# ' + source
+            dump.write_bytes(bz2.compress(ET.tostring(xml)))
+            member = ['wiki', 'date', dump.name, dump.stat().st_size, hashlib.sha1(dump.read_bytes()).hexdigest()]
+            (root / 'complete.json').write_text(json.dumps(dict(edition='wiki', date='date', build_inputs=dict(files=[member]))))
+            (root / 'languages.tsv').write_text('heading\nFrench\n')
+            row = dict(kind='definition', list_path='#', spans=damaged)
+            entry = dict(kind='language', title='other', language='French', sections=[dict(blocks=[row])])
+            with closing(SourceDefinitions('', root, [dump])) as audit:
+                audit.observe(entry)
+                self.assertEqual((audit.report()['eligible'], audit.report()['matched']), (1, 0))
+                row['spans'] = spans
+                audit.observe(entry)
+                self.assertEqual(audit.report()['matched'], 1)
 
     def test_gun_combined_emphasis_requires_both_styles_over_the_same_text(self):
         text = 'Awusọhia Yọnnu de tọn'

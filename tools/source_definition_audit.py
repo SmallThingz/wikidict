@@ -183,46 +183,56 @@ def source_line(source, title, trail_rule=None):
     plain = simple_line(source, title, trail_rule)
     if plain is not None:
         return (*plain, None)
-    # One balanced emphasis pair outside link syntax. Links may be entirely
-    # inside or outside the emphasis. Never interpret apostrophes in a target.
+    # Accept disjoint, explicitly paired runs. Nested or unbalanced apostrophes
+    # require the full MediaWiki parser and cannot serve as independent evidence.
     parts = re.split(r"('{2,})", source)
-    if len(parts) != 5:
+    if len(parts) < 5 or len(parts) % 4 != 1:
         return None
-    before, opening, marked, closing, after = parts
-    style = {"''": 'italic', "'''": 'bold', "'''''": 'bold-italic'}.get(opening)
-    if opening != closing or style is None or not marked.strip():
-        return None
-    unmarked = before + marked + after
+    boundaries = []
+    styles = []
+    offset = len(parts[0])
+    for index in range(1, len(parts), 4):
+        opening, marked, closing, after = parts[index:index + 4]
+        style = {"''": 'italic', "'''": 'bold', "'''''": 'bold-italic'}.get(opening)
+        if opening != closing or style is None or not marked.strip():
+            return None
+        boundaries.extend((offset, offset + len(marked)))
+        styles.append(style)
+        offset += len(marked) + len(after)
+    unmarked = ''.join(parts[::2])
     if LABELED_URL.search(unmarked):
         return None  # Emphasis offsets require mapping through the bracketed URL and its label.
     plain = simple_line(unmarked, title, trail_rule)
     if plain is None:
         return None
-    boundaries = [len(before), len(before) + len(marked)]
     for action in plain[1]:
         if len(action) == 4 and action[3] == 'external':
             if any(action[0] < at < action[1] for at in boundaries):
                 return None  # Emphasis split the URL token in the original source.
-    display_offsets = boundaries.copy()
-    for link in LINK.finditer(unmarked):
-        trail = trail_rule.match(unmarked, link.end()) if trail_rule is not None else None
-        if trail and any(link.end() <= at < trail.end() for at in boundaries):
-            return None  # Removing emphasis syntax would join separately authored tokens.
-        for i, at in enumerate(boundaries):
-            if link.start() < at < link.end():
-                return None
-            if link.end() <= at:
-                display_offsets[i] -= len(link[0]) - len(link[2] or link[1])
-    return (*plain, (*display_offsets, style))
+    links = iter(LINK.finditer(unmarked))
+    link = next(links, None)
+    removed = trail_end = 0
+    display = []
+    for at in boundaries:
+        while link is not None and link.end() <= at:
+            removed += len(link[0]) - len(link[2] or link[1])
+            trail = trail_rule.match(unmarked, link.end()) if trail_rule is not None else None
+            trail_end = trail.end() if trail else link.end()
+            link = next(links, None)
+        if at < trail_end or (link is not None and link.start() < at):
+            return None  # A boundary inside link markup or its trail changes tokenization.
+        display.append(at - removed)
+    runs = tuple(zip(display[::2], display[1::2], styles, strict=True))
+    return (*plain, runs[0] if len(runs) == 1 else runs)
 
 
 def compiled_emphasis(spans):
-    """Return the single visible emphasis range, if this block has exactly one."""
+    """Measure visible runs, merging adjacent spans that carry the same style."""
     text = ''.join(span['text'] for span in spans)
     first = edge_padding(spans, leading=True)
     last = len(text) - edge_padding(spans, leading=False)
     offset = 0
-    interval = None
+    runs = []
     for span in spans:
         if span.get('trail'):
             return None
@@ -235,13 +245,15 @@ def compiled_emphasis(spans):
             style = 'bold-italic'
         else:
             style = 'bold' if span.get('bold') else 'italic'
-        if interval is None:
-            interval = (start - first, end - first, style)
-        elif interval[1:] == (start - first, style):
-            interval = (interval[0], end - first, style)
+        if runs and runs[-1][1] == start - first:
+            if runs[-1][2] != style:
+                return None  # Adjacent style transitions have no simple disjoint source pair.
+            runs[-1] = (runs[-1][0], end - first, style)
         else:
-            return None
-    return interval
+            runs.append((start - first, end - first, style))
+    if not runs:
+        return None
+    return runs[0] if len(runs) == 1 else tuple(runs)
 
 
 def source_actions_match(expected, actual):
@@ -478,7 +490,10 @@ class SourceDefinitions:
         cursor = 0
         for rowid, list_path, text, links, emphasis in expected:
             actions = tuple(tuple(action) for action in json.loads(links))
-            layouts = positions.get((list_path, text, tuple(json.loads(emphasis)) if emphasis else None), {})
+            style = json.loads(emphasis) if emphasis else None
+            if style:
+                style = tuple(map(tuple, style)) if isinstance(style[0], list) else tuple(style)
+            layouts = positions.get((list_path, text, style), {})
             if any(len(action) == 4 and isinstance(action[3], int) for action in actions):
                 choices = (places for actual, places in layouts.items() if source_actions_match(actions, actual))
             else:
