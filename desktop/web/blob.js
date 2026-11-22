@@ -10,15 +10,31 @@ const require = (ok, message='Invalid compiled dictionary') => { if (!ok) throw 
 export function decode(bytes, metadata) {
   let p=0, budget=1000000, explained=false, colored=false, anchored=false, painted=false, nested=false, ordered=false, scaled=false, based=false, referenceItems=false, referenceBlocks=false, imageBorder=false, aligned=false, componentTargets=false, dynamicCatalogue=false, tooltips=false, blockGeometry=false, rich=false, inlineTableStyles=false, containers=false, containerFonts=false, contentDepth=0, rubyDepth=0, rubyCount=0, rubyEnabled=false, mapStringBudget=32*1024*1024;
   const view=new DataView(bytes.buffer,bytes.byteOffset,bytes.byteLength);
-  const take=n=>{require(n>=0 && n<=bytes.length-p);const start=p;p+=n;return bytes.subarray(start,p);};
-  const byte=()=>take(1)[0], u16=()=>{const at=p;take(2);return view.getUint16(at,true);}, u32=()=>{const at=p;take(4);return view.getUint32(at,true);};
-  const string=()=>{const n=u32();require(n<=32*1024*1024);return utf8.decode(take(n));};
-  const f32=()=>{const at=p;take(4);return view.getFloat32(at,true);};
-  const f64=()=>{const at=p;take(8);return view.getFloat64(at,true);};
+  function advance(length) {
+    require(length >= 0 && length <= bytes.length - p);
+    const start = p;
+    p += length;
+    return start;
+  }
+  function text(length) {
+    if (length === 0) return '';
+    const start = advance(length);
+    return utf8.decode(bytes.subarray(start, p));
+  }
+  const byte = () => bytes[advance(1)];
+  const u16 = () => view.getUint16(advance(2), true);
+  const u32 = () => view.getUint32(advance(4), true);
+  const f32 = () => view.getFloat32(advance(4), true);
+  const f64 = () => view.getFloat64(advance(8), true);
+  const string = () => {
+    const length = u32();
+    require(length <= 32 * 1024 * 1024);
+    return text(length);
+  };
   const charge=()=>{require(budget>0);budget--;};
   const content=fn=>{require(contentDepth<16,'Content depth exceeds limit');contentDepth++;try{return fn();}finally{contentDepth--;}};
   const blockMinimum=()=>rich?29:blockGeometry?27:aligned?26:anchored?25:17;
-  const mapString=()=>{const n=u32();require(n<=32*1024*1024&&n<=mapStringBudget);mapStringBudget-=n;return utf8.decode(take(n));};
+  const mapString=()=>{const n=u32();require(n<=32*1024*1024&&n<=mapStringBudget);mapStringBudget-=n;return text(n);};
   const mapAction=()=>{const kind=tag(['internal','external']),target=mapString(),target_fragment=presence()?mapString():null,label=mapString();require(kind==='internal'?(target.length>0||target_fragment!==null):(target.length>0&&target_fragment===null));return {kind,target,target_fragment,label};};
   const imageMap=()=>{
     const description=tag(['none','top_right','bottom_right','bottom_left','top_left']);
@@ -50,7 +66,7 @@ export function decode(bytes, metadata) {
     ['bold','italic','code','small','superscript','subscript','strike','underline'].forEach((f,i)=>s[f]=!!(flags&(1<<i)));return s;
   };
   const spans=()=>list(tooltips?37:componentTargets?36:referenceBlocks?35:scaled?34:painted?33:colored?32:explained?31:27,spanValue);
-  const styleLength=()=>{const unit=tag(['px','em']),at=p;take(4);const value=view.getFloat32(at,true);require(Number.isFinite(value)&&value>=0,'Invalid style length');return {unit,value};};
+  const styleLength=()=>{const unit=tag(['px','em']),value=f32();require(Number.isFinite(value)&&value>=0,'Invalid style length');return {unit,value};};
   const rubyFontSnapshot=()=>{
     const fields=byte();require((fields&~31)===0,'Invalid ruby font flags');
     const value={small:!!(fields&2),superscript:!!(fields&4),subscript:!!(fields&8),font_normalized:!!(fields&16)};
@@ -211,7 +227,7 @@ export function decode(bytes, metadata) {
     return value;
   };
   const contentContext=value=>['list_item','definition','example','quotation','term','list_detail','indent'].includes(value.kind)||(value.kind==='paragraph'&&value.depth===0&&value.path==='');
-  const magic=utf8.decode(take(4));
+  const magic=text(4);
   require(magic==='DPR2'||magic==='DPR3'||magic==='DPR4'||magic==='DPR5'||magic==='DPR6'||magic==='DPR7'||magic==='DPR8'||magic==='DPR9'||magic==='DPRA'||magic==='DPRB'||magic==='DPRC'||magic==='DPRD'||magic==='DPRE'||magic==='DPRF'||magic==='DPRG'||magic==='DPRH'||magic==='DPRI'||magic==='DPRJ'||magic==='DPRK'||magic==='DPRL'||magic==='DPRM'||magic==='DPRS','Dictionary contains uncompiled records');
   rubyEnabled=magic==='DPRS';containerFonts=magic==='DPRM'||rubyEnabled;containers=magic==='DPRL'||containerFonts;inlineTableStyles=magic==='DPRK'||containers;rich=magic==='DPRJ'||inlineTableStyles;blockGeometry=magic==='DPRI'||rich;tooltips=magic==='DPRH'||blockGeometry;dynamicCatalogue=magic==='DPRG'||tooltips;componentTargets=magic==='DPRF'||dynamicCatalogue;aligned=magic==='DPRE'||componentTargets;imageBorder=magic==='DPRD'||aligned;referenceBlocks=magic==='DPRC'||imageBorder;based=magic==='DPRB'||referenceBlocks;scaled=magic==='DPRA'||based;referenceItems=magic==='DPR9'||scaled;ordered=magic==='DPR8'||referenceItems;nested=magic==='DPR7'||ordered;if(nested)budget=1<<20;painted=magic==='DPR6'||nested;anchored=magic==='DPR5'||painted;colored=magic==='DPR4'||anchored;explained=magic!=='DPR2';
   const entry={...metadata,presentation_version:magic,display_title:spans(),sections:list(anchored?17:9,()=>({level:byte(),title:string(),anchor:anchored?string():'',anchor_fallback:anchored?string():'',blocks:list(blockMinimum(),()=>block())})),preamble_spans:spans()};
