@@ -37,6 +37,8 @@ WRITER_PRODUCT_EMBED_FILES = (
     'tools/testdata/shy-nom-owner/bases.lua',
     'tools/testdata/shy-nom-owner/langue.wikitext',
     'tools/testdata/fr-named-owner/langue.wikitext',
+    'tools/testdata/yi-source-category/interwiktionary.wikitext',
+    'tools/testdata/yi-source-category/interwiki.wikitext',
 )
 PRODUCER_SOURCE_FILES = ('build.zig', 'build.zig.zon', *WRITER_PRODUCT_EMBED_FILES)
 PRODUCER_SOURCE_DIRECTORIES = ('src', 'tools')

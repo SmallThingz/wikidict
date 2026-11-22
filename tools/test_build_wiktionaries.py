@@ -174,6 +174,15 @@ class WriterProductSourceManifestTests(unittest.TestCase):
         result[name]['mode']=0o444
         self.assertEqual(selected[name]['mode'],0o644)
 
+    def test_imported_category_provider_embeds_require_selected_descriptors(self):
+        for name in ('tools/testdata/yi-source-category/interwiktionary.wikitext',
+                     'tools/testdata/yi-source-category/interwiki.wikitext'):
+            with self.subTest(name=name):
+                selected=self.manifest();del selected[name]
+                with patch.object(Path,'read_bytes',side_effect=AssertionError('ambient source read')):
+                    with self.assertRaisesRegex(ValueError,'Missing Writer product source'):
+                        artifacts.writer_product_source_inputs(selected)
+
     def test_reviewed_alias_evidence_remains_required(self):
         selected=self.manifest();del selected['tools/reviewed_language_aliases.json']
         with self.assertRaisesRegex(ValueError,'Missing Writer product source'):
@@ -192,6 +201,8 @@ class ShardSourceIdentityTests(PreparedToolsFixture):
             'tools/testdata/shy-nom-owner/bases.lua':b'product nom casing',
             'tools/testdata/shy-nom-owner/langue.wikitext':b'product nom template',
             'tools/testdata/fr-named-owner/langue.wikitext':b'product named template',
+            'tools/testdata/yi-source-category/interwiktionary.wikitext':b'product imported category provider',
+            'tools/testdata/yi-source-category/interwiki.wikitext':b'product imported category peer',
             'tools/corpus_controller.py':b'controller timing',
             'tools/test_corpus_controller.py':b'controller timing tests',
             'tools/native_qualification.py':b'standalone native qualification',
@@ -367,6 +378,8 @@ class ShardSourceIdentityTests(PreparedToolsFixture):
                  'tools/testdata/shy-nom-owner/bases.lua',
                  'tools/testdata/shy-nom-owner/langue.wikitext',
                  'tools/testdata/fr-named-owner/langue.wikitext',
+                 'tools/testdata/yi-source-category/interwiktionary.wikitext',
+                 'tools/testdata/yi-source-category/interwiki.wikitext',
                  'tools/test_other.py','tools/nested/corpus_controller.py',
                  'tools/nested/native_qualification.py','tools/nested/test_native_qualification.py','registry','dump')
         for changed in changes:

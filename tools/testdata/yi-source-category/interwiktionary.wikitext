@@ -1,0 +1,4 @@
+<div class="noprint" style="clear: right; border: solid #aaa 1px; margin: 0 0 1em 1em; font-size: 90%; background: #f9f9f9; width: 250px; padding: 4px; spacing: 0px; text-align: left; float: right;">
+<div style="float: left;">[[Image:Wiktionary.png|50px|none|Wiktionary]]</div>
+<div style="margin-left: 70px;"><center>'''[[װיקיװערטערבוך]] אין'''<br />'''[[:{{{CODE}}}:|{{{LANGUAGE}}}]]''' </center></div>
+</div>
