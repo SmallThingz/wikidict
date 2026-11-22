@@ -125,7 +125,7 @@ async function journal(name) {
   };
 }
 const failures = await journal('issues'), summary = await journal('editions'), progress = await journal('progress');
-const productBundle = await build({stdin: {contents: "export {linkNameCandidate} from './check-edition-link-name.js'; export {renderEntry} from './renderer.js'; export {mediaView,loadInlineImage,inlineImageActionURL} from './media.js';", resolveDir: web}, bundle: true, format: 'iife', globalName: 'Product', write: false});
+const productBundle = await build({stdin: {contents: "export {linkNameCandidate} from './check-edition-link-name.js'; export {expectedTextFragments,normalizeVisibleText} from './check-edition-text.js'; export {renderEntry} from './renderer.js'; export {mediaView,loadInlineImage,inlineImageActionURL} from './media.js';", resolveDir: web}, bundle: true, format: 'iife', globalName: 'Product', write: false});
 const js = productBundle.outputFiles[0].text;
 const css = await readFile(path.join(web, 'style.css'), 'utf8');
 const font = await readFile(path.join(web, 'reader.ttf'));
@@ -134,7 +134,7 @@ const browser = await chromium.launch({executablePath: process.env.CHROMIUM || '
 // Executed inside the real browser. Only compact counts and defect samples cross back.
 async function inspectBatch(payload) {
   const {entries,edition,measureFigure=false}=typeof payload==='string' ? JSON.parse(payload) : payload;
-  const normalize = value => value.normalize('NFC').replace(/\s+/gu, ' ').trim();
+  const normalize = Product.normalizeVisibleText;
   const main = document.querySelector('main');
   const batchStarted=performance.now();
   const results = [];
@@ -153,16 +153,7 @@ async function inspectBatch(payload) {
       const problems = {};
       const text = normalize(main.innerText); // forces style/layout on this record
       if (!main.querySelector('h1')?.getBoundingClientRect().height) problems.missingHeading = true;
-      const expected = new Set();
-      function visit(value) {
-        if (!value || typeof value !== 'object') return;
-        if (['text', 'link', 'external_link'].includes(value.kind) && typeof value.text === 'string' && value.font_scale !== 0) {
-          const fragment = normalize(value.text + (value.trail || ''));
-          if (fragment.length > 2) expected.add(fragment);
-        }
-        for (const child of Object.values(value)) visit(child);
-      }
-      visit(entry.sections); visit(entry.references);
+      const expected = Product.expectedTextFragments(entry.sections, entry.references);
       let missing = 0;
       for (const fragment of expected) if (!text.includes(fragment)) {
         if (++missing <= 4) (problems.missingTextExamples ??= []).push(fragment.slice(0, 120));
