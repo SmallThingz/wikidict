@@ -6320,11 +6320,41 @@ def select_original_archive_input(items, downloads, output, workers, *, staged_i
         record=read_build_envelope(state) if state is not None else None
         identity=record.get('build_inputs',record) if isinstance(record,dict) else None
         archive=identity.get('original_archive_input') if isinstance(identity,dict) else None
-        if archive is None:return None,{}
-        if archive.get('marker',{}).get('path')!=str(selected/'.complete.json'):
+        if archive is None:
+            if not (os.path.lexists(selected) or os.path.lexists(container/'blocks.json')):
+                return None,{}  # Existing legacy work retains its ordinary route.
+            # The input marker is committed before workspace state. A crash
+            # can leave only empty newly created work directories beside it.
+            # Anything more needs an explicit source choice, not a transport
+            # switch or deletion of unverified progress.
+            if state is not None or os.path.lexists(prior[0]):
+                raise ValueError('Original input conflicts with unverified existing work; select its staged input explicitly (existing files preserved)')
+            for path in prior[1:]:
+                if os.path.lexists(path) and (path.is_symlink() or path.resolve()!=path or not path.is_dir()
+                                             or path.stat().st_uid!=os.getuid()
+                                             or next(path.iterdir(),None) is not None):
+                    raise ValueError('Original input has unverified existing work; select its staged input explicitly (existing files preserved)')
+        elif (not isinstance(archive,dict) or not isinstance(archive.get('marker'),dict)
+                or archive['marker'].get('path')!=str(selected/'.complete.json')):
             raise ValueError('Existing archive work requires its original staged input selection')
+        for path in prior:
+            if os.path.lexists(path) and (path.is_symlink() or path.resolve()!=path or not path.is_dir()
+                                         or path.stat().st_uid!=os.getuid()):
+                raise ValueError('Unsafe existing original archive work (existing files preserved)')
+        if (extraction_cache_root is not None or any(getattr(retained_roles,name,None) is not None for name in
+                ('initial_sealed_generation','closed_whole_execution','sealed_expander_recovery'))):
+            raise ValueError('Existing original input requires an explicit staged selection with retained tools or cache (existing files preserved)')
         if not (selected/'.complete.json').is_file():
             raise ValueError('Existing archive work is missing its retained input marker')
+        # Read-only validation must precede lock-file or output creation.
+        selected_staged_input_root(items,selected,output,raw_shard_root,extraction_cache_root)
+        selection=original_archive_record(selected)
+        if selection is None:
+            raise ValueError('Original archive staging requires a complete archive marker')
+        validated_staged_dump(current_xml_inputs(items),selected)
+        if archive is not None and archive!=dict(marker=prepared_metadata_ref(selected/'.complete.json'),selection=selection):
+            raise ValueError('Existing archive work differs from its original staged input selection (existing files preserved)')
+        return selected,{}
     if (extraction_cache_root is not None or any(getattr(retained_roles,name,None) is not None for name in
             ('initial_sealed_generation','closed_whole_execution','sealed_expander_recovery'))):
         return None,{}

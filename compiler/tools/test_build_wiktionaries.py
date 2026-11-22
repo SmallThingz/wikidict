@@ -6,6 +6,7 @@ from compression import zstd
 import gzip
 import hashlib
 import io
+import inspect
 import lzma
 import json
 import os
@@ -17915,5 +17916,107 @@ class VerifiedSourceCountForwardingTests(unittest.TestCase):
                 with self.subTest(value=value),self.assertRaises(ValueError):b.extraction_cache_args(Path(tmp),dict(staged,source_pages=value))
             with self.assertRaises(ValueError):b.extraction_cache_args(Path(tmp),dict(staged,version=b.FRESH_BZIP2_INPUT_VERSION))
 
+
+class OriginalArchiveCrashResumeTests(unittest.TestCase):
+    def selected(self,root):
+        item,downloads,output=MultiEditionOriginalArchiveTests().fixture(root)
+        selected,_=b.select_original_archive_input([item],downloads,output,1)
+        parent=output/item['wiki'];date=item['date']
+        # Recovery may not create a missing control lock before validation.
+        (selected.parent/'.input.lock').unlink()
+        return item,downloads,output,selected,parent,date
+
+    def snapshot(self,root):
+        values={}
+        for p in [root,*sorted(root.rglob('*'))]:
+            s=p.lstat()
+            stamp=(s.st_dev,s.st_ino,s.st_mode,s.st_size,s.st_mtime_ns,s.st_ctime_ns,s.st_nlink,s.st_uid,s.st_gid)
+            value=os.readlink(p)if stat.S_ISLNK(s.st_mode)else p.read_bytes()if stat.S_ISREG(s.st_mode)else None
+            values[str(p.relative_to(root))]=(stamp,value)
+        return values
+
+    def test_empty_crash_directories_resume_same_input_through_normal_build(self):
+        signature=inspect.signature(b._build_locked)
+        for mode in ('shards','building','both'):
+            with self.subTest(mode=mode),tempfile.TemporaryDirectory()as tmp,contextlib.chdir(tmp):
+                root=Path(tmp);item,downloads,output,selected,parent,date=self.selected(root)
+                for name in (('shards','building')if mode=='both'else(mode,)):
+                    (parent/(date+'.'+name)).mkdir()
+                before=self.snapshot(selected.parent)
+                def consume(*args,**kwargs):
+                    values=signature.bind(*args,**kwargs).arguments
+                    self.assertEqual(values['staged_input_root'],selected)
+                    self.assertFalse(values.get('_indexed_originals'))
+                    values['_staged_input_guard']()
+                    return 'new_output'
+                with patch('index_original_dump.write_directory',side_effect=AssertionError('reindex')), \
+                     patch.object(b,'_build_locked',side_effect=consume)as build:
+                    self.assertEqual(b.build([item],downloads,output,'never-executed',1,original_archives=True),'new_output')
+                    build.assert_called_once()
+                self.assertEqual(before,self.snapshot(selected.parent))
+                self.assertFalse((selected.parent/'.input.lock').exists())
+
+    def test_ambiguous_or_mutated_crash_state_refuses_without_mutation(self):
+        modes=('nonempty-shards','nonempty-building','publication','legacy-state','corrupt-state',
+               'unknown-marker','missing-marker','mutated-sidecar','symlink-work','retained','cache',
+               'wrong-declared-marker','wrong-declared-selection')
+        for mode in modes:
+            with self.subTest(mode=mode),tempfile.TemporaryDirectory()as tmp,contextlib.chdir(tmp):
+                root=Path(tmp);item,downloads,output,selected,parent,date=self.selected(root)
+                work=parent/(date+'.shards');work.mkdir();kwargs={}
+                record=b.original_archive_record(selected)
+                declaration=dict(marker=b.prepared_metadata_ref(selected/'.complete.json'),selection=record)
+                if mode=='nonempty-shards':(work/'worker-evidence').write_bytes(b'keep')
+                elif mode=='nonempty-building':
+                    building=parent/(date+'.building');building.mkdir();(building/'failure').write_bytes(b'keep')
+                elif mode=='publication':(parent/date).mkdir()
+                elif mode=='legacy-state':(work/'state.json').write_text('{"version":3,"source":"legacy"}')
+                elif mode=='corrupt-state':(work/'state.json').write_bytes(b'{bad-json')
+                elif mode=='unknown-marker':
+                    record['version']='unknown';(selected/'.complete.json').write_text(json.dumps(record))
+                elif mode=='missing-marker':(selected/'.complete.json').unlink()
+                elif mode=='mutated-sidecar':Path(record['block_directory']['path']).write_bytes(b'changed')
+                elif mode=='symlink-work':
+                    work.rmdir();other=root/'other';other.mkdir();work.symlink_to(other,target_is_directory=True)
+                elif mode=='retained':kwargs['retained_roles']=SimpleNamespace(initial_sealed_generation={'unrelated':True})
+                elif mode=='cache':
+                    cache=root/'paid-cache';cache.mkdir();kwargs['extraction_cache_root']=cache
+                elif mode=='wrong-declared-marker':
+                    declaration['marker']['sha256']='0'*64
+                    (work/'state.json').write_text(json.dumps(dict(original_archive_input=declaration)))
+                elif mode=='wrong-declared-selection':
+                    declaration['selection']=dict(record,source_pages=record['source_pages']+1)
+                    (work/'state.json').write_text(json.dumps(dict(original_archive_input=declaration)))
+                before=self.snapshot(root)
+                with patch('index_original_dump.write_directory',side_effect=AssertionError('reindex')), \
+                     patch.object(b,'_build_locked',side_effect=AssertionError('native dispatch')):
+                    with self.assertRaises((ValueError,OSError)):
+                        b.select_original_archive_input([item],downloads,output,1,**kwargs)
+                self.assertEqual(before,self.snapshot(root))
+
+    def test_recorded_archive_work_and_publication_keep_exact_selection(self):
+        for mode in ('shards','publication','building'):
+            with self.subTest(mode=mode),tempfile.TemporaryDirectory()as tmp,contextlib.chdir(tmp):
+                root=Path(tmp);item,downloads,output,selected,parent,date=self.selected(root)
+                declaration=dict(marker=b.prepared_metadata_ref(selected/'.complete.json'),selection=b.original_archive_record(selected))
+                if mode=='shards':
+                    work=parent/(date+'.shards');work.mkdir();path=work/'state.json';record=dict(original_archive_input=declaration)
+                else:
+                    work=parent/(date if mode=='publication'else date+'.building');work.mkdir();path=work/'complete.json';record=dict(build_inputs=dict(original_archive_input=declaration))
+                path.write_text(json.dumps(record));(work/'paid-evidence').write_bytes(b'keep')
+                before=self.snapshot(root)
+                with patch('index_original_dump.write_directory',side_effect=AssertionError('reindex')):
+                    self.assertEqual(b.select_original_archive_input([item],downloads,output,1),(selected,{}))
+                self.assertEqual(before,self.snapshot(root))
+
+    def test_orphan_sidecar_and_missing_descriptor_never_recreate_input(self):
+        with tempfile.TemporaryDirectory()as tmp,contextlib.chdir(tmp):
+            root=Path(tmp);item,downloads,output,selected,parent,date=self.selected(root)
+            record=b.original_archive_record(selected);block=Path(record['block_directory']['path'])
+            block.rename(selected.parent/'blocks.json');(selected/'.complete.json').unlink();selected.rmdir()
+            (parent/(date+'.shards')).mkdir();before=self.snapshot(root)
+            with patch('index_original_dump.write_directory',side_effect=AssertionError('reindex')):
+                with self.assertRaises(ValueError):b.select_original_archive_input([item],downloads,output,1)
+            self.assertEqual(before,self.snapshot(root))
 
 if __name__=='__main__':unittest.main()
