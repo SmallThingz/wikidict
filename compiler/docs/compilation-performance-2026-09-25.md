@@ -23,8 +23,8 @@ A fresh check still found no delegated writable cgroup subtree, so the hard
 aggregate cap cannot be installed on this RD host. Earlier guarded measurements
 do not qualify pending source or waive containment.
 
-This report preserves accepted results and their limits. The fuller working
-record remains at [.tmp/compile-perf-20260925/EVIDENCE-DRAFT.md](../.tmp/compile-perf-20260925/EVIDENCE-DRAFT.md).
+This report preserves accepted results and their limits. The original local working
+record was `.tmp/compile-perf-20260925/EVIDENCE-DRAFT.md`.
 All artifact paths below are relative to the repository.
 
 ## Change status

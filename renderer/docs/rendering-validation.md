@@ -53,7 +53,7 @@ Recovery rules that claim MediaWiki behavior are checked against the live
 Wiktionary `action=parse` endpoint:
 
 ```sh
-python3 tools/check_mediawiki_recovery.py --out .tmp/mediawiki-recovery-report.json
+python3 compiler/tools/check_mediawiki_recovery.py --out .tmp/mediawiki-recovery-report.json
 ```
 
 The twelve current cases passed a fresh live check on 2026-09-25. The checker
@@ -97,7 +97,7 @@ source lines with the compiled entry. Supply the original XML member from the
 edition's `complete.json`, or repeat the option for each split member.
 
 ```sh
-python3 tools/verify_presentation.py --root "$edition" --report "$report" \
+python3 compiler/tools/verify_presentation.py --root "$edition" --report "$report" \
     --definition-dump "$dump"
 ```
 
@@ -105,7 +105,7 @@ With a Reader built from the matching audit-reference source, select it
 explicitly to reuse fixed-feature bodies across repeated language-view redirects.
 
 ```sh
-python3 tools/verify_presentation.py --binary "$reader" --root "$edition" \
+python3 compiler/tools/verify_presentation.py --binary "$reader" --root "$edition" \
     --report "$report" --definition-dump "$dump" --batch-size 32 \
     --audit-reference-hints
 ```
@@ -125,7 +125,7 @@ record after checking its content identity. It still follows targets that exist
 in that language.
 
 ```sh
-python3 tools/verify_presentation.py --binary "$reader" --root "$edition" \
+python3 compiler/tools/verify_presentation.py --binary "$reader" --root "$edition" \
     --report "$report" --definition-dump "$dump" --batch-size 64 \
     --catalog-page-size 64 --audit-export-session --audit-browse-session --audit-reference-hints \
     --audit-alias-references

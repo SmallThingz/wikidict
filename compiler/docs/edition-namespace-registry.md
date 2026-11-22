@@ -5,14 +5,14 @@ checked against captured API namespace IDs, localized names, and case policy.
 Aliases and additional API properties retain their current-at-retrieval
 provenance; they are not represented as historical dump-time facts.
 
-`tools/namespace_registry_snapshot.py` verifies captured hashes, reparses the
+`compiler/tools/namespace_registry_snapshot.py` verifies captured hashes, reparses the
 hashed XML, rejects incomplete/duplicate namespace inventories and emits a TSV
 plus its provenance manifest. Missing namespace defaultContentModel stays
 absent. Known lexical features require an edition/name/ID proof; other subject
 namespaces are retained as supplemental content, never assigned English
 semantics by their numeric ID.
 
-`src/shared/namespace_registry.zig` owns validated namespace records and a sorted
+`compiler/src/shared/namespace_registry.zig` owns validated namespace records and a sorted
 normalized alias index. Prefix lookup is case-insensitive; title suffixes are
 NFC-normalized and retain case except where the namespace requests MediaWiki
 first-codepoint capitalization. Qualified Lua loader names are separate from
