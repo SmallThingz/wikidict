@@ -133,6 +133,43 @@ class OriginalXmlParts(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'archive inventory'):
             select(root=self.base / 'changed')
 
+    def test_single_archive_parallel_blocks_preserve_stream_order_and_recover_ambiguous_split(self):
+        from unittest.mock import patch
+        import index_original_dump as module
+        from build_wiktionaries import DUMP_STAGING_VERSION, _stage_seekable_dump, dump_input_fingerprint
+
+        directory = self.base / 'tnwiktionary' / '20261001'
+        directory.mkdir(parents=True)
+        raw = b'<page>' + random.Random(327).randbytes(480000).hex().encode() + b'</page>'
+        packed = bz2.compress(raw, compresslevel=1) + bz2.compress(b'<page>last</page>')
+        name = 'pages.xml.bz2'
+        (directory / name).write_bytes(packed)
+        items = [dict(wiki=directory.parent.name, date=directory.name, name=name, size=len(packed),
+                      sha1=hashlib.sha1(packed).hexdigest())]
+        stage = dict(version=DUMP_STAGING_VERSION, input_sha256=dump_input_fingerprint(items))
+        _stage_seekable_dump(items, self.base, self.base, stage, workers=1)
+        page_index = dict(bytes=1, sha256=hashlib.sha256(b'1').hexdigest())
+        def bridge(workers):
+            return module.verified_frame_bridge(items, self.base, stage, page_index, workers=workers)
+        expected = bridge(1)
+        self.assertGreater(len(expected['parts'][0]['blocks']), 4)
+        with patch.object(module.os, 'sched_getaffinity', return_value={0, 1, 2}):
+            self.assertEqual(bridge(3), expected)
+            # Reject a speculative split after earlier buffers have already reached the framer.
+            original = module.decode_block
+            import threading
+            lock = threading.Lock()
+            attempts = 0
+            def ambiguous(*args):
+                nonlocal attempts
+                with lock:
+                    attempts += 1
+                    if attempts == 6:
+                        raise OSError('Ambiguous candidate inside packed data')
+                return original(*args)
+            with patch.object(module, 'decode_block', side_effect=ambiguous):
+                self.assertEqual(bridge(3), expected)
+
     def test_retained_stage_uses_the_same_coordinates_for_split_and_independent_parts(self):
         import json
         from build_wiktionaries import DUMP_STAGING_VERSION, _stage_seekable_dump, dump_input_fingerprint

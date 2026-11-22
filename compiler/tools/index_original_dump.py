@@ -1,6 +1,8 @@
 """Locate and verify independently decodable blocks in original Wikimedia XML parts."""
 import bz2
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
 import hashlib
 import json
 import os
@@ -14,6 +16,10 @@ END = 0x177245385090
 CHUNK = 256 * 1024
 MAX_PACKED_BLOCK = 4 * 1024 * 1024
 MAX_RAW_BLOCK = 64 * 1024 * 1024
+
+
+class AmbiguousBlockBoundary(ValueError):
+    """A speculative block range needs the ordinary sequential boundary search."""
 
 
 def _bits(data, start, length):
@@ -86,10 +92,13 @@ class _ArchiveWindow:
         del self.data[:count]
         self.base += count
 
-    def next_block(self, bit, level):
+    def next_block(self, bit, level, pool):
         scan = bit + 80
         while True:
             for end in _markers(self.data, scan):
+                if pool is not None:
+                    packed = bytes(memoryview(self.data)[:(end + 7) // 8])
+                    return end, pool.submit(decode_block, packed, bit, end - bit, level)
                 try:
                     raw = decode_block(self.data, bit, end - bit, level)
                 except (OSError, ValueError):
@@ -109,9 +118,30 @@ def _stamp(st):
 
 
 def index_part(path, expected_size, expected_sha1, *, consume_xml=None):
+    return _index_part(path, expected_size, expected_sha1, consume_xml, 1)
+
+
+def _index_part(path, expected_size, expected_sha1, consume_xml, workers):
     blocks = []
+    pending = deque()
     xml_bytes = 0
-    with path.open('rb') as source:
+
+    def consume(position, length, level, raw):
+        nonlocal xml_bytes
+        blocks.append([position, length, len(raw), level])
+        xml_bytes += len(raw)
+        if consume_xml is not None:
+            consume_xml(raw)
+
+    def drain_one():
+        position, length, level, future = pending.popleft()
+        try:
+            raw = future.result()
+        except (OSError, ValueError) as exc:
+            raise AmbiguousBlockBoundary('Candidate block did not decode') from exc
+        consume(position, length, level, raw)
+
+    with path.open('rb') as source, (ThreadPoolExecutor(workers) if workers > 1 else nullcontext()) as pool:
         before = os.fstat(source.fileno())
         window = _ArchiveWindow(source)
         while window.fill(1):
@@ -125,17 +155,25 @@ def index_part(path, expected_size, expected_sha1, *, consume_xml=None):
                 marker = _bits(window.data, bit, 48)
                 crc = _bits(window.data, bit + 48, 32)
                 if marker == END:
+                    # Validate speculative boundaries before trusting a new stream.
+                    while pending:
+                        drain_one()
                     if crc != combined_crc:
                         raise ValueError(f'Original bzip2 stream CRC differs: {path.name}')
                     window.consume((bit + 80 + 7) // 8)
                     break
                 if marker != BLOCK:
+                    while pending:
+                        drain_one()
                     raise ValueError(f'Expected a bzip2 block: {path.name}')
-                end, raw = window.next_block(bit, level)
-                blocks.append([window.base * 8 + bit, end - bit, len(raw), level])
-                xml_bytes += len(raw)
-                if consume_xml is not None:
-                    consume_xml(raw)
+                end, result = window.next_block(bit, level, pool)
+                position = window.base * 8 + bit
+                if pool is None:
+                    consume(position, end - bit, level, result)
+                else:
+                    pending.append((position, end - bit, level, result))
+                    if len(pending) >= workers:
+                        drain_one()
                 combined_crc = (((combined_crc << 1) & 0xffffffff) | (combined_crc >> 31)) ^ crc
                 window.consume(end // 8)
                 bit = end % 8
@@ -169,10 +207,17 @@ def index_parts(items, downloads, workers=1):
     def index(item):
         return index_part(downloads / item['wiki'] / item['date'] / item['name'], item['size'], item['sha1'])
 
-    if workers == 1 or len(items) == 1:
+    slots = min(workers, len(os.sched_getaffinity(0)), 4)
+    if len(items) == 1 and slots > 1:
+        item = items[0]
+        try:
+            parts = [_index_part(downloads / item['wiki'] / item['date'] / item['name'], item['size'], item['sha1'], None, slots)]
+        except AmbiguousBlockBoundary:
+            parts = [index(item)]
+    elif slots == 1:
         parts = list(map(index, items))
     else:
-        with ThreadPoolExecutor(max_workers=min(workers, len(items), len(os.sched_getaffinity(0)), 4)) as pool:
+        with ThreadPoolExecutor(max_workers=min(slots, len(items))) as pool:
             parts = list(pool.map(index, items))
     return dict(format='wikidict-bzip2-blocks-v1', xml_bytes=sum(part['xml_bytes'] for part in parts), parts=parts)
 
@@ -216,7 +261,8 @@ def verified_frame_bridge(items, downloads, stage, page_index, *, workers=1, spl
             for batch in state.feed(raw):
                 consume(zstd.compress(batch, level=1))
         path = downloads / item['wiki'] / item['date'] / item['name']
-        return index_part(path, item['size'], item['sha1'], consume_xml=observe)
+        slots = min(workers, len(os.sched_getaffinity(0)), 4) if len(items) == 1 else 1
+        return _index_part(path, item['size'], item['sha1'], observe, slots)
 
     def finish(state, consume):
         for batch in state.finish():
@@ -236,9 +282,14 @@ def verified_frame_bridge(items, downloads, stage, page_index, *, workers=1, spl
         parts = [part for part, _ in records]
         pages = sum(count for _, count in records)
     else:
-        for item in items:
-            framer.source = item['name']
-            parts.append(read_part(item, framer, store))
+        try:
+            for item in items:
+                framer.source = item['name']
+                parts.append(read_part(item, framer, store))
+        except AmbiguousBlockBoundary:
+            # No bytes have been published. Recreate all frames, counters and
+            # hashes so a partially consumed parallel prefix is never repeated.
+            return verified_frame_bridge(items, downloads, stage, page_index, workers=1, split_parts=False)
         finish(framer, store)
         pages = framer.pages
     if not frames:
@@ -368,7 +419,8 @@ def main():
     parser.add_argument('--manifest-sha256', required=True)
     parser.add_argument('--edition', required=True, help='Edition name, e.g. enwiktionary')
     parser.add_argument('--output', type=Path, required=True, help='Block directory JSON file to create or select by digest')
-    parser.add_argument('--workers', type=int, choices=range(1, 5), default=4, help='Concurrent independent archive parts')
+    parser.add_argument('--workers', type=int, choices=range(1, 5), default=4,
+                        help='Concurrent archive parts, or bzip2 blocks for a single part')
     parser.add_argument('--stage-receipt', type=Path, help='Reproduce a retained Zstandard stage and its stream index in memory')
     parser.add_argument('--page-index-size', type=int, help='Authenticated uncompressed size of the retained page-index.tsv')
     parser.add_argument('--page-index-sha256', help='Authenticated SHA-256 of the retained page-index.tsv')
