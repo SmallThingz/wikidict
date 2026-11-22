@@ -44,6 +44,8 @@ def producer_relative_path(name):
     require(not path.is_absolute() and '..' not in path.parts and path.parts,
             'Source name must be repository relative')
     parts = path.parts
+    if path == Path('apps/android/app/src/main/cpp/egyptian_shape.cpp'):
+        return 'renderer/src/shaping/android/egyptian_shape.cpp'
     if parts[0] == 'apps' and len(parts) >= 2:
         return str(Path('renderer' if parts[1] == 'shared' else parts[1], *parts[2:]))
     if parts[0] == 'src' and len(parts) >= 2:
