@@ -10895,6 +10895,7 @@ fn hasBidiDeclaration(a: std.mem.Allocator, css: []const u8) std.mem.Allocator.E
     var pos: usize = 0;
     while (try nextDeclarationAlloc(a, css, &pos)) |raw| {
         defer a.free(raw);
+        if (trim(raw).len == 0) continue;
         const colon = std.mem.indexOfScalar(u8, raw, ':') orelse return true;
         const name = trim(raw[0..colon]);
         if (std.mem.indexOfScalar(u8, name, '\\') != null or std.ascii.eqlIgnoreCase(name, "unicode-bidi") or std.ascii.eqlIgnoreCase(name, "direction")) return true;
@@ -38077,4 +38078,24 @@ test "page scoped public paint and geometry require ordered distinct witnesses o
     try std.testing.expect((try reversed_paint.resolveTextPaint(a, &detached, "")).weight == null);
     const absent = try reversed_geometry.resolveContainerIn(a, &detached, "");
     try std.testing.expect(!absent.unresolved and absent.style.width == null);
+}
+
+test "bidi declaration scanner ignores exact German font rule empty trivia and preserves malformed refusals" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const actual = " font-family: 'Arial Unicode MS', Code2000, 'MPH 2B Damase', 'DejaVu Sans', sans-serif; ";
+    for ([_][]const u8{ actual[0 .. actual.len - 1], actual, "", " ; \t\n;\x0c ; ", "/* only trivia */ ;", "font-family:'semi;colon'; ; " }) |css| {
+        try std.testing.expect(!try hasBidiDeclaration(a, css));
+    }
+    for ([_][]const u8{ "direction:rtl; ", "unicode-bidi:isolate; ", "broken", " ; broken ; ", "font-family:serif; dangling", "\\64irection:rtl", "direction:" }) |css| {
+        try std.testing.expect(try hasBidiDeclaration(a, css));
+    }
+    const source = try std.fmt.allocPrint(a, ".a{{{s}}}.b{{{s}}}", .{ actual[0 .. actual.len - 1], actual });
+    var profile = try parseAlloc(a, source); defer profile.deinit();
+    const first: TextElement = .{ .tag = "span", .classes = "a" };
+    const second: TextElement = .{ .tag = "span", .classes = "b" };
+    try std.testing.expect(try profile.sourceBidiScopeUnchanged(a, &first, "font-size:1.4em"));
+    try std.testing.expect(try profile.sourceBidiScopeUnchanged(a, &second, "font-size:1.4em; \t ; "));
+    try std.testing.expect(!try profile.sourceBidiScopeUnchanged(a, &second, " ; broken ; "));
+    try std.testing.expect(!try profile.sourceBidiScopeUnchanged(a, &second, "direction:ltr; "));
 }

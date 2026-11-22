@@ -26699,7 +26699,7 @@ pub const Renderer = struct {
         return parts;
     }
     fn wrapFigureBidiSpans(self: *Renderer, start: usize, descriptor: BidiScope, capture: *BidiCapture, header: MissingText, closing: MissingText, content: []const u8, element: ?*const table_style_profile.TextElement, css: []const u8) Error!void {
-        if (!(try self.bidiSourceEligible(header, closing, content, element, css))) return self.figureUnavailable();
+        if (!(try self.bidiSourceEligible(header, closing, content, element, css))) return self.figureUnavailableAt("bidi_scope_source_unproven", header.bytes, 0, 0);
         const original = self.spans.items[start..];
         var scan: BidiTextScan = .{};
         const resolved: presentation_types.BidiResolvedDirection = if (descriptor.automatic)
@@ -26710,7 +26710,7 @@ pub const Renderer = struct {
         const parts = try self.bidiScopeParts(staged);
         const scope = try self.a.create(FlowScope);
         scope.* = .{ .mode = descriptor.mode, .authored_direction = descriptor.authored_direction, .resolved_direction = resolved, .language = descriptor.language, .parts = parts };
-        if (!presentation_types.validBidiScopeHeader(scope.*)) return self.figureUnavailable();
+        if (!presentation_types.validBidiScopeHeader(scope.*)) return self.figureUnavailableAt("bidi_scope_header_invalid", header.bytes, 0, 0);
         if (!self.spend()) return error.RenderLimit;
         self.spans.items.len = start;
         try self.spans.append(self.a, .{ .text = "", .pending_bidi_scope = scope });
@@ -128711,4 +128711,82 @@ test "nominal MIDI timed options keep reference actions separate from audio play
     try std.testing.expectEqual(@as(usize, 1), gallery.media.items.len);
     try std.testing.expectEqual(media_types.Kind.audio, gallery.media.items[0].kind);
     // MIDI gallery support is unchanged; this control claims ordinary File references only.
+}
+
+test "German caption bidi preserves equivalent font only CSS whitespace nested scopes styles actions and codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const actual = " font-family: 'Arial Unicode MS', Code2000, 'MPH 2B Damase', 'DejaVu Sans', sans-serif; ";
+    const source = "[[File:Caption.svg|thumb|80px|[1] <span class='spanAr' lang='ar' dir='rtl' style='font-size:1.4em'>طائرة [[Target|أ]]<span dir='ltr' lang='en' style='font-weight:bold'>L</span></span>&lrm;]]";
+    var previous: ?[]const u8 = null;
+    for ([_][]const u8{ actual[0 .. actual.len - 1], actual, try std.fmt.allocPrint(a, "{s}\t ; /* trivia */ ; ", .{actual}) }) |css| {
+        var profile = try table_style_profile.parseAlloc(a, try std.fmt.allocPrint(a, ".spanAr{{{s}}}", .{css})); defer profile.deinit();
+        var context = try FigureProducerTest.context(a); context.table_styles = &profile;
+        var renderer: Renderer = .{ .a = a, .context = context };
+        const blocks = try renderer.renderBody(source);
+        const figure = try FigureProducerTest.find(blocks);
+        const caption = figure.caption_blocks orelse return error.TestUnexpectedResult;
+        const parts = caption[0].flow orelse return error.TestUnexpectedResult;
+        const base = parts[0].spans[0];
+        var arabic: ?FlowScope = null;
+        for (parts) |part| if (part.scope) |scope| {
+            if (scope.language) |language| if (std.mem.eql(u8, language, "ar")) { arabic = scope; };
+        };
+        const scope = arabic orelse return error.TestUnexpectedResult;
+        try std.testing.expect(scope.mode == .isolate and scope.authored_direction == .rtl and scope.resolved_direction == .rtl);
+        var saw_word = false; var saw_action = false; var saw_nested = false;
+        for (scope.parts) |part| {
+            for (part.spans) |span| {
+                if (std.mem.indexOf(u8, span.text, "طائرة") != null) {
+                    saw_word = true;
+                    try std.testing.expectEqualStrings("ar", span.language);
+                    try std.testing.expectEqualStrings("rtl", span.direction);
+                    const actual_scale = span.font_scale orelse return error.TestUnexpectedResult;
+                    try std.testing.expectApproxEqAbs((base.font_scale orelse @as(f32, 1)) * @as(f32, 1.4), actual_scale, 0.00001);
+                    try std.testing.expectEqual(base.font_scale_basis, span.font_scale_basis);
+                }
+                if (span.kind == .link and std.mem.eql(u8, span.target, "Target")) {
+                    saw_action = true; try std.testing.expectEqualStrings("أ", span.text);
+                }
+            }
+            if (part.scope) |nested| {
+                saw_nested = true;
+                try std.testing.expect(nested.authored_direction == .ltr and nested.resolved_direction == .ltr);
+                try std.testing.expectEqualStrings("en", nested.language orelse return error.TestUnexpectedResult);
+                try std.testing.expect(nested.parts[0].spans[0].flags.bold);
+                try std.testing.expectEqualStrings("L", try plainText(a, nested.parts[0].spans));
+            }
+        }
+        try std.testing.expect(saw_word and saw_action and saw_nested);
+        try FigureProducerTest.roundtrip(a, &renderer, blocks);
+        const encoded = try CenteredImageTest.encoded(a, &renderer, blocks);
+        if (previous) |before| try std.testing.expectEqualSlices(u8, before, encoded);
+        previous = encoded;
+    }
+}
+
+test "figure bidi source and header refusals retain local authored header and finer precedence" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const header = "<span dir='rtl' lang='ar'>";
+    const element: table_style_profile.TextElement = .{ .tag = "span", .language = "ar" };
+    var profile = try table_style_profile.parseAlloc(a, ""); defer profile.deinit();
+    for (0..3) |case| {
+        var evidence: RejectedCompilerCapture = .{}; const capture_scope = evidence.begin(); defer capture_scope.deinit();
+        var context = try FigureProducerTest.context(a); context.table_styles = if (case == 0) null else &profile;
+        var renderer: Renderer = .{ .a = a, .context = context };
+        try renderer.spans.append(a, .{ .text = "A" });
+        if (case == 2) renderer.tracePresentationRejection("figure_geometry", "earlier_geometry", "fine", 0, 7, error.UncompiledPresentation);
+        var capture: BidiCapture = .{};
+        const descriptor: Renderer.BidiScope = if (case == 0)
+            .{ .opening = "\u{2067}", .authored_direction = .rtl, .language = "ar" }
+        else .{ .opening = "\u{2066}\u{202d}", .mode = .isolate_override, .language = "ar" };
+        try std.testing.expectError(error.UncompiledPresentation, renderer.wrapFigureBidiSpans(0, descriptor, &capture, .{ .bytes = header }, .{ .bytes = "</span>" }, "A", &element, ""));
+        const rejected = evidence.snapshot(error.UncompiledPresentation) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualStrings(if (case == 0) "bidi_scope_source_unproven" else if (case == 1) "bidi_scope_header_invalid" else "earlier_geometry", rejected.reason);
+        try std.testing.expectEqualStrings(if (case == 2) "figure_geometry" else "figure_admission", rejected.operation);
+        try std.testing.expectEqual(@as(usize, if (case == 2) 4 else header.len), rejected.fragment_bytes);
+        try std.testing.expectEqual(@as(usize, 0), rejected.local_offset);
+        try std.testing.expectEqual(@as(u64, if (case == 2) 7 else 0), rejected.reason_bits);
+    }
 }
