@@ -3421,6 +3421,7 @@ class BuildTest(PreparedToolsFixture):
                       url='https://dumps.wikimedia.org/testwiktionary/20260901/'+name,
                       size=len(data),sha1=hashlib.sha1(data).hexdigest())
             (folder/'language-registry.tsv').write_text('# content-language\ten\nen\tEnglish\n')
+            compiler=root/'mock-zig';compiler.write_bytes(b'mocked compiler identity');compiler.chmod(0o555)
             merges=[]
             def run(command):
                 if 'build-dictionary' in command:
@@ -3443,11 +3444,11 @@ class BuildTest(PreparedToolsFixture):
                  patch.object(b.time,'time',return_value=123),patch.object(b,'run_checked',side_effect=run), \
                  patch.object(b,'stage_seekable_dump',wraps=real_stage) as stage:
                 with self.assertRaises(subprocess.CalledProcessError):
-                    b.build([item],root,root/'output','zig',1)
+                    b.build([item],root,root/'output',str(compiler),1)
                 workspace=root/'output/testwiktionary/20260901.shards'
                 self.assertTrue((workspace/'input/.complete.json').is_file())
                 self.assertEqual(stage.call_count,1)
-                b.build([item],root,root/'output','zig',1)
+                b.build([item],root,root/'output',str(compiler),1)
                 self.assertEqual(stage.call_count,1)
                 self.assertEqual(len(merges),2)
                 self.assertFalse(workspace.exists())
@@ -18018,5 +18019,102 @@ class OriginalArchiveCrashResumeTests(unittest.TestCase):
             with patch('index_original_dump.write_directory',side_effect=AssertionError('reindex')):
                 with self.assertRaises(ValueError):b.select_original_archive_input([item],downloads,output,1)
             self.assertEqual(before,self.snapshot(root))
+
+
+
+class StagePartOrderTests(unittest.TestCase):
+    @staticmethod
+    def fixture(root):
+        folder=root/'testwiktionary/20260901';folder.mkdir(parents=True)
+        items=[];raws={}
+        for first,last in [(1,9),(100,109),(20,29)]:
+            name=f'testwiktionary-20260901-pages-meta-current1.xml-p{first}p{last}.bz2'
+            raw=f'<mediawiki><page><title>P{first}</title><ns>0</ns><id>{first}</id><revision><id>{first}</id><text xml:space="preserve">body{first}</text></revision></page></mediawiki>'.encode()
+            packed=bz2.compress(raw);(folder/name).write_bytes(packed)
+            items.append(dict(wiki='testwiktionary',date='20260901',name=name,size=len(packed),sha1=hashlib.sha1(packed).hexdigest()));raws[name]=raw
+        return items,raws
+
+    def check_roundtrip(self,kind):
+        for mode in (None,'page-range-v1'):
+            with self.subTest(kind=kind,mode=mode),tempfile.TemporaryDirectory()as td:
+                root=Path(td);items,raws=self.fixture(root);out=root/'stage';out.mkdir();metadata={}
+                dump=getattr(b,'_stage_seekable_dump_'+kind)(items,root,out,metadata,workers=2,part_order=mode)
+                selected=sorted(items,key=lambda row:row['name']) if mode is None else sorted(items,key=lambda row:int(row['name'].split('.xml-p')[1].split('p')[0]))
+                self.assertEqual(decode_staged_dump(dump),b''.join(raws[row['name']] for row in selected))
+                self.assertEqual(metadata['source_pages'],3)
+                self.assertEqual(metadata.get('part_order'),mode)
+                rows=bz2.decompress((out/'pages-index.txt.bz2').read_bytes()).splitlines()
+                self.assertEqual(len(rows),1 if kind=='serial'else 3)
+                packed=dump.read_bytes();offsets=[int(row.split(b':',1)[0])for row in rows]+[len(packed)]
+                for start,end in zip(offsets,offsets[1:]):self.assertEqual(zstd.get_frame_size(packed[start:end]),end-start)
+                identity={'version':b.DUMP_STAGING_VERSION,'files':[[row['wiki'],row['date'],row['name'],row['size'],row['sha1']]for row in sorted(items,key=lambda row:row['name'])]}
+                if mode is not None:identity['part_order']=mode
+                golden=hashlib.sha256(json.dumps(identity,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+                self.assertEqual(b.dump_input_fingerprint(items,part_order=mode),golden)
+    def test_serial_legacy_and_numeric_coordinates(self):self.check_roundtrip('serial')
+    def test_parallel_legacy_and_numeric_coordinates(self):self.check_roundtrip('parallel')
+
+    def test_actual_full_xml_sql_state_resumes_before_stage(self):
+        with tempfile.TemporaryDirectory()as td:
+            root=Path(td);xml,_=self.fixture(root);sql=dict(xml[0],name='testwiktionary-20260901-page_props.sql.gz',size=2,sha1='a'*40);items=xml+[sql];reg=root/'registry';reg.write_text('x');work=root/'work';work.mkdir()
+            with patch.object(b,'_source_fingerprints',return_value=({'fixture':1},{'fixture':1})):
+                state=b.shard_state(items,reg)
+            state['stage_part_order']='page-range-v1';(work/'state.json').write_text(json.dumps(state))
+            self.assertEqual(b.normal_repack_selection(items,work),('page-range-v1',None));self.assertFalse((work/'input').exists())
+            for bad in [xml,xml+[dict(sql,size=3)]]:
+                with self.assertRaisesRegex(ValueError,'ledger'):b.normal_repack_selection(bad,work)
+            self.assertEqual(json.loads((work/'state.json').read_text()),state)
+    def test_populated_sensitive_missing_marker_refuses_readonly(self):
+        with tempfile.TemporaryDirectory()as td:
+            root=Path(td);items,_=self.fixture(root);work=root/'work';(work/'expander').mkdir(parents=True);keep=work/'expander/keep';keep.write_bytes(b'worker');before=keep.stat()
+            with self.assertRaisesRegex(ValueError,'restore'):b.normal_repack_selection(items,work)
+            self.assertEqual(keep.read_bytes(),b'worker');self.assertEqual(keep.stat(),before);self.assertFalse((work/'input').exists())
+    def test_same_order_old_workspace_keeps_stock_selection(self):
+        with tempfile.TemporaryDirectory()as td:
+            root=Path(td);items,_=self.fixture(root);items=items[:1];work=root/'work';work.mkdir();(work/'expander').write_text('old');(work/'state.json').write_text('invalid')
+            self.assertEqual(b.normal_repack_selection(items,work),(None,None));self.assertIsNone(b.effective_stage_part_order(items,'page-range-v1'))
+    def test_clean_external_cache_not_legacy_coordinate_evidence(self):
+        with tempfile.TemporaryDirectory()as td:
+            root=Path(td);items,_=self.fixture(root);self.assertEqual(b.normal_repack_selection(items,root/'new',clean_new=True),('page-range-v1',None))
+    def test_legacy_cache_memo_revalidates_after_owned_alias_unlink(self):
+        with tempfile.TemporaryDirectory()as td:
+            root=Path(td);items,_=self.fixture(root);work=root/'work';work.mkdir();dump=b.cached_shard_dump(items,root,work,workers=2);original=dump.read_bytes();alias=root/'alias';os.link(dump,alias)
+            order,checked=b.normal_repack_selection(items,work);self.assertIsNone(order);alias.unlink()
+            with patch.object(b,'validated_staged_dump',wraps=b.validated_staged_dump)as validate:
+                self.assertEqual(b.cached_shard_dump(items,root,work,workers=2,_validated=checked).read_bytes(),original);self.assertEqual(validate.call_count,1)
+    def test_numeric_and_legacy_bridge_exact_physical_digests(self):
+        import index_original_dump as i
+        for mode in [None,'page-range-v1']:
+            with self.subTest(mode=mode),tempfile.TemporaryDirectory()as td:
+                root=Path(td);items,_=self.fixture(root);scratch=root/'stage';scratch.mkdir();stage=dict(version=b.DUMP_STAGING_VERSION,input_sha256=b.dump_input_fingerprint(items,part_order=mode));b._stage_seekable_dump_parallel(items,root,scratch,stage,workers=2,part_order=mode)
+                page_index=dict(bytes=1,sha256=hashlib.sha256(b'1').hexdigest());out=root/'blocks.json';i.write_directory(items,root,out,stage=stage,page_index=page_index)
+                directory=json.loads(out.read_text());self.assertEqual(directory['zstd_frame_bridge']['dump_sha256'],stage['dump_sha256']);self.assertEqual(directory['zstd_frame_bridge']['offset_index_sha256'],stage['index_sha256'])
+                marker=i.prepare_build_input(root/'selected',out,hashlib.sha256(out.read_bytes()).hexdigest(),items,root,stage=stage,page_index=page_index)
+                self.assertEqual(marker.get('part_order'),mode);b.validated_original_archive(items,root/'selected',marker)
+
+    def test_consumed_legacy_and_numeric_state_disagreement_refuses_both_directions(self):
+        for cache_order,state_order in [('page-range-v1',None),(None,'page-range-v1'),('page-range-v1','page-range-v1')]:
+            with self.subTest(cache=cache_order,state=state_order),tempfile.TemporaryDirectory()as td:
+                root=Path(td);items,_=self.fixture(root);work=root/'work';work.mkdir();b.cached_shard_dump(items,root,work,workers=2,part_order=cache_order)
+                reg=root/'registry';reg.write_text('x')
+                with patch.object(b,'_source_fingerprints',return_value=({'fixture':1},{'fixture':1})):state=b.shard_state(items,reg)
+                if state_order is not None:state['stage_part_order']=state_order
+                (work/'state.json').write_text(json.dumps(state));(work/'expander').mkdir();(work/'expander/worker').write_text('paid')
+                def snapshot():return {str(p.relative_to(work)):((p.stat().st_dev,p.stat().st_ino,p.stat().st_mode,p.stat().st_size,p.stat().st_mtime_ns,p.stat().st_ctime_ns),p.read_bytes() if p.is_file()else None)for p in work.rglob('*')}
+                before=snapshot()
+                if cache_order!=state_order:
+                    with self.assertRaisesRegex(ValueError,'part order differs'):b.normal_repack_selection(items,work)
+                else:self.assertEqual(b.normal_repack_selection(items,work)[0],cache_order)
+                self.assertEqual(snapshot(),before)
+    def test_ranged_nondict_cached_markers_refuse_as_valueerror(self):
+        with tempfile.TemporaryDirectory()as td:
+            root=Path(td);items,_=self.fixture(root);work=root/'work';cache=work/'input';cache.mkdir(parents=True)
+            (cache/'pages.xml.zst').write_bytes(b'old');(cache/'pages-index.txt.bz2').write_bytes(b'old')
+            for value in [[],None,7,'marker']:
+                (cache/'.complete.json').write_text(json.dumps(value));before=(cache/'.complete.json').read_bytes()
+                for call in [lambda:b.normal_repack_selection(items,work),lambda:b.cached_shard_dump(items,root,work),lambda:b.validated_staged_dump(items,cache)]:
+                    with self.assertRaises(ValueError):call()
+                self.assertEqual((cache/'.complete.json').read_bytes(),before)
+
 
 if __name__=='__main__':unittest.main()

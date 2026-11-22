@@ -19981,6 +19981,7 @@ const CapturedWriterSourceIndexRebase = struct {
 };
 const CapturedWriterRepackReceipt = struct {
     version: []const u8,
+    part_order: ?[]const u8 = null,
     input_sha256: []const u8,
     dump_codec: []const u8,
     dump_stream_kind: []const u8,
@@ -19990,6 +19991,16 @@ const CapturedWriterRepackReceipt = struct {
     index_size: u64,
     index_sha256: []const u8,
 };
+const CapturedWriterRepackRow = @Tuple(&.{ []const u8, []const u8, []const u8, u64, []const u8 });
+fn capturedWriterRepackFingerprintBytes(a: std.mem.Allocator, rows: []const CapturedWriterRepackRow, version: []const u8, part_order: ?[]const u8) ![]u8 {
+    if (part_order) |order| {
+        if (!std.mem.eql(u8, order, "page-range-v1")) return error.CapturedWriterSourceContextMismatch;
+        return std.json.Stringify.valueAlloc(a, .{ .files = rows, .part_order = order, .version = version }, .{});
+    }
+    // Keep the exact historical sorted-manifest encoding when no new recipe
+    // was selected. The marker's physical dump/index digests remain required.
+    return std.json.Stringify.valueAlloc(a, .{ .files = rows, .version = version }, .{});
+}
 fn capturedWriterCheckIndexRebase(io: std.Io, a: std.mem.Allocator, request: CapturedWriterRequest) !void {
     const rebase = request.source_index_rebase orelse return error.CapturedWriterSourceContextMismatch;
     const original_dump = request.source_category_dump orelse return error.InvalidCapturedWriterCategoryInputs;
@@ -20014,8 +20025,7 @@ fn capturedWriterCheckIndexRebase(io: std.Io, a: std.mem.Allocator, request: Cap
         marker.index_size == 0 or marker.index_sha256.len != 64 or marker.input_sha256.len != 64 or
         rebase.inputs.len == 0 or rebase.inputs.len > 64) return error.CapturedWriterSourceContextMismatch;
     // Reproduce the ordinary dump_input_fingerprint, including edition/date and official SHA1 rows.
-    const Row = @Tuple(&.{ []const u8, []const u8, []const u8, u64, []const u8 });
-    const rows = try a.alloc(Row, rebase.inputs.len); defer a.free(rows);
+    const rows = try a.alloc(CapturedWriterRepackRow, rebase.inputs.len); defer a.free(rows);
     const prefix = try std.fmt.allocPrint(a, "{s}-{s}-", .{ request.wiki, request.date }); defer a.free(prefix);
     for (rebase.inputs, 0..) |item, i| {
         if (!std.mem.eql(u8, item.wiki, request.wiki) or !std.mem.eql(u8, item.date, request.date) or
@@ -20025,7 +20035,7 @@ fn capturedWriterCheckIndexRebase(io: std.Io, a: std.mem.Allocator, request: Cap
         for (item.sha1) |char| if (!(char >= '0' and char <= '9') and !(char >= 'a' and char <= 'f')) return error.CapturedWriterSourceContextMismatch;
         rows[i] = .{ item.wiki, item.date, item.name, item.size, item.sha1 };
     }
-    const encoded = try std.json.Stringify.valueAlloc(a, .{ .files = rows, .version = marker.version }, .{}); defer a.free(encoded);
+    const encoded = try capturedWriterRepackFingerprintBytes(a, rows, marker.version, marker.part_order); defer a.free(encoded);
     const digest = try auditHash(a, encoded); defer a.free(digest);
     if (!std.mem.eql(u8, marker.input_sha256, digest)) return error.CapturedWriterSourceContextMismatch;
     if (request.audit_capture) |audit| if (audit.dump.bytes != rebase.dump.bytes or !std.mem.eql(u8, audit.dump.sha256, rebase.dump.sha256)) return error.CapturedWriterAuditMismatch;
@@ -69539,4 +69549,38 @@ test "ordinary bona root table card changes only language owner with full body a
     const reencoded = try encoder.presentation_codec.encodeAlloc(a, T.Stored{ .entry = actual });
     const decoded = try encoder.presentation_codec.decodeAlloc(a, reencoded, "bona", .language, .{ .code = "st", .heading = "Sesotho" });
     try std.testing.expectEqualDeep(actual, decoded.entry);
+}
+
+
+test "captured page numeric-order marker preserves same-coordinate source rebase and whole Stored output" {
+    var tmp=std.testing.tmpDir(.{});defer tmp.cleanup();var arena=std.heap.ArenaAllocator.init(std.testing.allocator);defer arena.deinit();
+    const a=arena.allocator();const io=std.testing.io;
+    // Independent Python json.dumps(sort_keys=True,separators=(",",":")) goldens.
+    // Filename order p100,p20 differs from numeric p20,p100; manifest rows
+    // remain filename-sorted and the selected recipe distinguishes coordinates.
+    const golden_rows=[_]CapturedWriterRepackRow{
+        .{"enwiktionary","20261001","enwiktionary-20261001-pages-meta-current1.xml-p100p109.bz2",200,"1111111111111111111111111111111111111111"},
+        .{"enwiktionary","20261001","enwiktionary-20261001-pages-meta-current1.xml-p20p29.bz2",100,"2222222222222222222222222222222222222222"},
+    };
+    try std.testing.expectEqualStrings("a1c7316d96df497ea8d62f7fc9f21bb105e17b38570ba87b3defda8522e26362",try auditHash(a,try capturedWriterRepackFingerprintBytes(a,&golden_rows,"page-aligned-zstd-parallel-v2",null)));
+    try std.testing.expectEqualStrings("0830bdfaf1d4f5ef71efb1123eab07fef49adae029119a063f7245d71bedb658",try auditHash(a,try capturedWriterRepackFingerprintBytes(a,&golden_rows,"page-aligned-zstd-parallel-v2","page-range-v1")));
+
+    const root=try std.Io.Dir.cwd().realPathFileAlloc(io,try std.fmt.allocPrint(a,".zig-cache/tmp/{s}",.{tmp.sub_path}),a);
+    var request=try CapturedWriterIndexRebaseTest.fixture(io,a,root);
+    const marker_path=try std.fs.path.join(a,&.{std.fs.path.dirname(request.source_category_dump.?.path).?,".complete.json"});
+    const original_bytes=try std.Io.Dir.cwd().readFileAlloc(io,marker_path,a,.limited(64*1024));
+    const parsed=try std.json.parseFromSlice(CapturedWriterRepackReceipt,a,original_bytes,.{});defer parsed.deinit();
+    var marker=parsed.value;marker.part_order="page-range-v1";
+    const name=try std.fmt.allocPrint(a,"{s}-{s}-pages-meta-current.xml.bz2",.{request.wiki,request.date});
+    const rows=[_]CapturedWriterRepackRow{.{request.wiki,request.date,name,1,"0000000000000000000000000000000000000000"}};
+    marker.input_sha256=try auditHash(a,try capturedWriterRepackFingerprintBytes(a,&rows,marker.version,marker.part_order));
+    try std.Io.Dir.cwd().writeFile(io,.{.sub_path=marker_path,.data=try std.json.Stringify.valueAlloc(a,marker,.{})});
+    try CapturedWriterCliTest.execute(io,a,root,request,"numeric-original-result");
+    const original=try CapturedWriterCurrentStored.load(io,a,try std.fs.path.join(a,&.{root,"numeric-original-result/data"}),request.page.title);
+    try CapturedWriterIndexRebaseTest.rebase(io,a,root,&request,false);
+    try CapturedWriterCliTest.execute(io,a,root,request,"numeric-rebased-result");
+    const current=try CapturedWriterCurrentStored.load(io,a,try std.fs.path.join(a,&.{root,"numeric-rebased-result/data"}),request.page.title);
+    try std.testing.expectEqual(@as(usize,1),current.len);
+    try std.testing.expectEqualStrings(try std.json.Stringify.valueAlloc(a,original[0].stored,.{}),try std.json.Stringify.valueAlloc(a,current[0].stored,.{}));
+    try std.testing.expectError(error.CapturedWriterSourceContextMismatch,capturedWriterRepackFingerprintBytes(a,&rows,marker.version,"unknown-order"));
 }

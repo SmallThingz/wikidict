@@ -3346,7 +3346,35 @@ class XmlFrames:
             yield self._take()
 
 
-def _stage_seekable_dump_serial(items, downloads, scratch, metadata=None, workers=4):
+STAGE_PART_ORDER_RANGE = 'page-range-v1'
+
+
+def stage_part_items(items, part_order=None):
+    """An absent order is the historical v2 filename recipe."""
+    if part_order not in (None, STAGE_PART_ORDER_RANGE):
+        raise ValueError('Unknown staged XML part order')
+    ordered=sorted(items,key=lambda item:item['name'])
+    if part_order is not None:
+        from index_original_dump import page_range_order
+        ordered=page_range_order(ordered)
+    return ordered
+
+
+def stage_part_order(record):
+    if not isinstance(record,dict):
+        raise ValueError('Invalid staged XML marker')
+    order=record.get('part_order')
+    if order not in (None, STAGE_PART_ORDER_RANGE):
+        raise ValueError('Unknown staged XML part order')
+    return order
+
+
+def effective_stage_part_order(items, requested):
+    ordered=stage_part_items(items,requested)
+    return requested if ordered!=stage_part_items(items) else None
+
+
+def _stage_seekable_dump_serial(items, downloads, scratch, metadata=None, workers=4, *, part_order=STAGE_PART_ORDER_RANGE):
     """Repack full-namespace dumps into bounded, page-aligned Zstandard frames.
 
     The downloaded meta-current parts are not indexed by page. A whole part can
@@ -3357,7 +3385,7 @@ def _stage_seekable_dump_serial(items, downloads, scratch, metadata=None, worker
     if zstd is None:
         raise RuntimeError('Python 3.14 compression.zstd is required for staged Zstandard dumps')
     parts=[]
-    for item in sorted(items,key=lambda x:x['name']):
+    for item in stage_part_items(items,part_order):
         source=downloads/item['wiki']/item['date']/item['name']
         with source.open('rb',buffering=0) as f:
             if f.read(3)!=b'BZh': raise ValueError(f'Expected bzip2 dump part: {source}')
@@ -3419,6 +3447,9 @@ def _stage_seekable_dump_serial(items, downloads, scratch, metadata=None, worker
             write_member(zstd.compress(b'',level=1),0)
     pages, xml_bytes = framer.pages, framer.xml_bytes
     if metadata is not None:
+        order=effective_stage_part_order(items,part_order)
+        if order is not None:metadata['part_order']=order
+        else:metadata.pop('part_order',None)
         metadata.update({'source_pages':pages,'dump_codec':'zstd','dump_stream_kind':'multistream-zstd','dump_size':dump.stat().st_size,'dump_sha256':dump_hash.hexdigest(),
                          'index_size':index.stat().st_size,'index_sha256':sha256_file(index)})
     print(f'Staged Zstandard dump: pages={pages} members={members} xml_bytes={xml_bytes} compressed_bytes={dump.stat().st_size} seconds={time.monotonic()-started:.1f}',flush=True)
@@ -3508,7 +3539,7 @@ def consume_ordered_part_frames(parts, workers, produce, consume, *, queue_bytes
     return results
 
 
-def _stage_seekable_dump_parallel(items, downloads, scratch, metadata=None, workers=4):
+def _stage_seekable_dump_parallel(items, downloads, scratch, metadata=None, workers=4, *, part_order=STAGE_PART_ORDER_RANGE):
     """Decode independent bzip2 parts concurrently into bounded frame queues.
 
     At most four part queues can hold frames, each capped at 512 MiB. The
@@ -3519,12 +3550,12 @@ def _stage_seekable_dump_parallel(items, downloads, scratch, metadata=None, work
     if zstd is None:
         raise RuntimeError('Python 3.14 compression.zstd is required for staged Zstandard dumps')
     parts=[]
-    for item in sorted(items,key=lambda x:x['name']):
+    for item in stage_part_items(items,part_order):
         source=downloads/item['wiki']/item['date']/item['name']
         with source.open('rb',buffering=0) as stream:
             if stream.read(3)!=b'BZh': raise ValueError(f'Expected bzip2 dump part: {source}')
         parts.append(source)
-    if len(parts)<2: return _stage_seekable_dump_serial(items,downloads,scratch,metadata,workers)
+    if len(parts)<2: return _stage_seekable_dump_serial(items,downloads,scratch,metadata,workers,part_order=part_order)
     started=time.monotonic()
     dump=scratch/'pages.xml.zst'
     index=scratch/'pages-index.txt.bz2'
@@ -3569,6 +3600,9 @@ def _stage_seekable_dump_parallel(items, downloads, scratch, metadata=None, work
                     raise ValueError('Empty Zstandard frame lacks known size')
                 store(frame)
         if metadata is not None:
+            order=effective_stage_part_order(items,part_order)
+            if order is not None:metadata['part_order']=order
+            else:metadata.pop('part_order',None)
             metadata.update({'source_pages':pages,'dump_codec':'zstd','dump_stream_kind':'multistream-zstd',
                              'dump_size':dump.stat().st_size,'dump_sha256':dump_hash.hexdigest(),
                              'index_size':index.stat().st_size,'index_sha256':sha256_file(index)})
@@ -3578,12 +3612,12 @@ def _stage_seekable_dump_parallel(items, downloads, scratch, metadata=None, work
         unlink_artifact(dump, missing_ok=True)
         unlink_artifact(index, missing_ok=True)
         print('XML page crosses archive part boundary; using serial stage',flush=True)
-        return _stage_seekable_dump_serial(items,downloads,scratch,metadata,workers)
+        return _stage_seekable_dump_serial(items,downloads,scratch,metadata,workers,part_order=part_order)
 
 
-def _stage_seekable_dump(items, downloads, scratch, metadata=None, workers=4):
+def _stage_seekable_dump(items, downloads, scratch, metadata=None, workers=4, *, part_order=STAGE_PART_ORDER_RANGE):
     workers = min(workers, STAGE_PARALLEL_PART_WORKERS, len(os.sched_getaffinity(0)))
-    return _stage_seekable_dump_parallel(items,downloads,scratch,metadata,workers)
+    return _stage_seekable_dump_parallel(items,downloads,scratch,metadata,workers,part_order=part_order)
 
 
 def phase_identity(items):
@@ -3593,10 +3627,10 @@ def phase_identity(items):
     return 'unknown','unknown'
 
 
-def stage_seekable_dump(items, downloads, scratch, metadata=None, workers=4):
+def stage_seekable_dump(items, downloads, scratch, metadata=None, workers=4, *, part_order=STAGE_PART_ORDER_RANGE):
     edition,date=phase_identity(items)
     with build_phase(edition,date,'repack',parts=len(items)):
-        return _stage_seekable_dump(items,downloads,scratch,metadata,workers)
+        return _stage_seekable_dump(items,downloads,scratch,metadata,workers,part_order=part_order)
 
 
 def count_page_index_rows(path):
@@ -3756,13 +3790,15 @@ def shard_state(items, registry, now_unix=None, interwiki_snapshot=None, auxilia
     return state
 
 
-def dump_input_fingerprint(items):
+def dump_input_fingerprint(items, *, part_order=None):
     """The repack depends on XML input bytes and its staging format only."""
     if not items: raise ValueError('No dump parts')
     files=[]
     for item in sorted(items,key=lambda x:x['name']):
         files.append([item['wiki'],item['date'],item['name'],item['size'],item['sha1']])
+    stage_part_items(items,part_order)  # Validate the selected coordinate recipe.
     state={'version':DUMP_STAGING_VERSION,'files':files}
+    if part_order is not None:state['part_order']=part_order
     return hashlib.sha256(json.dumps(state,sort_keys=True,separators=(',',':')).encode()).hexdigest()
 
 
@@ -6159,7 +6195,10 @@ def original_archive_paths(record):
 def validated_original_archive(items,root,record):
     fresh=is_fresh_archive(record)
     fields={'version','input_sha256','source_pages','block_directory','source_directory'}
-    if not fresh:fields.update(('dump_size','dump_sha256','index_size','index_sha256'))
+    if not fresh:
+        fields.update(('dump_size','dump_sha256','index_size','index_sha256'))
+        if 'part_order' in record:fields.add('part_order')
+        stage_part_order(record)
     if (set(record)!=fields or record['input_sha256']!=dump_input_fingerprint(items)
             or type(record['source_pages']) is not int or record['source_pages']<0):
         raise ValueError('Original archive marker differs from selected inputs')
@@ -6188,7 +6227,7 @@ def validated_original_archive(items,root,record):
             ('offset_index_bytes','index_size'),('offset_index_sha256','index_sha256')))):
         raise ValueError('Original block directory logical bridge differs')
     from index_original_dump import matches_archive_parts
-    if not matches_archive_parts(items,directory.get('parts'),fresh=fresh):
+    if not matches_archive_parts(items,directory.get('parts'),fresh=fresh,part_order=stage_part_order(record)):
         raise ValueError('Original block directory parts differ from manifest')
     for item in items:
         name,size=item['name'],item['size']
@@ -6230,7 +6269,7 @@ def validated_staged_dump(items, cache):
     before={path:stamp(path) for path in paths}
     dump,index,marker=paths
     record=read_small_json(marker)
-    valid=isinstance(record,dict) and record.get('version')==DUMP_STAGING_VERSION and record.get('input_sha256')==dump_input_fingerprint(items)
+    valid=isinstance(record,dict) and record.get('version')==DUMP_STAGING_VERSION and record.get('input_sha256')==dump_input_fingerprint(items,part_order=stage_part_order(record))
     valid=valid and record.get('dump_codec')=='zstd' and record.get('dump_stream_kind')=='multistream-zstd'
     valid=valid and type(record.get('source_pages')) is int and record['source_pages']>=0
     for label,path in (('dump',dump),('index',index)):
@@ -6419,8 +6458,76 @@ def verify_original_download(source, item, indexed):
         raise ValueError(f'Missing or unverified download: {source}')
 
 
-def cached_shard_dump(items, downloads, workspace, workers=4):
+def _repack_has_consumers(workspace,state=None):
+    # Inspect only the selected workspace's direct members. Unknown downstream
+    # outputs may depend on these coordinates too; never delete them to guess.
+    if not workspace.is_dir():return False
+    if os.path.lexists(workspace/'input'/'extraction-cache'):return True
+    if state is None and (workspace/'state.json').is_file():
+        try:state=read_build_envelope(workspace/'state.json')
+        except (OSError,ValueError):return True
+    raw=state.get('raw_shards_path') if isinstance(state,dict) else None
+    if raw is not None:
+        if not isinstance(raw,str) or not Path(raw).is_absolute():return True
+        path=Path(raw)
+        if os.path.lexists(path) and (path.is_symlink() or not path.is_dir()
+                                     or next(path.iterdir(),None) is not None):return True
+    return any(path.name not in ('input','state.json','state.part') for path in workspace.iterdir())
+
+
+def normal_repack_selection(items, workspace, *, clean_new=False):
+    """Select a recipe before any reset; retain one verified stage read."""
+    xml=current_xml_inputs(items)
+    if effective_stage_part_order(xml,STAGE_PART_ORDER_RANGE) is None:
+        return None,None  # All 193 identical-order editions keep stock behavior.
+    cache=workspace/'input';marker=cache/'.complete.json';checked=None
+    if marker.is_file():stage_part_order(read_small_json(marker))
+    if cache.is_dir():
+        try:checked=validated_staged_dump(xml,cache)
+        except (OSError,ValueError,json.JSONDecodeError):pass
+    state_present=(workspace/'state.json').is_file()
+    state=read_build_envelope(workspace/'state.json') if state_present else {}
+    recorded=state.get('stage_part_order')
+    if recorded not in (None,STAGE_PART_ORDER_RANGE):
+        raise ValueError('Unknown workspace staged XML part order')
+    consumers=_repack_has_consumers(workspace,state)
+    if checked is not None:
+        order=stage_part_order(checked[0])
+        if state_present and recorded!=order and consumers:
+            raise ValueError('Staged XML part order differs from existing workspace; restore the selected stage')
+        return order,checked
+    if consumers:
+        raise ValueError('Existing workspace requires its authenticated staged dump; restore it before replay (existing files preserved)')
+    if recorded is not None:
+        expected=[[item['name'],item['size'],item['sha1']]for item in sorted(items,key=lambda row:row['name'])]
+        edition,date=phase_identity(items)
+        if state.get('version')!=SHARD_STATE_VERSION or state.get('edition')!=edition or state.get('date')!=date or state.get('files')!=expected:
+            raise ValueError('Workspace part-order ledger does not bind these inputs')
+        return recorded,None
+    return effective_stage_part_order(xml,STAGE_PART_ORDER_RANGE) if clean_new else None,None
+
+
+def _checked_repack(items,cache,checked):
+    record,before=checked
+    expected={cache/name for name in ('pages.xml.zst','pages-index.txt.bz2','.complete.json')}
+    if set(before)!=expected or read_small_json(cache/'.complete.json')!=record:
+        raise ValueError('Verified staged dump changed before reuse')
+    changed=False
+    for path,want in before.items():
+        value=path.lstat()
+        actual=(value.st_dev,value.st_ino,value.st_mode,value.st_size,value.st_mtime_ns,value.st_ctime_ns)
+        if path.is_symlink():raise ValueError('Verified staged dump changed before reuse')
+        changed=changed or actual!=want
+    # An owned workspace reset can unlink aliases and change ctime. Recheck
+    # actual bytes on any drift; do not invent a custody refresh or reject a
+    # valid cache merely because that reset happened after the first check.
+    if changed:return validated_staged_dump(items,cache)
+    return record,before
+
+
+def cached_shard_dump(items, downloads, workspace, workers=4, *, part_order=None, _validated=None):
     """Reuse only a completed, content-verified repack for these XML inputs."""
+    part_order=effective_stage_part_order(items,part_order)
     edition,date=phase_identity(items)
     cache=workspace/'input'
     dump=cache/'pages.xml.zst'
@@ -6428,7 +6535,13 @@ def cached_shard_dump(items, downloads, workspace, workers=4):
     marker=cache/'.complete.json'
     with build_phase(edition,date,'cache_verification') as result:
         if cache.is_symlink(): raise ValueError(f'Unsafe cached dump path: {cache}')
-        input_hash=dump_input_fingerprint(items)
+        input_hash=dump_input_fingerprint(items,part_order=part_order)
+        if _validated is not None:
+            record,_=_checked_repack(items,cache,_validated)
+            result.update(cache_hit=True,compressed_bytes=record['dump_size'])
+            return dump
+        sensitive=effective_stage_part_order(items,STAGE_PART_ORDER_RANGE) is not None
+        if sensitive and marker.is_file():stage_part_order(read_small_json(marker))
         if cache.is_dir() and not any(path.is_symlink() for path in (dump,index,marker)):
             try:
                 record,_=validated_staged_dump(items,cache)
@@ -6441,12 +6554,14 @@ def cached_shard_dump(items, downloads, workspace, workers=4):
             except (OSError,ValueError,json.JSONDecodeError):
                 pass
         result['cache_hit']=False
+    if sensitive and _repack_has_consumers(workspace):
+        raise ValueError('Existing workspace requires its authenticated staged dump; restore it before replay (existing files preserved)')
     if cache.exists():
         if not cache.is_dir(): raise ValueError(f'Unsafe cached dump path: {cache}')
         remove_artifact_tree(cache)
     cache.mkdir()
     metadata={}
-    stage_seekable_dump(items,downloads,cache,metadata,workers)
+    stage_seekable_dump(items,downloads,cache,metadata,workers,**({'part_order':part_order} if part_order is not None or sensitive else {}))
     record=dict(metadata,version=DUMP_STAGING_VERSION,input_sha256=input_hash)
     temp=marker.with_suffix('.part')
     temp.write_text(json.dumps(record,sort_keys=True)+'\n')
@@ -9623,6 +9738,13 @@ def _build_locked(items, downloads, output, zig, compression_workers=None, expan
         if generation is not None:generation.require_identity(build_identity)
         auxiliary_hashes=build_identity['auxiliary_snapshot_sha256']
     target = output / edition / date
+    repack_order=None;repack_checked=None
+    if staged_input_root is None and not (target/'complete.json').is_file():
+        workspace=target.with_name(date+'.shards')
+        clean_new=(retained_roles is None and reviewed_nonlexical_review is None
+                   and getattr(_PREPARED_SOURCE,'request',None) is None and getattr(_PREPARED_SOURCE,'value',None) is None
+                   and not any(os.path.lexists(path) for path in (target,target.with_name(date+'.building'),workspace)))
+        repack_order,repack_checked=normal_repack_selection(items,workspace,clean_new=clean_new)
     initial_generation = getattr(retained_roles, 'initial_sealed_generation', None) if retained_roles is not None else None
     initial_workspace = initial_sealed_generation(initial_generation, retained_roles)[3] if initial_generation is not None else None
     closed_whole=getattr(retained_roles,'closed_whole_execution',None) if retained_roles is not None else None
@@ -9725,6 +9847,7 @@ def _build_locked(items, downloads, output, zig, compression_workers=None, expan
         workspace=target.with_name(date+'.shards')
         expected=shard_state(items,registry,interwiki_snapshot=interwiki_snapshot,auxiliary_snapshots=auxiliary_snapshots,reviewed_nonlexical=reviewed,**({'build_identity':build_identity} if 'retained_runtime_source' in build_identity else {}), **shard_page_options(shard_pages))
         if archive is not None:expected['original_archive_input']=build_identity['original_archive_input']
+        elif repack_order is not None:expected['stage_part_order']=repack_order
         raw_shards_path=(Path(raw_shard_root).absolute()/edition/(date+'.raw-shards')) if raw_shard_root is not None else None
         update_args={}
         if (getattr(_PREPARED_SOURCE,'value',None) is None and getattr(_PREPARED_SOURCE,'request',None) is None
@@ -9743,7 +9866,9 @@ def _build_locked(items, downloads, output, zig, compression_workers=None, expan
             update_args['closed_whole_execution' if closed_whole is not None else 'initial_generation']=closed_whole if closed_whole is not None else initial_generation
         now_unix=prepare_shard_workspace(workspace,expected,now_unix,**({'raw_shards_path':raw_shards_path} if raw_shards_path is not None else {}),**update_args)
         if reviewed is not None:nonlexical.pin_review(reviewed,workspace/'reviewed-nonlexical-source.json')
-    dump=selected_staged_dump(staged_input_root) if staged_input_root is not None else cached_shard_dump(xml,downloads,workspace,workers)
+    dump=selected_staged_dump(staged_input_root) if staged_input_root is not None else cached_shard_dump(xml,downloads,workspace,workers,
+        **({'part_order':repack_order}if repack_order is not None else {}),
+        **({'_validated':repack_checked}if repack_checked is not None else {}))
     source_metadata=read_small_json((staged_input_root if staged_input_root is not None else workspace/'input')/'.complete.json')
     if not isinstance(source_metadata,dict) or type(source_metadata.get('source_pages')) is not int or source_metadata['source_pages']<0:
         raise ValueError('Staged dump lacks a verified source page count')

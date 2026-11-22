@@ -156,6 +156,14 @@ as page-stream boundaries: a single meta-current part can expand to gigabytes.
 Corpus staging requires Python 3.14's `compression.zstd`; the native build tools
 link against libbz2 and libzstd.
 
+New builds order multipart dumps by declared page ranges when that differs from
+filename order. These stages record `part_order: "page-range-v1"` in their
+completion marker and shard state. Existing authenticated stages retain their
+original coordinates, including filename order. A consumed workspace whose
+selected stage is missing or conflicts with its state requires that exact stage
+to be restored; it is not silently repacked into different coordinates. Editions
+whose filename and page-range orders agree retain their existing fingerprints.
+
 For faster staging of a single large `.bz2` archive, install `lbzip2` on the
 builder's `PATH`. At 8 MiB or larger, a build with at least three available
 workers can decode bzip2 blocks in parallel and stream them straight into the

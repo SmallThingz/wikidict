@@ -209,13 +209,16 @@ def page_range_order(items):
     return [item for _, item in sorted(zip(ranges, items), key=lambda row: row[0])]
 
 
-def matches_archive_parts(items, parts, *, fresh):
+def matches_archive_parts(items, parts, *, fresh, part_order=None):
     if not isinstance(parts, list) or any(not isinstance(part, dict) for part in parts):
         return False
     manifest = ordered_parts(items)
     def identities(rows):
         return [(r.get('name'), r.get('size'), r.get('sha1')) for r in rows]
     actual = identities(parts)
+    if part_order is not None:
+        from build_wiktionaries import stage_part_items
+        return actual == identities(stage_part_items(manifest,part_order))
     # Existing descriptors pin their exact coordinates. Historical frame bridges
     # reproduce the old filename order; only fresh indexes can use page ranges.
     return actual == identities(manifest) or (fresh and actual == identities(page_range_order(manifest)))
@@ -278,7 +281,7 @@ def index_parts(items, downloads, workers=1, *, count_pages=False):
 
 def verified_frame_bridge(items, downloads, stage, page_index, *, workers=1, split_parts=True):
     from build_wiktionaries import (DUMP_STAGING_VERSION, STAGE_MAX_MEMBER_BYTES, STAGE_TARGET_BYTES,
-                                    XmlFrames, consume_ordered_part_frames, dump_input_fingerprint)
+                                    XmlFrames, consume_ordered_part_frames, dump_input_fingerprint, stage_part_items, stage_part_order)
     from compression import zstd
 
     if (stage.get('version') != DUMP_STAGING_VERSION or stage.get('dump_codec') != 'zstd'
@@ -287,8 +290,9 @@ def verified_frame_bridge(items, downloads, stage, page_index, *, workers=1, spl
     if (type(page_index.get('bytes')) is not int or page_index['bytes'] <= 0
             or not re.fullmatch('[0-9a-f]{64}', page_index.get('sha256', ''))):
         raise ValueError('Expected a bound logical page-index identity')
-    items = ordered_parts(items)
-    if stage.get('input_sha256') != dump_input_fingerprint(items):
+    order=stage_part_order(stage)
+    items = stage_part_items(ordered_parts(items),order)
+    if stage.get('input_sha256') != dump_input_fingerprint(items,part_order=order):
         raise ValueError('Staging record belongs to a different set of original XML inputs')
     frames, parts = [], []
     xml_size = packed_size = index_size = pages = 0
@@ -414,14 +418,14 @@ def read_bound_json(path, expected_sha256):
 
 def prepare_build_input(root, output, block_sha256, items, downloads, stage=None, page_index=None):
     """Select an authenticated fresh or historically bridged archive directory."""
-    from build_wiktionaries import dump_input_fingerprint
+    from build_wiktionaries import dump_input_fingerprint,stage_part_order
 
     blocks, stamp = read_bound_json(output, block_sha256)
     items = ordered_parts(items)
     directory = (downloads / items[0]['wiki'] / items[0]['date']).resolve(strict=True)
     parts = [(item['name'], item['size'], item['sha1']) for item in items]
     if (blocks.get('format') != 'wikidict-bzip2-blocks-v1'
-            or not matches_archive_parts(items, blocks.get('parts'), fresh=stage is None)
+            or not matches_archive_parts(items, blocks.get('parts'), fresh=stage is None,part_order=stage_part_order(stage) if stage is not None else None)
             or any(not (directory / name).is_file() or (directory / name).stat().st_size != size
                    for name, size, _ in parts)):
         raise ValueError('Block directory differs from the official archive inventory')
@@ -429,13 +433,15 @@ def prepare_build_input(root, output, block_sha256, items, downloads, stage=None
         raise ValueError('Select both the retained stage and its page index, or neither')
     marker = dict(input_sha256=dump_input_fingerprint(items), source_directory=str(directory),
                   block_directory=dict(path=str(output.absolute()), bytes=stamp[2], sha256=block_sha256))
+    if stage is not None and stage_part_order(stage) is not None:
+        marker['part_order']=stage_part_order(stage)
     if stage is None:
         pages = blocks.get('source_pages')
         if 'zstd_frame_bridge' in blocks or type(pages) is not int or pages < 0:
             raise ValueError('Fresh builds require a counted original XML block directory')
         marker.update(version='wikidict-original-bzip2-fresh-input-v1', source_pages=pages)
     else:
-        marker = bridged_build_marker(marker, blocks.get('zstd_frame_bridge'), stage, page_index)
+        marker = bridged_build_marker(marker, blocks.get('zstd_frame_bridge'), stage, page_index, items=items)
     root.mkdir(mode=0o700)
     try:
         with tempfile.NamedTemporaryFile(mode='w', encoding='utf8', dir=root) as temporary:
@@ -454,11 +460,17 @@ def prepare_build_input(root, output, block_sha256, items, downloads, stage=None
     return marker
 
 
-def bridged_build_marker(base, bridge, stage, page_index):
-    from build_wiktionaries import DUMP_STAGING_VERSION
+def bridged_build_marker(base, bridge, stage, page_index, *, items=None):
+    from build_wiktionaries import DUMP_STAGING_VERSION,dump_input_fingerprint,stage_part_order
+
+    order=stage_part_order(stage)
+    if stage_part_order(base)!=order or (order is not None and items is None):
+        raise ValueError('Original index and retained stage select different part order')
+    expected_input=(dump_input_fingerprint(items,part_order=order) if items is not None
+                    else base['input_sha256'])
 
     if (not isinstance(bridge, dict) or stage.get('version') != DUMP_STAGING_VERSION
-            or stage.get('input_sha256') != base['input_sha256']
+            or stage.get('input_sha256') != expected_input
             or stage.get('dump_codec') != 'zstd' or stage.get('dump_stream_kind') != 'multistream-zstd'
             or type(stage.get('source_pages')) is not int or stage['source_pages'] < 0
             or type(page_index.get('bytes')) is not int or page_index['bytes'] <= 0
