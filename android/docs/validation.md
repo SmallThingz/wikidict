@@ -1,6 +1,49 @@
 # Android validation
 
-## Current full host and unsigned package qualification — 2026-11-21
+## Blank internal-link accessibility names — 2026-11-22
+
+Internal links whose displayed text contains only whitespace now use their
+original destination as the accessibility name. The visible text, direction
+isolates, Ruby projection, interaction ranges, paint and original activation
+callbacks remain unchanged. An explicit local fragment and a literal title such
+as `#en` keep their distinct navigation behavior. Nonblank labels retain their
+original `CharSequence`; ambiguous or unowned ranges receive no inferred action.
+
+[Five focused JVM checks][blank-link-jvm] passed: three new controls and two
+maintained controls, with zero failures, skips or assumption failures. They
+exercise the actual naming, source-range, projection and action methods using
+blank action values observed in five Tamazight/Yiddish records containing nine
+actions. These are bounded source-shaped controls, not Android rendering of
+those whole records. The compiler and test runner used retained dependencies and
+the actual JetBrains JDK 21, targeting JVM 17. Candidate class-origin assertions
+exclude execution of stale tests or the old helper implementation.
+
+The [matching Compose call-site compilation][blank-link-compose] compiled the
+current canonical `NativeFloatCompose.kt` and the same tested helper with the
+actual Kotlin/Compose 2.3.0 plugin and the recorded canonical168 compiler
+libraries. It produced no compiler diagnostics. Emitted bytecode contains both
+new helper calls and the Compose ABI. It used the directly authenticated
+1,750-file main-class output, not an app JAR: the earlier JAR-bundling tasks were
+up to date and do not establish freshly built JAR bytes. All 177 main-source
+files matched across the repository's old `apps/android/` and tracked `android/`
+paths before applying this repair. This scoped compilation uses the authenticated
+output as a friend path; it is not a full Gradle invocation. All new output and
+JVM scratch were private PROJECT files; retained HOME classes, dependencies,
+caches and history were preserved. The five JVM checks were not repeated during
+this compilation.
+
+The saved host closures verify process exit, exact inputs and the free Android
+build lock. These results do not qualify a new APK, rendered native geometry,
+TalkBack, physical focus/Enter/touch behavior or installation. The prior
+canonical168 unsigned four-ABI APK below predates this fix. Actual phone coverage
+still depends on permitted access, coordinated custody and an authorized
+compatible signed installation; the recorded pre-ADB `EACCES` and signing,
+installation and publication holds remain unchanged. No phone probe occurred.
+
+[blank-link-jvm]: ../../.tmp/renderer-core-oct28/blank-link-accessibility01/jvm01/completion01.json
+[blank-link-compose]: ../../.tmp/renderer-core-oct28/blank-link-accessibility01/compose01/completion01.json
+
+## Previous full host and unsigned package qualification — 2026-11-21
 
 The integrated Android source at `da4e671e` passed the ordinary unfiltered
 [Host167 JVM suite][host167-current]: **1,234 fresh passes**, with zero failures,

@@ -111,4 +111,77 @@ class FigureLinkStateTest {
         assertEquals(190L,png.widthPx)
         assertEquals(296L,jpeg.heightPx)
     }
+
+    @Test fun blankInternalActionsUseGenuineDestinationNamesWithoutChangingWhitespaceOrOwners() {
+        // Normal W5/W7 archive records: ZGH offsets4781/4681296/5071513; YI aliases17884/30734.
+        fun tamazight() = listOf(Span("link", "\u00a0", "ⵓⵙⵎⵉⴷ ⴰⵏⴰⴱⴰⵡ"),
+            Span("link", "\u00a0", "ⴰⵏⴰⴹ ⵓⵙⵙⵉⴷ"))
+        fun yiddish() = List(2) { Span("link", " ", "File:Jidysz.lebt.svg") }
+        val cases = listOf(tamazight(), tamazight(),
+            listOf(Span("link", " ", "#en", targetFragment = "")), yiddish(), yiddish())
+        val expected = listOf(listOf("ⵓⵙⵎⵉⴷ ⴰⵏⴰⴱⴰⵡ", "ⴰⵏⴰⴹ ⵓⵙⵙⵉⴷ"),
+            listOf("ⵓⵙⵎⵉⴷ ⴰⵏⴰⴱⴰⵡ", "ⴰⵏⴰⴹ ⵓⵙⵙⵉⴷ"), listOf("#en"),
+            listOf("File:Jidysz.lebt.svg", "File:Jidysz.lebt.svg"),
+            listOf("File:Jidysz.lebt.svg", "File:Jidysz.lebt.svg"))
+        assertEquals(9, cases.sumOf { it.size })
+        cases.forEachIndexed { case, spans ->
+            val originalText = spans.joinToString("") { it.text }
+            val originalActions = spans.map { it.entryLink() }
+            val projection = rubyGraphicalProjection(spans)
+            val ranges = nativeCaptionLinkRanges(spans)
+            assertEquals(originalText, projection.text)
+            assertEquals(spans.size, ranges.size)
+            ranges.forEachIndexed { index, range ->
+                val source = nativeInternalLinkAccessibilitySource(ranges, range.start, range.end, range.span.target)
+                assertSame(spans[index], source)
+                val label = projection.text.subSequence(range.start, range.end)
+                assertTrue(label.isBlank())
+                assertEquals(expected[case][index], nativeInternalLinkAccessibilityLabel(label, source))
+            }
+            assertEquals(originalText, rubyGraphicalProjection(spans).text)
+            assertEquals(originalActions, spans.map { it.entryLink() })
+        }
+    }
+
+    @Test fun blankLinkNamesKeepLiteralHashTargetsAndLocalFragmentsDistinctAtActivation() {
+        val literal = Span("link", " ", "#en", targetFragment = "")
+        val local = Span("link", " ", "", targetFragment = "en")
+        val legacy = Span("link", " ", "#en")
+        val delivered = mutableListOf<EntryLink>()
+        listOf(literal, local, legacy).forEachIndexed { index, source ->
+            val action = { delivered.add(source.entryLink()); Unit }
+            val node = FloatInteractionNode(index, FloatInteractionKind.LINK, index, index + 1,
+                emptyList(), nativeInternalLinkAccessibilityLabel(source.text, source), null, action)
+            assertEquals("#en", node.label)
+            assertEquals(index, node.start); assertEquals(index + 1, node.end)
+            assertTrue(NativeLinkKeyPress(index, 66, null, action).matches(node))
+            node.onClick!!.invoke()
+        }
+        assertEquals(listOf(EntryLink("#en", ""), EntryLink("", "en"), EntryLink("#en")), delivered)
+        assertEquals("#en", delivered[0].title); assertFalse(delivered[0].local)
+        assertEquals("", delivered[1].title); assertTrue(delivered[1].local)
+        assertEquals("en", delivered[1].fragment); assertTrue(delivered[2].local)
+    }
+
+    @Test fun blankLinkNamingKeepsVisibleRubyLabelsAndRefusesAmbiguousOrUnownedSources() {
+        val source = Span("link", "\u00a0", "Destination", targetFragment = "part")
+        val visible = StringBuilder("Original reading")
+        assertSame(visible, nativeInternalLinkAccessibilityLabel(visible, source))
+        val blank = StringBuilder(" ")
+        assertSame(blank, nativeInternalLinkAccessibilityLabel(blank, null))
+        assertSame(blank, nativeInternalLinkAccessibilityLabel(blank, Span("external_link", " ", "https://example.invalid")))
+        val isolated = "\u2067\u00a0\u2069"
+        assertEquals("Destination#part", nativeInternalLinkAccessibilityLabel(isolated, source))
+        assertEquals("\u2067\u00a0\u2069", isolated)
+        val range = NativeCaptionLinkRange(0, source, 0, 1)
+        assertSame(source, nativeInternalLinkAccessibilitySource(listOf(range), 0, 1, "Destination"))
+        assertNull(nativeInternalLinkAccessibilitySource(listOf(range), 0, 1, "Other"))
+        assertNull(nativeInternalLinkAccessibilitySource(listOf(range), 1, 2, "Destination"))
+        assertNull(nativeInternalLinkAccessibilitySource(listOf(range, range.copy(index = 1, span = source.copy())), 0, 1, "Destination"))
+        val ruby = Ruby(listOf(RubySegment(emptyList(),
+            listOf(RubyBase(RubyOwner(InlineFontSnapshot()), emptyList(), listOf(Span("text", "字")))), emptyList())))
+        val projection = rubyGraphicalProjection(listOf(Span("text", "", ruby = ruby)))
+        assertSame(projection.text, nativeInternalLinkAccessibilityLabel(projection.text, source))
+        assertEquals("字", projection.text)
+    }
 }

@@ -70,6 +70,20 @@ internal fun nativeCaptionLinkRanges(spans: List<Span>): List<NativeCaptionLinkR
             add(NativeCaptionLinkRange(index, span, start, offset))
     }
 }
+/** A semantic name never replaces the original rendered text or compiled action. */
+internal fun nativeInternalLinkAccessibilityLabel(label: CharSequence, source: Span?): CharSequence {
+    // Native direction isolates are invisible ownership controls, not a spoken label.
+    val named = label.any { !it.isWhitespace() && it !in '\u2066'..'\u2069' }
+    if (named || source?.hasInternalAction() != true) return label
+    val action = source.entryLink()
+    return action.target + action.targetFragment?.takeIf { it.isNotEmpty() }?.let { "#$it" }.orEmpty()
+}
+
+internal fun nativeInternalLinkAccessibilitySource(sources: List<NativeCaptionLinkRange>,
+    start: Int, end: Int, target: String): Span? = sources.singleOrNull {
+    it.start == start && it.end == end && it.span.hasInternalAction() && it.span.target == target
+}?.span
+
 internal data class NativeLinkKeyPress(val nodeId: Int, val keyCode: Int,
     val identity: MissingLinkActionIdentity?, val action: () -> Unit) {
     fun matches(node: FloatInteractionNode): Boolean = node.id == nodeId && node.onClick != null &&

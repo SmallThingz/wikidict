@@ -381,6 +381,11 @@ internal fun prepareNativeFloatText(
             NativeCaptionLinkRange(index, it, leaf.range.start, leaf.range.end)
         }
     } ?: nativeCaptionLinkRanges(visibleSpans).filter { scopedBacklink?.span === it.span }
+    val accessibilityLinkSources = ruby?.leaves?.mapIndexedNotNull { index, leaf ->
+        leaf.range.span?.takeIf { it.hasInternalAction() }?.let {
+            NativeCaptionLinkRange(index, it, leaf.range.start, leaf.range.end)
+        }
+    } ?: nativeCaptionLinkRanges(visibleSpans)
     val citationOwners = citationSourceRanges.associate { range ->
         (range.start to range.end) to remember(NativeCitationOccurrenceIdentity(range.span, range.start, range.end)) { Any() }
     }
@@ -1438,8 +1443,14 @@ internal fun prepareNativeFloatText(
                                     range.start, range.end, fragments), scope.density, scope.bodyPixels)
                             }
                             (actionGroup ?: paddingAction ?: childRange)?.let { advisorySources[index] = it }
+                            val accessibilitySource = clippedActionSpan ?: actionGroup?.span ?: paddingOwner ?: citationSource
+                                ?: (range.item as? LinkAnnotation.Clickable)?.let { link ->
+                                    nativeInternalLinkAccessibilitySource(accessibilityLinkSources, range.start, range.end, link.tag)
+                                }
+                            val accessibilityLabel = nativeInternalLinkAccessibilityLabel(
+                                annotated.subSequence(range.start, range.end), accessibilitySource)
                             add(FloatInteractionNode(index, FloatInteractionKind.LINK, range.start, range.end,
-                                fragments, annotated.subSequence(range.start, range.end), (clippedActionSpan ?: actionGroup?.span ?: paddingOwner ?: citationSource)?.tooltip,
+                                fragments, accessibilityLabel, (clippedActionSpan ?: actionGroup?.span ?: paddingOwner ?: citationSource)?.tooltip,
                                  citationCallbacks[range.start to range.end] ?: actionGroup?.let { actionGroupCallbacks.getValue(it.path) } ?: { when (val link = range.item) { is LinkAnnotation.Clickable -> link.linkInteractionListener?.onClick(link) ?: onLink(EntryLink(link.tag)); is LinkAnnotation.Url -> uri.openUri(link.url) }
                                     if (missingLinkPaint != null) onMissingLinkActivated()
                                     else state?.actionIdentity?.target?.let {
