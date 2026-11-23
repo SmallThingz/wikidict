@@ -1,0 +1,244 @@
+{| class="wikitable sortable" width="100%"
+! rowspan="2" style="width:26%;"| Nama negara !! rowspan="2" style="width:30%;"| Adjektiva||colspan="2" | [[demonim|Demonim]]</tr>
+! style="width:21%;"| !! {{smaller|''[[Colloquialism|colloquial term(s)]]''}}
+|-
+| [[Abkhazia]] || [[Abkhaz |Abkhaz]], [[Abkhazian |Abkhazian]] ||colspan="2"| [[Abkhaz people|Abkhazians]]</tr>
+| [[Afghanistan]] || [[Afghan |Afghan]] ||colspan="2"| [[Demographics of Afghanistan|Afghans]]</tr>
+| [[Albania]] || [[Albanian |Albanian]] ||colspan="2"| [[Albanian people|Albanians]]</tr>
+| [[Algeria]] || [[Algerian |Algerian]] ||colspan="2"| [[Demographics of Algeria|Algerians]]</tr>
+| [[American Samoa]] || [[American Samoan |American Samoan]] ||colspan="2"| [[Samoans|American Samoans]]</tr>
+| [[Andorra]] || [[Andorran |Andorran]] ||colspan="2"| [[Andorran |Andorrans]]</tr>
+| [[Angola]] || [[Angolan |Angolan]] ||colspan="2"| [[Angolan |Angolans]]</tr>
+| [[Anguilla]] || [[Anguillan |Anguillan]] ||colspan="2"| [[Anguillans]]</tr>
+| [[Antigua and Barbuda]] || [[Antiguan |Antiguan]], [[Barbudan |Barbudan]] ||colspan="2"| [[Antiguans]], [[Barbudans]]</tr>
+| [[Argentina]] || [[Argentine |Argentine]], [[Argentine |Argentinean]], [[Argentine |Argentinian]] ||colspan="2"| [[Argentine people|Argentines]], [[Argentine people|Argentineans]], [[Argentine people|Argentinians]]</tr>
+| [[Armenia]] || [[Armenian |Armenian]] ||colspan="2"| [[Armenians]]</tr>
+| [[Aruba]] || [[Aruban |Aruban]] ||colspan="2"| [[Arubans]]</tr>
+| [[Australia]] || [[Australian |Australian]] || [[Australians]] || {{smaller|"[[Aussie]]s"}}</tr>
+| [[Austria]] || [[Austrian |Austrian]] ||colspan="2"| [[Austrians]]</tr>
+| [[Azerbaijan]] || [[Azerbaijani |Azerbaijani]], [[Azeri]] ||colspan="2"| [[Azerbaijani people|Azerbaijanis]], [[Azeris]]</tr>
+| [[Bahamas]] || [[Bahamian |Bahamian]] ||colspan="2"| [[Bahamians]]</tr>
+| [[Bahrain]] || [[Bahraini]] ||colspan="2"| [[Bahrainis]]</tr>
+| [[Bangladesh]] || [[Bengali people|Bangladeshi]] ||colspan="2"| [[Bengali people|Bangladeshis]]</tr>
+| [[Barbados]] || [[Barbadian |Barbadian]]{{spaces|2}}{{smaller|("[[Bajan]]")}} || [[Barbadians]] || {{smaller|"Bajans"}}</tr>
+| [[Belarus]] || [[Belarusian |Belarusian]] ||colspan="2"| [[Belarusians]]</tr>
+| [[Belgium]] || [[Belgian]] ||colspan="2"| [[Belgians]]</tr>
+| [[Belize]] || [[Belizean |Belizean]] ||colspan="2"| [[Belizeans]]</tr>
+| [[Benin]] || [[Beninese |Beninese]], [[Beninois]] ||colspan="2"| [[Beninese |Beninese]], [[Beninois]]</tr>
+| [[Bermuda]] || [[Bermudian |Bermudian]], [[Bermudan |Bermudan]] ||colspan="2"| [[Bermudians]], [[Bermudans]]</tr>
+| [[Bhutan]] || [[Bhutanese |Bhutanese]] ||colspan="2"| [[Bhutanese |Bhutanese]]</tr>
+| [[Bolivia]] || [[Bolivia]]n ||colspan="2"| [[Bolivia]]ns</tr>
+| [[Bosnia and Herzegovina]] || [[Bosnian |Bosnian]], [[Bosniak]], [[Herzegovinian |Herzegovinian]] ||colspan="2"| [[Bosnians]], [[Bosniaks]], [[Herzegovinians]]</tr>
+| [[Botswana]] || [[Tswana people|Motswana]] ([[Plural|''pl.'']] [[Batswana]]), [[Demographics of Botswana|Botswanan]] ||colspan="2"| [[Tswana people|Batswana]], [[Botswanans]]</tr>
+| [[Brazil]] || Brazilian ||colspan="2"| [[Brazilians]]</tr>
+| [[British Virgin Islands]] || [[British Virgin Island]] ||colspan="2"| [[British Virgin Islanders]]</tr>
+| [[Brunei]] || [[Bruneian |Bruneian]] ||colspan="2"| [[Bruneians]]</tr>
+| [[Bulgaria]] || Bulgarian ||colspan="2"| [[Bulgarians]]</tr>
+| [[Burkina Faso]]<sup>[[#a|a]]</sup> || [[Burkinabè]]/[[Burkinabé]] ||colspan="2"| [[Burkinabè]]/[[Burkinabé]]</tr>
+| [[Burma]]<sup>[[#b|b]]</sup> || [[Burmese |Burmese]] ||colspan="2"| [[Bamar]], [[Burmese |Burmese]]</tr>
+| [[Burundi]] || [[Burundian |Burundian]] ||colspan="2"| [[Burundians]]</tr>
+| [[Cambodia]] || [[Khmer people|Cambodian]] ||colspan="2"| [[Khmer people|Cambodians]]</tr>
+| [[Cameroon]] || [[Cameroonian |Cameroonian]] ||colspan="2"| [[Cameroonians]]</tr>
+| [[Canada]] || [[Canadian |Canadian]] || [[Canadians]] || "[[Canuck]]s" </tr>
+| [[Cape Verde]] || [[Cape Verdean |Cape Verdean]] ||colspan="2"| [[Cape Verdeans]]</tr>
+| [[Cayman Islands]] || [[Caymanian |Caymanian]] ||colspan="2"| [[Caymanians]]</tr>
+| [[Central African Republic]] || [[Central African |Central African]] ||colspan="2"| [[Central Africans]]</tr>
+| [[Chad]] || [[Chadian |Chadian]] ||colspan="2"| [[Chadians]]</tr>
+| [[Chile]] || [[Chilean |Chilean]] ||colspan="2"| [[Chileans]]</tr>
+| [[People's Republic of China]] || [[Chinese |Chinese]] ||colspan="2"| [[Chinese people|Chinese]]</tr>
+| [[Republic of China]] || colspan="3" | See ''[[#Taiwan|Taiwan]]'', below</tr>
+| [[Christmas Island]] || [[Christmas Island]] ||colspan="2"| [[Christmas Islanders]]</tr>
+| [[Cocos (Keeling) Islands]] || [[Cocos Island]] ||colspan="2"| [[Cocos Islanders]]</tr>
+| [[Colombia]] || [[Colombian people|Colombian]] ||colspan="2"| [[Colombian people|Colombians]]</tr>
+| [[Comoros]] || [[Comorian |Comorian]] ||colspan="2"| [[Comorians]]</tr>
+| {{nowrap|[[Democratic Republic of the Congo|Dem. Republic of the Congo]]}} ||rowspan="2"| [[Congolese |Congolese]], [[Congolese |Congo]]{{Citation needed|reason=april 2009|date=April 2009}} ||rowspan="2" colspan="2"| [[Congolese |Congolese]]</tr>
+| [[Republic of the Congo]]</tr>
+| [[Cook Islands]] || [[Cook Island |Cook Island]] ||colspan="2"| [[Cook Islanders]]</tr>
+| [[Costa Rica]] || [[Costa Rican]] || [[Costa Ricans]] || {{smaller|"Ticos"}}</tr>
+| [[Côte d'Ivoire]] || [[Ivorian]] ||colspan="2"| [[Ivorians]]</tr>
+| [[Croatia]] || [[Croatian]]||colspan="2"| [[Croats|Croatians]], [[Croats]]</tr>
+| [[Cuba]] || [[Cuban |Cuban]] ||colspan="2"| [[Cubans]]</tr>
+| [[Cyprus]] || [[Cypriot |Cypriot]] ||colspan="2"| [[Demographics of Cyprus|Cypriots]]</tr>
+| [[Czech Republic]] || [[Czech |Czech]] ||colspan="2"| [[Czech people|Czechs]]</tr>
+| [[Denmark]] || [[Danish |Danish]] ||colspan="2"| [[Danish people|Danes]]</tr>
+| [[Djibouti]] || [[Djiboutian |Djiboutian]] ||colspan="2"| [[Djiboutians]]</tr>
+| [[Dominica]] || [[Dominican |Dominican]]<sup>[[#d|d]]</sup> ||colspan="2"| [[Dominicans]]<sup>[[#d|d]]</sup></tr>
+| [[Dominican Republic]] || [[Dominican |Dominican]]<sup>[[#e|e]]</sup> || [[Dominicans]]<sup>[[#e|e]]</sup> || {{smaller|"Quisqueyanos"}}</tr>
+| [[East Timor]] || [[Timorese |Timorese]] || [[Timorese |Timorese]] || {{smaller|"Maubere"}}</tr>
+| [[Ecuador]] || [[Ecuadorian]] ||colspan="2"| [[Ecuadorians]]</tr>
+| [[Egypt]] || [[Egyptian |Egyptian]] ||colspan="2"| [[Egyptians]]</tr>
+| [[El Salvador]] || [[Salvadoran]] ||colspan="2"| [[Salvadorans]]</tr>
+| [[England]] || [[English |English]] ||colspan="2"| [[English people|English]]</tr>
+| [[Equatorial Guinea]] || [[Equatorial Guinean]], [[Equatoguinean]] ||colspan="2"| [[Equatorial Guineans]], [[Equatoguineans]]</tr>
+| [[Eritrea]] || [[Eritrean |Eritrean]] ||colspan="2"| [[Eritreans]]</tr>
+| [[Estonia]] || [[Estonian |Estonian]] ||colspan="2"| [[Estonians]]</tr>
+| [[Ethiopia]] || [[Ethiopian]] ||colspan="2"| [[Ethiopians]]</tr>
+| [[Falkland Islands]] || [[Falkland Island]] || [[Falkland Islanders]] || {{smaller|"Belongers"}}</tr>
+| [[Faroe Islands]] || [[Faroese |Faroese]] ||colspan="2"| [[Faroese people|Faroese]]</tr>
+| [[Fiji]] || [[Fijian |Fijian]] ||colspan="2"| [[Fijian people|Fijians]]</tr>
+| [[Finland]] || [[Finnish |Finnish]] ||colspan="2"| [[Finns]]</tr>
+| [[France]] || [[French |French]] ||colspan="2"| [[French people|French]] (or [[Frenchman]]/[[Frenchwoman]])</tr>
+| [[French Guiana]] || [[French Guianese]] ||colspan="2"| [[French Guianese]]</tr>
+| [[French Polynesia]] || [[French Polynesian]] ||colspan="2"| [[French Polynesians]], [[Tahitians]]<ref>Sometimes used ''[[pars pro toto]]''.</ref></tr>
+| [[Gabon]] || [[Gabonese |Gabonese]] ||colspan="2"| [[Gabonese |Gabonese]]</tr>
+| [[Gambia]] || [[Gambian |Gambian]] ||colspan="2"| [[Gambians]]</tr>
+| [[Georgia (country)|Georgia]] || [[Georgian |Georgian]] ||colspan="2"| [[Georgian people|Georgians]]</tr>
+| [[Germany]] || [[German |German]] ||colspan="2"| [[Germans]]</tr>
+| [[Ghana]] || [[Ghanaian]] ||colspan="2"| [[Ghanaians]]</tr>
+| [[Gibraltar]] || [[Gibraltar]] || [[Gibraltarian people|Gibraltarians]] || [[Llanito#Demonym|Llanitos]]</tr>
+| [[Great Britain]] || [[British |British]] || [[British people|Britons]] ||style="font-size:90%;"| {{nowrap|''see'' [[Alternative words for British|Other words for "British"]]}}</tr>
+| [[Greece]] || [[Greek |Greek]], [[Greek |Grecian]]<sup>[[#f|f]]</sup>, [[Hellenic]] ||colspan="2"| [[Greeks]], [[Grecians]]<sup>[[#f|f]]</sup>, [[Hellenes]]</tr>
+| [[Greenland]] || [[Greenlandic |Greenlandic]] ||colspan="2"| [[Greenlanders]]</tr>
+| [[Grenada]] || [[Grenadian |Grenadian]] ||colspan="2"| [[Grenadians]]</tr>
+| [[Guadeloupe]] || [[Guadeloupe]] ||colspan="2"| [[Guadeloupians]]</tr>
+| [[Guam]] || [[Guamanian]] ||colspan="2"| [[Guamanians]]</tr>
+| [[Guatemala]] || [[Guatemalan |Guatemalan]] ||colspan="2"| [[Guatemalans]]</tr>
+| [[Guinea]] ||rowspan="2"| [[Guinean]] ||rowspan="2" colspan="2"| [[Guineans]]</tr>
+| [[Guinea-Bissau]]</tr>
+| [[Guyana]] || [[Guyanese |Guyanese]] ||colspan="2"| [[Guyanese |Guyanese]]</tr>
+| [[Haiti]] || [[Haitian |Haitian]] || [[Haitian |Haitians]] || {{smaller|Ayisyen}}</tr>
+| [[Honduras]] || [[Honduran |Honduran]] || [[Hondurans]] || {{smaller|"Catrachos"}}</tr>
+| [[Hong Kong]] || [[Hong Kong]], [[Hongkongese]] || [[Hongkongers]], [[Hongkongers|Hongkongese]] || {{smaller|"Hongers"}}</tr></tr>
+| [[Hungary]] || Hungarian, [[Hungarian language|Magyar]] ||colspan="2"| [[Hungarians]], [[Hungarian people|Magyars]]</tr>
+| [[Iceland]] || [[Icelandic |Icelandic]] ||colspan="2"| [[Icelanders]]</tr>
+| [[India]] || [[Indian |Indian]] ||colspan="2"| [[Demographics of India|Indians]]</tr>
+| [[Indonesia]] || [[Indonesian |Indonesian]] ||colspan="2"| [[Demographics of Indonesia|Indonesians]]</tr>
+| [[Iran]] || [[Iranian |Iranian]] ||colspan="2"| [[Iranian peoples|Iranians]]</tr>
+| [[Iraq]] || [[Iraqi |Iraqi]] ||colspan="2"| [[Iraqis]]</tr>
+| [[Republic of Ireland|Ireland]] || [[Irish |Irish]] ||colspan="2"| [[Irish people|Irish]]</tr>
+| [[Isle of Man]] || [[Manx |Manx]] ||colspan="2"| [[Manx people|Manx]]</tr>
+| [[Israel]] || [[Israeli |Israeli]] ||colspan="2"| [[Israelis]]</tr>
+| [[Italy]] || Italian, [[Italic |Italic]]<sup>[[#f|f]]</sup> ||colspan="2"| [[Italian people|Italians]], [[Ancient Italic peoples|Italics]]<sup>[[#f|f]]</sup></tr>
+| [[Jamaica]] || [[Jamaican]] ||colspan="2"| [[Jamaicans]]</tr>
+| [[Japan]] || [[Japanese |Japanese]] ||colspan="2"| [[Japanese people|Japanese]]</tr>
+| [[Jordan]] || [[Jordanian |Jordanian]] ||colspan="2"| [[Jordanians]]</tr>
+| [[Kazakhstan]] || [[Kazakh |Kazakh]], [[Kazakhstani |Kazakhstani]]  ||colspan="2"| [[Kazakhs]]tanis, [[Kazakhs]]</tr>
+| [[Kenya]] || [[Kenyan]] ||colspan="2"| [[Kenyans]]</tr>
+| [[Kiribati]] || [[Kiribati]] ||colspan="2"| [[I-Kiribati]]</tr>
+| [[North Korea]] || [[North Korean]] ||rowspan="2" colspan="2"| [[Korean people|Koreans]]</tr>
+| [[South Korea]] || [[South Korean]]</tr>
+| [[Kosovo]] || [[Kosovar |Kosovar]], [[Kosovar |Kosovan]] ||colspan="2"| [[Kosovan people|Kosovars]]</tr>
+| [[Kuwait]] || [[Kuwaiti |Kuwaiti]] ||colspan="2"| [[Kuwaitis]]</tr>
+| [[Kyrgyzstan]] || [[Kyrgyzstani |Kyrgyzstani]], [[Kyrgyz]], [[Kirgiz]], [[Kirghiz]] ||colspan="2"| [[Kyrgyzstanis]], [[Kyrgyz]], [[Kirgiz]], [[Kirghiz]]</tr>
+| [[Laos]] || [[Lao |Lao]]tian, [[Lao |Lao]] ||colspan="2"| [[Laotians]], [[Laos]]</tr>
+| [[Latvia]] || [[Latvian |Latvian]] ||colspan="2"| [[Latvians]], [[Latvians|Letts]]</tr>
+| [[Lebanon]] || [[Lebanese |Lebanese]] ||colspan="2"| [[Lebanese people|Lebanese]]</tr>
+| [[Lesotho]] || [[Basotho]] ||colspan="2"| [[Basotho]]</tr>
+| [[Liberia]] || [[Liberian |Liberian]] ||colspan="2"| [[Liberian people|Liberians]]</tr>
+| [[Libya]] || [[Libyan]] ||colspan="2"| [[Libyans]]</tr>
+| [[Liechtenstein]] || [[Liechtenstein]] ||colspan="2"| [[Liechtensteiners]]</tr>
+| [[Lithuania]] || [[Lithuanian |Lithuanian]] ||colspan="2"| [[Lithuanians]]</tr>
+| [[Luxembourg]] || [[Luxembourg]], [[Luxembourg]]ish ||colspan="2"| [[Luxembourgers]]</tr>
+| [[Macau]] || [[Macanese |Macanese]], [[Chinese |Chinese]] ||colspan="2"| [[Macanese people|Macanese]], [[Chinese people|Chinese]]</tr>
+| {{nowrap|[[Republic of Macedonia]]}} || [[Macedonia (country)|Macedonian]] ||colspan="2"| [[Macedonia (country)|Macedonians]]</tr>
+| [[Madagascar]] || [[Malagasy |Malagasy]] ||colspan="2"| [[Malagasy people|Malagasy]]</tr>
+| [[Malawi]] || [[Malawian]] ||colspan="2"| [[Malawians]]</tr>
+| [[Malaysia]] || [[Malaysian |Malaysian]] ||colspan="2"| [[Malaysians]]</tr>
+| [[Maldives]] || [[Maldivian |Maldivian]] ||colspan="2"| [[Maldivians]]</tr>
+| [[Mali]] || [[Malian |Malian]] ||colspan="2"| [[Malians]]</tr>
+| [[Malta]] || [[Maltese |Maltese]] ||colspan="2"| [[Maltese people|Maltese]]</tr>
+| [[Marshall Islands]] || [[Marshallese |Marshallese]] ||colspan="2"| [[Marshallese |Marshallese]]</tr>
+| [[Martinique]] || [[Martiniquais |Martiniquais]], [[Martinican]] ||colspan="2"| [[Martiniquais |Martiniquais]]</tr>
+| [[Mauritania]] || [[Mauritanian |Mauritanian]] ||colspan="2"| [[Mauritanians]]</tr>
+| [[Mauritius]] || [[Mauritian |Mauritian]] ||colspan="2"| [[Mauritians]]</tr>
+| [[Mayotte]] || [[Mahoran |Mahoran]] ||colspan="2"| [[Mahorais]]</tr>
+| [[Mexico]] || [[Mexico|Mexican]] ||colspan="2"| [[Mexicans]]</tr>
+| [[Federated States of Micronesia|Micronesia, Federated States of]] || [[Micronesian |Micronesian]] ||colspan="2"| [[Micronesians]]</tr>
+| [[Moldova]] || [[Moldovan |Moldovan]] ||colspan="2"| [[Moldovans]]</tr>
+| [[Monaco]] || [[Monégasque |Monégasque]], [[Monacan |Monacan]] ||colspan="2"| [[Monégasques]], [[Monacan |Monacan]]s</tr>
+| [[Mongolia]] || [[Mongolian |Mongolian]] ||colspan="2"| [[Mongols|Mongolians]], [[Mongols]]</tr>
+| [[Montenegro]] || [[Montenegrin |Montenegrin]] ||colspan="2"| [[Montenegrins]]</tr>
+| [[Montserrat]] || [[Montserratian |Montserratian]] ||colspan="2"| [[Montserratians]]</tr>
+| [[Morocco]] || [[Moroccan]] ||colspan="2"| [[Moroccans]]</tr>
+| [[Mozambique]] || [[Mozambican |Mozambican]] ||colspan="2"| [[Mozambican |Mozambican]]s</tr>
+| [[Namibia]] || [[Namibian |Namibian]] ||colspan="2"| [[Namibians]]</tr>
+| [[Nauru]] || [[Nauruan |Nauruan]] ||colspan="2"| [[Nauruan people|Nauruans]]</tr>
+| [[Nepal]] || [[Nepal]]i ||colspan="2"| [[Nepali people|Nepalese]]</tr>
+| [[Netherlands]] || [[Dutch |Dutch]] ||colspan="2"| [[Dutch people|Dutch]]</tr>
+| [[New Caledonia]] || [[New Caledonian |New Caledonian]] ||colspan="2"| [[New Caledonians]]</tr>
+| [[New Zealand]] || [[New Zealand]] || [[New Zealanders]] || {{smaller|"[[Kiwi (people)|Kiwi]]s"}}</tr>
+| [[Nicaragua]] || [[Nicaraguan]] ||colspan="2"| [[Nicaraguans]]</tr>
+| [[Niue]] || [[Niuean |Niuean]] ||colspan="2"| [[Niueans]]</tr>
+| [[Niger]] || [[Nigerien]] ||colspan="2"| [[Nigeriens]]</tr>
+| [[Nigeria]] || [[Nigerian]] ||colspan="2"| [[Nigerians]]</tr>
+| [[Norway]] || [[Norwegian |Norwegian]] ||colspan="2"| [[Norwegian people|Norwegians]]</tr>
+| [[Northern Ireland]] || [[Northern Irish]] / [[Ireland|Irish]] ||colspan="2"| [[Ireland|Irish]] / [[Northern Ireland|Northern Irish]]</tr>
+| [[Northern Marianas]] || [[Northern Marianan]] ||colspan="2"| [[Northern Marianans]]</tr>
+| [[Oman]] || [[Omani]] ||colspan="2"| [[Omanis]]</tr>
+| [[Pakistan]] || [[Pakistani |Pakistani]] ||colspan="2"| [[Pakistanis]]</tr>
+| [[Palestinian territories]] || [[Palestinian |Palestinian]] ||colspan="2"| [[Palestinians]]</tr>
+| [[Palau]] || [[Palauan]] ||colspan="2"| [[Palauans]]</tr>
+| [[Panama]] || [[Panamanian]] ||colspan="2"| [[Panamanians]]</tr>
+| [[Papua New Guinea]] || [[Papua New Guinean]], [[Papuan]] ||colspan="2"| [[Papua New Guineans]], [[Papuans]]</tr>
+| [[Paraguay]] || [[Paraguayan]] ||colspan="2"| [[Paraguayans]]</tr>
+| [[Peru]] || [[Peruvian]] ||colspan="2"| [[Peruvians]]</tr>
+| [[Philippines]] || [[Philippine]], [[Filipino |Filipino]] || [[Filipino people|Filipinos]], [[Filipinas]]|| {{smaller|[[Pinoy]]s}}</tr>
+| [[Pitcairn Island]] || [[Pitcairn Island]] ||colspan="2"| [[Pitcairn Islanders]]</tr>
+| [[Poland]] || [[Polish |Polish]] ||colspan="2"| [[Poles]]</tr>
+| [[Portugal]] || [[Portuguese |Portuguese]] ||colspan="2"| [[Portuguese people|Portuguese]]</tr>
+| [[Puerto Rico]] || [[Puerto Rican people|Puerto Rican]] ||colspan="2"| [[Puerto Rican people|Puerto Ricans]], [[Boricuas]]</tr>
+| [[Qatar]] || [[Qatari]] ||colspan="2"| [[Qataris]]</tr>
+| [[Republic of Ireland]]|| [[Ireland|Irish]] / [[Southern Irish]] <sup>[[#g|g]]</sup> ||colspan="2"| [[Ireland|Irish]] / [[Republic of Ireland|Southern Irish]] <sup>[[#g|g]]</sup></tr>
+| [[Réunion]] || [[Réunionese]], [[Réunionnais]] ||colspan="2"| [[Réunionese]], [[Réunionnais]]</tr>
+| [[Romania]] || [[Romanian |Romanian]] ||colspan="2"| [[Romanians]]</tr>
+| [[Russia]] || [[Russian |Russian]] ||colspan="2"| [[Russians]]</tr>
+| [[Rwanda]] || [[Rwandan]] ||colspan="2"| [[Rwandans]]</tr>
+| [[Saint Helena|St. Helena]] || [[St. Helenian]] ||colspan="2"| [[St. Helenians]]</tr>
+| [[Saint Kitts and Nevis|St. Kitts and Nevis]] || [[Kittitian]], [[Nevisian]] ||colspan="2"| [[Kittitians]], [[Nevisians]]</tr>
+| [[Saint Lucia|St. Lucia]] || [[Saint Lucian |St. Lucian]] ||colspan="2"| [[St. Lucians]]</tr>
+| [[Saint-Pierre and Miquelon]] || [[Saint-Pierrais]], [[Miquelonnais]] ||colspan="2"| [[Saint-Pierrais]], [[Miquelonnais]]</tr>
+| [[Saint Vincent and the Grenadines|St. Vincent and the Grenadines]] || [[St. Vincentian]], [[Vincentian |Vincentian]] ||colspan="2"| [[St. Vincentians]], [[Vincentian |Vincentian]]s</tr>
+| [[Samoa]] || [[Samoan |Samoan]] ||colspan="2"| [[Samoans]]</tr>
+| [[San Marino]] || [[Sammarinese]] ||colspan="2"| [[Sammarinese]]</tr>
+| [[São Tomé and Príncipe]] || [[São Toméan]] ||colspan="2"| [[São Toméans]]</tr>
+| [[Saudi Arabia]] || [[Saudi]], [[Saudi Arabian]] ||colspan="2"| [[Saudis]], [[Saudi Arabians]]</tr>
+| [[Scotland]] ||[[Scottish |Scots]], [[Scottish |Scottish]], [[Scotch whisky|Scotch]]<sup>[[#h|h]]</sup> ||colspan="2"| [[Scottish people|Scots]]</tr>
+| [[Senegal]] || [[Senegalese]] ||colspan="2"| [[Senegalese]]</tr>
+| [[Serbia]] || [[Serbian |Serbian]] ||colspan="2"| [[Serbia]]ns, [[Serbs]]</tr>
+| [[Seychelles]] || [[Seychellois]] ||colspan="2"| [[Seychellois People|Seychellois]]</tr>
+| [[Sierra Leone]] || [[Sierra Leonean]] ||colspan="2"| [[Sierra Leoneans]]</tr>
+| [[Singapore]] || [[Singapore]]<ref>[https://www.cia.gov/library/publications/the-world-factbook/geos/sn.html CIA - The World Factbook -- Singapore]</ref> ||colspan="2"| [[Singaporeans]]</tr>
+| [[Slovakia]] || [[Slovak |Slovak]] ||colspan="2"| [[Slovaks]]</tr>
+| [[Slovenia]] || [[Slovene |Slovene]], [[Slovene |Slovenian]] ||colspan="2"| [[Slovenes|Slovenians]], [[Slovenes]]</tr>
+| [[Solomon Islands]] || [[Solomon Island]] ||colspan="2"| [[Solomon Islanders]]</tr>
+| [[Somalia]] || [[Somalia|Somali]]; [[Somalia|Somalian]] ||colspan="2"| [[Somalia|Somalis]]; [[Somalia|Somalians]]</tr>
+| [[South Africa]] || [[South African]] ||colspan="2"| [[South Africans]]</tr>
+| [[South Ossetia]] || [[South Ossetian]] ||colspan="2"| [[Demographics of South Ossetia|South Ossetians]]</tr>
+| [[Spain]] || [[Spanish |Spanish]] ||colspan="2"| [[Spanish people|Spaniards]]</tr>
+| [[Sri Lanka]] || [[Sri Lankan]] ||colspan="2"| [[Tamils of Sri Lanka|Sri Lankans]]</tr>
+| [[Sudan]] || [[Sudanese]] ||colspan="2"| [[Sudanese]]</tr>
+| [[Surinam]] || [[Surinamese]] ||colspan="2"| [[Surinamers]]</tr>
+| [[Swaziland]] || [[Swaziland|Swazi]] ||colspan="2"| [[Swazis]]</tr>
+| [[Sweden]] || [[Swedish |Swedish]] ||colspan="2"| [[Swedish people|Swedes]]</tr>
+| [[Switzerland]] || [[Swiss]] ||colspan="2"| [[Swiss (people)|Swiss]]</tr>
+| [[Syria]] || [[Syrian]] ||colspan="2"| [[Syria  |Syria]]ns</tr>
+| [[Taiwan]]{{anchor|Taiwan}} || [[Taiwanese |Taiwanese]] ||colspan="2"| [[Taiwanese people|Taiwanese]]</tr>
+| [[Tajikistan]] || [[Tajikistani]] ||colspan="2"| [[Tajikistanis]], [[Ta-jik people|Tajiks]]</tr>
+| [[Tanzania]] || [[Tanzanian]] ||colspan="2"| [[Tanzanians]]</tr>
+| [[Thailand]] || [[Thai |Thai]] ||colspan="2"| [[Thai people|Thai]]</tr>
+| [[Togo]] || [[Togolese]] ||colspan="2"| [[Togolese]]</tr>
+| [[Tonga]] || [[Tongan |Tongan]] ||colspan="2"| [[Tongans]]</tr>
+| [[Trinidad and Tobago]] || [[Trinidadian]], [[Tobagonian]] || [[Trinidadians]], [[Tobagonians]] || {{smaller|"Trinis", "Trinibagonians"}}</tr>
+| [[Tunisia]] || [[Tunisian |Tunisian]] ||colspan="2"| [[Tunisians]]</tr>
+| [[Turkey]] || [[Turk |Turkish]] ||colspan="2"| [[Turkish people|Turks]]</tr>
+| [[Turkmenistan]] || [[Turkmen people|Turkmen]] ||colspan="2"| [[Turkmen people|Turkmens]]</tr>
+| [[Turks and Caicos Islands]] || ''none'' ||colspan="2"| [[Turks and Caicos Islanders]]</tr>
+| [[Tuvalu]] || [[Tuvaluan |Tuvaluan]] ||colspan="2"| [[Tuvaluans]]</tr>
+| [[Uganda]] || [[Ugandan]] ||colspan="2"| [[Ugandans]]</tr>
+| [[Ukraine]] || [[Ukrainian |Ukrainian]] ||colspan="2"| [[Ukrainians]]</tr>
+| [[United Arab Emirates]] || [[Emirati]], [[Emirian]] ||colspan="2"| [[United Arab Emiratis|Emiratis]], [[Emirians]]</tr>
+| [[United Kingdom]] || [[British |British]] || [[British people|Britons]] ||style="font-size:90%;"| {{nowrap|''see'' [[Alternative words for British|Other words for "British"]]}}</tr>
+| [[United States]] || [[American |American]]<sup>[[#i|i]]</sup>, [[U.S.]] || colspan="2"|[[American |Americans]]<sup>[[#j|j]]</sup></tr>
+| [[Uruguay]] || [[Uruguayan]] ||colspan="2"| [[Uruguayans]]</tr>
+| [[Uzbekistan]] || [[Uzbekistani]], [[Uzbek |Uzbek]] ||colspan="2"| [[Uzbekistanis]], [[Uzbeks]]</tr>
+| [[Vanuatu]] || [[Ni-Vanuatu]], [[Vanuatuan]] ||colspan="2"| [[Ni-Vanuatu]]</tr>
+| [[Venezuela]] || [[Venezuelan |Venezuelan]] ||colspan="2"| [[Venezuela]]ns</tr>
+| [[Vietnam]] || [[Vietnamese |Vietnamese]] ||colspan="2"| [[Vietnamese people|Vietnamese]]</tr>
+| [[Virgin Islands]] || [[Virgin Island]] ||colspan="2"| [[Virgin Islanders]]</tr>
+| [[Wales]] || Welsh ||colspan="2"| [[Welsh people|Welsh]]</tr>
+| [[Wallis and Futuna]] || [[Wallisian]], [[Futunan]] ||colspan="2"| [[Wallisians]], [[Futunans]]</tr>
+| [[Western Sahara]] || [[Sahraw]], [[Sahrawian]], [[Sahraouian]] ||colspan="2"| [[Sahrawis]], [[Sahraouis]]</tr>
+| [[Yemen]] || [[Yemeni |Yemeni]] ||colspan="2"| [[Yemeni |Yemenis]]</tr>
+| [[Zambia]] || [[Zambian |Zambian]] ||colspan="2"| [[Zambians]]</tr>
+| [[Zimbabwe]] || [[Zimbabwean]] ||colspan="2"| [[Zimbabweans]]</tr>
+|}

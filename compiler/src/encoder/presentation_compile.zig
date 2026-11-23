@@ -23264,7 +23264,9 @@ pub const Renderer = struct {
         while (pos < source.len) {
             const stop = std.mem.indexOfScalarPos(u8, source, pos, '\n') orelse source.len;
             const raw_line = std.mem.trimEnd(u8, source[pos..stop], "\r");
-            const line = trim(raw_line);
+            const full_line = trim(raw_line);
+            const html_row_close = wikiTableCellBeforeHtmlRowClose(full_line);
+            const line = html_row_close orelse full_line;
             if (line.len != 0 and (line[0] == '|' or line[0] == '!') and line.ptr != raw_line.ptr) return null;
             const next = if (stop < source.len) stop + 1 else stop;
             if (intrinsic and row != null and row_cells == 0 and (starts(line, "|-") or starts(line, "|}"))) {
@@ -23289,7 +23291,7 @@ pub const Renderer = struct {
                 } else false;
                 const legacy_tail = tail.len == 0 or literal_close or (floating and self.neutralRootTableCategory(tail));
                 if ((require_close_tail and !legacy_tail and !(floating and self.tableNestedOuterMetadataTail(tail))) or
-                    row == null or row_cells == 0 or cells.items.len == 0) return null;
+                    row_count == 0 or row_cells == 0 or cells.items.len == 0) return null;
                 var nested_source = false;
                 var remaining: usize = 8192;
                 for (cells.items) |cell| if (cell.needs_nested_source and !literal_body) {
@@ -23372,6 +23374,10 @@ pub const Renderer = struct {
                     current_cell = cells.items.len - 1;
                     if (split == line.len) break;
                     offset = split + 2;
+                }
+                if (html_row_close != null) {
+                    row = null;
+                    current_cell = null;
                 }
             } else {
                 // Only ordinary continuation content inside the last cell is
@@ -45198,6 +45204,56 @@ pub const Renderer = struct {
         return found and depth == 0;
     }
 
+    // MediaWiki accepts an active HTML row closer after cells introduced by
+    // wiki markers. Keep the source slices, and do not borrow a closer from a
+    // protected extension, a quoted attribute, or a nested HTML table.
+    fn wikiTableCellBeforeHtmlRowClose(line: []const u8) ?[]const u8 {
+        if (line.len < 6 or line[line.len - 1] != '>' or (line[0] != '|' and line[0] != '!') or
+            starts(line, "|-") or starts(line, "|+") or starts(line, "|}")) return null;
+        var close_at = line.len;
+        // Once the row has closed, an immediately repeated complete closer
+        // has no row to consume. The authored Hong Kong row uses that spelling.
+        while (std.mem.lastIndexOfScalar(u8, line[0..close_at], '<')) |candidate| {
+            const close = syntax.tagAt(line, candidate) orelse break;
+            if (!close.is("tr") or !close.closing or close.self_closing or
+                trim(close.attrs).len != 0 or close.end != close_at) break;
+            close_at = candidate;
+        }
+        if (close_at == line.len) return null;
+        var scan: syntax.OpaqueScan = .{};
+        var at: usize = 1;
+        while (std.mem.indexOfAny(u8, line[at..close_at], "<[{")) |relative| {
+            at += relative;
+            if (line[at] == '<') {
+                if (wikiTableProtectedEnd(line, at, &scan, null)) |end| {
+                    if (end > close_at) return null;
+                    if (scan.tagAt(line, at, null)) |opening|
+                        if (opening.isOpaque() and !opening.self_closing and end == opening.end) return null;
+                    at = end;
+                    continue;
+                }
+                const tag = scan.tagAt(line, at, null) orelse return null;
+                if (tag.end > close_at or tag.isOpaque() or tag.is("tr") or tag.is("td") or tag.is("th")) return null;
+                if (tag.is("table")) {
+                    if (tag.closing or tag.self_closing) return null;
+                    const nested = syntax.matchingTagWithOpaqueScan(line, tag, &scan) orelse return null;
+                    if (nested.end > close_at) return null;
+                    at = nested.end;
+                } else at = tag.end;
+                continue;
+            }
+            if (starts(line[at..], "{|")) return null;
+            if (starts(line[at..], "[[") or starts(line[at..], "{{")) {
+                const token = syntax.balancedWithOpaqueScan(line, at, &scan) orelse return null;
+                if (token.end > close_at) return null;
+                at = token.end;
+                continue;
+            }
+            at += 1;
+        }
+        return line[0..close_at];
+    }
+
     // Page-view preprocessing ignores a bare noinclude close even without an
     // opener. Admit its physical marker only in an already-owned wiki table;
     // borrow the original suffix so cell/heading offsets and the close tail stay
@@ -45350,7 +45406,9 @@ pub const Renderer = struct {
             const end = wikiTableLineEndWithScan(input, pos, &table_line_scan, &table_line_no_more_nowiki_close);
             const raw_line = std.mem.trimEnd(u8, input[pos..end], "\r");
             const structural_line = self.noincludeTableMarkerLine(raw_line) orelse raw_line;
-            const line = trim(structural_line);
+            const full_line = trim(structural_line);
+            const html_row_close = if (nested_tables == 0) wikiTableCellBeforeHtmlRowClose(full_line) else null;
+            const line = html_row_close orelse full_line;
             pos = if (end < input.len) end + 1 else end;
             if (nested_tables == 0 and current != null and !caption_pending) {
                 if (wikiCellHtmlTableEnd(input, line_start)) |child_end| {
@@ -45543,6 +45601,21 @@ pub const Renderer = struct {
                     try self.appendWikiTableFosteredCopy(&cell_source, &cell_copies, tracked, content.text);
                     if (split_at == line.len) break;
                     offset = split_at + 2;
+                }
+                if (html_row_close != null) {
+                    swatch_allowed = false;
+                    try self.finishWikiTableCell(&cells, &cell_source, &cell_copies, &current, cell_formatting, cell_style, row_hidden);
+                    if (cells.items.len != 0) try rows.append(self.a, .{ .cells = try cells.toOwnedSlice(self.a) });
+                    row_hidden = false;
+                    row_css_ancestors = self.table_css_ancestor_classes;
+                    row_background = effective_table_background;
+                    row_style = table_style;
+                    row_alignment = table_alignment;
+                    row_formatting = inherited_formatting;
+                    row_native_context = implicit_row_native_context;
+                    figure_row_attrs = "";
+                    literal_operation.row_opening = null;
+                    literal_operation.cell_attrs = null;
                 }
             } else if (if (syntax.tagAt(line, 0)) |tag| !tag.closing and tag.is("tr") else false) {
                 try self.finishWikiTableCaption(&caption, &caption_blocks, &caption_source, &caption_copies, &caption_pending, caption_style, caption_formatting);
@@ -46657,6 +46730,63 @@ test "renderer groups wiki tables and ordered nested lists" {
     try std.testing.expect(t.rows[0].cells[0].header);
     try std.testing.expectEqualStrings("cats", try flattened(a, t.rows[1].cells[1].spans));
 }
+test "mixed WikiTable HTML row closers match retained Indonesian table geometry" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const source = @embedFile("testdata/id-country-table/archived.wikitable.wikitext");
+    const ExpectedCell = struct { cols: u16, rows: u16, header: bool };
+    const expected = try std.json.parseFromSlice([][]ExpectedCell, a,
+        @embedFile("testdata/id-country-table/official-row-shape.json"), .{});
+    const blocks = try r.renderBody(source);
+    try std.testing.expectEqual(@as(usize, 1), blocks.len);
+    const table = blocks[0].table orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 241), table.rows.len);
+    try std.testing.expectEqual(expected.value.len, table.rows.len);
+    var cells: usize = 0;
+    for (table.rows, expected.value) |row, shape| {
+        try std.testing.expectEqual(shape.len, row.cells.len);
+        for (row.cells, shape) |cell, typed| {
+            try std.testing.expectEqual(typed.cols, cell.colspan);
+            try std.testing.expectEqual(typed.rows, cell.rowspan);
+            try std.testing.expectEqual(typed.header, cell.header);
+            cells += 1;
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 732), cells);
+    try std.testing.expectEqualStrings("Nama negara", try flattened(a, table.rows[0].cells[0].spans));
+    try std.testing.expectEqualStrings("Abkhazia", try flattened(a, table.rows[2].cells[0].spans));
+    const last = table.rows[240].cells[2];
+    try std.testing.expectEqualStrings("Zimbabweans", try flattened(a, last.spans));
+    try std.testing.expectEqual(ir.InlineKind.link, last.spans[0].kind);
+    try std.testing.expectEqualStrings("Zimbabweans", last.spans[0].target);
+}
+
+test "mixed WikiTable row closer retains protected literal and child table ownership" {
+    try std.testing.expectEqualStrings("| [[Title|label]]", Renderer.wikiTableCellBeforeHtmlRowClose("| [[Title|label]]</TR>").?);
+    try std.testing.expectEqualStrings("| [[Title|label]]", Renderer.wikiTableCellBeforeHtmlRowClose("| [[Title|label]]</TR></tr>").?);
+    try std.testing.expect(Renderer.wikiTableCellBeforeHtmlRowClose("| <table><tr><td>child</td></tr></tr>") == null);
+    for ([_][]const u8{
+        "| <nowiki>literal </tr></nowiki>", "| &lt;/tr&gt;", "| <syntaxhighlight lang=text></tr></syntaxhighlight>",
+        "| <table><tr><td>child</td></tr>", "| <table><tr><td>child</td></tr></table>",
+    }) |line| try std.testing.expect(Renderer.wikiTableCellBeforeHtmlRowClose(line) == null);
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var wiki: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try wiki.renderBody("{|\n| '''[[first]]''' || <nowiki></tr></nowiki>\n| <code>&lt;/tr&gt;</code>\n|-\n| [[next]]\n|}\n");
+    const table = blocks[0].table.?;
+    try std.testing.expectEqual(@as(usize, 2), table.rows.len);
+    try std.testing.expectEqual(@as(usize, 3), table.rows[0].cells.len);
+    try std.testing.expect(table.rows[0].cells[0].spans[0].flags.bold);
+    try std.testing.expectEqualStrings("first", table.rows[0].cells[0].spans[0].target);
+    for (table.rows[0].cells[1..]) |cell| try std.testing.expectEqualStrings("</tr>", try flattened(a, cell.spans));
+    var html: Renderer = .{ .a = a, .context = .{} };
+    const html_blocks = try html.renderBody("<table><tr><td>first</td></tr><tr><td>last</td></tr></table>");
+    try std.testing.expectEqual(@as(usize, 2), html_blocks[0].table.?.rows.len);
+}
+
 test "renderer preserves named forward references and unknown templates explicitly" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -128871,10 +129001,10 @@ test "native borrowed LI alone recognizes retained Thai list sample and literal 
     try std.testing.expectEqualStrings("[1]", full[639..642]);
     const node: table_style_profile.TextElement = .{ .tag = opening.name, .source_key = @intFromPtr(opening.name.ptr) };
     try std.testing.expect(!Renderer.sourceBoundPlainListParent(full, item, &node));
-    try std.testing.expect(Renderer.sourceBoundPlainListParentIn(full, item, &node, true));
+    try std.testing.expect(Renderer.sourceBoundPlainListParentIn(full, item, &node, true, null));
     for ([_][]const u8{ "note [1]", "<samp>[táꜜì]</samp>" }) |body| {
         try std.testing.expect(!Renderer.containerPositionChildComplete(body));
-        try std.testing.expect(Renderer.containerPositionChildCompleteIn(body, true));
+        try std.testing.expect(Renderer.containerPositionChildCompleteIn(body, true, null));
     }
 }
 
@@ -128885,7 +129015,7 @@ test "native borrowed LI sample census refuses malformed syntax and revoked sour
         "<samp>text [plain]</samp>", "<samp>[plain] text</samp>", "<samp>[[Target|plain]]</samp>",
         "<samp>[https://example.test plain]</samp>", "<samp>[RFC 123]</samp>",
         "note [RFC 123]", "note [plain", "note [plain]]", "note [x[y]]",
-    }) |body| try std.testing.expect(!Renderer.containerPositionChildCompleteIn(body, true));
+    }) |body| try std.testing.expect(!Renderer.containerPositionChildCompleteIn(body, true, null));
 
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
