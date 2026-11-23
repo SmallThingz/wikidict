@@ -4,15 +4,15 @@ import unittest
 from urllib.parse import parse_qs, urlsplit
 
 import prepare_figure_metadata as figure
-from test_prepare_figure_files import FigureFileTests
+import test_prepare_figure_files as figure_fixtures
 
 
 class SelectedPageFigureTests(unittest.TestCase):
-    setUp = FigureFileTests.setUp
-    write_projection = FigureFileTests.write_projection
-    inventory = FigureFileTests.inventory
-    args = FigureFileTests.args
-    response = FigureFileTests.response
+    setUp = figure_fixtures.FigureFileTests.setUp
+    write_projection = figure_fixtures.FigureFileTests.write_projection
+    inventory = figure_fixtures.FigureFileTests.inventory
+    args = figure_fixtures.FigureFileTests.args
+    response = figure_fixtures.FigureFileTests.response
 
     def selection(self, names):
         text = 'Original page\n' + '\n'.join('[[' + name + '|thumb|caption]]' for name in names)

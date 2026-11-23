@@ -1136,7 +1136,9 @@ class InterleavedPreparationTests(unittest.TestCase):
                                   type_ignores=[]), str(qualification.__file__), 'exec')
         namespace = dict(qualification_build_argv=qualification.qualification_build_argv,
             cfg=cfg, group_binding=proof, expect=expectation, ordered_groups=ordered,
-            focus_cases=cases, private=Path(proof['cwd']), private_manifest={}, out=out, phase=phase,
+            focus_cases=cases, private=Path(proof['cwd']),
+            private_manifest={'compiler/tools/test_reviewed_language_aliases.py': {}}, out=out, phase=phase,
+            qualification_source_key=qualification.qualification_source_key,
             Path=Path, re=re, os=os, args=SimpleNamespace(compiler=Path('/fixture/zig')),
             cache=Path('/fixture/cache'), read=read, auth=auth, ref=FakeExecution.ref, execute=execute, execute_outcome=execute_outcome,
             require_ordinary_preparation_compile_failure=qualification.require_ordinary_preparation_compile_failure,
