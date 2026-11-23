@@ -70,6 +70,23 @@ class UnionTest(unittest.TestCase):
         (self.out / union.COMPLETE).write_bytes(v2.encoded(
             {'schema': union.SCHEMA, 'manifest_sha256': v2.digest(raw)}))
 
+    def test_archive_replay_stays_in_checkout_with_external_tmpdir(self):
+        self.prepare()
+        project_scratch = Path(union.__file__).resolve().parents[2] / '.tmp'
+        real_directory = tempfile.TemporaryDirectory
+        replay_locations = []
+
+        def checked_directory(*args, **kwargs):
+            parent = Path(kwargs['dir']).resolve()
+            self.assertTrue(parent.is_relative_to(project_scratch))
+            replay_locations.append(parent)
+            return real_directory(*args, **kwargs)
+
+        with mock.patch.dict(os.environ, {'TMPDIR': '/tmp'}), \
+                mock.patch.object(union.tempfile, 'TemporaryDirectory', side_effect=checked_directory):
+            union.verify(self.out)
+        self.assertEqual(replay_locations[0], project_scratch)
+
     def test_real_v2_replay_union_and_builder_pin_preserve_bytes_and_scope(self):
         original = v2.producer()
         manifest = self.prepare()

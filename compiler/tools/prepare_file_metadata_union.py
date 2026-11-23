@@ -296,7 +296,20 @@ def verify(root, require_complete=True):
     root = Path(root)
     manifest = read_manifest(root, require_complete)
     index = evidence_index(root, manifest)
-    with tempfile.TemporaryDirectory(prefix='wikidict-file-union-') as directory:
+    # A replay can expand many archived captures. Keep checkout builds on the
+    # project volume, including when the system TMPDIR points somewhere else.
+    compiler = Path(__file__).resolve().parent.parent
+    scratch = None
+    if compiler.name == 'compiler' and (compiler.parent / 'renderer/src').is_dir():
+        scratch = compiler.parent / '.tmp'
+        scratch.mkdir(mode=0o700, exist_ok=True)
+        require(scratch.is_dir() and not scratch.is_symlink(), 'Unsafe metadata replay directory')
+        requested = os.environ.get('TMPDIR')
+        if requested:
+            candidate = Path(requested).resolve()
+            if candidate.is_relative_to(scratch) and candidate.is_dir():
+                scratch = candidate
+    with tempfile.TemporaryDirectory(prefix='wikidict-file-union-', dir=scratch) as directory:
         temporary = Path(directory)
         snapshots = []
         for number, row in enumerate(index['captures']):
