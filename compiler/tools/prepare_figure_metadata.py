@@ -196,14 +196,41 @@ FIGURE_MEDIA_VARIANTS = {
 FIGURE_MEDIA_VARIANTS['6e76237de1cf29c08427d191f110a2c38c2b4cf9'] = FIGURE_MEDIA_VARIANTS['992ad5e3679f848254828e823860ba8b3ad3b39b']
 FIGURE_MEDIA_VARIANTS['f03f1fdaa2d112807b6ce63170eb50e86de615bd'] = FIGURE_MEDIA_VARIANTS['992ad5e3679f848254828e823860ba8b3ad3b39b']
 
+# Between d191 and 87f only FlaggedRevs, Wikibase and the DB load monitor
+# changed. This registration covers ordinary ImageInfo geometry only.
+FILE_DEFAULTS = 'figure-imageinfo-defaultoptions.raw.json'
+SR_SELECTED_DEFAULTS = 'cd0624188c22163e38bdee69bbe0e67bf74f231eeeb023a2834abd84de4cc2d7'
+
+
+def verify_file_defaults(selected, observed):
+    old, new = decode(selected)['query'], decode(observed)['query']
+    if (digest(selected) != SR_SELECTED_DEFAULTS or digest(observed) != site_info.FIGURE_WMF5_SR_RAW or
+            old['general']['git-hash'] != '0470f6c99a6456a366635bf25a517a1f951de6f5' or
+            new['general']['git-hash'] != site_info.FIGURE_WMF5_CORE or
+            old['defaultoptions'] != new['defaultoptions'] or
+            site_info.figure_thumbnail_width(old) != site_info.figure_thumbnail_width(new) or
+            any(old['general'][key] != new['general'][key] for key in
+                ('wikiid', 'lang', 'rtl', 'case', 'server', 'thumblimits'))):
+        raise ValueError('Figure default-options source binding differs')
+
+
+def bound_file_core(core, selected_core, observed):
+    if observed is not None or core == site_info.FIGURE_WMF5_CORE:
+        return observed is not None and core == site_info.FIGURE_WMF5_CORE and selected_core == '0470f6c99a6456a366635bf25a517a1f951de6f5'
+    return figure_source_compatible(core, selected_core)
+
 
 def figure_profile(core, kind, media_extensions=None):
-    if core == 'd1919ec5e4ebd7b0dea1ff6ea1cb4347a9349ca2':
+    if core in ('d1919ec5e4ebd7b0dea1ff6ea1cb4347a9349ca2', site_info.FIGURE_WMF5_CORE):
         # Only the V4 handler model and this complete registration set were observed.
         registered = FIGURE_MEDIA_VARIANTS['f03f1fdaa2d112807b6ce63170eb50e86de615bd']
         if kind != FIGURE_PROFILE_V4 or (media_extensions is not None and media_extensions != registered):
             raise ValueError('Unreviewed Figure handler profile or media registration')
-        return dict(FIGURE_WMF4_PROFILE, media_extensions=dict(registered))
+        approved = dict(FIGURE_WMF4_PROFILE, media_extensions=dict(registered))
+        if core == site_info.FIGURE_WMF5_CORE:
+            approved.update(selected_defaults_sha256=SR_SELECTED_DEFAULTS,
+                            observed_defaults_response_sha256=site_info.FIGURE_WMF5_SR_RAW)
+        return approved
     # GIF inherits bitmap geometry. This profile does not certify animated
     # thumbnail pixels, frame selection, or deployed animation limits.
     if kind == FIGURE_PROFILE_V3:
@@ -494,6 +521,12 @@ def _figure_site_registration(site, general, wiki, approved):
     datetime.strptime(observed, '%Y-%m-%dT%H:%M:%SZ')
     if _figure_media_extensions(site) != approved['media_extensions']:
         raise ValueError('Unreviewed media registration set or version')
+    if other.get('git-hash') == site_info.FIGURE_WMF5_CORE:
+        limits = other.get('thumblimits')
+        if (wiki != 'srwiktionary' or other.get('lang') != 'sr' or other.get('rtl') is not False or
+                other.get('case') != 'case-sensitive' or limits != {'0': 180, '1': 250, '2': 400} or
+                any(type(width) is not int for width in limits.values())):
+            raise ValueError('ImageInfo differs from its reviewed default-options context')
 
 
 def _figure_media_extensions(site):
@@ -1260,7 +1293,7 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
     if (not isinstance(core, str) or re.fullmatch('[0-9a-f]{40}', core) is None or
             not isinstance(language, str) or '# content-language\t'+language not in namespace_raw.decode().splitlines()):
         raise ValueError('Figure file site/namespace identity mismatch')
-    if (core in (FIGURE_RESPONSE_CORE, *FIGURE_REGISTRATION_EPOCHS, *FIGURE_WMF4_CORES) or profile_kind == FIGURE_PROFILE_V5) and not allow_compatible_epochs:
+    if (core in (FIGURE_RESPONSE_CORE, *FIGURE_REGISTRATION_EPOCHS, *FIGURE_WMF4_CORES, site_info.FIGURE_WMF5_CORE) or profile_kind == FIGURE_PROFILE_V5) and not allow_compatible_epochs:
         raise ValueError('Compatible response epochs require replay contract v3')
     profile = None
     if has_batches:
@@ -1290,6 +1323,8 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
         observation = batch.get('observed_svg_width_px')
         occurrences = batch.get('observed_svg_occurrences')
         supplemental = 'observed_svg_width_px' in batch or 'observed_svg_occurrences' in batch or jpeg_supplement
+        if core == site_info.FIGURE_WMF5_CORE and supplemental:
+            raise ValueError('Only ordinary ImageInfo geometry was reviewed at this revision')
         if 'observed_svg_occurrences' in batch:
             if (profile_kind not in (FIGURE_PROFILE_V4, FIGURE_PROFILE_V5) or core not in (FIGURE_CURRENT_CORE, FIGURE_REGISTRATION_CORE) or
                     not isinstance(occurrences, list) or not 1 <= len(occurrences) <= 50 or
@@ -2039,7 +2074,7 @@ def replay(root, wiki, date, *, retained_cache=None, inventory_cache=None, regen
     raw = small(root / ROLES['figure-sizing-raw'], MAX_METADATA if file_level else MAX_RESPONSE)
     site_raw = small(root / ROLES['figure-sizing-site'], MAX_RESPONSE)
     if file_level:
-        if not figure_source_compatible(projection.get('core_revision'), general.get('git-hash')):
+        if not bound_file_core(projection.get('core_revision'), general.get('git-hash'), None):
             raise ValueError('Figure defaults and file facts use different source versions')
         verify_figure_file_document(projection, raw, namespace, wiki, date, site_raw)
         inventory = verify_inventory(decode(small(root / INVENTORY)), namespace, wiki, date, inventory_cache=inventory_cache)
@@ -3007,7 +3042,13 @@ def replay_stream_capture(root, wiki, date, defaults, namespace, general, *, ret
         if raw_identity() != raw_before:
             raise ValueError('Figure raw identity changed before root semantic reuse')
         return verified_count
-    if not figure_source_compatible(projection['core_revision'], general.get('git-hash')):
+    observed = None
+    if projection['core_revision'] == site_info.FIGURE_WMF5_CORE:
+        if projection.get('replay_contract') != REPLAY_CONTRACT:
+            raise ValueError('The bound ImageInfo defaults require streamed Figure replay v6')
+        observed = small(root / FILE_DEFAULTS, MAX_RESPONSE)
+        verify_file_defaults(small(root / ROLES['figure-siteinfo'], MAX_RESPONSE), observed)
+    if not bound_file_core(projection['core_revision'], general.get('git-hash'), observed):
         raise ValueError('Figure defaults and streamed facts use different source versions')
     inventory_path = root / INVENTORY
     inventory_before = ((inventory_path.resolve(), evidence.stamp(inventory_path))
@@ -3025,6 +3066,8 @@ def replay_stream_capture(root, wiki, date, defaults, namespace, general, *, ret
         raise error.with_traceback(traceback)
     plan = inventory_document(root / PLAN)
     fused = http_replay is not None and http_replay.ordinary and http_replay.plan == plan
+    if plan.get('observed_defaults_response_sha256') != (digest(observed) if observed is not None else None):
+        raise ValueError('Figure capture plan differs from observed default-options authority')
     http_files = http_replay.http_files if fused else set()
     prefix_cache = {} if retained_cache is None else retained_cache
     archived, planned = {}, []
@@ -3163,6 +3206,8 @@ def replay_stream_capture(root, wiki, date, defaults, namespace, general, *, ret
     expected = {*defaults['artifacts'], site_info.MANIFEST, site_info.COMPLETE, *ROLES.values(),
                 INVENTORY, FILE_REQUESTS, QUERY_INPUTS, PROVIDER, PLAN, *http_files,
                 *(row['path'] for row in query_inputs)}
+    if projection['core_revision'] == site_info.FIGURE_WMF5_CORE:
+        expected.add(FILE_DEFAULTS)
     if materialized is not None:
         if replay_identity != {'size': projection['raw_bytes'], 'sha256': projection['raw_sha256']}:
             raise ValueError('Figure indexed replay lacks its completed stream identity')
@@ -4258,6 +4303,9 @@ def capture_files(args, transport=None, sleep=time.sleep, *, target_contract=REP
     if target_contract not in (REPLAY_CONTRACT_V4, REPLAY_CONTRACT):
         raise ValueError('Unsupported Figure capture replay contract')
     root = Path(args.output)
+    file_defaults = getattr(args, 'file_defaults', None)
+    if file_defaults is not None and root.resolve().is_relative_to(Path(file_defaults).resolve()):
+        raise ValueError('Figure capture cannot modify its default-options witness')
     for source in getattr(args, 'reuse', []):
         if root.resolve().is_relative_to(Path(source).resolve()):
             raise ValueError('Figure capture cannot modify a retained source')
@@ -4339,6 +4387,17 @@ def _capture_files(args, transport=None, sleep=time.sleep, *, target_contract=RE
     saved = {name: small(defaults_root / name) for name in artifacts}
     if any(digest(saved[name]) != expected for name, expected in artifacts.items()):
         raise ValueError('Figure defaults changed before capture')
+    file_defaults = None
+    witness = getattr(args, 'file_defaults', None)
+    if witness is not None:
+        manifest = site_info.validate_snapshot(Path(witness)/site_info.SNAPSHOT, args.wiki, args.date, file_defaults=True)
+        if (manifest['profile'] != site_info.FIGURE_PROFILE or manifest['core'] != site_info.FIGURE_WMF5_CORE or
+                manifest['namespace_registry_sha256'] != defaults['namespace_registry_sha256'] or
+                profile_kind != FIGURE_PROFILE_V4 or target_contract != REPLAY_CONTRACT):
+            raise ValueError('Unreviewed Figure default-options binding')
+        file_defaults = small(Path(witness)/'site-info.01.raw.json', MAX_RESPONSE)
+        verify_file_defaults(saved[site_info.SNAPSHOT], file_defaults)
+        saved[FILE_DEFAULTS] = file_defaults
     namespace = saved[site_info.PREFIX + 'namespace-registry.tsv']
     inventory_cache = {} if _verification_caches is None else _verification_caches['inventory']
     inventory = selected_inventory(args, namespace, inventory_cache=inventory_cache)
@@ -4470,6 +4529,8 @@ def _capture_files(args, transport=None, sleep=time.sleep, *, target_contract=RE
             'batch_size': args.batch_size, 'delay': args.delay, 'pacing': 'start-to-start'}
     if lean:
         plan['metadata_mode'] = mode
+    if file_defaults is not None:
+        plan['observed_defaults_response_sha256'] = digest(file_defaults)
     if profile_kind != FIGURE_PROFILE_V3:
         plan['figure_profile'] = profile_kind
     if max_inflight == 2:
@@ -4570,8 +4631,7 @@ def _capture_files(args, transport=None, sleep=time.sleep, *, target_contract=RE
             rows, base = fetch_stage(number, planned[number-1], state)
             names, raw, _, _ = captured_http_stage(root, base, args.wiki, light=True)
             batch = {'requests': names, 'response': raw.decode('utf-8')}
-            if not figure_source_compatible(decode(raw)['query']['general']['git-hash'],
-                    decode(saved[site_info.SNAPSHOT])['query']['general'].get('git-hash')):
+            if not bound_file_core(decode(raw)['query']['general']['git-hash'], defaults['core'], file_defaults):
                 raise ValueError('Lean Figure and defaults source versions differ')
             titles = lean_tiff_titles(batch, namespace, args.wiki, args.date, profile_kind, allow_compatible_epochs=True)
             reference = {'base': base}
@@ -4722,8 +4782,7 @@ def _capture_files(args, transport=None, sleep=time.sleep, *, target_contract=RE
                     raise ValueError('Figure response record exceeds its bound')
                 if index == 0:
                     site_raw = batch['response'].encode()
-                    if not figure_source_compatible(decode(site_raw)['query']['general']['git-hash'],
-                            decode(saved[site_info.SNAPSHOT])['query']['general'].get('git-hash')):
+                    if not bound_file_core(decode(site_raw)['query']['general']['git-hash'], defaults['core'], file_defaults):
                         raise ValueError('Defaults and Figure observations use different source versions')
                     if resume_path is not None:
                         if small(root / ROLES['figure-sizing-site'], MAX_RESPONSE) != site_raw:
@@ -4768,7 +4827,7 @@ def _capture_files(args, transport=None, sleep=time.sleep, *, target_contract=RE
             profile_kind=profile_kind, **replay_policy)
         if slots is not None and (error := slots.close()) is not None:
             raise error
-        if not figure_source_compatible(document['core_revision'], decode(saved[site_info.SNAPSHOT])['query']['general'].get('git-hash')):
+        if not bound_file_core(document['core_revision'], defaults['core'], file_defaults):
             raise ValueError('Defaults and Figure observations use different source versions')
         check_prefix_cache(prefix_cache)
         raw_id = evidence.fingerprint(raw_path)
@@ -4839,8 +4898,7 @@ def _capture_files(args, transport=None, sleep=time.sleep, *, target_contract=RE
                     names, raw, _, _ = captured_http_stage(root, accepted[0], args.wiki, light=True)
                     lean_tiff_titles({'requests': names, 'response': raw.decode('utf-8')},
                                      namespace, args.wiki, args.date, profile_kind, allow_compatible_epochs=True)
-                    if not figure_source_compatible(decode(raw)['query']['general']['git-hash'],
-                            decode(saved[site_info.SNAPSHOT])['query']['general'].get('git-hash')):
+                    if not bound_file_core(decode(raw)['query']['general']['git-hash'], defaults['core'], file_defaults):
                         raise ValueError('First accepted lean response changed default source family')
                     if small(request_path) != stream_encoded({'schema': REQUEST_STREAM_SCHEMA, 'batches': total}):
                         raise ValueError('Empty lean prefix has uncommitted request records')
@@ -6445,6 +6503,7 @@ def main():
     for name in ('defaults', 'dumpstatus', 'output'):
         collect.add_argument('--' + name, type=Path, required=True)
     collect.add_argument('--sql', type=Path, action='append', required=True)
+    collect.add_argument('--file-defaults', type=Path, help='verified matching default-options observation for the selected ImageInfo revision')
     collect.add_argument('--reuse', type=Path, action='append', default=[])
     collect.add_argument('--reuse-batch', type=Path, action='append', default=[],
                          help='existing normal request/receipt evidence record, replayed without refetching')

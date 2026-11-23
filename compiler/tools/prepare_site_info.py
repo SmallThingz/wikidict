@@ -39,6 +39,9 @@ CORE_PROFILES = (CORE, '79b81ba96674efc8a803fc956bc501d347d440d2',
                  '6e76237de1cf29c08427d191f110a2c38c2b4cf9',
                  'd1919ec5e4ebd7b0dea1ff6ea1cb4347a9349ca2')
 SCRIBUNTO = 'b109cb6e5866c13871e308859ef78249b1bd3ea2'
+FIGURE_WMF5_CORE = '87f311882d8c84ec21e288d0bde8aa289df8dc56'
+FIGURE_WMF5_SCRIBUNTO = '25f7cdefa45a3b8417d7fa296f86b76537927f43'
+FIGURE_WMF5_SR_RAW = '9755bd766754d1d6e0ede764ca11eb351c4da75363cb6297c70668dba657b31f'
 MAX_RESPONSE = 2 * 1024 * 1024
 MAX_MANIFEST = 64 * 1024
 MAX_INTEGER = 2**53 - 1
@@ -132,14 +135,16 @@ def figure_thumbnail_width(result):
     return limits[index]
 
 
-def response(data, wiki, language, profile=PROFILE):
+def response(data, wiki, language, profile=PROFILE, *, raw_sha=None):
     if not isinstance(data, dict) or any(key in data for key in ('error', 'errors', 'warnings', 'continue')):
         raise ValueError('Unsuccessful or incomplete site-info API response')
     result = data.get('query')
     general = result.get('general') if isinstance(result, dict) else None
     if (not isinstance(general, dict) or general.get('wikiid') != wiki
-            or general.get('lang') != language or general.get('git-hash') not in CORE_PROFILES):
+            or general.get('lang') != language or not reviewed_source(general.get('git-hash'), profile, wiki)):
         raise ValueError('Site-info edition/language/source mismatch')
+    if general.get('git-hash') == FIGURE_WMF5_CORE and raw_sha != FIGURE_WMF5_SR_RAW:
+        raise ValueError('Unreviewed Figure default-options observation')
     legacy.validate_server(general.get('server'))
     stamp(general.get('time'))
     counters = result.get('statistics')
@@ -152,8 +157,17 @@ def response(data, wiki, language, profile=PROFILE):
     return result
 
 
+def reviewed_source(core, profile, wiki):
+    return core in CORE_PROFILES or (core == FIGURE_WMF5_CORE and profile == FIGURE_PROFILE and wiki == 'srwiktionary')
+
+
+def scribunto_reference(core):
+    # The two site library leaves retain the same SOURCE_PINS at both revisions.
+    return FIGURE_WMF5_SCRIBUNTO if core == FIGURE_WMF5_CORE else SCRIBUNTO
+
+
 def render(data, config, retrieved, raw_sha):
-    result = response(data, config['wiki'], config['content_language'], config['profile'])
+    result = response(data, config['wiki'], config['content_language'], config['profile'], raw_sha=raw_sha)
     return evidence.encoded({'schema': HEADER, **config, 'temporal_scope': 'current-api-observation',
         'retrieved_utc': retrieved, 'raw_response_sha256': raw_sha, 'query': result})
 
@@ -216,7 +230,7 @@ def capture(args, transport=None, sleep=time.sleep):
                 data = evidence.decode(raw)
                 if isinstance(data, dict) and isinstance(data.get('error'), dict):
                     retry = data['error'].get('code') in ('maxlag', 'ratelimited', 'readonly')
-                response(data, args.wiki, language, profile)
+                response(data, args.wiki, language, profile, raw_sha=receipt['response_sha256'])
                 receipt.update(accepted=True, ended_utc=evidence.utc())
                 evidence.document(root / (name + '.receipt.json'), receipt)
                 accepted = name + '.receipt.json'
@@ -237,7 +251,8 @@ def capture(args, transport=None, sleep=time.sleep):
         if producer() != identity or evidence.small(args.namespace_registry, MAX_RESPONSE) != namespace:
             raise ValueError('Capture producer or namespace changed')
         evidence.put(root / SNAPSHOT, output)
-        manifest = {'schema': SCHEMA, **config, **identity, 'core': data['query']['general']['git-hash'], 'scribunto': SCRIBUNTO,
+        core = data['query']['general']['git-hash']
+        manifest = {'schema': SCHEMA, **config, **identity, 'core': core, 'scribunto': scribunto_reference(core),
             'temporal_scope': 'current-api-observation', 'dump_date': None,
             'started_utc': started, 'retrieved_utc': receipt['ended_utc'], 'accepted_receipt': accepted,
             'source_url': url, 'output_sha256': evidence.digest(output), 'output_bytes': len(output),
@@ -303,7 +318,8 @@ def revalidate(root, failure_sha256):
     if stamp(reviewed) < stamp(failure['ended_utc']):
         raise ValueError('Revalidation predates retained refusal')
     identity = producer()
-    manifest = {'schema': SCHEMA, **config, **identity, 'core': data['query']['general']['git-hash'], 'scribunto': SCRIBUNTO,
+    core = data['query']['general']['git-hash']
+    manifest = {'schema': SCHEMA, **config, **identity, 'core': core, 'scribunto': scribunto_reference(core),
         'temporal_scope': 'current-api-observation', 'dump_date': None,
         'started_utc': receipt['started_utc'], 'retrieved_utc': receipt['ended_utc'],
         'accepted_receipt': PREFIX+'01.receipt.json',
@@ -328,7 +344,8 @@ def verify(root, require_complete=True, *, embedded=False):
     raw_manifest = evidence.small(root / MANIFEST, MAX_MANIFEST)
     manifest = evidence.decode(raw_manifest)
     if (not isinstance(manifest, dict) or manifest.get('schema') != SCHEMA or manifest.get('profile') not in (PROFILE, FIGURE_PROFILE)
-            or manifest.get('core') not in CORE_PROFILES or manifest.get('scribunto') != SCRIBUNTO
+            or not reviewed_source(manifest.get('core'), manifest.get('profile'), manifest.get('wiki'))
+            or manifest.get('scribunto') != scribunto_reference(manifest.get('core'))
             or manifest.get('temporal_scope') != 'current-api-observation' or manifest.get('dump_date') is not None):
         raise ValueError('Unreviewed site-info capture profile or producer')
     validate_producer_provenance(manifest)
@@ -407,11 +424,13 @@ def verify(root, require_complete=True, *, embedded=False):
     return manifest
 
 
-def validate_snapshot(path, wiki=None, date=None):
+def validate_snapshot(path, wiki=None, date=None, *, file_defaults=False):
     path = Path(path)
     if path.name != SNAPSHOT:
         raise ValueError('Unexpected site-info snapshot filename')
     manifest = verify(path.parent)
+    if manifest['core'] == FIGURE_WMF5_CORE and not file_defaults:
+        raise ValueError('This default-options observation is scoped to the ImageInfo source binding')
     if (wiki is not None and manifest['wiki'] != wiki) or (date is not None and manifest['date'] != date):
         raise ValueError('Site-info edition/date mismatch')
     return manifest

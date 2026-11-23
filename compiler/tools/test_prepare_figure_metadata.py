@@ -1,5 +1,6 @@
 import argparse
 import copy
+import gzip
 import json
 from pathlib import Path
 import time
@@ -254,6 +255,62 @@ class D191ProfileTests(unittest.TestCase):
                         dict(registration, TimedMediaHandler='0' * 40)):
             with self.subTest(changed=changed), self.assertRaises(ValueError):
                 figure.figure_profile(D191_CORE, figure.FIGURE_PROFILE_V4, changed)
+
+
+class SrImageInfoBindingTests(unittest.TestCase):
+    def setUp(self):
+        fixtures = Path(__file__).parent / 'testdata'
+        self.selected = (fixtures/'figure-page-observations/sr-fuhe-served-set/figure-siteinfo.raw.json').read_bytes()
+        sources = fixtures/'sr-imageinfo-87f'
+        self.observed = gzip.decompress((sources/'defaultoptions.raw.json.gz').read_bytes())
+        self.image = json.loads((sources/'imageinfo-first.raw.json').read_bytes())
+        self.media = figure._figure_media_extensions(self.image)
+        self.old = json.loads(self.selected)['query']['general']['git-hash']
+        self.core = site.FIGURE_WMF5_CORE
+
+    def test_bound_geometry_keeps_both_specific_observations(self):
+        figure.verify_file_defaults(self.selected, self.observed)
+        current = json.loads(self.observed)
+        self.assertEqual(site.figure_thumbnail_width(current['query']), 250)
+        site.response(current, 'srwiktionary', 'sr', site.FIGURE_PROFILE, raw_sha=figure.digest(self.observed))
+        approved = figure.figure_profile(self.core, figure.FIGURE_PROFILE_V4, self.media)
+        self.assertEqual(approved['observed_defaults_response_sha256'], figure.digest(self.observed))
+        self.assertEqual(approved['selected_defaults_sha256'], figure.digest(self.selected))
+        figure._figure_site_registration(self.image, self.image['query']['general'], 'srwiktionary', approved)
+        self.assertTrue(figure.bound_file_core(self.core, self.old, self.observed))
+        self.assertFalse(figure.bound_file_core(self.core, self.old, None))
+        self.assertFalse(figure.bound_file_core(self.old, self.core, self.observed))
+        self.assertFalse(figure.figure_source_compatible(self.core, self.old))
+        self.assertNotIn(self.core, figure.FIGURE_RESPONSE_EPOCHS)
+        self.assertNotIn(self.core, site.CORE_PROFILES)
+        with self.assertRaises(ValueError):
+            site.response(current, 'srwiktionary', 'sr', site.PROFILE, raw_sha=figure.digest(self.observed))
+        with patch.object(site, 'verify', return_value={'core': self.core, 'wiki': 'srwiktionary', 'date': '20261001'}):
+            with self.assertRaisesRegex(ValueError, 'scoped to the ImageInfo'):
+                site.validate_snapshot(Path(site.SNAPSHOT))
+
+    def test_changed_defaults_profile_and_media_are_rejected(self):
+        for group, key, value in (('defaultoptions', 'thumbsize', 0), ('defaultoptions', 'skin', 'vector'),
+                                  ('defaultoptions', 'vector-theme', 'night'), ('general', 'rtl', True)):
+            current = json.loads(self.observed)
+            current['query'][group][key] = value
+            altered = figure.encoded(current)
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                figure.verify_file_defaults(self.selected, altered)
+            # Even a changed raw digest cannot make the two contexts equal.
+            with patch.object(site, 'FIGURE_WMF5_SR_RAW', figure.digest(altered)), self.assertRaises(ValueError):
+                figure.verify_file_defaults(self.selected, altered)
+        for kind, media in ((figure.FIGURE_PROFILE_V3, self.media), (figure.FIGURE_PROFILE_V5, self.media),
+                            (figure.FIGURE_PROFILE_V4, dict(self.media, TimedMediaHandler='0'*40))):
+            with self.subTest(kind=kind, media=media), self.assertRaises(ValueError):
+                figure.figure_profile(self.core, kind, media)
+        approved = figure.figure_profile(self.core, figure.FIGURE_PROFILE_V4, self.media)
+        for key, value in (('rtl', True), ('thumblimits', {'0': 250}), ('lang', 'en')):
+            changed = copy.deepcopy(self.image)
+            general = changed['query']['general']
+            general[key] = value
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                figure._figure_site_registration(changed, general, 'srwiktionary', approved)
 
 
 if __name__ == '__main__':
