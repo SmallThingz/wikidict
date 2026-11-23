@@ -293,6 +293,19 @@ ORDINARY_FILE_DEFAULTS = {
 SELECTED_FILE_DEFAULTS = {**ORDINARY_FILE_DEFAULTS,
     'viwiktionary': ('0470f6c99a6456a366635bf25a517a1f951de6f5', VI_SELECTED_DEFAULTS)}
 SCOPED_FILE_EDITIONS = {*CURRENT_FILE_PROFILES, 'viwiktionary'}
+FIGURE_WMF5_ROLLOUT_CORE = '57f2a6bfacc3c5cecc269214a8d726b0b6faa596'
+
+
+def ordinary_rollout_scope(wiki, date, profile_kind):
+    # Only these three bound WMF5 captures observed this deployment transition.
+    return wiki in ('dewiktionary', 'ruwiktionary', 'thwiktionary') and date == '20261001' and profile_kind == FIGURE_PROFILE_V4
+
+
+def ordinary_rollout_plan(plan):
+    wiki = plan.get('wiki')
+    return (ordinary_rollout_scope(wiki, plan.get('date'), plan.get('figure_profile')) and
+            plan.get('replay_contract') == REPLAY_CONTRACT and
+            plan.get('observed_defaults_response_sha256') == site_info.FIGURE_WMF5_DEFAULTS[wiki][1])
 
 
 def verify_file_defaults(selected, observed):
@@ -639,9 +652,11 @@ def _figure_site_registration(site, general, wiki, approved, *, scoped_file_obse
     datetime.strptime(observed, '%Y-%m-%dT%H:%M:%SZ')
     if _figure_media_extensions(site) != approved['media_extensions']:
         raise ValueError('Unreviewed media registration set or version')
-    if other.get('git-hash') == site_info.FIGURE_WMF5_CORE:
+    if other.get('git-hash') in (site_info.FIGURE_WMF5_CORE, FIGURE_WMF5_ROLLOUT_CORE):
         limits = other.get('thumblimits')
         editions = SCOPED_FILE_EDITIONS if scoped_file_observation else ORDINARY_FILE_DEFAULTS
+        if other.get('git-hash') == FIGURE_WMF5_ROLLOUT_CORE and other.get('generator') != 'MediaWiki 1.48.0-wmf.5':
+            raise ValueError('Figure ImageInfo rollout generator differs')
         if (wiki not in editions or other.get('lang') != wiki.removesuffix('wiktionary') or other.get('rtl') is not False or
                 other.get('case') != 'case-sensitive' or limits != {'0': 180, '1': 250, '2': 400} or
                 any(type(width) is not int for width in limits.values())):
@@ -1532,7 +1547,7 @@ class _BatchFileRegistry(evidence.Registry):
 
 
 def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, record_limit,
-                 profile_kind=FIGURE_PROFILE_V3, allow_tiff_companion=True, allow_compatible_epochs=False, allow_decimal_tiff_axes=True, allow_default_tiff_page=True, current_file_supplements=False):
+                 profile_kind=FIGURE_PROFILE_V3, allow_tiff_companion=True, allow_compatible_epochs=False, allow_decimal_tiff_axes=True, allow_default_tiff_page=True, current_file_supplements=False, _lean_batch_validation=False):
     registry = _BatchFileRegistry(namespace_raw, wiki, date)
     registration = decode(site_raw)
     require_edition(registration, wiki)
@@ -1545,11 +1560,15 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
     if (core in (FIGURE_RESPONSE_CORE, *FIGURE_REGISTRATION_EPOCHS, *FIGURE_WMF4_CORES, site_info.FIGURE_WMF5_CORE) or profile_kind == FIGURE_PROFILE_V5) and not allow_compatible_epochs:
         raise ValueError('Compatible response epochs require replay contract v3')
     profile = None
+    # Per-batch TIFF classification consumes one response in isolation. This
+    # local validation cannot provide the registration header of a capture.
+    lean_rollout = (_lean_batch_validation and core == FIGURE_WMF5_ROLLOUT_CORE and
+        allow_compatible_epochs and ordinary_rollout_scope(wiki, date, profile_kind))
     if core == site_info.FIGURE_WMF5_CORE and (wiki not in ORDINARY_FILE_DEFAULTS or
             date != site_info.FIGURE_WMF5_DEFAULTS[wiki][0]):
         raise ValueError('Unreviewed ordinary ImageInfo edition/date')
     if has_batches:
-        approved = figure_profile(core, profile_kind, _figure_media_extensions(registration), wiki=wiki)
+        approved = figure_profile(site_info.FIGURE_WMF5_CORE if lean_rollout else core, profile_kind, _figure_media_extensions(registration), wiki=wiki)
         if approved is None:
             raise ValueError('Unreviewed Figure handler source version; retain the response for source reconciliation')
         profile = dict(approved, site_raw_sha256=digest(site_raw))
@@ -1575,6 +1594,8 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
         observation = batch.get('observed_svg_width_px')
         occurrences = batch.get('observed_svg_occurrences')
         supplemental = 'observed_svg_width_px' in batch or 'observed_svg_occurrences' in batch or jpeg_supplement
+        if _lean_batch_validation and (supplemental or batch_index != 0):
+            raise ValueError('Lean validation accepts one ordinary ImageInfo batch')
         if core == site_info.FIGURE_WMF5_CORE and wiki != 'srwiktionary' and supplemental:
             if wiki not in ('thwiktionary', 'itwiktionary') or observation is None or not current_file_supplements:
                 raise ValueError('Current ordinary ImageInfo does not grant this supplemental file observation')
@@ -1615,6 +1636,9 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
         require_edition(data, wiki)
         general = data['query']['general']
         batch_core = general.get('git-hash')
+        rollout = (not supplemental and batch_core == FIGURE_WMF5_ROLLOUT_CORE and
+            (lean_rollout or (batch_index > 0 and core == site_info.FIGURE_WMF5_CORE and
+             current_file_supplements and allow_compatible_epochs and ordinary_rollout_scope(wiki, date, profile_kind))))
         scoped_observation = (batch_index > 0 and current_file_supplements and allow_compatible_epochs and
             CURRENT_FILE_PROFILES.get(wiki) == profile_kind and core == FIGURE_CURRENT_CORE and
             batch_core == site_info.FIGURE_WMF5_CORE)
@@ -1622,7 +1646,7 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
             (wiki, date) == ('viwiktionary', site_info.FIGURE_WMF5_DEFAULTS['viwiktionary'][0]) and
             core == FIGURE_CURRENT_CORE and batch_core == site_info.FIGURE_WMF5_CORE and
             set(batch) - {'requests', 'response'} in (set(), {'observed_svg_width_px'}))
-        if (general.get('lang') != language or (batch_core != core and not (scoped_observation or vi_imageinfo) and not (
+        if (general.get('lang') != language or (batch_core != core and not (scoped_observation or vi_imageinfo or rollout) and not (
                 allow_compatible_epochs and profile_kind in (FIGURE_PROFILE_V4, FIGURE_PROFILE_V5) and
                 core in FIGURE_RESPONSE_EPOCHS and batch_core in FIGURE_RESPONSE_EPOCHS))):
             raise ValueError('Figure batches mix site/source versions')
@@ -1637,7 +1661,8 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
             current_file_observation(batch, data, registry)
             batch_profile = approved
         else:
-            batch_profile = figure_profile(batch_core, profile_kind, _figure_media_extensions(data), wiki=wiki)
+            batch_profile = figure_profile(site_info.FIGURE_WMF5_CORE if rollout else batch_core,
+                                          profile_kind, _figure_media_extensions(data), wiki=wiki)
             # Exact per-core registrations differ, but the proved image profile does
             # not. Both complete registration inventories are checked below.
             if ({key: value for key, value in batch_profile.items() if key != 'media_extensions'} !=
@@ -4177,7 +4202,7 @@ def validate_metadata_light(batch, namespace, wiki, date):
 def lean_tiff_titles(batch, namespace, wiki, date, profile_kind, *, allow_compatible_epochs=False):
     base = {'requests': batch['requests'], 'response': batch['response']}
     result = file_records(iter((base,)), namespace, wiki, date, batch['response'].encode(),
-                          has_batches=True, record_limit=50, profile_kind=profile_kind, allow_compatible_epochs=allow_compatible_epochs)
+                          has_batches=True, record_limit=50, profile_kind=profile_kind, allow_compatible_epochs=allow_compatible_epochs, _lean_batch_validation=True)
     data = decode(batch['response'].encode())
     if any('metadata' in info for page in data['query']['pages'] for info in page.get('imageinfo', [])):
         raise ValueError('Lean Figure response contains unrequested metadata')
@@ -4190,7 +4215,7 @@ def validate_lean_batch(batch, namespace, wiki, date, profile_kind, *, allow_com
     if bool(required) != ('tiff_metadata_response' in batch):
         raise ValueError('Lean Figure batch lacks its exact required TIFF followup')
     return file_records(iter((batch,)), namespace, wiki, date, batch['response'].encode(),
-                        has_batches=True, record_limit=50, profile_kind=profile_kind, allow_compatible_epochs=allow_compatible_epochs)
+                        has_batches=True, record_limit=50, profile_kind=profile_kind, allow_compatible_epochs=allow_compatible_epochs, _lean_batch_validation=True)
 
 
 def source_epoch_pending_batch(root, source, wiki, artifacts):
@@ -5131,7 +5156,12 @@ def _capture_files(args, transport=None, sleep=time.sleep, *, target_contract=RE
             rows, base = fetch_stage(number, planned[number-1], state)
             names, raw, _, _ = captured_http_stage(root, base, args.wiki, light=True)
             batch = {'requests': names, 'response': raw.decode('utf-8')}
-            if not bound_file_core(decode(raw)['query']['general']['git-hash'], defaults['core'], file_defaults, wiki=args.wiki):
+            batch_core = decode(raw)['query']['general']['git-hash']
+            if (batch_core == FIGURE_WMF5_ROLLOUT_CORE and target_contract == REPLAY_CONTRACT and
+                    ordinary_rollout_scope(args.wiki, args.date, profile_kind) and
+                    decode(site_raw)['query']['general']['git-hash'] == site_info.FIGURE_WMF5_CORE):
+                batch_core = site_info.FIGURE_WMF5_CORE
+            if not bound_file_core(batch_core, defaults['core'], file_defaults, wiki=args.wiki):
                 raise ValueError('Lean Figure and defaults source versions differ')
             titles = lean_tiff_titles(batch, namespace, args.wiki, args.date, profile_kind, allow_compatible_epochs=True)
             reference = {'base': base}
@@ -5855,12 +5885,13 @@ def materialized_origin_catalog(root, plan, wiki, date, namespace, inventory):
         # A V6 English origin can own current PNG width observations. The
         # full V5 model stays bound to its historical first response below.
         width_epoch = site_info.FIGURE_WMF5_CORE if english_v5 and origin_plan.get('replay_contract') == REPLAY_CONTRACT else None
+        rollout_epoch = FIGURE_WMF5_ROLLOUT_CORE if ordinary_rollout_plan(origin_plan) else None
         if (not isinstance(row['files'], dict) or not isinstance(row['pending'], list) or
                 len(row['pending']) > 2 or not isinstance(row['frame_map'], list) or
                 any(type(number) is not int or number < 0 for number in row['frame_map']) or
                 row['frame_map'] != sorted(set(row['frame_map'])) or
                 not isinstance(row['epochs'], list) or row['epochs'] != sorted(set(row['epochs'])) or
-                any(not isinstance(core, str) or core != width_epoch and figure_profile(core, profile_kind) is None
+                any(not isinstance(core, str) or core not in (width_epoch, rollout_epoch) and figure_profile(core, profile_kind) is None
                     for core in row['epochs'])):
             raise ValueError('Invalid materialized Figure origin source echo')
         failure, closure, proof = None, None, None
@@ -6024,7 +6055,11 @@ def materialized_frame_echo(state, source, batch, archived, root):
     if response_key not in archived:
         raise ValueError('Materialized Figure frame lacks durable HTTP echo')
     core=decode(batch['response'].encode()).get('query',{}).get('general',{}).get('git-hash')
-    if figure_profile(core,state['nodes'][identifier]['plan'].get('figure_profile',FIGURE_PROFILE_V3)) is None:
+    origin_plan=state['nodes'][identifier]['plan']
+    if core == FIGURE_WMF5_ROLLOUT_CORE:
+        if not ordinary_rollout_plan(origin_plan) or set(batch) - {'requests','response','tiff_metadata_response'}:
+            raise ValueError('Invalid materialized ImageInfo rollout frame')
+    elif figure_profile(core,origin_plan.get('figure_profile',FIGURE_PROFILE_V3)) is None:
         raise ValueError('Unknown materialized Figure response epoch')
     virtual={receipt['response']:archived[response_key]}
     if 'tiff_batch' in source:

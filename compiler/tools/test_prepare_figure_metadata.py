@@ -469,6 +469,89 @@ class CurrentOrdinaryImageInfoTests(unittest.TestCase):
                         figure.verify_file_defaults(defaults, figure.encoded(changed))
 
     def test_verified_ordinary_capture_and_materialization_survive_moved_parent(self):
+        self.check_ordinary_materialization({})
+
+    def test_rollout_ordinary_capture_and_materialization_survive_moved_parent(self):
+        path = Path(__file__).parent/'testdata/current-file-observations/ordinary-rollout-57f.json.zst'
+        rows = figure.decode(figure.zstd.decompress(path.read_bytes()))
+        self.check_ordinary_materialization({row['wiki']:row['rollout_batch'] for row in rows})
+
+    def test_rollout_depends_on_the_wmf5_document_and_ordinary_imageinfo(self):
+        fixtures = Path(__file__).parent/'testdata/current-file-observations'
+        def cases(name):
+            return figure.decode(figure.zstd.decompress((fixtures/name).read_bytes()))
+        anchors = {case['wiki']:(case['imageinfo'], case['namespace']) for case in self.cases}
+        thai = cases('th-it-ordinary-source.json.zst')[0]
+        anchors[thai['wiki']] = thai['batches'][0], thai['namespace']
+        for observed in cases('ordinary-rollout-57f.json.zst'):
+            wiki = observed['wiki']
+            first, namespace = anchors[wiki]
+            batch = observed['rollout_batch']
+            def replay(batches, *, registration=first['response'], date='20261001', **options):
+                defaults = dict(has_batches=True, record_limit=100, profile_kind=figure.FIGURE_PROFILE_V4,
+                                allow_compatible_epochs=True, current_file_supplements=True)
+                return figure.file_records(batches, namespace.encode(), wiki, date,
+                                           registration.encode(), **(defaults | options))
+            with self.subTest(wiki=wiki):
+                value = replay([first, batch])
+                self.assertEqual(value['core_revision'], site.FIGURE_WMF5_CORE)
+                self.assertEqual([r for r in value['records'] if r['batch'] == 1], observed['records'])
+                with self.assertRaises(ValueError): replay([batch], registration=batch['response'])
+                with self.assertRaises(ValueError): replay([first, batch], current_file_supplements=False)
+                with self.assertRaises(ValueError): replay([first, batch], profile_kind=figure.FIGURE_PROFILE_V5)
+                with self.assertRaises(ValueError): replay([first, batch], date='20261002')
+                for role in ({'observed_svg_width_px':250}, {'jpeg_metadata_only':True}, {'observed_svg_occurrences':[]}):
+                    with self.assertRaises(ValueError): replay([first, dict(batch, **role)])
+                for changed in ('core', 'generator', 'registry', 'wiki', 'rtl', 'case', 'widths'):
+                    raw = figure.decode(batch['response'].encode())
+                    general = raw['query']['general']
+                    if changed == 'registry':
+                        next(e for e in raw['query']['extensions'] if e['name']=='PagedTiffHandler')['vcs-version'] = 'a'*40
+                    else:
+                        key, replacement = {'core':('git-hash','a'*40), 'generator':('generator','MediaWiki 1.48.0-wmf.6'),
+                          'wiki':('wikiid','itwiktionary'), 'rtl':('rtl',True), 'case':('case','first-letter'),
+                          'widths':('thumblimits',{'0':180,'1':220,'2':400})}[changed]
+                        general[key] = replacement
+                    with self.subTest(change=changed), self.assertRaises(ValueError):
+                        replay([first, dict(batch, response=figure.encoded(raw).decode())])
+
+    def test_rollout_lean_tiff_requires_the_same_response_core_and_file(self):
+        fixtures = Path(__file__).parent / 'testdata/current-file-observations'
+        source = figure.decode(figure.zstd.decompress((fixtures/'ordinary-rollout-57f.json.zst').read_bytes()))[0]
+        first = self.cases[0]
+        self.assertEqual((source['wiki'], first['wiki']), ('dewiktionary', 'dewiktionary'))
+        response = figure.decode(source['rollout_batch']['response'].encode())
+        title = 'Datei:Regression.tif'
+        # Synthetic TIFF payload over the retained registration. The actual
+        # rollover batch contains audio and supplies no TIFF observation.
+        response['query']['pages'] = [{'ns': 6, 'title': title, 'missing': True, 'known': True,
+            'imagerepository': 'shared', 'imageinfo': [{'canonicaltitle': title, 'timestamp': '2021-03-20T23:39:21Z',
+            'sha1': '1'*40, 'size': 4096, 'width': 800, 'height': 600, 'mime': 'image/tiff',
+            'mediatype': 'BITMAP', 'pagecount': 1}]}]
+        companion = copy.deepcopy(response)
+        companion['query']['pages'][0]['imageinfo'][0]['metadata'] = [
+            {'name': 'TIFF_METADATA_VERSION', 'value': '1.4'},
+            *({'name': name, 'value': 1} for name in ('page_count', 'first_page', 'last_page')),
+            {'name': 'page_data', 'value': [{'name': 1, 'value': [
+                {'name': 'page', 'value': 1}, {'name': 'width', 'value': 800}, {'name': 'height', 'value': 600}]}]}]
+        def replay(other):
+            batch = {'requests': [title], 'response': figure.encoded(response).decode(),
+                     'tiff_metadata_response': figure.encoded(other).decode()}
+            return self.replay(first, [first['imageinfo'], batch])
+        records = replay(companion)['records']
+        self.assertEqual(next(row['state'] for row in records if row['requested_file'] == title), 'eligible')
+        for field in ('core', 'registry', 'file'):
+            changed = copy.deepcopy(companion)
+            if field == 'core':
+                changed['query']['general']['git-hash'] = site.FIGURE_WMF5_CORE
+            elif field == 'registry':
+                next(e for e in changed['query']['extensions'] if e['name'] == 'PagedTiffHandler')['vcs-version'] = '1'*40
+            else:
+                changed['query']['pages'][0]['imageinfo'][0]['sha1'] = '2'*40
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                replay(changed)
+
+    def check_ordinary_materialization(self, rollout_batches):
         import test_prepare_figure_files as files_tests
         fixtures = Path(__file__).parent/'testdata'
         proofs = figure.decode(figure.zstd.decompress((fixtures/'current-file-observations/ordinary-proofs.json.zst').read_bytes()))
@@ -496,22 +579,32 @@ class CurrentOrdinaryImageInfoTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     site.validate_snapshot(observed/site.SNAPSHOT, wiki, '20261101', file_defaults=True)
                 seed = argparse.Namespace(root=root, wiki=wiki, date='20261001')
-                names = [name.split(':', 1)[1].replace(' ', '_') for name in case['imageinfo']['requests']]
+                rollout = rollout_batches.get(wiki)
+                requested = case['imageinfo']['requests'] + (rollout['requests'] if rollout else [])
+                names = [name.split(':', 1)[1].replace(' ', '_') for name in requested]
                 paths, status = files_tests.FigureFileTests.inventory(seed, links=names)
                 source, appended, materialized = (root/name for name in ('source', 'appended', 'materialized'))
                 args = argparse.Namespace(wiki=wiki, date='20261001', defaults=selected, file_defaults=observed,
                     sql=paths, dumpstatus=status, batch_size=50, delay=1, wall_seconds=30, max_inflight=1,
-                    metadata_mode='lean-tiff-v1' if wiki=='ruwiktionary' else 'full', figure_profile=figure.FIGURE_PROFILE_V4,
+                    metadata_mode='lean-tiff-v1' if rollout or wiki=='ruwiktionary' else 'full', figure_profile=figure.FIGURE_PROFILE_V4,
                     output=source, reuse=[], reuse_batch=[image/'retained-observation.json'])
                 def offline(*_):
                     self.fail('The verified source requires no further request')
-                self.assertEqual(figure.capture_files(args, transport=offline)['coverage']['files'], 1)
+                calls = []
+                def captured(url, timeout):
+                    self.assertFalse(calls)
+                    self.assertEqual(url, figure.metadata.query_url(wiki, rollout['requests'], figure_axes=True,
+                        figure_metadata_light=args.metadata_mode == 'lean-tiff-v1'))
+                    calls.append(url)
+                    return 200, {}, rollout['response'].encode()
+                self.assertEqual(figure.capture_files(args, transport=captured if rollout else offline)['coverage']['files'], len(requested))
+                self.assertEqual(len(calls), int(rollout is not None))
                 args.output, args.reuse, args.reuse_batch = appended, [source], []
                 figure.capture_files(args, transport=offline)
                 figure.materialize_complete_capture(appended/figure.MANIFEST, materialized)
                 source.rename(root/'retired-source')
                 appended.rename(root/'retired-appended')
-                self.assertEqual(figure.verify(materialized)['coverage']['files'], 1)
+                self.assertEqual(figure.verify(materialized)['coverage']['files'], len(requested))
                 descriptor = figure.decode((image/'retained-observation.json').read_bytes())
                 receipt = image/descriptor['batch']['accepted_receipt']
                 original = receipt.read_bytes()
