@@ -319,6 +319,73 @@ fn registeredBannerName(a: std.mem.Allocator, source: []const u8, target: []cons
     return categoryTocLanguageName(a, source, .{ .label = ns.ofTitle(target).text, .code = owner.code }, registry);
 }
 
+// The original Yiddish tr/tr-/tr-- category pages explicitly pair a local
+// label with a registered code. Neither the edition nor an interwiki target
+// alone establishes an owner. Require both exact parameter-forwarding bodies
+// and all three independent declarations before installing the local spelling.
+fn yiddishCategoryLabel(source: []const u8) ?[]const u8 {
+    var at: usize = 0;
+    var seen = [_]bool{ false, false };
+    var label: ?[]const u8 = null;
+    while (at < source.len) {
+        if (std.mem.startsWith(u8, source[at..], "<!--")) {
+            at = (std.mem.indexOfPos(u8, source, at + 4, "-->") orelse return null) + 3;
+            continue;
+        }
+        if (source[at] == '<') {
+            if (syntax.protectedEnd(source, at)) |end| { at = end; continue; }
+            const tag = syntax.tagAt(source, at) orelse return null;
+            if (tag.is("noinclude") or tag.is("includeonly") or tag.is("onlyinclude")) return null;
+            if (std.mem.indexOf(u8, source[at..tag.end], "{{") != null) return null;
+            at = tag.end;
+            continue;
+        }
+        if (std.mem.startsWith(u8, source[at..], "[[")) {
+            const end = (syntax.balanced(source, at) orelse return null).end;
+            if (std.mem.indexOf(u8, source[at..end], "{{") != null) return null;
+            at = end;
+            continue;
+        }
+        if (std.mem.startsWith(u8, source[at..], "{{")) {
+            const pair = syntax.balanced(source, at) orelse return null;
+            const call = source[at + 2 .. pair.inner_end];
+            const pipe = syntax.delimiter(call, "|", 0) orelse call.len;
+            const name = std.mem.trim(u8, call[0..pipe], " \t\r\n");
+            const role: ?usize = if (std.mem.eql(u8, name, "interwiktionary")) 0 else if (std.mem.eql(u8, name, "interwiki")) 1 else null;
+            if (role) |index| {
+                if (seen[index]) return null;
+                seen[index] = true;
+                var field_count: usize = 0;
+                var field_at = pipe;
+                while (field_at < call.len) {
+                    field_count += 1;
+                    field_at = syntax.delimiter(call, "|", field_at + 1) orelse call.len;
+                }
+                if (field_count != 2 or !std.mem.eql(u8, argument(call, "CODE") orelse return null, "tr")) return null;
+                const current = argument(call, "LANGUAGE") orelse return null;
+                if (!plain(current) or !std.unicode.utf8ValidateSlice(current)) return null;
+                if (label) |previous| if (!std.mem.eql(u8, previous, current)) return null;
+                label = current;
+            } else if (!std.mem.eql(u8, std.mem.trim(u8, call, " \t\r\n"), "left")) return null;
+            at = pair.end;
+            continue;
+        }
+        at += 1;
+    }
+    return if (seen[0] and seen[1]) label else null;
+}
+
+pub fn yiddishCategoryHeading(categories: [3][]const u8, providers: [2][]const u8, ns: *const namespaces.Registry, registry: *const languages.Registry) ?[]const u8 {
+    if (!std.mem.eql(u8, ns.wiki, "yiwiktionary") or !std.mem.eql(u8, ns.content_language, "yi") or
+        !std.mem.eql(u8, registry.content_code orelse "", "yi") or !registry.codes.contains("tr")) return null;
+    if (!std.mem.eql(u8, providers[0], @embedFile("testdata/yi-source-category/interwiktionary.wikitext")) or
+        !std.mem.eql(u8, providers[1], @embedFile("testdata/yi-source-category/interwiki.wikitext"))) return null;
+    const label = yiddishCategoryLabel(categories[0]) orelse return null;
+    for (categories[1..]) |category| if (!std.mem.eql(u8, label, yiddishCategoryLabel(category) orelse return null)) return null;
+    if (!registry.sourceBannerCategoryNameCompatible("tr", label) or registry.isLanguageBoundary(label)) return null;
+    return label;
+}
+
 pub const Context = struct {
     allocator: std.mem.Allocator,
     registry: *const languages.Registry,
@@ -335,6 +402,36 @@ pub const Context = struct {
     cache_cursor: usize = 0,
     const Cache = struct { title: []const u8, owner: ?Resolved };
     const Page = struct { title: []const u8, source: []const u8 };
+
+    /// Install only a source-authenticated edition-local spelling. This runs
+    /// before worker dispatch; callbacks continue to borrow immutable registry
+    /// strings and the original source/index remains unchanged.
+    pub fn installYiddishCategoryHeading(self: *Context, registry: *languages.Registry) !void {
+        if (!std.mem.eql(u8, self.namespace_catalog.wiki, "yiwiktionary") or
+            !std.mem.eql(u8, self.namespace_catalog.content_language, "yi")) return;
+        if (self.registry != registry) return error.LanguageRegistryMismatch;
+        if (self.title_index.page_index_size != self.page_index.len or
+            self.title_index.kind != dump_source.pageIndexKind(self.page_index)) return error.PageTitleIndexMismatch;
+        // A duplicate title must not let a convenient declaration win.
+        if (self.title_index.row_count != self.title_index.unique_count) return;
+        const category_ns = self.namespace_catalog.byId(14) orelse return;
+        const template_ns = self.namespace_catalog.byId(10) orelse return;
+        var scratch = std.heap.ArenaAllocator.init(self.allocator);
+        defer scratch.deinit();
+        const a = scratch.allocator();
+        var categories: [3][]const u8 = undefined;
+        for ([_][]const u8{ "tr", "tr-", "tr--" }, 0..) |name, i| {
+            const title = try std.fmt.allocPrint(a, "{s}:{s}", .{ category_ns.name, name });
+            categories[i] = ((try self.readPage(a, title, 14, 8192)) orelse return).source;
+        }
+        var providers: [2][]const u8 = undefined;
+        for ([_][]const u8{ "interwiktionary", "interwiki" }, 0..) |name, i| {
+            const title = try std.fmt.allocPrint(a, "{s}:{s}", .{ template_ns.name, name });
+            providers[i] = ((try self.readPage(a, title, 10, 8192)) orelse return).source;
+        }
+        const label = yiddishCategoryHeading(categories, providers, self.namespace_catalog, registry) orelse return;
+        try registry.addSourceTemplateLabel(label, "tr");
+    }
 
     fn readPage(self: *Context, a: std.mem.Allocator, title: []const u8, namespace: u32, limit: usize) !?Page {
         const ref = (try self.title_index.lookup(self.page_index, title)) orelse return null;

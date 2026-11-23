@@ -1,0 +1,8 @@
+[[category:אַרבעט - arbet]]
+'''קאַטעגאָריעס - kategoryes:''' {{left}}
+&#8235;[[:category:tr|tr]]&#8236;
+&#8235;[[:category:tr-|tr-]]&#8236;
+&#8235;[[:category:tr--|tr--]]&#8236;
+
+{{interwiktionary|CODE=tr|LANGUAGE=טערקיש}}
+{{interwiki|CODE=tr|LANGUAGE=טערקיש}}

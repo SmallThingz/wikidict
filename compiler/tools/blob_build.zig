@@ -4575,6 +4575,7 @@ fn runBlobBuild(io: std.Io, a: std.mem.Allocator, args: []const []const u8, opti
         .allocator = a, .registry = &registry, .namespace_catalog = &namespaces,
         .source = &dump, .page_index = page_index.bytes, .title_index = title_index,
     };
+    try category_languages.installYiddishCategoryHeading(&registry);
     codes.source_category_ctx = &category_languages;
     codes.source_category_fn = source_category_language.Context.callback;
     codes.source_category_agreement_fn = source_category_language.Context.agreementCallback;
@@ -20321,6 +20322,7 @@ fn capturedWriterRun(io: std.Io, a: std.mem.Allocator, request: CapturedWriterRe
     if (category_dump != null) {
         category_context = .{ .allocator = a, .registry = registry, .namespace_catalog = namespaces,
             .source = &category_dump.?, .page_index = page_index.bytes, .title_index = titles };
+        try category_context.?.installYiddishCategoryHeading(registry);
         codes.source_category_ctx = &category_context.?;
         codes.source_category_fn = source_category_language.Context.callback;
         codes.source_category_agreement_fn = source_category_language.Context.agreementCallback;
@@ -69034,6 +69036,122 @@ test "SS d191 complete defaults and 194 captured Figure facts load through norma
         try std.testing.expect(ns.figure_source_defaults == null);
         try std.testing.expect(ns.manual_conversion_context == null);
         try std.testing.expect(ns.language_conversion == null);
+    }
+}
+
+const YiCategoryHeadingTest = struct {
+    const namespace_source = @embedFile("testdata/yi-source-category/namespace-registry.tsv");
+    const registry_source = @embedFile("testdata/yi-source-category/language-registry.tsv");
+    const categories = [3][]const u8{ @embedFile("testdata/yi-source-category/tr.wikitext"), @embedFile("testdata/yi-source-category/tr-.wikitext"), @embedFile("testdata/yi-source-category/tr--.wikitext") };
+    const providers = [2][]const u8{ @embedFile("testdata/yi-source-category/interwiktionary.wikitext"), @embedFile("testdata/yi-source-category/interwiki.wikitext") };
+    const label = "טערקיש";
+};
+
+test "Yiddish category heading derives only from three agreeing source declarations and exact providers" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const F = YiCategoryHeadingTest;
+    var ns = try namespace_registry.Registry.init(a, F.namespace_source); defer ns.deinit();
+    var registry = language_registry.Registry.empty(a); defer registry.deinit(); try registry.addTsv(F.registry_source);
+    try std.testing.expect(registry.resolveTrusted(F.label) == null);
+    try std.testing.expectEqualStrings(F.label, source_category_language.yiddishCategoryHeading(F.categories, F.providers, &ns, &registry).?);
+    for ([_][]const u8{
+        "{{interwiktionary|CODE=fr|LANGUAGE=טערקיש}}{{interwiki|CODE=fr|LANGUAGE=טערקיש}}",
+        "{{interwiktionary|CODE=tr|LANGUAGE=Other}}{{interwiki|CODE=tr|LANGUAGE=Other}}",
+        "{{interwiktionary|CODE=tr|LANGUAGE=טערקיש}}",
+        "<!--{{interwiktionary|CODE=tr|LANGUAGE=טערקיש}}-->{{interwiki|CODE=tr|LANGUAGE=טערקיש}}",
+        "<nowiki>{{interwiktionary|CODE=tr|LANGUAGE=טערקיש}}</nowiki>{{interwiki|CODE=tr|LANGUAGE=טערקיש}}",
+        "{{interwiktionary|CODE=tr|CODE=tr|LANGUAGE=טערקיש}}{{interwiki|CODE=tr|LANGUAGE=טערקיש}}",
+        "{{interwiktionary|CODE=tr|LANGUAGE=טערקיש|other=1}}{{interwiki|CODE=tr|LANGUAGE=טערקיש}}",
+        "{{interwiktionary|CODE=tr|LANGUAGE={{unknown}}}}{{interwiki|CODE=tr|LANGUAGE=טערקיש}}",
+        "{{interwiktionary|CODE=tr|LANGUAGE=טערקיש}}{{interwiki|CODE=tr|LANGUAGE=טערקיש}}{{unknown}}",
+        "{{interwiktionary|CODE=tr|LANGUAGE=טערקיש}}{{interwiki|CODE=tr|LANGUAGE=טערקיש}}{{interwiki|CODE=tr|LANGUAGE=טערקיש}}",
+        "{{interwiktionary|CODE=tr|LANGUAGE=טערקיש}}{{interwiki|CODE=tr|LANGUAGE=טערקיש}}{{מוסטער:interwiki|CODE=fr|LANGUAGE=Other}}",
+        "{{interwiktionary|CODE=tr|LANGUAGE=טערקיש}}{{interwiki|CODE=tr|LANGUAGE=טערקיש}}{{Template:interwiki|CODE=fr|LANGUAGE=Other}}",
+        "[[target|{{interwiki|CODE=fr|LANGUAGE=Other}}]]{{interwiktionary|CODE=tr|LANGUAGE=טערקיש}}{{interwiki|CODE=tr|LANGUAGE=טערקיש}}",
+        "<span title=\"{{interwiki|CODE=fr|LANGUAGE=Other}}\">label</span>{{interwiktionary|CODE=tr|LANGUAGE=טערקיש}}{{interwiki|CODE=tr|LANGUAGE=טערקיש}}",
+    }) |bad| {
+        var categories = F.categories; categories[1] = bad;
+        try std.testing.expect(source_category_language.yiddishCategoryHeading(categories, F.providers, &ns, &registry) == null);
+    }
+    var providers = F.providers; providers[0] = "[[:{{{LANGUAGE}}}:|{{{CODE}}}]]";
+    try std.testing.expect(source_category_language.yiddishCategoryHeading(F.categories, providers, &ns, &registry) == null);
+    var foreign = ns; foreign.wiki = "otherwiktionary";
+    try std.testing.expect(source_category_language.yiddishCategoryHeading(F.categories, F.providers, &foreign, &registry) == null);
+    var absent = language_registry.Registry.empty(a); defer absent.deinit(); try absent.addTsv("# content-language\tyi\n# mediawiki\nyi\tYiddish\nfr\tFrench\n");
+    try std.testing.expect(source_category_language.yiddishCategoryHeading(F.categories, F.providers, &ns, &absent) == null);
+    try registry.addLocalAlias(F.label, "fr");
+    try std.testing.expect(source_category_language.yiddishCategoryHeading(F.categories, F.providers, &ns, &registry) == null);
+}
+
+test "Yiddish indexed category heading preserves Writer body links codec and mixed owners" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator(); const io = std.testing.io;
+    const F = YiCategoryHeadingTest;
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(io, ".", a);
+    var ns = try namespace_registry.Registry.init(a, F.namespace_source); defer ns.deinit();
+    var registry = language_registry.Registry.empty(a); defer registry.deinit(); try registry.addTsv(F.registry_source);
+    const original_heading = registry.headings.get("tr").?;
+    var fixture: TeCategoryFixture = .{ .a = a };
+    const category_ns = ns.byId(14).?; const template_ns = ns.byId(10).?;
+    for ([_][]const u8{ "tr", "tr-", "tr--" }, F.categories) |name, source|
+        try fixture.page(try std.fmt.allocPrint(a, "{s}:{s}", .{ category_ns.name, name }), 14, source, "wikitext");
+    for ([_][]const u8{ "interwiktionary", "interwiki" }, F.providers) |name, source|
+        try fixture.page(try std.fmt.allocPrint(a, "{s}:{s}", .{ template_ns.name, name }), 10, source, "wikitext");
+    const input_path = try std.fs.path.join(a, &.{ root, "input.xml" });
+    const index_path = try std.fs.path.join(a, &.{ root, "page-index.tsv" });
+    const title_path = try std.fs.path.join(a, &.{ root, dump_source.page_title_index_filename });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = input_path, .data = fixture.source.items });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = index_path, .data = fixture.index.items });
+    try dump_source.buildPageTitleIndex(io, a, index_path, title_path);
+    var page_index = try mmapPath(io, index_path); defer page_index.deinit();
+    var title_storage = try mmapPath(io, title_path); defer title_storage.deinit();
+    const titles = try dump_source.PageTitleIndex.init(title_storage.bytes);
+    var reader = try dump_source.SourceReader.open(io, a, a, input_path, .raw_xml, null); defer reader.deinit();
+    var proof: source_category_language.Context = .{ .allocator = a, .registry = &registry, .namespace_catalog = &ns, .source = &reader, .page_index = page_index.bytes, .title_index = titles };
+    var wrong = proof; wrong.title_index.page_index_size += 1;
+    try std.testing.expectError(error.PageTitleIndexMismatch, wrong.installYiddishCategoryHeading(&registry));
+    try std.testing.expect(registry.resolveTrusted(F.label) == null);
+    try proof.installYiddishCategoryHeading(&registry);
+    try proof.installYiddishCategoryHeading(&registry);
+    const owner = registry.resolveTrusted(F.label) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("tr", owner.code);
+    try std.testing.expectEqualStrings(original_heading, registry.headings.get("tr").?);
+    try std.testing.expectEqualStrings(original_heading, owner.heading);
+    const raw = @embedFile("testdata/yi-source-category/yollamak.wikitext");
+    // The focused fixture resolves only PAGENAME; the later ordinary indexed
+    // page is the integration check for the actual expansion worker.
+    const expanded = try std.mem.replaceOwned(u8, a, raw, "{{PAGENAME}}", "yollamak");
+    const english = registry.resolveTrusted(registry.headings.get("en").?).?;
+    const mixed_raw = try std.fmt.allocPrint(a, "{s}\n=={s}==\n# [[english-target]]\n", .{ raw, english.heading });
+    const mixed_expanded = try std.fmt.allocPrint(a, "{s}\n=={s}==\n# [[english-target]]\n", .{ expanded, english.heading });
+    const output = try std.fs.path.join(a, &.{ root, "blobs" });
+    var writer = try encoder.blob_builder.Writer.init(io, a, output); defer writer.deinit();
+    const codes = languageCodes(&registry, &ns); writer.language_codes = codes;
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "yollamak", mixed_expanded, mixed_raw, null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 2), stats.language_records);
+    for ([_]language_registry.Resolved{ owner, english }) |expected| {
+        var filename: [encoder.blob_catalog.language_blob_filename_len]u8 = undefined;
+        const path = try std.fs.path.join(a, &.{ output, encoder.blob_catalog.language_directory, encoder.blob_catalog.languageBlobFilename(expected.heading, &filename) });
+        var mapped = try mmapPath(io, path); defer mapped.deinit();
+        const blob = try encoder.blob_format.inspect(mapped.bytes); const metadata = try blob.languageMetadata();
+        var index = try blob.buildTrustedIndexAlloc(a); defer index.deinit(a);
+        const record = (try index.find("yollamak")) orelse return error.TestUnexpectedResult;
+        const stored = try encoder.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+        try std.testing.expectEqualStrings(expected.code, stored.entry.language_code);
+        try std.testing.expectEqualSlices(u8, record.payload, try encoder.presentation_codec.encodeAlloc(a, stored));
+        var expected_links: usize = 0; var foreign_links: usize = 0; var local_label = false;
+        for (stored.entry.sections) |section| {
+            if (std.mem.eql(u8, section.title, F.label)) local_label = true;
+            for (section.blocks) |block| for (block.spans) |span| {
+            if (span.kind != .link) continue;
+            if (std.mem.eql(u8, span.target, if (std.mem.eql(u8, expected.code, "tr")) "שיקן" else "english-target")) expected_links += 1;
+            if (std.mem.eql(u8, span.target, if (std.mem.eql(u8, expected.code, "tr")) "english-target" else "שיקן")) foreign_links += 1;
+            };
+        }
+        try std.testing.expectEqual(@as(usize, 1), expected_links);
+        try std.testing.expectEqual(@as(usize, 0), foreign_links);
+        if (std.mem.eql(u8, expected.code, "tr")) try std.testing.expect(local_label);
     }
 }
 

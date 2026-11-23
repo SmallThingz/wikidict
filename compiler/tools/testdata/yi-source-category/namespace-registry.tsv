@@ -1,0 +1,28 @@
+# wikidict-namespace-registry-v1
+# wiki	yiwiktionary
+# dump-date	20261001
+# content-language	yi
+-2	מעדיע	Media	case-sensitive	0	0	0		compile_only	virtual_namespace
+-1	באַזונדער	Special	first-letter	0	0	0		compile_only	virtual_namespace	באזונדער
+0			case-sensitive	0	1	0		main	dictionary_entries
+1	רעדן	Talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+2	באַניצער	User	first-letter	1	0	0		compile_only	standard_build_input	באַניצערין	באנוצער	באניצער	משתמש	משתמשת
+3	באַניצער רעדן	User talk	first-letter	1	0	0		compile_only	discussion_namespace	באַניצערין רעדן	באנוצער רעדן	באניצער רעדן	שיחת משתמש	שיחת משתמשת
+4	װיקיװערטערבוך	Project	case-sensitive	1	0	0		compile_only	standard_build_input	WT	Wiktionary	וויקיווערטערבוך
+5	װיקיװערטערבוך רעדן	Project talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Wiktionary talk	וויקיווערטערבוך רעדן
+6	טעקע	File	case-sensitive	0	0	0		compile_only	standard_build_input	Image	בילד	תמונה
+7	טעקע רעדן	File talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Image talk	בילד רעדן	שיחת תמונה
+8	מעדיעװיקי	MediaWiki	first-letter	1	0	0		compile_only	standard_build_input	מעדיעוויקי
+9	מעדיעװיקי רעדן	MediaWiki talk	first-letter	1	0	0		compile_only	discussion_namespace	מעדיעוויקי רעדן
+10	מוסטער	Template	case-sensitive	1	0	0		compile_only	standard_build_input
+11	מוסטער רעדן	Template talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+12	הילף	Help	case-sensitive	1	0	0		compile_only	standard_build_input
+13	הילף רעדן	Help talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+14	קאַטעגאָריע	Category	case-sensitive	0	0	0		compile_only	standard_build_input	קאטעגאריע
+15	קאַטעגאָריע רעדן	Category talk	case-sensitive	1	0	0		compile_only	discussion_namespace	קאטעגאריע רעדן
+710	TimedText	TimedText	case-sensitive	0	0	0		compile_only	ancillary_site_input
+711	TimedText talk	TimedText talk	case-sensitive	0	0	0		compile_only	discussion_namespace
+828	יחידה	Module	case-sensitive	1	0	0		compile_only	standard_build_input
+829	שיחת יחידה	Module talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+1728	אירוע	Event	case-sensitive	1	0	0		compile_only	ancillary_site_input
+1729	שיחת אירוע	Event talk	case-sensitive	1	0	0		compile_only	discussion_namespace
