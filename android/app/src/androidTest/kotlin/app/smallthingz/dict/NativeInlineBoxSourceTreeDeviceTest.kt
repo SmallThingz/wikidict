@@ -67,7 +67,9 @@ class NativeInlineBoxSourceTreeDeviceTest {
                 fun rect(r: RubyTextRange) = checkNotNull(geometry.inlineBoxGroupRects(
                     checkNotNull(marker.groups.getValue(r.path).box).owner, r.start, r.end)).single()
                 val outer = rect(boxes.single { it.span === spans.single() })
-                val fill = rect(boxes.single { it.span?.background == "#edffff" })
+                val fillRange = boxes.single { it.span?.background == "#edffff" }
+                assertEquals(Color.rgb(237, 255, 255), marker.groups.getValue(fillRange.path).paint.bgColor)
+                val fill = rect(fillRange)
                 assertEquals(15f, fill.left - outer.left, .01f)
                 assertEquals(fill.right, outer.right, .01f)
                 val ink = Bitmap.createBitmap(width, geometry.height, Bitmap.Config.ARGB_8888)
@@ -78,8 +80,13 @@ class NativeInlineBoxSourceTreeDeviceTest {
                     val gap = geometry.characterRects(geometry.text.indexOf('\u00a0'), 1).single()!!
                     assertEquals(Color.rgb(237, 255, 255), ink.getPixel(gap.centerX().toInt(), gap.centerY().toInt()))
                     val separator = rect(boxes.single { it.span?.inlineBoxGroup?.spans?.singleOrNull()?.text == "\u00a0" })
-                    assertEquals(4f, gap.left - separator.left, .01f)
-                    assertEquals(4f, separator.right - gap.right, .01f)
+                    // Selection ranges are pixel-quantized Android Regions. Use shaped
+                    // boundary affinities for the exact source padding on either side.
+                    val gapStart = geometry.text.indexOf('\u00a0')
+                    val leading = geometry.caretRect(NativeTextCaret(gapStart, NativeTextAffinity.Downstream)).left
+                    val trailing = geometry.caretRect(NativeTextCaret(gapStart + 1, NativeTextAffinity.Upstream)).left
+                    assertEquals(4f, leading - separator.left, .01f)
+                    assertEquals(4f, separator.right - trailing, .01f)
                     for (tip in boxes.filter { it.span?.tooltip == "Cantonese" }) {
                         val r = rect(tip)
                         assertEquals(InlineCursor.Help, geometry.cursorAt(r.centerX(), r.centerY()))

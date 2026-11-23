@@ -42,7 +42,11 @@ internal class NativeRubyGroupFormat(
     val clippedAbsolute: NativeClippedAbsoluteFormat? = null,
     val annotationMargins: NativeRubyAnnotationMargins? = null,
 ) {
-    val paint = TextPaint(paint)
+    // TextPaint(Paint) copies native paint only. Inline box backgrounds are drawn
+    // once from this declaring owner, independently of glyph and baseline spans.
+    val paint = TextPaint(paint).also { copy ->
+        if (box != null) copy.bgColor = paint.bgColor
+    }
     init {
         require(baselineShift.isFinite() && kotlin.math.abs(baselineShift) <= TablePixelLimit)
         require(this.paint.baselineShift == 0) { "Ruby compound displacement must be applied once" }
