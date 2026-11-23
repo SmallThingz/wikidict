@@ -247,6 +247,7 @@ pub const Absence = struct {
     title_index_bytes: usize,
 };
 pub const Observation = struct {
+    screen_styles: ?imports.Joined = null,
     authority: ?Authority = null,
     absence: ?Absence = null,
 };
@@ -293,7 +294,12 @@ pub fn loadWithImports(
     title_index: dump_source.PageTitleIndex,
     snapshot: ?[]const u8,
 ) !?Authority {
-    return (try observeWithImports(a, namespaces, source, page_index, title_index, snapshot)).authority;
+    var result = try observeWithImports(a, namespaces, source, page_index, title_index, snapshot);
+    if (result.screen_styles) |*screen| {
+        screen.profile.deinit();
+        return error.InvalidStylesheetImports;
+    }
+    return result.authority;
 }
 
 pub fn observeWithImports(
@@ -330,9 +336,12 @@ pub fn observeWithImportsForTarget(
     const title = try std.fmt.allocPrint(sa, "{s}:Common.css", .{spec.name});
     if (title.len > 4096) return error.InvalidTableStylesSource;
     const ref = (try title_index.lookup(page_index, title)) orelse {
-        if (snapshot != null) return error.InvalidStylesheetImports;
         try requireIndexedAbsence(namespaces, page_index, title_index.kind, title);
-        return .{ .absence = .{ .namespace_sha256 = namespaces.source_sha256, .reason = .indexed_common_css_absent,
+        const screen_styles = if (snapshot) |bytes| imports.joinIndexedAbsentCustomAlloc(a, bytes, target, namespaces, page_index, title_index) catch |err| switch (err) {
+            error.OutOfMemory => return err,
+            else => return error.InvalidStylesheetImports,
+        } else null;
+        return .{ .screen_styles = screen_styles, .absence = .{ .namespace_sha256 = namespaces.source_sha256, .reason = .indexed_common_css_absent,
             .page_index_kind = title_index.kind, .page_index_bytes = page_index.len, .title_index_bytes = title_index.bytes.len } };
     };
     const offset = dump_source.pageRowRefOffset(ref);
@@ -658,4 +667,51 @@ test "ordinary default gadget loader preserves retained VI sanitized CSS with ex
     pages[2].redirect = "";
     pages[1].model = "sanitized-css";
     try std.testing.expectError(error.InvalidTableStylesSource, DefaultGadgetTesting.observe(a, &pages));
+}
+
+test "Amharic screen observation joins indexed absence and exact article without extending the edition stylesheet" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var ns = try namespace_registry.Registry.init(a, @embedFile("testdata/am-screen-observation/namespace-registry.tsv"));
+    defer ns.deinit();
+    var bytes: std.Io.Reader = .fixed(@embedFile("testdata/am-screen-observation/stylesheet-imports.json.gz"));
+    var inflater: std.compress.flate.Decompress = .init(&bytes, .gzip, &.{});
+    const snapshot = try inflater.reader.allocRemaining(a, .limited(512 * 1024));
+    try std.testing.expect(inflater.err == null and inflater.state == .end);
+    const index_path = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/page-index.tsv", .{tmp.sub_path});
+    const title_path = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/page-title-index.bin", .{tmp.sub_path});
+    const dump_path = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/pages.xml", .{tmp.sub_path});
+    try tmp.dir.writeFile(io, .{ .sub_path = "pages.xml", .data = "x" });
+    var reader = try dump_source.SourceReader.open(io, a, std.heap.page_allocator, dump_path, .raw_xml, null);
+    defer reader.deinit();
+    const article = "0\t1\tወደር\t\t2282\t17547\t2026-09-01T00:00:00Z\tFixture\twikitext\t0\t1\t0\n";
+    for ([_][]const u8{article,
+        "0\t1\tወደር\t\t2282\t17548\t2026-09-01T00:00:00Z\tFixture\twikitext\t0\t1\t0\n",
+        "0\t1\tother\t\t2282\t17547\t2026-09-01T00:00:00Z\tFixture\twikitext\t0\t1\t0\n",
+    }, 0..) |index, i| {
+        try tmp.dir.writeFile(io, .{ .sub_path = "page-index.tsv", .data = index });
+        if (i != 0) try tmp.dir.deleteFile(io, "page-title-index.bin");
+        try dump_source.buildPageTitleIndex(io, a, index_path, title_path);
+        const titles = try dump_source.PageTitleIndex.init(try tmp.dir.readFileAlloc(io, "page-title-index.bin", a, .limited(64 * 1024)));
+        if (i != 0) {
+            try std.testing.expectError(error.InvalidStylesheetImports, observeWithImportsForTarget(a, &ns, &reader, index, titles, snapshot, .screen));
+            continue;
+        }
+        var observation = try observeWithImportsForTarget(a, &ns, &reader, index, titles, snapshot, .screen);
+        try std.testing.expect(observation.authority == null and observation.absence.?.reason == .indexed_common_css_absent);
+        const joined = &observation.screen_styles.?;
+        defer joined.profile.deinit();
+        try std.testing.expectEqual(@as(usize, 0), joined.proof.sources.len);
+        try std.testing.expectEqual(@as(u64, 17547), joined.proof.custom.?.article.?.revision_id);
+        const custom = joined.profile.custom_properties.?;
+        try std.testing.expect(custom.appliesTo("ወደር") and !custom.appliesTo("other"));
+        const color = try encoder.table_style_profile.customColorValue(a, custom.root_environment, "var(--background-color-progressive-subtle, #f1f4fd)");
+        try std.testing.expect(color == .known);
+        try std.testing.expectEqualStrings("#e8eeff", color.known);
+        try std.testing.expectError(error.InvalidStylesheetImports, observeWithImportsForTarget(a, &ns, &reader, index, titles, snapshot, .print));
+    }
 }

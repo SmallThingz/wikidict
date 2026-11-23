@@ -43,6 +43,10 @@ pub const LanguageCodes = struct {
     local_link_targets: ?@import("presentation_compile.zig").LocalLinkTargetSource = null,
     // A selected page borrows its Profile from the page arena. Retain the stable
     // global parent here so the next page resets without dereferencing that view.
+    screen_style_article: ?struct {
+        page_id: u64, revision_id: u64, title: []const u8,
+        profile: *const @import("table_style_profile.zig").Profile,
+    } = null,
     page_style_parent: ?*const @import("table_style_profile.zig").Profile = null,
     figure_sizing: ?presentation_document.FigureSizingSource = null,
     table_styles: ?*const @import("table_style_profile.zig").Profile = null,

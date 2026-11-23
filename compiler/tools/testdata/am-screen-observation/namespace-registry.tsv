@@ -1,0 +1,28 @@
+# wikidict-namespace-registry-v1
+# wiki	amwiktionary
+# dump-date	20261001
+# content-language	am
+-2	ፋይል	Media	case-sensitive	0	0	0		compile_only	virtual_namespace
+-1	ልዩ	Special	first-letter	0	0	0		compile_only	virtual_namespace
+0			case-sensitive	0	1	0		main	dictionary_entries
+1	ውይይት	Talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+2	አባል	User	first-letter	1	0	0		compile_only	standard_build_input
+3	አባል ውይይት	User talk	first-letter	1	0	0		compile_only	discussion_namespace
+4	Wiktionary	Project	case-sensitive	1	0	0		compile_only	standard_build_input	WT
+5	Wiktionary ውይይት	Project talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Wiktionary talk
+6	ስዕል	File	case-sensitive	0	0	0		compile_only	standard_build_input	Image
+7	ስዕል ውይይት	File talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Image talk
+8	መልዕክት	MediaWiki	first-letter	1	0	0		compile_only	standard_build_input
+9	መልዕክት ውይይት	MediaWiki talk	first-letter	1	0	0		compile_only	discussion_namespace
+10	መለጠፊያ	Template	case-sensitive	1	0	0		compile_only	standard_build_input	መልጠፊያ
+11	መለጠፊያ ውይይት	Template talk	case-sensitive	1	0	0		compile_only	discussion_namespace	መልጠፊያ ውይይት
+12	እርዳታ	Help	case-sensitive	1	0	0		compile_only	standard_build_input
+13	እርዳታ ውይይት	Help talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+14	መደብ	Category	case-sensitive	0	0	0		compile_only	standard_build_input
+15	መደብ ውይይት	Category talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+710	TimedText	TimedText	case-sensitive	0	0	0		compile_only	ancillary_site_input
+711	TimedText talk	TimedText talk	case-sensitive	0	0	0		compile_only	discussion_namespace
+828	ሞጁል	Module	case-sensitive	1	0	0		compile_only	standard_build_input
+829	ሞጁል ውይይት	Module talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+1728	Event	Event	case-sensitive	1	0	0		compile_only	ancillary_site_input
+1729	Event talk	Event talk	case-sensitive	1	0	0		compile_only	discussion_namespace

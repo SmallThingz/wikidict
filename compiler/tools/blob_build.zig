@@ -940,6 +940,10 @@ fn attachFigurePageObservation(a: std.mem.Allocator, codes: *encoder.blob_builde
     // including absent inputs and errors on the following page.
     if (codes.page_style_parent) |parent| codes.table_styles = parent;
     codes.page_style_parent = null;
+    if (codes.screen_style_article) |article| {
+        codes.table_styles = if (namespace_id == 0 and article.page_id == page_id and article.revision_id == revision_id and
+            std.mem.eql(u8, article.title, title)) article.profile else null;
+    }
     const sizing_source = if (codes.figure_sizing) |*value| value else return;
     if (sizing_source.table_containing_direction) |direction| {
         if (direction.root_only) sizing_source.table_containing_direction = null;
@@ -4572,7 +4576,14 @@ fn runBlobBuild(io: std.Io, a: std.mem.Allocator, args: []const []const u8, opti
     const style_observation = try source_table_styles.observeWithImportsForTarget(a, &namespaces, &dump, page_index.bytes, title_index, stylesheet_snapshot, .screen);
     var table_styles = style_observation.authority;
     defer if (table_styles) |*authority| authority.deinit();
+    var screen_styles = style_observation.screen_styles;
+    defer if (screen_styles) |*screen| screen.profile.deinit();
     codes.table_styles = if (table_styles) |*authority| &authority.profile else null;
+    if (screen_styles) |*screen| {
+        const custom = screen.proof.custom.?;
+        const article = custom.article.?;
+        codes.screen_style_article = .{ .page_id = article.page_id, .revision_id = article.revision_id, .title = custom.page_title, .profile = &screen.profile };
+    }
     if (first_failure_capture_context) |*capture| capture.table_styles = if (table_styles) |*authority| authority else null;
     defer {
         if (first_failure_capture_context) |*capture| capture.table_styles = null;
@@ -20396,7 +20407,14 @@ fn capturedWriterRun(io: std.Io, a: std.mem.Allocator, request: CapturedWriterRe
     const style_observation = try source_table_styles.observeWithImportsForTarget(a, namespaces, &category_dump.?, page_index.bytes, titles, stylesheet_snapshot, .screen);
     var table_styles = style_observation.authority;
     defer if (table_styles) |*authority| authority.deinit();
+    var screen_styles = style_observation.screen_styles;
+    defer if (screen_styles) |*screen| screen.profile.deinit();
     codes.table_styles = if (table_styles) |*authority| &authority.profile else null;
+    if (screen_styles) |*screen| {
+        const custom = screen.proof.custom.?;
+        const article = custom.article.?;
+        codes.screen_style_article = .{ .page_id = article.page_id, .revision_id = article.revision_id, .title = custom.page_title, .profile = &screen.profile };
+    }
     if (codes.figure_sizing) |*sizing_source| sizing_source.source_context =
         try figureSourceContext(figure_site orelse return error.InvalidFigureSizingSource, style_observation.absence);
     const spec = namespaces.byId(std.math.cast(i32, page.ns) orelse return error.InvalidNamespace) orelse return error.InvalidNamespace;
@@ -68814,6 +68832,91 @@ test "normal equals project loader retains local namespace model owner and colli
     try registry.addSourceEqualsLabel("fr", "Plain source label");
     try std.testing.expectEqualStrings("Plain source label", registry.source_equals_labels.get("fr").?.?);
     try std.testing.expect(registry.resolve("Plain source label") == null);
+}
+
+test "Amharic screen observation paints the captured message box and retains its three stored actions" {
+    const fixture = "testdata/am-screen-observation/";
+    const raw = @embedFile(fixture ++ "article.wikitext");
+    const template = @embedFile(fixture ++ "template.wikitext");
+    const expanded = @embedFile(fixture ++ "expanded.wikitext");
+    const title = "ወደር";
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const io = std.testing.io;
+    // The live oldid expansion matches the dated article and its only template.
+    try TpiStaticCategoryOwnerTest.hash(raw, "a323f11e2c93c8a83e98b0c59742fe4680ebd771c82cf74946b237d413bc4973");
+    try TpiStaticCategoryOwnerTest.hash(template, "7656630ba4e6ad1f19f23e24117da299015a88944569bd1265bb2dc5f29528de");
+    try TpiStaticCategoryOwnerTest.hash(expanded, "38cca0b5b64a8f90a8618de79bdc6df931a743888838cde91889d37c84e0876e");
+    const included = try std.mem.replaceOwned(u8, a, try std.mem.replaceOwned(u8, a, template, "<includeonly>", ""), "</includeonly>", "");
+    const invocation = try std.mem.replaceOwned(u8, a, included, "{{PAGENAME}}", title);
+    try std.testing.expectEqualStrings(expanded, try std.mem.replaceOwned(u8, a, raw, "{{ከውክፔዲያ}}", invocation));
+
+    const Read = struct {
+        fn gzip(allocator: std.mem.Allocator, data: []const u8) ![]const u8 {
+            var input: std.Io.Reader = .fixed(data);
+            var inflater: std.compress.flate.Decompress = .init(&input, .gzip, &.{});
+            const decoded = try inflater.reader.allocRemaining(allocator, .limited(512 * 1024));
+            try std.testing.expect(inflater.err == null and inflater.state == .end);
+            return decoded;
+        }
+    };
+    var ns = try namespace_registry.Registry.init(a, @embedFile(fixture ++ "namespace-registry.tsv"));
+    defer ns.deinit();
+    try ns.attachInterwikiMap(try Read.gzip(a, @embedFile(fixture ++ "interwiki-map.tsv.gz")));
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    const index = "0\t247\tወደር\t\t2282\t17547\t2018-01-01T14:30:14Z\tTil Eulenspiegel\twikitext\t0\t1\t0\n";
+    try tmp.dir.writeFile(io, .{ .sub_path = "page-index.tsv", .data = index });
+    try dump_source.buildPageTitleIndex(io, a, try std.fs.path.join(a, &.{ root, "page-index.tsv" }), try std.fs.path.join(a, &.{ root, "page-title-index.bin" }));
+    const titles = try dump_source.PageTitleIndex.init(try tmp.dir.readFileAlloc(io, "page-title-index.bin", a, .limited(64 * 1024)));
+    try tmp.dir.writeFile(io, .{ .sub_path = "page-source", .data = raw });
+    var reader = try dump_source.SourceReader.open(io, a, std.heap.page_allocator, try std.fs.path.join(a, &.{ root, "page-source" }), .raw_xml, null);
+    defer reader.deinit();
+    const snapshot = try Read.gzip(a, @embedFile(fixture ++ "stylesheet-imports.json.gz"));
+    var observed = try source_table_styles.observeWithImportsForTarget(a, &ns, &reader, index, titles, snapshot, .screen);
+    const screen = &observed.screen_styles.?;
+    defer screen.profile.deinit();
+    const proof = screen.proof.custom.?;
+    const article = proof.article.?;
+    var codes: encoder.blob_builder.LanguageCodes = .{ .namespace_catalog = &ns, .screen_style_article = .{
+        .page_id = article.page_id, .revision_id = article.revision_id, .title = proof.page_title, .profile = &screen.profile,
+    } };
+    try attachFigurePageObservation(a, &codes, null, null, 0, 2282, 17547, title, raw, expanded);
+    try std.testing.expect(codes.table_styles == &screen.profile);
+    const output = try std.fs.path.join(a, &.{ root, "blobs" });
+    var writer = try encoder.blob_builder.Writer.init(io, a, output);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, title, expanded, raw, null);
+    const result = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 1), result.language_records);
+    const record = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, output, "Unclassified", title);
+    var boxes: usize = 0;
+    var actions: usize = 0;
+    const expected = [_][]const u8{ "https://am.wikipedia.org/wiki/%E1%8B%8D%E1%8A%AD%E1%8D%94%E1%8B%B2%E1%8B%AB", "መዝገበ ዕውቀት", "መዝገበ ቃላት" };
+    for (record.sections) |section| for (section.blocks) |block| {
+        const box = block.container orelse continue;
+        boxes += 1;
+        try std.testing.expectEqualStrings("#e8eeff", box.style.background.?.rgb);
+        const border = box.style.border.?.solid;
+        try std.testing.expectEqualStrings("#3366cc", border.color.rgb);
+        try std.testing.expectEqual(encoder.presentation_types.StyleLength{ .unit = .px, .value = 1 }, border.width);
+        for (box.blocks) |child| for (child.spans) |span| {
+            if (span.target.len == 0) continue;
+            try std.testing.expect(actions < expected.len);
+            try std.testing.expectEqualStrings(expected[actions], span.target);
+            try std.testing.expect(if (actions == 0) span.kind == .external_link else span.kind == .link);
+            actions += 1;
+        };
+    };
+    try std.testing.expectEqual(@as(usize, 1), boxes);
+    try std.testing.expectEqual(expected.len, actions);
+    try attachFigurePageObservation(a, &codes, null, null, 0, 2282, 17548, title, raw, expanded);
+    try std.testing.expect(codes.table_styles == null);
+    try attachFigurePageObservation(a, &codes, null, null, 0, 2282, 17547, "other", raw, expanded);
+    try std.testing.expect(codes.table_styles == null);
 }
 
 test "TN courant actual Reader and normal Writer retain complete body after source proved French ownership" {

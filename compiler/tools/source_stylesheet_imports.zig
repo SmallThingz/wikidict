@@ -586,7 +586,32 @@ const CustomSnapshot = struct {
     ancestors: []const struct { tag: []const u8, classes: []const u8, id: []const u8, inline_css: []const u8, root: bool, start: usize, end: usize },
     sources: []const struct { url: []const u8, css: []const u8, bytes: usize, sha256: []const u8 },
 };
+pub const absent_custom_schema = "wikidict.stylesheet-imports.custom-properties-absent-root.v1";
+const AbsentCustomSnapshot = struct {
+    schema: []const u8,
+    wiki: []const u8,
+    dump_date: []const u8,
+    namespace_sha256: []const u8,
+    article_page_id: u64,
+    article_revision_id: u64,
+    root_absence: struct {
+        namespace: i32, dbkey: []const u8, page_table_sha256: []const u8,
+        page_table_bytes: u64, dumpstatus_sha256: []const u8, namespace_registry_sha256: []const u8,
+    },
+    temporal_scope: []const u8,
+    observed_utc: []const u8,
+    page_url: []const u8,
+    page_title: []const u8,
+    page_html: []const u8,
+    page_sha256: []const u8,
+    generator: []const u8,
+    skin: []const u8,
+    dark: ?bool,
+    ancestors: []const struct { tag: []const u8, classes: []const u8, id: []const u8, inline_css: []const u8, root: bool, start: usize, end: usize },
+    sources: []const struct { url: []const u8, css: []const u8, bytes: usize, sha256: []const u8 },
+};
 pub const CustomProof = struct {
+    article: ?struct { page_id: u64, revision_id: u64 } = null,
     temporal_scope: []const u8,
     observed_utc: []const u8,
     page_url: []const u8,
@@ -600,6 +625,7 @@ pub const CustomProof = struct {
         try jw.beginObject();
         try jw.objectField("temporal_scope"); try jw.write(self.temporal_scope);
         try jw.objectField("observed_utc"); try jw.write(self.observed_utc);
+        if (self.article) |article| { try jw.objectField("article"); try jw.write(article); }
         try jw.objectField("page_url"); try jw.write(self.page_url);
         try jw.objectField("page_title"); try jw.write(self.page_title);
         try jw.objectField("page_sha256"); try jw.write(self.page_sha256[0..]);
@@ -618,14 +644,48 @@ fn joinCustomAlloc(a: A, root_css: []const u8, root: Root, snapshot_bytes: []con
     if (!std.mem.eql(u8, value.schema, custom_schema) or !std.mem.eql(u8, value.wiki, root.wiki) or
         !std.mem.eql(u8, value.dump_date, root.dump_date) or !std.mem.eql(u8, value.namespace_sha256, root.namespace_sha256) or
         !std.mem.eql(u8, value.root_css_sha256, &sha256(root_css)) or value.root_page_id != root.page_id or value.root_revision_id != root.revision_id or
-        root.page_id == 0 or root.revision_id == 0 or
-        !std.mem.eql(u8, value.temporal_scope, "current anonymous screen stylesheet observation applied to retained source; not historical dump deployment") or
+        root.page_id == 0 or root.revision_id == 0) return error.InvalidStylesheetImports;
+    return buildCustomContext(a, root_css, snapshot_bytes, target, value);
+}
+
+pub fn joinIndexedAbsentCustomAlloc(a: A, snapshot_bytes: []const u8, target: styles.ReadingTarget, namespaces: anytype, page_index: []const u8, titles: anytype) !Joined {
+    if (target != .screen or snapshot_bytes.len > max_snapshot_bytes) return error.InvalidStylesheetImports;
+    const parsed = try std.json.parseFromSlice(AbsentCustomSnapshot, a, snapshot_bytes, .{});
+    defer parsed.deinit();
+    const value = parsed.value;
+    const ns_hash = std.fmt.bytesToHex(namespaces.source_sha256, .lower);
+    const absence = value.root_absence;
+    if (!std.mem.eql(u8, value.schema, absent_custom_schema) or !std.mem.eql(u8, value.wiki, namespaces.wiki) or
+        !std.mem.eql(u8, value.dump_date, namespaces.dump_date) or !std.mem.eql(u8, value.namespace_sha256, &ns_hash) or
+        !std.mem.eql(u8, absence.namespace_registry_sha256, &ns_hash) or absence.namespace != 8 or !std.mem.eql(u8, absence.dbkey, "Common.css") or
+        absence.page_table_bytes == 0 or value.article_page_id == 0 or value.article_revision_id == 0) return error.InvalidStylesheetImports;
+    for ([_][]const u8{absence.page_table_sha256, absence.dumpstatus_sha256}) |hash| {
+        if (hash.len != 64) return error.InvalidStylesheetImports;
+        for (hash) |c| if (!(std.ascii.isDigit(c) or (c >= 'a' and c <= 'f'))) return error.InvalidStylesheetImports;
+    }
+    const dump_source = @import("wikimedia_dump");
+    const ref = (try titles.lookup(page_index, value.page_title)) orelse return error.InvalidStylesheetImports;
+    const at = dump_source.pageRowRefOffset(ref);
+    if (at >= page_index.len or (at != 0 and page_index[at - 1] != '\n')) return error.InvalidStylesheetImports;
+    const end = std.mem.indexOfScalarPos(u8, page_index, at, '\n') orelse page_index.len;
+    const row = try dump_source.parsePageIndexLine(titles.kind, page_index[at..end]);
+    if (row.ns != 0 or !row.has_source or row.redirect != null or !std.mem.eql(u8, row.content_model, "wikitext") or
+        !std.mem.eql(u8, row.title, value.page_title) or row.page_id != value.article_page_id or row.revision_id != value.article_revision_id) return error.InvalidStylesheetImports;
+    var result = try buildCustomContext(a, null, snapshot_bytes, target, value);
+    result.proof.custom.?.article = .{ .page_id = row.page_id, .revision_id = row.revision_id };
+    return result;
+}
+
+fn buildCustomContext(a: A, css: ?[]const u8, snapshot_bytes: []const u8, target: styles.ReadingTarget, value: anytype) !Joined {
+    const scope = if (css != null) "current anonymous screen stylesheet observation applied to retained source; not historical dump deployment" else "current anonymous server-emitted screen styles before client scripts applied to retained source; not historical dump deployment";
+    if (!std.mem.eql(u8, value.temporal_scope, scope) or
         value.observed_utc.len < 20 or value.generator.len == 0 or value.skin.len == 0 or value.page_title.len == 0 or
         !std.mem.startsWith(u8, value.page_url, "https://") or
         value.page_html.len > 1024 * 1024 or !std.mem.eql(u8, value.page_sha256, &sha256(value.page_html)) or
         value.sources.len == 0 or value.sources.len > 32 or value.ancestors.len < 2 or value.ancestors.len > 32)
         return error.InvalidStylesheetImports;
-    var profile = try styles.parseForTargetAlloc(a, root_css, target);
+    if (css == null and !styles.Profile.hasClass(value.ancestors[0].classes, "client-nojs")) return error.InvalidStylesheetImports;
+    var profile = if (css) |raw| try styles.parseForTargetAlloc(a, raw, target) else try styles.parseSourcesForTargetAlloc(a, &.{}, target);
     errdefer profile.deinit();
     const pa = profile.arena.allocator();
     const syntax = @import("encoder").wikitext_syntax;
@@ -643,9 +703,9 @@ fn joinCustomAlloc(a: A, root_css: []const u8, root: Root, snapshot_bytes: []con
         ancestors[i] = .{ .tag = try pa.dupe(u8, item.tag), .classes = try pa.dupe(u8, item.classes), .id = try pa.dupe(u8, item.id), .root = item.root, .inline_css = try pa.dupe(u8, item.inline_css) };
         preceding = item.end;
     }
-    const sources = try pa.alloc(styles.Source, value.sources.len + 1);
+    const sources = try pa.alloc(styles.Source, value.sources.len + @intFromBool(css != null));
     const hashes = try pa.alloc([64]u8, value.sources.len);
-    var total: usize = root_css.len;
+    var total: usize = if (css) |raw| raw.len else 0;
     for (value.sources, 0..) |source, i| {
         total = std.math.add(usize, total, source.css.len) catch return error.InvalidStylesheetImports;
         if (source.bytes != source.css.len or source.css.len > 1024 * 1024 or total > 1024 * 1024 or
@@ -656,7 +716,7 @@ fn joinCustomAlloc(a: A, root_css: []const u8, root: Root, snapshot_bytes: []con
     }
     // The retained source's complete Common.css is still consulted; the selected
     // external context does not replace or silently rewrite the dump's input.
-    sources[value.sources.len] = .{ .css = root_css, .base_url = "" };
+    if (css) |raw| sources[value.sources.len] = .{ .css = raw, .base_url = "" };
     try styles.attachCustomProperties(&profile, sources, .{ .dark = value.dark, .ancestors = ancestors });
     @constCast(profile.custom_properties.?).page_title = try pa.dupe(u8, value.page_title);
     return .{ .profile = profile, .proof = .{
