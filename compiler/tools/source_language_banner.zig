@@ -512,6 +512,20 @@ pub fn categoryH1ProofAlloc(a: std.mem.Allocator, wrapper: []const u8, formatter
 }
 
 
+// Retained =mnw= p1212/r370728 emits the link and its trailing newline.
+// The excluded category documents the template; it never classifies entries.
+pub fn monEqualsParagraph(source: []const u8, ns: *const namespaces.Registry) bool {
+    if (!std.mem.eql(u8, ns.wiki, "mnwwiktionary") or !std.mem.eql(u8, ns.content_language, "mnw") or
+        ns.byName("w") != null or
+        ns.ofTitle("ကဏ္ဍ:ထာမ်ပလိက်ဂမၠိုၚ်").id != 14 or
+        !categoryRoleHash(source, "ab95a829e4227dde475b593806172e2386f9ccdb56b33e20e27c69e2476645d4")) return false;
+    for (ns.interwiki_rows) |row| {
+        if (std.mem.eql(u8, row.prefix, "w") and !row.is_current_wiki and !row.is_interlanguage and
+            std.mem.eql(u8, row.url, "https://mnw.wikipedia.org/wiki/$1")) return true;
+    }
+    return false;
+}
+
 // Complete selected NS10 declaration, including inclusion boundaries and both
 // uses of positional code 1. The emitted embedded name and ucfirst label still
 // need independent registry agreement; this never registers an interwiki alias.

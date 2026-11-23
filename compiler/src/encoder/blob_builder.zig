@@ -4145,8 +4145,9 @@ fn rawCodeDeclarationLine(codes: LanguageCodes, line: []const u8, required_level
     return .{ .name = name, .code = code };
 }
 
-fn rawPrefixParagraphLanguage(codes: LanguageCodes, raw_source: ?[]const u8, source: []const u8, raw_sections: []const language_source.Section, rendered: []const language_source.Section) ?ResolvedLanguage {
+fn rawPrefixParagraphLanguage(codes: LanguageCodes, raw_source: ?[]const u8, tracked: MissingText, raw_sections: []const language_source.Section, rendered: []const language_source.Section) ?ResolvedLanguage {
     const raw = raw_source orelse return null;
+    const source = tracked.bytes;
     const namespaces = codes.namespace_catalog orelse return null;
     const matches = codes.source_paragraph_fn orelse return null;
     if (rendered.len != 0 or raw_sections.len != 1) return null;
@@ -4154,7 +4155,14 @@ fn rawPrefixParagraphLanguage(codes: LanguageCodes, raw_source: ?[]const u8, sou
     const offset = @intFromPtr(first.source.ptr) - @intFromPtr(raw.ptr);
     if (offset > raw.len or std.mem.trim(u8, raw[0..offset], "\r\n").len != 0) return null;
     const line = std.mem.trimEnd(u8, first.source[0 .. std.mem.indexOfScalar(u8, first.source, '\n') orelse first.source.len], "\r");
-    const declaration = if (!first.hyphen_marker) rawCodeDeclarationLine(codes, line, 2) orelse return null else null;
+    const declaration: ?RawCodeDeclaration = if (first.hyphen_marker) null else rawCodeDeclarationLine(codes, line, 2) orelse equals: {
+        const opening = "=={{=";
+        const closing = "=}}==";
+        if (!std.mem.startsWith(u8, line, opening) or !std.mem.endsWith(u8, line, closing)) return null;
+        const code = equalsSectionDeclaration(first) orelse return null;
+        if (line.len != opening.len + code.len + closing.len or !std.mem.eql(u8, line[opening.len..][0..code.len], code)) return null;
+        break :equals .{ .name = line[4 .. line.len - 4], .code = code };
+    };
     const canonical = if (declaration) |call| codes.resolve(call.code) orelse return null else resolveSection(codes, first) orelse return null;
     // Preserve the emitted paragraph rather than manufacturing a heading.
     // A selected declaration source may emit a category on the following line;
@@ -4173,6 +4181,10 @@ fn rawPrefixParagraphLanguage(codes: LanguageCodes, raw_source: ?[]const u8, sou
         if (second_end > 4096) return null;
         const prefix = expanded[0..second_end];
         if (!matches(codes.ctx, canonical.code, call.name, prefix)) return null;
+        if (call.name[0] == '=') {
+            const start = source.len - expanded.len;
+            if (tracked.unknown or tracked.lost_missing_range or !calibratedBoundaryRangesClean(tracked, start, start + second_end)) return null;
+        }
         // One raw H2 alone is insufficient: later declared deep headings must
         // not inherit its owner, even if expansion erased their visible heading.
         var every_heading = language_source.Iterator.init(raw);
@@ -4190,6 +4202,9 @@ fn rawPrefixParagraphLanguage(codes: LanguageCodes, raw_source: ?[]const u8, sou
             if (codes.isLanguageBoundary(boundary_heading) or boundaryLanguage(codes, later) != null or
                 resolveSection(codes, later) != null or hasExplicitLanguageDeclaration(codes, later)) return null;
             const later_line = later.source[0 .. std.mem.indexOfScalar(u8, later.source, '\n') orelse later.source.len];
+            if (call.name[0] == '=') if (blobs.wikitext_syntax.controlHeading(later_line, null)) |heading| {
+                if (language_source.equalsLanguageDeclaration(heading.title) != null) return null;
+            };
             if (rawCodeDeclarationLine(codes, later_line, null)) |other|
                 if (matches(codes.ctx, canonical.code, other.name, prefix)) return null;
         }
@@ -6846,7 +6861,7 @@ fn processMain(
             (try slovenianSupportCategoryLanguage(codes, title, source, raw_source, raw_sections.items, page_sections.items)) orelse
                 paragraph: {
                     // Keep the exact successful lookup in its original short-circuit arm.
-                    paragraph_support = rawPrefixParagraphLanguage(codes, raw_source, source, raw_sections.items, page_sections.items);
+                    paragraph_support = rawPrefixParagraphLanguage(codes, raw_source, source_missing, raw_sections.items, page_sections.items);
                     break :paragraph paragraph_support;
                 } orelse
                 tsongaLabelledHeadword(codes, title, raw_source, source_missing) orelse

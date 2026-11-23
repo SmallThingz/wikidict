@@ -2158,6 +2158,9 @@ fn loadSourceLanguageBannersWithRows(io: std.Io, a: std.mem.Allocator, root: []c
         defer if (decoded) |value| a.free(value);
         if (equals_label) {
             if (!std.mem.eql(u8, row.content_model, "wikitext")) continue;
+            if (row.ns == 10 and std.mem.eql(u8, code, "mnw") and row.page_id == 1212 and row.revision_id == 370728) {
+                registry.source_mon_equals_paragraph = source_language_banner.monEqualsParagraph(decoded orelse raw, namespaces);
+            }
             try registry.addSourceEqualsLabel(code, decoded orelse raw);
             if (source_language_banner.equalsProjectLabel(decoded orelse raw, namespaces, if (behavior) |*value| value else null, registry, code)) |label|
                 try registry.addSourceTemplateLabel(label, code);
@@ -10983,6 +10986,144 @@ const IsParagraphTest = struct {
         try writer.append(0, 2831, 393255, template_raw); try writer.finish(index);
     }
 };
+
+const MonEqualsParagraphTest = struct {
+    const ns_source = @embedFile("testdata/figure-inputs198/mnw/namespace-registry.tsv");
+    const interwiki = "w\t1\t0\t0\t0\thttps://mnw.wikipedia.org/wiki/$1\t0\n";
+    const registry_source = "# content-language\tmnw\n# mediawiki\nmnw\tဘာသာမန်\tmnw\tMon\nmy\tဗၟာ\tmy\tBurmese\n";
+    const name = "ထာမ်ပလိက်:=mnw=";
+    const provider = "[[w:မန်|မန်]]\n<noinclude>[[ကဏ္ဍ:ထာမ်ပလိက်ဂမၠိုၚ်|မ]]</noinclude>";
+    const authored = "=={{=mnw=}}==\n";
+    const prefix = "==[[w:မန်|မန်]]\n==";
+    const expected_url = "https://mnw.wikipedia.org/wiki/%E1%80%99%E1%80%94%E1%80%BA";
+
+    fn load(io: std.Io, a: std.mem.Allocator, root: []const u8, ns: *const namespace_registry.Registry,
+        page: u64, revision: u64, redirect: []const u8, source: []const u8, registry: []const u8) !language_registry.Registry
+    {
+        const cwd = std.Io.Dir.cwd();
+        try cwd.writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "manifest.jsonl" }), .data = "" });
+        try cwd.writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "language-registry.tsv" }), .data = registry });
+        const index = try std.fs.path.join(a, &.{ root, "page-index.tsv" });
+        const row = try std.fmt.allocPrint(a, "0\t0\t{s}\t{s}\t{d}\t{d}\t2025-11-19T18:52:03Z\tA\twikitext\t10\t1\t0\n", .{ name, redirect, page, revision });
+        try cwd.writeFile(io, .{ .sub_path = index, .data = row });
+        var templates = try dump_source.TemplateSourceWriter.init(io, a, root);
+        defer templates.deinit();
+        try templates.append(0, page, revision, source);
+        try templates.finish(index);
+        return loadLanguageRegistry(io, a, root, ns);
+    }
+};
+
+test "indexed Mon equals paragraph declaration requires the exact provider and outgoing link" {
+    const F = MonEqualsParagraphTest;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const io = std.testing.io;
+    const cases = [_]struct {
+        page: u64 = 1212,
+        revision: u64 = 370728,
+        redirect: []const u8 = "",
+        source: []const u8 = F.provider,
+        interwiki: []const u8 = F.interwiki,
+        registry: []const u8 = F.registry_source,
+        accepted: bool = false,
+    }{
+        .{ .accepted = true },
+        .{ .page = 1213 },
+        .{ .revision = 370729 },
+        .{ .redirect = "ထာမ်ပလိက်:Other" },
+        .{ .source = F.provider ++ "extra" },
+        .{ .interwiki = "" },
+        .{ .interwiki = "w\t1\t0\t0\t0\thttps://my.wikipedia.org/wiki/$1\t0\n" },
+        .{ .registry = F.registry_source ++ "my\tမန်\n" },
+    };
+    for (cases) |arm| {
+        var tmp = std.testing.tmpDir(.{});
+        defer tmp.cleanup();
+        const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+        var ns = try namespace_registry.Registry.init(a, F.ns_source);
+        defer ns.deinit();
+        try ns.attachInterwikiMap(arm.interwiki);
+        var registry = try F.load(io, a, root, &ns, arm.page, arm.revision, arm.redirect, arm.source, arm.registry);
+        defer registry.deinit();
+        try std.testing.expectEqual(arm.accepted, registry.matchesSourceParagraphCall("mnw", "=mnw=", F.prefix));
+        try std.testing.expect(!registry.matchesSourceParagraphCall("my", "=mnw=", F.prefix));
+        try std.testing.expect(!registry.matchesSourceParagraphCall("mnw", "=mnw=", "==[[w:မန်|Other]]\n=="));
+        if (arm.accepted) try std.testing.expect(registry.resolveSourceTrusted("မန်") == null);
+    }
+    var foreign = try namespace_registry.Registry.init(a, F.ns_source);
+    defer foreign.deinit();
+    try foreign.attachInterwikiMap(F.interwiki);
+    foreign.wiki = "mywiktionary";
+    try std.testing.expect(!source_language_banner.monEqualsParagraph(F.provider, &foreign));
+}
+
+test "Writer retains Mon equals paragraph link and typed body with only proved ownership" {
+    const F = MonEqualsParagraphTest;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    var ns = try namespace_registry.Registry.init(a, F.ns_source);
+    defer ns.deinit();
+    try ns.attachInterwikiMap(F.interwiki);
+    var registry = try F.load(io, a, root, &ns, 1212, 370728, "", F.provider, F.registry_source);
+    defer registry.deinit();
+    const codes = languageCodes(&registry, &ns);
+    const owner = registry.resolve("mnw").?;
+    const output = try std.fs.path.join(a, &.{ root, "blobs" });
+    var writer = try encoder.blob_builder.Writer.init(io, a, output);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    const noun = "\n\n===နာမ်===\n# '''တၞဟ်''' [[မန်]]\n";
+    const verb = "\n\n===ကြိယာ ၁===\n# ''ဂ္ညိ'' [[မန်]]\n===ကြိယာ ၂===\n# [[တၞဟ်]]\n";
+    const cases = [_]struct { raw: []const u8, expanded: []const u8, owned: bool = false }{
+        .{ .raw = F.authored ++ noun, .expanded = F.prefix ++ "\n" ++ noun, .owned = true },
+        .{ .raw = F.authored ++ verb, .expanded = F.prefix ++ "\n" ++ verb, .owned = true },
+        .{ .raw = "=={{=my=}}==\n" ++ noun, .expanded = F.prefix ++ "\n" ++ noun },
+        .{ .raw = "<nowiki>=={{=mnw=}}==</nowiki>\n" ++ noun, .expanded = F.prefix ++ "\n" ++ noun },
+        .{ .raw = "=={{=mnw=|extra}}==\n" ++ noun, .expanded = F.prefix ++ "\n" ++ noun },
+        .{ .raw = "prefix\n" ++ F.authored ++ noun, .expanded = F.prefix ++ "\n" ++ noun },
+        .{ .raw = F.authored ++ noun, .expanded = "==[[w:မန်|Other]]\n==\n" ++ noun },
+        .{ .raw = F.authored ++ "=== {{=my=}} ===\n" ++ noun, .expanded = F.prefix ++ "\n" ++ noun },
+        .{ .raw = F.authored ++ noun, .expanded = F.prefix ++ "\n" ++ noun ++ "[[ကဏ္ဍ:Burmese]]\n" },
+    };
+    for (cases, 0..) |arm, i| {
+        const title = try std.fmt.allocPrint(a, "mon-paragraph-{d}", .{i});
+        try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, title, arm.expanded, arm.raw, null);
+    }
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, cases.len), stats.language_records);
+    for (cases, 0..) |arm, i| {
+        const heading = if (arm.owned) owner.heading else "Unclassified";
+        const expected_code = if (arm.owned) owner.code else "";
+        const title = try std.fmt.allocPrint(a, "mon-paragraph-{d}", .{i});
+        const entry = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, output, heading, title);
+        try std.testing.expectEqualStrings(expected_code, entry.language_code);
+        var report: encoder.presentation_document.Fallbacks = .{};
+        const whole = try encoder.presentation_document.compileReportedWithLinkTrailAlloc(a, title, .language, heading, expected_code, arm.expanded, null, .{}, &ns, &report);
+        const meta = encoder.blob_format.LanguageMetadata{ .heading = heading, .code = expected_code };
+        const independent = (try encoder.presentation_codec.decodeAlloc(a, whole, title, .language, meta)).entry;
+        var restored = entry;
+        restored.organization = independent.organization;
+        try std.testing.expectEqualDeep(independent, restored);
+        const payload = try encoder.presentation_codec.encodeAlloc(a, .{ .entry = entry });
+        const decoded = try encoder.presentation_codec.decodeAlloc(a, payload, title, .language, meta);
+        try std.testing.expectEqualDeep(entry, decoded.entry);
+        try std.testing.expectEqualSlices(u8, payload, try encoder.presentation_codec.encodeAlloc(a, decoded));
+        if (arm.owned) {
+            try std.testing.expectEqualStrings("==", entry.sections[0].blocks[0].spans[0].text);
+            const link = entry.sections[0].blocks[0].spans[1];
+            try std.testing.expectEqual(.external_link, link.kind);
+            try std.testing.expectEqualStrings("မန်", link.text);
+            try std.testing.expectEqualStrings(F.expected_url, link.target);
+        }
+    }
+}
 
 test "literal paragraph declaration requires exact known name and same owner hidden category" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();

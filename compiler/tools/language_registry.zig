@@ -111,6 +111,7 @@ pub const Registry = struct {
     source_banners: std.StringHashMapUnmanaged(?SourceLanguageBanner) = .empty,
     source_static_support: std.StringHashMapUnmanaged(?SourceStaticSupport) = .empty,
     source_equals_labels: std.StringHashMapUnmanaged(?[]const u8) = .empty,
+    source_mon_equals_paragraph: bool = false,
     source_paragraphs: std.StringHashMapUnmanaged(?SourceLanguageParagraph) = .empty,
     source_code_declarations: std.StringHashMapUnmanaged(?[]const u8) = .empty,
     source_linked_heading: ?SourceLinkedHeading = null,
@@ -666,6 +667,11 @@ pub const Registry = struct {
 
     pub fn matchesSourceParagraphCall(self: *const Registry, code_value: []const u8, template_name: []const u8, line: []const u8) bool {
         if (template_name.len == 0) return self.matchesSourceLanguageParagraph(code_value, line);
+        if (std.mem.eql(u8, template_name, "=mnw=")) {
+            return self.source_mon_equals_paragraph and std.mem.eql(u8, code_value, "mnw") and
+                self.sourceBannerLiteralCodeNameCompatible(code_value, "မန်") and
+                !self.isLanguageBoundary("မန်") and std.mem.eql(u8, line, "==[[w:မန်|မန်]]\n==");
+        }
         const category = (self.source_code_declarations.get(template_name) orelse return false) orelse return false;
         if (!self.codes.contains(code_value)) return false;
         var rest = line;
