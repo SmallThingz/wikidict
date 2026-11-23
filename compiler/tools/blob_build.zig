@@ -2280,7 +2280,7 @@ const SourceEquivalentTemplate = struct { row: dump_source.IndexedPage, ordinal:
 // heading ID. Its literal leaf repeats the code and labels its own category.
 const jezik_parent_source = "<h2 {{#if:{{{code|}}}|id=\"{{{code}}}\"}}>__NOEDITSECTION__{{#if:{{{portal|}}}|[[Portal:{{{1}}}|{{{1}}}]]|{{{1}}}}} {{#if:{{{2|}}}|<span style=\"font-size: x-small\"> {{{2}}} </span>}}</h2><noinclude>\n\n[[Kategorija:Templates za podnaslove-jezik| ]]\n[[Kategorija:Šabloni]]\n</noinclude>";
 
-fn jezikSource(a: std.mem.Allocator, templates: *const dump_source.TemplateSource, entry: SourceEquivalentTemplate) !?[]u8 {
+fn boundedLanguageTemplateSource(a: std.mem.Allocator, templates: *const dump_source.TemplateSource, entry: SourceEquivalentTemplate) !?[]u8 {
     const row = entry.row;
     if (row.redirect != null or !row.has_source or !std.mem.eql(u8, row.content_model, "wikitext")) return null;
     const raw = (try templates.lookup(entry.ordinal, row.page_id, row.revision_id)) orelse return error.MissingLanguageTemplateSource;
@@ -2422,7 +2422,7 @@ fn loadSourceEquivalentLanguageTemplatesWithRows(io: std.Io, a: std.mem.Allocato
     }
     if (names.get("=jezik=")) |parent_index| jezik: {
         const source = (try view.templates(root, namespaces)) orelse break :jezik;
-        const parent = (try jezikSource(a, source, rows.items[parent_index])) orelse break :jezik;
+        const parent = (try boundedLanguageTemplateSource(a, source, rows.items[parent_index])) orelse break :jezik;
         defer a.free(parent);
         if (!std.mem.eql(u8, parent, jezik_parent_source)) break :jezik;
         for (rows.items) |entry| {
@@ -2430,10 +2430,25 @@ fn loadSourceEquivalentLanguageTemplatesWithRows(io: std.Io, a: std.mem.Allocato
             if (name.len < 3 or name[0] != '=' or name[name.len - 1] != '=') continue;
             const code = name[1 .. name.len - 1];
             if (!registry.codes.contains(code)) continue;
-            const leaf = (try jezikSource(a, source, entry)) orelse continue;
+            const leaf = (try boundedLanguageTemplateSource(a, source, entry)) orelse continue;
             defer a.free(leaf);
             try addJezikLabel(a, registry, code, leaf);
         }
+    }
+    // The hyphen banner and its code-named literal peer independently name
+    // the same language. Look up the verified pair directly in this edition's
+    // existing index; the proof applies only to a raw invocation of the banner.
+    if (std.mem.eql(u8, namespaces.wiki, "sawiktionary") and
+        std.mem.eql(u8, namespaces.content_language, "sa")) paired: {
+        const marker = names.get("-sa-") orelse break :paired;
+        const peer = names.get("sa") orelse break :paired;
+        const sources = (try view.templates(root, namespaces)) orelse break :paired;
+        const banner = (try boundedLanguageTemplateSource(a, sources, rows.items[marker])) orelse break :paired;
+        defer a.free(banner);
+        const name = (try boundedLanguageTemplateSource(a, sources, rows.items[peer])) orelse break :paired;
+        defer a.free(name);
+        if (source_language_banner.pairedCategoryHeading(banner, name, namespaces, registry, "sa")) |proof|
+            try registry.addSourceLanguageBanner("sa", proof);
     }
     // Reuse the same authenticated namespace/index and bounded redirect graph.
     // The name selects a candidate only; complete source, not its spelling,
@@ -70374,6 +70389,90 @@ test "Jezik indexed declarations preserve mixed language bodies and codec" {
                 }
             };
             try std.testing.expectEqual(labels.len, linked_spans);
+        }
+    }
+}
+
+test "Sanskrit paired H1 source banner binds its first region only" {
+    const banner = "[[Category:संस्कृतं]]\n= ''[[संस्कृतं]]'' =";
+    const peer = "[[संस्कृतं]]";
+    const label = "संस्कृतं";
+    const heading = "''[[संस्कृतं]]''";
+    const io = std.testing.io;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const namespace_bytes = "# wikidict-namespace-registry-v1\n# wiki\tsawiktionary\n# dump-date\t20261001\n# content-language\tsa\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\t\tmain\tdictionary_entries\n" ++
+        "10\tफलकम्\tTemplate\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\n" ++
+        "14\tवर्गः\tCategory\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\n";
+    var namespaces = try namespace_registry.Registry.init(a, namespace_bytes);
+    defer namespaces.deinit();
+    for (0..9) |arm| {
+        var tmp = std.testing.tmpDir(.{});
+        defer tmp.cleanup();
+        const root = try tmp.dir.realPathFileAlloc(io, ".", a);
+        const parent_index = "0\t0\tफलकम्:-sa-\t\t854\t3997\t2026-10-01T00:00:00Z\tTest\twikitext\t10\t1\t0\n";
+        const peer_index = "0\t0\tफलकम्:sa\t\t870\t4013\t2026-10-01T00:00:00Z\tTest\twikitext\t10\t1\t0\n";
+        const index = try std.fs.path.join(a, &.{ root, "page-index.tsv" });
+        const peer_row = if (arm == 6) try std.mem.replaceOwned(u8, a, peer_index, "फलकम्:sa", "फलकम्:en") else peer_index;
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = index, .data = try std.mem.concat(a, u8, &.{ parent_index, peer_row, if (arm == 7) peer_index else "" }) });
+        var templates = try dump_source.TemplateSourceWriter.init(io, a, root);
+        defer templates.deinit();
+        const provider = switch (arm) {
+            1 => "[[:Category:संस्कृतं]]\n= ''[[संस्कृतं]]'' =",
+            2 => "[[Category:Other]]\n= ''[[संस्कृतं]]'' =",
+            3 => banner ++ "\n# other body",
+            else => banner,
+        };
+        try templates.append(0, 854, 3997, provider);
+        try templates.append(1, 870, 4013, if (arm == 4) "[[Other]]" else if (arm == 5) "<nowiki>[[संस्कृतं]]</nowiki>" else peer);
+        if (arm == 7) try templates.append(2, 870, 4013, peer);
+        try templates.finish(index);
+        var registry = language_registry.Registry.empty(a);
+        defer registry.deinit();
+        try registry.addTsv("# content-language\tsa\n# mediawiki\nsa\tसंस्कृतम्\tsa\tSanskrit\tsan\nen\tEnglish\n");
+        if (arm == 8) try registry.addLocalAlias(label, "en");
+        if (arm == 7) {
+            try std.testing.expectError(error.DuplicateLanguageTemplateSource, loadSourceEquivalentLanguageTemplates(io, a, root, &namespaces, &registry));
+            continue;
+        }
+        try loadSourceEquivalentLanguageTemplates(io, a, root, &namespaces, &registry);
+        try std.testing.expect(!registry.matchesSourceLanguageBanner("sa", heading, 1));
+        try std.testing.expectEqual(arm == 0, registry.matchesSourceLanguageBannerPrefix("sa", heading, 1, "[[Category:संस्कृतं]]"));
+        try std.testing.expect(!registry.matchesSourceLanguageBanner("en", heading, 1));
+        try std.testing.expect(!registry.matchesSourceLanguageBanner("sa", heading, 2));
+        if (arm != 0) continue;
+        try std.testing.expect(registry.resolveTrusted(label) == null);
+        try std.testing.expect(registry.matchesSourceLanguageBannerPrefix("sa", heading, 1, "[[Category:संस्कृतं]]"));
+        try std.testing.expect(!registry.matchesSourceLanguageBannerPrefix("sa", heading, 1, "[[Category:Other]]"));
+        const first = "\n'''निर्वाह'''  : (पु.)\n* [[end]]\n* [[fin]]\n";
+        const later = "= यन्त्रोपारोपितकोशांशः =\n== वाचस्पत्यम् ==\n# [[reference]]\n";
+        const output = try std.fs.path.join(a, &.{root, "blobs"});
+        var writer = try encoder.blob_builder.Writer.init(io, a, output);
+        defer writer.deinit();
+        const codes = languageCodes(&registry, &namespaces);
+        writer.language_codes = codes;
+        try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "निर्वाह", banner ++ first ++ later, "{{-sa-}}" ++ first ++ later, null);
+        try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "changed category", "[[Category:Other]]\n= ''[[संस्कृतं]]'' =" ++ first ++ later, "{{-sa-}}" ++ first ++ later, null);
+        try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "other raw provider", banner ++ first ++ later, "{{-en-}}" ++ first ++ later, null);
+        const stats = try writer.finish(codes);
+        try std.testing.expectEqual(@as(usize, 4), stats.language_records);
+        for ([_][]const u8{ "changed category", "other raw provider" }) |title| {
+            const unknown = try MgEqualsPrefixTest.entry(a, output, "Unclassified", title);
+            try std.testing.expectEqualStrings("", unknown.language_code);
+        }
+        for ([_][]const u8{ "संस्कृतम्", "Unclassified" }) |owner| {
+            const entry = try MgEqualsPrefixTest.entry(a, output, owner, "निर्वाह");
+            const is_sanskrit = std.mem.eql(u8, owner, "संस्कृतम्");
+            try std.testing.expectEqualStrings(if (is_sanskrit) "sa" else "", entry.language_code);
+            var words: [3]usize = @splat(0);
+            for (entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+                if (span.kind == .link) for ([_][]const u8{ "end", "fin", "reference" }, 0..) |target, i| {
+                    if (std.mem.eql(u8, span.target, target)) words[i] += 1;
+                };
+            };
+            try std.testing.expectEqual(if (is_sanskrit) [3]usize{ 1, 1, 0 } else [3]usize{ 0, 0, 1 }, words);
         }
     }
 }

@@ -2917,7 +2917,7 @@ fn sourceBannerBoundaryOnly(codes: LanguageCodes, raw: language_source.Section, 
         boundary(codes.ctx, raw.heading, heading.title, heading.level);
 }
 
-fn rawPrefixBannerLanguage(codes: LanguageCodes, raw: []const u8, raw_sections: []const language_source.Section, rendered: []const language_source.Section) ?ResolvedLanguage {
+fn rawPrefixBannerLanguage(codes: LanguageCodes, raw: []const u8, raw_sections: []const language_source.Section, rendered: []const language_source.Section, paired_prefix: bool) ?ResolvedLanguage {
     if (raw_sections.len == 0 or rendered.len == 0) return null;
     const first = raw_sections[0];
     if (!first.hyphen_marker) return null;
@@ -2935,6 +2935,7 @@ fn rawPrefixBannerLanguage(codes: LanguageCodes, raw: []const u8, raw_sections: 
     if (parsed.level < 1 or parsed.level > 2) return null;
     const heading = parsed.title;
     if (heading.len > 4096 or !std.mem.eql(u8, heading, section.heading)) return null;
+    if (paired_prefix) return canonical;
     // This exact root invocation must have an authenticated literal template
     // banner proof. No ordinary alias or code-shaped POS name is promoted.
     if (codes.source_banner_fn) |matches| if (matches(codes.ctx, canonical.code, heading, parsed.level)) {
@@ -6697,9 +6698,13 @@ fn processMain(
         if (resolved == null) resolved = sourceLinkedHeadingOwner(codes, source_missing, section);
         if (resolved == null and index == 0) {
             if (raw_source) |raw| {
-                resolved = rawPrefixBannerLanguage(codes, raw, raw_sections.items, page_sections.items);
+                const paired_prefix = raw_sections.items.len != 0 and page_prefix.len != 0 and
+                    !source_missing.unknown and !source_missing.lost_missing_range and
+                    sourceBannerDeclaredPrelude(codes, raw_sections.items[0], section, std.mem.trim(u8, page_prefix, " \t\r\n")) and
+                    calibratedBoundaryRangesClean(source_missing, 0, page_prefix.len) and sourceCategoryHeaderRangesClean(source_missing, section);
+                resolved = rawPrefixBannerLanguage(codes, raw, raw_sections.items, page_sections.items, paired_prefix);
                 source_banner_scoped_owner = resolved != null and raw_sections.items.len != 0 and
-                    sourceBannerPairMatches(codes, raw_sections.items[0], section);
+                    (paired_prefix or sourceBannerPairMatches(codes, raw_sections.items[0], section));
             }
         }
         if (resolved == null and index == 0 and sr_mul_candidate) {
@@ -24253,16 +24258,16 @@ test "source banner first region remains owned before an independently unknown a
     var rendered = [_]language_source.Section{
         .{ .heading = "[[Romanian]]", .source = source[0..cut] }, .{ .heading = "Salentina", .source = source[cut..] },
     };
-    const owner = rawPrefixBannerLanguage(codes, raw_source, &raw, &rendered).?;
+    const owner = rawPrefixBannerLanguage(codes, raw_source, &raw, &rendered, false).?;
     try std.testing.expectEqualStrings("ro", owner.code);
     try std.testing.expect(sourceBannerPairMatches(codes, raw[0], rendered[0]));
     try std.testing.expect(resolveSection(codes, rendered[1]) == null);
     try std.testing.expect(codes.resolve("scn-sal") == null);
     rendered[0].heading = "Salentina";
-    try std.testing.expect(rawPrefixBannerLanguage(codes, raw_source, &raw, &rendered) == null);
+    try std.testing.expect(rawPrefixBannerLanguage(codes, raw_source, &raw, &rendered, false) == null);
     rendered[0].heading = "[[Romanian]]";
     codes.source_banner_fn = null;
-    try std.testing.expect(rawPrefixBannerLanguage(codes, raw_source, &raw, &rendered) == null);
+    try std.testing.expect(rawPrefixBannerLanguage(codes, raw_source, &raw, &rendered, false) == null);
 }
 
 test "source banner partition keeps a physical preamble unowned only after protected raw and rendered root proofs" {

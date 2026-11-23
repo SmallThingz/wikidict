@@ -1789,6 +1789,7 @@ const tools_partitions = [_]ToolsPartition{
         "blob_build.test.SL ",
         "blob_build.test.SS ",
         "blob_build.test.Samoan ",
+        "blob_build.test.Sanskrit ",
         "blob_build.test.TE ",
         "blob_build.test.TN ",
         "blob_build.test.TPI ",

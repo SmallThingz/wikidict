@@ -52,6 +52,32 @@ pub fn parse(source: []const u8, ns: *const namespaces.Registry, behavior: ?*con
     var value = result; value.emitted_prefix = declared.emitted_prefix; return value;
 }
 
+// A code-named source peer emits a single ordinary link. The hyphen-code
+// banner must emit that exact link in an italic H1 and name the same hidden
+// category. The result certifies this banner and creates no heading alias.
+pub fn pairedCategoryHeading(source: []const u8, peer: []const u8, ns: *const namespaces.Registry,
+    registry: *const languages.Registry, code: []const u8) ?languages.SourceLanguageBanner
+{
+    if (!registry.codes.contains(code) or !std.mem.startsWith(u8, peer, "[[") or !std.mem.endsWith(u8, peer, "]]")) return null;
+    if (peer.len < 5) return null;
+    const label = peer[2 .. peer.len - 2];
+    if (!plain(label) or std.mem.indexOfAny(u8, label, ":#_") != null or
+        !std.unicode.utf8ValidateSlice(label) or !std.mem.eql(u8, label, std.mem.trim(u8, label, " ")) or
+        !registry.sourceBannerCategoryNameCompatible(code, label)) return null;
+    const split = std.mem.indexOfScalar(u8, source, '\n') orelse return null;
+    const category = source[0..split];
+    const name = bannerCategoryName(category, ns, null) orelse return null;
+    if (!std.mem.eql(u8, name, label) or !std.mem.eql(u8, category, std.mem.trim(u8, category, " \t\r"))) return null;
+    const line = source[split + 1 ..];
+    const prefix = "= ''";
+    const suffix = "'' =";
+    if (line.len != prefix.len + peer.len + suffix.len or !std.mem.startsWith(u8, line, prefix) or
+        !std.mem.endsWith(u8, line, suffix) or !std.mem.eql(u8, line[prefix.len .. line.len - suffix.len], peer)) return null;
+    const heading = syntax.controlHeading(line, null) orelse return null;
+    return .{ .heading = heading.title, .level = 1, .target = label, .label = label,
+        .authority = .paired_first_category, .emitted_prefix = .{ .category = category, .suffix = "" } };
+}
+
 fn bannerCategoryName(link: []const u8, ns: *const namespaces.Registry, behavior: ?*const Behavior) ?[]const u8 {
     if (!std.mem.startsWith(u8, link, "[[") or !std.mem.endsWith(u8, link, "]]") or
         !hiddenCategory(link, ns, behavior) or std.mem.indexOfAny(u8, link, "|#") != null) return null;

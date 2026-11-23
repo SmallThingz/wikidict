@@ -73,7 +73,7 @@ pub const SourceLanguageBannerPrefix = struct {
 
 pub const SourceLanguageBanner = struct {
     heading: []const u8, level: u8, target: []const u8, label: []const u8,
-    authority: enum { known_names, literal_code, category_declaration } = .known_names,
+    authority: enum { known_names, literal_code, category_declaration, paired_first_category } = .known_names,
     // Exact static transclusion bytes before this provider's own heading.
     emitted_prefix: ?SourceLanguageBannerPrefix = null,
 };
@@ -428,8 +428,8 @@ pub const Registry = struct {
     }
 
     pub fn matchesSourceLanguageBannerPrefix(self: *const Registry, code_value: []const u8, heading: []const u8, level: u8, emitted: []const u8) bool {
-        if (!self.matchesSourceLanguageBanner(code_value, heading, level)) return false;
         const proof = (self.source_banners.get(code_value) orelse return false) orelse return false;
+        if (!self.bannerHeadingMatches(proof, code_value, heading, level)) return false;
         const prefix = proof.emitted_prefix orelse return false;
         return prefix.matches(emitted);
     }
@@ -579,6 +579,10 @@ pub const Registry = struct {
 
     pub fn matchesSourceLanguageBanner(self: *const Registry, code_value: []const u8, heading: []const u8, level: u8) bool {
         const proof = (self.source_banners.get(code_value) orelse return false) orelse return false;
+        return proof.authority != .paired_first_category and self.bannerHeadingMatches(proof, code_value, heading, level);
+    }
+
+    fn bannerHeadingMatches(self: *const Registry, proof: SourceLanguageBanner, code_value: []const u8, heading: []const u8, level: u8) bool {
         return proof.level == level and std.mem.eql(u8, proof.heading, heading) and
             self.sourceBannerNamesAllowed(code_value, proof);
     }
