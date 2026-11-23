@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QJsonObject>
+#include <QJsonDocument>
 #include <QColor>
 #include <QMainWindow>
 #include <QPointer>
@@ -101,6 +102,7 @@ private:
     void showLearningDialog(int tab = 0);
     void applyTheme();
     bool renderResponse(const QByteArray &json, bool addVisit = true, const std::optional<QString> &fragment = std::nullopt, bool deferCommit = false);
+    bool renderDocument(const QJsonDocument &document, bool addVisit, const std::optional<QString> &fragment, bool deferCommit);
     void commitReadingEntry();
     bool refreshReading();
     void updateSectionFoldControl();
@@ -124,7 +126,8 @@ private:
     QString spansHtml(const QJsonArray &spans, qreal leftMargin = 0, const QString &prefix = {}, const QString &cellBackground = {}, qreal contextPointSize = 0, const QColor &inheritedInk = {}, int sourceRun = -1, bool zeroFontContext = false, bool typedScopeOwnsIsolation = false, const QJsonObject &linkPaint = {}, bool computedCellTraits = false, const QJsonValue &contextFamily = {}, const QJsonArray &citationBacklinks = {}) const;
     QString tableHtml(const QJsonObject &table, int depth, int tableDepth = 1, const QString &inheritedBackground = {}, const QString &location = {}, const QString &inheritedAlignment = {}, const QString &listMarker = {}, FlowConstruction::RenderContext context = {}) const;
     SavedWord savedWord(const QJsonObject &entry) const;
-    QString clueFor(const QJsonObject &entry) const;
+    static QString clueFor(const QJsonObject &entry);
+    static SavedWord savedWordForOrigin(const QJsonObject &entry, const QString &root, const QString &edition);
     QVector<SavedWord> learningPool() const;
     void reportError(const QString &title, const std::exception &error);
 
@@ -182,7 +185,7 @@ private:
     QTimer *searchTimer_ = nullptr;
     QTimer *inlineImageNoticeTimer_ = nullptr;
     QJsonObject currentEntry_;
-    QByteArray currentJson_;
+    QJsonDocument currentResponse_;
     QString resultsQuery_;
     QVector<QString> searchTitles_;
     QVector<SavedWord> sampleWords_;

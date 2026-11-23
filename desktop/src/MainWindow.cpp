@@ -3220,7 +3220,7 @@ struct LoadedDataset {
     std::unique_ptr<DictApi> api;
     QStringList languages;
     QVector<QString> titles;
-    QVector<QJsonObject> practice;
+    QVector<SavedWord> practice;
     QString originRoot;
     QString originEdition;
     QString error;
@@ -3516,11 +3516,7 @@ void MainWindow::loadDataset(const QString &root, const QString &language, const
             originRoot_ = loaded->originRoot;
             originEdition_ = loaded->originEdition;
             searchTitles_ = std::move(loaded->titles);
-            sampleWords_.clear();
-            for (const QJsonObject &entry : loaded->practice) {
-                try { sampleWords_.append(savedWord(entry)); }
-                catch (const std::exception &) { /* Unreadable sampled entries do not prevent dictionary browsing. */ }
-            }
+            sampleWords_ = std::move(loaded->practice);
             {
                 QSignalBlocker kindBlocker(kind_);
                 QSignalBlocker languageBlocker(language_);
@@ -3532,7 +3528,7 @@ void MainWindow::loadDataset(const QString &root, const QString &language, const
             if (resetVisits) { visits_.clear(); visitIndex_ = -1; }
             static_cast<ReadingBrowser *>(reading_)->clearDisclosures();
             currentEntry_ = {};
-            currentJson_.clear();
+            currentResponse_ = {};
             media_->setEntry({});
             bookmark_->setEnabled(false);
             sections_->clear();
@@ -3711,7 +3707,10 @@ void MainWindow::loadDataset(const QString &root, const QString &language, const
                 if (sampled.contains(index)) continue;
                 sampled.insert(index);
                 const auto entries = QJsonDocument::fromJson(loaded->api->lookup(loaded->titles[index])).object().value(QStringLiteral("entries")).toArray();
-                if (!entries.isEmpty()) loaded->practice.append(entries.first().toObject());
+                if (!entries.isEmpty()) {
+                    try { loaded->practice.append(savedWordForOrigin(entries.first().toObject(), loaded->originRoot, loaded->originEdition)); }
+                    catch (const std::exception &) { /* Unreadable samples do not prevent browsing. */ }
+                }
             }
             if (QFileInfo(root).canonicalFilePath() != loaded->originRoot || LibraryStorage::editionIdentity(root) != loaded->originEdition)
                 throw DictApiError("The dictionary changed while opening. Open it again.");
@@ -3738,7 +3737,7 @@ void MainWindow::chooseRoot() {
             sampleWords_.clear();
             static_cast<ReadingBrowser *>(reading_)->clearDisclosures();
             currentEntry_ = {};
-            currentJson_.clear();
+            currentResponse_ = {};
             json_->clear();
             media_->setEntry({});
             visits_.clear();
@@ -3954,8 +3953,8 @@ void MainWindow::setupUi() {
             inlineImageNoticeTimer_->start();
         });
     connect(entryTabs_, &QTabWidget::currentChanged, this, [this] {
-        if (entryTabs_->currentWidget() == json_ && json_->document()->isEmpty() && !currentJson_.isEmpty())
-            json_->setPlainText(QString::fromUtf8(currentJson_));
+        if (entryTabs_->currentWidget() == json_ && json_->document()->isEmpty() && !currentResponse_.isNull())
+            json_->setPlainText(QString::fromUtf8(currentResponse_.toJson(QJsonDocument::Indented)));
     });
     right->addWidget(entryTabs_, 1);
 
@@ -4548,9 +4547,11 @@ bool MainWindow::openWord(const QString &word, const std::optional<QString> &fra
     if (!api_ || loading_ || word.trimmed().isEmpty()) return false;
     try {
         QString exact = word.trimmed();
-        QByteArray response = api_->lookup(exact);
         QJsonParseError parseError{};
-        QJsonDocument document = QJsonDocument::fromJson(response, &parseError);
+        QJsonDocument document = [&] {
+            const QByteArray response = api_->lookup(exact);
+            return QJsonDocument::fromJson(response, &parseError);
+        }();
         if (parseError.error != QJsonParseError::NoError || !document.isObject() ||
             !document.object().value(QStringLiteral("entries")).isArray())
             throw DictApiError("invalid JSON returned by dictionary core");
@@ -4558,8 +4559,7 @@ bool MainWindow::openWord(const QString &word, const std::optional<QString> &fra
             const auto found = std::lower_bound(searchTitles_.cbegin(), searchTitles_.cend(), exact, titleLess);
             if (found != searchTitles_.cend() && found->compare(exact, Qt::CaseInsensitive) == 0) {
                 exact = *found;
-                response = api_->lookup(exact);
-                document = QJsonDocument::fromJson(response, &parseError);
+                document = QJsonDocument::fromJson(api_->lookup(exact), &parseError);
                 if (parseError.error != QJsonParseError::NoError || !document.isObject() ||
                     !document.object().value(QStringLiteral("entries")).isArray())
                     throw DictApiError("invalid JSON returned by dictionary core");
@@ -4584,7 +4584,7 @@ bool MainWindow::openWord(const QString &word, const std::optional<QString> &fra
             return false;
         }
         search_->setText(exact);
-        if (!renderResponse(response, true, fragment)) return false;
+        if (!renderDocument(document, true, fragment, false)) return false;
         refreshSearch();
         return true;
     } catch (const std::exception &error) {
@@ -4886,15 +4886,17 @@ void MainWindow::bindInlineImages() {
 }
 
 bool MainWindow::renderResponse(const QByteArray &bytes, bool addVisit, const std::optional<QString> &fragment, bool deferCommit) {
+    const QJsonDocument document = QJsonDocument::fromJson(bytes);
+    return renderDocument(document, addVisit, fragment, deferCommit);
+}
+
+bool MainWindow::renderDocument(const QJsonDocument &document, bool addVisit, const std::optional<QString> &fragment, bool deferCommit) {
     ++inlineImageGeneration_;
-    QJsonParseError parseError{};
-    const QJsonDocument document = QJsonDocument::fromJson(bytes, &parseError);
-    if (parseError.error != QJsonParseError::NoError || !document.isObject())
-        throw DictApiError("invalid JSON returned by dictionary core");
+    if (!document.isObject()) throw DictApiError("invalid JSON returned by dictionary core");
     const QJsonArray entries = document.object().value(QStringLiteral("entries")).toArray();
     if (entries.isEmpty() || !entries.first().isObject()) return false;
     if (addVisit) saveVisit();
-    currentJson_ = document.toJson(QJsonDocument::Indented);
+    currentResponse_ = document;
     static_cast<ReadingBrowser *>(reading_)->clearDisclosures();
     readingUncommitted_ = true;
     currentEntry_ = entries.first().toObject();
@@ -5912,10 +5914,10 @@ void MainWindow::navigate(int direction) {
     const QString previousKind = api_->kind();
     try {
         api_->select(visit.language, visit.kind);
-        const QByteArray bytes = api_->lookup(visit.title);
-        if (QJsonDocument::fromJson(bytes).object().value(QStringLiteral("entries")).toArray().isEmpty())
+        const QJsonDocument document = QJsonDocument::fromJson(api_->lookup(visit.title));
+        if (document.object().value(QStringLiteral("entries")).toArray().isEmpty())
             throw DictApiError("This entry is no longer available in the open dictionary folder.");
-        if (!renderResponse(bytes, false, std::nullopt, true)) return;
+        if (!renderDocument(document, false, std::nullopt, true)) return;
         QSignalBlocker kindBlocker(kind_);
         QSignalBlocker languageBlocker(language_);
         kind_->setCurrentIndex(kind_->findData(visit.kind));
@@ -7429,7 +7431,7 @@ QString MainWindow::entryHtml(const QJsonObject &entry, bool bodyBoundary) const
     return out + QStringLiteral("</body>");
 }
 
-QString MainWindow::clueFor(const QJsonObject &entry) const {
+QString MainWindow::clueFor(const QJsonObject &entry) {
     auto textFor = [](const QJsonArray &spans) {
         QString text;
         const auto skip = [](const QJsonObject &span) {
@@ -7526,13 +7528,17 @@ QString MainWindow::clueFor(const QJsonObject &entry) const {
 }
 
 SavedWord MainWindow::savedWord(const QJsonObject &entry) const {
+    return savedWordForOrigin(entry, originRoot_, originEdition_);
+}
+
+SavedWord MainWindow::savedWordForOrigin(const QJsonObject &entry, const QString &root, const QString &edition) {
     SavedWord word;
     word.title = entry.value(QStringLiteral("title")).toString();
     word.language = entry.value(QStringLiteral("language")).toString();
     word.kind = entry.value(QStringLiteral("kind")).toString();
     word.clue = clueFor(entry);
-    word.originRoot = originRoot_;
-    word.originEdition = originEdition_;
+    word.originRoot = root;
+    word.originEdition = edition;
     word.key = QString::fromUtf8(QJsonDocument(QJsonArray{word.originRoot, word.originEdition, word.kind, word.language, word.title}).toJson(QJsonDocument::Compact));
     word.lastViewed = QDateTime::currentMSecsSinceEpoch();
     word.views = 1;
@@ -7548,12 +7554,11 @@ void MainWindow::showRandomWord() {
     try {
         const QString source = learning_.settings().randomPool;
         if (source == QStringLiteral("all")) {
-            const QByteArray response = api_->random();
-            const QJsonDocument document = QJsonDocument::fromJson(response);
+            const QJsonDocument document = QJsonDocument::fromJson(api_->random());
             const QJsonArray entries = document.object().value(QStringLiteral("entries")).toArray();
             if (!entries.isEmpty()) {
                 search_->setText(entries.first().toObject().value(QStringLiteral("title")).toString());
-                if (!renderResponse(response)) return;
+                if (!renderDocument(document, true, std::nullopt, false)) return;
                 refreshSearch();
                 if (compactNavigation_ && !currentEntry_.isEmpty()) reading_->setFocus();
             }

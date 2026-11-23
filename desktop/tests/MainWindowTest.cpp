@@ -5695,7 +5695,7 @@ private slots:
         QTRY_COMPARE(title(window), QStringLiteral("cat"));
         QCOMPARE(window.readingPointSize_, 12);
         QVERIFY(window.renderResponse(bytes, false)); QCOMPARE(window.currentEntry_, entry);
-        QCOMPARE(QJsonDocument::fromJson(window.currentJson_), response);
+        QCOMPARE(window.currentResponse_, response);
         auto *reader = window.reading_; auto *document = reader->document();
         auto *layout = qobject_cast<QTextDocumentLayout *>(document->documentLayout()); QVERIFY(layout);
         bool geometryFinite = true;
@@ -5819,7 +5819,7 @@ private slots:
             for (auto it = lines.cbegin(); it != lines.cend(); ++it) projectedLines.append(it.value());
             const bool unchanged = document == reader->document() && layout == document->documentLayout()
                 && revision == document->revision() && count == document->characterCount() && raw == document->toRawText()
-                && window.currentEntry_ == entry && QJsonDocument::fromJson(window.currentJson_) == response;
+                && window.currentEntry_ == entry && window.currentResponse_ == response;
             for (qreal value : {documentSize.width(), documentSize.height(), document->pageSize().width(), document->textWidth(), document->documentMargin()}) finite(value);
             const QJsonObject observation{{"window", QJsonArray{size.width(), size.height()}},
                 {"viewport", QJsonArray{reader->viewport()->width(), reader->viewport()->height()}},
@@ -9511,7 +9511,7 @@ private slots:
                 QVERIFY(window.renderResponse(payload, false)); window.readingPaneAction_->trigger(); QTRY_VERIFY(window.reading_->isVisible());
                 auto *document = window.reading_->document(); auto *native = document->documentLayout(); native->documentSize();
                 QCOMPARE(native->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
-                QCOMPARE(window.currentEntry_, entry); QCOMPARE(QJsonDocument::fromJson(window.currentJson_), response);
+                QCOMPARE(window.currentEntry_, entry); QCOMPARE(window.currentResponse_, response);
                 QTextCursor first = document->find(QStringLiteral("Brasil")); QVERIFY(!first.isNull()); auto *owner = first.currentFrame(); QVERIFY(owner);
                 QCOMPARE(QJsonDocument::fromJson(owner->frameFormat().property(FlowConstruction::containerSourceProperty).toByteArray()).object(), original);
                 const auto policy = owner->frameFormat().property(FlowConstruction::containerAutoMarginsProperty).toMap();
@@ -10907,7 +10907,7 @@ private slots:
                 QTRY_VERIFY(window.reading_->isVisible());
                 auto *document = window.reading_->document(); auto *layout = document->documentLayout();
                 layout->documentSize(); QCOMPARE(layout->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
-                QCOMPARE(window.currentEntry_, entry); QCOMPARE(QJsonDocument::fromJson(window.currentJson_), response);
+                QCOMPARE(window.currentEntry_, entry); QCOMPARE(window.currentResponse_, response);
                 QVERIFY(document->toPlainText().contains(QString::fromUtf8("absolvição (dos pecados)")));
                 auto selected = imageCursor(document); QVERIFY(!selected.isNull());
                 const auto imageFormat = selected.charFormat().toImageFormat(); auto *floating = selected.currentFrame();
@@ -11023,7 +11023,7 @@ private slots:
                 QVERIFY(window.renderResponse(payload, false)); checkpoint("installed-es-render-after"); window.readingPaneAction_->trigger(); QTRY_VERIFY(window.reading_->isVisible());
                 auto *document = window.reading_->document(); auto *native = document->documentLayout(); native->documentSize();
                 QCOMPARE(native->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
-                QCOMPARE(window.currentEntry_, entry); QCOMPARE(QJsonDocument::fromJson(window.currentJson_), response);
+                QCOMPARE(window.currentEntry_, entry); QCOMPARE(window.currentResponse_, response);
                 auto image = imageCursor(document); QVERIFY(!image.isNull()); QCOMPARE(image.selectedText(), QString(QChar::ObjectReplacementCharacter));
                 const auto imageFormat = image.charFormat().toImageFormat(); auto *floating = image.currentFrame(); auto *outer = floating->parentFrame(); QVERIFY(outer);
                 QCOMPARE(QJsonDocument::fromJson(floating->frameFormat().property(FlowConstruction::containerSourceProperty).toByteArray()).object(), imageOwner);
@@ -11173,7 +11173,7 @@ private slots:
             const QByteArray goodPayload = goodFixture.readAll(); const auto goodResponse = QJsonDocument::fromJson(goodPayload); QVERIFY(goodResponse.isObject());
             QCOMPARE(goodResponse.object().value("entries").toArray().first().toObject().value("language_code").toString(), QStringLiteral("en"));
             checkpoint("installed-en-render-before");
-            QVERIFY(window.renderResponse(goodPayload, false)); checkpoint("installed-en-render-after"); QCOMPARE(QJsonDocument::fromJson(window.currentJson_), goodResponse);
+            QVERIFY(window.renderResponse(goodPayload, false)); checkpoint("installed-en-render-after"); QCOMPARE(window.currentResponse_, goodResponse);
             QVERIFY(window.reading_->document()->toPlainText().contains(QStringLiteral("barracuda")));
             checkpoint("installed-es-final-render-before");
             QVERIFY(window.renderResponse(payload, false)); QCOMPARE(window.currentEntry_, entry);
@@ -12928,7 +12928,7 @@ private slots:
         }
         window.readingPointSize_ = 14;
         QVERIFY(window.renderResponse(readerBytes, false)); QCOMPARE(window.currentEntry_, entry);
-        QCOMPARE(QJsonDocument::fromJson(window.currentJson_), response);
+        QCOMPARE(window.currentResponse_, response);
         QCOMPARE(document->documentLayout()->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
         QVERIFY(document->toPlainText().contains(QStringLiteral("汉字或谚汉混合表记：거익심조〈去益深造〉")));
         window.readingPaneAction_->trigger(); QCoreApplication::processEvents();
@@ -17591,7 +17591,7 @@ private slots:
         const QJsonObject bad = entry(double(std::numeric_limits<float>::max()));
         QVERIFY(!window.renderResponse(response(bad)));
         QCOMPARE(window.currentEntry_, bad);
-        QCOMPARE(QJsonDocument::fromJson(window.currentJson_).object().value("entries").toArray().first().toObject(), bad);
+        QCOMPARE(window.currentResponse_.object().value("entries").toArray().first().toObject(), bad);
         QVERIFY(window.readingUncommitted_);
         QCOMPARE(window.visitIndex_, visit);
         QVERIFY(window.reading_->toPlainText().contains(QStringLiteral("This entry could not be displayed.")));
@@ -17666,7 +17666,7 @@ private slots:
         QTest::qWait(20);
         QVERIFY(window.grab().save(stem + QStringLiteral("-initial.png")));
         QVERIFY(composed); QVERIFY(!window.readingUncommitted_);
-        QCOMPARE(window.currentEntry_, entry); QCOMPARE(QJsonDocument::fromJson(window.currentJson_), response);
+        QCOMPARE(window.currentEntry_, entry); QCOMPARE(window.currentResponse_, response);
         auto *document = window.reading_->document();
         QVERIFY(document->isLayoutEnabled()); QVERIFY(SemanticHtml::hasTableBoxes(document));
         const QString source = document->toRawText();
@@ -17714,7 +17714,7 @@ private slots:
             QVERIFY(captionBox.height() > 0); QVERIFY(captionBox.bottom() <= box.top());
             QCOMPARE(document->findBlock(grid->firstPosition()).layout()->lineCount(), 0);
             QCOMPARE(document->toRawText(), source); QCOMPARE(wrapper->frameFormat(), wrapperFormat); QCOMPARE(grid->frameFormat(), gridFormat);
-            QCOMPARE(QJsonDocument::fromJson(window.currentJson_), response);
+            QCOMPARE(window.currentResponse_, response);
             QCOMPARE(caption.selectedText(), QStringLiteral("Caption link")); QCOMPARE(suffix.selectedText(), QStringLiteral("visible action"));
         }
     }
@@ -17767,7 +17767,7 @@ private slots:
         QTRY_COMPARE(title(window), QStringLiteral("cat"));
         QVERIFY(window.renderResponse(bytes, false));
         QCOMPARE(window.currentEntry_, entry);
-        QCOMPARE(QJsonDocument::fromJson(window.currentJson_), response);
+        QCOMPARE(window.currentResponse_, response);
         QVERIFY(!window.readingUncommitted_);
         auto *reader = window.reading_;
         auto *document = reader->document();
@@ -17835,7 +17835,7 @@ private slots:
             QVERIFY(bounds.isValid() && qIsFinite(bounds.x()) && qIsFinite(bounds.y())
                 && qIsFinite(bounds.width()) && qIsFinite(bounds.height()));
             QCOMPARE(window.readingLogicalRevision_, document->revision());
-            QCOMPARE(QJsonDocument::fromJson(window.currentJson_), response);
+            QCOMPARE(window.currentResponse_, response);
             QVERIFY(window.grab().save(stem + QStringLiteral("-%1-width%2.png").arg(step++).arg(width)));
         }
     }
@@ -21539,7 +21539,7 @@ private slots:
         QTRY_COMPARE(title(window), QStringLiteral("cat"));
         QVERIFY(window.renderResponse(bytes, false));
         QCOMPARE(window.currentEntry_, entry);
-        QCOMPARE(QJsonDocument::fromJson(window.currentJson_), response);
+        QCOMPARE(window.currentResponse_, response);
         QVERIFY(!window.readingUncommitted_);
         auto *reader = window.reading_;
         reader->setFocus(Qt::OtherFocusReason);
@@ -21666,7 +21666,7 @@ private slots:
         QVERIFY(recoveredPageWidth > 0);
         QCOMPARE(reader->document(), document);
         QCOMPARE(window.currentEntry_, entry);
-        QCOMPARE(QJsonDocument::fromJson(window.currentJson_), response);
+        QCOMPARE(window.currentResponse_, response);
         QVERIFY(!window.readingUncommitted_);
         QVERIFY(document->isLayoutEnabled());
         QCOMPARE(document->toRawText(), source);
@@ -22348,7 +22348,7 @@ private slots:
             reader->setAccessibleDescription(QStringLiteral("Previous composition description"));
             QVERIFY(!window.renderResponse(response(failedEntry)));
             QCOMPARE(window.currentEntry_, failedEntry);
-            QCOMPARE(QJsonDocument::fromJson(window.currentJson_).object().value("entries").toArray().first().toObject(), failedEntry);
+            QCOMPARE(window.currentResponse_.object().value("entries").toArray().first().toObject(), failedEntry);
             QVERIFY(window.readingUncommitted_); QVERIFY(!window.loading_);
             QCOMPARE(reader->document()->toPlainText(), failure);
             QVERIFY(reader->accessibleDescription().isEmpty());
@@ -22498,7 +22498,7 @@ private slots:
         reader->setAccessibleDescription(QStringLiteral("Description before empty composition"));
         QVERIFY(window.renderResponse(publishedEmpty));
         QCOMPARE(window.currentEntry_, empty);
-        QCOMPARE(QJsonDocument::fromJson(window.currentJson_), emptyEnvelope);
+        QCOMPARE(window.currentResponse_, emptyEnvelope);
         QCOMPARE(title(window), empty.value(QStringLiteral("title")).toString());
         QCOMPARE(window.meta_->text(), QString::fromUtf8("polski · Dictionary"));
         QVERIFY(reader->accessibleDescription().isEmpty());
@@ -22509,7 +22509,7 @@ private slots:
         QVERIFY(emptyText.startsWith(emptyMessage));
         QVERIFY(emptyText.contains(QStringLiteral("Wiktionary contributors")));
         QVERIFY(emptyText.contains(QStringLiteral("CC BY-SA 4.0")));
-        QVERIFY(!window.currentJson_.contains(emptyMessage.toUtf8()));
+        QVERIFY(!window.currentResponse_.toJson(QJsonDocument::Indented).contains(emptyMessage.toUtf8()));
         auto *accessible = QAccessible::queryAccessibleInterface(reader);
         QVERIFY(accessible && accessible->textInterface());
         const auto *accessibleText = accessible->textInterface();
@@ -26036,7 +26036,7 @@ private slots:
             learningBefore = learning.value(QStringLiteral("learning/state")).toByteArray();
             entryBefore = window.currentEntry_;
             bodyBefore = window.reading_->toPlainText();
-            const QByteArray jsonBefore = window.currentJson_;
+            const QByteArray jsonBefore = window.currentResponse_.toJson(QJsonDocument::Indented);
             window.installEventFilter(&probe);
 
             bool modalChecked = false;
@@ -26067,7 +26067,7 @@ private slots:
             QCOMPARE(probe.count, 1);
             QVERIFY(window.isVisible());
             QCOMPARE(window.currentEntry_, entryBefore);
-            QCOMPARE(window.currentJson_, jsonBefore);
+            QCOMPARE(window.currentResponse_.toJson(QJsonDocument::Indented), jsonBefore);
             QCOMPARE(window.reading_->toPlainText(), bodyBefore);
             QCOMPARE(learning.value(QStringLiteral("learning/state")).toByteArray(), learningBefore);
             geometryBefore = window.saveGeometry();
@@ -26744,7 +26744,7 @@ private slots:
             if (richTitle) entry.insert("display_title", QJsonArray{QJsonObject{
                 {"kind", "link"}, {"text", exactTitle}, {"target", "Germano-Interlingua"}}});
             window.renderResponse(QJsonDocument(QJsonObject{{"entries", QJsonArray{entry}}}).toJson(), false);
-            const QByteArray json = window.currentJson_;
+            const QByteArray json = window.currentResponse_.toJson(QJsonDocument::Indented);
             const QString body = window.reading_->toPlainText();
             const QString bookmarkName = QAccessible::queryAccessibleInterface(bookmark)->text(QAccessible::Name);
             for (const int width : {640, 480, 1180, 640}) {
@@ -26814,7 +26814,7 @@ private slots:
                 QTest::keyClick(listen, Qt::Key_Tab);
                 QTRY_VERIFY(bookmark->hasFocus());
                 QCOMPARE(window.currentEntry_, entry);
-                QCOMPARE(window.currentJson_, json);
+                QCOMPARE(window.currentResponse_.toJson(QJsonDocument::Indented), json);
                 QCOMPARE(window.reading_->toPlainText(), body);
                 QVERIFY(QDir().mkpath(QStringLiteral(".tmp/ui-screenshots")));
                 const QString frame = QStringLiteral(".tmp/ui-screenshots/desktop-long-title-%1-%2-%3.png")
@@ -26850,7 +26850,7 @@ private slots:
         for (auto *button : window.searchPane_->findChildren<QPushButton *>())
             if (button->text() == QStringLiteral("Saved")) saved = button;
         QVERIFY(saved && saved->isVisible());
-        const QByteArray entryBefore = window.currentJson_;
+        const QByteArray entryBefore = window.currentResponse_.toJson(QJsonDocument::Indented);
         const QString queryBefore = window.search_->text();
         const auto historyKeys = [&] {
             QStringList keys;
@@ -26937,7 +26937,7 @@ private slots:
         QStyleOption mouseFocused;
         mouseFocused.initFrom(window.search_);
         QVERIFY(!mouseFocused.state.testFlag(QStyle::State_KeyboardFocusChange));
-        QCOMPARE(window.currentJson_, entryBefore);
+        QCOMPARE(window.currentResponse_.toJson(QJsonDocument::Indented), entryBefore);
         QCOMPARE(window.search_->text(), queryBefore);
         QCOMPARE(historyKeys(), historyBefore);
     }
@@ -26947,7 +26947,7 @@ private slots:
         window.show();
         QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
         window.bookmark_->click();
-        const QByteArray entryBefore = window.currentJson_;
+        const QByteArray entryBefore = window.currentResponse_.toJson(QJsonDocument::Indented);
         const auto keys = [](const QVector<SavedWord> &words) {
             QStringList values; for (const SavedWord &word : words) values.append(word.key); return values;
         };
@@ -27037,7 +27037,7 @@ private slots:
             window.activateWindow();
         QTRY_VERIFY(window.isActiveWindow());
         QTRY_COMPARE(QApplication::focusWidget(), static_cast<QWidget *>(window.search_));
-        QCOMPARE(window.currentJson_, entryBefore);
+        QCOMPARE(window.currentResponse_.toJson(QJsonDocument::Indented), entryBefore);
         QCOMPARE(keys(window.learning_.history()), historyBefore);
         QCOMPARE(keys(window.learning_.bookmarks()), bookmarksBefore);
         QCOMPARE(window.learning_.settings().historyLimit, 47);
@@ -27975,7 +27975,7 @@ private slots:
         const QString visible = window.reading_->toPlainText();
         QCOMPARE(visible.count(QStringLiteral("Advised heading")), 1);
         QCOMPARE(window.currentEntry_, entry);
-        QCOMPARE(QJsonDocument::fromJson(window.currentJson_).object(), QJsonObject({{"entries", QJsonArray{entry}}}));
+        QCOMPARE(window.currentResponse_.object(), QJsonObject({{"entries", QJsonArray{entry}}}));
         QCOMPARE(window.title_->accessibleName(), QStringLiteral("Tooltip consumer control"));
         const auto advisories = window.readingAdvisories();
         QVERIFY(advisories.contains(qMakePair(QString(), QStringLiteral("Empty range advice"))));
@@ -28218,7 +28218,7 @@ private slots:
         QCOMPARE(window.reading_->textCursor().charFormat().anchorHref(), href);
         QCOMPARE(window.reading_->toPlainText(), visible);
         QCOMPARE(window.currentEntry_, entry);
-        QCOMPARE(QJsonDocument::fromJson(window.currentJson_).object(), QJsonObject({{"entries", QJsonArray{entry}}}));
+        QCOMPARE(window.currentResponse_.object(), QJsonObject({{"entries", QJsonArray{entry}}}));
         window.resize(900, 600); window.resize(640, 600); window.refreshReading();
         QCOMPARE(window.reading_->toPlainText(), visible);
         QCOMPARE(window.readingAdvisories(), advisories);
@@ -28657,7 +28657,7 @@ private slots:
         const unsigned serial = window.loadSerial_;
         const auto cancelled = window.cancelLoad_;
         const QJsonObject entry = window.currentEntry_;
-        const QByteArray json = window.currentJson_;
+        const QByteArray json = window.currentResponse_.toJson(QJsonDocument::Indented);
         const QString reading = window.reading_->toPlainText();
         const QString status = window.resultStatus_->text();
         const QString search = window.search_->text();
@@ -28685,7 +28685,7 @@ private slots:
         QVERIFY(window.cancelLoad_ == cancelled);
         QVERIFY(!cancelled->load());
         QCOMPARE(window.currentEntry_, entry);
-        QCOMPARE(window.currentJson_, json);
+        QCOMPARE(window.currentResponse_.toJson(QJsonDocument::Indented), json);
         QCOMPARE(window.reading_->toPlainText(), reading);
         QCOMPARE(window.resultStatus_->text(), status);
         QCOMPARE(window.search_->text(), search);
@@ -28728,7 +28728,7 @@ private slots:
         MainWindow window(root, QStringLiteral("cat")); window.show();
         QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
         QTRY_COMPARE(title(window), QStringLiteral("cat"));
-        const QByteArray originalJson = window.currentJson_;
+        const QByteArray originalJson = window.currentResponse_.toJson(QJsonDocument::Indented);
         const QString originalReading = window.reading_->toPlainText();
         QStringList originalHistory;
         for (const auto &entry : window.learning_.history()) originalHistory.append(entry.key);
@@ -28796,7 +28796,7 @@ private slots:
             pending->blockSignals(false);
             QVERIFY(QMetaObject::invokeMethod(pending.data(), "finished", Qt::DirectConnection));
             deliveredInsideModal = true;
-            QCOMPARE(window.currentJson_, originalJson);
+            QCOMPARE(window.currentResponse_.toJson(QJsonDocument::Indented), originalJson);
             QCOMPARE(window.reading_->toPlainText(), originalReading);
             QStringList history;
             for (const auto &entry : window.learning_.history()) history.append(entry.key);
@@ -28824,7 +28824,7 @@ private slots:
         QVERIFY(window.json_->isReadOnly());
         QCOMPARE(window.json_->accessibleName(), QStringLiteral("Entry data"));
         QVERIFY(qobject_cast<QPlainTextDocumentLayout *>(window.json_->document()->documentLayout()));
-        const QString catJson = QString::fromUtf8(window.currentJson_);
+        const QString catJson = QString::fromUtf8(window.currentResponse_.toJson(QJsonDocument::Indented));
         const QString readingBefore = window.reading_->toPlainText();
         QVERIFY(!catJson.isEmpty());
         auto *tabs = window.entryTabs_->tabBar();
@@ -28833,7 +28833,7 @@ private slots:
         QTest::keyClick(tabs, Qt::Key_Right);
         QCOMPARE(window.entryTabs_->currentWidget(), window.json_);
         QCOMPARE(window.json_->toPlainText(), catJson);
-        QCOMPARE(QJsonDocument::fromJson(window.json_->toPlainText().toUtf8()), QJsonDocument::fromJson(window.currentJson_));
+        QCOMPARE(QJsonDocument::fromJson(window.json_->toPlainText().toUtf8()), window.currentResponse_);
         QTest::keyClick(tabs, Qt::Key_Tab);
         QTRY_VERIFY(window.json_->hasFocus());
         QVERIFY(window.json_->textInteractionFlags().testFlag(Qt::TextSelectableByKeyboard));
@@ -28872,13 +28872,13 @@ private slots:
         QTRY_COMPARE(title(window), QStringLiteral("dog"));
         QCOMPARE(window.entryTabs_->currentWidget(), window.reading_);
         QVERIFY(window.json_->document()->isEmpty());
-        const QString dogJson = QString::fromUtf8(window.currentJson_);
+        const QString dogJson = QString::fromUtf8(window.currentResponse_.toJson(QJsonDocument::Indented));
         QVERIFY(dogJson != catJson);
         QTest::keyClick(tabs, Qt::Key_Right);
         QTest::keyClick(tabs, Qt::Key_Right);
         QCOMPARE(window.json_->toPlainText(), dogJson);
         QVERIFY(!window.openWord(QStringLiteral("__missing_entry_data_control__")));
-        QCOMPARE(QString::fromUtf8(window.currentJson_), dogJson);
+        QCOMPARE(QString::fromUtf8(window.currentResponse_.toJson(QJsonDocument::Indented)), dogJson);
         QCOMPARE(window.json_->toPlainText(), dogJson);
     }
 
@@ -28917,7 +28917,7 @@ private slots:
         QStringList history;
         for (const auto &entry : window.learning_.history()) history.append(entry.key);
         window.entryTabs_->setCurrentWidget(window.json_);
-        QCOMPARE(window.json_->toPlainText(), QString::fromUtf8(window.currentJson_));
+        QCOMPARE(window.json_->toPlainText(), QString::fromUtf8(window.currentResponse_.toJson(QJsonDocument::Indented)));
         QVERIFY(!window.json_->toPlainText().isEmpty());
 
         bool removed = false;
@@ -28964,7 +28964,7 @@ private slots:
         QCoreApplication::processEvents();
         QVERIFY(window.currentEntry_.isEmpty());
         QVERIFY(window.reading_->accessibleDescription().isEmpty());
-        QVERIFY(window.currentJson_.isEmpty());
+        QVERIFY(window.currentResponse_.isNull());
         QVERIFY(window.json_->toPlainText().isEmpty());
         QCOMPARE(window.search_->text(), query);
         QCOMPARE(window.results_->count(), 0);
@@ -29091,7 +29091,7 @@ private slots:
             QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
             QVERIFY(window.openWord(QStringLiteral("dog")));
             QTRY_COMPARE(title(window), QStringLiteral("dog"));
-            const QByteArray json = window.currentJson_;
+            const QByteArray json = window.currentResponse_.toJson(QJsonDocument::Indented);
             const QString reading = window.reading_->toPlainText();
             window.saveVisit();
             const auto visits = window.visits_;
@@ -29143,7 +29143,7 @@ private slots:
             QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 30000);
             QVERIFY(window.api_ && window.search_->isEnabled());
             QCOMPARE(window.api_->root(), fixture_);
-            QCOMPARE(window.currentJson_, json);
+            QCOMPARE(window.currentResponse_.toJson(QJsonDocument::Indented), json);
             QCOMPARE(window.reading_->toPlainText(), reading);
             QCOMPARE(window.visitIndex_, visitIndex);
             QCOMPARE(window.visits_.size(), visits.size());
@@ -29190,7 +29190,7 @@ private slots:
             QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
             QVERIFY(window.openWord(QStringLiteral("dog")));
             QTRY_COMPARE(title(window), QStringLiteral("dog"));
-            const QByteArray json = window.currentJson_;
+            const QByteArray json = window.currentResponse_.toJson(QJsonDocument::Indented);
             const QString reading = window.reading_->toPlainText();
             const int visitIndex = window.visitIndex_;
             const qsizetype visitCount = window.visits_.size();
@@ -29252,7 +29252,7 @@ private slots:
                 QFile retained(backup);
                 QVERIFY(retained.open(QIODevice::ReadOnly));
                 QCOMPARE(retained.readAll(), originalBytes);
-                QVERIFY(!window.api_ && window.currentEntry_.isEmpty() && window.currentJson_.isEmpty());
+                QVERIFY(!window.api_ && window.currentEntry_.isEmpty() && window.currentResponse_.isNull());
                 QVERIFY(window.visits_.isEmpty());
                 QCOMPARE(window.visitIndex_, -1);
                 QVERIFY(!window.back_->isEnabled());
@@ -29263,7 +29263,7 @@ private slots:
                 QVERIFY(restored.open(QIODevice::ReadOnly));
                 QCOMPARE(restored.readAll(), originalBytes);
                 QVERIFY(window.api_ && window.search_->isEnabled());
-                QCOMPARE(window.currentJson_, json);
+                QCOMPARE(window.currentResponse_.toJson(QJsonDocument::Indented), json);
                 QCOMPARE(window.reading_->toPlainText(), reading);
                 QCOMPARE(window.visitIndex_, visitIndex);
                 QCOMPARE(window.visits_.size(), visitCount);
@@ -29280,14 +29280,14 @@ private slots:
         MainWindow window(fixture_, QStringLiteral("cat")); window.show();
         QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
         QTRY_COMPARE(title(window), QStringLiteral("cat"));
-        const QByteArray json = window.currentJson_;
+        const QByteArray json = window.currentResponse_.toJson(QJsonDocument::Indented);
         const QString reading = window.reading_->toPlainText();
         const unsigned serial = window.loadSerial_;
         QTimer::singleShot(0, &window, [] {
             if (auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget())) dialog->done(QDialog::Rejected);
         });
         window.chooseRoot();
-        QCOMPARE(window.currentJson_, json);
+        QCOMPARE(window.currentResponse_.toJson(QJsonDocument::Indented), json);
         QCOMPARE(window.reading_->toPlainText(), reading);
         QCOMPARE(window.loadSerial_, serial);
         QVERIFY(!window.loading_ && window.api_ && window.search_->isEnabled());
@@ -29691,7 +29691,7 @@ private slots:
         QVERIFY(window.openWord(QStringLiteral("dog")));
         QTRY_COMPARE(title(window), QStringLiteral("dog"));
         window.saveVisit();
-        const QByteArray json = window.currentJson_;
+        const QByteArray json = window.currentResponse_.toJson(QJsonDocument::Indented);
         const QString reading = window.reading_->toPlainText();
         const auto visits = window.visits_;
         const int visitIndex = window.visitIndex_;
@@ -29730,7 +29730,7 @@ private slots:
             QVERIFY(completed);
             QVERIFY(!window.loading_ && window.api_ && window.search_->isEnabled());
             QCOMPARE(window.api_->root(), root);
-            QCOMPARE(window.currentJson_, json);
+            QCOMPARE(window.currentResponse_.toJson(QJsonDocument::Indented), json);
             QCOMPARE(window.reading_->toPlainText(), reading);
             QCOMPARE(window.visitIndex_, visitIndex);
             QCOMPARE(window.visits_.size(), visits.size());
@@ -34287,7 +34287,7 @@ private slots:
                         }
                         if (placement == QStringLiteral("left") || placement == QStringLiteral("right")) { QVERIFY(beside); QVERIFY(below); }
                         QCOMPARE(window.currentEntry_, entry);
-                        QCOMPARE(QJsonDocument::fromJson(window.currentJson_), QJsonDocument::fromJson(response));
+                        QCOMPARE(window.currentResponse_, QJsonDocument::fromJson(response));
                         const auto pointFor = [&](QTextCursor selection) {
                             QTextCursor end(selection); selection.setPosition(selection.selectionStart()); end.setPosition(end.selectionEnd());
                             return window.reading_->cursorRect(selection).united(window.reading_->cursorRect(end)).center();
@@ -35163,7 +35163,7 @@ private slots:
             const SavedWord currentCard = window.learningPool().first();
             const auto studyBefore = window.learning_.study().value(currentCard.key);
             const int answersBefore = window.learning_.answerCount();
-            const QByteArray bodyBefore = window.currentJson_;
+            const QByteArray bodyBefore = window.currentResponse_.toJson(QJsonDocument::Indented);
             QVERIFY(reveal->isVisible() && reveal->isEnabled());
             QVERIFY(!again->isVisible() && !gotIt->isVisible());
             QVERIFY(hasLabel(card, QStringLiteral("Recall the definition, then reveal it.")));
@@ -35209,7 +35209,7 @@ private slots:
             QCOMPARE(window.learning_.answerCount(), answersBefore + 2);
             QCOMPARE(window.learning_.study().value(currentCard.key).wrong, studyBefore.wrong + 1);
             QCOMPARE(window.learning_.study().value(currentCard.key).right, studyBefore.right + 1);
-            QCOMPARE(window.currentJson_, bodyBefore);
+            QCOMPARE(window.currentResponse_.toJson(QJsonDocument::Indented), bodyBefore);
 
             QTest::mouseClick(tabs->tabBar(), Qt::LeftButton, Qt::NoModifier, tabs->tabBar()->tabRect(3).center());
             QCOMPARE(tabs->currentIndex(), 3);
@@ -35566,7 +35566,7 @@ private slots:
         QVERIFY(disclosureActions->actionNames().contains(QAccessibleActionInterface::setFocusAction()));
         QVERIFY(disclosure->state().expandable && disclosure->state().collapsed && !disclosure->state().expanded);
         const QString lexicalHref = window.reading_->document()->find(QStringLiteral("Etymology 1")).charFormat().anchorHref();
-        const QByteArray entryJson = window.currentJson_;
+        const QByteArray entryJson = window.currentResponse_.toJson(QJsonDocument::Indented);
         disclosureActions->doAction(QAccessibleActionInterface::setFocusAction());
         QTRY_VERIFY(disclosure->state().focused);
         QCOMPARE(readerAccessible->focusChild(), disclosure);
@@ -35626,7 +35626,7 @@ private slots:
             QCOMPARE(window.collapsedSections_.contains(1), !expanded);
             QCOMPARE(window.reading_->toPlainText().contains(QStringLiteral("RICH HISTORICAL BODY")), expanded);
             QCOMPARE(window.currentEntry_, entry);
-            QCOMPARE(window.currentJson_, entryJson);
+            QCOMPARE(window.currentResponse_.toJson(QJsonDocument::Indented), entryJson);
             QCOMPARE(window.reading_->document()->find(QStringLiteral("Etymology 1")).charFormat().anchorHref(), lexicalHref);
         };
         checkDisclosure(false);
