@@ -3210,6 +3210,7 @@ const ExpansionSlot = struct {
     language_codes: encoder.blob_builder.LanguageCodes = .{},
     page_languages: ?*const page_source_context.Registry = null,
     source_anchor_provider: ?*const source_internal_link.Provider = null,
+    table_link_index: ?*const source_internal_link.TableLinkIndex = null,
     page_language_core: ?[]const u8 = null,
     page_observations: ?*const figure_page_observations.Book = null,
     figure_defaults_sha256: ?[32]u8 = null,
@@ -3277,6 +3278,9 @@ const ExpansionSlot = struct {
                 return;
             };
         }
+        if (codes.local_link_targets == null) if (self.table_link_index) |index| {
+            codes.local_link_targets = index.bind(expanded.source);
+        };
         if (codes.figure_sizing) |*sizing| {
             sizing.page_language = null;
             if (self.page_languages) |languages| {
@@ -3666,6 +3670,7 @@ const ExpansionPool = struct {
     page_redirects: ?*const encoder.page_redirects.Snapshot = null,
     page_languages: ?*const page_source_context.Registry = null,
     source_anchor_provider: ?*const source_internal_link.Provider = null,
+    table_link_index: ?*const source_internal_link.TableLinkIndex = null,
     page_language_core: ?[]const u8 = null,
     page_observations: ?*const figure_page_observations.Book = null,
     figure_defaults_sha256: ?[32]u8 = null,
@@ -3779,6 +3784,7 @@ const ExpansionPool = struct {
                 slot.language_codes = writer.language_codes;
                 slot.page_languages = self.page_languages;
                 slot.source_anchor_provider = self.source_anchor_provider;
+                slot.table_link_index = self.table_link_index;
                 slot.page_language_core = self.page_language_core;
                 slot.page_observations = self.page_observations;
                 slot.figure_defaults_sha256 = self.figure_defaults_sha256;
@@ -4814,6 +4820,8 @@ fn runBlobBuild(io: std.Io, a: std.mem.Allocator, args: []const []const u8, opti
             pool.source_anchor_provider = if (source_anchor_provider) |*provider| provider else null;
         }
     }
+    var table_link_index = source_internal_link.TableLinkIndex.select(&namespaces, page_index.bytes, title_index, codes.table_styles);
+    pool.table_link_index = if (table_link_index) |*index| index else null;
     pool.page_observations = if (page_observations) |*value| value else null;
     pool.figure_defaults_sha256 = if (figure_site) |site| site.source_sha256 else null;
     codes.figure_sizing = if (sizing_authority) |*value| .{ .ctx = value, .resolve_fn = figure_sizing.Registry.resolve,
@@ -20736,6 +20744,8 @@ fn capturedWriterRun(io: std.Io, a: std.mem.Allocator, request: CapturedWriterRe
         }
     }
     if (anchor_provider) |*provider| codes.local_link_targets = try provider.bindTargets(a, expanded.source);
+    var table_link_index = source_internal_link.TableLinkIndex.select(namespaces, page_index.bytes, titles, codes.table_styles);
+    if (codes.local_link_targets == null) if (table_link_index) |*index| { codes.local_link_targets = index.bind(expanded.source); };
     try attachFigurePageObservation(a, &codes, if (page_observations) |*value| value else null,
         if (figure_site) |site| site.source_sha256 else null, std.math.cast(i32, page.ns) orelse return error.InvalidNamespace,
         page.page_id, page.revision_id, page.title, raw, expanded.source);

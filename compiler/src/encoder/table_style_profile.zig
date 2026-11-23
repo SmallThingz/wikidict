@@ -9782,6 +9782,16 @@ pub const Profile = struct {
 
     pub fn hasTextContext(self: *const Profile) bool { return self.hasTextPaint() or self.block_rules.len != 0; }
 
+    pub fn hasNewAnchorTextRule(self: *const Profile) bool {
+        if (self.page_style_parent) |parent| if (parent.hasNewAnchorTextRule()) return true;
+        for (self.text_rules) |rule| {
+            if (rule.selector.chain.len == 0) continue;
+            const terminal = rule.selector.chain[rule.selector.chain.len - 1];
+            if (terminal.tag) |tag| if (!std.ascii.eqlIgnoreCase(tag, "a")) continue;
+            for (terminal.classes) |class| if (std.mem.eql(u8, class, "new")) return true;
+        }
+        return false;
+    }
     pub fn hasTextPaint(self: *const Profile) bool { return self.page_style_parent != null or self.globally_unresolved or self.text_rules.len != 0; }
 
     pub fn resolveTextPaint(self: *const Profile, a: std.mem.Allocator, element: *const TextElement, css: []const u8) std.mem.Allocator.Error!TextPaint {

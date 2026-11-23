@@ -203,6 +203,52 @@ pub const Provider = struct {
         return .{ .state = state, .normalized_title = normalized, .href = href, .title = title, .attributes = attributes };
     }
 };
+// Shared mmap inputs from the ordinary Writer. Missing-link class identity does
+// not require a localized edit tooltip or URL configuration.
+pub const TableLinkIndex = struct {
+    registry: *const namespaces.Registry,
+    page_index: []const u8,
+    titles: dump.PageTitleIndex,
+
+    pub fn select(registry: *const namespaces.Registry, page_index: []const u8, titles: dump.PageTitleIndex,
+        styles: ?*const encoder.table_style_profile.Profile) ?TableLinkIndex
+    {
+        const profile = styles orelse return null;
+        if (!registry.literal_link_titles or !profile.hasNewAnchorTextRule()) return null;
+        return .{ .registry = registry, .page_index = page_index, .titles = titles };
+    }
+
+    pub fn bind(self: *const TableLinkIndex, source: []const u8) ?encoder.presentation_compile.LocalLinkTargetSource {
+        if (std.mem.indexOf(u8, source, "{|") == null or std.mem.indexOf(u8, source, "[[") == null or
+            std.mem.indexOf(u8, source, "-{") != null) return null;
+        return .{ .source = source, .namespace_sha256 = self.registry.source_sha256, .context = self, .missing = missing };
+    }
+
+    fn missing(context: ?*const anyopaque, a: A, op: encoder.presentation_compile.TableSourceAnchorOperation) encoder.presentation_compile.Error!bool {
+        const self: *const TableLinkIndex = @ptrCast(@alignCast(context orelse return false));
+        if (!PageBinding.contains(op.source, op.token) or !PageBinding.contains(op.token, op.target)) return false;
+        const raw = op.target;
+        // Fragment existence is unrelated to page existence. Namespaced, relative,
+        // percent-escaped and entity-bearing titles need other title constructors.
+        if (raw.len == 0 or !std.unicode.utf8ValidateSlice(raw) or std.mem.indexOf(u8, raw, "\u{fffd}") != null or
+            std.mem.indexOfAny(u8, raw, "\x00\x7f<>[]{}&'\"%:\r\n\t|") != null) return false;
+        const end = std.mem.indexOfScalar(u8, raw, '#') orelse raw.len;
+        if (end == 0 or (end < raw.len and std.mem.indexOfScalar(u8, raw[end + 1..], '#') != null)) return false;
+        const page = raw[0..end];
+        const normalized = self.registry.normalizeTitle(a, page, 0, .any) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory, else => return false,
+        };
+        defer a.free(normalized);
+        if (normalized.len == 0 or normalized.len > 255 or std.mem.startsWith(u8, normalized, "/") or
+            std.mem.startsWith(u8, normalized, "../") or std.mem.startsWith(u8, normalized, "./") or
+            std.mem.eql(u8, normalized, ".") or std.mem.eql(u8, normalized, "..") or
+            std.mem.indexOf(u8, normalized, "/./") != null or std.mem.indexOf(u8, normalized, "/../") != null or
+            std.mem.endsWith(u8, normalized, "/.") or std.mem.endsWith(u8, normalized, "/..") or
+            std.mem.indexOf(u8, normalized, "~~~") != null) return false;
+        return (self.titles.lookup(self.page_index, normalized) catch return error.UncompiledPresentation) == null;
+    }
+};
+
 const PageBinding = struct {
     provider: *const Provider,
     source: []const u8,
@@ -512,3 +558,49 @@ pub const ControlledKuTitleInputsTesting = if (@import("builtin").is_test) struc
         try std.testing.expectEqualSlices(usize, &.{ 3, 4, 1, 3, 8, 6 }, &counts);
     }
 } else struct {};
+
+test "ordinary indexed table links keep fragment actions and cascade missing-page paint" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile("testdata/en-empty-element271/namespace-registry.tsv"));
+    defer ns.deinit();
+    const rows = "0\t1\tPresent\t\t1\t2\t2026-01-01T00:00:00Z\tU\twikitext\t0\t1\t0\n";
+    const titles = try variantTestIndex(a, rows);
+    var styles = try encoder.table_style_profile.parseForTargetAlloc(a,
+        ".inflection-table-right a.new { color: #000000; }\n.inflection-table-right a { color: #191970; }", .screen);
+    defer styles.deinit();
+    const source = "{| class=\"inflection-table-right\"\n|-\n| [[Autoversicherungen#Þýsk|form]] || [[Present#Absent section|entry]]\n|}";
+    try std.testing.expect(TableLinkIndex.select(&ns, rows, titles, &styles) == null);
+    try ns.attachLanguageConversion(@embedFile("testdata/en-empty-element271/namespace-siteinfo.raw.json"));
+    try std.testing.expect(ns.literal_link_titles);
+    var index = TableLinkIndex.select(&ns, rows, titles, &styles) orelse return error.TestUnexpectedResult;
+    const selected = index.bind(source) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(index.bind("[[Absent]]") == null);
+    try std.testing.expect(index.bind("{|\n| -{x}- [[Absent]]\n|}") == null);
+    try std.testing.expect(TableLinkIndex.select(&ns, rows, titles, null) == null);
+    for ([_][]const u8{ "#section", "../relative#section", "Category:Absent#section", "Encoded%2Ftitle", "Missing#one#two",
+        "Absent/../Present", "Absent/./Present", "Absent/.", "Absent/..#part", "Unusable\u{fffd}#part" }) |raw| {
+        const token = try std.fmt.allocPrint(a, "[[{s}]]", .{raw});
+        try std.testing.expect(!try TableLinkIndex.missing(&index, a, .{ .source = token, .token = token, .target = token[2 .. token.len - 2] }));
+    }
+    for (0..2) |mode| {
+        var renderer: encoder.presentation_compile.Renderer = .{ .a = a, .context = .{
+            .title = "Host", .namespace_catalog = &ns, .table_styles = &styles,
+            .local_link_targets = if (mode == 0) selected else index.bind(try a.dupe(u8, source)),
+        } };
+        const blocks = try renderer.renderBody(source);
+        const cells = blocks[0].table.?.rows[0].cells;
+        try std.testing.expectEqual(@as(usize, 2), cells.len);
+        const missing_span = cells[0].spans[0];
+        const present_span = cells[1].spans[0];
+        try std.testing.expectEqualStrings("Autoversicherungen#Þýsk", missing_span.target);
+        try std.testing.expectEqualStrings("form", missing_span.text);
+        try std.testing.expectEqualStrings(if (mode == 0) "new" else "", missing_span.classes);
+        try std.testing.expectEqualStrings(if (mode == 0) "#000000" else "#191970", missing_span.foreground.?);
+        try std.testing.expectEqualStrings("Present#Absent section", present_span.target);
+        try std.testing.expectEqualStrings("entry", present_span.text);
+        try std.testing.expectEqualStrings("", present_span.classes);
+        try std.testing.expectEqualStrings("#191970", present_span.foreground.?);
+    }
+}

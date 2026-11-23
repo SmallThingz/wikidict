@@ -1293,7 +1293,10 @@ pub const LocalLinkTargetSource = struct {
     source: []const u8,
     namespace_sha256: [32]u8,
     context: ?*const anyopaque,
-    resolve: *const fn (?*const anyopaque, A, TableSourceAnchorOperation) Error!?[]const u8,
+    resolve: *const fn (?*const anyopaque, A, TableSourceAnchorOperation) Error!?[]const u8 = unchanged,
+    missing: ?*const fn (?*const anyopaque, A, TableSourceAnchorOperation) Error!bool = null,
+
+    fn unchanged(_: ?*const anyopaque, _: A, _: TableSourceAnchorOperation) Error!?[]const u8 { return null; }
 };
 // Issued only after Document validates the explicit DISPLAYTITLE carrier.
 // Its exact page title and namespace identity confine reuse to this compilation.
@@ -11115,8 +11118,10 @@ pub const Renderer = struct {
         if (try self.ordinaryActionGroupStyle(original, destination, source)) |known| return known;
         if ((style.kind == .link or style.kind == .external_link) and (hasCompleteAncestorClasses(original.text_element) or self.bounded_text_class_scope != null or
             self.textPaintProfile() != null)) {
+            const missing = style.self_link_target == null and try self.indexedTableLinkMissing(destination, source);
+            if (missing) style.classes = if (style.classes.len == 0) "new" else try std.fmt.allocPrint(self.a, "{s} new", .{style.classes});
             const anchor = try self.a.create(table_style_profile.TextElement);
-            anchor.* = .{ .tag = "a", .language = if (original.text_element == null) self.pageTextRootLanguage(original.language) else null, .classes = if (style.self_link_target != null) "mw-selflink selflink" else if (destination.interwiki) "extiw" else "", .parent = original.text_element };
+            anchor.* = .{ .tag = "a", .language = if (original.text_element == null) self.pageTextRootLanguage(original.language) else null, .classes = if (style.self_link_target != null) "mw-selflink selflink" else if (destination.interwiki) "extiw" else if (missing) "new" else "", .parent = original.text_element };
             if (source) |token| self.bindGeneratedPageStyle(anchor, token);
             if (self.rowColorSourceProof()) |proof| if (anchor.page_style_root == proof.root and self.currentAncestorScope(anchor)) {
                 // This factory emits A without an own bgcolor. Retain only the
@@ -21312,8 +21317,21 @@ pub const Renderer = struct {
         }
     }
 
+    fn indexedTableLinkMissing(self: *Renderer, destination: LinkDestination, source: ?[]const u8) Error!bool {
+        if (self.typed_table_depth == 0 or destination.external or destination.interwiki) return false;
+        const binding = self.context.local_link_targets orelse return false;
+        const lookup = binding.missing orelse return false;
+        const original = self.localLinkOriginal(source orelse return false) orelse return false;
+        var iterator: ir.InlineIterator = .{ .input = original, .renderer_boundaries = true };
+        const token = iterator.next() orelse return false;
+        if (token.kind != .link or iterator.cursor != original.len or token.link_empty_label or token.link_label_restored_close or
+            !std.mem.eql(u8, token.target, destination.target)) return false;
+        return lookup(binding.context, self.a, .{ .source = binding.source, .token = original, .target = token.target });
+    }
+
     fn localLinkTarget(self: *Renderer, token: []const u8, target: []const u8) Error!?[]const u8 {
         const selected = self.context.local_link_targets orelse return null;
+        if (selected.resolve == LocalLinkTargetSource.unchanged) return null;
         const target_at = std.math.sub(usize, @intFromPtr(target.ptr), @intFromPtr(token.ptr)) catch return null;
         if (target_at > token.len or target.len > token.len - target_at) return null;
         const original = self.localLinkOriginal(token) orelse return null;
@@ -39562,7 +39580,7 @@ pub const Renderer = struct {
         if (domain.local_link_targets) |original_targets| {
             const targets = self.context.local_link_targets orelse return false;
             if (targets.source.ptr != original_targets.source.ptr or targets.source.len != original_targets.source.len or
-                targets.context != original_targets.context or targets.resolve != original_targets.resolve or
+                targets.context != original_targets.context or targets.resolve != original_targets.resolve or targets.missing != original_targets.missing or
                 !std.mem.eql(u8, &targets.namespace_sha256, &original_targets.namespace_sha256)) return false;
         } else if (self.context.local_link_targets != null) return false;
         return QuoteSourceMap.clean(domain.original) and QuoteSourceMap.clean(domain.source) and

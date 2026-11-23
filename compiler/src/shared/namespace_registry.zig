@@ -107,6 +107,7 @@ pub const Registry = struct {
     // Optional immutable site metadata, owned by this registry arena.
     interwiki_rows: []const InterwikiRow = &.{},
     interwiki_magic: ?bool = null,
+    literal_link_titles: bool = false,
     language_conversion: ?[]const []const u8 = null,
     figure_source_defaults: ?FigureSourceDefaults = null,
     manual_conversion_context: ?ManualConversionContext = null,
@@ -211,6 +212,7 @@ pub const Registry = struct {
     /// The selected installed site-info capture supplies conversion authority.
     /// Missing/legacy snapshots never infer it from an edition or language name.
     pub fn attachLanguageConversion(self: *Registry, raw: []const u8) !void {
+        self.literal_link_titles = false;
         self.manual_conversion_context = null;
         self.figure_source_defaults = null;
         errdefer self.figure_source_defaults = null;
@@ -267,12 +269,17 @@ pub const Registry = struct {
         if (enabled != .bool) return error.InvalidLanguageConversionProfile;
         if (!enabled.bool) {
             self.language_conversion = null;
+            self.literal_link_titles = true;
             return;
         }
         // ApiQuerySiteinfo exposes the global enable switch independently of
         // whether this content language's converter has any variants.
         const variants = general.object.get("variants") orelse {
             self.language_conversion = null;
+            // Only a complete captured general response makes omission meaningful.
+            if (value.object.get("profile")) |profile| self.literal_link_titles = profile == .string and
+                (std.mem.eql(u8, profile.string, "general-and-seven-scribunto-statistics") or
+                 std.mem.eql(u8, profile.string, "general-statistics-and-figure-default-options"));
             return;
         };
         if (variants != .array or variants.array.items.len == 0) return error.InvalidLanguageConversionProfile;
