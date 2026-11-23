@@ -4065,23 +4065,43 @@ class RendererDeviceTest {
 
     private fun search(word:String) {
         compose.onNodeWithContentDescription("Dictionary").performClick()
-        compose.onNode(hasSetTextAction()).performTextInput(word)
-        compose.waitUntil(10000){compose.onAllNodesWithText(word).fetchSemanticsNodes().isNotEmpty()}
-        compose.onAllNodesWithText(word).onFirst().performClick()
+        compose.onNode(hasSetTextAction()).assertIsFocused().performTextInput(word)
+        val result = hasText(word) and hasClickAction() and !hasSetTextAction()
+        compose.waitUntil(10000) { compose.onAllNodes(result).fetchSemanticsNodes().isNotEmpty() }
+        compose.onAllNodes(result).onFirst().assertIsDisplayed().performClick()
         compose.waitUntil(10000){compose.onAllNodesWithTag("entry-scroll").fetchSemanticsNodes().isNotEmpty()}
     }
-    private fun capture(name: String) {
+    private fun capture(name: String, portrait: Boolean = false) {
         compose.waitForIdle()
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val directory = java.io.File(instrumentation.targetContext.filesDir,"qa-screenshots").apply { mkdirs() }
-        val bitmap = requireNotNull(instrumentation.uiAutomation.takeScreenshot())
-        try { java.io.File(directory,name).outputStream().use { assertTrue(bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG,100,it)) } }
-        finally { bitmap.recycle() }
+        val bitmap = if (portrait) compose.onRoot().captureToImage().asAndroidBitmap()
+            else requireNotNull(instrumentation.uiAutomation.takeScreenshot())
+        try {
+            if (portrait) assertTrue("Reader viewport ${bitmap.width}×${bitmap.height}", bitmap.height > bitmap.width)
+            java.io.File(directory,name).outputStream().use { assertTrue(bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG,100,it)) }
+        } finally { bitmap.recycle() }
     }
     @Test fun corpusArabicAndCompiledAliasRemainReadableInPortrait(): Unit = runBlocking {
         val before = library.dictionaries.map { it.id }.toSet()
         val assets = InstrumentationRegistry.getInstrumentation().context.assets
+        val scenario = compose.activityRule.scenario
+        var previousOrientation: Int? = null
         try {
+            scenario.onActivity { activity ->
+                assertPhysicalActivity(activity)
+                previousOrientation = activity.requestedOrientation
+                activity.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            }
+            compose.waitUntil(10000) {
+                var ready = false
+                scenario.onActivity { activity ->
+                    val view = activity.window.decorView
+                    ready = activity.resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_PORTRAIT &&
+                        view.width > 0 && view.height > view.width
+                }
+                ready
+            }
             for ((name,asset) in listOf(
                 "arwiktionary-20261001-d274159863057eb5c633116c3b54e4f8659167f0b73fabbee256e881fa1ac8c8.wikblb" to "arabic-visual.wikblb",
                 "bgwiktionary-20261001-aliases.wikblb" to "compiled-aliases.wikblb",
@@ -4102,16 +4122,22 @@ class RendererDeviceTest {
                 useUnmergedTree = true
             ).performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.GetTextLayoutResult) { it(layouts) }
             assertEquals(1,layouts.single().lineCount)
-            capture("actual-arabic-excerpt.png")
+            assertFalse(layouts.single().didOverflowWidth)
+            assertFalse(layouts.single().didOverflowHeight)
+            capture("actual-arabic-excerpt.png", portrait = true)
             search("ChainA")
             compose.onNodeWithText("ChainA -> ChainB#Incoming").assertExists()
             compose.onNodeWithText("gainst",substring=true).assertExists()
-            capture("synthetic-alias-chain.png")
+            capture("synthetic-alias-chain.png", portrait = true)
             compose.onNodeWithContentDescription("Settings").performClick()
             compose.onNodeWithTag("settings-scroll").performScrollToNode(hasText("Images & sound"))
-            capture("portrait-media-settings.png")
+            capture("portrait-media-settings.png", portrait = true)
         } finally {
-            library.dictionaries.map { it.id }.filter { it !in before }.forEach { library.remove(it).join() }
+            try {
+                previousOrientation?.let { prior -> scenario.onActivity { it.requestedOrientation = prior } }
+            } finally {
+                library.dictionaries.map { it.id }.filter { it !in before }.forEach { library.remove(it).join() }
+            }
         }
     }
     @Test fun emptyAvailableCatalogExplainsRecoveryAndPreservesValidationErrors(): Unit = runBlocking {
