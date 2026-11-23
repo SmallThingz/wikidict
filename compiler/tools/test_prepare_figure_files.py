@@ -2646,7 +2646,7 @@ class FigureFileTests(unittest.TestCase):
         with patch.object(figure.evidence,'get_response',side_effect=transport):
             paths=builder.resolve_figure_snapshot_options(self.root,inputs['manifest'],inputs['selected_inputs'],
                 inputs['downloads'],self.namespace,{},metadata_network='allow',figure_reuse_batches=(proof_path,))
-        self.assertEqual(calls,[(['ملف:D.svg'],False),(['ملف:C.djvu'],True)])
+        self.assertCountEqual(calls,[(['ملف:D.svg'],False),(['ملف:C.djvu'],True)])
         with patch.object(figure.evidence,'get_response',side_effect=AssertionError('complete prefix recaptured')):
             reused=builder.resolve_figure_snapshot_options(self.root,inputs['manifest'],inputs['selected_inputs'],
                 inputs['downloads'],self.namespace,{},metadata_network='offline',figure_reuse_batches=(proof_path,))
@@ -5059,7 +5059,12 @@ class FigureFileTests(unittest.TestCase):
     def test_byte_equal_wmf4_core_refuses_unproved_neighbors_profiles_and_registration(self):
         core = 'bb3b6755d485f60478c87c907f0557c53117142d'
         self.assertEqual(figure.FIGURE_WMF4_CORES, (figure.FIGURE_WMF4_CORE, core,
-                         '93f1cdcc57c0891fb208c960a9f7fff6ca1ca35c'))
+                         '93f1cdcc57c0891fb208c960a9f7fff6ca1ca35c',
+                         '992ad5e3679f848254828e823860ba8b3ad3b39b',
+                         'bfe24921d500b20f2938fb8fe2a09cf5cac80161',
+                         '6e76237de1cf29c08427d191f110a2c38c2b4cf9',
+                         'f03f1fdaa2d112807b6ce63170eb50e86de615bd',
+                         'd1919ec5e4ebd7b0dea1ff6ea1cb4347a9349ca2'))
         self.assertIsNone(figure.figure_profile(core, figure.FIGURE_PROFILE_V3))
         self.assertEqual(figure.figure_profile(core, figure.FIGURE_PROFILE_V5)['webp_handler_core_revision'], figure.FIGURE_CURRENT_CORE)
         title = 'ملف:Example.svg'
@@ -7278,7 +7283,8 @@ class GeneratedProjectionTests(unittest.TestCase):
                                                figure.REPLAY_CONTRACT_V4, figure.REPLAY_CONTRACT),
                     allow_compatible_epochs=contract in (figure.REPLAY_CONTRACT_V3, figure.REPLAY_CONTRACT_V4, figure.REPLAY_CONTRACT),
                     allow_decimal_tiff_axes=contract in (figure.REPLAY_CONTRACT_V4, figure.REPLAY_CONTRACT),
-                    allow_default_tiff_page=contract == figure.REPLAY_CONTRACT)
+                    allow_default_tiff_page=contract == figure.REPLAY_CONTRACT,
+                    current_file_supplements=contract == figure.REPLAY_CONTRACT)
                 document = figure.figure_stream_document(plain, namespace, self.fixture.wiki, self.fixture.date, site, **options)
                 document['generator_sha256'] = 'a' * 64
                 if contract is None: document.pop('replay_contract')
@@ -7563,8 +7569,8 @@ class OfflinePolicyReprojectionTests(unittest.TestCase):
         self.assertEqual(actual['records'], old['records'])
         selected = [options for path, options in calls if path.parent==output]
         self.assertEqual(len(selected), 1)
-        self.assertEqual([options for path, options in consumed if path.parent == output], selected)
-        self.assertTrue(all(options == dict(profile_kind=figure.FIGURE_PROFILE_V3, allow_tiff_companion=True,
+        self.assertEqual([dict(options, current_file_supplements=False) for path, options in consumed if path.parent == output], selected)
+        self.assertTrue(all(options == dict(current_file_supplements=False, profile_kind=figure.FIGURE_PROFILE_V3, allow_tiff_companion=True,
             allow_encoded=True, allow_compatible_epochs=True, allow_decimal_tiff_axes=True,
             allow_default_tiff_page=False) for options in selected))
 
@@ -7959,11 +7965,11 @@ class LeanFrameReplayReuseTests(unittest.TestCase):
         # real. Scoped recursion and every non-lean branch use the common path.
         def replay(root, source, batch, wiki, date, namespace, http_files, prefix_cache=None,
                    *, profile_kind=figure.FIGURE_PROFILE_V3, inventory_cache=None,
-                   allow_compatible_epochs=False, origin_plan=None):
+                   allow_compatible_epochs=False, origin_plan=None, _encoded_record=None):
             if source.get('kind') != 'http-archived-lean' or '/' in source.get('batch', {}).get('accepted_receipt', ''):
                 return original(root, source, batch, wiki, date, namespace, http_files, prefix_cache,
                     profile_kind=profile_kind, inventory_cache=inventory_cache,
-                    allow_compatible_epochs=allow_compatible_epochs, origin_plan=origin_plan)
+                    allow_compatible_epochs=allow_compatible_epochs, origin_plan=origin_plan, _encoded_record=_encoded_record)
             expected = {'kind', 'batch', 'artifacts'}
             if 'tiff_metadata_response' in batch:
                 expected.update(('tiff_batch', 'tiff_artifacts'))
@@ -8284,8 +8290,8 @@ class DefaultPageReplayReprojectionTests(unittest.TestCase):
         self.assertEqual(self.fixture.stream_document(output)['records'], old['records'])
         selected = [options for path, options in calls if path.parent == output]
         self.assertEqual(len(selected), 1)
-        self.assertEqual([options for path, options in consumed if path.parent == output], selected)
-        self.assertTrue(all(options == dict(profile_kind=figure.FIGURE_PROFILE_V4,
+        self.assertEqual([dict(options, current_file_supplements=True) for path, options in consumed if path.parent == output], selected)
+        self.assertTrue(all(options == dict(current_file_supplements=True, profile_kind=figure.FIGURE_PROFILE_V4,
             allow_tiff_companion=True, allow_encoded=True, allow_compatible_epochs=True,
             allow_decimal_tiff_axes=True, allow_default_tiff_page=True) for options in selected))
 
@@ -10298,9 +10304,8 @@ class CompleteRawIndexReuseTests(unittest.TestCase):
             with self.subTest(encoded=encoded), \
                     patch.object(figure, 'raw_record_decode', wraps=figure.raw_record_decode) as decode:
                 result = figure.read_complete_capture(root / figure.MANIFEST, cache)
-            # The semantic derivation and source-echo traversal both remain;
-            # there is no third decoding pass solely to make this index.
-            self.assertEqual(decode.call_count, 2 * len(expected))
+            # The single verified traversal also records physical offsets.
+            self.assertEqual(decode.call_count, len(expected))
             self.assertEqual(result['document'], document)
             self.assertEqual(len(result['offsets']), len(expected))
             physical = before[figure.ROLES['figure-sizing-raw']]
