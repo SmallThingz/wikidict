@@ -12626,10 +12626,17 @@ const Builder = struct {
         var count: usize = 0;
         while (pos < raw.len) {
             if (count == 16 or raw.len - pos < 6 or !std.ascii.eqlIgnoreCase(raw[pos .. pos + 5], ":not(")) return false;
-            const end = std.mem.indexOfScalarPos(u8, raw, pos + 5, ')') orelse return false;
+            const end = observedFunctionClose(raw, pos + 4) orelse return false;
             const argument_text = trim(raw[pos + 5 .. end]);
             const exact = try self.paintCompound(argument_text, true);
-            const argument = exact orelse try self.figureNecessaryCompound(argument_text) orelse return false;
+            const argument = exact orelse try self.figureNecessaryCompound(argument_text) orelse nested: {
+                // A terminal simple :not() preserves its own positive prefix.
+                // Reject alternatives, relations and other functional predicates.
+                const opening = std.mem.indexOfScalar(u8, argument_text, ':') orelse return false;
+                if (opening == 0 or argument_text.len - opening < 7 or
+                    !std.ascii.eqlIgnoreCase(argument_text[opening .. opening + 5], ":not(")) return false;
+                break :nested try self.figureSubjectCompound(argument_text) orelse return false;
+            };
             const compound: TextCompound = .{ .tag = argument.tag, .classes = argument.classes, .ids = argument.ids };
             const match_ltr = compound.matches(&ltr);
             const match_rtl = compound.matches(&rtl);
@@ -17777,6 +17784,63 @@ test "functional-only simple negations preserve root direction invariance withou
         try std.testing.expect(profile.figure_rules[0].selector.uncertain);
         const actual_subject: TextElement = .{ .tag = if (index == 0) "h2" else "div", .classes = if (index == 0) "" else "mw-heading2", .parent = &root, .source_key = 1 };
         try std.testing.expect((try profile.resolveFigure(a, &actual_subject, 1, false)).unresolved);
+    }
+}
+
+test "Mon original heading sibling rules keep Figure root direction independent" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // Exact rule from Mon Gadget-Site.css p295679/r396490.
+    const css =
+        "body.ns-0 .mw-parser-output> :not(.collapsible-block:not(.open-block))+h2:not(:first-of-type),\n" ++
+        "body.ns-0 .mw-parser-output> .mw-heading2 ~ :not(.collapsible-block:not(.open-block))+.mw-heading2 {\n" ++
+        "\tborder-top: 1px solid var(--border-color-base, #a2a9b1);\n" ++
+        "\tpadding-top: 1em;\n" ++
+        "\tmargin-top: 0.2em;\n" ++
+        "}"
+    ;
+    var profile = try parseForTargetAlloc(a, css, .screen);
+    defer profile.deinit();
+    try std.testing.expectEqual(@as(usize, 2), profile.figure_rules.len);
+    for (profile.figure_rules) |rule| {
+        try std.testing.expect(rule.selector.uncertain);
+        try std.testing.expect(!rule.selector.root_predicate_unresolved);
+    }
+    try std.testing.expectEqual(Profile.FigureRootDirectionUse.independent, profile.figureRootDirectionUse(null));
+    const root: TextElement = .{ .tag = "div", .classes = "mw-content-ltr mw-parser-output", .ancestry_complete = true };
+    const frame: TextElement = .{ .tag = "figure", .parent = &root };
+    try std.testing.expect(profile.contentParentEffectsUnchanged(null, &root));
+    try std.testing.expect(!(try profile.resolveFigure(a, &frame, 1, false)).unresolved);
+    const h2: TextElement = .{ .tag = "h2", .parent = &root, .source_key = 1 };
+    const wrapper: TextElement = .{ .tag = "div", .classes = "mw-heading2", .parent = &root, .source_key = 1 };
+    try std.testing.expect((try profile.resolveFigure(a, &h2, 1, false)).unresolved);
+    try std.testing.expect((try profile.resolveFigure(a, &wrapper, 1, false)).unresolved);
+
+    var builder: Builder = .{ .a = a };
+    try std.testing.expect(try builder.invariantRootNegationCompound(":not(.collapsible-block:not(.open-block))"));
+    for ([_][]const u8{
+        ":not(.collapsible-block:not(.open-block),.mw-content-rtl)",
+        ":not(.collapsible-block:not(.open-block) .mw-content-rtl)",
+        ":not(.collapsible-block:not(.open-block) + .mw-content-rtl)",
+        ":not(.collapsible-block:not(.open-block,.mw-content-rtl))",
+        ":not(.collapsible-block:not(.open-block):dir(rtl))",
+        ":not(.collapsible-block:lang(mnw))",
+        ":not(.collapsible-block:not(:dir(rtl)))",
+        ":not(.collapsible-block:not(.open-block)",
+        ":not(.mw-parser-output:not(.mw-content-rtl))",
+        ":not(.mw-content-rtl:not(.open-block))",
+        ":not(:not(.mw-content-rtl))",
+    }) |part| try std.testing.expect(!try builder.invariantRootNegationCompound(part));
+    for ([_][]const u8{
+        ":not(.mw-parser-output:not(.mw-content-rtl))",
+        ":not(.mw-content-rtl:not(.open-block))",
+        ":not(:not(.mw-content-rtl))",
+    }) |part| {
+        const strict_css = try std.fmt.allocPrint(a, "body {s} + h2{{border-top:1px solid red}}", .{part});
+        var strict = try parseForTargetAlloc(a, strict_css, .screen);
+        defer strict.deinit();
+        try std.testing.expectEqual(Profile.FigureRootDirectionUse.unresolved, strict.figureRootDirectionUse(null));
     }
 }
 
