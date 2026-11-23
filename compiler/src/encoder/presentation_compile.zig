@@ -9416,6 +9416,9 @@ pub const Renderer = struct {
         if (self.rejection_probe_scope or self.rejection_trace_events != 0) return;
         self.rejection_trace_events += 1;
         if (rejected_compiler_capture) |capture| capture.record(phase, reject_reason, fragment, local_offset, reason_bits, failure);
+        if (self.inline_box_profile_diagnostic != .none) {
+            diagnostics.logLine("presentation inline_box profile_reason={s}", .{@tagName(self.inline_box_profile_diagnostic)});
+        }
         const bounded_offset = @min(local_offset, fragment.len);
         const window_start = bounded_offset -| 64;
         const window_end = window_start + @min(@as(usize, 256), fragment.len - window_start);
