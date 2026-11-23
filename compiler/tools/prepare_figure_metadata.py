@@ -4551,14 +4551,24 @@ def _capture_files(args, transport=None, sleep=time.sleep, *, target_contract=RE
     closed_prefixes = []
     complete_captures = []
     def retain_complete(path):
+        nonlocal inventory
         path = Path(path).absolute()
         complete = read_complete_capture(path, prefix_cache, inventory_cache=inventory_cache)
+        parent_inventory = complete['inventory']
+        comparison = parent_inventory
+        if (inventory_sql_downloads.get() is not None and parent_inventory != inventory and
+                parent_inventory.get('schema') == INVENTORY_SCHEMA):
+            # Both inventories have already been rederived against their SQL.
+            # Only explicit, identical physical archives can reconcile differing locators.
+            comparison = dict(parent_inventory, sources=[dict(row, path=str(inventory_sql_path(row, args.wiki, args.date)))
+                for row in parent_inventory['sources']])
         if (complete_captures or complete['manifest']['wiki'] != args.wiki or
                 complete['manifest']['date'] != args.date or complete['namespace'] != namespace or
-                complete['inventory'] != inventory or
+                comparison != inventory or
                 query_inputs[:len(complete['query_inputs'])] != complete['query_inputs'] or
                 complete['defaults'] != artifacts):
             raise ValueError('Complete Figure input selection differs')
+        inventory = parent_inventory
         names = {row['requested_file'] for row in complete['document']['records']}
         # New requested names must come from authenticated appended query logs;
         # all original parent facts and query-log bytes remain selected.
@@ -6649,6 +6659,7 @@ def main():
     for name in ('defaults', 'dumpstatus', 'output'):
         collect.add_argument('--' + name, type=Path, required=True)
     collect.add_argument('--sql', type=Path, action='append', required=True)
+    collect.add_argument('--downloads', type=Path, help='Archive root for SQL recorded by a relocated complete parent')
     collect.add_argument('--file-defaults', type=Path, help='verified matching default-options observation for the selected ImageInfo revision')
     collect.add_argument('--reuse', type=Path, action='append', default=[])
     collect.add_argument('--reuse-batch', type=Path, action='append', default=[],

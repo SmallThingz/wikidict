@@ -3527,6 +3527,46 @@ class FigureFileTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 figure.verify(args.output)
 
+    def test_current_archives_append_unchanged_historical_inventory_through_cli(self):
+        args = self.args(links=('Example.svg', 'Missing.ogg'))
+        original = self.root/'old-downloads'
+        archives = original/self.wiki/self.date
+        archives.mkdir(parents=True)
+        args.sql = [path.rename(archives/path.name) for path in args.sql]
+        args, _, _ = self.complete_stream_fixture(args)
+        parent = args.output
+        before = (parent/figure.INVENTORY).read_bytes()
+        current = original.rename(self.root/'downloads')
+        physical = [current/self.wiki/self.date/path.name for path in args.sql]
+        def append(output, paths, source):
+            argv = ['prepare_figure_metadata.py', 'capture-files', '--wiki', self.wiki, '--date', self.date,
+                    '--defaults', str(args.defaults), '--dumpstatus', str(args.dumpstatus), '--output', str(output),
+                    '--reuse', str(parent), '--downloads', str(source)]
+            for path in paths:
+                argv.extend(['--sql', str(path)])
+            with contextlib.redirect_stdout(io.StringIO()), patch('sys.argv', argv), patch.object(figure.evidence, 'get_response', side_effect=AssertionError('offline')):
+                figure.main()
+        child = self.root/'relocated-child'
+        append(child, physical, current)
+        self.assertEqual((parent/figure.INVENTORY).read_bytes(), before)
+        self.assertEqual((child/figure.INVENTORY).read_bytes(), before)
+        plan = json.loads((child/figure.PLAN).read_bytes())
+        self.assertEqual(plan['inventory_sha256'], figure.digest(before))
+        with figure.bind_inventory_downloads(current):
+            self.assertEqual(figure.verify(child)['wiki'], self.wiki)
+        wrong = self.root/'other-archives'/self.wiki/self.date
+        wrong.mkdir(parents=True)
+        for path in physical:
+            (wrong/path.name).write_bytes(path.read_bytes())
+        with self.assertRaisesRegex(ValueError, 'Complete Figure input selection differs'):
+            append(self.root/'different-selected', [wrong/path.name for path in physical], current)
+        physical[0].unlink(); physical[0].symlink_to(wrong/physical[0].name)
+        with self.assertRaises((ValueError, OSError)):
+            append(self.root/'linked-selected', physical, current)
+        physical[0].unlink(); physical[0].write_bytes(b'changed')
+        with self.assertRaises((ValueError, OSError)):
+            append(self.root/'changed-selected', physical, current)
+
     def test_main_discovers_relocated_figure_from_manifest_and_replays_in_worker(self):
         # Exercise manifest-only discovery and the real worker pool with a tiny
         # Figure generation. Unrelated registry projections are fixture inputs.
