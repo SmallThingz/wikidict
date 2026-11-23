@@ -8745,6 +8745,7 @@ pub const Renderer = struct {
     protected_bare_parameter_events: usize = 0,
     diagnosed_missing_targets: usize = 0,
     nodes: usize = 0,
+    node_limit: usize = max_nodes,
     truncated: bool = false,
     span_limit_marker: bool = false,
     block_limit_reached: bool = false,
@@ -11371,8 +11372,15 @@ pub const Renderer = struct {
         self.media_remaining_items -= 1;
         return if (caption_style != null) caption_spans else null;
     }
+    // Ordinary source-backed documents can contain more typed items than the
+    // small-input expansion allowance. Keep work bounded by source bytes and
+    // by the format's aggregate item ceiling; the codec enforces its own count.
+    pub fn budgetForSource(self: *Renderer, source_bytes: usize) void {
+        self.node_limit = @max(max_nodes, @min(source_bytes, presentation_types.max_presentation_items));
+    }
+
     fn spend(self: *Renderer) bool {
-        if (self.nodes >= max_nodes) {
+        if (self.nodes >= self.node_limit) {
             self.fallbacks.render_limit = true;
             self.truncated = true;
             return false;
@@ -14743,7 +14751,7 @@ pub const Renderer = struct {
         }
         var arena = std.heap.ArenaAllocator.init(self.a);
         defer arena.deinit();
-        var probe: Renderer = .{ .a = arena.allocator(), .context = self.context, .media_action_depth = self.media_action_depth + 1, .media_depth = self.media_depth, .nodes = self.nodes, .inline_image_attribute = true };
+        var probe: Renderer = .{ .a = arena.allocator(), .context = self.context, .media_action_depth = self.media_action_depth + 1, .media_depth = self.media_depth, .nodes = self.nodes, .node_limit = self.node_limit, .inline_image_attribute = true };
         defer self.nodes = probe.nodes;
         const parsed_spans = try probe.parseSpans(raw, .{});
         const spans = try rubyFallbackSpans(arena.allocator(), parsed_spans);
@@ -16694,7 +16702,7 @@ pub const Renderer = struct {
         }
         var arena = std.heap.ArenaAllocator.init(self.a);
         defer arena.deinit();
-        var probe: Renderer = .{ .a = arena.allocator(), .context = self.context, .media_depth = self.media_depth, .media_action_depth = self.media_action_depth + 1, .nodes = self.nodes };
+        var probe: Renderer = .{ .a = arena.allocator(), .context = self.context, .media_depth = self.media_depth, .media_action_depth = self.media_action_depth + 1, .nodes = self.nodes, .node_limit = self.node_limit };
         defer self.nodes = probe.nodes;
         const spans = try probe.parseSpans(raw, .{});
         if (probe.truncated or probe.fallbacks.render_limit) {
@@ -27071,7 +27079,7 @@ pub const Renderer = struct {
         // Children have already consumed their normal budget. Build the entire
         // balanced replacement first; shortage preserves those children and
         // reports a limit, rather than dropping a generated PDF/PDI later.
-        const maximum = original.len + (max_nodes -| self.nodes);
+        const maximum = original.len + (self.node_limit -| self.nodes);
         for (original) |span| {
             // This legacy Unicode wrapper cannot represent a compound Ruby scope.
             if (span.ruby != null or span.inline_padding_group != null or span.inline_action_group != null or span.inline_box_group != null) return error.UncompiledPresentation;

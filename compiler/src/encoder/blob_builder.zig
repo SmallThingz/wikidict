@@ -6118,6 +6118,17 @@ fn addPreparedStats(total: *BuildStats, before: BuildStats, after: BuildStats) v
         @field(total, field) += @field(after, field) - @field(before, field);
 }
 
+// Takes ownership of the projection on failure. Successful callers retain
+// ownership alongside the prepared source for the rest of the page.
+fn checkedWriterNumbering(a: std.mem.Allocator, numbered: @import("presentation_compile.zig").PreparedExternalLinks,
+    fallbacks: *presentation_document.Fallbacks) error{RenderLimit}!@import("presentation_compile.zig").PreparedExternalLinks
+{
+    errdefer if (numbered.source_element_projection) |proof| a.free(proof.copies);
+    fallbacks.merge(numbered.fallbacks);
+    if (numbered.fallbacks.render_limit) return error.RenderLimit;
+    return numbered;
+}
+
 fn processMain(
     page_allocator: std.mem.Allocator,
     spools: PageOutput,
@@ -6147,7 +6158,7 @@ fn processMain(
     else null;
     const local_targets_selected = if (codes.local_link_targets) |target|
         target.source.ptr == raw_missing.bytes.ptr and target.source.len == raw_missing.bytes.len else false;
-    const numbered = try presentation_document.preparePageExternalLinksWithMissingAlloc(page_allocator, raw_missing, .{
+    const numbered = try checkedWriterNumbering(page_allocator, try presentation_document.preparePageExternalLinksWithMissingAlloc(page_allocator, raw_missing, .{
         .title = title,
         .observe_source_elements = observeSourceElements(codes.figure_sizing, raw_missing.bytes) or
             local_targets_selected,
@@ -6160,8 +6171,7 @@ fn processMain(
         .image_options = codes.image_options,
         .figure_sizing = codes.figure_sizing,
         .poem_phase = raw_poem_phase,
-    });
-    fallbacks.merge(numbered.fallbacks);
+    }), fallbacks);
     defer if (numbered.source_element_projection) |proof| page_allocator.free(proof.copies);
     const poem_phase = numbered.poem_phase;
     // MediaWiki's first body TOC is page-scoped, before language-owner regrouping.
@@ -7188,7 +7198,7 @@ fn processNamespace(
             if (display_title) |value| .{ .source = value, .page_title = title, .missing = if (missing_phase) |phase| phase.displayTitle() else null } else null,
             link_trail, namespace_catalog, behavior_switches, image_options, poem_phase)
     else null;
-    const numbered = try presentation_document.preparePageExternalLinksWithMissingAlloc(page_allocator, raw_missing, .{
+    const numbered = try checkedWriterNumbering(page_allocator, try presentation_document.preparePageExternalLinksWithMissingAlloc(page_allocator, raw_missing, .{
         .title = local_title,
         .observe_source_elements = observeSourceElements(figure_sizing, raw_missing.bytes) or
             (if (local_link_targets) |target| target.source.ptr == raw_missing.bytes.ptr and target.source.len == raw_missing.bytes.len else false),
@@ -7201,8 +7211,7 @@ fn processNamespace(
         .image_options = image_options,
         .figure_sizing = figure_sizing,
         .poem_phase = poem_phase,
-    });
-    fallbacks.merge(numbered.fallbacks);
+    }), fallbacks);
     defer if (numbered.source_element_projection) |proof| page_allocator.free(proof.copies);
     var direct_table_copy: [1]presentation_document.SourceElementProjection.Copy = undefined;
     const direct_table_projection = if (numbered.source_element_projection == null)
@@ -11366,6 +11375,133 @@ test "Writer ordinary multiline links retain heading navigation without category
             }
         }
     }
+}
+
+test "Writer preserves every original Indonesian frequency row beyond its former render budget" {
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
+    const title = "Indeks:Bahasa Indonesia/Frekuensi/1";
+    var input = std.Io.Reader.fixed(@embedFile("testdata/id-frequency-201342/original.wikitext.zst"));
+    const window = try a.alloc(u8, 1024 * 1024 + std.compress.zstd.block_size_max);
+    var decoder = std.compress.zstd.Decompress.init(&input, window, .{ .window_len = 1024 * 1024 });
+    const source = try a.alloc(u8, 950709);
+    try decoder.reader.readSliceAll(source);
+    try std.testing.expectError(error.EndOfStream, decoder.reader.takeByte());
+    var digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(source, &digest, .{});
+    try std.testing.expectEqualStrings("ece1e9ccaf8f7fb3e2b01b0087360cd472c48829c902a27a2e496bb4a6b5a93e", &std.fmt.bytesToHex(digest, .lower));
+    var ns = try @import("namespace_registry").Registry.init(a, @embedFile("testdata/id-frequency-201342/namespace-registry.tsv"));
+    defer ns.deinit();
+    const codes: LanguageCodes = .{ .namespace_catalog = &ns };
+    var writer = try Writer.init(io, a, root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    {
+        var page_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer page_arena.deinit();
+        const pa = page_arena.allocator();
+        var page: PreparedPage = .{ .ns = .{ .id = 100, .kind = .supplemental }, .title = title };
+        try page.compileWithPhasesAndRoot(pa, codes, source, source, null, null, null, null, .parser_output);
+        try std.testing.expect(!page.fallbacks.render_limit and page.records.items.len == 1);
+        try writer.commitPreparedPrefix(pa, &page);
+        try writer.finishPrepared(pa, &page);
+    }
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 1), stats.supplemental_records);
+    var mapped = try mmapPath(io, try std.fs.path.join(a, &.{ root, "supplemental.wikblb" }));
+    defer mapped.deinit();
+    const blob = try blob_format.inspect(mapped.bytes);
+    var records = try blob.buildTrustedIndexAlloc(a);
+    defer records.deinit(a);
+    const rec = (try records.find(title)) orelse return error.TestUnexpectedResult;
+    const decoded = try blobs.presentation_codec.decodeAlloc(a, rec.payload, title, .supplemental, null);
+    try std.testing.expectEqualSlices(u8, rec.payload, try blobs.presentation_codec.encodeAlloc(a, decoded));
+    try std.testing.expectEqual(@as(usize, 1), decoded.entry.sections.len);
+    var table_count: usize = 0;
+    var preamble_url = false;
+    var preamble_index = false;
+    for (decoded.entry.sections[0].blocks) |block| {
+        for (block.spans) |span| {
+            if (std.mem.eql(u8, span.target, "https://invokeit.wordpress.com/frequency-word-lists/")) preamble_url = true;
+            if (std.mem.eql(u8, span.target, "Indeks:Bahasa Indonesia/Kata perhentian")) preamble_index = true;
+        }
+        const table = block.table orelse continue;
+        table_count += 1;
+        try std.testing.expectEqual(@as(usize, 47570), table.rows.len);
+        try std.testing.expectEqual(@as(usize, 2), table.rows[0].cells.len);
+        for (table.rows[0].cells, [_][]const u8{ "Kata", "Frekuensi" }) |cell, label| {
+            try std.testing.expect(cell.header and cell.spans.len == 1);
+            try std.testing.expectEqualStrings(label, cell.spans[0].text);
+        }
+        var row: usize = 1;
+        var highlighted = false;
+        var highlight_count: usize = 0;
+        var lines = std.mem.splitScalar(u8, source, '\n');
+        while (lines.next()) |line| {
+            if (std.mem.startsWith(u8, line, "|-")) {
+                highlighted = std.mem.eql(u8, line, "|- style=\"background:lightblue\"");
+                continue;
+            }
+            if (!std.mem.startsWith(u8, line, "|[[")) continue;
+            const separator = std.mem.indexOf(u8, line, "]]||") orelse return error.TestUnexpectedResult;
+            const word = line[3..separator];
+            const count = line[separator + 4 ..];
+            const cells = table.rows[row].cells;
+            try std.testing.expectEqual(@as(usize, 2), cells.len);
+            for (cells) |cell| {
+                try std.testing.expect(!cell.header and cell.rowspan == 1 and cell.colspan == 1 and cell.spans.len == 1);
+                if (highlighted) try std.testing.expectEqualStrings("#add8e6", cell.background orelse return error.TestUnexpectedResult) else try std.testing.expect(cell.background == null);
+            }
+            if (highlighted) highlight_count += 1;
+            try std.testing.expect(cells[0].spans[0].kind == .link and cells[1].spans[0].kind == .text);
+            try std.testing.expectEqualStrings(word, cells[0].spans[0].text);
+            try std.testing.expectEqualStrings(word, cells[0].spans[0].target);
+            try std.testing.expectEqualStrings(count, cells[1].spans[0].text);
+            row += 1;
+        }
+        try std.testing.expectEqual(table.rows.len, row);
+        try std.testing.expectEqual(@as(usize, 250), highlight_count);
+    }
+    try std.testing.expect(table_count == 1 and preamble_url and preamble_index);
+}
+
+test "normal Writer rejects exhausted presentation and preserves authored truncation-marker text" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const marker = "[render output truncated]";
+    var literal: PreparedPage = .{ .ns = .{ .id = 100, .kind = .supplemental }, .title = "Authored literal" };
+    try literal.compileWithPhasesAndRoot(a, .{}, marker, marker, null, null, null, null, .parser_output);
+    const decoded = try blobs.presentation_codec.decodeAlloc(a, literal.records.items[0].payload, literal.title, .supplemental, null);
+    try std.testing.expectEqualStrings(marker, decoded.entry.sections[0].blocks[0].spans[0].text);
+    var deep: std.ArrayList(u8) = .empty;
+    for (0..64) |_| try deep.appendSlice(a, "<div>\n");
+    try deep.appendSlice(a, "deep text\n");
+    for (0..64) |_| try deep.appendSlice(a, "</div>\n");
+    var refused: PreparedPage = .{ .ns = literal.ns, .title = "Exhausted" };
+    try std.testing.expectError(error.RenderLimit, refused.compileWithPhasesAndRoot(a, .{}, deep.items, deep.items, null, null, null, null, .parser_output));
+    try std.testing.expectEqual(@as(usize, 0), refused.records.items.len);
+}
+
+test "numbering exhaustion releases the Writer projection before returning" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const text = MissingText.untracked("prefix [https://example.org] suffix");
+    var numbered = try presentation_document.preparePageExternalLinksWithMissingAlloc(arena.allocator(), text, .{ .observe_source_elements = true });
+    const projected = numbered.source_element_projection orelse return error.TestUnexpectedResult;
+    try std.testing.expect(projected.copies.len != 0);
+    // Own the projection independently of the page arena so the leak checker
+    // observes the exact error-path release, even after page cleanup.
+    numbered.source_element_projection.?.copies = try std.testing.allocator.dupe(presentation_document.SourceElementProjection.Copy, projected.copies);
+    numbered.fallbacks.render_limit = true;
+    var report: presentation_document.Fallbacks = .{};
+    try std.testing.expectError(error.RenderLimit, checkedWriterNumbering(std.testing.allocator, numbered, &report));
+    try std.testing.expect(report.render_limit);
 }
 
 test "Writer publishes authored table group literals with cells links and fallback evidence" {

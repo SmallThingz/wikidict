@@ -1502,6 +1502,7 @@ fn workAllocWithMissingFragmentsIn(a: A, title: []const u8, language: []const u8
         },
     };
     // One final Entry owner, not one receipt per selected source fragment.
+    renderer.budgetForSource(tracked.bytes.len);
     var native_host = nativeArticleHostForFinalBody(&renderer, tracked, title, native_body_language,
         native_article_owner and final_document_body);
     renderer.native_article_host = if (native_host) |*host| host else null;
@@ -1571,6 +1572,7 @@ fn workWithHeadingOffsetsAllocIn(a: A, title: []const u8, language: []const u8, 
     var wiki_rule_openings: std.ArrayList(usize) = .empty;
     defer wiki_rule_openings.deinit(a);
     var renderer: compiler.Renderer = .{ .a = a, .native_body_language = native_body_language, .source_classified_language = source_classified_language, .page_source_focus_completion = !observe_structure_only, .content_root = completeContentFragments(source, fragments, content_root), .context = .{ .title = title, .language = if (language.len == 0) "English" else language, .link_trail = link_trail, .namespace_catalog = namespace_catalog, .behavior_switches = behavior_switches, .image_options = image_options, .table_styles = table_styles, .figure_sizing = figure_sizing, .poem_phase = poem_phase } };
+    renderer.budgetForSource(source.bytes.len);
     var native_host = nativeArticleHostForFinalBody(&renderer, source, title, native_body_language,
         native_article_owner and !observe_structure_only);
     renderer.native_article_host = if (native_host) |*host| host else null;
@@ -1686,16 +1688,21 @@ fn displayTitleSpansAlloc(a: A, display: ?DisplayTitle, language: []const u8, li
             .poem_phase = poem_phase,
         },
     };
+    renderer.budgetForSource(value.source.len);
     const spans = renderer.parseSpansWithMissing(value.missing orelse MissingText.untracked(value.source), .{ .role = .headword }) catch |err| {
         if (fallbacks) |report| switch (err) {
             error.RenderLimit => {
                 report.render_limit = true;
                 report.display_title_rejected = true;
-                return &.{};
+                return err;
             },
             else => return err,
         } else return err;
     };
+    if (renderer.fallbacks.render_limit) {
+        if (fallbacks) |report| report.merge(renderer.fallbacks);
+        return error.RenderLimit;
+    }
     if (fallbacks == null and (renderer.rendered_templates != 0 or renderer.unresolved_templates != 0)) return error.UncompiledTemplate;
     if (fallbacks) |report| report.merge(renderer.fallbacks);
     if (renderer.rendered_templates != 0 or renderer.unresolved_templates > renderer.diagnosed_missing_targets) {
@@ -2161,6 +2168,7 @@ pub fn compileClassifiedWithHeadingAnchorsAndSourceMediaRootAlloc(
     // Partial source queries may preserve actions without representing an
     // authored inline box. Normal compilation never publishes that debt, even
     // when the caller omitted a diagnostic report.
+    if (work.fallbacks.render_limit) return error.RenderLimit;
     if (work.fallbacks.unrepresented_inline_geometry) return error.UncompiledPresentation;
     const display_spans = early_display orelse try displayTitleSpansAlloc(a, display_title, language orelse "", link_trail, namespace_catalog, behavior_switches, image_options, fallbacks, poem_phase);
     try validatePublishedSpans(a, display_spans, fallbacks);
