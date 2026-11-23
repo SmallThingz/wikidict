@@ -1305,10 +1305,60 @@ pub const Expander = struct {
         return self.expandWikitextMode(text, params, host_title, depth, true, false);
     }
     fn expandWikitextMode(self: *Expander, text: []const u8, params: *rt.Table, host_title: []const u8, depth: usize, allow_poem: bool, prepared: bool) anyerror![]const u8 {
-        return (try self.expandWikitextModeTracked(text, params, host_title, depth, allow_poem, prepared)).bytes;
+        return (try self.expandWikitextModeTracked(text, params, host_title, depth, allow_poem, prepared, null)).bytes;
     }
 
-    fn expandWikitextModeTracked(self: *Expander, text: []const u8, params: *rt.Table, host_title: []const u8, depth: usize, allow_poem: bool, prepared: bool) anyerror!dependency.Text {
+    const code_example_open = "<code>{&#123;";
+    const code_example_close = "}}</code>";
+    const code_example_boundary = "<noinclude/>";
+
+    fn trimCodeExampleBoundaries(text: []const u8) []const u8 {
+        var value = std.mem.trimStart(u8, text, " \t\r\n");
+        while (std.mem.startsWith(u8, value, code_example_boundary))
+            value = std.mem.trimStart(u8, value[code_example_boundary.len..], " \t\r\n");
+        return value;
+    }
+
+    // Only a complete authored code wrapper in this transclusion's own source
+    // can own the two braces. Empty preprocessing boundaries do not own tags.
+    fn transcludedCodeExampleClose(source: []const u8) ?usize {
+        // This inline source proof scans at most one small transclusion.
+        if (source.len > 4096) return null;
+        const visible = trimCodeExampleBoundaries(source);
+        if (!std.mem.startsWith(u8, visible, code_example_open)) return null;
+        var next = source.len - visible.len + code_example_open.len;
+        while (std.mem.indexOfScalarPos(u8, source, next, '<')) |tag| {
+            if (std.mem.startsWith(u8, source[tag..], code_example_boundary)) {
+                next = tag + code_example_boundary.len;
+                continue;
+            }
+            if (tag < 2 or !std.mem.startsWith(u8, source[tag - 2 ..], code_example_close) or
+                trimCodeExampleBoundaries(source[tag - 2 + code_example_close.len ..]).len != 0) return null;
+            return tag - 2;
+        }
+        return null;
+    }
+
+    fn markTranscludedCodeExampleClose(a: std.mem.Allocator, out: *dependency.Builder) !void {
+        if (out.lost_missing_range) return;
+        const bytes = out.bytes.items;
+        const code = std.mem.trim(u8, bytes, " \t\r\n");
+        if (code.len <= code_example_open.len + code_example_close.len + 4 or
+            !std.mem.startsWith(u8, code, code_example_open) or !std.mem.endsWith(u8, code, code_example_close)) return;
+        const link = code[code_example_open.len .. code.len - code_example_close.len];
+        if (!std.mem.startsWith(u8, link, "[[") or !std.mem.endsWith(u8, link, "]]")) return;
+        const body = link[2 .. link.len - 2];
+        if (std.mem.indexOfAny(u8, body, "[]{}<>&'\"\r\n") != null) return;
+        const separator = std.mem.indexOfScalar(u8, body, '|') orelse body.len;
+        if (std.mem.trim(u8, body[0..separator], " \t").len == 0) return;
+        const at = @intFromPtr(code.ptr) - @intFromPtr(bytes.ptr);
+        for (out.ranges.items) |range| if (range.start < at + code.len and range.end > at) return;
+        for (out.generated_links.items) |range| if (range.start < at + code.len and range.end > at) return;
+        const close = at + code.len - code_example_close.len;
+        try out.markLiteralCurly(a, close, close + 2);
+    }
+
+    fn expandWikitextModeTracked(self: *Expander, text: []const u8, params: *rt.Table, host_title: []const u8, depth: usize, allow_poem: bool, prepared: bool, code_close: ?usize) anyerror!dependency.Text {
         if (depth > self.max_depth) return error.TemplateDepth;
         if (work_stats.current()) |work| {
             work.scan_calls +|= 1;
@@ -1352,6 +1402,9 @@ pub const Expander = struct {
             }
         }
         try self.appendPoemLiteralTracked(&out, text[pos..], prepared, protect_literal_curly, &literal_state);
+        // The closer must sit in this ordinary, copied suffix. A close consumed
+        // by an active template construct cannot supply literal authority.
+        if (code_close) |close| if (close >= pos) try markTranscludedCodeExampleClose(self.runtime.allocator, &out);
         var result = try out.finish(self.runtime.allocator);
         if (rt.string_origins.enabled()) if (self.origin_ledger) |origins| {
             const input = try originResult(origins.read(text));
@@ -1365,7 +1418,7 @@ pub const Expander = struct {
     }
 
     fn expandWikitextTracked(self: *Expander, text: []const u8, params: *rt.Table, host_title: []const u8, depth: usize) anyerror!dependency.Text {
-        return self.expandWikitextModeTracked(text, params, host_title, depth, true, false);
+        return self.expandWikitextModeTracked(text, params, host_title, depth, true, false, null);
     }
     fn trimDependency(self: *Expander, value: dependency.Text, characters: []const u8) !dependency.Text {
         const trimmed = std.mem.trim(u8, value.bytes, characters);
@@ -1522,7 +1575,7 @@ pub const Expander = struct {
             if (recovery.args == args and isUsageRecoveryWrapper(text))
                 recovery.exact_wrapper = true;
         }
-        return self.expandWikitextTracked(text, args, title, depth);
+        return self.expandWikitextModeTracked(text, args, title, depth, true, false, transcludedCodeExampleClose(text));
     }
 
     fn expandTemplateSourceTracked(self: *Expander, title: []const u8, raw: []const u8, args: *rt.Table, depth: usize) anyerror!dependency.Text {
@@ -3292,7 +3345,7 @@ pub const Expander = struct {
             // Lua values may contain registered results from explicit frame
             // APIs. Preserve those items while returned tag text stays unhooked.
             .generated => |generated| blk: {
-                var result = try self.expandWikitextModeTracked(generated, params, host_title, depth + 1, false, true);
+                var result = try self.expandWikitextModeTracked(generated, params, host_title, depth + 1, false, true, null);
                 if (self.origin_ledger) |origins| {
                     const input = try originResult(origins.read(generated));
                     if (input.unknown or input.lost_missing_range or input.ranges.len != 0) {
@@ -8596,6 +8649,75 @@ const MissingDependencyRegression = struct {
         return null;
     }
 };
+test "authored transcluded code template example keeps closing braces through dependency phase" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var runtime = try rt.Context.init(a, 24);
+    defer runtime.deinit();
+    runtime.namespace_catalog = try rt.namespace_registry.englishTestRegistry();
+    try rt.bindGlobalTable(&runtime, null, 0);
+    try stdlib.install(&runtime);
+    const Fixture = struct {
+        fn get(_: ?*anyopaque, _: std.mem.Allocator, title: []const u8) !?[]const u8 {
+            if (std.mem.eql(u8, title, "Template:Example")) return "<includeonly><code>{&#123;<!-- name -->{{#if:{{{1|}}}|[[Template:{{{1}}}|{{{1}}}]]|[[Template:Other]]}}<!-- tail -->}}</code></includeonly><noinclude>outside</noinclude>";
+            if (std.mem.eql(u8, title, "Template:OrphanClose")) return "<code>[[Template:Kept|Kept]]}}</code>";
+            if (std.mem.eql(u8, title, "Template:ActiveClose")) return "<code>{&#123;{{Label}}</code>";
+            if (std.mem.eql(u8, title, "Template:Label")) return "[[Template:Kept|Kept]]";
+            if (std.mem.eql(u8, title, "Template:ForgedClose")) return "<code>{&#123;{{ReturnedBraces}}</code>";
+            if (std.mem.eql(u8, title, "Template:ReturnedBraces")) return "[[Template:Kept|Kept]]}}";
+            return null;
+        }
+    };
+    var expander: Expander = .{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23,
+        .provider = .{ .get = Fixture.get, .exists = TestProvider.exists } };
+    const output = try expander.expandFragment("Page", "{{Example|Kept}}|{{Missing}}|{{OrphanClose}}|{{ActiveClose}}|{{ForgedClose}}", null);
+    try std.testing.expectEqualStrings("<code>{&#123;[[Template:Kept|Kept]]&#125;&#125;</code>|[[:Template:Missing]]|<code>[[Template:Kept|Kept]]}}</code>|<code>{&#123;[[Template:Kept|Kept]]</code>|<code>{&#123;[[Template:Kept|Kept]]}}</code>", output);
+    var phase = try dependency.decode(a, expander.missing_dependency_metadata.?, output, "");
+    defer phase.deinit();
+    try std.testing.expectEqual(@as(usize, 1), phase.output().ranges.len);
+    const range = phase.output().ranges[0];
+    try std.testing.expectEqualStrings("[[:Template:Missing]]", output[range.start..range.end]);
+}
+
+test "transcluded code brace proof refuses foreign tags malformed source and lost or local dependency ranges" {
+    const a = std.testing.allocator;
+    const source = "<noinclude/><code>{&#123;<!-- replaced -->[[Template:Kept|Kept]]}}</code><noinclude/>";
+    const prepared = try preprocess.transcludeDecodedForParsingAlloc(a, source);
+    defer a.free(prepared);
+    const close = Expander.transcludedCodeExampleClose(prepared).?;
+    try std.testing.expectEqualStrings("}}", prepared[close..close + 2]);
+    for ([_][]const u8{
+        "<nowiki><code>{&#123;[[Target]]}}</code></nowiki>",
+        "<code>[[Target]]}}</code>",
+        "<code>{&#123;[[Target]]}}",
+        "<code>{&#123;<code>[[Target]]}}</code>}}</code>",
+        "<code>{&#123;[[Target]]}}</code> outside",
+        "<noinclude/><code>{&#123;[[Target]]}}</code><noinclude />",
+        "<noinclude/><code>{&#123;<noinclude>[[Target]]</noinclude>}}</code>",
+    }) |candidate| try std.testing.expect(Expander.transcludedCodeExampleClose(candidate) == null);
+    const literal = "<code>{&#123;[[Template:Kept|Kept]]}}</code>";
+    var out: dependency.Builder = .{};
+    defer out.deinit(a);
+    try out.append(a, .{ .bytes = literal, .unknown = true, .lost_missing_range = true });
+    try Expander.markTranscludedCodeExampleClose(a, &out);
+    try std.testing.expectEqual(@as(usize, 0), out.literal_curly_ranges.items.len);
+    out.lost_missing_range = false;
+    const start: u32 = @intCast(std.mem.indexOf(u8, literal, "[[").?);
+    try out.ranges.append(a, .{ .start = start, .end = start + 2, .occurrence = 1 });
+    try Expander.markTranscludedCodeExampleClose(a, &out);
+    try std.testing.expectEqual(@as(usize, 0), out.literal_curly_ranges.items.len);
+    out.ranges.clearRetainingCapacity();
+    try Expander.markTranscludedCodeExampleClose(a, &out);
+    try std.testing.expectEqual(@as(usize, 1), out.literal_curly_ranges.items.len);
+    try std.testing.expect(out.unknown);
+    var nested: dependency.Builder = .{};
+    defer nested.deinit(a);
+    try nested.append(a, .{ .bytes = "<code>{&#123;[[Template:Kept|[[Nested]]]]}}</code>" });
+    try Expander.markTranscludedCodeExampleClose(a, &nested);
+    try std.testing.expectEqual(@as(usize, 0), nested.literal_curly_ranges.items.len);
+}
+
 test "native missing dependency provenance preserves copied arguments and distinguishes authored bytes" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
