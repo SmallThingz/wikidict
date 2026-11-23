@@ -10534,7 +10534,8 @@ def main():
     p.add_argument('--continue-failed-shards',action='store_true',help='With an audit bound, continue only authenticated presentation rejections; retain verified shards and refuse merge/publication if any shard fails')
     p.add_argument('--presentation-audit-pages',type=int,metavar='N',help='After a bound presentation failure, audit at most N rows from the failed shard start using the same worker; edition remains failed and unpublished, original deadline applies')
     p.add_argument('--shard-pages',type=int,metavar='N',help='Positive verified shard checkpoint interval; default 100000 pages. Smaller shards increase verification/compression/merge overhead.')
-    p.add_argument('--compress-shards',action='store_true',help='Verify and compress each temporary shard, then merge directly to compressed output')
+    p.add_argument('--compress-shards',action=argparse.BooleanOptionalAction,default=None,
+                   help='Compress verified temporary shards before merge (default for ordinary builds)')
     transport=p.add_mutually_exclusive_group()
     transport.add_argument('--original-archives',dest='original_archives',action='store_true',help='Read original bzip2 archives for compatible new builds (default); preserve existing staged work and sealed workers')
     transport.add_argument('--repack',dest='original_archives',action='store_false',help='Repack newly selected input as Zstd; preserve explicitly selected inputs and existing legacy work')
@@ -10582,6 +10583,9 @@ def main():
         p.add_argument('--'+name+'-snapshot',type=Path,
                        help='Optional '+name+' snapshot; its SHA-256 is part of the shard identity')
     a=p.parse_args()
+    if a.compress_shards is None:
+        a.compress_shards = (a.retained_native_roles_json is None and a.retained_native_roles_ref is None
+                             and _PYTHON_TOOLING is None)
     with ExitStack() as resources:
         return run_main(p, a, resources)
 
