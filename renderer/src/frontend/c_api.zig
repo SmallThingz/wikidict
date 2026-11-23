@@ -78,7 +78,7 @@ fn resetBuffer(out: *Buffer) void {
 fn jsonBuffer(handle: *Handle, value: anytype, out: *Buffer) !void {
     var writer: std.Io.Writer.Allocating = .init(allocator);
     errdefer writer.deinit();
-    try std.json.Stringify.value(value, .{ .whitespace = .indent_2 }, &writer.writer);
+    try std.json.Stringify.value(value, .{}, &writer.writer);
     try writer.writer.writeByte('\n');
     const bytes = try writer.toOwnedSlice();
     out.* = .{ .data = bytes.ptr, .len = bytes.len };
