@@ -69397,6 +69397,224 @@ test "KL source owned sju preserves numbered Kisitsit body and styled flag while
     try std.testing.expect(source_language_banner.parse(@embedFile("testdata/kl-number-owner/aa-provider.wikitext"), &ns, null, &registry, "aa") == null);
 }
 
+test "reviewed exact Santali English heading needs explicit authority and preserves unknown peers" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const heading = "ᱤᱝᱜᱽᱨᱟᱡᱤ";
+    const peer = "ᱴᱨᱟᱱᱥᱞᱤᱝᱜᱩᱣᱟᱞ";
+    var hash: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(@embedFile("reviewed_language_aliases.json"), &hash, .{});
+    const marker = try std.fmt.allocPrint(a, "# reviewed-alias\ten\t{s}\tsat-english-exact-p3697-r35372-v1\t{s}\n", .{ heading, std.fmt.bytesToHex(hash, .lower) });
+    const original = "# content-language\tsat\n# mediawiki\nen\tᱟᱝᱜᱽᱨᱮᱡᱤ\tEnglish\ten\teng\nmul\tMultiple languages\tmul\nsat\tᱥᱟᱱᱛᱟᱲᱤ\n";
+    var registry = language_registry.Registry.empty(a);
+    defer registry.deinit();
+    try registry.addTsv(original);
+    try std.testing.expect(registry.resolveTrusted(heading) == null);
+    try std.testing.expect(registry.resolveTrusted(peer) == null);
+    try registry.addTsv(marker);
+    const actual = registry.resolveTrusted(heading) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("en", actual.code);
+    try std.testing.expectEqualStrings("ᱟᱝᱜᱽᱨᱮᱡᱤ", actual.heading);
+    try std.testing.expect(registry.resolveSourceTrusted(heading) == null);
+    try std.testing.expect(registry.resolveTrusted(peer) == null);
+    try std.testing.expect(registry.resolveTrusted("ᱤᱝᱜᱽᱨᱟᱡᱤ extra") == null);
+    var absent = language_registry.Registry.empty(a);
+    defer absent.deinit();
+    try absent.addTsv("mul\tMultiple languages\n");
+    try std.testing.expectError(error.InvalidLanguageRegistry, absent.addTsv(marker));
+    var stale = language_registry.Registry.empty(a);
+    defer stale.deinit();
+    try stale.addTsv(original);
+    const stale_digest: [64]u8 = @splat('0');
+    const bad_marker = try std.fmt.allocPrint(a, "# reviewed-alias\ten\t{s}\tsat-english-exact-p3697-r35372-v1\t{s}\n", .{ heading, stale_digest[0..] });
+    try std.testing.expectError(error.InvalidLanguageRegistry, stale.addTsv(bad_marker));
+    try std.testing.expect(stale.resolveTrusted(heading) == null);
+    var conflict = language_registry.Registry.empty(a);
+    defer conflict.deinit();
+    try conflict.addTsv(original);
+    try conflict.addTsv("# mediawiki\nfr\tᱤᱝᱜᱽᱨᱟᱡᱤ\n");
+    try conflict.addTsv(marker);
+    try std.testing.expectEqualStrings("fr", conflict.resolveTrusted(heading).?.code);
+    try registry.addLocalAlias(heading, "mul");
+    try std.testing.expect(registry.resolveTrusted(heading) == null);
+}
+
+test "actual Santali I literal regions retain every stored field across reviewed English and unknown peer owners" {
+    const T = encoder.presentation_types;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const io = std.testing.io;
+    const raw = @embedFile("testdata/sat-literal-headings/I.raw.wikitext");
+    const source = @embedFile("testdata/sat-literal-headings/I-literal-regions.wikitext");
+    const saved = try std.json.parseFromSlice(struct { entries: []const T.Entry }, a,
+        @embedFile("testdata/sat-literal-headings/I-literal-reader.json"), .{ .ignore_unknown_fields = true });
+    const before = saved.value.entries[0];
+    try std.testing.expectEqual(@as(usize, 1), saved.value.entries.len);
+    try std.testing.expectEqual(@as(usize, 3), before.sections.len);
+    try std.testing.expectEqualStrings("", before.language_code);
+    try std.testing.expectEqualStrings("i", before.sections[0].blocks[0].spans[1].target);
+    try std.testing.expectEqualStrings("ᱤᱧ", before.sections[2].blocks[0].spans[0].target);
+    try std.testing.expect(std.mem.indexOf(u8, source, "{{") == null);
+    const first_end = std.mem.indexOf(u8, source, "== ᱤᱝᱜᱽᱨᱟᱡᱤ ==").?;
+    try std.testing.expect(std.mem.indexOf(u8, raw, source[0..first_end]) != null);
+    try std.testing.expect(std.mem.indexOf(u8, raw, std.mem.trimEnd(u8, source[first_end..], "\n")) != null);
+    // These two exact authored regions have no transclusions. They are a
+    // selected literal-source projection, not a claimed full Worker capture.
+    // The original prelude/media/See-also/Wikipedia fields have a separate
+    // full ordinary Reader oracle and are not normalized by this control.
+    for ([_]bool{ false, true }) |with_marker| {
+        var tmp = std.testing.tmpDir(.{});
+        defer tmp.cleanup();
+        const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
+        var ns = try namespace_registry.Registry.init(a, @embedFile("testdata/sat-literal-headings/namespace-registry.tsv"));
+        defer ns.deinit();
+        var registry = language_registry.Registry.empty(a);
+        defer registry.deinit();
+        try registry.addTsv(@embedFile("testdata/sat-literal-headings/language-registry.tsv"));
+        const heading = "ᱤᱝᱜᱽᱨᱟᱡᱤ";
+        try std.testing.expect(registry.resolveTrusted(heading) == null);
+        if (with_marker) {
+            var hash: [32]u8 = undefined;
+            std.crypto.hash.sha2.Sha256.hash(@embedFile("reviewed_language_aliases.json"), &hash, .{});
+            try registry.addTsv(try std.fmt.allocPrint(a, "# reviewed-alias\ten\t{s}\tsat-english-exact-p3697-r35372-v1\t{s}\n", .{ heading, std.fmt.bytesToHex(hash, .lower) }));
+        }
+        try std.testing.expect(registry.resolveTrusted("ᱴᱨᱟᱱᱥᱞᱤᱝᱜᱩᱣᱟᱞ") == null);
+        const codes = languageCodes(&registry, &ns);
+        var writer = try encoder.blob_builder.Writer.init(io, a, root);
+        defer writer.deinit();
+        writer.language_codes = codes;
+        try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "I", source, source, null);
+        const stats = try writer.finish(codes);
+        try std.testing.expectEqual(@as(usize, if (with_marker) 2 else 1), stats.language_records);
+        var unknown = before;
+        if (with_marker) {
+            unknown.sections = before.sections[0..1];
+            unknown.organization = .{ .other_sections = &.{0} };
+        }
+        const actual_unknown = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, root, "Unclassified", "I");
+        try std.testing.expectEqualDeep(unknown, actual_unknown);
+        const unknown_stored: T.Stored = .{ .entry = actual_unknown };
+        const unknown_bytes = try encoder.presentation_codec.encodeAlloc(a, unknown_stored);
+        const unknown_roundtrip = try encoder.presentation_codec.decodeAlloc(a, unknown_bytes, "I", .language, .{ .heading = "Unclassified", .code = "" });
+        try std.testing.expectEqualDeep(unknown_stored, unknown_roundtrip);
+        try std.testing.expectEqualSlices(u8, unknown_bytes, try encoder.presentation_codec.encodeAlloc(a, unknown_roundtrip));
+        if (with_marker) {
+            var expected = before;
+            expected.language = "ᱟᱝᱜᱽᱨᱮᱡᱤ";
+            expected.language_code = "en";
+            expected.sections = before.sections[1..3];
+            expected.organization = .{ .other_sections = &.{ 0, 1 } };
+            const actual = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, root, expected.language.?, "I");
+            try std.testing.expectEqualDeep(expected, actual);
+            const stored: T.Stored = .{ .entry = actual };
+            const bytes = try encoder.presentation_codec.encodeAlloc(a, stored);
+            const roundtrip = try encoder.presentation_codec.decodeAlloc(a, bytes, "I", .language, .{ .heading = expected.language.?, .code = "en" });
+            try std.testing.expectEqualDeep(stored, roundtrip);
+            try std.testing.expectEqualSlices(u8, bytes, try encoder.presentation_codec.encodeAlloc(a, roundtrip));
+        }
+    }
+}
+
+test "actual Santali I centered table image retains source width action and complete codec under selected options" {
+    const T = encoder.presentation_types;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const io = std.testing.io;
+    const raw = @embedFile("testdata/sat-literal-headings/I.raw.wikitext");
+    const source = raw[0..std.mem.indexOf(u8, raw, "== ").?];
+    try std.testing.expect(std.mem.indexOf(u8, source, "{{") == null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "|colspan=\"3\"|[[File:Unicode 0x0049.svg|center|100px]]") != null);
+    const saved = try std.json.parseFromSlice(struct { entries: []const T.Entry }, a,
+        @embedFile("testdata/sat-literal-headings/I-reader.json"), .{ .ignore_unknown_fields = true });
+    try std.testing.expectEqual(@as(usize, 1), saved.value.entries.len);
+    const before = saved.value.entries[0];
+    const old_table = before.sections[0].blocks[0].table.?;
+    const old_cell = old_table.rows[1].cells[0];
+    try std.testing.expectEqual(@as(u16, 3), old_cell.colspan);
+    try std.testing.expectEqual(@as(usize, 1), old_cell.spans.len);
+    try std.testing.expect(old_cell.blocks == null and old_cell.spans[0].image == null);
+    try std.testing.expectEqualStrings("Unicode 0x0049.svg", old_cell.spans[0].text);
+    try std.testing.expectEqualStrings("File:Unicode 0x0049.svg", old_cell.spans[0].target);
+    const image_options = @embedFile("testdata/sat-literal-headings/image-options.tsv");
+    const center_row = "img_center\t1\t\"center\"\n";
+    const center_start = std.mem.indexOf(u8, image_options, center_row).?;
+    // The negative changes one selected option spelling, not the source. An
+    // unrecognized caption word must not acquire a centered block by default.
+    const without_center = try std.mem.concat(a, u8, &.{ image_options[0..center_start], image_options[center_start + center_row.len ..] });
+    for ([_]bool{ true, false }) |center_known| {
+        var tmp = std.testing.tmpDir(.{});
+        defer tmp.cleanup();
+        const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
+        var ns = try namespace_registry.Registry.init(a, @embedFile("testdata/sat-literal-headings/namespace-registry.tsv"));
+        defer ns.deinit();
+        var registry = language_registry.Registry.empty(a);
+        defer registry.deinit();
+        try registry.addTsv(@embedFile("testdata/sat-literal-headings/language-registry.tsv"));
+        var behavior_hash: [32]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash(@embedFile("testdata/sat-literal-headings/behavior-switches.tsv"), &behavior_hash, .{});
+        var images = try namespace_registry.image_options.Registry.init(a,
+            if (center_known) image_options else without_center,
+            ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256, behavior_hash);
+        defer images.deinit();
+        var codes = languageCodes(&registry, &ns);
+        codes.image_options = &images;
+        var writer = try encoder.blob_builder.Writer.init(io, a, root);
+        defer writer.deinit();
+        writer.language_codes = codes;
+        try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "I", source, source, null);
+        const stats = try writer.finish(codes);
+        try std.testing.expectEqual(@as(usize, 1), stats.language_records);
+        const actual = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, root, "Unclassified", "I");
+        const actual_cell = actual.sections[0].blocks[0].table.?.rows[1].cells[0];
+        // Keep every original row, action and metadata record in both arms.
+        var occurrence = old_cell.spans[0];
+        occurrence.text = "";
+        occurrence.image = .{ .file = "Unicode 0x0049.svg", .width_px = 100 };
+        var cells = try a.dupe(T.Cell, old_table.rows[1].cells);
+        if (center_known) {
+            // The complete prior table is the independent body/style/action
+            // oracle. Only its original File-label cell becomes an occurrence.
+            cells[0].spans = &.{};
+            cells[0].blocks = &.{.{ .kind = .paragraph, .text_align = .center, .spans = &.{occurrence} }};
+            try std.testing.expectEqual(@as(usize, 0), actual_cell.spans.len);
+            try std.testing.expectEqual(@as(usize, 1), actual_cell.blocks.?.len);
+        } else {
+            occurrence.image.?.tooltip = "center";
+            occurrence.image.?.alt = "center";
+            cells[0].spans = &.{occurrence};
+            try std.testing.expect(actual_cell.blocks == null);
+            try std.testing.expectEqual(@as(usize, 1), actual_cell.spans.len);
+            const span = actual_cell.spans[0];
+            try std.testing.expectEqualStrings("File:Unicode 0x0049.svg", span.target);
+            const image = span.image orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqual(@as(?u32, 100), image.width_px);
+            try std.testing.expect(image.height_px == null);
+            try std.testing.expectEqualStrings("center", image.tooltip.?);
+        }
+        var rows = try a.dupe(T.Row, old_table.rows);
+        rows[1].cells = cells;
+        var blocks = try a.dupe(T.Block, before.sections[0].blocks);
+        blocks[0].table.?.rows = rows;
+        var sections = try a.dupe(T.Section, before.sections[0..1]);
+        sections[0].blocks = blocks;
+        var media = try a.dupe(T.Media, before.media[0..1]);
+        if (!center_known) media[0].caption = "center";
+        var expected = before;
+        expected.sections = sections;
+        expected.media = media;
+        expected.organization = .{ .other_sections = &.{0} };
+        try std.testing.expectEqualDeep(expected, actual);
+        const stored: T.Stored = .{ .entry = actual };
+        const bytes = try encoder.presentation_codec.encodeAlloc(a, stored);
+        const decoded = try encoder.presentation_codec.decodeAlloc(a, bytes, "I", .language, .{ .heading = "Unclassified", .code = "" });
+        try std.testing.expectEqualDeep(stored, decoded);
+        try std.testing.expectEqualSlices(u8, bytes, try encoder.presentation_codec.encodeAlloc(a, decoded));
+    }
+}
+
 const KcgNativeActionToolsTest = struct {
     // Original KCG p3691/r43671 and p3725/r43965: one authored action each.
     const amput = "[[Species:Taenia solium|'''''<u>Taenia</u> <u>solium</u>''''']]";

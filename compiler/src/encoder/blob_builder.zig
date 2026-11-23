@@ -3631,6 +3631,49 @@ fn leadingUnownedLexicalRegion(codes: LanguageCodes, raw: []const language_sourc
     return false;
 }
 
+// A direct numbered meaning under an unresolved leading H2 is a separate
+// authored region. It gains no language; the paired known H2 only proves where
+// its bytes stop. Ordinary raw/rendered root observations remain mandatory.
+const LeadingDirectDefinition = struct {
+    fn prefix(codes: LanguageCodes, raw_source: []const u8, source: MissingText,
+        raw: []const language_source.Section, rendered: []const language_source.Section,
+        require_root: bool) ?[]const u8
+    {
+        if (raw.len != 2 or rendered.len != 2 or source.lost_missing_range or source.generated_source != null) return null;
+        if (resolveSection(codes, raw[0]) != null or resolveSection(codes, rendered[0]) != null or
+            knownOuterSupportOrPos(raw[0].heading)) return null;
+        for (raw, rendered) |authored, expanded| {
+            if (!std.mem.eql(u8, authored.heading, expanded.heading) or
+                !language_source.literalL2Section(authored, null) or
+                !language_source.literalL2Section(expanded, null)) return null;
+            if (require_root and (!authored.root_wiki_heading or !expanded.root_wiki_heading)) return null;
+            _ = SourceHeadword.offset(raw_source, authored.source) orelse return null;
+            _ = SourceHeadword.offset(source.bytes, expanded.source) orelse return null;
+            const raw_line = authored.source[0..SourceHeadword.lineEnd(authored.source, 0)];
+            const line = expanded.source[0..SourceHeadword.lineEnd(expanded.source, 0)];
+            if (!std.mem.eql(u8, raw_line, line) or !sourceCategoryHeaderRangesClean(source, expanded)) return null;
+        }
+        const owner = boundaryLanguage(codes, rendered[1]) orelse return null;
+        const original_owner = boundaryLanguage(codes, raw[1]) orelse return null;
+        if (owner.code.len == 0 or !std.mem.eql(u8, owner.code, original_owner.code) or
+            !std.mem.eql(u8, owner.heading, original_owner.heading)) return null;
+        const original = SourceNomLeadingRegion.lexicalPrefix(raw[0]) orelse return null;
+        const meaning = SourceNomLeadingRegion.lexicalPrefix(rendered[0]) orelse return null;
+        if (!std.mem.eql(u8, original, meaning)) return null;
+        const at = SourceHeadword.offset(source.bytes, rendered[0].source) orelse return null;
+        const meaning_at = SourceHeadword.offset(rendered[0].source, meaning) orelse return null;
+        if (!calibratedBoundaryRangesClean(source, at, at + meaning_at + meaning.len)) return null;
+        return meaning;
+    }
+
+    fn boundary(a: std.mem.Allocator, title: []const u8, codes: LanguageCodes, raw_source: []const u8,
+        source: MissingText, raw: []const language_source.Section, rendered: []const language_source.Section) !bool
+    {
+        const meaning = prefix(codes, raw_source, source, raw, rendered, true) orelse return false;
+        return SourceNomLeadingRegion.hasMeaning(a, title, codes, meaning);
+    }
+};
+
 // A transformed leading H2 can delimit an unknown lexical region without
 // naming its language. Its unchanged ordinary definition prefix and every
 // ordered root pair must be proved independently of the later named owner.
@@ -6427,6 +6470,9 @@ fn processMain(
         raw_source != null and
         calibratedLiteralPeerOwners(codes, raw_source.?, source_missing, raw_sections.items, page_sections.items, false) and
         calibratedUnknownPreflight(codes, raw_source.?, source_missing, raw_sections.items, page_sections.items);
+    const direct_leading_candidate = raw_aligned and !raw_conflicts.present and !sections.mixed_levels and
+        raw_source != null and LeadingDirectDefinition.prefix(codes, raw_source.?, source_missing,
+            raw_sections.items, page_sections.items, false) != null;
     const linked_peer_candidate = raw_aligned and !raw_conflicts.present and !sections.mixed_levels and
         raw_source != null and (linkedPeerPartition(codes, raw_source.?, source_missing, raw_sections.items, page_sections.items, false) or
             knownFirstLinkedPeerPartition(codes, raw_source.?, source_missing, raw_sections.items, page_sections.items, false));
@@ -6466,7 +6512,7 @@ fn processMain(
         codes.image_options,
         reference_context,
         poem_phase,
-        equals_prefix_candidate or literal_alias_candidate or finnish_category_page or template_peer_candidate or simple_pos_candidate != null or source_category_candidate or calibrated_peer_candidate or linked_peer_candidate or headword_candidate or sr_mul_candidate or codes.source_naslov_noun or codes.source_numbered_pos[0] or codes.source_numbered_pos[1] or codes.source_nom_label_fn != null or codes.source_section_fn != null or codes.source_linked_heading_fn != null or codes.figure_sizing != null or codes.table_styles != null or local_targets_selected,
+        equals_prefix_candidate or literal_alias_candidate or finnish_category_page or template_peer_candidate or simple_pos_candidate != null or source_category_candidate or calibrated_peer_candidate or linked_peer_candidate or headword_candidate or sr_mul_candidate or direct_leading_candidate or codes.source_naslov_noun or codes.source_numbered_pos[0] or codes.source_numbered_pos[1] or codes.source_nom_label_fn != null or codes.source_section_fn != null or codes.source_linked_heading_fn != null or codes.figure_sizing != null or codes.table_styles != null or local_targets_selected,
     );
 
     var raw_heading_proof: PageRawHeadingProof = .{ .a = heading_arena.allocator(), .codes = codes, .title = title, .raw = raw_source };
@@ -6486,7 +6532,7 @@ fn processMain(
     if ((codes.source_linked_heading_fn != null or codes.source_nom_label_fn != null) and heading_observation.page_wiki_scope_complete)
         simpleApplyRootScope(source, page_sections.items, heading_observation.page_wiki_openings);
 
-    if ((source_category_candidate or calibrated_peer_candidate or linked_peer_candidate) and heading_observation.page_wiki_scope_complete) {
+    if ((source_category_candidate or calibrated_peer_candidate or linked_peer_candidate or direct_leading_candidate) and heading_observation.page_wiki_scope_complete) {
         simpleApplyRootScope(source, page_sections.items, heading_observation.page_wiki_openings);
         simpleApplyRootRules(source, page_sections.items, heading_observation.page_wiki_rule_openings);
         if (raw_source) |raw| {
@@ -6520,6 +6566,10 @@ fn processMain(
         TemplatePeerBoundary.boundary(codes, raw_source.?, source_missing, raw_sections.items, page_sections.items,
             raw_observed.page_wiki_openings, heading_observation.page_wiki_openings, heading_observation.page_wiki_content_openings)
     else null;
+
+    const direct_leading_boundary = direct_leading_candidate and heading_observation.page_wiki_scope_complete and
+        try LeadingDirectDefinition.boundary(page_allocator, title, codes, raw_source.?, source_missing,
+            raw_sections.items, page_sections.items);
 
     var groups: std.ArrayList(PageLanguageGroup) = .empty;
     defer {
@@ -6682,7 +6732,7 @@ fn processMain(
             codes.isLanguageBoundary(std.mem.trim(u8, section.heading, " \t\r\n")) or
             (raw_aligned and codes.isLanguageBoundary(std.mem.trim(u8, raw_sections.items[index].heading, " \t\r\n")));
         const leading_unowned = resolved == null and current == null and index == 0 and raw_aligned and
-            (leadingUnownedLexicalRegion(codes, raw_sections.items, page_sections.items) or
+            (direct_leading_boundary or leadingUnownedLexicalRegion(codes, raw_sections.items, page_sections.items) or
                 (!raw_conflicts.present and !sections.mixed_levels and raw_source != null and
                     try SourceNomLeadingRegion.boundary(page_allocator, title, codes, raw_source.?, source_missing, raw_sections.items, page_sections.items)));
         // Only the immediately preceding independently owned region can
@@ -24589,6 +24639,55 @@ test "paired orthography owner requires clean identical source both authored for
         try std.testing.expect(unsectionedPairedOrthographyLanguage(codes, altered, .untracked(altered)) == null);
     }
 
+}
+
+test "leading direct meaning stays unknown only across paired literal root headings" {
+    const F = CalibratedPeerBoundaryFixture;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = "==Unrecorded language==\n# A [[kept]] meaning.\n==English==\n===Noun===\n*[[English body]]\n";
+    const sections = try F.sections(a, source);
+    try std.testing.expectEqual(@as(usize, 2), sections.len);
+    try std.testing.expect(resolveSection(F.codes, sections[0]) == null);
+    try std.testing.expectEqualStrings("en", resolveSection(F.codes, sections[1]).?.code);
+    try std.testing.expect(try LeadingDirectDefinition.boundary(a, "boundary", F.codes, source, .untracked(source), sections, sections));
+    const unknown: MissingText = .{ .bytes = source, .unknown = true };
+    try std.testing.expect(try LeadingDirectDefinition.boundary(a, "boundary", F.codes, source, unknown, sections, sections));
+    try std.testing.expect(unknown.unknown);
+    const at = std.mem.indexOf(u8, source, "[[kept]]").?;
+    const overlapping: MissingText = .{ .bytes = source, .unknown = true, .ranges = &.{.{ .start = @intCast(at), .end = @intCast(at + 8), .occurrence = 1 }} };
+    try std.testing.expect(!try LeadingDirectDefinition.boundary(a, "boundary", F.codes, source, overlapping, sections, sections));
+    try std.testing.expectEqual(@as(usize, 1), overlapping.ranges.len);
+    const generated: MissingText = .{ .bytes = source, .generated_source = source };
+    try std.testing.expect(!try LeadingDirectDefinition.boundary(a, "boundary", F.codes, source, generated, sections, sections));
+    const lost: MissingText = .{ .bytes = source, .lost_missing_range = true };
+    try std.testing.expect(!try LeadingDirectDefinition.boundary(a, "boundary", F.codes, source, lost, sections, sections));
+    const detached = try a.dupe(u8, source);
+    try std.testing.expect(!try LeadingDirectDefinition.boundary(a, "boundary", F.codes, detached, .untracked(source), sections, sections));
+    const no_root = try a.dupe(language_source.Section, sections);
+    no_root[0].root_wiki_heading = false;
+    try std.testing.expect(!try LeadingDirectDefinition.boundary(a, "boundary", F.codes, source, .untracked(source), no_root, sections));
+    no_root[0].root_wiki_heading = true;
+    no_root[1].root_wiki_heading = false;
+    try std.testing.expect(!try LeadingDirectDefinition.boundary(a, "boundary", F.codes, source, .untracked(source), sections, no_root));
+    const changed = try std.mem.replaceOwned(u8, a, source, "A [[kept]]", "A [[changed]]");
+    const changed_sections = try F.sections(a, changed);
+    try std.testing.expect(!try LeadingDirectDefinition.boundary(a, "boundary", F.codes, source, .untracked(changed), sections, changed_sections));
+    for ([_][]const u8{
+        "==Unrecorded language==\n#* example only\n==English==\nbody\n",
+        "==Unrecorded language==\n# \n==English==\nbody\n",
+        "==Unrecorded language==\n# [[broken\n==English==\nbody\n",
+        "==Unrecorded language==\n===Noun===\n# meaning\n==English==\nbody\n",
+        "==Unrecorded language==\n# meaning\n==Other unknown==\nbody\n",
+        "==Unrecorded language==\n# meaning\n==English==\nbody\n==French==\nbody\n",
+        "==Usage notes==\n# instruction\n==English==\nbody\n",
+    }) |negative| {
+        var parsed: std.ArrayList(language_source.Section) = .empty;
+        var iterator = language_source.Iterator.init(negative);
+        while (iterator.next()) |section| try parsed.append(a, section);
+        try std.testing.expect(LeadingDirectDefinition.prefix(F.codes, negative, .untracked(negative), parsed.items, parsed.items, false) == null);
+    }
 }
 
 test "paired orthography bona owns only closed root table cards and plain gloss annotations" {

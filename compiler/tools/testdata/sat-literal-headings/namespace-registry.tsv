@@ -1,0 +1,28 @@
+# wikidict-namespace-registry-v1
+# wiki	satwiktionary
+# dump-date	20261001
+# content-language	sat
+-2	ᱢᱤᱰᱤᱭᱟ	Media	case-sensitive	0	0	0		compile_only	virtual_namespace
+-1	ᱟᱥᱚᱠᱟᱭ	Special	first-letter	0	0	0		compile_only	virtual_namespace
+0			case-sensitive	0	1	0		main	dictionary_entries
+1	ᱜᱟᱞᱢᱟᱨᱟᱣ	Talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+2	ᱵᱮᱵᱷᱟᱨᱤᱭᱟᱹ	User	first-letter	1	0	0		compile_only	standard_build_input
+3	ᱵᱮᱵᱷᱟᱨᱤᱭᱟᱹ ᱜᱟᱞᱢᱟᱨᱟᱣ	User talk	first-letter	1	0	0		compile_only	discussion_namespace
+4	ᱣᱤᱠᱤ ᱟᱹᱲᱟᱹ ᱢᱩᱨᱟᱹᱭ	Project	case-sensitive	1	0	0		compile_only	standard_build_input	WT	Wiktionary
+5	ᱣᱤᱠᱤ ᱟᱹᱲᱟᱹ ᱢᱩᱨᱟᱹᱭ ᱢᱤᱰᱤᱭᱟᱣᱤᱠᱤ	Project talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Wiktionary talk
+6	ᱨᱮᱫ	File	case-sensitive	0	0	0		compile_only	standard_build_input	Image
+7	ᱨᱮᱫ ᱜᱟᱞᱢᱟᱨᱟᱣ	File talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Image talk
+8	ᱢᱤᱰᱤᱭᱟᱣᱤᱠᱤ	MediaWiki	first-letter	1	0	0		compile_only	standard_build_input
+9	ᱢᱤᱰᱤᱭᱟᱣᱤᱠᱤ ᱜᱟᱞᱢᱟᱨᱟᱣ	MediaWiki talk	first-letter	1	0	0		compile_only	discussion_namespace
+10	ᱪᱷᱟᱸᱪ	Template	case-sensitive	1	0	0		compile_only	standard_build_input
+11	ᱪᱷᱟᱸᱪ ᱜᱟᱞᱢᱟᱨᱟᱣ	Template talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+12	ᱜᱚᱸᱲᱚᱸ	Help	case-sensitive	1	0	0		compile_only	standard_build_input
+13	ᱜᱚᱸᱲᱚᱸ ᱜᱟᱞᱢᱟᱨᱟᱣ	Help talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+14	ᱛᱷᱚᱠ	Category	case-sensitive	0	0	0		compile_only	standard_build_input
+15	ᱛᱷᱚᱠ ᱜᱟᱞᱢᱟᱨᱟᱣ	Category talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+710	TimedText	TimedText	case-sensitive	0	0	0		compile_only	ancillary_site_input
+711	TimedText talk	TimedText talk	case-sensitive	0	0	0		compile_only	discussion_namespace
+828	ᱢᱳᱰᱩᱞ	Module	case-sensitive	1	0	0		compile_only	standard_build_input
+829	ᱢᱳᱰᱩᱞ ᱜᱟᱞᱢᱟᱨᱟᱣ	Module talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+1728	Event	Event	case-sensitive	1	0	0		compile_only	ancillary_site_input
+1729	Event talk	Event talk	case-sensitive	1	0	0		compile_only	discussion_namespace

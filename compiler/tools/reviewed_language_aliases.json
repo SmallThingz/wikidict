@@ -326,6 +326,15 @@
       "url": "https://li.wiktionary.org/w/index.php?title=Algemein_Gesjreve_Limburgs&oldid=983499",
       "evidence": "Authenticated selected dump page101567/revision983499 names Algemeen Geschreven Limburgs/AGL and synonym Limburgse sjrieftaal; current ich p1545/r929752 supplies this separate written-variety section before Mofers. Installed ordinary code li has preferred Limburgs.",
       "rationale": "Preserve exact written-variety heading and installed parent code li, independently from Mofers; no edition default or new code."
+    },
+    {
+      "id": "sat-english-exact-p3697-r35372-v1",
+      "code": "en",
+      "alias": "ᱤᱝᱜᱽᱨᱟᱡᱤ",
+      "authority_kind": "reviewed_public_reference",
+      "url": "https://sat.wiktionary.org/w/index.php?curid=3697&oldid=35372",
+      "evidence": "Authenticated 20261001 Santali Wiktionary dump page3697/revision35372 has this exact title and explicitly translates it as English with [[English]] and [[wikt:en:English|en]]. Full original source1883B SHA256 d240946ba80d44b248f4e50b28c287461dc1849b23a5dc6827a72e7fe58c3353; original dump2058607B SHA256 9923e708e0e756aecb97dfc1e994faf8905d504ad734f31a275a309c7b9c6296. The independently retained ordinary language registry has en preferred ᱟᱝᱜᱽᱨᱮᱡᱤ and alias English. Actual I page305/revision34342 authors this exact English heading after a separate unresolved heading.",
+      "rationale": "One exact editorial language-name alias, activated only by an explicit digest-bound reviewed-alias marker in the derived Santali build input. Preserve the original registry and preferred display. Do not infer identity from spelling resemblance, template names, script, edition, or neighboring headings. The distinct ᱴᱨᱟᱱᱥᱞᱤᱝᱜᱩᱣᱟᱞ heading has no established local equivalence and remains unassigned. This does not grant source-banner identity or change POS/body/media semantics."
     }
   ]
 }

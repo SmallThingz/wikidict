@@ -1,0 +1,32 @@
+{|class="wikitable"
+!colspan="3"|[[Appendix:Unicode/Basic Latin|Basic Latin]]
+|-
+|colspan="3"|[[File:Unicode 0x0049.svg|center|100px]]
+|-
+!ᱭᱩᱱᱤᱠᱳᱰ
+!ᱪᱤᱴᱷᱤ
+!ᱧᱩᱛᱩᱢ
+|-
+|U+0049
+|I
+|LATIN CAPITAL LETTER I
+|-
+|[[H|←H]]
+|I
+|[[J|J→]]
+|-
+|}
+== ᱴᱨᱟᱱᱥᱞᱤᱝᱜᱩᱣᱟᱞ ==
+# ᱪᱤᱠᱤ ᱨᱮᱭᱟᱜ ᱟᱨᱮ ᱪᱤᱠᱤ ᱾ ᱠᱟᱹᱴᱤᱡ ᱟᱹᱲᱟᱹ: [[i]]
+{{See also:Latin Alphabet}}
+
+{{See also:Variants of I}}
+
+== ᱤᱝᱜᱽᱨᱟᱡᱤ ==
+=== ᱧᱩᱱᱩᱢ ===
+*[[ᱤᱧ]]
+
+=== ᱥᱟᱹᱠᱷᱭᱟᱹᱛ ===
+{{ᱣᱤᱠᱤᱯᱤᱰᱤᱭᱟ-en}}
+[[ᱛᱷᱚᱠ:ᱤᱝᱜᱽᱨᱟᱡᱤ ᱟᱹᱲᱟᱹ]]
+[[ᱛᱷᱚᱠ:I]]
