@@ -32,6 +32,7 @@ const wmf4_core = "d45799ff7a503ab18523e720d5e3686761c84c87";
 // must still prove each exact approved extension registration independently.
 const d191_core = "d1919ec5e4ebd7b0dea1ff6ea1cb4347a9349ca2";
 const wmf5_imageinfo_core = "87f311882d8c84ec21e288d0bde8aa289df8dc56";
+const wmf5_rollout_core = "57f2a6bfacc3c5cecc269214a8d726b0b6faa596";
 const sr_selected_defaults = "cd0624188c22163e38bdee69bbe0e67bf74f231eeeb023a2834abd84de4cc2d7";
 const vi_selected_defaults = "eb0dd59011bfb846be294843217806fa3c2de3eeec75d24fb9960eb083d19efc";
 const vi_observed_defaults = "36f91d60b106a4cd26045775717de845d267faa5e76b4a801682db2dcd497ad4";
@@ -705,7 +706,7 @@ fn officialServer(a: A, wiki: []const u8) ![]u8 {
 fn general(value: Value, wiki: []const u8, language: []const u8, server: []const u8, core: []const u8) !Value {
     return generalWithEpoch(value, wiki, language, server, core, false, .ordinary);
 }
-const ImageInfoScope = enum { ordinary, svg_width, french_jpeg, hungarian_missing_ogg, greek_audio_ogg, vietnamese_svg };
+const ImageInfoScope = enum { ordinary, rollout_base, svg_width, french_jpeg, hungarian_missing_ogg, greek_audio_ogg, vietnamese_svg };
 
 // These roles use only the file state or explicit thumbnail returned by
 // ImageInfo. The deployment does not supply general file or parser authority.
@@ -735,7 +736,10 @@ fn generalWithEpoch(value: Value, wiki: []const u8, language: []const u8, server
     const bare = if (std.mem.startsWith(u8, remote, "https:")) remote[6..] else remote;
     if (!equal(try string(item, "wikiid"), wiki) or !equal(try string(item, "lang"), language) or
         !equal(try string(item, "git-hash"), core) or !equal(bare, server)) return invalid;
-    if (equal(core, wmf5_imageinfo_core)) {
+    if (scope == .rollout_base or equal(core, wmf5_imageinfo_core)) {
+        if (scope == .rollout_base and (!equal(core, wmf5_rollout_core) or
+            (!equal(wiki, "dewiktionary") and !equal(wiki, "ruwiktionary") and !equal(wiki, "thwiktionary")) or
+            !equal(try string(item, "generator"), "MediaWiki 1.48.0-wmf.5"))) return invalid;
         const rtl = try field(item, "rtl");
         const limits = try field(item, "thumblimits");
         if (scope == .ordinary and ordinaryImageInfoDefaults(wiki) == null) return invalid;
@@ -822,7 +826,7 @@ fn mediaRevision(core: []const u8, name: []const u8, prior: []const u8) []const 
 }
 // Keep complete reviewed sets, not independently interchangeable revisions.
 fn mediaVariant(core: []const u8) ?[media_extensions.len][]const u8 {
-    if (equal(core, wmf5_imageinfo_core) or equal(core, d191_core) or equal(core, "992ad5e3679f848254828e823860ba8b3ad3b39b") or equal(core, "6c5fe215cf45da0b1448e7ece41bde087e7ef4e2") or equal(core, "f03f1fdaa2d112807b6ce63170eb50e86de615bd") or equal(core, "6e76237de1cf29c08427d191f110a2c38c2b4cf9")) return .{
+    if (equal(core, wmf5_rollout_core) or equal(core, wmf5_imageinfo_core) or equal(core, d191_core) or equal(core, "992ad5e3679f848254828e823860ba8b3ad3b39b") or equal(core, "6c5fe215cf45da0b1448e7ece41bde087e7ef4e2") or equal(core, "f03f1fdaa2d112807b6ce63170eb50e86de615bd") or equal(core, "6e76237de1cf29c08427d191f110a2c38c2b4cf9")) return .{
         "b7208776bccdcbbfa4252f67f3e924b79b6587b9", "7755b61c361899ff83792940cf1eb20923a69bba",
         "6c890ba5064565386a35082e16c0d511b789ac6b", "43498dc2d52c37d98294e4bbf73a0e8a70bd1aea",
     };
@@ -834,7 +838,7 @@ fn mediaVariant(core: []const u8) ?[media_extensions.len][]const u8 {
 }
 fn mediaSetAccepted(core: []const u8, actual: [media_extensions.len][]const u8) bool {
     // This newly observed epoch proves one complete set, not the older WMF set.
-    if (equal(core, d191_core) or equal(core, wmf5_imageinfo_core)) {
+    if (equal(core, d191_core) or equal(core, wmf5_imageinfo_core) or equal(core, wmf5_rollout_core)) {
         for (mediaVariant(core).?, actual) |expected, revision| if (!equal(expected, revision)) return false;
         return true;
     }
@@ -1361,11 +1365,11 @@ const TiffCompanion = struct {
     observed: Timestamp,
     requests: usize = 0,
 
-    fn init(a: A, raw: []const u8, ns: *const namespaces.Registry, server: []const u8, core: []const u8, request_count: usize, epochs: bool, parent_media: [media_extensions.len][]const u8) !TiffCompanion {
+    fn init(a: A, raw: []const u8, ns: *const namespaces.Registry, server: []const u8, core: []const u8, request_count: usize, epochs: bool, scope: ImageInfoScope, parent_media: [media_extensions.len][]const u8) !TiffCompanion {
         if (raw.len == 0) return invalid;
         try preflight(raw, false);
         const root = try std.json.parseFromSliceLeaky(Value, a, raw, .{ .allocate = .alloc_always });
-        const query = try generalWithEpoch(root, ns.wiki, ns.content_language, server, core, epochs, .ordinary);
+        const query = try generalWithEpoch(root, ns.wiki, ns.content_language, server, core, epochs, scope);
         _ = try mediaRegistration(query, parent_media);
         const observed = try timestamp(try string(root, "curtimestamp"));
         if (observed.fraction.len != 0) return invalid;
@@ -1456,7 +1460,7 @@ const TiffCompanion = struct {
 };
 
 const ArrayBatches = struct {
-    historical_observations: bool = false,
+    streamed_v6: bool = false,
     scratch_reset_mode: std.heap.ArenaAllocator.ResetMode = .free_all,
     items: []const RawFileBatch,
     count: usize,
@@ -1511,7 +1515,7 @@ fn rawStreamRecordValue(a: A, bytes: []const u8, encoded_permitted: bool) !Value
 }
 
 const StreamBatches = struct {
-    historical_observations: bool = false,
+    streamed_v6: bool = false,
     scratch_reset_mode: std.heap.ArenaAllocator.ResetMode = .free_all,
     input: *StreamInput,
     backing: A,
@@ -1848,7 +1852,7 @@ pub const Registry = struct {
         var batches: StreamBatches = .{ .input = raw, .backing = backing, .count = count,
             .base_count = std.math.cast(usize, header.base_batches) orelse return invalid, .raw_sha256 = header.raw_sha256,
             .allow_tiff_companion = parsed_header.contract or equal(header.generator_sha256, file_generator_sha256),
-            .historical_observations = parsed_header.streamed_v6 and equal(header.core_revision, current_core),
+            .streamed_v6 = parsed_header.streamed_v6,
             .encoded_records = parsed_header.encoded_records,
             .scratch_reset_mode = switch (reset_mode) { .free_all => .free_all, else => .{ .retain_with_limit = raw_batch_retained_limit } } };
         return validateFileFacts(&arena, .{ .schema = "wikidict.figure-sizing-files.v1", .wiki = header.wiki,
@@ -1987,7 +1991,13 @@ pub const Registry = struct {
             const source = try std.json.parseFromSliceLeaky(Value, temp, batch.response, .{ .allocate = .alloc_always });
             const raw_general = try field(try field(source, "query"), "general");
             const batch_core = try string(raw_general, "git-hash");
-            const scope: ImageInfoScope = if (batch_index != 0 and batches.historical_observations and equal(batch_core, wmf5_imageinfo_core))
+            // The rollout occurred during three full captures. Only their later ordinary
+            // rows may use the new core. The first authenticated registration, defaults
+            // and every supplemental observation retain their original source rules.
+            const scope: ImageInfoScope = if (equal(batch_core, wmf5_rollout_core)) scope: {
+                if (batch_index == 0 or !batches.streamed_v6 or !equal(doc.core_revision, wmf5_imageinfo_core) or supplement) return invalid;
+                break :scope .rollout_base;
+            } else if (batch_index != 0 and batches.streamed_v6 and equal(doc.core_revision, current_core) and equal(batch_core, wmf5_imageinfo_core))
                 try historicalObservationScope(batch, ns, doc.source_profile) else .ordinary;
             const vietnamese_svg = scope == .vietnamese_svg;
             used_vietnamese_svg = used_vietnamese_svg or vietnamese_svg;
@@ -2000,7 +2010,8 @@ pub const Registry = struct {
             const query = try generalWithEpoch(source, ns.wiki, ns.content_language, server, batch_core, epochs, scope);
             var tiff_companion: ?TiffCompanion = if (batch.tiff_metadata_response) |response| blk: {
                 if (supplement or (!contract and !equal(doc.generator_sha256, file_generator_sha256))) return invalid;
-                break :blk try TiffCompanion.init(temp, response, ns, server, batch_core, batch.requests.len, epochs, try mediaRegistration(query, null));
+                break :blk try TiffCompanion.init(temp, response, ns, server, batch_core, batch.requests.len, epochs,
+                    if (scope == .rollout_base) .rollout_base else .ordinary, try mediaRegistration(query, null));
             } else null;
             _ = try mediaRegistration(query, null);
             const observed = try timestamp(try string(source, "curtimestamp"));
@@ -8520,4 +8531,103 @@ test "Vietnamese current SVG identity and PNG width extend only the selected his
         };
         try std.testing.expectEqual(@as(usize,1), measured);
     }
+}
+
+test "ordinary German Russian and Thai ImageInfo crosses the WMF5 rollout only inside its dated v6 base" {
+    const Parent = struct {
+        wiki: []const u8, namespace: []const u8, selected_defaults: []const u8, source_profile: Value,
+        imageinfo: ?RawFileBatch = null, batches: ?[]const RawFileBatch = null, records: []const FileFact,
+    };
+    const Child = struct { wiki: []const u8, rollout_batch: RawFileBatch, records: []const FileFact };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const parents = try std.json.parseFromSliceLeaky([]const Parent, a, try dump_source.decompressZstdBytesAlloc(a,
+        @embedFile("testdata/current-file-observations/ordinary-source.json.zst"), 512 * 1024), .{ .ignore_unknown_fields = true });
+    const widths = try std.json.parseFromSliceLeaky([]const Parent, a, try dump_source.decompressZstdBytesAlloc(a,
+        @embedFile("testdata/current-file-observations/th-it-ordinary-source.json.zst"), 2 * 1024 * 1024), .{ .ignore_unknown_fields = true });
+    const children = try std.json.parseFromSliceLeaky([]const Child, a, try dump_source.decompressZstdBytesAlloc(a,
+        @embedFile("testdata/current-file-observations/ordinary-rollout-57f.json.zst"), 512 * 1024), .{});
+    try std.testing.expectEqual(@as(usize, 3), children.len);
+    try std.testing.expect(!responseEpoch(wmf5_rollout_core) and !acceptedResponseCore(wmf5_rollout_core, true));
+    for (children, [_]Parent{ parents[0], parents[1], widths[0] }, 0..) |child, parent, index| {
+        try std.testing.expectEqualStrings(parent.wiki, child.wiki);
+        const first = parent.imageinfo orelse parent.batches.?[0];
+        const facts = try a.alloc(FileFact, first.requests.len + child.records.len);
+        var n: usize = 0;
+        for (parent.records) |fact| if (fact.batch == 0) {
+            facts[n] = fact;
+            n += 1;
+        };
+        try std.testing.expectEqual(first.requests.len, n);
+        try std.testing.expectEqual(@as(usize, 50), child.records.len);
+        @memcpy(facts[n..], child.records);
+        std.mem.sort(FileFact, facts, {}, struct {
+            fn less(_: void, left: FileFact, right: FileFact) bool { return std.mem.order(u8, left.requested_file, right.requested_file) == .lt; }
+        }.less);
+        var ns = try namespaces.Registry.init(a, parent.namespace);
+        defer ns.deinit();
+        var selected: [32]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash(parent.selected_defaults, &selected, .{});
+        const defaults: DefaultsSource = .{ .core = current_core, .sha256 = selected };
+        const doc: FilesDocument = .{ .schema = "wikidict.figure-sizing-files.v1", .wiki = parent.wiki,
+            .content_language = ns.content_language, .core_revision = wmf5_imageinfo_core,
+            .namespace_registry_sha256 = &std.fmt.bytesToHex(ns.source_sha256, .lower), .source_profile = parent.source_profile,
+            .generator_sha256 = file_generator_sha256, .raw_sha256 = "", .records = facts };
+        const Check = enum { exact, first_batch, parent_core, old_contract, width, height, jpeg, generator, registration, companion };
+        for ([_]Check{ .exact, .first_batch, .parent_core, .old_contract, .width, .height, .jpeg, .generator, .registration, .companion }) |check| {
+            // Run the projection/source/role mutations once; Thai independently exercises its width-enabled parent.
+            if (index != 0 and check != .exact and !(index == 2 and check == .width)) continue;
+            var scratch = std.heap.ArenaAllocator.init(std.testing.allocator);
+            defer scratch.deinit();
+            const temp = scratch.allocator();
+            var projected = doc;
+            var batches = [_]RawFileBatch{ first, child.rollout_batch };
+            switch (check) {
+                .exact, .old_contract => {},
+                .first_batch, .parent_core => {
+                    batches[0].response = try std.mem.replaceOwned(u8, temp, first.response, wmf5_imageinfo_core, wmf5_rollout_core);
+                    if (check == .parent_core) projected.core_revision = wmf5_rollout_core;
+                },
+                .width => batches[1].observed_svg_width_px = 250,
+                .height => batches[1].observed_svg_occurrences = &.{},
+                .jpeg => batches[1].jpeg_metadata_only = true,
+                .generator => batches[1].response = try std.mem.replaceOwned(u8, temp, batches[1].response, "MediaWiki 1.48.0-wmf.5", "MediaWiki 1.48.0-wmf.6"),
+                .registration => batches[1].response = try std.mem.replaceOwned(u8, temp, batches[1].response, "7755b61c361899ff83792940cf1eb20923a69bba", "740f9aee79a2ed80dee5957cd6b9cbe9d0fc6fad"),
+                .companion => batches[1].tiff_metadata_response = first.response,
+            }
+            const fixture = try ResponseEpochTestSource.seal(temp, projected, &batches, if (check == .parent_core) batches[0].response else first.response,
+                true, if (check == .old_contract) replay_contract_v4 else replay_contract_v6);
+            var p = StreamTestSource.Slice{ .bytes = fixture.projection };
+            var r = StreamTestSource.Slice{ .bytes = fixture.raw };
+            var projection = p.input(); var raw = r.input();
+            const checked = Registry.initStreamWithDefaults(temp, &projection, &raw, fixture.site, &ns, defaults);
+            if (check != .exact) { try std.testing.expectError(invalid, checked); continue; }
+            var registry = try checked;
+            defer registry.deinit();
+            var missing: usize = 0;
+            var eligible: usize = 0;
+            for (child.records) |fact| switch (fact.state) {
+                .missing => { try std.testing.expect(registry.missing_files.contains(fact.requested_file)); missing += 1; },
+                .eligible => {
+                    const found = found: {
+                        for (registry.records) |record| if (equal(record.canonical_file, fact.canonical_file)) break :found record;
+                        return error.MissingTestData;
+                    };
+                    try std.testing.expectEqual(fact.original_width, found.original_width);
+                    try std.testing.expectEqual(fact.original_height, found.original_height);
+                    eligible += 1;
+                },
+                else => {},
+            };
+            try std.testing.expectEqual(([_]usize{ 3, 50, 1 })[index], missing);
+            try std.testing.expectEqual(([_]usize{ 0, 0, 5 })[index], eligible);
+        }
+    }
+    // An otherwise genuine Italian capture has a current V4 defaults binding but no rollout role.
+    const italian = widths[1];
+    try std.testing.expectEqualStrings("itwiktionary", italian.wiki);
+    const unissued = try std.mem.replaceOwned(u8, a, italian.batches.?[0].response, wmf5_imageinfo_core, wmf5_rollout_core);
+    const value = try std.json.parseFromSliceLeaky(Value, a, unissued, .{});
+    try std.testing.expectError(invalid, generalWithEpoch(value, italian.wiki, "it", "//it.wiktionary.org", wmf5_rollout_core, true, .rollout_base));
 }
