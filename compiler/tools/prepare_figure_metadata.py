@@ -9,6 +9,7 @@ import base64
 import binascii
 import copy
 from compression import zstd
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import datetime
@@ -6299,13 +6300,20 @@ def materialize_complete_capture(source, output, *, max_batches=64, max_input_by
             if node['reference']['kind']=='closed-prefix' and node['authority']['schema']==CLOSED_PREFIX_SCHEMA:
                 closure=decode(saved(node['closure_path']))
                 required.update(Path(closure[name]['path']).name for name in ('actual_request','actual_receipt','actual_response'))
-            for name in sorted(required):
+            def copy_origin_file(name):
                 observed_artifact_name(name)
                 if 'imported_row' in node:
                     reference=node['imported_row']['files'][name]
-                    row['files'][name]=put(reference['path'],materialized_local_file(node['container'],reference))
-                else:
-                    row['files'][name]=put(identifier+'/'+name,origin_root/name)
+                    return name,put(reference['path'],materialized_local_file(node['container'],reference))
+                return name,put(identifier+'/'+name,origin_root/name)
+            names=sorted(required)
+            if len(names)>=32 and 'imported_row' not in node and required.isdisjoint(p.name for p in own.iterdir()):
+                # Each new origin file retains its own exclusive create, digest and fsync.
+                # Join all writers before assembling the plan or handling an error.
+                with ThreadPoolExecutor(max_workers=4) as copies:
+                    row['files'].update(copies.map(copy_origin_file,names,buffersize=4))
+            else:
+                row['files'].update(map(copy_origin_file,names))
             rows.append(row)
         plan=copy.deepcopy(top['plan'])
         plan.update(metadata_mode=MATERIALIZED_HTTP_MODE,source=capture_source(),retained=[],
