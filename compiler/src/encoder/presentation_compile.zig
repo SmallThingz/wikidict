@@ -25219,11 +25219,17 @@ pub const Renderer = struct {
             .{ .font_weight_consumed = weight_consumed, .cell_ancestor_id_superset = cell_ancestor_id_superset, .font_size_consumed = computed_font.font_scale_set and !computed_font.font_size_unknown, .page_style_root = if (computed_font.text_element) |node| node.page_style_root else null, .custom_environment = computed_font.custom_properties, .text_color_consumed = computed_font.table_text_color_consumed, .absent_own_attribute = self.tableRowColorOwnAbsence(tag, computed_font), .computed_border_collapse = if (computed_font.table_inheritance_scoped) computed_font.table_collapse else null, .legacy_vertical_align = try self.semanticAttribute(tag, "valign"), .legacy_cell_width = try self.semanticAttribute(tag, "width"), .ancestor_classes = self.table_css_ancestor_classes, .own_id = (try self.semanticAttribute(tag, "id")) orelse "" }, tag.is("th"),
             try self.semanticAttribute(tag, "bgcolor"), try self.semanticAttribute(tag, "align"),
             (try self.semanticAttribute(tag, "style")) orelse "");
-        if (self.table_style_unresolved or (computed_font.font_scale_basis == .css_px and resolved.line_height == null and !(native.cell_policy_active and native.inherited_height != null))) {
+        if (self.table_style_unresolved) {
             resolved.style = null;
             resolved.unresolved = true;
             resolved.padding_basis_unresolved = true;
             resolved.alignment_specified = true;
+        } else if (computed_font.font_scale_basis == .css_px and resolved.line_height == null and !(native.cell_policy_active and native.inherited_height != null)) {
+            // The missing cell strut leaves line layout unresolved. The CSS
+            // cascade still establishes alignment and physical-length edges.
+            // guardCellEmStyleAt rejects lengths without a normal-body basis.
+            resolved.unresolved = true;
+            resolved.padding_basis_unresolved = true;
         }
         self.fallbacks.unresolved_table_style = self.fallbacks.unresolved_table_style or self.traceUnresolvedTableStyle(resolved.unresolved, "resolvedCellStyle.2", tag.attrs);
         if (!resolved.background_specified) resolved.background = fallback;
@@ -64417,6 +64423,23 @@ test "Amharic phrase table preserves row CSS pixel font in stored spans" {
             }
         }
     }
+}
+
+test "Amharic phrase table pixel row preserves independently resolved cell geometry" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var profile = try table_style_profile.parseAlloc(a, "");
+    defer profile.deinit();
+    var renderer: Renderer = .{ .a = a, .context = .{ .table_styles = &profile } };
+    const blocks = try renderer.renderBody("{|\n|- style='text-align:center; font-size:26px'\n! style='padding:2px' | physical\n! style='padding:1em' | relative\n|}");
+    const saved = try FormattingScopeTest.encode(a, &renderer, blocks);
+    const cells = saved.entry.sections[0].blocks[0].table.?.rows[0].cells;
+    try std.testing.expectEqual(presentation_types.CellTextAlign.center, cells[0].style.?.text_align.?);
+    try std.testing.expectEqual(presentation_types.StyleEdges.all(.{ .unit = .px, .value = 2 }), cells[0].style.?.padding.?);
+    try std.testing.expectEqual(presentation_types.CellTextAlign.center, cells[1].style.?.text_align.?);
+    try std.testing.expect(cells[1].style.?.padding == null);
+    try std.testing.expect(renderer.fallbacks.unresolved_table_style);
 }
 
 test "Amharic phrase table row font permits local override without sibling leakage" {
