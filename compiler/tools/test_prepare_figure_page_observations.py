@@ -1,4 +1,5 @@
 import copy
+import gzip
 import hashlib
 import json
 import os
@@ -886,6 +887,36 @@ class SelectedFullGetRootContract(unittest.TestCase):
 
 
 class RootOnlyObservationTests(unittest.TestCase):
+ def test_saved_aragonese_sun_table_and_closed_heading_parent(self):
+  folder = Path(__file__).parent / 'testdata/an-planet-table'
+  namespace = (folder.parent / 'an-decimal-noun/namespace-registry.tsv').read_bytes()
+  defaults = gzip.decompress((folder / 'figure-siteinfo.json.gz').read_bytes())
+  snapshot = gzip.decompress((folder / 'sun-table-source.json.gz').read_bytes())
+  doc = observed.validate_document(snapshot, namespace, defaults)
+  root, = doc['table_roots']
+  self.assertEqual((root['title'], root['page_id'], root['revision_id']), ('☉', 8372, 32427))
+  source = (folder / 'expanded.wikitext').read_bytes()
+  self.assertEqual(root['source'].encode(), source)
+  self.assertEqual(root['raw_sha256'], observed.digest((folder / 'raw.wikitext').read_bytes()))
+  self.assertEqual(observed.table_root_source_parent(source, root['source_table']['start']), {'align':'center'})
+  suffix = source[source.index(b'<div align='):]
+  for prefix in (b'ordinary text\n', b'==Unclosed\n', b'==<h3 id="x">word</h3>==\n==Next==\n',
+                 b'[[open\n==Next==\n', b':[1x]:\n==Next==\n', b'<sub>x\n==Next==\n'):
+   altered = prefix + suffix
+   with self.subTest(prefix=prefix), self.assertRaises(ValueError):
+    observed.table_root_source_parent(altered, altered.index(b'{|'))
+
+ def test_aragonese_planetary_table_configuration(self):
+  prelude = (Path(__file__).parent / 'testdata/an-planet-table/vector-prelude.js').read_text()
+  classes = 'client-nojs ' + prelude.split('var className="client-js ', 1)[1].split('";var cookie=', 1)[0]
+  script = prelude + 'RLCONF={"wgArticleId":8372,"wgRevisionId":32427};'
+  self.assertEqual(observed.table_root_configuration(script, classes)['wgRevisionId'], 32427)
+  for changed in (script.replace('anwiktionarymwclientpreferences','xxwiktionarymwclientpreferences'),
+                  script.replace('vector-toc-not-available','vector-toc-not-availablx'),
+                  script.replace('RLCONF=','if(false)RLCONF=')):
+   with self.assertRaises(ValueError): observed.table_root_configuration(changed, classes)
+  with self.assertRaises(ValueError): observed.table_root_configuration(script, classes + ' foreign')
+
  def setUp(self):
   root=Path(__file__).parent/'testdata'
   self.snapshot_path=root/'ru-current-table-root/figure-page-observations.json'

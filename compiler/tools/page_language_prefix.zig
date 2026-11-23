@@ -105,6 +105,7 @@ fn configurationForSelectedPage(a: A, text: []const u8, page_id: u64, revision_i
         // before RLCONF; unknown programs remain rejected.
         if (!std.mem.eql(u8, &hash, "4596a0a448783bdf5cd823d3b017520464502eba17da6e0277049df0c171bf39") and
             !std.mem.eql(u8, &hash, "296e5797ae51141a36d124508c23b7e0aeb2cb5be620e060fc6eb5aceb39cc89") and
+            !std.mem.eql(u8, &hash, "4883bdb1c585b9440aa445aacdea8bdb5df146ca42bde57bd25862fffb71ed0f") and
             !std.mem.eql(u8, &hash, "ff0406678d57587b7409bfba7f818a44a9ec8dd418eb27da4b32823b3e19ed0d") and
             !std.mem.eql(u8, &hash, "50617cc2b928696b5f738520ed06f6814b186a4a6ddcadd9743d34abd74a8d5d") and
             !std.mem.eql(u8, &hash, "1e6d52df99a5b900fc18cec459f5e77aee670a50858da0923389f6c308ac7c49") and
@@ -401,6 +402,23 @@ test "page prefix exact observed EL program remains data-bound and rejects chang
         try std.testing.expect(!std.mem.eql(u8, script, altered));
         try std.testing.expectError(invalid, configurationForPage(a, altered, 47830, 7126690, "φεμινισμός"));
     }
+}
+
+test "Aragonese planetary table prelude retains its source classes and current identity" {
+    const a = std.testing.allocator;
+    const prelude = @embedFile("testdata/an-planet-table/vector-prelude.js");
+    const script = prelude ++ "RLCONF={\"wgArticleId\":8372,\"wgRevisionId\":32427,\"wgCurRevisionId\":32427,\"wgNamespaceNumber\":0,\"wgTitle\":\"☉\",\"wgPageName\":\"☉\",\"wgAction\":\"view\",\"wgIsArticle\":true};";
+    const page = SelectedPage{ .namespace_id = 0, .title = "☉" };
+    const first = "(function(){var className=\"client-js ".len;
+    const last = std.mem.indexOf(u8, prelude, "\";var cookie=") orelse return error.TestUnexpectedResult;
+    const classes = try std.mem.concat(a, u8, &.{ "client-nojs ", prelude[first..last] });
+    defer a.free(classes);
+    try std.testing.expect(try configurationForSelectedPage(a, script, 8372, 32427, "☉", page, classes));
+    try std.testing.expectError(invalid, configurationForSelectedPage(a, script, 8372, 32427, "☉", page, "client-nojs foreign"));
+    try std.testing.expectError(invalid, configurationForSelectedPage(a, script, 8372, 32428, "☉", page, classes));
+    const altered = try std.mem.replaceOwned(u8, a, script, "anwiktionarymwclientpreferences", "xxwiktionarymwclientpreferences");
+    defer a.free(altered);
+    try std.testing.expectError(invalid, configurationForSelectedPage(a, altered, 8372, 32427, "☉", page, classes));
 }
 
 

@@ -1586,6 +1586,7 @@ def table_root_configuration(text, html_classes):
         hashes = {
             '4596a0a448783bdf5cd823d3b017520464502eba17da6e0277049df0c171bf39',
             '296e5797ae51141a36d124508c23b7e0aeb2cb5be620e060fc6eb5aceb39cc89',
+            '4883bdb1c585b9440aa445aacdea8bdb5df146ca42bde57bd25862fffb71ed0f',
             'ff0406678d57587b7409bfba7f818a44a9ec8dd418eb27da4b32823b3e19ed0d',
             '50617cc2b928696b5f738520ed06f6814b186a4a6ddcadd9743d34abd74a8d5d',
             '1e6d52df99a5b900fc18cec459f5e77aee670a50858da0923389f6c308ac7c49',
@@ -1634,22 +1635,65 @@ def table_root_configuration(text, html_classes):
 def table_root_source_parent(source, start):
     # Conservative native-equivalent prefix custody, not a general HTML parser.
     prefix = source[:start].decode()
+    def heading_boundaries():
+        boundaries = set(); offset = 0
+        # Scan each physical line once. A heading-looking line inside an open
+        # construct cannot establish a block boundary for a later parent.
+        for physical in prefix.split('\n'):
+            raw = physical.encode(); cursor = 0; bold = italic = False
+            while cursor < len(raw):
+                if raw.startswith(b'[[', cursor):
+                    cursor = source_link_end(raw, cursor); continue
+                if raw.startswith(b':[', cursor) and cursor == 0:
+                    marker = re.match(rb':\[[0-9]{1,9}\]:', raw)
+                    if marker: cursor = marker.end(); continue
+                if raw[cursor:cursor+1] in (b'[',b']',b'{',b'}',b'\0'): return boundaries
+                if raw[cursor] == 39:
+                    end = cursor + 1
+                    while end < len(raw) and raw[end] == 39: end += 1
+                    run = end - cursor
+                    if run not in (1,2,3,5): return boundaries
+                    if run in (2,5): italic = not italic
+                    if run in (3,5): bold = not bold
+                    cursor = end; continue
+                cursor += 1
+            if bold or italic: return boundaries
+            offset += len(physical) + 1
+            heading = re.fullmatch(r'(={1,6})([^=<>\[\]{}|\'\x00-\x1f]+)\1', physical)
+            if heading and heading[2].strip(' '):
+                boundaries.add(offset)
+        return boundaries
+
     class SourcePrefix(HTMLParser):
         def __init__(self):
             super().__init__(convert_charrefs=True); self.stack = []; self.nodes = 0; self.offsets = [0]
             self.offsets += [i + 1 for i, ch in enumerate(prefix) if ch == '\n']
+        def heading_boundaries(self):
+            if not hasattr(self, 'boundaries'): self.boundaries = heading_boundaries()
+            return self.boundaries
         def handle_starttag(self, tag, attrs):
             self.nodes += 1
-            if tag not in {'span','ul','li','div'} or self.nodes > 16384 or len(self.stack) >= 128:
+            if tag not in {'span','ul','li','div','h3','sub'} or self.nodes > 16384 or len(self.stack) >= 128:
                 raise ValueError('Unsupported table source prefix owner')
             opening = self.get_starttag_text(); line, col = self.getpos()
             at = self.offsets[line - 1] + col
             values = dict(attrs)
             if len(values) != len(attrs) or len(attrs) > 64 or any(value is None for _, value in attrs):
                 raise ValueError('Ambiguous table source prefix attributes')
-            if tag == 'div':
+            line_start = self.offsets[line - 1]
+            line_end = self.offsets[line] - 1 if line < len(self.offsets) else len(prefix)
+            # Earlier heading markup is balanced on its own physical line; it
+            # cannot contribute an active ancestor to the selected table.
+            heading_div = (tag == 'div' and not self.stack and col == 1 and
+                           re.fullmatch(r'=<div id="toc" class="toccolours" *>[^<>]+</div>=(?:__NOTOC__ __NOEDITSECTION__)?', prefix[line_start:line_end]))
+            if tag == 'h3':
+                if self.stack or col != 2 or not re.fullmatch(r'==<h3>[^<>]+</h3>==', prefix[line_start:line_end], re.I):
+                    raise ValueError('Unproved closed HTML heading')
+            if tag == 'sub' and (attrs or not re.compile(r'<sub>[^<>\[\]{}]+</sub>',re.I).match(prefix, at, line_end)):
+                raise ValueError('Unproved subscript')
+            if tag == 'div' and not heading_div:
                 match = re.fullmatch(r"<div[ \t]+(align|style)[ \t]*=[ \t]*([\"'])(.*?)\2[ \t]*>", opening)
-                if (match is None or (at and (at < 2 or prefix[at - 2:at] != '\n\n')) or self.stack):
+                if (match is None or (at and (at < 2 or prefix[at - 2:at] != '\n\n') and at not in self.heading_boundaries()) or self.stack):
                     raise ValueError('Unproved table source parent')
                 key, value = match[1], match[3]
                 if (not value or any(c in value for c in '{}[]<>|\r\n\0') or '__' in value

@@ -1,0 +1,11 @@
+{{-mul-}}
+[[Imachen:Sun symbol (fixed width).svg|80px|right|frameless|{{PAGENAME}}]]
+{{-symbol-}}
+# (astronomía, astrolochía) o [[sol|Sol]]
+# (alquimia) lo metal planetario [[oro]]
+
+===Eixemplos d'emplego===
+:[1]: [[L☉|''L''<sub>☉</sub>]], [[M☉|''M''<sub>☉</sub>]], [[R☉|''R''<sub>☉</sub>]]
+
+==Se veigan tamién==
+{{simbolos planetarios}}

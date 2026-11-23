@@ -17194,6 +17194,24 @@ pub fn tableDirectionRootAlloc(a: A, ns: *const namespaces.Registry, bytes: []co
 }
 
 pub const TableDirectionLocalParent = struct { opening: []const u8, tag: []const u8, attributes: []const profile.FigureObservedAttribute };
+// A source definition/example can start with a numeric reference marker. Only
+// the complete indented note token is neutral; arbitrary brackets still refuse.
+fn tableDirectionNoteEnd(source: []const u8, at: usize) ?usize {
+    if (at == 0 or source[at - 1] != ':' or (at != 1 and source[at - 2] != '\n')) return null;
+    var end = at + 1;
+    while (end < source.len and std.ascii.isDigit(source[end])) : (end += 1) {}
+    if (end == at + 1 or end - at > 10 or !std.mem.startsWith(u8, source[end..], "]:")) return null;
+    return end + 2;
+}
+
+fn tableDirectionPlainHeading(line: []const u8) bool {
+    const heading = syntax.controlHeading(line, null) orelse return false;
+    const level: usize = heading.level;
+    if (line.len != 2 * level + heading.title.len or std.mem.trim(u8, heading.title, " ").len == 0 or
+        std.mem.indexOfAny(u8, heading.title, "=<>[]{}|'\x00\r\n\t") != null) return false;
+    return true;
+}
+
 fn tableDirectionNoSourceStyles(a: A, ns: *const namespaces.Registry, source: []const u8) !bool {
     var at: usize = 0;
     while (at < source.len) {
@@ -17202,6 +17220,7 @@ fn tableDirectionNoSourceStyles(a: A, ns: *const namespaces.Registry, source: []
             continue;
         }
         if (source[at] == '[') {
+            if (tableDirectionNoteEnd(source, at)) |end| { at = end; continue; }
             at = (try authoredElementLinkEnd(a, ns, source, at, 0)) orelse return false;
             continue;
         }
@@ -17240,6 +17259,7 @@ fn tableDirectionLocalParentsInnerAlloc(a: A, ns: *const namespaces.Registry, so
     var stack: [128]Open = undefined; var depth: usize = 0;
     var table_depths: [64]usize = undefined; var tables: usize = 0;
     var bold = false; var italic = false; var at: usize = 0;
+    var after_heading: ?usize = null;
     var last_root_div_end: ?usize = null;
     while (at < opening_start) {
         if (std.mem.startsWith(u8, source[at..], "<!--")) {
@@ -17248,6 +17268,10 @@ fn tableDirectionLocalParentsInnerAlloc(a: A, ns: *const namespaces.Registry, so
             at = end + 3; continue;
         }
         if (at == 0 or source[at - 1] == '\n') {
+            if (tables == 0 and depth == 0 and !bold and !italic and source[at] == '=') {
+                const eol = std.mem.indexOfScalarPos(u8, source, at, '\n') orelse return null;
+                if (tableDirectionPlainHeading(source[at..eol])) after_heading = eol + 1;
+            }
             var begin = at;
             while (begin < opening_start and std.mem.indexOfScalar(u8, ":*#; ", source[begin]) != null) : (begin += 1) {}
             if (std.mem.startsWith(u8, source[begin..], "{|")) {
@@ -17267,6 +17291,7 @@ fn tableDirectionLocalParentsInnerAlloc(a: A, ns: *const namespaces.Registry, so
             }
         }
         if (source[at] == '[') {
+            if (tableDirectionNoteEnd(source, at)) |end| { at = end; continue; }
             const end = (try authoredElementLinkEnd(a, ns, source, at, 0)) orelse return null;
             if (end > opening_start) return null;
             at = end; continue;
@@ -17277,6 +17302,19 @@ fn tableDirectionLocalParentsInnerAlloc(a: A, ns: *const namespaces.Registry, so
             var supported = false;
             for ([_][]const u8{ "div", "span", "ul", "ol", "li", "b", "i", "em", "strong", "small", "sup", "sub", "br", "hr", "wbr" }) |name|
                 if (tag.is(name)) { supported = true; break; };
+            // An attribute-free HTML heading may wrap this entire wiki heading.
+            // It must close on the same line, outside tables and other elements.
+            if (tag.is("h3")) {
+                if (tag.attrs.len != 0 or tag.self_closing or tables != 0) return null;
+                if (!tag.closing) {
+                    if (depth != 0 or at < 2 or !std.mem.eql(u8, source[at-2..at], "==") or
+                        (at > 2 and source[at-3] != '\n')) return null;
+                    const pair = syntax.matchingTag(source, tag) orelse return null;
+                    if (pair.end + 2 >= source.len or !std.mem.eql(u8, source[pair.end..][0..3], "==\n") or
+                        std.mem.indexOfAny(u8, source[tag.end..pair.inner_end], "<>\r\n") != null) return null;
+                }
+                supported = true;
+            }
             if (!supported) return null;
             if (tag.closing) {
                 if (depth == 0 or !tag.is(stack[depth - 1].tag.name) or tag.attrs.len != 0) return null;
@@ -17303,7 +17341,7 @@ fn tableDirectionLocalParentsInnerAlloc(a: A, ns: *const namespaces.Registry, so
         return &.{};
     }
     const first = stack[0].start;
-    if (first != 0 and (first < 2 or !std.mem.eql(u8, source[first - 2..first], "\n\n"))) {
+    if (first != 0 and after_heading != first and (first < 2 or !std.mem.eql(u8, source[first - 2..first], "\n\n"))) {
         // A closed root DIV is also an explicit block boundary. Only whitespace
         // may separate it from the selected parent; text cannot borrow that proof.
         const closed = last_root_div_end orelse return null;
@@ -17764,6 +17802,49 @@ test "actual FR independent table root binds current GET source opening centered
     var wrong_defaults = defaults; wrong_defaults[0] = 1;
     try std.testing.expect((try book.selectTableRoot(a, &ns, 0, input.page_id, input.revision_id, input.title,
         TableRootTesting.raw, selected_source, wrong_defaults)) == null);
+}
+
+test "actual Aragonese Sun table parent follows a closed heading and rejects malformed prefix" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile("testdata/an-decimal-noun/namespace-registry.tsv")); defer ns.deinit();
+    const source = @embedFile("testdata/an-planet-table/expanded.wikitext");
+    const offset = std.mem.indexOf(u8, source, "{|").?;
+    const parents = (try tableDirectionLocalParentsAlloc(a, &ns, source, offset)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 1), parents.len);
+    try std.testing.expectEqualStrings("<div align=\"center\">", parents[0].opening);
+    for ([_][]const u8{ "author text\n", " ==Heading==\n", "==No close\n", "[[open\n==Heading==\n", "{{open\n==Heading==\n", "==<H3 onclick='x'>Foreign</H3>==\n==Heading==\n", ":[12x]: malformed\n==Heading==\n" }) |prefix| {
+        const altered = try std.mem.concat(a, u8, &.{ prefix, source[std.mem.indexOf(u8, source, "<div align=").?..] });
+        try std.testing.expect((try tableDirectionLocalParentsAlloc(a, &ns, altered, std.mem.indexOf(u8, altered, "{|").?)) == null);
+    }
+}
+
+test "Aragonese Sun table joins the original entry to its observed page and styles" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile("testdata/an-decimal-noun/namespace-registry.tsv"));
+    defer ns.deinit();
+    var stream: std.Io.Reader = .fixed(@embedFile("testdata/an-planet-table/sun-table-source.json.gz"));
+    var inflater: std.compress.flate.Decompress = .init(&stream, .gzip, &.{});
+    const snapshot = try inflater.reader.allocRemaining(a, .limited(512 * 1024));
+    try std.testing.expect(inflater.err == null and inflater.state == .end);
+    const doc = try std.json.parseFromSliceLeaky(Document, a, snapshot, .{ .allocate = .alloc_always });
+    var files = try Testing.registry(a, &ns, doc);
+    defer files.deinit();
+    var defaults: [32]u8 = undefined;
+    _ = try std.fmt.hexToBytes(&defaults, "ab817c1a13249261f3e872b16d2254a277d573140fbe1909aaa263ba0baf380c");
+    var book = try Book.init(a, snapshot, &ns, &files, defaults, 220);
+    defer book.deinit();
+    const source = @embedFile("testdata/an-planet-table/expanded.wikitext");
+    const raw = @embedFile("testdata/an-planet-table/raw.wikitext");
+    const selected = (try book.selectTableRoot(a, &ns, 0, 8372, 32427, "☉", raw, source, defaults)) orelse return error.TestUnexpectedResult;
+    const table_offset = std.mem.indexOf(u8, source, "{|") orelse return error.TestUnexpectedResult;
+    const observation = (try selected.observe(selected.context, a, source, table_offset)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 1), observation.parents.len);
+    try std.testing.expectEqualStrings("<div align=\"center\">", observation.parents[0]);
+    try std.testing.expectEqual(@as(usize, 1), observation.contexts.len);
+    try std.testing.expect((try book.selectTableRoot(a, &ns, 0, 8372, 32428, "☉", raw, source, defaults)) == null);
+    try std.testing.expect((try selected.observe(selected.context, a, source, table_offset + 1)) == null);
 }
 
 test "table root source boundary accepts only closed adjacent DIV and refuses text malformed unknown or extra parents" {

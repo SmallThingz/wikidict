@@ -1,0 +1,21 @@
+=<div id="toc" class="toccolours" >[[Image:Flag_of_the United Nations.svg|40px]] '''''[[internacional|Internacional]]''''' </div>=__NOTOC__ __NOEDITSECTION__
+
+[[Category:Parabras internacionales]]
+[[Imachen:Sun symbol (fixed width).svg|80px|right|frameless|☉]]
+==<H3>[[Image:Open_book_01.svg|30px]] ''[[Wiktionary:simbolo|Simbolo]]''</H3>==
+[[Categoría:Simbolos]]
+
+# (astronomía, astrolochía) o [[sol|Sol]]
+# (alquimia) lo metal planetario [[oro]]
+
+===Eixemplos d'emplego===
+:[1]: [[L☉|''L''<sub>☉</sub>]], [[M☉|''M''<sub>☉</sub>]], [[R☉|''R''<sub>☉</sub>]]
+
+==Se veigan tamién==
+<div align="center">
+{| class="toccolours" style="margin: 0 auto;text-align:center;"
+! style="background: #ccccff;" | Simbolos planetarios
+|- 
+|[[Image:Sun symbol (fixed width).svg|link=☉]] · [[Image:Mercury symbol (fixed width).svg|link=☿]] · [[Image:Venus symbol (fixed width).svg|link=♀]] · [[Image:Earth symbol (fixed width).svg|link=🜨]]&ndash;[[Image:Globus cruciger (fixed width).svg|link=♁]] · [[Image:Moon crescent symbol (fixed width).svg|link=☽]]&ndash;[[Image:Moon decrescent symbol (fixed width).svg|link=☾]] · [[Image:Mars symbol (fixed width).svg|link=♂]] · [[Image:Ceres symbol (fixed width).svg|link=⚳]] · [[Image:Pallas symbol (fixed width).svg|link=⚴]] · [[Image:Juno symbol (fixed width).svg|link=⚵]] · [[Image:Vesta symbol (fixed width).svg|link=⚶]] · [[Image:Hygiea symbol (fixed width).svg|link=⯚]] · [[Image:Chiron symbol (fixed width).svg|link=⚷]] · [[Image:Jupiter symbol (fixed width).svg|link=♃]] · [[Image:Saturn symbol (fixed width).svg|link=♄]] · [[Image:Uranus symbol (fixed width).svg|link=⛢]]&ndash;[[Image:Uranus monogram (fixed width).svg|link=♅]] · [[Image:Neptune symbol (fixed width).svg|link=♆]] · [[Image:Pluto symbol (large orb, fixed width).svg|link=⯓]]&ndash;[[Image:Pluto monogram (fixed width).svg|link=♇]] · [[Image:Orcus symbol (fixed width).svg|link=🝿]] · [[Image:Haumea symbol (fixed width).svg|link=🝻]] · [[Image:Quaoar symbol (fixed width).svg|link=🝾]] · [[Image:Makemake symbol (fixed width).svg|link=🝼]] · [[Image:Gonggong symbol (fixed width).svg|link=🝽]] · [[Image:Eris symbol (fixed width).svg|link=⯰]] · [[Image:Sedna symbol (fixed width).svg|link=⯲]] · [[Image:Comet symbol (fixed width).svg|link=☄]]
+|} 
+</div>
