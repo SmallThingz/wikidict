@@ -16364,6 +16364,7 @@ test "normal Writer retained PT bor preserves literal path numbered action all o
             return count;
         }
         const Scan = struct {
+            bordered_headwords: usize = 0,
             visible: std.ArrayList(u8) = .empty,
             label: std.ArrayList(u8) = .empty,
             tables: usize = 0,
@@ -16372,6 +16373,13 @@ test "normal Writer retained PT bor preserves literal path numbered action all o
             lingea_segments: usize = 0,
             fn spans(self: *@This(), a: std.mem.Allocator, values: []const encoder.presentation_types.Span, owner: []const u8) !void {
                 for (values) |span| {
+                    if (span.inline_box_group) |box| if (box.spans.len != 0 and std.mem.eql(u8, box.spans[0].text, "bor")) {
+                        try PtVinrodRetainedFixture.Scan.borderedBoldWord(span, "bor");
+                        try std.testing.expectEqualStrings("br", owner);
+                        self.bordered_headwords += 1;
+                        try self.visible.appendSlice(a, box.spans[0].text);
+                        try self.visible.appendSlice(a, box.spans[0].trail);
+                    };
                     try self.visible.appendSlice(a, span.text);
                     try self.visible.appendSlice(a, span.trail);
                     if (span.kind == .link or span.kind == .external_link) self.action_segments += 1;
@@ -16510,6 +16518,7 @@ test "normal Writer retained PT bor preserves literal path numbered action all o
         try scan.entry(a, actual);
     }
     try std.testing.expect(try reference_it.next() == null);
+    try std.testing.expectEqual(@as(usize, 1), scan.bordered_headwords);
     try std.testing.expect(changed_targets != 0);
     try std.testing.expectEqual(@as(usize, 1), cs_records);
     try std.testing.expectEqual(@as(usize, 1), ro_records);
@@ -16570,6 +16579,7 @@ test "normal Writer retained PT bor with authenticated imported CSS preserves co
             return count;
         }
         const Scan = struct {
+            bordered_headwords: usize = 0,
             visible: std.ArrayList(u8) = .empty,
             label: std.ArrayList(u8) = .empty,
             tables: usize = 0,
@@ -16578,6 +16588,13 @@ test "normal Writer retained PT bor with authenticated imported CSS preserves co
             lingea_segments: usize = 0,
             fn spans(self: *@This(), a: std.mem.Allocator, values: []const encoder.presentation_types.Span, owner: []const u8) !void {
                 for (values) |span| {
+                    if (span.inline_box_group) |box| if (box.spans.len != 0 and std.mem.eql(u8, box.spans[0].text, "bor")) {
+                        try PtVinrodRetainedFixture.Scan.borderedBoldWord(span, "bor");
+                        try std.testing.expectEqualStrings("br", owner);
+                        self.bordered_headwords += 1;
+                        try self.visible.appendSlice(a, box.spans[0].text);
+                        try self.visible.appendSlice(a, box.spans[0].trail);
+                    };
                     try self.visible.appendSlice(a, span.text);
                     try self.visible.appendSlice(a, span.trail);
                     if (span.kind == .link or span.kind == .external_link) self.action_segments += 1;
@@ -16702,6 +16719,7 @@ test "normal Writer retained PT bor with authenticated imported CSS preserves co
         try scan.entry(a, actual);
     }
     try std.testing.expect(try reference_it.next() == null);
+    try std.testing.expectEqual(@as(usize, 1), scan.bordered_headwords);
     try std.testing.expect(changed_targets != 0);
     try std.testing.expectEqual(@as(usize, 1), cs_records);
     try std.testing.expectEqual(@as(usize, 1), ro_records);
@@ -22646,6 +22664,7 @@ test "normal Writer retained PT Uran preserves malformed numeric heading all own
             try std.testing.expectEqualStrings(expected, &std.fmt.bytesToHex(digest, .lower));
         }
         const Scan = struct {
+            bordered_headwords: usize = 0,
             visible: std.ArrayList(u8) = .empty,
             targets: std.ArrayList(u8) = .empty,
             tables: usize = 0,
@@ -22687,6 +22706,13 @@ test "normal Writer retained PT Uran preserves malformed numeric heading all own
             fn spans(self: *@This(), a: std.mem.Allocator, values: []const encoder.presentation_types.Span, owner: []const u8) !void {
                 try self.elementActions(a, values);
                 for (values) |span| {
+                    if (span.inline_box_group) |box| if (box.spans.len != 0 and std.mem.eql(u8, box.spans[0].text, "Uran")) {
+                        try PtVinrodRetainedFixture.Scan.borderedBoldWord(span, "Uran");
+                        self.bold_title = true;
+                        self.bordered_headwords += 1;
+                        try self.visible.appendSlice(a, box.spans[0].text);
+                        try self.visible.appendSlice(a, box.spans[0].trail);
+                    };
                     try self.visible.appendSlice(a, span.text); try self.visible.appendSlice(a, span.trail);
                     if (span.target.len != 0) { try self.targets.appendSlice(a, span.target); try self.targets.append(a, '\n'); }
                     if (span.bold and std.mem.eql(u8, span.text, "Uran")) self.bold_title = true;
@@ -22809,6 +22835,7 @@ test "normal Writer retained PT Uran preserves malformed numeric heading all own
         try scan.entry(a, actual); records += 1;
     }
     try std.testing.expect(try reference_it.next() == null);
+    try std.testing.expectEqual(@as(usize, 6), scan.bordered_headwords);
     try std.testing.expectEqual(stats[0].language_records, records);
     try std.testing.expectEqual(@as(usize, 1), polish_records);
     try std.testing.expectEqual(@as(usize, 1), scan.malformed_headings);

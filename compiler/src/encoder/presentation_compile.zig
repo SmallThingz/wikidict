@@ -5784,12 +5784,24 @@ const InlineSourceDomain = struct {
 pub const ContentRoot = enum { unknown, parser_output };
 
 // Issued only from the original page observation through an exact owner range.
+pub fn containsSortedOffset(openings: []const usize, boundary: usize) bool {
+    var lo: usize = 0;
+    var hi = openings.len;
+    while (lo < hi) {
+        const mid = lo + (hi - lo) / 2;
+        if (openings[mid] < boundary) lo = mid + 1 else hi = mid;
+    }
+    return lo < openings.len and openings[lo] == boundary;
+}
+
 pub const NativeArticleFragment = struct {
     page: []const u8,
     original_page: ?[]const u8,
     start: usize,
     prepared: []const u8,
     starts_page: bool,
+    quoted_paragraph_openings: []const usize = &.{},
+    quoted_paragraph_original_prefix: []const u8 = "",
     observed_box_table_heading_root: bool = false,
 };
 pub const NativeArticleHost = struct {
@@ -8929,6 +8941,8 @@ pub const Renderer = struct {
     literal_url_root: ?[]const u8 = null,
     heading_source: ?[]const u8 = null,
     page_root_wiki_table_openings: ?*std.ArrayList(usize) = null,
+    page_quoted_paragraph_openings: ?*std.ArrayList(usize) = null,
+    dispatched_quoted_paragraph: ?[]const u8 = null,
     page_top_level_wiki_table_openings: ?*std.ArrayList(usize) = null,
     neutral_root_table_prefix: ?NeutralRootTablePrefix = null,
     root_wiki_table_range: ?RootWikiTableRange = null,
@@ -26993,7 +27007,7 @@ pub const Renderer = struct {
     // its generated B and each authored opener to this exact source interval.
     fn inlineBoxQuotedParagraphInput(self: *Renderer, tracked: MissingText, inherited: Style) bool {
         const raw = tracked.bytes;
-        if (raw.len < 7 or raw.len > 16 * 1024 or !starts(raw, "'''") or !std.mem.endsWith(u8, raw, "'''") or
+        if (raw.len < 7 or raw.len > 16 * 1024 or !starts(raw, "'''") or
             std.mem.indexOfAny(u8, raw, "\r\n") != null or std.mem.indexOfScalar(u8, raw, '<') == null) return false;
         const hints = self.semantic_capture orelse return false;
         const host = self.native_article_host orelse return false;
@@ -27012,6 +27026,20 @@ pub const Renderer = struct {
         var page = held.root.source;
         var begin = local;
         if (host.active_fragment) |fragment| {
+            // Whole-page and owner parsers separately dispatched the same source
+            // line. A later rewrite cannot influence its source ancestry. The
+            // Builder issued the unchanged original prefix on this page only.
+            if (self.dispatched_quoted_paragraph) |dispatched| if (inlineOverlaySameSourceSlice(dispatched, line) and
+                inlineOverlaySameSourceSlice(fragment.prepared, page.bytes) and fragment.start <= fragment.page.len and
+                page.bytes.len <= fragment.page.len - fragment.start and
+                std.mem.eql(u8, fragment.page[fragment.start..][0..page.bytes.len], page.bytes))
+            {
+                const start = fragment.start + local;
+                const prefix = fragment.quoted_paragraph_original_prefix;
+                if (start <= prefix.len and line.len <= prefix.len - start and
+                    std.mem.eql(u8, prefix[start..][0..line.len], line) and
+                    containsSortedOffset(fragment.quoted_paragraph_openings, start)) return true;
+            };
             const original = fragment.original_page orelse return false;
             if (!inlineOverlaySameSourceSlice(fragment.prepared, page.bytes) or fragment.start > fragment.page.len or
                 page.bytes.len > fragment.page.len - fragment.start or original.len != fragment.page.len) return false;
@@ -27024,7 +27052,7 @@ pub const Renderer = struct {
         if (begin > 16 * 1024 or (begin != 0 and page.bytes[begin - 1] != '\n') or
             (end != page.bytes.len and page.bytes[end] != '\n' and page.bytes[end] != '\r') or
             !clippedAbsoluteEnclosurePrefix(page, 0, begin, true)) return false;
-        return inlineBoxQuotedSpanSiblings(raw[3 .. raw.len - 3]);
+        return true;
     }
 
     fn inlineBoxQuotedSpanSiblings(interior: []const u8) bool {
@@ -27047,14 +27075,28 @@ pub const Renderer = struct {
     fn inlineBoxPairedBoldMap(map: *const QuoteSourceMap, raw: MissingText, quoted: MissingText) bool {
         if (!QuoteSourceMap.clean(raw) or !QuoteSourceMap.clean(quoted) or raw.bytes.len < 7 or quoted.bytes.len < 8 or
             !inlineOverlaySameSourceSlice(map.original, raw.bytes) or !inlineOverlaySameSourceSlice(map.output, quoted.bytes) or
-            map.has_literal_quote_edits or map.generated.items.len != 2) return false;
-        const first = map.generated.items[0];
-        const last = map.generated.items[1];
-        if (first.token != .b_open or first.output_start != 0 or first.quote_start != 0 or first.quote_end != 3 or
-            last.token != .b_close or last.output_start != quoted.bytes.len - 4 or last.quote_start != raw.bytes.len - 3 or
-            last.quote_end != raw.bytes.len or !starts(quoted.bytes, "<b>") or !std.mem.endsWith(u8, quoted.bytes, "</b>")) return false;
-        const original = map.copiedOriginal(quoted.bytes[3 .. quoted.bytes.len - 4]) orelse return false;
-        return inlineOverlaySameSourceSlice(original, raw.bytes[3 .. raw.bytes.len - 3]);
+            map.has_literal_quote_edits or map.generated.items.len < 2) return false;
+        const open = map.generated.items[0];
+        const close = map.generated.items[1];
+        if (open.token != .b_open or open.output_start != 0 or open.quote_start != 0 or open.quote_end != 3 or
+            close.token != .b_close or close.output_start < 3 or close.output_start > quoted.bytes.len - 4 or
+            close.quote_start < 3 or close.quote_start > raw.bytes.len - 3 or close.quote_end != close.quote_start + 3 or
+            !starts(quoted.bytes, "<b>") or !starts(raw.bytes, "'''") or !starts(raw.bytes[close.quote_start..], "'''") or
+            !starts(quoted.bytes[close.output_start..], "</b>")) return false;
+        const interior = map.copiedOriginal(quoted.bytes[3..close.output_start]) orelse return false;
+        if (!inlineOverlaySameSourceSlice(interior, raw.bytes[3..close.quote_start]) or !inlineBoxQuotedSpanSiblings(interior)) return false;
+        // The closed B and its copied children precede any independent italic runs.
+        // A suffix with HTML or link structure is outside this paragraph grammar.
+        if (std.mem.indexOfAny(u8, raw.bytes[close.quote_end..], "<>{}[]\x7f\r\n") != null) return false;
+        var italic = false;
+        for (map.generated.items[2..]) |record| {
+            if (record.output_start < close.output_start + 4 or record.quote_start < close.quote_end or
+                record.quote_start > raw.bytes.len - 2 or record.quote_end != record.quote_start + 2 or
+                record.token != (if (italic) QuoteSourceMap.Token.i_close else .i_open) or
+                !starts(raw.bytes[record.quote_start..], "''")) return false;
+            italic = !italic;
+        }
+        return !italic;
     }
 
     fn inlineBoxQuotedParagraphClasses(self: *Renderer, element: *const table_style_profile.TextElement,
@@ -27073,6 +27115,7 @@ pub const Renderer = struct {
             !std.ascii.eqlIgnoreCase(element.tag, "span") or !inlineOverlaySameSourceSlice(bold.opening, issued.map.output[0..3]) or
             parent.source_key != @intFromPtr(bold.opening[1..].ptr)) return null;
         const original = issued.map.copiedOriginal(span.opening) orelse return null;
+        if (!wikiClassContains(issued.map.original[3..issued.map.generated.items[1].quote_start], original)) return null;
         const tag = syntax.tagAt(span.opening, 0) orelse return null;
         if (!tag.is("span") or tag.closing or tag.self_closing or tag.html_pre or tag.end != original.len or
             htmlOwnAttributePresence(&tag, "class") == .unknown or htmlOwnAttributePresence(&tag, "dir") != .absent or
@@ -40321,9 +40364,40 @@ pub const Renderer = struct {
         return true;
     }
 
+    // Both the whole-page structural pass and the final owner must dispatch
+    // this complete physical line as an ordinary, unjoined root paragraph.
+    fn rootQuotedParagraphLine(source: []const u8, line: []const u8) ?usize {
+        if (line.len < 7 or line.len > 16 * 1024 or !starts(line, "'''") or
+            std.mem.indexOfScalar(u8, line, '<') == null or std.mem.indexOfAny(u8, line, "\r\n") != null or
+            !wikiClassContains(source, line)) return null;
+        const start = @intFromPtr(line.ptr) - @intFromPtr(source.ptr);
+        const end = start + line.len;
+        if ((start != 0 and source[start - 1] != '\n') or
+            (end != source.len and source[end] != '\r' and source[end] != '\n')) return null;
+        return start;
+    }
+
     fn bodyRawParagraph(self: *Renderer, blocks: *std.ArrayList(Block), source: []const u8, raw: []const u8, fallback: ?QuoteSeed, quotes: *?QuoteBoundaryScan, pending_join: *?bool) Error!void {
         const parsed = if (self.parsed_pre) raw else trim(raw);
         const seed = (try self.rawBodyQuoteSeed(source, parsed, quotes)) orelse fallback;
+        const previous = self.dispatched_quoted_paragraph;
+        self.dispatched_quoted_paragraph = null;
+        defer self.dispatched_quoted_paragraph = previous;
+        if (pending_join.* == null and self.body_depth == 1 and !self.rejection_probe_scope and !self.in_reference and !self.pre_block and !self.parsed_pre and
+            !self.in_template_literal_scope and self.body_link_target.len == 0 and self.explicit_wiki_label == null and
+            !self.figure_implicit_list_context and !self.html_list_item_flow and !self.html_blockquote_flow)
+        {
+            if (rootQuotedParagraphLine(source, parsed)) |start| {
+                if (self.page_quoted_paragraph_openings) |openings| {
+                    const root = self.heading_source;
+                    if (self.page_html_heading_openings != null and self.page_wiki_heading_openings != null and
+                        root != null and inlineOverlaySameSourceSlice(source, root.?)) try openings.append(self.a, start);
+                }
+                if (self.native_inline_motion_root) |root| if (inlineOverlaySameSourceSlice(source, root.source.bytes)) {
+                    self.dispatched_quoted_paragraph = parsed;
+                };
+            }
+        }
         try self.bodyParagraph(blocks, raw, seed, pending_join);
     }
     // Primary BlockLevelPass trims prefixed physical-list-line edges, not
@@ -131225,4 +131299,24 @@ test "static inline decoration accepts only authored span siblings under the ope
     try std.testing.expect(!Renderer.inlineBoxPairedBoldMap(&map, unknown, quoted));
     map.generated.items[1].quote_start -= 1;
     try std.testing.expect(!Renderer.inlineBoxPairedBoldMap(&map, raw, quoted));
+    const trailing: MissingText = .untracked("'''<span style='border-bottom:1px solid black; display:inline'>Uran</span>''', ''neutro'',&nbsp;''incontável''");
+    var suffix_map: QuoteSourceMap = .{};
+    defer suffix_map.deinit(a);
+    const with_suffix = try normalizeWikiQuotesPreparedMappedWithMissing(a, trailing, 0, false, .{}, null, &suffix_map);
+    defer a.free(with_suffix.bytes);
+    try std.testing.expect(Renderer.inlineBoxPairedBoldMap(&suffix_map, trailing, with_suffix));
+    try std.testing.expect(std.mem.endsWith(u8, with_suffix.bytes, "</b>, <i>neutro</i>,&nbsp;<i>incontável</i>"));
+    const untouched = suffix_map.generated.items[1];
+    suffix_map.generated.items[1] = suffix_map.generated.items[3];
+    try std.testing.expect(!Renderer.inlineBoxPairedBoldMap(&suffix_map, trailing, with_suffix));
+    suffix_map.generated.items[1] = untouched;
+    for ([_][]const u8{ "'''<span>x</span>''', <span>y</span>", "'''<span>x</span>''', [[other]]",
+        "'''<span>x</span>''', '''second'''", "'''<span>x</span>''y'''''" }) |invalid| {
+        var invalid_map: QuoteSourceMap = .{};
+        defer invalid_map.deinit(a);
+        const input: MissingText = .untracked(invalid);
+        const output = try normalizeWikiQuotesPreparedMappedWithMissing(a, input, 0, false, .{}, null, &invalid_map);
+        defer a.free(output.bytes);
+        try std.testing.expect(!Renderer.inlineBoxPairedBoldMap(&invalid_map, input, output));
+    }
 }
