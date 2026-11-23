@@ -21489,6 +21489,24 @@ private slots:
         QVERIFY(replaced); QCOMPARE(replacement->document.toPlainText(), QStringLiteral("Replacement survives"));
     }
 
+    void wrappedEntryTitleAllocatesBothLinesAboveSubtitle() {
+        MainWindow window{fixture_, QStringLiteral("cat")}; window.resize(1180,780); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        const QString title = QStringLiteral("Lampiran:Nama negara dalam bahasa Inggris");
+        window.meta_->setText(QStringLiteral("All languages · Supplemental"));
+        SemanticHtml::setHtml(window.title_, title.toHtmlEscaped());
+        for (int width : {1180, 600, 1180}) {
+            window.resize(width, 780);
+            if (width == 600) window.showCompactPane(false);
+            QTRY_VERIFY(window.title_->isVisible() && window.meta_->isVisible());
+            QTRY_VERIFY(window.title_->document()->firstBlock().layout()->lineCount() >= 2);
+            QTRY_VERIFY(window.title_->viewport()->height() >= qCeil(window.title_->document()->size().height()));
+            const auto titleBottom = window.title_->mapTo(&window, QPoint(0, window.title_->height())).y();
+            QVERIFY(titleBottom <= window.meta_->mapTo(&window, QPoint()).y());
+            QCOMPARE(window.title_->toPlainText(), title);
+        }
+    }
+
     void retainedNorskEntryComposesOrdinaryParagraphsAndTables() {
         // The default is the ordinary FFI lookup of norsk member 78cd2515, record 4684,
         // from the sealed 20261001 publication. An explicit capture keeps its original digest.
