@@ -1,0 +1,32 @@
+<noinclude>See [[Special:Gadgets]] untuk dokumentasi perkakas-perkakas di bawah, dan [[:en:Wiktionary:Gadgets]] (bahasa Inggris) untuk informasi umum tentang perkakas di Wiktionary (bahasa Inggris).</noinclude>
+
+== general ==
+
+* ExtLinks|ExtLinks.js
+* CommentsInLocalTime|CommentsInLocalTime.js
+* UTCLiveClock[dependencies=mediawiki.util]|UTCLiveClock.js
+* NavPopups|NavPopups.js
+* WiktSidebarTranslation|WiktSidebarTranslation.js
+* HideFundraisingNotice|HideFundraisingNotice.css
+* Twinkle[dependencies=mediawiki.user,mediawiki.util,jquery.ui,moment|rights=autoconfirmed|type=general]|morebits.js|morebits.css|Twinkle.js|twinkleprod.js|twinkleimage.js|twinklebatchundelete.js|twinklewarn.js|twinklespeedy.js|friendlyshared.js|twinklediff.js|twinkleunlink.js|friendlytag.js|twinkledeprod.js|friendlywelcome.js|twinklexfd.js|twinklebatchdelete.js|twinklebatchprotect.js|twinkleconfig.js|twinklefluff.js|twinkleprotect.js|twinklearv.js|twinkleblock.js|friendlytalkback.js
+
+== editing ==
+
+* HotCat[default]|HotCat.js 
+* RegexMenuFramework|RegexMenuFramework.js
+* disableEditorJs|disableEditorJs.js
+* disableRhymesEdit|disableRhymesEdit.js
+* FastRevert|FastRevert.js
+* PatrollingEnhancements[rights=patrol|default]|PatrollingEnhancements.js
+<!--* TabbedLanguages[dependencies=mediawiki.util]|TabbedLanguages.js|TabbedLanguages.css-->
+* PilahEntri|PilahEntri.js|PilahEntri.css
+* TambahEntri[dependencies=mediawiki.api,mediawiki.util|default]|TambahEntri.js|TambahEntri.css
+
+== toolbox ==
+
+* Purge[dependencies=mediawiki.util]|Purge.js
+* Contributors[dependencies=mediawiki.util]|Contributors.js
+* Subpages[dependencies=mediawiki.util]|Subpages.js
+* ArticleTraffic[dependencies=mediawiki.util]|ArticleTraffic.js
+* ArticleStatistik[dependencies=mediawiki.util]|ArticleStatistik.js
+* Bagikan[dependencies=mediawiki.util|default]|Bagikan.js

@@ -38135,6 +38135,121 @@ test "normal Writer retained JA partir preserves qualified invalid link all owne
     try std.testing.expect(std.mem.indexOf(u8, actual_report, "literal_markup") != null);
 }
 
+test "dated Indonesian Common CSS and complete source preserve all frequency table rows and styled headers" {
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/id-frequency-styled", .{tmp.sub_path});
+    const title = "Indeks:Bahasa Indonesia/Frekuensi/1";
+    var input = std.Io.Reader.fixed(@embedFile("testdata/id-frequency-201342/original.wikitext.zst"));
+    const window = try a.alloc(u8, 1024 * 1024 + std.compress.zstd.block_size_max);
+    var decoder = std.compress.zstd.Decompress.init(&input, window, .{ .window_len = 1024 * 1024 });
+    const source = try a.alloc(u8, 950709);
+    try decoder.reader.readSliceAll(source);
+    try std.testing.expectError(error.EndOfStream, decoder.reader.takeByte());
+    var digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(source, &digest, .{});
+    try std.testing.expectEqualStrings("ece1e9ccaf8f7fb3e2b01b0087360cd472c48829c902a27a2e496bb4a6b5a93e", &std.fmt.bytesToHex(digest, .lower));
+    var ns = try namespace_registry.Registry.init(a, @embedFile("testdata/id-swadesh-jawa/namespace-registry.tsv")); defer ns.deinit();
+    try ns.attachInterwikiMap(@embedFile("testdata/id-swadesh-jawa/interwiki-map.tsv"));
+    const behavior_source = @embedFile("testdata/id-swadesh-jawa/behavior-switches.tsv");
+    var behavior = try namespace_registry.behavior_switches.Registry.init(a, behavior_source, ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256); defer behavior.deinit();
+    var behavior_sha: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(behavior_source, &behavior_sha, .{});
+    var images = try namespace_registry.image_options.Registry.init(a, @embedFile("testdata/id-swadesh-jawa/image-options.tsv"), ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256, behavior_sha); defer images.deinit();
+    var registry = language_registry.Registry.empty(a); defer registry.deinit();
+    try registry.addTsv(@embedFile("testdata/id-swadesh-jawa/language-registry.tsv"));
+    try registry.trustAutonymSnapshot(@embedFile("testdata/id-swadesh-jawa/language-names.tsv"), ns.wiki, ns.dump_date, ns.content_language);
+    const css = @embedFile("testdata/id-swadesh-jawa/common.css");
+    std.crypto.hash.sha2.Sha256.hash(css, &digest, .{});
+    try std.testing.expectEqualStrings("c94c6f82363ace5b7ac8fc39335ad44eef9f9c0e5674b2f9cbcf73a8ffe0041e", &std.fmt.bytesToHex(digest, .lower));
+    const definition = @embedFile("testdata/id-frequency-201342/Gadgets-definition");
+    std.crypto.hash.sha2.Sha256.hash(definition, &digest, .{});
+    try std.testing.expectEqualStrings("d42d77102a7c5a7360ae88aed1462117ce0f1f462ce669ff4122ba3b76b37da3", &std.fmt.bytesToHex(digest, .lower));
+    const defaults = try @import("source_default_gadgets.zig").selectAlloc(a, definition, .{});
+    try std.testing.expectEqual(@as(usize, 0), defaults.len);
+    var styles = try encoder.table_style_profile.parseForTargetAlloc(a, css, .screen); defer styles.deinit();
+    var codes = languageCodes(&registry, &ns); codes.behavior_switches = &behavior; codes.image_options = &images; codes.table_styles = &styles;
+    var writer = try encoder.blob_builder.Writer.init(io, a, root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    {
+        var page_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer page_arena.deinit();
+        const pa = page_arena.allocator();
+        var page: encoder.blob_builder.PreparedPage = .{ .ns = .{ .id = 100, .kind = .supplemental }, .title = title };
+        errdefer std.debug.print("ID_FREQUENCY_FAILURE {any}\n", .{page.fallbacks});
+        try page.compileWithPhasesAndRoot(pa, codes, source, source, null, null, null, null, .parser_output);
+        try std.testing.expect(!page.fallbacks.render_limit and page.records.items.len == 1);
+        try writer.commitPreparedPrefix(pa, &page);
+        try writer.finishPrepared(pa, &page);
+    }
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 1), stats.supplemental_records);
+    var mapped = try mmapPath(io, try std.fs.path.join(a, &.{ root, "supplemental.wikblb" }));
+    defer mapped.deinit();
+    const blob = try encoder.blob_format.inspect(mapped.bytes);
+    var records = try blob.buildTrustedIndexAlloc(a);
+    defer records.deinit(a);
+    const rec = (try records.find(title)) orelse return error.TestUnexpectedResult;
+    const decoded = try encoder.presentation_codec.decodeAlloc(a, rec.payload, title, .supplemental, null);
+    try std.testing.expectEqualSlices(u8, rec.payload, try encoder.presentation_codec.encodeAlloc(a, decoded));
+    try std.testing.expectEqual(@as(usize, 1), decoded.entry.sections.len);
+    const fallback_path = try std.fs.path.join(a, &.{root, "fallback-pages.jsonl"});
+    const fallback_bytes = try std.Io.Dir.cwd().readFileAlloc(io, fallback_path, a, .limited(64 * 1024));
+    std.debug.print("ID_FREQUENCY_REPORT {s}\n", .{fallback_bytes});
+    var table_count: usize = 0;
+    var preamble_url = false;
+    var preamble_index = false;
+    for (decoded.entry.sections[0].blocks) |block| {
+        for (block.spans) |span| {
+            if (std.mem.eql(u8, span.target, "https://invokeit.wordpress.com/frequency-word-lists/")) preamble_url = true;
+            if (std.mem.eql(u8, span.target, "Indeks:Bahasa Indonesia/Kata perhentian")) preamble_index = true;
+        }
+        const table = block.table orelse continue;
+        table_count += 1;
+        try std.testing.expect(table.style != null and table.style.?.collapse == .collapse);
+        try std.testing.expectEqual(@as(usize, 47570), table.rows.len);
+        try std.testing.expectEqual(@as(usize, 2), table.rows[0].cells.len);
+        for (table.rows[0].cells, [_][]const u8{ "Kata", "Frekuensi" }) |cell, label| {
+            try std.testing.expect(cell.header and cell.spans.len == 1);
+            try std.testing.expect(cell.style != null and cell.style.?.text_align == .center);
+            try std.testing.expectEqualStrings(label, cell.spans[0].text);
+        }
+        var row: usize = 1;
+        var highlighted = false;
+        var highlight_count: usize = 0;
+        var lines = std.mem.splitScalar(u8, source, '\n');
+        while (lines.next()) |line| {
+            if (std.mem.startsWith(u8, line, "|-")) {
+                highlighted = std.mem.eql(u8, line, "|- style=\"background:lightblue\"");
+                continue;
+            }
+            if (!std.mem.startsWith(u8, line, "|[[")) continue;
+            const separator = std.mem.indexOf(u8, line, "]]||") orelse return error.TestUnexpectedResult;
+            const word = line[3..separator];
+            const count = line[separator + 4 ..];
+            const cells = table.rows[row].cells;
+            try std.testing.expectEqual(@as(usize, 2), cells.len);
+            for (cells) |cell| {
+                try std.testing.expect(!cell.header and cell.rowspan == 1 and cell.colspan == 1 and cell.spans.len == 1);
+                if (highlighted) try std.testing.expectEqualStrings("#add8e6", cell.background orelse return error.TestUnexpectedResult) else try std.testing.expect(cell.background == null);
+            }
+            if (highlighted) highlight_count += 1;
+            try std.testing.expect(cells[0].spans[0].kind == .link and cells[1].spans[0].kind == .text);
+            try std.testing.expectEqualStrings(word, cells[0].spans[0].text);
+            try std.testing.expectEqualStrings(word, cells[0].spans[0].target);
+            try std.testing.expectEqualStrings(count, cells[1].spans[0].text);
+            row += 1;
+        }
+        try std.testing.expectEqual(table.rows.len, row);
+        try std.testing.expectEqual(@as(usize, 250), highlight_count);
+    }
+    try std.testing.expect(table_count == 1 and preamble_url and preamble_index);
+}
+
 test "normal Writer retained ID rampai preserves three owners request example noun senses complete body and codec" {
     const T = encoder.presentation_types;
     const F = struct {

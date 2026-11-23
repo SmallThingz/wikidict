@@ -1828,6 +1828,7 @@ const tools_partitions = [_]ToolsPartition{
         "blob_build.test.official ",
         "blob_build.test.operational ",
         "blob_build.test.ordinary ",
+        "blob_build.test.dated ",
         "blob_build.test.page ",
         "blob_build.test.parent ",
         "blob_build.test.prepared ",
