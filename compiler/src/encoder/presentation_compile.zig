@@ -5146,14 +5146,31 @@ const PageExternalNumbering = struct {
         if (len != 0) try copies.append(self.a, .{ .original_start = original_at, .prepared_start = prepared_at, .len = len });
         return .{ .original = original, .prepared = prepared, .copies = try copies.toOwnedSlice(self.a), .observed_source = observed };
     }
-    fn inlineBoxTableTransition(self: *const @This(), original: MissingText, source: MissingText, prepared: []const u8) ?InlineBoxTableTransition {
+    fn inlineBoxTableTransition(selected: []const Edit, original: MissingText, source: MissingText, prepared: []const u8) ?InlineBoxTableTransition {
         if (original.lost_missing_range or source.lost_missing_range or original.generated_source != null or
             source.generated_source != null or !std.mem.eql(u8, original.bytes, source.bytes)) return null;
         if (std.mem.indexOf(u8, source.bytes, "\n{|") == null and !std.mem.startsWith(u8, source.bytes, "{|")) return null;
         const begin = @intFromPtr(source.bytes.ptr);
         const end = begin + source.bytes.len;
-        for (self.edits.items) |edit| {
-            if (!enclosed(begin, end, edit) or edit.start != edit.end or edit.tracked != null or
+        for (selected) |edit| {
+            if (!enclosed(begin, end, edit)) return null;
+            if (edit.tracked) |replacement| {
+                // A recursively prepared caption may return a tracked copy of
+                // identical text. Preserve both the bytes and every local channel.
+                if (edit.start >= edit.end or edit.numbered_label_only or edit.citation_attribute_only or
+                    replacement.bytes.ptr != edit.value.ptr or replacement.bytes.len != edit.value.len or
+                    replacement.unknown != original.unknown or replacement.unknown != source.unknown or
+                    replacement.lost_missing_range or replacement.ranges.len != 0 or replacement.literal_curly_ranges.len != 0 or
+                    replacement.generated_links.len != 0 or replacement.generated_source != null) return null;
+                const before = edit.start - begin;
+                const after = edit.end - begin;
+                const slice = source.bytes[before..after];
+                if (!std.mem.eql(u8, slice, replacement.bytes) or
+                    !Renderer.noLiParentSourceRange(source, slice) or
+                    !Renderer.noLiParentSourceRange(original, original.bytes[before..after])) return null;
+                continue;
+            }
+            if (edit.start != edit.end or
                 edit.numbered_label_only == edit.citation_attribute_only or edit.start <= begin or edit.start >= end) return null;
             const at = edit.start - begin;
             if (!Renderer.noLiParentSourceRange(original, original.bytes[at - 1 .. at + 1]) or
@@ -5177,7 +5194,13 @@ const PageExternalNumbering = struct {
     fn apply(self: *@This(), input: []const u8) Error![]const u8 {
         return (try self.applyWithMissing(MissingText.untracked(input))).bytes;
     }
+    const TableTransitionRequest = struct { original: MissingText, result: ?InlineBoxTableTransition = null };
+
     fn applyWithMissing(self: *@This(), source: MissingText) Error!MissingText {
+        return self.applyWithTableTransition(source, null);
+    }
+
+    fn applyWithTableTransition(self: *@This(), source: MissingText, table: ?*TableTransitionRequest) Error!MissingText {
         const input = source.bytes;
         const begin = self.address(input, 0);
         const end = begin + input.len;
@@ -5185,7 +5208,12 @@ const PageExternalNumbering = struct {
         defer selected.deinit(self.a);
         for (self.edits.items) |edit| if (enclosed(begin, end, edit))
             try selected.append(self.a, edit);
-        if (selected.items.len == 0) return source;
+        if (selected.items.len == 0) {
+            if (table) |request| if (begin == @intFromPtr(input.ptr)) {
+                request.result = inlineBoxTableTransition(&.{}, request.original, source, input);
+            };
+            return source;
+        }
         std.mem.sort(Edit, selected.items, {}, struct {
             fn less(_: void, lhs: Edit, rhs: Edit) bool {
                 return lhs.start < rhs.start;
@@ -5202,7 +5230,13 @@ const PageExternalNumbering = struct {
             position = edit.end - begin;
         }
         try out.appendSlice(self.a, source, position, input.len);
-        return out.finish(self.a);
+        const prepared = try out.finish(self.a);
+        // Only these sorted edits produced this source slice. Detached reference
+        // bodies keep their own address domains and missing-dependency evidence.
+        if (table) |request| if (begin == @intFromPtr(input.ptr)) {
+            request.result = inlineBoxTableTransition(selected.items, request.original, source, prepared.bytes);
+        };
+        return prepared;
     }
     fn reference(self: *@This(), site: usize, name: []const u8, group: []const u8, source: []const u8, depth: usize) Error!void {
         // Anonymous references have no reusable referenceIndex. Their source site
@@ -5689,7 +5723,8 @@ fn preparePageExternalCoreWithProjection(a: A, tracked: MissingText, context: Co
             try prep.reference(@intFromPtr(definition.body.ptr), definition.name, definition.group, definition.body, 0);
     }
     try prep.domain(input, false, 0);
-    const prepared_missing = try prep.applyWithMissing(controlled);
+    var table_transition: PageExternalNumbering.TableTransitionRequest = .{ .original = tracked };
+    const prepared_missing = try prep.applyWithTableTransition(controlled, &table_transition);
     const prepared = prepared_missing.bytes;
     var phase = context.poem_phase;
     if (phase) |original| {
@@ -5731,7 +5766,7 @@ fn preparePageExternalCoreWithProjection(a: A, tracked: MissingText, context: Co
     return .{ .generated_external_labels = if (prep.renderer.fallbacks.any()) null else prep.number,
         .source = prepared, .missing = prepared_missing, .poem_phase = phase, .citations = if (!collecting) citations else null,
         .class_scope_transition = if (std.mem.eql(u8, tracked.bytes, controlled.bytes)) prep.classScopeTransition(tracked, controlled, prepared) else null,
-        .inline_box_table_transition = prep.inlineBoxTableTransition(tracked, controlled, prepared),
+        .inline_box_table_transition = table_transition.result,
         .source_element_projection = try prep.sourceElementProjection(tracked, controlled, prepared) };
 }
 
@@ -27236,7 +27271,7 @@ pub const Renderer = struct {
             (table_at != 0 and held.root.source.bytes[table_at - 1] != '\n') or
             !(if (dispatched_table) |selected| inlineOverlaySameSourceSlice(original_table, selected) and
                 inlineOverlaySameSourceSlice(selected, self.inline_box_root_table_opening orelse return null) and
-                host.startsPage(self, held.root.source) else clippedAbsoluteEnclosurePrefix(held.root.source, 0, table_at, true)) or
+                host.startsBoxTableRoot(self, held.root.source) else clippedAbsoluteEnclosurePrefix(held.root.source, 0, table_at, true)) or
             !inlineOverlayClosedWikiTable(held.root.source, table_at + original_table.len,
                 cell_at + original_cell.len)) return null;
         // The live cell delimiter owns its full first source line. Every HTML
@@ -99647,6 +99682,41 @@ test "display-only ancestry tracks nested HTML and table classes and stops at un
     try std.testing.expectEqualStrings("Target", linked.spans.items[0].target);
 }
 
+test "original Serbian green table heading retains the exact page numbering domain" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var input = std.Io.Reader.fixed(@embedFile("testdata/sr-green-3521/expanded.wikitext.zst"));
+    const window = try a.alloc(u8, 1024 * 1024 + std.compress.zstd.block_size_max);
+    var decoder = std.compress.zstd.Decompress.init(&input, window, .{ .window_len = 1024 * 1024 });
+    const source = try a.alloc(u8, 133304);
+    try decoder.reader.readSliceAll(source);
+    try std.testing.expectError(error.EndOfStream, decoder.reader.takeByte());
+    var digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(source, &digest, .{});
+    try std.testing.expectEqualStrings("11f2d3fafe006167ea8089506ea3dd787cc93d12b49f89887b17ebd8a8acf865", &std.fmt.bytesToHex(digest, .lower));
+    const ranges = [_]missing_dependency.Range{
+        .{ .start = 11100, .end = 11140, .occurrence = 1 },
+        .{ .start = 11629, .end = 11669, .occurrence = 2 },
+        .{ .start = 12403, .end = 12449, .occurrence = 3 },
+        .{ .start = 17485, .end = 17518, .occurrence = 4 },
+        .{ .start = 20528, .end = 20575, .occurrence = 5 },
+        .{ .start = 59916, .end = 59949, .occurrence = 6 },
+        .{ .start = 60211, .end = 60240, .occurrence = 7 },
+        .{ .start = 87400, .end = 87435, .occurrence = 8 },
+        .{ .start = 88317, .end = 88359, .occurrence = 9 },
+        .{ .start = 106922, .end = 106945, .occurrence = 10 },
+        .{ .start = 115122, .end = 115151, .occurrence = 11 },
+    };
+    const result = try preparePageExternalLinksWithMissingAlloc(a, .{ .bytes = source, .ranges = &ranges, .unknown = true }, .{});
+    const transition = result.inline_box_table_transition orelse return error.TestUnexpectedResult;
+    try std.testing.expect(transition.original.ptr == source.ptr and transition.original.len == source.len);
+    try std.testing.expect(transition.prepared.ptr == result.source.ptr and transition.prepared.len == result.source.len);
+    try std.testing.expect(result.missing.unknown and result.missing.ranges.len == ranges.len and result.class_scope_transition == null);
+    std.crypto.hash.sha2.Sha256.hash(result.source, &digest, .{});
+    try std.testing.expectEqualStrings("60c67543308b5790c9c1710aa3face1a1e7528bd5b69c2d54f87071513dda663", &std.fmt.bytesToHex(digest, .lower));
+}
+
 test "native table ancestry follows numbered label and citation edits without authorizing a global class census" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -99666,16 +99736,32 @@ test "native table ancestry follows numbered label and citation edits without au
     var prep: PageExternalNumbering = .{ .a = a, .renderer = .{ .a = a, .context = .{} }, .phase = null, .seen_poem = &empty };
     const at = std.mem.indexOf(u8, source, "</sup>").? - 1;
     try prep.replace(source, at, at, "<span class='unknown'>");
-    try std.testing.expect(prep.inlineBoxTableTransition(owner, owner, try prep.apply(source)) == null);
+    try std.testing.expect(PageExternalNumbering.inlineBoxTableTransition(prep.edits.items, owner, owner, try prep.apply(source)) == null);
     const foreign = try a.dupe(u8, source);
     prep.edits.clearRetainingCapacity();
     try prep.replace(foreign, at, at, " <nowiki>[1]</nowiki>");
     prep.edits.items[0].numbered_label_only = true;
-    try std.testing.expect(prep.inlineBoxTableTransition(owner, owner, source) == null);
+    try std.testing.expect(PageExternalNumbering.inlineBoxTableTransition(prep.edits.items, owner, owner, source) == null);
+    // A no-op selected range can retain the existing unknown bit. A changed
+    // payload, missing provenance, or overlap with an authored hole cannot.
+    const lo = std.mem.indexOf(u8, source, "Citation").?;
+    const hi = lo + "Citation".len;
+    for ([_]MissingText{
+        .{ .bytes = "citation", .unknown = true }, .{ .bytes = "Citation", .unknown = false },
+        .{ .bytes = "Citation", .unknown = true, .lost_missing_range = true },
+        .{ .bytes = "Citation", .unknown = true, .ranges = &.{.{ .start = 0, .end = 1, .occurrence = 1 }} },
+    }) |changed| {
+        prep.edits.clearRetainingCapacity();
+        try prep.replaceTracked(source, lo, hi, changed);
+        try std.testing.expect(PageExternalNumbering.inlineBoxTableTransition(prep.edits.items, owner, owner, try prep.apply(source)) == null);
+    }
+    prep.edits.clearRetainingCapacity();
+    try prep.replaceTracked(source, 0, 10, .{ .bytes = "unresolved", .unknown = true });
+    try std.testing.expect(PageExternalNumbering.inlineBoxTableTransition(prep.edits.items, owner, owner, try prep.apply(source)) == null);
     prep.edits.clearRetainingCapacity();
     try prep.replace(source, 1, 1, " <nowiki>[1]</nowiki>");
     prep.edits.items[0].numbered_label_only = true;
-    try std.testing.expect(prep.inlineBoxTableTransition(owner, owner, try prep.apply(source)) == null);
+    try std.testing.expect(PageExternalNumbering.inlineBoxTableTransition(prep.edits.items, owner, owner, try prep.apply(source)) == null);
 }
 
 test "bounded observed class transition admits only original body numeric external labels" {
@@ -129093,6 +129179,19 @@ test "direct table box class inventory preserves the native root and requires al
     value.renderer.inline_box_root_table_opening = original;
     value.host.active_whole_page = false;
     try std.testing.expect(try value.renderer.inlineBoxTableAncestorClasses(element, state) == null);
+    const prefix = "==Prior language==\nEarlier entry.\n";
+    const page = try std.mem.concat(a, u8, &.{ prefix, value.source });
+    value.host.active_fragment = .{ .page = page, .original_page = null, .start = prefix.len,
+        .prepared = value.source, .starts_page = false };
+    try std.testing.expect(try value.renderer.inlineBoxTableAncestorClasses(element, state) == null);
+    value.host.active_fragment.?.observed_box_table_heading_root = true;
+    try std.testing.expect(!value.host.startsPage(&value.renderer, value.root.source));
+    const heading_classes = (try value.renderer.inlineBoxTableAncestorClasses(element, state)) orelse return error.TestUnexpectedResult;
+    defer a.free(heading_classes);
+    try std.testing.expectEqualStrings(classes, heading_classes);
+    value.host.active_fragment.?.prepared = try a.dupe(u8, value.source);
+    try std.testing.expect(try value.renderer.inlineBoxTableAncestorClasses(element, state) == null);
+    value.host.active_fragment = null;
     value.host.active_whole_page = true;
     value.operation.row_opening = try a.dupe(u8, value.row);
     try std.testing.expect(try value.renderer.inlineBoxTableAncestorClasses(element, state) == null);
