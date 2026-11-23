@@ -13,12 +13,17 @@ import urllib.parse
 TOOLS = next(candidate for parent in Path(__file__).resolve().parents
              for candidate in (parent / 'compiler' / 'tools', parent / 'tools')
              if (candidate / 'prepare_date_numbering.py').is_file())
-sys.path.insert(0, str(TOOLS))
+prepared_imports = sys._xoptions.get('wikidict_prepared_source') == '1'
+if not prepared_imports:
+    sys.path.insert(0, str(TOOLS))
 import prepare_date_numbering as date
 e = date.evidence
-spec = importlib.util.spec_from_file_location('format_profile', Path(__file__).with_name('prepare_site_statistics_format_profile.py'))
-profile = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(profile)
+if prepared_imports:
+    import prepare_site_statistics_format_profile as profile
+else:
+    spec = importlib.util.spec_from_file_location('format_profile', Path(__file__).with_name('prepare_site_statistics_format_profile.py'))
+    profile = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(profile)
 OUTPUT = 'site-statistics-format.json'
 MANIFEST = 'site-statistics-format.manifest.json'
 COMPLETE = 'site-statistics-format.complete.json'

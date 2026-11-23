@@ -31,6 +31,18 @@ class ToolDiscoveryTests(unittest.TestCase):
             exec(code, namespace)
             self.assertEqual(namespace['TOOLS'], private.parent)
 
+    def test_prepared_import_preserves_bound_path_and_uses_imported_profile(self):
+        import sys
+        before = [sys._stdlib_dir, sys._stdlib_dir + '/lib-dynload', str(m.TOOLS)]
+        spec = importlib.util.spec_from_file_location('prepared_capture', m.__file__)
+        helper = importlib.util.module_from_spec(spec)
+        with mock.patch.object(sys, '_xoptions', {'wikidict_prepared_source': '1'}), \
+             mock.patch.object(sys, 'path', before.copy()):
+            spec.loader.exec_module(helper)
+            self.assertEqual(sys.path, before)
+            self.assertIs(helper.profile, sys.modules['prepare_site_statistics_format_profile'])
+            self.assertEqual(Path(helper.profile.__file__), m.TOOLS / 'prepare_site_statistics_format_profile.py')
+
 
 class CaptureTests(unittest.TestCase):
     def setUp(self):
