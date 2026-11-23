@@ -96,7 +96,7 @@ private data class TextCacheKey(val weight: FontWeight?, val direction: LayoutDi
     val inheritedFamily: ContainerFontFamily? = null, val authoredPreformatted: Boolean = false,
     val computedContainerTraits: Boolean = false, val bodyDirection: BidiResolvedDirection? = null,
     val columnDirection: BidiResolvedDirection? = null,
-    val cellForeground: NativeCellForegroundContext? = null)
+    val cellForeground: NativeCellForegroundContext? = null, val darkPage: Int? = null)
 private class TextCache(val link: State<(EntryLink) -> Unit>) {
     val values = java.util.IdentityHashMap<List<Span>, MutableMap<TextCacheKey, AnnotatedString>>()
 }
@@ -105,6 +105,12 @@ private val LocalEntryMediaOwners = staticCompositionLocalOf { MediaOwners(empty
 internal val LocalEntryEdition = staticCompositionLocalOf { "" }
 private val LocalReaderSettings = staticCompositionLocalOf { AppSettings() }
 private val LocalTextCache = staticCompositionLocalOf<TextCache?> { null }
+private val LocalDarkReadingPage = compositionLocalOf<Int?> { null }
+
+@Composable
+private fun bareBlockDarkPage(block: Block): Int? = if (LocalReaderDarkTheme.current &&
+    block.usesPageForDefinitionInk()) MaterialTheme.colorScheme.background.toArgb() else null
+
 internal val LocalAuthoredBackground = staticCompositionLocalOf<String?> { null }
 internal val LocalFigureCaptionForeground = staticCompositionLocalOf<Int?> { null }
 internal val LocalCellWeight = staticCompositionLocalOf<FontWeight?> { null }
@@ -737,9 +743,11 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
                     }
                     row.block?.let { block ->
                         val content: @Composable () -> Unit = {
-                            BlockView(block, readerLink, path = row.key,
-                                outsideGapDp = if (row.compact) 2f else 6f,
-                                previousBlock = visibleRows.getOrNull(rowIndex - 1)?.takeIf { it.sectionKey == row.sectionKey }?.block)
+                            CompositionLocalProvider(LocalDarkReadingPage provides bareBlockDarkPage(block)) {
+                                BlockView(block, readerLink, path = row.key,
+                                    outsideGapDp = if (row.compact) 2f else 6f,
+                                    previousBlock = visibleRows.getOrNull(rowIndex - 1)?.takeIf { it.sectionKey == row.sectionKey }?.block)
+                            }
                         }
                         if (bodyText == null || block.kind == "heading") content() else {
                             bodyText.exceptionOrNull()?.let { ReaderLayoutUnavailable(it.message ?: NativeContainerOwnerFontUnavailable) }
@@ -2391,7 +2399,8 @@ internal fun styledTextAnnotationWithoutDirectionControls(spans: List<Span>, wei
 
 @Composable
 private fun ordinaryStyledTextAnnotation(spans: List<Span>, weight: FontWeight?, style: TextStyle,
-    onLink: (EntryLink) -> Unit, directionControls: Boolean = true): AnnotatedString {
+    onLink: (EntryLink) -> Unit, directionControls: Boolean = true,
+    darkReadingPage: Int? = LocalDarkReadingPage.current): AnnotatedString {
     val effectiveWeight = weight ?: LocalCellWeight.current
     val normalBodySize = MaterialTheme.typography.bodyLarge.fontSize
     val contextSize = LocalTextStyle.current.merge(style).fontSize
@@ -2417,14 +2426,15 @@ private fun ordinaryStyledTextAnnotation(spans: List<Span>, weight: FontWeight?,
     val computedCellTraits = LocalNativeContainerTextContext.current?.cellText != null || computedContainerTraits
     val bodyFamily = (if (computedContainerTraits) LocalTextStyle.current.merge(style).fontFamily
         else MaterialTheme.typography.bodyLarge.fontFamily) ?: FontFamily.Default
-    val cacheKey = TextCacheKey(effectiveWeight, layoutDirection, inheritedBackground, normalBodySize, contextSize, textDensity, inheritedForeground, cellLetterSpacing, cssPixelTextZoom, computedCellTraits, bodyFamily.takeIf { computedCellTraits }, compiledTableDirection, compiledTableLanguage, inheritedFamily, authoredPreformatted, computedContainerTraits, bodyDirection, columnDirection, cellForeground)
-    val annotated = remember(spans, directionControls, effectiveWeight, linkColor, codeColor, cache, layoutDirection, inheritedBackground, normalBodySize, contextSize, textDensity, inheritedForeground, cellLetterSpacing, cssPixelTextZoom, computedCellTraits, computedContainerTraits, bodyFamily, compiledTableDirection, compiledTableLanguage, inheritedFamily, authoredPreformatted, bodyDirection, columnDirection, cellForeground) {
+    val darkPage = darkReadingPage.takeIf { inheritedBackground == null && cellForeground == null && inheritedForeground == null }
+    val cacheKey = TextCacheKey(effectiveWeight, layoutDirection, inheritedBackground, normalBodySize, contextSize, textDensity, inheritedForeground, cellLetterSpacing, cssPixelTextZoom, computedCellTraits, bodyFamily.takeIf { computedCellTraits }, compiledTableDirection, compiledTableLanguage, inheritedFamily, authoredPreformatted, computedContainerTraits, bodyDirection, columnDirection, cellForeground, darkPage)
+    val annotated = remember(spans, directionControls, effectiveWeight, linkColor, codeColor, cache, layoutDirection, inheritedBackground, normalBodySize, contextSize, textDensity, inheritedForeground, cellLetterSpacing, cssPixelTextZoom, computedCellTraits, computedContainerTraits, bodyFamily, compiledTableDirection, compiledTableLanguage, inheritedFamily, authoredPreformatted, bodyDirection, columnDirection, cellForeground, darkPage) {
         cache?.values?.get(spans)?.get(cacheKey) ?: buildAnnotatedString {
             val appendedSpans = ArrayList<Pair<Span, IntRange>>(spans.size)
             spans.forEachIndexed { index, span ->
                 val effectiveBackground = span.background ?: inheritedBackground.takeIf { !span.code }
                 val explicitForeground = canonicalColorArgb(span.linkPaint?.normal?.foreground ?: span.foreground)?.toInt()
-                val foreground = nativeCellPlainForeground(cellForeground, explicitForeground, inheritedForeground,
+                val foreground = nativeCellPlainForeground(cellForeground, readingSpanInk(span, explicitForeground, darkPage), inheritedForeground,
                     span.background, effectiveBackground, span.code)?.let { Color(it) }
                 val normalLinkForeground = nativeCellLinkForeground(cellForeground, explicitForeground, inheritedForeground,
                     span.background, effectiveBackground, span.code)?.let { Color(it) }
@@ -2745,7 +2755,11 @@ internal fun NativeFloatBlockContext(blocks: List<Block>, onLink: (EntryLink) ->
             val spans = if (embedded.isEmpty()) displayed else displayed.map {
                 if (it.hasClassToken("wikidict-media")) it.withoutClassToken("wikidict-media") else it
             }
-            val annotated = styledTextAnnotation(spans, if (block.kind == "term") FontWeight.Bold else null, style, onLink)
+            val darkPage = if (positionedPaintRoot && !inCell && !leaf.inContainer && leaf.rootIndex != null && referenceParagraph == null)
+                bareBlockDarkPage(block) else null
+            val weight = if (block.kind == "term") FontWeight.Bold else null
+            val annotated = if (darkPage == null) styledTextAnnotation(spans, weight, style, onLink)
+                else ordinaryStyledTextAnnotation(spans, weight, style, onLink, darkReadingPage = darkPage)
             val prefixStyle = compiledTableOwnerTextStyle(MaterialTheme.typography.labelMedium).copy(color =
                 nativeMarkedCellForeground()?.let { Color(it) } ?: authoredSpanForegroundArgb(null, LocalAuthoredBackground.current)?.let { Color(it) } ?: MaterialTheme.colorScheme.primary)
             val text = NativeFloatContextSpec.Text(if (referenceParagraph != null)

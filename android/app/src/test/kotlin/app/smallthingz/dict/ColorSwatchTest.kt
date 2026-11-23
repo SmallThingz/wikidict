@@ -33,4 +33,29 @@ class ColorSwatchTest {
         assertNull(authoredSpanForegroundArgb(null, "#FFFFE0"))
     }
 
+    @Test fun ordinarySetswanaAnnotationRetainsHueOnTheDarkReadingPage() {
+        val span = Span("text", "tlhaloso", italic = true, foreground = "#008000")
+        val ink = checkNotNull(canonicalColorArgb(span.foreground)).toInt()
+        val darkPage = 0xff18221e.toInt()
+        assertEquals(0xff349a34.toInt(), readingSpanInk(span, ink, darkPage))
+        assertEquals("#008000", span.foreground)
+        assertEquals(ink, readingSpanInk(span, ink, null))
+        assertEquals(ink, readingSpanInk(span.copy(background = "#ffffff"), ink, darkPage))
+        assertEquals(ink, readingSpanInk(span.copy(kind = "link", target = "motho"), ink, darkPage))
+        assertEquals(ink, readingSpanInk(span.copy(code = true), ink, darkPage))
+        assertEquals(ink, readingSpanInk(span.copy(classes = "Egyp"), ink, darkPage))
+        val readable = 0xff64c864.toInt()
+        assertEquals(readable, readingSpanInk(span.copy(foreground = "#64c864"), readable, darkPage))
+    }
+
+    @Test fun onlyBareDefinitionsUseTheReadingPageForForegroundContrast() {
+        val span = Span("text", "tlhaloso", italic = true, foreground = "#008000")
+        val block = Block("definition", 0, listOf(span))
+        assertTrue(block.usesPageForDefinitionInk())
+        assertFalse(block.copy(kind = "heading").usesPageForDefinitionInk())
+        assertFalse(block.copy(kind = "table", table = Table(emptyList(), emptyList())).usesPageForDefinitionInk())
+        assertFalse(block.copy(spans = listOf(span.copy(classes = "wikidict-media"))).usesPageForDefinitionInk())
+        assertFalse(block.copy(spans = listOf(span.copy(classes = "wikidict-poem"))).usesPageForDefinitionInk())
+    }
+
 }
