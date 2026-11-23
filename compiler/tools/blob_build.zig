@@ -2276,6 +2276,38 @@ fn loadSourceCategoryH1BannersWithRows(io: std.Io, a: std.mem.Allocator, root: [
 // an arbitrary code-named literal template as a new language authority.
 const SourceEquivalentTemplate = struct { row: dump_source.IndexedPage, ordinal: u64 };
 
+// The parent emits exactly its first argument in an H2 and binds code to the
+// heading ID. Its literal leaf repeats the code and labels its own category.
+const jezik_parent_source = "<h2 {{#if:{{{code|}}}|id=\"{{{code}}}\"}}>__NOEDITSECTION__{{#if:{{{portal|}}}|[[Portal:{{{1}}}|{{{1}}}]]|{{{1}}}}} {{#if:{{{2|}}}|<span style=\"font-size: x-small\"> {{{2}}} </span>}}</h2><noinclude>\n\n[[Kategorija:Templates za podnaslove-jezik| ]]\n[[Kategorija:Šabloni]]\n</noinclude>";
+
+fn jezikSource(a: std.mem.Allocator, templates: *const dump_source.TemplateSource, entry: SourceEquivalentTemplate) !?[]u8 {
+    const row = entry.row;
+    if (row.redirect != null or !row.has_source or !std.mem.eql(u8, row.content_model, "wikitext")) return null;
+    const raw = (try templates.lookup(entry.ordinal, row.page_id, row.revision_id)) orelse return error.MissingLanguageTemplateSource;
+    if (raw.len > 4096) return null;
+    return if (row.source_needs_decode) try xml_decode.decodeSinglePassAlloc(a, raw) else try a.dupe(u8, raw);
+}
+
+fn addJezikLabel(a: std.mem.Allocator, registry: *language_registry.Registry, code: []const u8, source: []const u8) !void {
+    const prefix = "{{=jezik=|";
+    if (!std.mem.startsWith(u8, source, prefix)) return;
+    const stop = std.mem.indexOfScalarPos(u8, source, prefix.len, '|') orelse return;
+    const label = source[prefix.len..stop];
+    if (!sourceEquivalentLiteral(label) or !std.mem.eql(u8, label, std.mem.trim(u8, label, " "))) return;
+    const expected = try std.fmt.allocPrint(a, "||code={s}}}}}<includeonly>[[Kategorija:{s} jezik]]</includeonly><noinclude>\n[[Kategorija:Šabloni|{s}]]\n[[Kategorija:Šabloni za podnaslove-jezik|{s}]]\n</noinclude>", .{ code, label, code, code });
+    defer a.free(expected);
+    if (!std.mem.eql(u8, source[stop..], expected)) return;
+    try registry.addSourceTemplateLabel(label, code);
+    // Lowercase article headings must match the first spelling in the same
+    // code's installed preferred name, in addition to the explicit declaration.
+    const preferred = registry.headings.get(code) orelse return;
+    const split = std.mem.indexOf(u8, preferred, " / ") orelse return;
+    const lower = preferred[0..split];
+    if (lower.len == label.len and std.ascii.isLower(lower[0]) and
+        std.ascii.toUpper(lower[0]) == label[0] and std.mem.eql(u8, lower[1..], label[1..]))
+        try registry.addSourceTemplateLabel(lower, code);
+}
+
 fn sourceEquivalentTerminal(rows: []const SourceEquivalentTemplate, names: *const std.StringHashMapUnmanaged(usize), namespaces: *const namespace_registry.Registry, start: usize) ?usize {
     var current = start;
     var seen: [8]usize = undefined;
@@ -2386,6 +2418,21 @@ fn loadSourceEquivalentLanguageTemplatesWithRows(io: std.Io, a: std.mem.Allocato
             const code = (owners.get(terminal) orelse continue) orelse continue;
             const title = namespaces.ofTitle(entry.row.title);
             try registry.addLocalAlias(title.text, code);
+        }
+    }
+    if (names.get("=jezik=")) |parent_index| jezik: {
+        const source = (try view.templates(root, namespaces)) orelse break :jezik;
+        const parent = (try jezikSource(a, source, rows.items[parent_index])) orelse break :jezik;
+        defer a.free(parent);
+        if (!std.mem.eql(u8, parent, jezik_parent_source)) break :jezik;
+        for (rows.items) |entry| {
+            const name = namespaces.ofTitle(entry.row.title).text;
+            if (name.len < 3 or name[0] != '=' or name[name.len - 1] != '=') continue;
+            const code = name[1 .. name.len - 1];
+            if (!registry.codes.contains(code)) continue;
+            const leaf = (try jezikSource(a, source, entry)) orelse continue;
+            defer a.free(leaf);
+            try addJezikLabel(a, registry, code, leaf);
         }
     }
     // Reuse the same authenticated namespace/index and bounded redirect graph.
@@ -70233,4 +70280,100 @@ test "captured page numeric-order marker preserves same-coordinate source rebase
     try std.testing.expectEqual(@as(usize,1),current.len);
     try std.testing.expectEqualStrings(try std.json.Stringify.valueAlloc(a,original[0].stored,.{}),try std.json.Stringify.valueAlloc(a,current[0].stored,.{}));
     try std.testing.expectError(error.CapturedWriterSourceContextMismatch,capturedWriterRepackFingerprintBytes(a,&rows,marker.version,"unknown-order"));
+}
+
+test "Jezik parent language labels require the complete code-bearing leaf" {
+    const a = std.testing.allocator;
+    const leaf = "{{=jezik=|Srpskohrvatski||code=sh}}<includeonly>[[Kategorija:Srpskohrvatski jezik]]</includeonly><noinclude>\n[[Kategorija:Šabloni|sh]]\n[[Kategorija:Šabloni za podnaslove-jezik|sh]]\n</noinclude>";
+    const row = "# mediawiki\nsh\tsrpskohrvatski / српскохрватски\nfr\tFrancuski\n";
+    var registry = language_registry.Registry.empty(a);
+    defer registry.deinit();
+    try registry.addTsv(row);
+    try std.testing.expect(registry.resolveTrusted("srpskohrvatski") == null);
+    try addJezikLabel(a, &registry, "fr", leaf);
+    try addJezikLabel(a, &registry, "sh", leaf[0 .. leaf.len - 1]);
+    try addJezikLabel(a, &registry, "fr", "{{=jezik=|[[Datoteka:Flag of France.svg|40px]] Francuski (fr)||code=fr}}<includeonly>[[Kategorija:Francuski jezik]]</includeonly><noinclude>\n[[Kategorija:Šabloni|fr]]\n[[Kategorija:Šabloni za podnaslove-jezik|fr]]\n</noinclude>");
+    try std.testing.expect(registry.resolveTrusted("Srpskohrvatski") == null);
+    try addJezikLabel(a, &registry, "sh", leaf);
+    for ([_][]const u8{ "Srpskohrvatski", "srpskohrvatski" }) |label| {
+        const owner = registry.resolveTrusted(label).?;
+        try std.testing.expectEqualStrings("sh", owner.code);
+        try std.testing.expectEqualStrings("srpskohrvatski / српскохрватски", owner.heading);
+    }
+    try std.testing.expect(registry.resolveTrusted("српскохрватски") == null);
+    try registry.addSourceTemplateLabel("SRPSKOHRVATSKI", "fr");
+    try std.testing.expect(registry.resolveTrusted("Srpskohrvatski") == null);
+    try std.testing.expect(registry.resolveTrusted("srpskohrvatski") == null);
+}
+
+test "Jezik indexed declarations preserve mixed language bodies and codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const io = std.testing.io;
+    var ns = try namespace_registry.Registry.init(a, namespace_registry.english_test_fixture);
+    defer ns.deinit();
+    for (0..4) |arm| {
+        var tmp = std.testing.tmpDir(.{});
+        defer tmp.cleanup();
+        const root = try tmp.dir.realPathFileAlloc(io, ".", a);
+        const path = try std.fs.path.join(a, &.{ root, "page-index.tsv" });
+        const parent = "0\t0\tTemplate:=jezik=\t\t2051\t1127682\t2026-10-01T00:00:00Z\tTest\twikitext\t10\t1\t0\n";
+        const sh = "0\t0\tTemplate:=sh=\t\t2052\t1470909\t2026-10-01T00:00:00Z\tTest\twikitext\t10\t1\t0\n";
+        const en = "0\t0\tTemplate:=en=\t\t3530\t1470982\t2026-10-01T00:00:00Z\tTest\twikitext\t10\t1\t0\n";
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = try std.mem.concat(a, u8, &.{ parent, sh, en, if (arm == 3) parent else "" }) });
+        var provider = try dump_source.TemplateSourceWriter.init(io, a, root);
+        defer provider.deinit();
+        try provider.append(0, 2051, 1127682, if (arm == 1) "{{{1}}}" else jezik_parent_source);
+        try provider.append(1, 2052, 1470909, if (arm == 2) "#REDIRECT [[Template:=en=]]" else "{{=jezik=|Srpskohrvatski||code=sh}}<includeonly>[[Kategorija:Srpskohrvatski jezik]]</includeonly><noinclude>\n[[Kategorija:Šabloni|sh]]\n[[Kategorija:Šabloni za podnaslove-jezik|sh]]\n</noinclude>");
+        try provider.append(2, 3530, 1470982, "{{=jezik=|Engleski||code=en}}<includeonly>[[Kategorija:Engleski jezik]]</includeonly><noinclude>\n[[Kategorija:Šabloni|en]]\n[[Kategorija:Šabloni za podnaslove-jezik|en]]\n</noinclude>");
+        if (arm == 3) try provider.append(3, 2051, 1127682, jezik_parent_source);
+        try provider.finish(path);
+        var registry = language_registry.Registry.empty(a);
+        defer registry.deinit();
+        try registry.addTsv("# mediawiki\nsh\tsrpskohrvatski / српскохрватски\nen\tEnglish\n");
+        if (arm == 3) {
+            try std.testing.expectError(error.DuplicateLanguageTemplateSource, loadSourceEquivalentLanguageTemplates(io, a, root, &ns, &registry));
+            continue;
+        }
+        try loadSourceEquivalentLanguageTemplates(io, a, root, &ns, &registry);
+        try std.testing.expectEqual(arm == 0, registry.resolveTrusted("srpskohrvatski") != null);
+        try std.testing.expectEqual(arm != 1, registry.resolveTrusted("Engleski") != null);
+        if (arm != 0) continue;
+        const codes = languageCodes(&registry, &ns);
+        const output = try std.fs.path.join(a, &.{ root, "blobs" });
+        var writer = try encoder.blob_builder.Writer.init(io, a, output);
+        defer writer.deinit();
+        writer.language_codes = codes;
+        const mixed = "==srpskohrvatski==\n===Imenica===\n# [[alkohol]]no piće\n==Engleski==\n===Noun===\n# [[other]]\n";
+        try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "pivo", mixed, mixed, null);
+        const stats = try writer.finish(codes);
+        try std.testing.expectEqual(@as(usize, 2), stats.language_records);
+        for ([_][]const u8{ "sh", "en" }, [_][]const u8{ "alkohol", "other" }) |code, target| {
+            const heading = registry.headings.get(code).?;
+            var filename: [encoder.blob_catalog.language_blob_filename_len]u8 = undefined;
+            const member = try std.fs.path.join(a, &.{ output, encoder.blob_catalog.language_directory, encoder.blob_catalog.languageBlobFilename(heading, &filename) });
+            var mapped = try mmapPath(io, member);
+            defer mapped.deinit();
+            const blob = try encoder.blob_format.inspect(mapped.bytes);
+            var index = try blob.buildTrustedIndexAlloc(a);
+            defer index.deinit(a);
+            const record = (try index.find("pivo")) orelse return error.TestUnexpectedResult;
+            const stored = try encoder.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, try blob.languageMetadata());
+            try std.testing.expectEqualStrings(code, stored.entry.language_code);
+            try std.testing.expectEqualSlices(u8, record.payload, try encoder.presentation_codec.encodeAlloc(a, stored));
+            // The authored [[alkohol]]no link emits a label and a linked suffix.
+            const labels: []const []const u8 = if (std.mem.eql(u8, code, "sh")) &.{ "alkohol", "no" } else &.{"other"};
+            var linked_spans: usize = 0;
+            for (stored.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+                if (span.kind == .link) {
+                    try std.testing.expectEqualStrings(target, span.target);
+                    try std.testing.expect(linked_spans < labels.len);
+                    try std.testing.expectEqualStrings(labels[linked_spans], span.text);
+                    linked_spans += 1;
+                }
+            };
+            try std.testing.expectEqual(labels.len, linked_spans);
+        }
+    }
 }
