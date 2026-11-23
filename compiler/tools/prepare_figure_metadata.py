@@ -1149,7 +1149,8 @@ def figure_stream_document(raw_path, namespace_raw, wiki, date, site_raw, *, pro
         raise ValueError('Invalid private Figure HTTP stream replay')
     storage = {} if _gzip_size is None else dict(_gzip_size=_gzip_size, _storage_out=_storage_out)
     values = stream_values(raw_path, RAW_STREAM_SCHEMA, allow_encoded=allow_encoded, identity_out=identity,
-                           record_offsets=None if _http_replay is None else _http_replay.offsets, **storage)
+                           record_offsets=None if _http_replay is None else _http_replay.offsets,
+                           _encoded_record=None if _http_replay is None else _http_replay.encoded_record, **storage)
     header = next(values)
     def observed_values():
         for batch in values:
@@ -3129,8 +3130,12 @@ class _HttpBatchReplay:
     Semantic/projection errors keep their old priority over HTTP-source errors.
     Only the first latter exception is held, with its original traceback (and
     at most its one bounded failed batch), until the old replay boundary.
-    Mixed/parent/light/lean streams use the existing independent second pass.
+    Retained requests keep bounded encoded rows for the original late authority
+    check. Parent, light, lean and oversized streams use the independent pass.
     """
+    max_retained_rows = 64
+    max_retained_bytes = 4 * 1024 * 1024
+
     def __init__(self, root, wiki, date, namespace, plan, *, indexed):
         self.root, self.wiki, self.date, self.namespace, self.plan = root, wiki, date, namespace, plan
         self.sources = None
@@ -3138,6 +3143,8 @@ class _HttpBatchReplay:
         self.ordinary, self.error = True, None
         self.header, self.identity = None, None
         self.offsets = [] if indexed else None
+        self.encoded_record = {}
+        self.retained_count = self.retained_bytes = 0
 
     def consume(self, header, batch):
         if self.error is not None:
@@ -3147,6 +3154,15 @@ class _HttpBatchReplay:
                 self.sources = source_records(self.root / FILE_REQUESTS,
                     header['base_batches'] + header['observed_batches'])
             source = next(self.sources)
+            if not self.ordinary:
+                return
+            if isinstance(source, dict) and source.get('kind') == 'retained-request':
+                raw = self.encoded_record['raw']
+                self.retained_count += 1
+                self.retained_bytes += len(raw)
+                if self.retained_count <= self.max_retained_rows and self.retained_bytes <= self.max_retained_bytes:
+                    self.frames.append((raw, source, None))
+                    return
             if not isinstance(source, dict) or source.get('kind') != 'http-archived':
                 self.ordinary = False
                 self.frames.clear(); self.http_files.clear(); self.archived_names.clear()
@@ -3166,6 +3182,7 @@ class _HttpBatchReplay:
 
     def raw_complete(self, header, identity):
         self.header, self.identity = header, identity
+        self.encoded_record.clear()
 
     def finish(self):
         if self.error is not None:
@@ -3465,7 +3482,8 @@ def replay_stream_capture(root, wiki, date, defaults, namespace, general, *, ret
         error, traceback = early_plan_error
         raise error.with_traceback(traceback)
     plan = inventory_document(root / PLAN)
-    fused = http_replay is not None and http_replay.ordinary and http_replay.plan == plan
+    fused = (http_replay is not None and http_replay.ordinary and http_replay.plan == plan and
+             not (http_replay.retained_count and http_replay.error is not None))
     if plan.get('observed_defaults_response_sha256') != (digest(observed) if observed is not None else None):
         raise ValueError('Figure capture plan differs from observed default-options authority')
     http_files = http_replay.http_files if fused else set()
@@ -3493,7 +3511,9 @@ def replay_stream_capture(root, wiki, date, defaults, namespace, general, *, ret
             offsets = http_replay.offsets
         if replay_identity is not None:
             replay_identity = http_replay.identity
-        frames = ((batch, source, archive, None) for batch, source, archive in http_replay.frames)
+        encoding = raw_record_encoding(header)
+        frames = ((raw_record_decode(batch, encoding) if archive is None else batch, source, archive, None)
+                  for batch, source, archive in http_replay.frames)
     else:
         encoded_record = {}
         options = {'_gzip_size': gzip_size} if compressed else {}
@@ -3536,6 +3556,8 @@ def replay_stream_capture(root, wiki, date, defaults, namespace, general, *, ret
         # All former whole-projection/inventory/provider/plan gates above retain
         # priority over an earlier HTTP proof error observed during that scan.
         http_replay.raise_source_error()
+        if http_replay.retained_count and raw_identity() != raw_before:
+            raise ValueError('Figure raw identity changed before retained request replay')
     for batch, source, checked_archive, encoded_record in frames:
         frame_archived = (checked_archive if checked_archive is not None else
             replay_source(root, source, batch, wiki, date, namespace, http_files, prefix_cache, profile_kind=selected_profile, inventory_cache=inventory_cache,
@@ -3559,6 +3581,8 @@ def replay_stream_capture(root, wiki, date, defaults, namespace, general, *, ret
             lean_requests.update(batch['requests'])
     if fused:
         http_replay.frames.clear()
+        if http_replay.retained_count and raw_identity() != raw_before:
+            raise ValueError('Figure raw identity changed during retained request replay')
     check_prefix_cache(prefix_cache)
     if (('max_inflight' in plan and (plan['max_inflight'] != 2 or type(plan['max_inflight']) is not int)) or
             (('max_inflight' in plan or mode == 'lean-tiff-v1') and
@@ -5100,8 +5124,15 @@ def _capture_files(args, transport=None, sleep=time.sleep, *, target_contract=RE
     def retain_complete(path):
         nonlocal inventory
         path = Path(path).absolute()
-        complete = read_complete_capture(path, prefix_cache, inventory_cache=inventory_cache)
+        cached = complete_stream_cache_key(path) in prefix_cache
+        complete = read_complete_capture(path, prefix_cache, inventory_cache=inventory_cache, include_document=False)
         parent_inventory = complete['inventory']
+        if cached:
+            # A prior validation-only caller may have used a different SQL cache.
+            check_prefix_cache(prefix_cache)
+            verify_inventory(parent_inventory, complete['namespace'], complete['manifest']['wiki'],
+                             complete['manifest']['date'], inventory_cache=inventory_cache)
+            check_inventory_replay_cache(inventory_cache)
         comparison = parent_inventory
         if (inventory_sql_downloads.get() is not None and parent_inventory != inventory and
                 parent_inventory.get('schema') == INVENTORY_SCHEMA):
@@ -5116,7 +5147,12 @@ def _capture_files(args, transport=None, sleep=time.sleep, *, target_contract=RE
                 complete['defaults'] != artifacts):
             raise ValueError('Complete Figure input selection differs')
         inventory = parent_inventory
-        names = {row['requested_file'] for row in complete['document']['records']}
+        # The completed replay's file_coverage proved exact ordered equality
+        # between its projected names and its dated inventory plus query inputs.
+        names = desired
+        if len(complete['query_inputs']) < len(query_inputs):
+            names = set(parent_inventory['titles'])
+            names.update(provider_query_titles(path.parent, complete['query_inputs'], namespace, args.wiki, args.date))
         # New requested names must come from authenticated appended query logs;
         # all original parent facts and query-log bytes remain selected.
         if not names <= desired or names & used:
@@ -5124,14 +5160,13 @@ def _capture_files(args, transport=None, sleep=time.sleep, *, target_contract=RE
         reference = {'kind': 'complete-stream', 'path': str(path),
                      'sha256': complete['manifest_sha256']}
         complete_captures.append(reference)
-        base = complete['document']['base_batches']
+        base = complete['projection_header']['base_batches']
         retained.extend(dict(reference, batch=i) for i in range(base))
         observed.extend(dict(reference, batch=i) for i in range(base, len(complete['offsets'])))
         used.update(names)
-        if compressed_output:
-            # The append needs selected names and immutable row locators, not
-            # the parent's full fact graph alongside the child's reducer.
-            complete.pop('document', None)
+        # All child frames use authenticated row locators. Release selected
+        # parent facts before the child starts assembling its own projection.
+        complete.pop('document', None)
     # Retain descriptors, not response strings. Each source is replayed lazily.
     for path in args.reuse:
         raw = small(Path(path) / MANIFEST)
@@ -6012,6 +6047,8 @@ def materialized_origin_catalog(root, plan, wiki, date, namespace, inventory):
     fields = {'id', 'source_reference', 'authority_kind', 'authority', 'complete', 'closure', 'failure',
               'plan', 'journal', 'files', 'pending', 'frame_map', 'epochs'}
     nodes, references, expected = {}, {}, set()
+    inventory_sha256 = digest(encoded(inventory))
+    inventory_titles = frozenset(inventory['titles'])
     for row in rows:
         if not isinstance(row, dict) or set(row) != fields:
             raise ValueError('Invalid materialized Figure origin record')
@@ -6044,7 +6081,7 @@ def materialized_origin_catalog(root, plan, wiki, date, namespace, inventory):
                 origin_plan.get('wiki') != wiki or origin_plan.get('date') != date or
                 origin_plan.get('metadata_mode', 'full') not in ('full', 'lean-tiff-v1', MATERIALIZED_HTTP_MODE) or
                 origin_plan.get('namespace_registry_sha256') != digest(namespace) or
-                origin_plan.get('inventory_sha256') != digest(encoded(inventory)) or
+                origin_plan.get('inventory_sha256') != inventory_sha256 or
                 origin_plan.get('defaults') != plan.get('defaults') or
                 type(origin_plan.get('base_batches')) is not int or origin_plan['base_batches'] < 0 or
                 type(origin_plan.get('records_count')) is not int or origin_plan['records_count'] < 0 or
@@ -6199,18 +6236,19 @@ def materialized_origin_catalog(root, plan, wiki, date, namespace, inventory):
         # Keep original query basenames in the origin: the normal query parser
         # authenticates the same per-origin files without rebasing their bytes.
         own_root = Path(root)/identifier
-        desired = set(inventory['titles']) | provider_query_titles(own_root, origin_plan['query_inputs'], namespace, wiki, date)
-        if len(desired) != origin_plan.get('records_count'):
+        extra_titles = provider_query_titles(own_root, origin_plan['query_inputs'], namespace, wiki, date)
+        extra_titles.difference_update(inventory_titles)
+        if len(inventory_titles) + len(extra_titles) != origin_plan.get('records_count'):
             raise ValueError('Materialized Figure origin inventory count differs')
         node=dict(row=row, plan=origin_plan, authority=authority, proof=proof, closure=closure,
                   failure=failure, artifacts=artifacts, committed=committed,
-                  sources=sources+row['pending'], desired=desired, own_root=own_root)
+                  sources=sources+row['pending'], extra_titles=extra_titles, own_root=own_root)
         nodes[identifier]=node; references[key]=identifier
     root_id = plan.get('materialized_root')
     if root_id not in nodes or nodes[root_id]['row']['authority_kind'] != 'complete-stream':
         raise ValueError('Materialized Figure plan lacks its original complete root')
     return dict(nodes=nodes,references=references,expected=expected,root=root_id,frames=[],
-                capture_root=Path(root),inventory=inventory)
+                capture_root=Path(root),inventory=inventory, inventory_titles=inventory_titles)
 
 
 def materialized_frame_echo(state, source, batch, archived, root):
@@ -6301,7 +6339,8 @@ def validate_materialized_echo(state, plan, wiki, date, namespace, *, root_recor
             names=set(frames[number]['requests'])
             if names & retained_names:raise ValueError('Duplicate materialized retained requests')
             retained_names.update(names)
-        remaining=sorted(node['desired']-retained_names,key=lambda name:name.encode())
+        remaining=sorted((name for name in itertools.chain(state['inventory_titles'], node['extra_titles'])
+                          if name not in retained_names), key=lambda name:name.encode())
         del retained_names
         planned=list(metadata.title_batches(wiki,remaining,old['batch_size'],figure_axes=True))
         del remaining

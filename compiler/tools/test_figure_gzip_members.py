@@ -70,6 +70,52 @@ class IndexedArchiveTests(unittest.TestCase):
             reordered = gzip.compress(rows[1]) + gzip.compress(rows[0])
             self.assertNotEqual(hashlib.sha256(gzip.decompress(reordered)).hexdigest(), writer.identity()['sha256'])
 
+    def test_identity_append_releases_selected_parent_facts_before_child_replay(self):
+        fixture, args, observation, _ = CompleteSelectionDocumentTests.fresh(self)
+        parent = args.output
+        args.reuse, args.reuse_batch = [parent], [observation]
+        args.output = fixture.root / 'identity-lifetime'
+        native_read, native_files, native_batch = figure.read_complete_capture, figure.file_records, figure.complete_stream_batch
+        parents, stages = [], set()
+
+        def read(path, *values, **options):
+            result = native_read(path, *values, **options)
+            if Path(path).parent == parent:
+                self.assertIs(options.get('include_document'), False)
+                self.assertNotIn('document', result)
+                if not parents:
+                    parents.append(result)
+            return result
+
+        def check(stage):
+            if parents:
+                self.assertNotIn('document', parents[0])
+                stages.add(stage)
+
+        def files(*values, **options):
+            check('child file projection')
+            return native_files(*values, **options)
+
+        def batch(*values, **options):
+            check('retained batch replay')
+            return native_batch(*values, **options)
+
+        with patch.object(figure, 'read_complete_capture', new=read), \
+                patch.object(figure, 'file_records', new=files), patch.object(figure, 'complete_stream_batch', new=batch):
+            child = figure.capture_files(args, transport=lambda *_: self.fail('Offline child fetched HTTP'))
+        self.assertTrue(parents)
+        self.assertEqual(stages, {'child file projection', 'retained batch replay'})
+        self.assertEqual(figure.verify(args.output), child)
+        for kind in ('parent member', 'dated SQL'):
+            path = (parent/figure.PROVIDER) if kind == 'parent member' else Path(args.sql[0])
+            original = path.read_bytes()
+            try:
+                path.write_bytes(original + b'changed')
+                with self.subTest(kind=kind), self.assertRaises(ValueError):
+                    figure.verify(args.output)
+            finally:
+                path.write_bytes(original)
+
     def test_parent_append_materialize(self):
         fixture, args, observation, original = CompleteSelectionDocumentTests.fresh(self)
         parent = args.output

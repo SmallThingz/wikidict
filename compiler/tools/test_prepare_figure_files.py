@@ -6832,6 +6832,36 @@ class MaterializedRootReplayTests(unittest.TestCase):
     rebind = OfflineFigureMaterializationTests.rebind
 
 
+    def test_materialized_inventory_is_shared_only_within_one_catalogue(self):
+        args, _, _, _ = self.fixture.logged_query_parent()
+        args.batch_size = 2
+        def transport(url, timeout):
+            titles = parse_qs(urlsplit(url).query)['titles'][0].split('|')
+            return 200, {}, figure.encoded(self.fixture.logged_query_response(titles))
+        figure.capture_files(args, transport=transport)
+        output, manifest = self.materialize(args)
+        plan = figure.inventory_document(output/figure.PLAN)
+        inventory = figure.inventory_document(output/figure.INVENTORY)
+        original = figure.encoded(inventory)
+        namespace = self.fixture.namespace.read_bytes()
+        def catalog(value):
+            return figure.materialized_origin_catalog(output, plan, args.wiki, args.date, namespace, value)
+        with patch.object(figure, 'encoded', wraps=figure.encoded) as encode:
+            state = catalog(inventory)
+            self.assertEqual(sum(call.args[0] is inventory for call in encode.call_args_list), 1)
+        self.assertEqual(state['inventory_titles'], frozenset(inventory['titles']))
+        nodes = sorted(state['nodes'].values(), key=lambda node: node['plan']['batch_size'])
+        self.assertEqual([node['plan']['batch_size'] for node in nodes], [2, 50])
+        self.assertEqual(nodes[1]['extra_titles'], {'ملف:Old.ogg'})
+        self.assertTrue(nodes[1]['extra_titles'] < nodes[0]['extra_titles'])
+        self.assertGreater(len(nodes[0]['row']['frame_map']), len(nodes[1]['row']['frame_map']))
+        self.assertEqual(figure.encoded(inventory), original)
+        for changed in (dict(inventory, titles=inventory['titles']+['ملف:Other.ogg']),
+                        dict(inventory, unbound_metadata=True)):
+            with self.assertRaisesRegex(ValueError, 'origin input or mode differs'):
+                catalog(changed)
+        self.assertEqual(figure.verify(output), manifest)
+
     def counted_verify(self, helper, output):
         raw_path = output/figure.ROLES['figure-sizing-raw']
         fingerprints = []
@@ -12589,6 +12619,36 @@ class FigureHttpSingleTraversalTests(unittest.TestCase):
         with patch.object(figure, '_HttpBatchReplay', return_value=None):
             old_tuple = figure.verify_tuple(self.paths, self.fixture.wiki, self.fixture.date)
         self.assertEqual(old_tuple, figure.verify_tuple(self.paths, self.fixture.wiki, self.fixture.date))
+
+    def test_mixed_retained_request_uses_one_pass_and_keeps_late_authority(self):
+        base, response, _ = self.fixture.svg_observation()
+        observation = self.fixture.write_svg_observation(response)
+        self.args.output = self.fixture.root / 'mixed-http'
+        self.args.reuse_batch = [observation]
+        figure.capture_files(self.args, transport=lambda *_: (200, {}, figure.encoded(base)), sleep=lambda _: None)
+        self.raw = self.args.output / figure.ROLES['figure-sizing-raw']
+        old, old_index, old_passes = self.verify_counted(False, indexed=True)
+        new, new_index, new_passes = self.verify_counted(True, indexed=True)
+        self.assertEqual((old, old_index), (new, new_index))
+        self.assertEqual((old_passes, new_passes), (2, 1))
+        for bound in ('max_retained_rows', 'max_retained_bytes'):
+            with self.subTest(bound=bound), patch.object(figure._HttpBatchReplay, bound, 0):
+                self.assertEqual(self.verify_counted(True, indexed=True), (old, old_index, 2))
+        name = next(name for name in json.loads(observation.read_bytes())['artifacts'] if 'response' in name)
+        artifact = observation.parent / name
+        original = artifact.read_bytes()
+        verify_inventory = figure.verify_inventory
+        def changed(*args, **options):
+            inventory = verify_inventory(*args, **options)
+            artifact.write_bytes(original + b' ')
+            return inventory
+        for fused in (False, True):
+            with self.subTest(fused=fused), patch.object(figure, 'verify_inventory', side_effect=changed):
+                try:
+                    with self.assertRaisesRegex(ValueError, 'Retained file batch artifact changed'):
+                        self.verify_counted(fused)
+                finally:
+                    artifact.write_bytes(original)
 
     def test_http_single_stream_keeps_outer_projection_error_before_http_error(self):
         projection = self.paths['figure-sizing']
