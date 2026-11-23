@@ -1603,7 +1603,10 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
         if core == site_info.FIGURE_WMF5_CORE and wiki != 'srwiktionary' and supplemental:
             if wiki not in ('thwiktionary', 'itwiktionary') or observation is None or not current_file_supplements:
                 raise ValueError('Current ordinary ImageInfo does not grant this supplemental file observation')
-        if core == site_info.FIGURE_WMF5_CORE and jpeg_supplement:
+        serbian_jpeg_supplement = (current_file_supplements and profile_kind == FIGURE_PROFILE_V4 and
+            wiki == 'srwiktionary' and language == 'sr' and date == '20261001' and
+            core == site_info.FIGURE_WMF5_CORE and jpeg_supplement)
+        if core == site_info.FIGURE_WMF5_CORE and jpeg_supplement and not serbian_jpeg_supplement:
             raise ValueError('Unreviewed ImageInfo supplement at this revision')
         if 'observed_svg_occurrences' in batch:
             if (profile_kind not in (FIGURE_PROFILE_V4, FIGURE_PROFILE_V5) or core not in (FIGURE_CURRENT_CORE, FIGURE_REGISTRATION_CORE, site_info.FIGURE_WMF5_CORE) or

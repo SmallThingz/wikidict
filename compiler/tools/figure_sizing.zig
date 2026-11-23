@@ -1902,6 +1902,8 @@ pub const Registry = struct {
         };
         const gif = gifProfile(doc.source_profile);
         const webp = webpProfile(doc.source_profile);
+        const sr_jpeg_document = batches.streamed_v6 and gif and !webp and equal(doc.core_revision, wmf5_imageinfo_core) and
+            equal(ns.wiki, "srwiktionary") and equal(ns.content_language, "sr") and equal(ns.dump_date, "20261001");
         // Coverage belongs to each requested file. Keep the index only while
         // replaying the batches; the returned registry borrows the facts themselves.
         const RequestedFact = struct { fact: *const FileFact, base_seen: bool = false };
@@ -1985,7 +1987,7 @@ pub const Registry = struct {
             if (batch.observed_svg_occurrences) |observations| {
                 if (!gif or (!contract and !svgOccurrenceGenerator(doc.generator_sha256)) or observations.len == 0 or observations.len > 50) return invalid;
             }
-            const sr_occurrences = try batch.requiresFreshSvgReceipts(doc.core_revision);
+            const sr_occurrences = if (jpeg_supplement and sr_jpeg_document) false else try batch.requiresFreshSvgReceipts(doc.core_revision);
             if (supplement) observing = true else if (observing) return invalid;
             try preflight(batch.response, false);
             const source = try std.json.parseFromSliceLeaky(Value, temp, batch.response, .{ .allocate = .alloc_always });
@@ -1999,6 +2001,8 @@ pub const Registry = struct {
                 break :scope .rollout_base;
             } else if (batch_index != 0 and batches.streamed_v6 and equal(doc.core_revision, current_core) and equal(batch_core, wmf5_imageinfo_core))
                 try historicalObservationScope(batch, ns, doc.source_profile) else .ordinary;
+            const sr_jpeg_epoch = sr_jpeg_document and equal(batch_core, wmf5_imageinfo_core);
+            if (jpeg_supplement and equal(doc.core_revision, wmf5_imageinfo_core) and !sr_jpeg_epoch) return invalid;
             const vietnamese_svg = scope == .vietnamese_svg;
             used_vietnamese_svg = used_vietnamese_svg or vietnamese_svg;
             // The English V5 WebP model stays anchored to its historical source.
@@ -2215,7 +2219,7 @@ pub const Registry = struct {
                     proof.value_ptr.* = if (proof.found_existing) proof.value_ptr.* and proven else proven;
                 }
                 if (!eligible and !default_page) continue;
-                if ((equal(batch_core, current_core) or (epochs and responseEpoch(batch_core))) and equal(fact.mime, "image/jpeg")) {
+                if ((sr_jpeg_epoch or equal(batch_core, current_core) or (epochs and responseEpoch(batch_core))) and equal(fact.mime, "image/jpeg")) {
                     const proven = try jpegUnrotatedMetadata(temp, image);
                     const evidence = try jpeg_evidence.getOrPut(a, fact.canonical_file);
                     const size = (try field(image, "size")).integer;
@@ -2224,11 +2228,14 @@ pub const Registry = struct {
                     } else evidence.value_ptr.* = .{ .repository = try a.dupe(u8, repository), .size = size };
                     evidence.value_ptr.omitted = evidence.value_ptr.omitted or !image.object.contains("metadata");
                     evidence.value_ptr.veto = evidence.value_ptr.veto or (image.object.contains("metadata") and !proven);
-                    const proof = try jpeg_width_proofs.getOrPut(a, fact.canonical_file);
-                    // Ordinary rows keep the original all-alias rule. Only a
-                    // separate exact-file supplement can fill omitted metadata;
-                    // a present malformed/rotated map always vetoes that route.
-                    proof.value_ptr.* = if (proof.found_existing) proof.value_ptr.* and proven else proven;
+                    // This epoch requires a separate, matched positive JPEG receipt.
+                    if (!sr_jpeg_epoch) {
+                        const proof = try jpeg_width_proofs.getOrPut(a, fact.canonical_file);
+                        // Ordinary rows keep the original all-alias rule. Only a
+                        // separate exact-file supplement can fill omitted metadata;
+                        // a present malformed/rotated map always vetoes that route.
+                        proof.value_ptr.* = if (proof.found_existing) proof.value_ptr.* and proven else proven;
+                    }
                 }
                 for ([_][]const u8{ fact.requested_file, fact.canonical_file }) |key| {
                     const record: Record = .{ .canonical_file = key, .file_sha1 = fact.file_sha1,
@@ -8630,4 +8637,43 @@ test "ordinary German Russian and Thai ImageInfo crosses the WMF5 rollout only i
     const unissued = try std.mem.replaceOwned(u8, a, italian.batches.?[0].response, wmf5_imageinfo_core, wmf5_rollout_core);
     const value = try std.json.parseFromSliceLeaky(Value, a, unissued, .{});
     try std.testing.expectError(invalid, generalWithEpoch(value, italian.wiki, "it", "//it.wiktionary.org", wmf5_rollout_core, true, .rollout_base));
+}
+
+test "Serbian original 23 JPEG thumbnails obtain width limits only from matching unrotated supplements" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile("testdata/figure-page-observations/sr-fuhe-served-set/namespace-registry.tsv"));
+    defer ns.deinit();
+    const source_defaults = @embedFile("testdata/figure-page-observations/sr-fuhe-served-set/figure-siteinfo.raw.json");
+    var defaults_sha: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(source_defaults, &defaults_sha, .{});
+    const projection = try dump_source.decompressZstdBytesAlloc(a, @embedFile("testdata/sr-jpeg-selected/projection.zst"), 1024 * 1024);
+    var p = StreamTestSource.Slice{ .bytes = projection, .chunk = 1024 };
+    var r = StreamTestSource.Slice{ .bytes = @embedFile("testdata/sr-jpeg-selected/selected.jsonl"), .chunk = 1024 };
+    var projection_input = p.input();
+    var raw = r.input();
+    var registry = try Registry.initStreamWithDefaults(a, &projection_input, &raw, @embedFile("testdata/sr-imageinfo-87f/imageinfo-first.raw.json"), &ns, .{ .core = accepted_core, .sha256 = defaults_sha });
+    defer registry.deinit();
+    const Case = struct {name: []const u8, original: u32, authored: u32};
+    const targets = try std.json.parseFromSliceLeaky([]const Case, a, @embedFile("testdata/sr-jpeg-selected/targets.json"), .{});
+    try std.testing.expectEqual(@as(usize, 23), targets.len);
+    for (targets) |entry| {
+        try std.testing.expect(entry.authored > entry.original);
+        try std.testing.expectEqual(@as(?u32, entry.original), try Registry.resolveWidthLimit(&registry, a, entry.name, .thumbnail));
+        try std.testing.expectEqual(@as(?u32, null), try Registry.resolveWidthLimit(&registry, a, entry.name, .framed));
+        try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null), try Registry.resolve(&registry, a, entry.name, .thumbnail, entry.authored, null));
+        try std.testing.expectEqual(@as(?types.FigureSizingPolicy, .requested_fit), try Registry.resolve(&registry, a, entry.name, .thumbnail, entry.original, null));
+    }
+    var lean_only: usize = 0;
+    for (registry.records) |record| {
+        if (!std.ascii.endsWithIgnoreCase(record.canonical_file,".jpg")) continue;
+        for (targets) |entry| {
+            if (equal(record.canonical_file,entry.name)) break;
+        } else {
+            try std.testing.expectEqual(@as(?u32, null), try Registry.resolveWidthLimit(&registry, a, record.canonical_file, .thumbnail));
+            lean_only += 1;
+        }
+    }
+    try std.testing.expect(lean_only > 100);
 }
