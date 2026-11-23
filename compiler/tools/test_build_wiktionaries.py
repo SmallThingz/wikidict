@@ -17728,6 +17728,33 @@ class MultiEditionOriginalArchiveTests(unittest.TestCase):
                   url='https://dumps.wikimedia.org/'+wiki+'/'+date+'/'+name)
         return item,downloads,root/'output'
 
+    def test_public_archive_preference_preserves_explicit_and_full_provider_inputs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            item, downloads, output = self.fixture(root)
+            write_test_manifest(downloads, {'files': [item]})
+            edition = (item['wiki'], item['date'])
+            providers = {role: root / role for role in b.WIKIBASE_PROVIDER_ROLES}
+            for flags, snapshots, started, expected in (
+                ([], {}, False, True),
+                (['--repack'], {}, False, False),
+                ([], providers, False, False),
+                (['--original-archives'], providers, False, True),
+                ([], providers, True, True),
+            ):
+                with self.subTest(flags=flags, providers=bool(snapshots), started=started):
+                    if started:
+                        (output / item['wiki'] / (item['date'] + '.shards')).mkdir(parents=True)
+                    argv = ['build_wiktionaries.py', '--in', str(downloads), '--output', str(output),
+                            '--threads', '1', '--jobs', '1', *flags]
+                    options = {edition: {'auxiliary_snapshots': snapshots}}
+                    with patch.object(sys, 'argv', argv), patch.object(b, 'safe_worker_budget', return_value=1), \
+                         patch.object(b, 'resolve_edition_snapshot_options', return_value=options), \
+                         patch.object(b, 'build_groups', return_value=[]) as dispatch:
+                        b.main()
+                    selected = dispatch.call_args.kwargs['edition_options'][edition]
+                    self.assertIs(selected['original_archives'], expected)
+
     def test_two_editions_use_normal_admission_and_one_index_pass_each(self):
         import index_original_dump as index
         import inspect

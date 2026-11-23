@@ -2752,12 +2752,12 @@ class ControllerCampaignSelectionTests(unittest.TestCase):
             cfg = dict(llvm_workers=2, edition_options={'toy': dict(extraction_cache_root=record,
                 auxiliary_snapshots={'file-metadata': controller.descriptor(snap)})})
             argv = controller.edition_cli_options(cfg, 'toy')
-            self.assertEqual(argv, ['--llvm-workers', '2', '--file-metadata-snapshot', str(snap), '--extraction-cache-root', str(cache)])
+            self.assertEqual(argv, ['--repack', '--llvm-workers', '2', '--file-metadata-snapshot', str(snap), '--extraction-cache-root', str(cache)])
             record['inode'] += 1
             with self.assertRaisesRegex(ValueError, 'cache identity'): controller.edition_cli_options(cfg, 'toy')
             record['inode'] -= 1; snap.write_text('changed')
             with self.assertRaisesRegex(ValueError, 'snapshot identity'): controller.edition_cli_options(cfg, 'toy')
-            self.assertEqual(controller.edition_cli_options({}, 'toy'), [])
+            self.assertEqual(controller.edition_cli_options({}, 'toy'), ['--repack'])
 
     def test_started_without_terminal_keeps_unknown_production_time_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -3638,9 +3638,9 @@ class BorrowedStagedInputOptionTests(unittest.TestCase):
     def test_exact_owned_root_and_completion_forward_existing_cli(self):
         with tempfile.TemporaryDirectory() as tmp:
             path,record,cfg=self.fixture(Path(tmp));before=tuple(getattr((path/'.complete.json').stat(),k) for k in ('st_dev','st_ino','st_size','st_mtime_ns','st_ctime_ns'))
-            self.assertEqual(controller.edition_cli_options(cfg,'toy'),['--staged-input-root',str(path)])
+            self.assertEqual(controller.edition_cli_options(cfg,'toy'),['--repack','--staged-input-root',str(path)])
             self.assertEqual(tuple(getattr((path/'.complete.json').stat(),k) for k in ('st_dev','st_ino','st_size','st_mtime_ns','st_ctime_ns')),before)
-            self.assertEqual(controller.edition_cli_options({},'toy'),[])
+            self.assertEqual(controller.edition_cli_options({},'toy'),['--repack'])
             cfg.update(build_timeout_seconds=60,now_unix=123,expansion_timeout_ms=1000,downloads=str(path.parent/'downloads'),output=str(path.parent/'output'),raw_shard_root=str(path.parent/'raw'),compiler=dict(path='/fixture/zig'))
             with mock.patch.object(controller,'source_roots',return_value=(path.parent,path.parent)):
                 argv=controller.command(cfg,'toy',1)
@@ -5670,9 +5670,9 @@ class OrdinaryCommandRecordTests(unittest.TestCase):
 
 class ConfigurableShardPagesControllerTests(unittest.TestCase):
     def test_edition_interval_is_explicit_positive_and_context_bound(self):
-        self.assertEqual(controller.edition_cli_options({},'toy'),[])
+        self.assertEqual(controller.edition_cli_options({},'toy'),['--repack'])
         cfg={'edition_options':{'toy':{'shard_pages':2500}}}
-        self.assertEqual(controller.edition_cli_options(cfg,'toy'),['--shard-pages','2500'])
+        self.assertEqual(controller.edition_cli_options(cfg,'toy'),['--repack','--shard-pages','2500'])
         for value in (None,0,-1,True,1.5,'2'):
             with self.subTest(value=value),self.assertRaises(ValueError):
                 controller.edition_cli_options({'edition_options':{'toy':{'shard_pages':value}}},'toy')
@@ -5686,7 +5686,7 @@ class OriginalArchiveControllerTests(unittest.TestCase):
         stage=root/'stage';stage.mkdir();source=root/'archives';source.mkdir()
         name=edition+'-20261001-pages-meta-current.xml.bz2'
         data=b'BZh9metadata fixture';(source/name).write_bytes(data)
-        item=dict(wiki=edition,date='20261001',name=name,size=len(data),sha1=hashlioriginal_archive_builder.sha1(data).hexdigest())
+        item=dict(wiki=edition,date='20261001',name=name,size=len(data),sha1=hashlib.sha1(data).hexdigest())
         block=root/'blocks.json'
         directory=dict(format='wikidict-bzip2-blocks-v1',xml_bytes=7,source_pages=1,
             parts=[dict(name=name,size=len(data),sha1=item['sha1'],xml_bytes=7,blocks=[])])
@@ -5718,12 +5718,17 @@ class OriginalArchiveControllerTests(unittest.TestCase):
     def test_flag_is_strict_and_older_producers_keep_legacy_path(self):
         for value in (True,False):
             self.assertEqual(controller.edition_cli_options(dict(edition_options={'toy':dict(original_archives=value)}),'toy'),
-                             ['--original-archives'] if value else [])
+                             ['--original-archives'] if value else ['--repack'])
         for value in (1,0,None,'yes',[]):
             with self.subTest(value=value),self.assertRaisesRegex(ValueError,'boolean'):
                 controller.edition_cli_options(dict(edition_options={'toy':dict(original_archives=value)}),'toy')
-        with mock.patch.object(b,'select_original_archive_input',None):
-            self.assertEqual(controller.edition_cli_options({},'toy'),[])
+        legacy = SimpleNamespace(AUXILIARY_SNAPSHOT_NAMES=original_archive_builder.AUXILIARY_SNAPSHOT_NAMES,
+                                 select_original_archive_input=original_archive_builder.select_original_archive_input)
+        with mock.patch.dict(controller.sys.modules, {'build_wiktionaries': legacy}):
+            self.assertEqual(controller.edition_cli_options({}, 'toy'), [])
+            enabled = {'edition_options': {'toy': {'original_archives': True}}}
+            self.assertEqual(controller.edition_cli_options(enabled, 'toy'), ['--original-archives'])
+            legacy.select_original_archive_input = None
             with self.assertRaisesRegex(ValueError,'does not support'):
                 controller.edition_cli_options(dict(edition_options={'toy':dict(original_archives=True)}),'toy')
 
@@ -5733,7 +5738,7 @@ class OriginalArchiveControllerTests(unittest.TestCase):
                 cfg,stage,source,block,_=self.fixture(Path(tmp),fresh)
                 stamp=lambda p:tuple(getattr(p.stat(),key) for key in ('st_dev','st_ino','st_mode','st_size','st_mtime_ns','st_ctime_ns'))
                 before={p:stamp(p) for p in (stage/'.complete.json',block,*source.iterdir())}
-                self.assertEqual(controller.edition_cli_options(cfg,'toywiktionary'),['--staged-input-root',str(stage)])
+                self.assertEqual(controller.edition_cli_options(cfg,'toywiktionary'),['--repack','--staged-input-root',str(stage)])
                 controller.require_ordinary_input_roles(self.with_required_roles(cfg))
                 self.assertTrue(all(stamp(p)==st for p,st in before.items()))
                 self.assertFalse((stage/'pages.xml.zst').exists())
@@ -5747,7 +5752,7 @@ class OriginalArchiveControllerTests(unittest.TestCase):
                 seen.append(Path(path));self.assertNotEqual(Path(path).parent,source)
                 return original(path)
             checked=self.with_required_roles(cfg)
-            with mock.patch.object(b,'sha256_file',side_effect=digest):controller.require_ordinary_input_roles(checked)
+            with mock.patch.object(original_archive_builder,'sha256_file',side_effect=digest):controller.require_ordinary_input_roles(checked)
             self.assertTrue(seen)
 
     def test_marker_sidecar_parts_and_source_binding_fail_closed(self):

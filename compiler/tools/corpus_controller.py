@@ -2007,7 +2007,12 @@ def edition_cli_options(cfg, edition):
     options = cfg.get('edition_options', {}).get(edition, {})
     require(isinstance(options, dict) and set(options) <= {'extraction_cache_root', 'staged_input_root', 'auxiliary_snapshots', 'interwiki_snapshot', 'presentation_audit_pages', 'continue_failed_shards', 'shard_pages', 'original_archives'},
             'Unknown edition option')
-    argv = ['--original-archives'] if _original_archive_option(options, builder) else []
+    enabled=_original_archive_option(options, builder)
+    default=getattr(builder,'ORIGINAL_ARCHIVES_CLI_DEFAULT',False)
+    require(type(default) is bool, 'Selected producer original archive default must be a boolean')
+    # Configuration keeps its explicit transport meaning with both maintained
+    # and pinned legacy producers; never send a new flag to an old producer.
+    argv = ['--original-archives'] if enabled else (['--repack'] if default else [])
     if 'shard_pages' in options:
         from build_wiktionaries import selected_shard_pages
         pages=options['shard_pages']

@@ -6151,6 +6151,8 @@ def prepare_shard_workspace(workspace, expected, now_unix=None, raw_shards_path=
 
 
 ORIGINAL_BZIP2_INPUT_VERSION = 'wikidict-original-bzip2-input-v1'
+# Public CLI preference only; the internal build() API remains opt-in.
+ORIGINAL_ARCHIVES_CLI_DEFAULT = True
 FRESH_BZIP2_INPUT_VERSION = 'wikidict-original-bzip2-fresh-input-v1'
 FRESH_BZIP2_COORDINATE_VERSION = 'original-bzip2-global-xml-v1'
 
@@ -10152,7 +10154,10 @@ def main():
     p.add_argument('--presentation-audit-pages',type=int,metavar='N',help='After a bound presentation failure, audit at most N rows from the failed shard start using the same worker; edition remains failed and unpublished, original deadline applies')
     p.add_argument('--shard-pages',type=int,metavar='N',help='Positive verified shard checkpoint interval; default 100000 pages. Smaller shards increase verification/compression/merge overhead.')
     p.add_argument('--compress-shards',action='store_true',help='Verify and compress each temporary shard, then merge directly to compressed output')
-    p.add_argument('--original-archives',action='store_true',help='Use original bzip2 archives for new editions without repacking; preserve existing staged work and sealed workers')
+    transport=p.add_mutually_exclusive_group()
+    transport.add_argument('--original-archives',dest='original_archives',action='store_true',help='Read original bzip2 archives for compatible new builds (default); preserve existing staged work and sealed workers')
+    transport.add_argument('--repack',dest='original_archives',action='store_false',help='Repack newly selected input as Zstd; preserve explicitly selected inputs and existing legacy work')
+    p.set_defaults(original_archives=None)
     p.add_argument('--staged-input-root',type=Path,metavar='DIR',help='Read-only completed repack or explicit original-bzip2 input marker for one edition; validates declared inputs, never copies or retires them')
     p.add_argument('--extraction-cache-root',type=Path,metavar='DIR',help='Existing verified native extraction/object cache for one edition; cache identities are checked against fresh build inputs')
     p.add_argument('--raw-shard-root',type=Path,metavar='DIR',help='Optional raw shard volume; input/native caches and merged publication remain under --output')
@@ -10313,8 +10318,28 @@ def main():
     if a.interwiki_map_snapshot: options['interwiki_snapshot']=a.interwiki_map_snapshot.resolve()
     try: options['edition_options']=resolve_edition_snapshot_options(manifest,groups,a.downloads.resolve(),auxiliary,workspace=workspace,metadata_network=a.metadata_network,figure_reuse_batches=tuple(a.figure_reuse_batch))
     except (ValueError,OSError) as error:p.error(str(error))
-    if a.original_archives:
-        for value in options['edition_options'].values():value['original_archives']=True
+    # Retained tools and relocated Python producers keep their established
+    # transport unless it was explicitly selected. The maintained normal
+    # recipe is the source contract for automatic archive-capable tools.
+    original_archives=(a.original_archives if a.original_archives is not None else
+                       ORIGINAL_ARCHIVES_CLI_DEFAULT and retained_roles is None
+                       and _PYTHON_TOOLING is None and PROJECT==_script_source_root())
+    for (edition,date),value in options['edition_options'].items():
+        enabled=original_archives
+        providers={name for name,path in value.get('auxiliary_snapshots',{}).items() if path is not None}
+        if a.original_archives is None and enabled and WIKIBASE_PROVIDER_ROLES <= providers:
+            # A new full-Provider worker requires a generation seal. Fresh
+            # XML offsets cannot use its legacy verified hash-pair contract.
+            # Preserve every existing or explicit input choice; only the
+            # automatic selection of brand-new incompatible input falls back.
+            parent=a.output/edition
+            container=parent/(date+'.original-input')
+            existing=any(os.path.lexists(path) for path in (
+                parent/date,parent/(date+'.building'),parent/(date+'.shards'),
+                container/'input',container/'blocks.json'))
+            enabled=(existing or a.staged_input_root is not None
+                     or value.get('staged_input_root') is not None)
+        value['original_archives']=enabled
     # The maintained checkout's normal build recipe embeds this authority.
     # An external tooling projection is not evidence for a historical Writer.
     ordinary_source_root=(PROJECT if _PYTHON_TOOLING is None and PROJECT==_script_source_root() else None)
