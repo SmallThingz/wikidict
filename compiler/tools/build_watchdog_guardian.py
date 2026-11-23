@@ -17,10 +17,11 @@ import time
 
 
 def process(pid):
-    raw = (Path('/proc') / str(pid) / 'stat').read_text()
-    fields = raw[raw.rfind(')') + 2:].split()
+    with open(f'/proc/{pid}/stat', 'rb', buffering=0) as stream:
+        raw = stream.read()
+    fields = raw[raw.rfind(b')') + 2:].split(None, 20)
     return {
-        'pid': pid, 'state': fields[0], 'ppid': int(fields[1]),
+        'pid': pid, 'state': fields[0].decode('ascii'), 'ppid': int(fields[1]),
         'pgrp': int(fields[2]), 'session': int(fields[3]),
         'start': int(fields[19]),
     }

@@ -166,7 +166,10 @@ def child_memory_limit_bytes():
 
 
 def supervise(*, root=CGROUP_ROOT, argv=None, affinity_cpus=None):
-    """Return child status, or raise before spawning if a hard limit is unavailable."""
+    """Return the child status under hard cgroup limits.
+
+    argv contains arguments for sys.executable, as in supervise_watchdog().
+    """
     try:
         current = _self_cgroup(root)
         parent = _delegated_parent(current, root)
@@ -856,7 +859,12 @@ def supervise_watchdog(*, argv=None, report_path=None, wall_seconds=WATCHDOG_WAL
                        address_space_limit_bytes=None, disk_paths=None,
                        disk_floor_bytes=BUILD_DISK_RESERVE_BYTES, child_nice=None,
                        host_observation=None, max_open_files=512):
-    """Opt-in sampled fallback. Its aggregate cap is best effort, not a cgroup."""
+    """Supervise a Python invocation with sampled resource limits.
+
+    Pass interpreter arguments such as ['-m', 'unittest', 'test_example'].
+    To run a native executable, replace the supervised Python process in place:
+    ['-c', 'import os,sys; os.execv(sys.argv[1], sys.argv[1:])', absolute_executable, *arguments].
+    """
     inherited_nice = os.getpriority(os.PRIO_PROCESS, 0)
     effective_open_files = watchdog_open_files_limit(
         max_open_files, resource.getrlimit(resource.RLIMIT_NOFILE)[1])

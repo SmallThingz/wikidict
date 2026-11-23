@@ -54,6 +54,14 @@ class ResourceLimitsTest(unittest.TestCase):
         self.test_watchdog_wall_limit_reaps_own_child()
         self.assertEqual(retained[0], 1)
 
+    def test_guardian_tracks_numeric_identity_after_opaque_command_name(self):
+        import build_watchdog_guardian as guardian
+        fields = [b'S'] + [str(i).encode() for i in range(1, 52)]
+        status = b'123 (worker) \xff\n(name) ' + b' '.join(fields)
+        with patch('builtins.open', return_value=io.BytesIO(status)):
+            self.assertEqual(guardian.process(123), dict(
+                pid=123, state='S', ppid=1, pgrp=2, session=3, start=19))
+
     def test_process_table_keeps_numeric_fields_after_opaque_command_name(self):
         with tempfile.TemporaryDirectory() as tmp:
             process = Path(tmp, '123')
