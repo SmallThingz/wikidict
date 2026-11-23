@@ -386,6 +386,15 @@ class CaptureTest(unittest.TestCase):
         self.assertEqual([self.registry.file_title(t) for batch in self.calls for t in batch],
                          ['ملف:Ru-акула.ogg'])
 
+    def test_native_phonos_file_warning_supplies_collector_title(self):
+        title = 'LL-Q9240 (ind)-Sofi Solihah-sistem.wav'
+        log = self.root / 'writer.log'
+        log.write_text(f'pid=1 warning: phonos file metadata snapshot unavailable: title=File:{title}\n'
+                       'unrelated phonos file=File:Unused.wav\n', encoding='utf-8')
+        observed = set()
+        metadata.seed_file(log, 'log', observed, self.registry, False)
+        self.assertEqual(observed, {'ملف:' + title})
+
     def test_pinned_sql_candidates_capture_and_replay_offline(self):
         path, status = self.sql_seed()
         status_path = self.root / 'dumpstatus.json'

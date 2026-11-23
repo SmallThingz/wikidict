@@ -4142,7 +4142,7 @@ pub const Expander = struct {
         // validates the supplied name in NS_FILE without stripping its prefix.
         const title = try registry.normalizeTitle(a, file, 6, .only_default);
         const get = self.provider.file_metadata orelse {
-            rt.work_stats.logLine("warning: file metadata snapshot unavailable: phonos file={s}\n", .{title});
+            rt.work_stats.logLine("warning: phonos file metadata snapshot unavailable: title={s}\n", .{title});
             return error.FileMetadataSnapshotMissing;
         };
         const metadata = try get(self.provider.ctx, title);
@@ -4790,9 +4790,13 @@ pub const Expander = struct {
             return out.toOwnedSlice(a);
         }
 
-        if (!std.ascii.eqlIgnoreCase(mode, "pages") or
-            !std.mem.eql(u8, depth, "1"))
-            return error.UnsupportedCategoryTreeOptions;
+        if (!std.ascii.eqlIgnoreCase(mode, "pages")) return error.UnsupportedCategoryTreeOptions;
+        const deeper = !std.mem.eql(u8, depth, "1");
+        if (deeper) {
+            if (depth.len == 0 or depth[0] == '0') return error.UnsupportedCategoryTreeOptions;
+            for (depth) |digit| if (!std.ascii.isDigit(digit)) return error.UnsupportedCategoryTreeOptions;
+            _ = std.fmt.parseInt(u32, depth, 10) catch return error.UnsupportedCategoryTreeOptions;
+        }
 
         const style = categoryTreeArg(args, "style");
         if (style) |value| {
@@ -4812,11 +4816,22 @@ pub const Expander = struct {
 
         var page_count: usize = members.len;
         var complete_members = members.len < 200;
+        var complete_leaf = false;
         if (self.provider.category_stats) |stats_get| {
             if (try stats_get(self.provider.ctx, category)) |stats| {
                 page_count = stats.all -| stats.files;
-                if (page_count == members.len) complete_members = true;
+                if (page_count == members.len) {
+                    complete_members = true;
+                    complete_leaf = stats.files <= stats.all and stats.subcats == 0;
+                }
             }
+        }
+        // Further depth cannot expand a complete list of ordinary page leaves.
+        // Both independently derived inputs must agree before reusing the depth-one path.
+        if (deeper) {
+            if (!complete_leaf) return error.UnsupportedCategoryTreeOptions;
+            for (members) |title| if (namespace_lib.ofTitle(self.runtime, title).id == 14)
+                return error.UnsupportedCategoryTreeOptions;
         }
         if (namespace_ids.len != 0 and !main_only and !complete_members) {
             // Captured pages are capped before filtering, but MediaWiki filters
@@ -6716,6 +6731,8 @@ test "Phonos validates authoritative media and preserves label language and cano
     try attrs.rawSet(runtime.allocator, .{ .string = "file" }, .{ .string = "Alias.ogg" });
     const frame = try Expander.hostFrameExtensionTag(&expander, runtime.allocator, "phonos", .{ .string = "Frame" }, attrs);
     try std.testing.expect(std.mem.indexOf(u8, frame, "data-phonos-audio=\"Actual audio.opus\"") != null);
+    expander.provider.file_metadata = null;
+    try std.testing.expectError(error.FileMetadataSnapshotMissing, expander.expandFragment("Entry", "{{#tag:phonos|Keep|file=LL-Q9240 (ind)-Sofi Solihah-sistem.wav}}", 1_670_803_200));
 }
 
 test "implicit block newlines retain Belarusian legacy translation terms" {
@@ -7751,6 +7768,7 @@ const CategoryTreeNamespaceFixture = struct {
         "118\tRekonstruktion\tReconstruction\tcase-sensitive\t1\t0\t0\t\treconstruction\tverified_edition_feature\tReko\n";
     members: []const []const u8 = &.{ "main", "Reconstruction:Proto-Test/term", "Talk:excluded", "Wiktionary:entry" },
     count: ?u32 = null,
+    subcats: u32 = 0,
     present: bool = true,
 
     fn exists(raw: ?*anyopaque, _: []const u8) !bool {
@@ -7763,9 +7781,47 @@ const CategoryTreeNamespaceFixture = struct {
     }
     fn stats(raw: ?*anyopaque, _: []const u8) !?Provider.CategoryStats {
         const self: *@This() = @ptrCast(@alignCast(raw.?));
-        return if (self.count) |count| .{ .all = count, .files = 0, .subcats = 0 } else null;
+        return if (self.count) |count| .{ .all = count, .files = 0, .subcats = self.subcats } else null;
     }
 };
+
+test "CategoryTree deeper page traversal requires a complete verified leaf" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var registry = try rt.namespace_registry.Registry.init(a, CategoryTreeNamespaceFixture.registry_text);
+    defer registry.deinit();
+    var runtime = try rt.Context.init(a, 24);
+    defer runtime.deinit();
+    runtime.namespace_catalog = &registry;
+    try rt.bindGlobalTable(&runtime, null, 0);
+    try stdlib.install(&runtime);
+    var source: CategoryTreeNamespaceFixture = .{};
+    var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{
+        .ctx = &source,
+        .get = TestProvider.get,
+        .exists = CategoryTreeNamespaceFixture.exists,
+        .category_tree = CategoryTreeNamespaceFixture.tree,
+        .category_stats = CategoryTreeNamespaceFixture.stats,
+    } };
+    source.members = &.{ "diunggah", "mengunggah" };
+    source.count = 2;
+    const one = "{{#categorytree:Turunan kata unggah|depth=1|namespaces=0 14}}";
+    const three = "{{#categorytree:Turunan kata unggah|depth=3|namespaces=0 14}}";
+    const result = try expander.expandFragment("unggah", three, 0);
+    try std.testing.expectEqualStrings(try expander.expandFragment("unggah", one, 0), result);
+    try std.testing.expect(std.mem.indexOf(u8, result, "[[diunggah]]").? < std.mem.indexOf(u8, result, "[[mengunggah]]").?);
+    source.count = null;
+    try std.testing.expectError(error.UnsupportedCategoryTreeOptions, expander.expandFragment("unggah", three, 0));
+    source.count = 3;
+    try std.testing.expectError(error.UnsupportedCategoryTreeOptions, expander.expandFragment("unggah", three, 0));
+    source.count = 2;
+    source.subcats = 1;
+    try std.testing.expectError(error.UnsupportedCategoryTreeOptions, expander.expandFragment("unggah", three, 0));
+    source.subcats = 0;
+    source.members = &.{ "diunggah", "Category:Child" };
+    try std.testing.expectError(error.UnsupportedCategoryTreeOptions, expander.expandFragment("unggah", three, 0));
+}
 
 test "CategoryTree namespace filters retain qualified titles and resolve aliases" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
