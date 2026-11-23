@@ -9091,6 +9091,15 @@ def edition_extraction_cache(workspace, selected):
     return workspace/'extraction-cache'
 
 
+def require_existing_extraction_cache(cache_root):
+    try:
+        mode = Path(cache_root).lstat().st_mode
+    except FileNotFoundError:
+        raise ValueError('Explicit extraction cache root must exist') from None
+    if not stat.S_ISDIR(mode):
+        raise ValueError('Extraction cache root must be a regular directory')
+
+
 def extraction_cache_args(cache_root, staged):
     if cache_root is None:return []
     if is_fresh_archive(staged):
@@ -10143,8 +10152,7 @@ def _build_locked(items, downloads, output, zig, compression_workers=None, expan
     if extraction_cache_root is not None:
         if is_fresh_archive(original_archive_record(staged_input_root)):
             raise ValueError('Fresh original archive input does not support an explicit extraction cache')
-        if not Path(extraction_cache_root).is_dir():raise ValueError('Explicit extraction cache root must exist')
-        extraction_cache_args(extraction_cache_root,{'dump_sha256':'','index_sha256':''})
+        require_existing_extraction_cache(extraction_cache_root)
     for item in items:validate_item(item)
     timeout_args=expansion_deadline_args(expansion_timeout_ms)
     phase_edition,phase_date=phase_identity(items)
@@ -10739,6 +10747,13 @@ def run_main(p, a, resources):
         missing=set(a.wikis)-{key[0] for key in groups}
         if missing:p.error(f'Unknown editions: {", ".join(sorted(missing))}')
         groups={key:group for key,group in groups.items() if key[0] in a.wikis}
+    if a.extraction_cache_root is not None:
+        if len(groups) != 1:
+            p.error('An explicit extraction cache requires exactly one edition')
+        try:
+            require_existing_extraction_cache(a.extraction_cache_root)
+        except (OSError, ValueError) as error:
+            p.error(str(error))
     auxiliary={name:getattr(a,name.replace('-','_')+'_snapshot').resolve()
                for name in AUXILIARY_SNAPSHOT_NAMES
                if getattr(a,name.replace('-','_')+'_snapshot') is not None}
@@ -10787,8 +10802,6 @@ def run_main(p, a, resources):
         p.error('Auxiliary snapshots require exactly one edition')
     if a.staged_input_root is not None and len(groups)!=1:
         p.error('Borrowed staged inputs require exactly one edition')
-    if a.extraction_cache_root is not None and len(groups)!=1:
-        p.error('An explicit extraction cache requires exactly one edition')
     if a.reviewed_nonlexical_review is not None and len(groups)!=1:
         p.error('A reviewed nonlexical source manifest requires exactly one edition')
     try:

@@ -6544,6 +6544,39 @@ class ExplicitExtractionCacheTests(PreparedToolsFixture):
             with self.assertRaisesRegex(ValueError,'regular directory'):
                 b.extraction_cache_args(link,staged)
 
+    def test_invalid_explicit_cache_refuses_before_snapshot_staging(self):
+        with tempfile.TemporaryDirectory() as tmp, contextlib.chdir(tmp):
+            root = Path(tmp)
+            cache = root/'cache'
+            cache.mkdir()
+            regular = root/'file'
+            regular.touch()
+            link = root/'link'
+            link.symlink_to(cache, target_is_directory=True)
+            for selected, editions, error in ((root/'missing', 1, 'must exist'),
+                                              (regular, 1, 'regular directory'),
+                                              (link, 1, 'regular directory'),
+                                              (cache, 2, 'exactly one edition')):
+                files = [dict(wiki=wiki, date='20261001', name='test.xml.bz2', size=1, sha1='a'*40,
+                              url=f'https://dumps.wikimedia.org/{wiki}/20261001/test.xml.bz2')
+                         for wiki in ('testwiktionary', 'otherwiktionary')[:editions]]
+                (root/'manifest.json').write_text(json.dumps({'files':files}))
+                argv = ['build_wiktionaries.py', '--resource-mode=watchdog', '--downloads', str(root),
+                        '--threads', '1', '--jobs', '1', '--snapshot-selection', str(root/'unopened.json'),
+                        '--extraction-cache-root', str(selected)]
+                with self.subTest(selected=selected), patch.object(b,'PROJECT',root), patch.object(sys,'argv',argv), \
+                     patch.object(b,'safe_worker_budget',return_value=1), patch.object(b,'materialize_snapshot_selection') as stage, \
+                     patch.object(b,'resolve_edition_snapshot_options') as resolve, patch.object(b,'build_groups') as build, \
+                     contextlib.redirect_stderr(io.StringIO()) as stderr, self.assertRaises(SystemExit) as stopped:
+                    b.main()
+                self.assertEqual(stopped.exception.code, 2)
+                self.assertIn(error, stderr.getvalue())
+                stage.assert_not_called()
+                resolve.assert_not_called()
+                build.assert_not_called()
+            self.assertFalse((root/'missing').exists())
+            self.assertEqual(list(cache.iterdir()), [])
+
     def test_cli_and_scheduler_forward_cache_without_adopting_output(self):
         with tempfile.TemporaryDirectory() as tmp, contextlib.chdir(tmp):
             root=Path(tmp);cache=root/'old-cache';cache.mkdir();output=root/'fresh-output'
