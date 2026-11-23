@@ -13,6 +13,33 @@ import native_qualification as qualification
 import native_qualification_helpers as helpers
 
 
+class QualificationInputTests(unittest.TestCase):
+    def test_physical_scope_tracks_borrowed_files_and_excludes_unrelated_paths(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / 'src'
+            source.mkdir()
+            borrowed = root / 'dependency'
+            borrowed.write_bytes(b'original')
+            link = source / 'borrowed'
+            link.symlink_to(borrowed)
+            inputs = lambda: qualification.qualification_input_inventory(root, root, ['src'])
+            initial = inputs()
+            (root / 'unrelated').write_bytes(b'changed')
+            self.assertEqual(inputs(), initial)
+            borrowed.write_bytes(b'changed!')
+            self.assertNotEqual(inputs(), initial)
+            previous = inputs()
+            borrowed.chmod(0o400)
+            self.assertNotEqual(inputs(), previous)
+            with self.assertRaises(ValueError):
+                qualification.qualification_input_file(link)
+            link.unlink()
+            link.symlink_to(root.parent)
+            with self.assertRaises(ValueError):
+                inputs()
+
+
 def worker_role_ast():
     """Extract only the maintained worker role, excluding the closure owner."""
     import ast
@@ -142,6 +169,28 @@ class FailureOutputTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     qualification.execute_with_failure_output(never, out, label, [], out)
             self.assertEqual((existing / 'original.stderr').read_bytes(), b'preserve')
+
+
+class FocusedPreparedNamesTests(unittest.TestCase):
+    def test_compiled_discovery_matches_the_selected_group(self):
+        focus = 'presentation_compile.test.exact selected case'
+        anchor = 'root.test.encoder root imports bundle-time presentation modules'
+        for group, expected in [('encoder', [focus, anchor]), ('lua', [focus, 'tests.test_0']),
+                                ('tools', [focus]), ('encoder', [anchor])]:
+            selected = expected if expected == [anchor] else [focus]
+            self.assertEqual(qualification.focused_prepared_names(group, selected), expected)
+        dependency = 'ustring_pattern.test_0'
+        imported = dict(imported_discovery=[dependency], source_occurrences={dependency: 1})
+        self.assertEqual(qualification.focused_prepared_names('lua_wikitext', [focus], **imported),
+                         [focus, dependency])
+        for group, occurrences in [('lua_wikitext', {}), ('lua_wikitext', {dependency: 2}),
+                                   ('tools', {dependency: 1})]:
+            with self.assertRaises(ValueError):
+                qualification.focused_prepared_names(group, [focus], imported_discovery=[dependency],
+                                                    source_occurrences=occurrences)
+        for invalid in ([], [focus, focus]):
+            with self.assertRaises(ValueError):
+                qualification.focused_prepared_names('encoder', invalid)
 
 
 class FocusPlanTests(unittest.TestCase):

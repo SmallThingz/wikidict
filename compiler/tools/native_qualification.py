@@ -730,6 +730,83 @@ def validate_preparation_plan(cfg, group_binding, expect, ordered_groups, focus_
     return prepared_names, prepare_filters, prepare_discovery
 
 
+def _qualification_stat_fields(info):
+    return [getattr(info, 'st_' + key) for key in ('dev','ino','mode','uid','gid','nlink','size','mtime_ns','ctime_ns')]
+
+
+def qualification_input_file(path):
+    """Authenticate a physical input or issued executable by descriptor and identity."""
+    import hashlib, os, stat
+    from pathlib import Path
+    path = Path(path)
+    observed = path.lstat()
+    if not stat.S_ISREG(observed.st_mode):
+        raise ValueError(f'Expected physical regular file: {path}')
+    with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW), 'rb') as stream:
+        if _qualification_stat_fields(os.fstat(stream.fileno())) != _qualification_stat_fields(observed):
+            raise ValueError(f'Input replaced before open: {path}')
+        digest = hashlib.file_digest(stream, 'sha256').hexdigest()
+        if _qualification_stat_fields(os.fstat(stream.fileno())) != _qualification_stat_fields(observed) or _qualification_stat_fields(path.lstat()) != _qualification_stat_fields(observed):
+            raise ValueError(f'Input changed while read: {path}')
+    return [str(path), _qualification_stat_fields(observed), digest]
+
+
+def qualification_input_inventory(overlay, allowed_root, roots, extras=()):
+    """Snapshot the source projection actually used by a scoped native build.
+
+    Call before and after the build and compare the returned dictionaries.
+    Track Git lineage separately, including commits affecting only private copies.
+    """
+    import os
+    from pathlib import Path
+    overlay = Path(overlay)
+    allowed_root = Path(allowed_root).resolve(strict=True)
+    entries = {}
+    def collect(path, active=()):
+        key = str(path.relative_to(overlay))
+        physical = path.resolve(strict=True)
+        if not physical.is_relative_to(allowed_root):
+            raise ValueError(f'Source escapes issued checkout: {path}')
+        # Preserve every projection link's own identity as well as its target.
+        for link in reversed((path, *path.parents)):
+            if link.is_relative_to(overlay) and link.is_symlink():
+                entries['link:' + str(link.relative_to(overlay))] = [_qualification_stat_fields(link.lstat()), os.readlink(link)]
+        before = _qualification_stat_fields(physical.lstat())
+        if not physical.is_dir():
+            entries['file:' + key] = qualification_input_file(physical)
+            return
+        if physical in active:
+            raise ValueError(f'Source projection cycle: {path}')
+        entries['dir:' + key] = [str(physical), before]
+        for child in sorted(path.iterdir()):
+            collect(child, (*active, physical))
+        if _qualification_stat_fields(physical.lstat()) != before:
+            raise ValueError(f'Input changed during enumeration: {path}')
+    for key in roots:
+        collect(overlay / key)
+    for extra in extras:
+        extra = Path(extra)
+        entries['extra:' + str(extra)] = qualification_input_file(extra)
+    return entries
+
+
+def focused_prepared_names(group, selected, *, imported_discovery=(), source_occurrences=None):
+    """Exact artifact inventory for fully qualified, explicitly chosen test names."""
+    if not selected or len(set(selected)) != len(selected):
+        raise ValueError('Focused native tests must be nonempty and unique')
+    discovery = {'encoder': 'root.test.encoder root imports bundle-time presentation modules',
+                 'lua': 'tests.test_0'}.get(group)
+    required = [discovery] if discovery else []
+    # Unnamed tests in reached dependency modules may be emitted independently
+    # of Zig's root-name filters. Require source-bound inventory for such cases.
+    for name in imported_discovery:
+        if (group != 'lua_wikitext' or name != 'ustring_pattern.test_0' or name in required or
+                source_occurrences is None or source_occurrences.get(name) != 1):
+            raise ValueError('Invalid source-bound discovery test: ' + name)
+        required.append(name)
+    return list(selected) + [name for name in required if name not in selected]
+
+
 def focused_encoder_preparation(cfg, expect):
     """Bind one selected encoder artifact to all requested logical partitions."""
     if not cfg.get('filtered_tools_only', False):
@@ -754,7 +831,7 @@ def focused_encoder_preparation(cfg, expect):
     assert selected and len(selected) == len(set(selected))
     discovery = 'root.test.encoder root imports bundle-time presentation modules'
     assert source[discovery] == 1
-    compiled = selected + ([] if discovery in selected else [discovery])
+    compiled = focused_prepared_names('encoder', selected)
     # Build.zig ORs substring filters across the whole encoder root, including
     # partitions not requested here. No extra or ambiguous match is admissible.
     filters = selected + ['encoder root imports bundle-time presentation modules']
