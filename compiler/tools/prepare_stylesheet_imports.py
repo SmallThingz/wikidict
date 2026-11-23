@@ -7,7 +7,11 @@ selected corpus inputs. Unsupported dependency grammar remains unresolved.
 """
 import argparse
 from datetime import datetime, timezone
+import gzip
 import hashlib
+import errno
+import os
+import shutil
 import json
 from pathlib import Path
 import re
@@ -77,21 +81,24 @@ def observed_utc(value):
     return result
 
 
-def checked_producer(value):
+def checked_producer(value, page_inventory=False):
     # Historical recorded producer roles remain immutable. Current verification
     # replays every request/source/projection instead of executing old code or
     # restamping an earned capture as produced by this hardened verifier.
     if (not isinstance(value, dict) or set(value) != {'generator_sha256', 'dependency_sha256'}
             or not hash_string(value.get('generator_sha256'))
             or not isinstance(value.get('dependency_sha256'), dict)
-            or set(value['dependency_sha256']) != {'prepare_file_metadata.py'}
-            or not hash_string(value['dependency_sha256']['prepare_file_metadata.py'])):
+            or set(value['dependency_sha256']) != ({'prepare_file_metadata.py', 'category_tree_snapshot.py'} if page_inventory else {'prepare_file_metadata.py'})
+            or not all(hash_string(item) for item in value['dependency_sha256'].values())):
         raise ValueError('Malformed recorded stylesheet producer roles')
 
 
-def producer():
-    return {'generator_sha256': digest(read(__file__)),
-            'dependency_sha256': {'prepare_file_metadata.py': digest(read(evidence.__file__))}}
+def producer(page_inventory=False):
+    dependencies = {'prepare_file_metadata.py': digest(read(evidence.__file__))}
+    if page_inventory:
+        import category_tree_snapshot
+        dependencies['category_tree_snapshot.py'] = digest(read(category_tree_snapshot.__file__))
+    return {'generator_sha256': digest(read(__file__)), 'dependency_sha256': dependencies}
 
 
 def space_comments(raw, at):
@@ -506,7 +513,7 @@ def derive_core_defaults(output, root_css, root_authority, siteinfo_raw, siteinf
 def verify(root, require_complete=True):
     root = checked_root(root)
     manifest = evidence.decode(read(root / MANIFEST))
-    if manifest.get('schema') == CUSTOM_SCHEMA:
+    if manifest.get('schema') in (CUSTOM_SCHEMA, ABSENT_SCHEMA):
         return verify_custom_properties(root, manifest, require_complete)
     if manifest.get('schema') == CORE_SCHEMA:
         return verify_core_defaults(root, manifest, require_complete)
@@ -582,6 +589,8 @@ def main():
     parser.add_argument('--output', type=Path)
     parser.add_argument('--root-css', type=Path)
     parser.add_argument('--root-authority', type=Path)
+    parser.add_argument('--absent-root-page-table', type=Path)
+    parser.add_argument('--dumpstatus', type=Path)
     parser.add_argument('--core-defaults', action='store_true')
     parser.add_argument('--custom-properties-capture', type=Path)
     parser.add_argument('--siteinfo-raw', type=Path)
@@ -595,6 +604,11 @@ def main():
         if not all((args.output, args.root_css, args.root_authority)):
             parser.error('continuation requires output, root css and authority')
         resume_capture(args.output, args.resume_first_response, args.root_css, args.root_authority)
+    elif args.absent_root_page_table:
+        if not all((args.output, args.custom_properties_capture, args.namespace_registry, args.dumpstatus)) or args.root_css or args.root_authority:
+            parser.error('absent root requires page table, namespace registry, dumpstatus and observed page')
+        derive_custom_properties(args.output, None, None, args.custom_properties_capture,
+                                 (args.absent_root_page_table, args.namespace_registry, args.dumpstatus))
     elif args.custom_properties_capture:
         if not all((args.output, args.root_css, args.root_authority)):
             parser.error('custom properties require root css, authority and retained capture')
@@ -613,9 +627,20 @@ def main():
 
 def snapshot_summary(path, value):
     raw = read(path)
-    return {'schema': value['schema'], 'wiki': value['wiki'], 'date': value['dump_date'],
-            'namespace_registry_sha256': value['namespace_sha256'],
-            'output_sha256': digest(raw), 'output_bytes': len(raw)}
+    record = {'schema': value['schema'], 'wiki': value['wiki'], 'date': value['dump_date'],
+              'namespace_registry_sha256': value['namespace_sha256'],
+              'output_sha256': digest(raw), 'output_bytes': len(raw)}
+    if value['schema'] == ABSENT_SCHEMA:
+        status = read(Path(path).with_name('pagetable-dumpstatus.raw.json'))
+        if digest(status) != value['root_absence']['dumpstatus_sha256']:
+            raise ValueError('Changed page table dumpstatus during snapshot projection')
+        files = evidence.decode(status)['jobs']['pagetable']['files']
+        name = f"{value['wiki']}-{value['dump_date']}-page.sql.gz"
+        item = files[name]
+        record['source_dump_files'] = [{'wiki': value['wiki'], 'date': value['dump_date'], 'name': name,
+                                        'url': 'https://dumps.wikimedia.org' + item['url'],
+                                        'size': item['size'], 'sha1': item['sha1']}]
+    return record
 
 
 def validate_snapshot(path, wiki=None, date=None):
@@ -640,6 +665,8 @@ def capture_artifacts(path, record=None):
             COMPLETE: digest(read(path.with_name(COMPLETE)))}
 
 
+ABSENT_SCOPE = 'current anonymous server-emitted screen styles before client scripts applied to retained source; not historical dump deployment'
+ABSENT_SCHEMA = 'wikidict.stylesheet-imports.custom-properties-absent-root.v1'
 CUSTOM_SCHEMA = 'wikidict.custom-property-styles.v1'
 CUSTOM_TEMPORAL_SCOPE = 'current anonymous screen stylesheet observation applied to retained source; not historical dump deployment'
 
@@ -766,6 +793,11 @@ def custom_snapshot(artifacts):
             or type(auth.get('page_id')) is not int or auth['page_id'] <= 0
             or type(auth.get('revision_id')) is not int or auth['revision_id'] <= 0):
         raise ValueError('Custom-property root authority mismatch')
+    root_fields = {'root_css_sha256': digest(css), 'root_page_id': auth['page_id'], 'root_revision_id': auth['revision_id']}
+    return screen_snapshot(artifacts, auth, root_fields, len(css), {'root-common.css', 'root-authority.json'}, CUSTOM_SCHEMA)
+
+
+def screen_snapshot(artifacts, auth, root_fields, root_css_bytes, expected, schema):
     specification = evidence.decode(artifacts['request-02.json'])
     page_url = specification['url']
     parsed_url = urllib.parse.urlsplit(page_url)
@@ -774,6 +806,8 @@ def custom_snapshot(artifacts):
         raise ValueError('Page observation edition mismatch')
     page = artifacts['request-02.response']
     parsed, skin, dark = custom_page_context(page, page_url)
+    if schema == ABSENT_SCHEMA and 'client-nojs' not in parsed.ancestors[0]['classes'].split():
+        raise ValueError('Observed root must identify the server-emitted pre-script view')
     sources = []
     requested = [(2, page_url, 'text/html')]
     for n, url in enumerate(parsed.links, 3):
@@ -783,7 +817,6 @@ def custom_snapshot(artifacts):
                 or endpoint.fragment or params.get('only') != ['styles'] or params.get('skin') != [skin]):
             raise ValueError('Unadvertised stylesheet origin or selected skin')
         requested.append((n, url, 'text/css'))
-    expected = {'root-common.css', 'root-authority.json'}
     for n, url, mime in requested:
         names = [f'request-{n:02d}{suffix}' for suffix in ('.json', '.receipt.json', '.response')]
         expected.update(names)
@@ -809,59 +842,187 @@ def custom_snapshot(artifacts):
         body = text.encode('utf-8')
         inline_sources.append({'url': page_url + '#inline-style-' + str(n), 'css': text, 'bytes': len(body), 'sha256': digest(body)})
     sources = [(sources if kind == 'link' else inline_sources)[i] for kind, i in parsed.sequence]
-    if sum(source['bytes'] for source in sources) + len(css) > MAX_BYTES:
+    if schema == ABSENT_SCHEMA:
+        for source in sources:
+            # Unresolved imports can contribute new custom properties. Reject
+            # escaped at-rule names too rather than guessing their meaning.
+            if re.search(r'@(?:import\b|[\w-]*\\)', source['css'], re.I):
+                raise ValueError('Unobserved stylesheet import')
+    if sum(source['bytes'] for source in sources) + root_css_bytes > MAX_BYTES:
         raise ValueError('Stylesheet closure exceeds bound')
-    return {'schema': CUSTOM_SCHEMA, 'wiki': auth['wiki'], 'dump_date': auth['dump_date'],
-            'namespace_sha256': auth['namespace_sha256'], 'root_css_sha256': digest(css),
-            'root_page_id': auth['page_id'], 'root_revision_id': auth['revision_id'],
-            'temporal_scope': CUSTOM_TEMPORAL_SCOPE,
+    return {'schema': schema, 'wiki': auth['wiki'], 'dump_date': auth['dump_date'],
+            'namespace_sha256': auth['namespace_sha256'], **root_fields,
+            'temporal_scope': ABSENT_SCOPE if schema == ABSENT_SCHEMA else CUSTOM_TEMPORAL_SCOPE,
             'observed_utc': evidence.decode(artifacts['request-02.receipt.json'])['ended_utc'],
             'page_url': page_url, 'page_title': urllib.parse.parse_qs(parsed_url.query)['title'][0],
             'page_html': page.decode('utf-8'), 'page_sha256': digest(page),
             'generator': parsed.generator, 'skin': skin, 'dark': dark, 'ancestors': parsed.ancestors, 'sources': sources}
 
 
-def derive_custom_properties(output, root_css, root_authority, capture_root):
+def absent_root_snapshot(artifacts, page_table):
+    import category_tree_snapshot
+    from html.parser import HTMLParser
+
+    registry = artifacts['namespace-registry.tsv']
+    lines = registry.decode().splitlines()
+    if (len(lines) < 4 or lines[0] != '# wikidict-namespace-registry-v1' or
+            not re.fullmatch(r'# wiki\t[a-z0-9_-]+wiktionary', lines[1]) or
+            not re.fullmatch(r'# dump-date\t[0-9]{8}', lines[2]) or
+            [line.split('\t')[2] for line in lines if line.startswith('8\t')] != ['MediaWiki']):
+        raise ValueError('Invalid MediaWiki namespace or edition identity')
+    wiki = lines[1].split('\t')[1]
+    date = lines[2].split('\t')[1]
+    filename = f'{wiki}-{date}-page.sql.gz'
+    status = evidence.decode(artifacts['pagetable-dumpstatus.raw.json'])['jobs']['pagetable']
+    if status['status'] != 'done' or set(status['files']) != {filename}:
+        raise ValueError('Expected complete official page table')
+    official = status['files'][filename]
+    before = evidence.stamp(page_table)
+    pin = evidence.fingerprint(page_table)
+    if (official['url'] != f'/{wiki}/{date}/{filename}' or official['sha1'] != pin['sha1'] or
+            official['size'] != pin['size']):
+        raise ValueError('Dated page table identity mismatch')
+
+    class PageConfig(HTMLParser):
+        in_head = False
+        in_script = False
+        configurations = None
+
+        def handle_starttag(self, tag, attrs):
+            if tag == 'head':
+                self.in_head = True
+            if tag == 'script' and self.in_head and not attrs:
+                self.in_script = True
+
+        def handle_endtag(self, tag):
+            if tag == 'head':
+                self.in_head = False
+            if tag == 'script':
+                self.in_script = False
+
+        def handle_data(self, data):
+            if self.in_script:
+                for match in re.finditer(r'(?<![\w$])RLCONF\s*=\s*(?=\{)', data):
+                    value, _ = json.JSONDecoder().raw_decode(data[match.end():])
+                    self.configurations.append(value)
+
+    parser = PageConfig()
+    parser.configurations = []
+    parser.feed(artifacts['request-02.response'].decode())
+    parser.close()
+    if len(parser.configurations) != 1:
+        raise ValueError('Missing or ambiguous observed page identity')
+    config = parser.configurations[0]
+    page_id, revision_id = config['wgArticleId'], config['wgRevisionId']
+    url = evidence.decode(artifacts['request-02.json'])['url']
+    query = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query, strict_parsing=True)
+    if (urllib.parse.urlsplit(url).path != '/w/index.php' or set(query) != {'useskin', 'oldid', 'title'} or
+            type(page_id) != int or type(revision_id) != int or min(page_id, revision_id) < 1 or
+            query.get('oldid') != [str(revision_id)] or query.get('title') != [config['wgPageName'].replace('_', ' ')] or
+            config['wgNamespaceNumber'] != 0 or config['wgAction'] != 'view' or config['wgIsRedirect'] is not False):
+        raise ValueError('Unbound revision, title or view')
+    article = (page_id, 0, config['wgPageName'].replace(' ', '_').encode(), revision_id)
+    # The official size/hash binds all bytes. Require the mysqldump completion
+    # marker as well, so a syntactically complete INSERT prefix cannot pass.
+    with gzip.open(page_table, 'rb') as sql:
+        last_line = b''
+        saw_database = False
+        saw_schema = False
+        while line := sql.readline(16 * 1024 * 1024 + 1):
+            if len(line) > 16 * 1024 * 1024:
+                raise ValueError('Oversized page table line')
+            if line.startswith(b'-- Host:'):
+                saw_database = line.rstrip().endswith(b' Database: ' + wiki.encode())
+            if line.startswith(b'CREATE TABLE '):
+                if saw_schema or line.rstrip() != b'CREATE TABLE `page` (':
+                    raise ValueError('Unexpected page table schema')
+                saw_schema = True
+            if line.startswith(b'INSERT INTO ') and not line.startswith(b'INSERT INTO `page` VALUES'):
+                raise ValueError('Unexpected page table INSERT')
+            if line.strip():
+                last_line = line.strip()
+        if not saw_database or not saw_schema or not re.fullmatch(rb'-- Dump completed on [0-9-]+ [0-9:]+', last_line):
+            raise ValueError('Incomplete or mismatched page table dump')
+    matches = 0
+    for row in category_tree_snapshot.rows(page_table, ['page_id', 'page_namespace', 'page_title', 'page_latest']):
+        if row[1:3] == (8, b'Common.css'):
+            raise ValueError('MediaWiki:Common.css exists in the dump')
+        if row[0] == page_id or row[1:3] == article[1:3]:
+            if row != article:
+                raise ValueError('Dated article identity mismatch')
+            matches += 1
+    if matches != 1 or evidence.stamp(page_table) != before:
+        raise ValueError('Missing article or changing page table')
+    absence = {'namespace': 8, 'dbkey': 'Common.css', 'page_table_sha256': pin['sha256'],
+               'page_table_bytes': pin['size'], 'dumpstatus_sha256': digest(artifacts['pagetable-dumpstatus.raw.json']),
+               'namespace_registry_sha256': digest(registry)}
+    return screen_snapshot(artifacts, {'wiki': wiki, 'dump_date': date, 'namespace_sha256': digest(registry)},
+                           {'root_absence': absence, 'article_page_id': page_id, 'article_revision_id': revision_id},
+                           0, {'namespace-registry.tsv', 'pagetable-dumpstatus.raw.json'}, ABSENT_SCHEMA)
+
+
+def derive_custom_properties(output, root_css, root_authority, capture_root, absence_inputs=None):
     # Replay only already retained ordinary collector responses. No networking,
     # retries, current preferences, or modifications of the original capture.
     capture_root = checked_root(capture_root)
     page_url = evidence.decode(read(capture_root / 'request-02.json'))['url']
     parsed, _, _ = custom_page_context(read(capture_root / 'request-02.response', MAX_BYTES), page_url)
-    artifacts = {'root-common.css': read(root_css, MAX_BYTES), 'root-authority.json': read(root_authority)}
+    if absence_inputs is None:
+        artifacts = {'root-common.css': read(root_css, MAX_BYTES), 'root-authority.json': read(root_authority)}
+    else:
+        page_table, namespace, dumpstatus = absence_inputs
+        artifacts = {'namespace-registry.tsv': read(namespace), 'pagetable-dumpstatus.raw.json': read(dumpstatus)}
     for n in range(2, len(parsed.links) + 3):
         for suffix in ('.json', '.receipt.json', '.response'):
             name = f'request-{n:02d}{suffix}'
             artifacts[name] = read(capture_root / name, MAX_BYTES)
-    value = custom_snapshot(artifacts)
+    value = custom_snapshot(artifacts) if absence_inputs is None else absent_root_snapshot(artifacts, page_table)
     root = Path(output)
     root.mkdir(parents=True, exist_ok=False)
     for name, raw in artifacts.items():
         evidence.put(root / name, raw)
     evidence.document(root / SNAPSHOT, value)
     artifacts[SNAPSHOT] = read(root / SNAPSHOT)
-    evidence.document(root / MANIFEST, {'schema': CUSTOM_SCHEMA, 'temporal_scope': CUSTOM_TEMPORAL_SCOPE,
-                      'producer': producer(), 'artifacts': {name: digest(raw) for name, raw in artifacts.items()}})
+    hashes = {name: digest(raw) for name, raw in artifacts.items()}
+    if absence_inputs is not None:
+        try:
+            os.link(page_table, root / 'page.sql.gz', follow_symlinks=False)
+        except OSError as error:
+            if error.errno != errno.EXDEV:
+                raise
+            shutil.copyfile(page_table, root / 'page.sql.gz')
+        hashes['page.sql.gz'] = value['root_absence']['page_table_sha256']
+    evidence.document(root / MANIFEST, {'schema': value['schema'], 'temporal_scope': value['temporal_scope'],
+                      'producer': producer(absence_inputs is not None), 'artifacts': hashes})
     verify(root, require_complete=False)
-    evidence.document(root / COMPLETE, {'schema': CUSTOM_SCHEMA, 'manifest_sha256': digest(read(root / MANIFEST))})
+    evidence.document(root / COMPLETE, {'schema': value['schema'], 'manifest_sha256': digest(read(root / MANIFEST))})
     return verify(root)
 
 
 def verify_custom_properties(root, manifest, require_complete=True):
-    if manifest.get('temporal_scope') != CUSTOM_TEMPORAL_SCOPE:
+    scope = ABSENT_SCOPE if manifest['schema'] == ABSENT_SCHEMA else CUSTOM_TEMPORAL_SCOPE
+    if manifest.get('temporal_scope') != scope:
         raise ValueError('Changed custom-property temporal scope')
-    checked_producer(manifest.get('producer'))
+    checked_producer(manifest.get('producer'), manifest['schema'] == ABSENT_SCHEMA)
     artifacts = {}
     for name, wanted in manifest.get('artifacts', {}).items():
         if Path(name).name != name or not hash_string(wanted):
             raise ValueError('Invalid custom-property artifact')
+        if name == 'page.sql.gz' and manifest['schema'] == ABSENT_SCHEMA:
+            continue
         artifacts[name] = read(root / name)
         if digest(artifacts[name]) != wanted:
             raise ValueError('Changed custom-property evidence')
     actual = evidence.decode(artifacts.pop(SNAPSHOT))
-    expected = custom_snapshot(artifacts)
+    if manifest['schema'] == ABSENT_SCHEMA:
+        expected = absent_root_snapshot(artifacts, root / 'page.sql.gz')
+        if manifest['artifacts'].get('page.sql.gz') != expected['root_absence']['page_table_sha256']:
+            raise ValueError('Page table digest missing or changed')
+    else:
+        expected = custom_snapshot(artifacts)
     if actual != expected:
         raise ValueError('Changed custom-property snapshot derivation')
-    if require_complete and evidence.decode(read(root / COMPLETE)) != {'schema': CUSTOM_SCHEMA, 'manifest_sha256': digest(read(root / MANIFEST))}:
+    if require_complete and evidence.decode(read(root / COMPLETE)) != {'schema': manifest['schema'], 'manifest_sha256': digest(read(root / MANIFEST))}:
         raise ValueError('Incomplete custom-property generation')
     return expected
 

@@ -2584,6 +2584,9 @@ def _validate_captured_snapshot_context(name,path,capture,selected,capture_root,
             for source in bound[0]['source_dump_files']:selected_source(source,selected)
         return
     if name=='stylesheet-imports':
+        if bound[0]['schema'] == 'wikidict.stylesheet-imports.custom-properties-absent-root.v1':
+            source, = bound[0]['source_dump_files']
+            selected_source(source, selected)
         if capture_root is not None and bound[0]['namespace_registry_sha256']!=sha256_file(capture_root/'namespace-registry.tsv'):
             raise ValueError('Stylesheet import namespace differs from selected capture')
         return

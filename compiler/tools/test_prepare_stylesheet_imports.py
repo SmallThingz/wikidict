@@ -233,6 +233,75 @@ class CustomPropertyInputTests(unittest.TestCase):
                 'response_bytes': len(body), 'response_sha256': collector.digest(body), 'headers': {'content-type': mime}}).encode()
         return result
 
+    def test_absent_root_requires_complete_dated_page_inventory_and_observed_revision(self):
+        import gzip
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        sql = root / 'page.sql.gz'
+        header = (b'-- Host: localhost    Database: eswiktionary\nCREATE TABLE `page` (\n'
+                  b'  `page_id` int,\n  `page_namespace` int,\n  `page_title` varbinary(255),\n'
+                  b'  `page_latest` int\n) ENGINE=InnoDB;\nINSERT INTO `page` VALUES\n')
+        end = b'\n-- Dump completed on 2026-10-01 12:00:00\n'
+        artifact = self.artifacts()
+        del artifact['root-common.css'], artifact['root-authority.json']
+        artifact['namespace-registry.tsv'] = (b'# wikidict-namespace-registry-v1\n# wiki\teswiktionary\n'
+                                               b'# dump-date\t20261001\n8\tMediaWiki\tMediaWiki\n')
+        url = self.url + '&oldid=42'
+        body = artifact['request-02.response'].replace(b'skin-theme-clientpref-day', b'client-nojs skin-theme-clientpref-day').replace(b'<head>', b'<head><script>RLCONF={"wgArticleId":7,"wgRevisionId":42,"wgPageName":"control","wgNamespaceNumber":0,"wgIsRedirect":false,"wgAction":"view"};</script>')
+        artifact['request-02.response'] = body
+        spec = json.loads(artifact['request-02.json'])
+        spec['url'] = url
+        artifact['request-02.json'] = json.dumps(spec).encode()
+        receipt = json.loads(artifact['request-02.receipt.json'])
+        receipt.update(final_url=url, response_bytes=len(body), response_sha256=collector.digest(body))
+        artifact['request-02.receipt.json'] = json.dumps(receipt).encode()
+
+        def bind(raw_sql):
+            packed = gzip.compress(raw_sql, mtime=0)
+            sql.write_bytes(packed)
+            name = 'eswiktionary-20261001-page.sql.gz'
+            job = {'status': 'done', 'files': {name: {'url': '/eswiktionary/20261001/' + name,
+                   'size': len(packed), 'sha1': hashlib.sha1(packed).hexdigest()}}}
+            artifact['pagetable-dumpstatus.raw.json'] = json.dumps({'jobs': {'pagetable': job}}).encode()
+
+        article = b"(7,0,'control',42)"
+        bind(header + article + b';' + end)
+        value = collector.absent_root_snapshot(artifact, sql)
+        self.assertEqual((7, 42), (value['article_page_id'], value['article_revision_id']))
+        self.assertEqual('Common.css', value['root_absence']['dbkey'])
+        self.assertNotIn('root_page_id', value)
+        snapshot = root / collector.SNAPSHOT
+        snapshot.write_text(json.dumps(value))
+        (root / 'pagetable-dumpstatus.raw.json').write_bytes(artifact['pagetable-dumpstatus.raw.json'])
+        record = collector.snapshot_summary(snapshot, value)
+        import build_wiktionaries as builder
+        selected = record['source_dump_files']
+        self.assertEqual(hashlib.sha1(sql.read_bytes()).hexdigest(), selected[0]['sha1'])
+        self.assertTrue(selected[0]['url'].startswith('https://dumps.wikimedia.org/eswiktionary/'))
+        builder._validate_captured_snapshot_context('stylesheet-imports', snapshot, {}, selected, None, (record,))
+        for mismatch in ([], [dict(selected[0], sha1='0' * 40)]):
+            with self.assertRaisesRegex(ValueError, 'selected dump inventory'):
+                builder._validate_captured_snapshot_context('stylesheet-imports', snapshot, {}, mismatch, None, (record,))
+        for raw_sql in (header + article + b';', header + article + b",(8,8,'Co\\mmon.css',77);" + end,
+                        header + article.replace(b'42', b'43') + b';' + end):
+            bind(raw_sql)
+            with self.assertRaises(ValueError):
+                collector.absent_root_snapshot(artifact, sql)
+        bind(header + article + b';' + end)
+        saved = sql.read_bytes()
+        sql.write_bytes(saved[:-1])
+        with self.assertRaises(ValueError):
+            collector.absent_root_snapshot(artifact, sql)
+        sql.write_bytes(saved)
+        for changed in ('request-02.receipt.json', 'request-03.response', 'unexpected.css'):
+            with self.subTest(changed=changed), self.assertRaises((KeyError, ValueError)):
+                collector.absent_root_snapshot({**artifact, changed: b'{}'}, sql)
+        imported = b'@import "external.css";'
+        css_receipt = json.loads(artifact['request-03.receipt.json'])
+        css_receipt.update(response_bytes=len(imported), response_sha256=collector.digest(imported))
+        with self.assertRaisesRegex(ValueError, 'import'):
+            collector.absent_root_snapshot({**artifact, 'request-03.response': imported,
+                                           'request-03.receipt.json': json.dumps(css_receipt).encode()}, sql)
+
     def test_custom_context_keeps_order_ancestor_override_and_distinct_epoch(self):
         value = collector.custom_snapshot(self.artifacts(root_style='--ink:#abcdef'))
         self.assertEqual([':root{--ink:#111111}', ':root{--ink:#222222}', '.x{--ink:#333333}'], [item['css'] for item in value['sources']])
