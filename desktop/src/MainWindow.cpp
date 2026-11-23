@@ -424,17 +424,40 @@ public:
         setFocusPolicy(Qt::ClickFocus);
         setOpenLinks(false);
         setOpenExternalLinks(false);
+        QSizePolicy policy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+        policy.setHeightForWidth(true);
+        setSizePolicy(policy);
         document()->setDocumentMargin(0);
         setWordWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
         setStyleSheet(QStringLiteral("background: transparent; border: 0; padding: 0;"));
         connect(document(), &QTextDocument::contentsChanged, this, [this] {
             setAccessibleName(QString(toPlainText()).remove(QChar::ObjectReplacementCharacter));
-            fitHeight();
+            scheduleHeightUpdate();
         });
         connect(document()->documentLayout(), &QAbstractTextDocumentLayout::documentSizeChanged,
-                this, [this] { fitHeight(); });
+                this, [this] { if (!measuring_) scheduleHeightUpdate(); });
     }
+    int heightForWidth(int width) const override {
+        // Measure the original rich title at the width offered by the parent grid.
+        // Restore its live layout when the grid is only considering this width.
+        auto *doc = document();
+        const qreal previous = doc->textWidth();
+        const qreal proposed = qMax(1, width - 2 * frameWidth());
+        const bool changeWidth = previous != proposed;
+        measuring_ = true;
+        if (changeWidth) doc->setTextWidth(proposed);
+        const int height = qMax(1, qCeil(doc->size().height()) + 2 * frameWidth());
+        if (changeWidth) doc->setTextWidth(previous);
+        measuring_ = false;
+        return height;
+    }
+    QSize sizeHint() const override { return QSize(0, heightForWidth(width())); }
+    QSize minimumSizeHint() const override { return QSize(0, 1); }
 protected:
+    void resizeEvent(QResizeEvent *event) override {
+        QTextBrowser::resizeEvent(event);
+        if (event->size().width() != event->oldSize().width()) scheduleHeightUpdate();
+    }
     void paintEvent(QPaintEvent *event) override {
         const QPointer<HeadingBrowser> guard(this);
         QTextBrowser::paintEvent(event);
@@ -458,19 +481,34 @@ protected:
         if (showCompiledAdvisory(this, event)) return true;
         return QTextBrowser::viewportEvent(event);
     }
-    void resizeEvent(QResizeEvent *event) override {
-        QTextBrowser::resizeEvent(event);
-        fitHeight();
-    }
 private:
-    bool fitting_ = false;
-    void fitHeight() {
-        if (fitting_) return;
-        fitting_ = true;
-        document()->setTextWidth(qMax(1, viewport()->width()));
-        setFixedHeight(qMax(1, qCeil(document()->size().height())));
-        fitting_ = false;
+    void scheduleHeightUpdate() {
+        if (heightUpdatePending_) return;
+        heightUpdatePending_ = true;
+        QTimer::singleShot(0, this, [this] {
+            heightUpdatePending_ = false;
+            // Rich-text import and splitter geometry may settle in different events.
+            // Publish the minimum for the committed viewport, then let the grid
+            // remeasure the subtitle and controls together.
+            setMinimumHeight(heightForWidth(width()));
+            updateGeometry();
+            // The title and subtitle share a layout inside a widget nested in
+            // the actions grid. Commit that layout's new minimum to the grid
+            // before it paints the shorter heading's old subtitle position.
+            if (auto *container = parentWidget(); container && container->layout()) {
+                auto *heading = container->layout();
+                heading->invalidate();
+                heading->activate();
+                container->updateGeometry();
+                if (auto *content = container->parentWidget(); content && content->layout()) {
+                    content->layout()->invalidate();
+                    content->layout()->activate();
+                }
+            }
+        });
     }
+    mutable bool measuring_ = false;
+    bool heightUpdatePending_ = false;
 };
 
 class MissingFocusStyle final : public QProxyStyle {
@@ -3847,6 +3885,7 @@ void MainWindow::setupUi() {
     headerLayout_ = header;
     readerHeading_ = new QWidget(content);
     auto *heading = new QVBoxLayout(readerHeading_);
+    heading->setSizeConstraint(QLayout::SetMinimumSize);
     heading->setContentsMargins(0, 0, 0, 0);
     title_ = new HeadingBrowser(content);
     title_->setHtml(QStringLiteral("Find the word."));
@@ -3855,7 +3894,6 @@ void MainWindow::setupUi() {
     titleFont.setPointSize(30);
     titleFont.setBold(true);
     title_->setFont(titleFont);
-    title_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     meta_ = new QLabel(QStringLiteral("Local Wiktionary"), content);
     meta_->setTextFormat(Qt::PlainText);
     meta_->setWordWrap(true);
