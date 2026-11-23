@@ -209,3 +209,37 @@ export function validateRubySpan(span){
   if(span.kind!=='text'||span.text!==''||span.target!==''||(span.trail??'')!==''||span.target_fragment!=null||span.image!=null||span.inline_padding_group!=null||span.inline_action_group!=null||span.inline_box_group!=null||span.clipped_absolute!=null||span.audio_control!=null)rubyFailure();
   if(span.inline_style!=null||span.font_features!=null||span.font_family!=null||span.link_paint!=null)throw Error('Unsupported ruby root typography');
 }
+
+// An explicit owner identifies one authored action; equal URLs never identify it.
+export function validateActionGroupSpan(span){
+  const invalid=()=>{throw Error('Invalid compiled inline action group');};
+  const string=value=>{
+    if(typeof value!=='string'||/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(value)||new TextEncoder().encode(value).length>32*1024*1024)invalid();
+  };
+  const text=value=>{
+    if(!value||typeof value!=='object')invalid();
+    for(const key of ['text','target','trail','language','classes','direction','explanation'])string(value[key]??'');
+    if(value.role!=null&&!['normal','label','pronunciation','headword','example','quotation','citation','reference'].includes(value.role))invalid();
+    for(const key of ['bold','italic','code','small','superscript','subscript','strike','underline'])if(value[key]!=null&&typeof value[key]!=='boolean')invalid();
+    if(/[\t\n\r\f]/u.test((value.text??'')+(value.trail??'')))invalid();
+    if(!['','ltr','rtl','auto'].includes(value.direction??''))invalid();
+    for(const key of ['foreground','background'])if(value[key]!=null&&!/^#[0-9a-f]{6}$/.test(value[key]))invalid();
+    if((value.classes??'').split(/[ \t\r\n\f]+/).some(token=>token==='wikidict-media'||token.startsWith('wikidict-media-file-')))invalid();
+    if(value.tooltip!=null)string(value.tooltip);
+    const basis=value.font_scale_basis??'context',scale=value.font_scale;
+    if(!['context','normal_body','css_px'].includes(basis)||(scale==null?basis!=='context':typeof scale!=='number'||!Number.isFinite(scale)||scale<0||scale>3.4028234663852886e38))invalid();
+    for(const key of ['image','audio_control','inline_box_group','clipped_absolute'])if(value[key]!=null)invalid();
+    if(value.font_features!=null||value.font_family!=null||value.inline_style!=null||value.link_paint!=null)throw Error('Unsupported inline action typography');
+  };
+  text(span);
+  if(!['link','external_link'].includes(span.kind)||!span.target||span.text!==''||(span.trail??'')!==''||span.ruby!=null||span.inline_padding_group!=null||span.self_link)invalid();
+  if(span.target_fragment!=null){if(span.kind!=='link')invalid();string(span.target_fragment);}
+  if((span.font_scale_basis??'context')!=='context'||span.font_scale===0||span.code||span.small||span.superscript||span.subscript)throw Error('Unsupported inline action declaring font');
+  const group=span.inline_action_group;
+  if(!group||typeof group!=='object'||Array.isArray(group)||Object.keys(group).length!==1||!Array.isArray(group.spans)||!group.spans.length||group.spans.length>1048576)invalid();
+  for(const child of group.spans){
+    text(child);
+    if(child.kind!=='text'||child.target!==''||child.target_fragment!=null||child.inline_action_group!=null)invalid();
+    if(child.ruby!=null||child.inline_padding_group!=null)throw Error('Unsupported rich inline action child');
+  }
+}

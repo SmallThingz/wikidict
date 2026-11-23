@@ -1,10 +1,17 @@
 const mediaClasses = new Set(['wikidict-media', 'audiotable']);
 
+export function inlineText(values,lineBreak=' '){
+  let budget=1048576;
+  const text=(spans,depth)=>{
+    if(depth>16||!Array.isArray(spans)||(budget-=spans.length)<0)throw Error('Inline text exceeds reader limit');
+    return spans.map(span=>(span.kind==='line_break'?lineBreak:span.inline_action_group?text(span.inline_action_group.spans,depth+1):span.text||'')+(span.trail||'')).join('');
+  };
+  return text(values,0);
+}
+
 function previewText(block) {
-  return (block.spans || [])
-    .filter(span => !(span.classes || '').split(/\s+/).some(token => mediaClasses.has(token)))
-    .map(span => (span.kind === 'line_break' ? ' ' : span.text || '') + (span.trail || ''))
-    .join('').trim();
+  return inlineText((block.spans || [])
+    .filter(span => !(span.classes || '').split(/\s+/).some(token => mediaClasses.has(token)))).trim();
 }
 
 export function previewBlocks(values) {

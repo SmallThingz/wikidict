@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "build": "node build.mjs",
-    "test": "node --test blob.test.mjs alias.test.mjs validate.test.mjs preview.test.mjs reference-blocks.test.mjs table-styles.test.mjs inline-images.test.mjs typed-content.test.mjs ruby.test.mjs",
+    "test": "node --test blob.test.mjs alias.test.mjs validate.test.mjs preview.test.mjs reference-blocks.test.mjs table-styles.test.mjs inline-images.test.mjs typed-content.test.mjs ruby.test.mjs action-groups.test.mjs",
     "test:browser": "node browser.test.mjs && node reference-blocks.browser.test.mjs && node table-styles.browser.test.mjs && node inline-images.browser.test.mjs",
     "test:container-fonts": "node container-fonts.browser.test.mjs",
     "test:swatch": "node color-swatch.browser.test.mjs",

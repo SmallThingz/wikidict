@@ -5,8 +5,8 @@ const contrastInk=background=>{
   const luminance=.2126*rgb[0]+.7152*rgb[1]+.0722*rgb[2];
   return (luminance+.05)/.05>=1.05/(luminance+.05)?'#000000':'#ffffff';
 };
-import {safeURL,linkTargetParts,bookSourcesURL,validateContainerBlock,validateCellMetrics,validateRuby,validateRubyOwner,validateRubySpan} from './validate.js';
-import {previewBlocks} from './preview.js';
+import {safeURL,linkTargetParts,bookSourcesURL,validateContainerBlock,validateCellMetrics,validateRuby,validateRubyOwner,validateRubySpan,validateActionGroupSpan} from './validate.js';
+import {previewBlocks,inlineText} from './preview.js';
 const node = (tag, text, cls) => { const el = document.createElement(tag); if (text != null) el.textContent = text; if (cls) el.className = cls; return el; };
 let explanationSequence = 0;
 const poemTokens = span => (span.classes || '').split(/[ \t\r\n\v\f]+/).filter(Boolean);
@@ -146,14 +146,14 @@ export function spans(values = [], onLink = () => {}, preserve = false, explanat
   const fragment = document.createDocumentFragment();
   const compact=[];
   const scaled=span=>semanticFontSize(span,rubyFontContext)!==null;
-  values.forEach(value=>{semanticFontSize(value,rubyFontContext);if(value.ruby!=null){validateRubySpan(value);validateRuby(value.ruby);}if(value.image&&(value.text!==''||(value.trail??'')!==''||!['text','link','external_link'].includes(value.kind)||(value.kind==='text'?!!value.target:!value.target)))throw Error('Invalid inline image action');});
+  values.forEach(value=>{if(value.inline_action_group!=null)validateActionGroupSpan(value);semanticFontSize(value,rubyFontContext);if(value.ruby!=null){validateRubySpan(value);validateRuby(value.ruby);}if(value.image&&(value.text!==''||(value.trail??'')!==''||!['text','link','external_link'].includes(value.kind)||(value.kind==='text'?!!value.target:!value.target)))throw Error('Invalid inline image action');});
   const blank=value=>!(value||'').includes('\u00a0')&&!(value||'').trim();
   for(const span of values){
     if(span.kind==='line_break' && !span.trail && (!compact.length||compact.at(-1).kind==='line_break'))continue;
     if(!span.ruby&&!span.image&&!scaled(span)&&!canonicalRGB(span.background)&&span.kind==='text'&&blank(span.text)&&blank(span.trail)&&(!compact.length||compact.at(-1).kind==='line_break'))continue;
     compact.push(span);
   }
-  while(compact.length&&!compact.at(-1).ruby&&!compact.at(-1).image&&!scaled(compact.at(-1))&&!canonicalRGB(compact.at(-1).background)&&((compact.at(-1).kind==='line_break'&&blank(compact.at(-1).trail))||(blank(compact.at(-1).text)&&blank(compact.at(-1).trail))))compact.pop();
+  while(compact.length&&!compact.at(-1).ruby&&!compact.at(-1).image&&!compact.at(-1).inline_action_group&&!scaled(compact.at(-1))&&!canonicalRGB(compact.at(-1).background)&&((compact.at(-1).kind==='line_break'&&blank(compact.at(-1).trail))||(blank(compact.at(-1).text)&&blank(compact.at(-1).trail))))compact.pop();
   const visible = preserve||explanations?.preserveFlowSpacing?values:compact, described = new Map();
   for (let i=0;i<visible.length;) {
     const explanation=visible[i].explanation;
@@ -161,7 +161,7 @@ export function spans(values = [], onLink = () => {}, preserve = false, explanat
     let end=i,label='';
     if(visible[i].kind==='line_break'){label=visible[i].trail||'';end++;}
     else while(end<visible.length && visible[end].kind!=='line_break' && visible[end].explanation===explanation) {
-      label+=(visible[end].text||'')+(visible[end].trail||'');end++;
+      label+=inlineText([visible[end]]);end++;
     }
     if (label.trim() && explanations) {
       const id=explanations.add(label.trim(),explanation);
@@ -192,6 +192,7 @@ export function spans(values = [], onLink = () => {}, preserve = false, explanat
     }
     let el = node('span', span.text || '');
     if(span.ruby!=null)el.append(rubySpans(span.ruby,onLink,explanations,withinSummary,cellBackground,span));
+    if(span.inline_action_group!=null)el.append(spans(span.inline_action_group.spans,onLink,true,explanations,withinSummary,cellBackground,span));
     if(rubyFontContext){el.style.fontWeight=span.bold?'bold':'normal';el.style.fontStyle=span.italic?'italic':'normal';}
     if(span.image){const image=inlineImageElement(span.image,explanations?.inlineImage,{sizing:explanations?.figureSizing,figureImage:explanations?.figureImage});el.append(span.image.map?mappedImage(image,span.image,onLink,explanations):image);}
     if(inkFor(span))el.style.color=inkFor(span);
@@ -224,12 +225,14 @@ export function spans(values = [], onLink = () => {}, preserve = false, explanat
         link.href = '#' + (span.target ? encodeURIComponent(span.target) + '#' : '') + encodeURIComponent(span.target_fragment);
       }
       // Some table and thumbnail links contain only a space. Keep its layout and name the action.
-      if (!span.image && !span.ruby && !span.text?.trim() && !span.tooltip?.trim()) {
+      if (!span.image && !span.ruby && !inlineText([span]).trim() && !span.tooltip?.trim()) {
         link.setAttribute('aria-label', span.explanation?.trim() || (span.target_fragment ? `${span.target}#${span.target_fragment}` : span.target));
       }
       link.addEventListener('click', event => { event.preventDefault(); if(withinSummary)event.stopPropagation(); if(span.target_fragment==null)onLink(span.target);else onLink(span.target,span.target_fragment); }); link.append(el); el = link;
     } else if (span.kind === 'external_link' && safeURL(span.target) && !span.image?.map) {
-      const link = node('a'); link.href = safeURL(span.target); link.rel = 'noopener noreferrer'; link.target = '_blank'; if(withinSummary)link.addEventListener('click',event=>event.stopPropagation()); link.append(el); el = link;
+      const link = node('a'); link.href = safeURL(span.target); link.rel = 'noopener noreferrer'; link.target = '_blank';
+      if(span.inline_action_group&&!inlineText([span]).trim()&&!span.tooltip?.trim())link.setAttribute('aria-label',span.explanation?.trim()||safeURL(span.target));
+      if(withinSummary)link.addEventListener('click',event=>event.stopPropagation()); link.append(el); el = link;
     }
     if(described.has(i) && el.tagName==='A')el.setAttribute('aria-describedby',described.get(i));
     const trail=trailNode(span,i);
@@ -279,7 +282,7 @@ function legacyDestinations(entry) {
     add(section,section.title);
     const companion = sectionHeadingCompanion(section);
     for (const block of section.blocks.slice(companion?1:0)) if (block.kind === 'heading') {
-      const label = (block.spans||[]).map(span => span.kind === 'line_break'?'\n':(span.text||'')+(span.trail||'')).join('').trim();
+      const label = inlineText(block.spans||[],'\n').trim();
       add(block,label);
     }
   }
@@ -317,6 +320,7 @@ function validateRichEntry(entry){
     if(!value||typeof value!=='object')richError();
     if(value.tooltip!=null)string(value.tooltip);
     if(value.ruby!=null){validateRubySpan(value);validateRuby(value.ruby);}
+    if(value.inline_action_group!=null){validateActionGroupSpan(value);charge(value.inline_action_group.spans.length);}
     if(value.target_fragment!=null&&value.kind!=='link')richError();
     if(!value.image)return;
     const image=richObject(value.image,['file','width_px','height_px','alt','tooltip','border','map','dark_mode_filter'],['file']);
@@ -609,7 +613,7 @@ function tableView(value,onLink,explanations,depth=1,inheritedBackground=null){
   return table;
 }
 function visibleBlock(block){
-  return block.kind!=='blank'&&(block.container||block.figure||block.flow!=null||block.style||block.table||block.kind==='rule'||block.spans?.some(s=>s.image||s.text?.trim()||s.trail?.trim())||block.spans?.some(isPoem)||(block.kind==='heading'&&(block.anchor||block.anchor_fallback)));
+  return block.kind!=='blank'&&(block.container||block.figure||block.flow!=null||block.style||block.table||block.kind==='rule'||block.spans?.some(s=>s.image||s.inline_action_group||s.text?.trim()||s.trail?.trim())||block.spans?.some(isPoem)||(block.kind==='heading'&&(block.anchor||block.anchor_fallback)));
 }
 function appendBlocks(parent,values,render){
   let lists=[];
@@ -774,11 +778,11 @@ function sectionHeadingCompanion(section){
     if(span.kind==='line_break'&&span.trail)return null;
     visual=visual||span.image!=null;
     explained=explained||!!span.explanation;
-    navigable=navigable||(['link','external_link'].includes(span.kind)&&!!(span.target||(span.kind==='link'&&span.target_fragment))&&!!(span.text||span.trail));
+    navigable=navigable||(['link','external_link'].includes(span.kind)&&!!(span.target||(span.kind==='link'&&span.target_fragment))&&!!inlineText([span]));
     const styled=['bold','italic','code','small','superscript','subscript','strike','underline'].some(flag=>span[flag])||
       (span.font_scale_basis==='normal_body'||(span.font_scale!=null&&span.font_scale!==1))||span.foreground!=null||span.background!=null||!!span.classes||!!span.language||!!span.direction||(span.role??'normal')!=='normal';
     styledText=styledText||(span.kind==='text'&&!!span.text&&!span.target&&styled);
-    label+=span.kind==='line_break'?'\n':(span.text||'')+(span.trail||'');
+    label+=inlineText([span],'\n');
   }
   const trimmed=label.replace(/^[ \t\r\n\u00a0]+|[ \t\r\n\u00a0]+$/g,'');
   return (navigable||explained||styledText||visual||first.depth>0)&&trimmed===section.title?first:null;
