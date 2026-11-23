@@ -145,7 +145,7 @@ class SectionLinkDeviceTest {
         }
         try {
             show(false)
-            touchLink(text.text)
+            touchLink(text.text, withinParagraph = true)
             compose.onNodeWithContentDescription("Component image", useUnmergedTree = true).performClick()
             compose.runOnIdle { assertEquals(listOf(textAction, imageAction), clicks); clicks.clear() }
             show(true)
@@ -185,8 +185,16 @@ class SectionLinkDeviceTest {
                 }
             } }
             compose.onNodeWithContentDescription("Changing component", useUnmergedTree = true).performClick()
-            compose.runOnIdle { fragment.value = "Caption#two" }
-            compose.onNodeWithContentDescription("Changing component", useUnmergedTree = true).performClick()
+            compose.runOnIdle {
+                assertEquals(listOf("https://eu.wiktionary.org/wiki/File%3AControlled.svg%23literal"), urls)
+                fragment.value = "Caption#two"
+            }
+            // These are separate activations of a link in selectable text.
+            compose.onNodeWithContentDescription("Changing component", useUnmergedTree = true)
+                .assertHasClickAction().performTouchInput {
+                    advanceEventTime(android.view.ViewConfiguration.getDoubleTapTimeout().toLong() + 1L)
+                    click(center)
+                }
             compose.runOnIdle { assertEquals(listOf(
                 "https://eu.wiktionary.org/wiki/File%3AControlled.svg%23literal",
                 "https://eu.wiktionary.org/wiki/File%3AControlled.svg%23literal#Caption%23two"), urls) }
@@ -207,11 +215,17 @@ class SectionLinkDeviceTest {
         }
     }
 
-    private fun touchLink(label: String) {
-        val node = compose.onNodeWithText(label, useUnmergedTree = true)
+    private fun touchLink(label: String, withinParagraph: Boolean = false) {
+        val node = compose.onNode(hasText(label, substring = withinParagraph) and
+            SemanticsMatcher.keyIsDefined(androidx.compose.ui.semantics.SemanticsActions.GetTextLayoutResult),
+            useUnmergedTree = true)
         val layouts = mutableListOf<TextLayoutResult>()
         node.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
-        val glyph = layouts.single().getBoundingBox(1).center
+        val layout = layouts.single()
+        val text = layout.layoutInput.text.text
+        val start = text.indexOf(label)
+        require(start >= 0 && start == text.lastIndexOf(label))
+        val glyph = layout.getBoundingBox(start + minOf(1, label.lastIndex)).center
         node.performTouchInput { click(glyph) }
         compose.waitForIdle()
     }
