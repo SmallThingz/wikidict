@@ -1097,30 +1097,43 @@ fn loadLanguageRegistry(io: std.Io, a: std.mem.Allocator, expander_root: []const
     defer a.free(manifest_path);
     var manifest = try mmapPath(io, manifest_path);
     defer manifest.deinit();
-    const modules = [_]struct { name: []const u8, local_names: bool, nom_names: bool = false }{
-        .{ .name = "languages/canonical names", .local_names = false },
-        .{ .name = "sprǣcnaman", .local_names = true },
+    const additional_names = [_][]const u8{
+        "sprǣcnaman",
         // Retained SHY langues p4217/r6746 reads l[code].nom from this data module.
-        .{ .name = "langues/data", .local_names = false, .nom_names = true },
+        "langues/data",
     };
-    for (modules) |module| {
-        var rows = std.mem.splitScalar(u8, manifest.bytes, '\n');
-        var found = false;
-        while (rows.next()) |line| {
-            if (line.len == 0) continue;
-            const parsed = try std.json.parseFromSlice(struct { page_id: u64, title: []const u8, sha256: []const u8 = "" }, a, line, .{ .ignore_unknown_fields = true });
-            defer parsed.deinit();
-            const role = (try languageMetadataModuleRole(a, namespaces, parsed.value.title)) orelse continue;
-            defer a.free(role);
-            if (!std.mem.eql(u8, role, module.name)) continue;
-            if (found) return error.DuplicateLanguageMetadataModule;
-            found = true;
-            const module_path = try std.fmt.allocPrint(a, "{s}/modules/{d}.lua", .{ expander_root, parsed.value.page_id });
-            defer a.free(module_path);
-            const source = try readLanguageMetadataSource(io, a, module_path, 64 * 1024 * 1024, parsed.value.sha256);
+    var additional: [additional_names.len]struct { line: ?[]const u8 = null, duplicate: bool = false } = @splat(.{});
+    var rows = std.mem.splitScalar(u8, manifest.bytes, '\n');
+    var found_canonical = false;
+    while (rows.next()) |line| {
+        if (line.len == 0) continue;
+        const parsed = try std.json.parseFromSlice(LanguageMetadataManifestRow, a, line, .{ .ignore_unknown_fields = true });
+        defer parsed.deinit();
+        const role = (try languageMetadataModuleRole(a, namespaces, parsed.value.title)) orelse continue;
+        defer a.free(role);
+        if (std.mem.eql(u8, role, "languages/canonical names")) {
+            if (found_canonical) return error.DuplicateLanguageMetadataModule;
+            found_canonical = true;
+            const source = try readLanguageMetadataModule(io, a, expander_root, parsed.value);
             defer a.free(source);
-            if (module.nom_names) try out.addNomLanguageDataLua(source) else if (module.local_names) try out.addLocalNamesLua(source) else
-                try loadCanonicalNameModule(io, a, expander_root, namespaces, manifest.bytes, parsed.value.page_id, source, &out);
+            try loadCanonicalNameModule(io, a, expander_root, namespaces, manifest.bytes, parsed.value.page_id, source, &out);
+        } else for (additional_names, &additional) |name, *selection| {
+            if (!std.mem.eql(u8, role, name)) continue;
+            if (selection.line == null) selection.line = line else selection.duplicate = true;
+            break;
+        }
+    }
+    // The first pass already validated every row. Later providers keep their
+    // original order, including loading the first artifact before a duplicate
+    // of that provider can take precedence over its source or parser error.
+    for (additional, 0..) |selection, index| {
+        if (selection.line) |line| {
+            const parsed = try std.json.parseFromSlice(LanguageMetadataManifestRow, a, line, .{ .ignore_unknown_fields = true });
+            defer parsed.deinit();
+            const source = try readLanguageMetadataModule(io, a, expander_root, parsed.value);
+            defer a.free(source);
+            if (index == 0) try out.addLocalNamesLua(source) else try out.addNomLanguageDataLua(source);
+            if (selection.duplicate) return error.DuplicateLanguageMetadataModule;
         }
     }
     try loadPositionalLanguageModules(io, a, expander_root, namespaces, manifest.bytes, &out);
@@ -1159,6 +1172,13 @@ fn loadLanguageRegistry(io: std.Io, a: std.mem.Allocator, expander_root: []const
     return out;
 }
 
+const LanguageMetadataManifestRow = struct { page_id: u64, title: []const u8, sha256: []const u8 = "" };
+
+fn readLanguageMetadataModule(io: std.Io, a: std.mem.Allocator, root: []const u8, row: LanguageMetadataManifestRow) ![]u8 {
+    const path = try std.fmt.allocPrint(a, "{s}/modules/{d}.lua", .{ root, row.page_id });
+    defer a.free(path);
+    return readLanguageMetadataSource(io, a, path, 64 * 1024 * 1024, row.sha256);
+}
 
 fn loadCanonicalNameModule(io: std.Io, a: std.mem.Allocator, root: []const u8, namespaces: *const namespace_registry.Registry, manifest: []const u8, initial_page: u64, initial_source: []const u8, registry: *language_registry.Registry) !void {
     var visited: [32]u64 = undefined;
@@ -16446,6 +16466,45 @@ test "normal canonical forwarding rejects missing duplicate cyclic and foreign t
     try std.testing.expectError(error.LanguageMetadataForwardCycle, loadLanguageRegistry(io, a, root, &namespaces));
     try F.install(io, a, root, "return require('Template:Names')", F.leaf, "Template:Names", true, false);
     try std.testing.expectError(error.InvalidLanguageMetadataForwardTarget, loadLanguageRegistry(io, a, root, &namespaces));
+}
+
+test "normal language manifest scan preserves first source and malformed row error order" {
+    const F = ForwardedCanonicalModuleTest;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const io = std.testing.io;
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    var ns = try namespace_registry.Registry.init(a, LocalizedModuleTest.namespaces);
+    defer ns.deinit();
+    try F.install(io, a, root, F.leaf, F.leaf, F.target_title, false, false);
+    const manifest = try std.fs.path.join(a, &.{ root, "manifest.jsonl" });
+    const canonical = try F.row(a, F.entry_title, 127617, F.leaf);
+    const local = "local names = { ku = \"Kurdish local\" } local aliases = {}";
+    const local_row = try F.row(a, "Module:sprǣcnaman", 127619, local);
+    const local_duplicate = try F.row(a, "Module:sprǣcnaman", 127620, local);
+    const nom = try F.row(a, "Module:langues/data", 127621, "return {}");
+    const duplicate_rows = try std.mem.join(a, "\n", &.{ nom, local_row, canonical, local_duplicate, "" });
+    const malformed_rows = try std.mem.concat(a, u8, &.{ duplicate_rows, "{!\n" });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = manifest, .data = malformed_rows });
+    try std.testing.expectError(error.SyntaxError, loadLanguageRegistry(io, a, root, &ns));
+
+    const canonical_path = try std.fs.path.join(a, &.{ root, "modules/127617.lua" });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = canonical_path, .data = "return {}" });
+    try std.testing.expectError(error.LanguageSourceIdentityMismatch, loadLanguageRegistry(io, a, root, &ns));
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = canonical_path, .data = F.leaf });
+
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = manifest, .data = duplicate_rows });
+    const local_path = try std.fs.path.join(a, &.{ root, "modules/127619.lua" });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = local_path, .data = "return {}" });
+    // The earlier manifest row for the nom provider names a missing file. The
+    // local provider must still be opened first, and its hash must be checked
+    // before reporting its later duplicate.
+    try std.testing.expectError(error.LanguageSourceIdentityMismatch, loadLanguageRegistry(io, a, root, &ns));
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = local_path, .data = local });
+    try std.testing.expectError(error.DuplicateLanguageMetadataModule, loadLanguageRegistry(io, a, root, &ns));
 }
 
 test "HU code name collision preserves plain unknown explicit code and unrelated Writer ownership" {
