@@ -49,6 +49,7 @@ pub const NativeSourceClassProof = compiler.NativeSourceClassProof;
 pub const nativeSourceClassProofAlloc = compiler.nativeSourceClassProofAlloc;
 pub const nativeSourceClassRangeCurrent = compiler.nativeSourceClassRangeCurrent;
 pub const ParserOutputRange = struct {
+    observed_box_table_heading_root: bool = false,
     native_source_class_proof: ?*const NativeSourceClassProof = null,
     // Original full expansion, retained only by the normal exact-byte binder.
     // This is independent of prepared owner/page coordinates and root proofs.
@@ -1421,7 +1422,8 @@ const NativeArticleRenderScope = struct {
             const starts_page = proof.start == 0 and std.mem.eql(u8, tracked.bytes, part.source) and
                 (if (proof.original_page) |original| std.mem.eql(u8, original, proof.page) else true);
             value.active_fragment = .{ .page = proof.page, .original_page = proof.original_page,
-                .start = proof.start, .prepared = proof.prepared, .starts_page = starts_page };
+                .start = proof.start, .prepared = proof.prepared, .starts_page = starts_page,
+                .observed_box_table_heading_root = proof.observed_box_table_heading_root };
         };
         return scope;
     }

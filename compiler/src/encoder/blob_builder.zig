@@ -7111,6 +7111,19 @@ fn processMain(
         }
         if (codes.figure_sizing != null or codes.table_styles != null or local_targets_selected) for (fragments) |*fragment| {
             bindOwnerRootTableSource(source, source_raw, heading_observation, fragment);
+            if (fragment.parser_output_range) |*range| {
+                // Only the whole-page renderer can witness a root wiki heading;
+                // opaque/nested headings never enter page_wiki_openings. The
+                // final root dispatcher independently binds the actual table.
+                if (range.start != 0 and observedContentBoundary(heading_observation.page_wiki_openings, range.start)) {
+                    if (range.original_page != null) range.observed_box_table_heading_root = true
+                    else if (numbered.inline_box_table_transition) |transition| {
+                        range.observed_box_table_heading_root = transition.original.ptr == source_raw.ptr and
+                            transition.original.len == source_raw.len and transition.prepared.ptr == numbered.source.ptr and
+                            transition.prepared.len == numbered.source.len and std.mem.eql(u8, source, numbered.source);
+                    }
+                }
+            }
             bindOwnerNativeSourceClasses(source, native_source_class_proof, fragment);
             bindOwnerTextClassTransition(source, source_raw, numbered.source, numbered.class_scope_transition, fragment);
             bindOwnerSourceElements(source, source_raw, final_source_projection, fragment);

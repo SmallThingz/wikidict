@@ -4263,6 +4263,9 @@ const MissingBuffer = struct {
 
 // Issued only by the existing complete-root numbering pass when its sole
 // changes are validated ordinary numeric labels, never arbitrary replacements.
+// This transition conveys structural continuity only to an observed heading-root
+// article fragment's directly dispatched wiki table. It carries no class census.
+pub const InlineBoxTableTransition = struct { original: []const u8, prepared: []const u8 };
 pub const ClassScopeSourceTransition = struct { original: []const u8, prepared: []const u8 };
 // Coordinates issued by the page preparation operation, not DOM authority.
 // The ranges and their backing source live in the supplied page allocator.
@@ -4664,6 +4667,7 @@ pub const PreparedExternalLinks = struct {
     generated_external_labels: ?usize = null,
     source_element_projection: ?SourceElementProjection = null,
     class_scope_transition: ?ClassScopeSourceTransition = null,
+    inline_box_table_transition: ?InlineBoxTableTransition = null,
     fallbacks: @import("presentation_fallback.zig").Report = .{},
     content_conversion: ?bool = null,
     citations: ?*const CitationPlan = null,
@@ -5142,6 +5146,21 @@ const PageExternalNumbering = struct {
         if (len != 0) try copies.append(self.a, .{ .original_start = original_at, .prepared_start = prepared_at, .len = len });
         return .{ .original = original, .prepared = prepared, .copies = try copies.toOwnedSlice(self.a), .observed_source = observed };
     }
+    fn inlineBoxTableTransition(self: *const @This(), original: MissingText, source: MissingText, prepared: []const u8) ?InlineBoxTableTransition {
+        if (original.lost_missing_range or source.lost_missing_range or original.generated_source != null or
+            source.generated_source != null or !std.mem.eql(u8, original.bytes, source.bytes)) return null;
+        if (std.mem.indexOf(u8, source.bytes, "\n{|") == null and !std.mem.startsWith(u8, source.bytes, "{|")) return null;
+        const begin = @intFromPtr(source.bytes.ptr);
+        const end = begin + source.bytes.len;
+        for (self.edits.items) |edit| {
+            if (!enclosed(begin, end, edit) or edit.start != edit.end or edit.tracked != null or
+                edit.numbered_label_only == edit.citation_attribute_only or edit.start <= begin or edit.start >= end) return null;
+            const at = edit.start - begin;
+            if (!Renderer.noLiParentSourceRange(original, original.bytes[at - 1 .. at + 1]) or
+                !Renderer.noLiParentSourceRange(source, source.bytes[at - 1 .. at + 1])) return null;
+        }
+        return .{ .original = original.bytes, .prepared = prepared };
+    }
     fn classScopeTransition(self: *const @This(), original: MissingText, source: MissingText, prepared: []const u8) ?ClassScopeSourceTransition {
         if (self.collecting_citations or self.citations != null or self.phase != null or
             self.renderer.context.citation_definitions.len != 0 or !std.mem.eql(u8, original.bytes, source.bytes) or
@@ -5538,6 +5557,12 @@ fn preparePageExternalLinksModeAlloc(a: A, tracked: MissingText, context: Contex
         page_context.citation_original_root = context.citation_original_root orelse bound.bytes;
     page_context.content_conversion = try pageContentConversion(a, normalized.bytes, context);
     var result = try preparePageExternalLinksInner(a, normalized, page_context);
+    if (result.inline_box_table_transition) |*proof| {
+        if (std.mem.eql(u8, tracked.bytes, bound.bytes) and std.mem.eql(u8, tracked.bytes, multiline_source.bytes) and
+            std.mem.eql(u8, tracked.bytes, conversion_source.bytes) and std.mem.eql(u8, tracked.bytes, category_source.bytes) and
+            std.mem.eql(u8, tracked.bytes, normalized.bytes) and proof.original.ptr == normalized.bytes.ptr and
+            proof.original.len == normalized.bytes.len) proof.original = tracked.bytes else result.inline_box_table_transition = null;
+    }
     if (result.class_scope_transition) |*proof| {
         if (std.mem.eql(u8, tracked.bytes, bound.bytes) and std.mem.eql(u8, tracked.bytes, multiline_source.bytes) and
             std.mem.eql(u8, tracked.bytes, conversion_source.bytes) and std.mem.eql(u8, tracked.bytes, category_source.bytes) and
@@ -5602,6 +5627,13 @@ fn preparePageExternalLinksInner(a: A, tracked: MissingText, context: Context) E
     var result = try preparePageExternalCoreWithProjection(a, collected.missing, numbered_context, false, plan, collected.source_element_projection);
     result.generated_external_labels = if (collected.generated_external_labels) |first|
         if (result.generated_external_labels) |last| first + last else null else null;
+    if (result.inline_box_table_transition) |*second| {
+        if (collected.inline_box_table_transition) |first| {
+            if (toc_source.bytes.ptr == tracked.bytes.ptr and toc_source.bytes.len == tracked.bytes.len and
+                first.prepared.ptr == second.original.ptr and first.prepared.len == second.original.len)
+                second.original = first.original else result.inline_box_table_transition = null;
+        } else result.inline_box_table_transition = null;
+    }
     if (result.source_element_projection) |second| {
         defer a.free(second.copies);
         result.source_element_projection = null;
@@ -5699,6 +5731,7 @@ fn preparePageExternalCoreWithProjection(a: A, tracked: MissingText, context: Co
     return .{ .generated_external_labels = if (prep.renderer.fallbacks.any()) null else prep.number,
         .source = prepared, .missing = prepared_missing, .poem_phase = phase, .citations = if (!collecting) citations else null,
         .class_scope_transition = if (std.mem.eql(u8, tracked.bytes, controlled.bytes)) prep.classScopeTransition(tracked, controlled, prepared) else null,
+        .inline_box_table_transition = prep.inlineBoxTableTransition(tracked, controlled, prepared),
         .source_element_projection = try prep.sourceElementProjection(tracked, controlled, prepared) };
 }
 
@@ -5757,6 +5790,7 @@ pub const NativeArticleFragment = struct {
     start: usize,
     prepared: []const u8,
     starts_page: bool,
+    observed_box_table_heading_root: bool = false,
 };
 pub const NativeArticleHost = struct {
     renderer: *const Renderer,
@@ -5826,6 +5860,15 @@ pub const NativeArticleHost = struct {
         return std.mem.eql(u8, &expected, &current);
     }
 
+    fn startsBoxTableRoot(self: *const NativeArticleHost, renderer: *const Renderer, tracked: MissingText) bool {
+        if (self.startsPage(renderer, tracked)) return true;
+        const fragment = self.active_fragment orelse return false;
+        return fragment.observed_box_table_heading_root and fragment.start != 0 and !self.active_whole_page and
+            self.matchesActive(renderer, tracked) and renderer.content_root == .parser_output and
+            fragment.prepared.ptr == tracked.bytes.ptr and fragment.prepared.len == tracked.bytes.len and
+            fragment.start < fragment.page.len and tracked.bytes.len <= fragment.page.len - fragment.start and
+            std.mem.eql(u8, tracked.bytes, fragment.page[fragment.start..][0..tracked.bytes.len]);
+    }
     pub fn startsPage(self: *const NativeArticleHost, renderer: *const Renderer, tracked: MissingText) bool {
         if (!self.matchesActive(renderer, tracked) or renderer.content_root != .parser_output) return false;
         if (self.active_whole_page) return self.active_fragment == null and sameSource(self.source, tracked);
@@ -42360,7 +42403,7 @@ pub const Renderer = struct {
                         self.body_link_target.len == 0 and !self.context.observe_structure_only and !self.rejection_probe_scope)
                     {
                         if (self.native_article_host) |host| if (self.native_inline_motion_root) |root| {
-                            if (host.native_paragraph_css_subjects and host.startsPage(self, root.source) and
+                            if (host.native_paragraph_css_subjects and host.startsBoxTableRoot(self, root.source) and
                                 NativeArticleHost.sameSource(prepared_missing, root.source) and
                                 noLiParentSourceRange(root.source, table_line)) self.inline_box_root_table_opening = table_line;
                         };
@@ -99528,6 +99571,37 @@ test "display-only ancestry tracks nested HTML and table classes and stops at un
     try std.testing.expectEqualStrings("label", try FormattingScopeTest.text(a, linked.spans.items));
     try std.testing.expectEqual(@as(usize, 1), linked.spans.items.len);
     try std.testing.expectEqualStrings("Target", linked.spans.items[0].target);
+}
+
+test "native table ancestry follows numbered label and citation edits without authorizing a global class census" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = "unresolved\n==Language==\n<sup>[https://example.test/archive.zip]</sup><ref>Citation</ref><references/>\n{| class='wikitable'\n|-\n| direct\n|}";
+    const ranges = [_]missing_dependency.Range{.{ .start = 0, .end = 10, .occurrence = 1 }};
+    const owner: MissingText = .{ .bytes = source, .ranges = &ranges, .unknown = true };
+    const result = try preparePageExternalLinksWithMissingAlloc(a, owner, .{});
+    const proof = result.inline_box_table_transition orelse return error.TestUnexpectedResult;
+    try std.testing.expect(proof.original.ptr == source.ptr and proof.original.len == source.len);
+    try std.testing.expect(proof.prepared.ptr == result.source.ptr and proof.prepared.len == result.source.len);
+    try std.testing.expect(result.missing.unknown and result.class_scope_transition == null and result.source_element_projection == null);
+    try std.testing.expectEqualDeep(owner.ranges, result.missing.ranges);
+    try std.testing.expect(std.mem.indexOf(u8, result.source, "<nowiki>[1]</nowiki>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.source, "data-wikidict-cite-") != null);
+    var empty: [0]bool = .{};
+    var prep: PageExternalNumbering = .{ .a = a, .renderer = .{ .a = a, .context = .{} }, .phase = null, .seen_poem = &empty };
+    const at = std.mem.indexOf(u8, source, "</sup>").? - 1;
+    try prep.replace(source, at, at, "<span class='unknown'>");
+    try std.testing.expect(prep.inlineBoxTableTransition(owner, owner, try prep.apply(source)) == null);
+    const foreign = try a.dupe(u8, source);
+    prep.edits.clearRetainingCapacity();
+    try prep.replace(foreign, at, at, " <nowiki>[1]</nowiki>");
+    prep.edits.items[0].numbered_label_only = true;
+    try std.testing.expect(prep.inlineBoxTableTransition(owner, owner, source) == null);
+    prep.edits.clearRetainingCapacity();
+    try prep.replace(source, 1, 1, " <nowiki>[1]</nowiki>");
+    prep.edits.items[0].numbered_label_only = true;
+    try std.testing.expect(prep.inlineBoxTableTransition(owner, owner, try prep.apply(source)) == null);
 }
 
 test "bounded observed class transition admits only original body numeric external labels" {
