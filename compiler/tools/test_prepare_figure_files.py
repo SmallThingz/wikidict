@@ -5824,6 +5824,65 @@ class OfflineFigureMaterializationTests(unittest.TestCase):
         (output/figure.COMPLETE).write_bytes(figure.encoded({'schema':figure.SCHEMA,
             'manifest_sha256':figure.digest((output/figure.MANIFEST).read_bytes())}))
 
+    def test_materialize_and_relocate_bound_imageinfo_defaults(self):
+        fixtures = Path(__file__).parent / 'testdata'
+        selected_fixture = fixtures/'figure-page-observations/sr-fuhe-served-set'
+        current_fixture = fixtures/'sr-imageinfo-87f'
+        selected = json.loads((selected_fixture/'figure-siteinfo.raw.json').read_bytes())
+        witness = gzip.decompress((current_fixture/'defaultoptions.raw.json.gz').read_bytes())
+        imageinfo = (current_fixture/'imageinfo-first.raw.json').read_bytes()
+        expected = json.loads((current_fixture/'first-records.json').read_bytes())
+        titles = [record['requested_file'] for record in expected]
+        f = self.fixture
+        f.wiki, f.date = 'srwiktionary', '20261001'
+        f.namespace = selected_fixture/'namespace-registry.tsv'
+        site = figure.site_info
+        defaults = argparse.Namespace(wiki=f.wiki, date=f.date, namespace_registry=f.namespace,
+            primary_sources=f.primary, output=self.root/'selected-defaults', delay=0,
+            wall_seconds=30, figure_defaults=True)
+        selected_raw = figure.encoded({'batchcomplete': True, 'query': selected['query']})
+        site.capture(defaults, transport=lambda *_: (200, {}, selected_raw))
+        current = argparse.Namespace(**{**vars(defaults), 'output': self.root/'current-defaults'})
+        site.capture(current, transport=lambda *_: (200, {}, witness))
+        names = [title.split(':', 1)[1].replace(' ', '_').replace('\\', '\\\\').replace("'", "\\'")
+                 for title in titles]
+        args = f.args(links=names)
+        args.defaults, args.file_defaults = defaults.output, current.output
+        args.metadata_mode = 'lean-tiff-v1'
+        args.figure_profile = figure.FIGURE_PROFILE_V4
+        args.max_inflight = 2
+        def transport(url, timeout):
+            self.assertEqual(parse_qs(urlsplit(url).query)['titles'], ['|'.join(titles)])
+            return 200, {}, imageinfo
+        def no_http(*_):
+            self.fail('Materialized capture performed HTTP')
+        selected_sha = figure.digest((args.defaults/site.SNAPSHOT).read_bytes())
+        with patch.object(figure, 'SR_SELECTED_DEFAULTS', selected_sha):
+            original = figure.capture_files(args, transport=transport)
+            materialized, manifest = self.materialize(args)
+            args.output.rename(self.root/'original-unavailable')
+            self.assertEqual(self.verify_both(materialized), manifest)
+            args.reuse, args.output = [materialized], self.root/'wrapper'
+            figure.capture_files(args, transport=no_http)
+            relocated = self.root/'relocated'
+            final = figure.materialize_complete_capture(args.output/figure.MANIFEST, relocated)
+            materialized.rename(self.root/'materialized-unavailable')
+            args.output.rename(self.root/'wrapper-unavailable')
+            self.assertEqual(self.verify_both(relocated), final)
+            self.assertEqual(final['coverage'], original['coverage'])
+            self.assertEqual((relocated/figure.FILE_DEFAULTS).read_bytes(), witness)
+            plan = json.loads((relocated/figure.PLAN).read_bytes())
+            origins = plan['materialized_http_origins']
+            self.assertEqual(len(origins), 3)
+            for origin in origins:
+                reference = origin['files'][figure.FILE_DEFAULTS]
+                self.assertEqual((relocated/reference['path']).read_bytes(), witness)
+            missing = origins[-1]['files'].pop(figure.FILE_DEFAULTS)
+            (relocated/missing['path']).unlink()
+            self.rebind(relocated, plan)
+            with self.assertRaisesRegex(ValueError, 'lost its observed default-options authority'):
+                figure.verify(relocated)
+
     def test_materialization_verifies_source_without_retaining_unused_projection_document(self):
         args=self.complete();source=args.output/figure.MANIFEST
         before={name:(args.output/name).read_bytes()

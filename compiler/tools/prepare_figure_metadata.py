@@ -5491,6 +5491,10 @@ def materialized_origin_catalog(root, plan, wiki, date, namespace, inventory):
             if not reference['path'].startswith(identifier + '/') and reference['path'] != name:
                 raise ValueError('Materialized shared Figure artifact aliases another role')
             materialized_local_file(root, reference); expected.add(reference['path'])
+        observed_defaults = origin_plan.get('observed_defaults_response_sha256')
+        if ((FILE_DEFAULTS in row['files']) != (observed_defaults is not None) or
+                observed_defaults is not None and row['files'][FILE_DEFAULTS]['sha256'] != observed_defaults):
+            raise ValueError('Materialized Figure origin lost its observed default-options authority')
         for name, reference in ((PLAN,row['plan']), (FILE_REQUESTS,row['journal'])):
             if artifacts.get(name) != {k:reference[k] for k in ('bytes','sha256')}:
                 raise ValueError('Materialized Figure plan/journal lost original byte binding')
@@ -6206,6 +6210,8 @@ def materialize_complete_capture(source, output, *, max_batches=64, max_input_by
         query_inputs=decode(saved(root/QUERY_INPUTS))
         base={*defaults,site_info.MANIFEST,site_info.COMPLETE,*ROLES.values(),INVENTORY,QUERY_INPUTS,PROVIDER,
               *(row['path'] for row in query_inputs)}
+        if top['plan'].get('observed_defaults_response_sha256') is not None:
+            base.add(FILE_DEFAULTS)
         for name in sorted(base):put(name,root/name)
         rows=[]
         for identifier,node in nodes.items():
@@ -6222,6 +6228,8 @@ def materialize_complete_capture(source, output, *, max_batches=64, max_input_by
                 row['closure']=put(identifier+'/closure.json',node['closure_path'])
                 row['failure']=put(identifier+'/failure.json',node['failure_path'])
             required={QUERY_INPUTS,ROLES['figure-sizing-site']}
+            if node['plan'].get('observed_defaults_response_sha256') is not None:
+                required.add(FILE_DEFAULTS)
             required.update(item['path'] for item in node['plan']['query_inputs'])
             if node['plan'].get('metadata_mode') != MATERIALIZED_HTTP_MODE:
                 for value in node['sources']+node['pending']:
