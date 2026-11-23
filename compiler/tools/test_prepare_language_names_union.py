@@ -1,4 +1,5 @@
 import copy
+from contextlib import contextmanager
 import importlib.util
 import json
 from pathlib import Path
@@ -8,6 +9,29 @@ import unittest
 from unittest import mock
 
 import prepare_language_names_union as m
+
+
+class ProducerContractTests(unittest.TestCase):
+    def test_current_producer_binds_actual_generator_and_reviewed_dependencies(self):
+        actual = m.producer()
+        self.assertEqual(actual['generator_sha256'], m.identity(Path(m.__file__).read_bytes())['sha256'])
+        self.assertEqual(actual['dependency_sha256'], {
+            'prepare_language_names_autonyms.py': 'bf84f0c4ff9549a054e213704031bab06bb0e6c0f6564183c44ee888a901d904',
+            'prepare_language_names_generic.py': 'bbe9020879766923c63021b93016aa0edb5331be0b996671351cb4f953e6ebc3',
+            'prepare_file_metadata.py': 'cc8684fd9d0b8e38d4ccf53730cb0863249b2706132c474a2c5c42c0e738d802',
+        })
+        for name, module in (('prepare_language_names_autonyms.py', m.autonyms),
+                             ('prepare_language_names_generic.py', m.generic),
+                             ('prepare_file_metadata.py', m.evidence)):
+            self.assertEqual(actual['dependency_sha256'][name], m.identity(Path(module.__file__).read_bytes())['sha256'])
+
+    def test_changed_dependency_bytes_cannot_issue_current_provenance(self):
+        with tempfile.TemporaryDirectory() as directory:
+            changed = Path(directory) / 'prepare_file_metadata.py'
+            changed.write_bytes(Path(m.evidence.__file__).read_bytes() + b'\n')
+            with mock.patch.object(m.evidence, '__file__', str(changed)):
+                with self.assertRaisesRegex(ValueError, 'Union dependency changed: prepare_file_metadata.py'):
+                    m.producer()
 
 
 def tsv(displays, autonym=False):
@@ -231,15 +255,29 @@ class ArchiveAndBuilderTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'Synthetic child evidence changed'):
             m.validate_snapshot(root / m.TSV)
 
-    def test_union_output_and_producer_tamper_rejected(self):
+    def test_resealed_union_output_tamper_rejected(self):
         root = self.copy_union(); manifest = copy.deepcopy(self.manifest)
         (root / m.TSV).write_bytes((root / m.TSV).read_bytes().replace(b'English', b'Changed'))
         manifest['output'] = m.identity((root / m.TSV).read_bytes()); self.reseal(root, manifest)
         with self.assertRaises(ValueError):
             m.validate_snapshot(root / m.TSV)
-        manifest['generator_sha256'] = '0' * 64; self.reseal(root, manifest)
-        with self.assertRaises(ValueError):
-            m.validate_snapshot(root / m.TSV)
+
+    def test_resealed_producer_changes_rejected_against_valid_archive(self):
+        changes = (
+            ('generator', {'generator_sha256': '0' * 64}),
+            ('historical-generator', {'generator_sha256': '027db1c6d7e87647c8b33c1d819d2f308bfca6728a088b2393e8a8f3c80eaf77'}),
+            ('historical-dependency', {'dependency_sha256': dict(self.manifest['dependency_sha256'],
+                **{'prepare_file_metadata.py': 'd2a09c741c3fb12ee1a59ea5ce6eeb9611105ffa782d90ca25d3a7b37acf23ab'})}),
+        )
+        for label, update in changes:
+            with self.subTest(label=label):
+                root = self.root / (self.id().split('.')[-1] + '-' + label)
+                shutil.copytree(self.output, root)
+                manifest = copy.deepcopy(self.manifest); manifest.update(update)
+                self.reseal(root, manifest)
+                self.assertEqual((root / m.TSV).read_bytes(), (self.output / m.TSV).read_bytes())
+                with self.assertRaisesRegex(ValueError, 'Unreviewed union producer or scope'):
+                    m.validate_snapshot(root / m.TSV)
 
     def test_reserved_selection_and_namespace_mismatch_rejected(self):
         for field, value in [('profiles_added', ['-']), ('namespace_registry_sha256', '0' * 64)]:
@@ -299,6 +337,199 @@ class ArchiveAndBuilderTests(unittest.TestCase):
         path.write_bytes(b'other namespace snapshot')
         with self.assertRaises(ValueError):
             self.builder.validate_captured_snapshot('language-names', self.output / m.TSV, capture, [], capture_root)
+
+
+def prepare_real_validator_union_fixture(base, work, union_module):
+    """Use retained source evidence with an explicitly synthetic raw response.
+
+    The base is read-only. The addition is a unit fixture, not a captured API
+    observation or evidence of French language-name correctness.
+    """
+    import argparse
+    import urllib.parse
+
+    module = union_module
+    base, work = Path(base).resolve(), Path(work)
+    base_manifest_raw = module.autonyms.regular(base / module.MANIFEST)
+    base_manifest = module.autonyms.validate_snapshot(base / module.TSV)
+    base_files = {name: module.identity(module.autonyms.regular(base / name))
+                  for name in (*base_manifest['artifacts'], module.MANIFEST, module.COMPLETE)}
+    base_raw = module.autonyms.regular(base / module.TSV)
+    _, base_profiles, base_directions = module.sections(base_raw)
+    if any(('fr', scope) in base_profiles for scope in module.generic.SCOPES):
+        raise ValueError('Real-validator fixture requires a disjoint fr profile')
+    previous = module.evidence.decode(module.autonyms.regular(
+        base / ('previous.' + module.MANIFEST)))
+    if (previous.get('schema') != module.generic.SCHEMA
+            or previous.get('core') != '79b81ba96674efc8a803fc956bc501d347d440d2'
+            or previous.get('name_source_profile') is not None):
+        raise ValueError('Real-validator fixture requires the retained generic source profile')
+    work.mkdir(exist_ok=False)
+    sources = work / 'primary'; sources.mkdir()
+    for name, digest in module.generic.SOURCE_PINS.items():
+        archived = 'previous.language-names.source-' + name
+        raw = module.autonyms.regular(base / archived)
+        if (module.identity(raw) != base_manifest['artifacts'].get(archived)
+                or module.identity(raw)['sha256'] != digest):
+            raise ValueError('Retained primary source differs: ' + name)
+        (sources / name).write_bytes(raw)
+    _, aliases, tables = module.generic.primary_contract(sources, core=previous['core'])
+    namespace_raw = module.autonyms.regular(base / 'previous.language-names.namespace-registry.tsv')
+    if module.identity(namespace_raw)['sha256'] != base_manifest['namespace_registry_sha256']:
+        raise ValueError('Retained namespace differs')
+    namespace = work / 'namespace-registry.tsv'; namespace.write_bytes(namespace_raw)
+
+    # A complete deterministic synthetic MW table deliberately overrides CLDR
+    # values. Names are fixture labels, not asserted French translations. The
+    # real source parser still proves the aliases and complete English universe.
+    codes = set(tables['en']) | set(base_directions) | set(aliases) | set(aliases.values()) | {'fr'}
+    if 'en-x-piglatin' not in base_directions:
+        codes.discard('en-x-piglatin')
+    mw = {code: 'Synthetic union fixture ' + code for code in sorted(codes)}
+    info = {code: dict(code=code, name=mw[aliases.get(code, code)],
+                       dir=base_directions.get(code, 'ltr'), fallbacks=[])
+            for code in sorted(codes)}
+    response = {
+        'unit_fixture': {'synthetic': True, 'network_observation': False,
+                         'purpose': 'Current union producer and real child-validator regression'},
+        'query': {
+            'general': {'wikiid': base_manifest['wiki'], 'lang': base_manifest['content_language'],
+                        'git-hash': previous['core']},
+            'languageinfo': info,
+            'languages': [dict(code=code, name=name) for code, name in mw.items()],
+        },
+    }
+    raw_response = module.evidence.encoded(response)
+    calls = []
+
+    def transport(url, timeout):
+        parsed = urllib.parse.urlsplit(url)
+        expected = module.generic.request_query('fr', True, {})
+        if (url != module.evidence.wiktionary_api(base_manifest['wiki']) + '?' +
+                urllib.parse.urlencode(sorted(expected.items()))
+                or urllib.parse.parse_qs(parsed.query) != {key: [value] for key, value in expected.items()}
+                or calls or not 0 < timeout <= 30):
+            raise AssertionError('Unexpected synthetic fixture transport request')
+        calls.append(url)
+        return 200, {'content-type': 'application/json'}, raw_response
+
+    def no_retry(delay):
+        raise AssertionError('Synthetic fixture unexpectedly requested a retry')
+
+    args = argparse.Namespace(
+        wiki=base_manifest['wiki'], date=base_manifest['date'], namespace_registry=namespace,
+        primary_sources=sources, output=work / 'addition', languages=['fr'],
+        core=previous['core'], delay=0, wall_seconds=60,
+    )
+    addition_manifest = module.generic.capture(args, transport=transport, sleep=no_retry)
+    if len(calls) != 1 or module.generic.validate_snapshot(args.output / module.TSV) != addition_manifest:
+        raise AssertionError('Real generic validator did not reproduce the authored addition')
+    observed_raw = args.output / addition_manifest['requests'][0]['accepted_receipt']
+    receipt = module.evidence.decode(module.autonyms.regular(observed_raw))
+    if module.autonyms.regular(args.output / receipt['response']) != raw_response:
+        raise AssertionError('Synthetic raw response was not retained exactly')
+    if ({name: module.identity(module.autonyms.regular(base / name)) for name in base_files} != base_files
+            or module.autonyms.regular(base / module.MANIFEST) != base_manifest_raw):
+        raise AssertionError('Read-only genuine base changed')
+    return dict(base=base, addition=args.output, base_manifest=base_manifest,
+                addition_manifest=addition_manifest, raw_response=raw_response,
+                base_files=base_files, raw_response_name=receipt['response'],
+                fixture_marker=response['unit_fixture'])
+
+
+class RealChildValidatorUnionTests(unittest.TestCase):
+    """Optional retained-source integration; no validator or producer mocks."""
+    @classmethod
+    def setUpClass(cls):
+        import os
+        selected = os.environ.get('WIKIDICT_NAMES_UNION_REAL_BASE')
+        if selected is None:
+            raise unittest.SkipTest('Set WIKIDICT_NAMES_UNION_REAL_BASE to the retained source fixture')
+        base = Path(selected)
+        if not base.is_absolute() or not base.is_dir():
+            raise ValueError('Selected real-validator base must be an existing absolute directory')
+        project = Path(m.__file__).resolve().parent.parent
+        if project.name == 'compiler':
+            project = project.parent
+        scratch = project / '.tmp'; scratch.mkdir(exist_ok=True)
+        cls.temp = tempfile.TemporaryDirectory(prefix='names-union-real-validator-', dir=scratch)
+        cls.addClassCleanup(cls.temp.cleanup)
+        # Autonym archive replay uses tempfile's default location. This changes
+        # scratch placement only, never a validator, source pin or producer.
+        temporary_root = mock.patch.object(tempfile, 'tempdir', cls.temp.name)
+        temporary_root.start(); cls.addClassCleanup(temporary_root.stop)
+        cls.root = Path(cls.temp.name)
+        cls.fixture = prepare_real_validator_union_fixture(base, cls.root / 'authored', m)
+        cls.output = cls.root / 'union'
+        cls.manifest = m.union(cls.fixture['base'], cls.fixture['addition'], cls.output, ['fr'])
+
+    @contextmanager
+    def copy_union(self, suffix):
+        with tempfile.TemporaryDirectory(prefix='union-mutation-' + suffix + '-', dir=self.root) as directory:
+            root = Path(directory) / 'union'
+            shutil.copytree(self.output, root)
+            yield root
+
+    @staticmethod
+    def reseal(root, manifest):
+        raw = m.evidence.encoded(manifest)
+        (root / m.MANIFEST).write_bytes(raw)
+        (root / m.COMPLETE).write_bytes(m.evidence.encoded(
+            dict(schema=m.SCHEMA, manifest_sha256=m.identity(raw)['sha256'])))
+
+    def test_current_union_replays_real_children_and_records_actual_producer(self):
+        self.assertEqual(m.autonyms.validate_snapshot(self.fixture['base'] / m.TSV),
+                         self.fixture['base_manifest'])
+        self.assertEqual(m.generic.validate_snapshot(self.fixture['addition'] / m.TSV),
+                         self.fixture['addition_manifest'])
+        self.assertEqual(m.validate_snapshot(self.output / m.TSV), self.manifest)
+        self.assertEqual({key: self.manifest[key] for key in m.producer()}, m.producer())
+        self.assertEqual(m.producer()['generator_sha256'], m.identity(Path(m.__file__).read_bytes())['sha256'])
+        self.assertEqual(m.producer()['dependency_sha256']['prepare_file_metadata.py'],
+                         m.identity(Path(m.evidence.__file__).read_bytes())['sha256'])
+        self.assertTrue((self.output / m.TSV).read_bytes().startswith(
+            (self.fixture['base'] / m.TSV).read_bytes()))
+        self.assertEqual((self.output / ('addition.' + self.fixture['raw_response_name'])).read_bytes(),
+                         self.fixture['raw_response'])
+        self.assertEqual(m.evidence.decode(self.fixture['raw_response'])['unit_fixture'],
+                         self.fixture['fixture_marker'])
+        self.assertIs(self.fixture['fixture_marker']['network_observation'], False)
+        self.assertEqual({name: m.identity(m.autonyms.regular(self.fixture['base'] / name))
+                          for name in self.fixture['base_files']}, self.fixture['base_files'])
+        for field in ('atomic_observation', 'native_resolution_proven', 'corpus_query_closure_proven'):
+            self.assertIs(self.manifest[field], False)
+
+    def test_historical_producer_substitution_is_refused_without_restamping(self):
+        historical_generator = '027db1c6d7e87647c8b33c1d819d2f308bfca6728a088b2393e8a8f3c80eaf77'
+        historical_evidence = 'd2a09c741c3fb12ee1a59ea5ce6eeb9611105ffa782d90ca25d3a7b37acf23ab'
+        for case in ('generator', 'dependency', 'both'):
+            with self.subTest(case=case), self.copy_union(case) as root:
+                manifest = copy.deepcopy(self.manifest)
+                if case in ('generator', 'both'):
+                    manifest['generator_sha256'] = historical_generator
+                if case in ('dependency', 'both'):
+                    manifest['dependency_sha256']['prepare_file_metadata.py'] = historical_evidence
+                self.reseal(root, manifest)
+                with self.assertRaisesRegex(ValueError, 'Unreviewed union producer or scope'):
+                    m.validate_snapshot(root / m.TSV)
+                self.assertEqual((root / m.TSV).read_bytes(), (self.output / m.TSV).read_bytes())
+                self.assertEqual(json.loads((root / m.MANIFEST).read_bytes()), manifest)
+
+    def test_resealed_changed_raw_response_fails_the_real_generic_validator(self):
+        with self.copy_union('raw') as root:
+            manifest = copy.deepcopy(self.manifest)
+            name = self.fixture['raw_response_name']; archived = 'addition.' + name
+            raw = m.evidence.decode((root / archived).read_bytes())
+            raw['query']['languageinfo']['fr']['name'] = 'Changed synthetic fixture name'
+            changed = m.evidence.encoded(raw); (root / archived).write_bytes(changed)
+            identity = m.identity(changed)
+            manifest['children']['addition']['files'][name] = identity
+            manifest['artifacts'][archived] = identity
+            # Re-seal the outer archive, keeping the child's accepted receipt and
+            # manifest unchanged. Actual child verification must find the mismatch.
+            self.reseal(root, manifest)
+            with self.assertRaisesRegex(ValueError, 'Capture evidence inventory differs'):
+                m.validate_snapshot(root / m.TSV)
 
 
 if __name__ == '__main__':

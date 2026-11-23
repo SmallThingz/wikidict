@@ -3,6 +3,10 @@
 
 Each child keeps its complete provenance and unchanged validator. Native TSV v1
 allows new profiles after the original bytes, including its autonym suffix.
+
+Union manifests bind the exact generator and dependency versions. Archived
+unions must be verified in their original authenticated tooling context;
+changing the producer does not reinterpret an existing manifest.
 """
 import argparse
 import hashlib
@@ -26,7 +30,7 @@ MAX_FILES = 1024
 DEPENDENCIES = {
     'prepare_language_names_autonyms.py': 'bf84f0c4ff9549a054e213704031bab06bb0e6c0f6564183c44ee888a901d904',
     'prepare_language_names_generic.py': 'bbe9020879766923c63021b93016aa0edb5331be0b996671351cb4f953e6ebc3',
-    'prepare_file_metadata.py': 'd2a09c741c3fb12ee1a59ea5ce6eeb9611105ffa782d90ca25d3a7b37acf23ab',
+    'prepare_file_metadata.py': 'cc8684fd9d0b8e38d4ccf53730cb0863249b2706132c474a2c5c42c0e738d802',
 }
 
 
