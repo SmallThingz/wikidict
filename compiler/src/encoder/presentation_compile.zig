@@ -10375,7 +10375,11 @@ pub const Renderer = struct {
             .font = value.font, .paint = value.paint, .wrap = value.wrap });
     }
     fn ordinaryActionGroupDomain(self: *const Renderer) bool {
-        return self.wikiClassOrdinaryState() and self.typed_table_depth == 0 and self.inline_table_boundaries == null and
+        return self.actionGroupDomain(false);
+    }
+    fn actionGroupDomain(self: *const Renderer, bracketed_external: bool) bool {
+        const physical_bullet = bracketed_external and self.ordinary_bullet_link != null;
+        return self.wikiClassStateAllowingBullet(physical_bullet) and self.typed_table_depth == 0 and self.inline_table_boundaries == null and
             self.table_viewport_cell_source == null and self.figure_caption_depth == 0 and self.observed_figure_caption == null and
             self.ruby_depth == 0 and self.bidi_scope_depth == 0 and self.active_bidi_capture == null and
             !self.inline_image_attribute and self.pre_scope_observer == null and self.navigation_target_probe == null;
@@ -10545,7 +10549,19 @@ pub const Renderer = struct {
     fn nativeInterwikiActionSource(self: *const Renderer, source: []const u8,
         original: Style, destination: LinkDestination) ?[32]u8
     {
-        if (!self.ordinaryActionGroupDomain() or !destination.interwiki or !destination.external or
+        return self.nativeFormattedActionSource(source, original, destination, false);
+    }
+
+    fn nativeExternalActionSource(self: *const Renderer, source: []const u8,
+        original: Style, destination: LinkDestination) ?[32]u8
+    {
+        return self.nativeFormattedActionSource(source, original, destination, true);
+    }
+
+    fn nativeFormattedActionSource(self: *const Renderer, source: []const u8,
+        original: Style, destination: LinkDestination, bracketed: bool) ?[32]u8
+    {
+        if (!self.actionGroupDomain(bracketed) or destination.interwiki == bracketed or !destination.external or
             !safeUrl(destination.target) or unresolvedExternalActionTarget(destination.target) or
             self.required_page_source_focus != null or self.page_source_focus_completion or
             original.kind != .text or original.target.len != 0 or original.provenance != .parsed or
@@ -10556,9 +10572,14 @@ pub const Renderer = struct {
         var iterator: ir.InlineIterator = .{ .input = source, .renderer_boundaries = true,
             .link_trail = self.context.link_trail };
         const parsed = iterator.next() orelse return null;
-        if (parsed.kind != .link or iterator.cursor != source.len or !parsed.link_has_pipe or
-            parsed.link_empty_label or parsed.link_label_restored_close or parsed.text.len == 0 or
-            !nativeActionFormattingLabel(parsed.text)) return null;
+        if (iterator.cursor != source.len or parsed.link_empty_label or parsed.link_label_restored_close or
+            parsed.text.len == 0) return null;
+        if (bracketed) {
+            if (parsed.kind != .external_link or source.len < 3 or source[0] != '[' or source[1] == '[' or
+                source[source.len - 1] != ']' or parsed.external_label_prefix.len != 0 or
+                parsed.text.ptr == parsed.target.ptr or !std.mem.eql(u8, parsed.target, destination.target) or
+                nativeExternalFormattingLabel(parsed.text) == null) return null;
+        } else if (parsed.kind != .link or !parsed.link_has_pipe or !nativeActionFormattingLabel(parsed.text)) return null;
         var hash = std.crypto.hash.sha2.Sha256.init(.{});
         hash.update(source);
         hash.update(destination.target);
@@ -10595,20 +10616,84 @@ pub const Renderer = struct {
         return count == 0;
     }
 
+    // Numbering has already run. Retain its existing protected marker inside
+    // this one complete bracketed action, without allocating or changing a number.
+    fn nativeExternalFormattingLabel(label: []const u8) ?[]const u8 {
+        var stack: [16][]const u8 = undefined;
+        var count: usize = 0;
+        var at: usize = 0;
+        var marker: []const u8 = "";
+        while (at < label.len) {
+            switch (label[at]) {
+                '[', ']', '{', '}', '\r', '\n', '\t', '\x0c' => return null,
+                '<' => {
+                    const tag = syntax.tagAt(label, at) orelse return null;
+                    if (std.mem.trim(u8, tag.attrs, " \t").len != 0 or tag.self_closing) return null;
+                    if (tag.is("nowiki")) {
+                        if (tag.closing or marker.len != 0) return null;
+                        const pair = syntax.matchingTag(label, tag) orelse return null;
+                        const closing = syntax.tagAt(label, pair.inner_end) orelse return null;
+                        if (!closing.closing or !closing.is("nowiki") or closing.self_closing or
+                            std.mem.trim(u8, closing.attrs, " \t").len != 0 or closing.end != pair.end) return null;
+                        const body = label[tag.end..pair.inner_end];
+                        if (body.len < 3 or body[0] != '[' or body[body.len - 1] != ']' or body[1] == '0') return null;
+                        const number = std.fmt.parseInt(usize, body[1 .. body.len - 1], 10) catch return null;
+                        if (number == 0 or number > max_nodes) return null;
+                        for (body[1 .. body.len - 1]) |digit| if (!std.ascii.isDigit(digit)) return null;
+                        marker = body;
+                        at = pair.end;
+                        continue;
+                    }
+                    if (!oneOf(tag.name, &.{ "b", "strong", "i", "em", "u" })) return null;
+                    if (tag.closing) {
+                        if (count == 0 or !std.ascii.eqlIgnoreCase(stack[count - 1], tag.name)) return null;
+                        count -= 1;
+                    } else {
+                        if (count == stack.len) return null;
+                        stack[count] = tag.name;
+                        count += 1;
+                    }
+                    at = tag.end;
+                },
+                else => at += 1,
+            }
+        }
+        return if (count == 0) marker else null;
+    }
+
     fn finishNativeInterwikiAction(self: *Renderer, source: []const u8, before: ?[32]u8,
         original: Style, action_style: Style, destination: LinkDestination, first: usize) Error!bool
     {
+        return self.finishNativeFormattedAction(source, before, original, action_style, destination, first, false);
+    }
+
+    fn finishNativeExternalAction(self: *Renderer, source: []const u8, before: ?[32]u8,
+        original: Style, action_style: Style, destination: LinkDestination, first: usize) Error!bool
+    {
+        return self.finishNativeFormattedAction(source, before, original, action_style, destination, first, true);
+    }
+
+    fn finishNativeFormattedAction(self: *Renderer, source: []const u8, before: ?[32]u8,
+        original: Style, action_style: Style, destination: LinkDestination, first: usize, bracketed: bool) Error!bool
+    {
         const image = before orelse return false;
-        const current = self.nativeInterwikiActionSource(source, original, destination) orelse return false;
+        const current = self.nativeFormattedActionSource(source, original, destination, bracketed) orelse return false;
         if (!std.mem.eql(u8, &image, &current) or first >= self.spans.items.len or
             self.spans.items.len - first < 2 or self.spans.items.len - first > 128 or
             action_style.kind != .external_link or action_style.self_link_target != null or
             action_style.font_size_unknown or action_style.link_paint != null or
             action_style.ordinary_action_origin != null or action_style.ordinary_link_paint != null or
             action_style.ruby_unitless_line_height != null) return false;
+        var iterator: ir.InlineIterator = .{ .input = source, .renderer_boundaries = true, .link_trail = self.context.link_trail };
+        const parsed = iterator.next() orelse return false;
+        const marker = if (bracketed) nativeExternalFormattingLabel(parsed.text) orelse return false else "";
+        var protected_markers: usize = 0;
         for (self.spans.items[first..]) |child| {
+            const numbered = bracketed and child.provenance == .protected_literal and marker.len != 0 and
+                std.mem.eql(u8, child.text, marker);
+            if (numbered) { protected_markers += 1; if (protected_markers > 1) return false; }
             if (child.kind != .external_link or child.target.ptr != destination.target.ptr or child.target.len != destination.target.len or
-                child.self_link or child.provenance != .parsed or child.font_size_unknown or
+                child.self_link or (child.provenance != .parsed and !numbered) or child.font_size_unknown or
                 child.generated_link != null or child.generated_diagnostic or child.external_literal_parameter != null or
                 child.ordinary_action_origin != null or child.ordinary_action_script != null or child.ordinary_action_entity != null or
                 child.action_focus != null or child.action_group_focus != null or child.link_paint != null or
@@ -10617,6 +10702,7 @@ pub const Renderer = struct {
                 child.pending_container != null or child.pending_bidi_scope != null or child.captured_bidi_scope != null or
                 child.target_fragment != null or std.mem.indexOfAny(u8, child.text, "\r\n\t\x0c") != null) return false;
         }
+        if (marker.len != 0 and protected_markers != 1) return false;
         const children = try self.a.dupe(Span, self.spans.items[first..]);
         for (children) |*child| { child.kind = .text; child.target = ""; }
         const group = try self.a.create(presentation_types.InlineActionGroup(Span));
@@ -12934,9 +13020,9 @@ pub const Renderer = struct {
         return self.linkWithSourceProof(tracked, target, style, depth, external, proof, null);
     }
     fn linkWithSourceProof(self: *Renderer, tracked: MissingText, target: []const u8, style: Style, depth: usize, external: bool, proof: ?ExternalLiteralParameterProof, angle_source: ?[]const u8) Error!void {
-        return self.linkWithRecognizedSource(tracked, target, style, depth, external, proof, angle_source, null);
+        return self.linkWithRecognizedSource(tracked, target, style, depth, external, proof, angle_source, null, null);
     }
-    fn linkWithRecognizedSource(self: *Renderer, tracked: MissingText, target: []const u8, style: Style, depth: usize, external: bool, proof: ?ExternalLiteralParameterProof, angle_source: ?[]const u8, reopened_parent: ?ReopenedExternalParent) Error!void {
+    fn linkWithRecognizedSource(self: *Renderer, tracked: MissingText, target: []const u8, style: Style, depth: usize, external: bool, proof: ?ExternalLiteralParameterProof, angle_source: ?[]const u8, reopened_parent: ?ReopenedExternalParent, action_capture: ?*?Style) Error!void {
         const label = tracked.bytes;
         const angle_proven = external and ((if (angle_source) |source| ir.bracketedAngleProtocolTarget(source, target) else false) or
             (if (reopened_parent) |parent| parent.target.ptr == target.ptr and parent.target.len == target.len and parent.borrowedOriginal() != null else false));
@@ -13008,6 +13094,7 @@ pub const Renderer = struct {
                 s = try self.wikiLinkStyleIn(style, .{ .target = resolved_target, .external = external }, target);
             if (!external) s.poem_independent_parse = false;
         }
+        if (action_capture) |capture| capture.* = s;
         if (external and std.mem.eql(u8, label, target)) {
             const decoded_label = try self.entityText(label);
             // URL text containing encoded controls/whitespace uses its escaped
@@ -18399,10 +18486,13 @@ pub const Renderer = struct {
         return self.inline_source_domain == null and self.wikiClassOrdinaryState();
     }
     fn wikiClassOrdinaryState(self: *const Renderer) bool {
+        return self.wikiClassStateAllowingBullet(false);
+    }
+    fn wikiClassStateAllowingBullet(self: *const Renderer, physical_bullet: bool) bool {
         if (self.content_root != .parser_output or self.in_reference or self.in_template_literal_scope or
             self.pre_block or self.parsed_pre or self.block_formatting.code or self.poem_depth != 0 or
             self.explicit_wiki_label != null or self.body_link_target.len != 0 or
-            self.html_list_item_flow or self.html_blockquote_flow or self.figure_implicit_list_context) return false;
+            self.html_list_item_flow or self.html_blockquote_flow or (self.figure_implicit_list_context and !physical_bullet)) return false;
         if (self.body_language_direction) |style| if (style.code or style.provenance != .parsed or
             style.kind != .text or style.target.len != 0 or style.self_link_target != null) return false;
         return true;
@@ -35823,7 +35913,7 @@ pub const Renderer = struct {
                 !s.missing_nonaction and !self.inline_image_attribute and it.recognize_external_links)
             {
                 if (self.reopenedExternalAt(prepared_missing, it.cursor)) |recognized| {
-                    try self.linkWithRecognizedSource(try missingSlice(self.a, prepared_missing, recognized.label), recognized.parent.target, s, depth + 1, true, null, null, recognized.parent);
+                    try self.linkWithRecognizedSource(try missingSlice(self.a, prepared_missing, recognized.label), recognized.parent.target, s, depth + 1, true, null, null, recognized.parent, null);
                     it.cursor = recognized.end;
                     continue;
                 }
@@ -36829,8 +36919,16 @@ pub const Renderer = struct {
                             self.ordinary_action_group_pending = previous_group;
                         }
                         const group_first = self.spans.items.len;
-                        try self.linkWithSourceProof(converted_label orelse try missingSlice(self.a, prepared_missing, label), target, s, depth + 1, true, proof, angle_source);
-                        _ = try self.finishOrdinaryActionGroup(&group_pending, group_first);
+                        const native_source = if (proof == null and angle_source == null and converted_label == null)
+                            self.nativeExternalActionSource(group_pending.token, s, .{ .target = target, .external = true })
+                        else null;
+                        var action_style: ?Style = null;
+                        try self.linkWithRecognizedSource(converted_label orelse try missingSlice(self.a, prepared_missing, label), target, s,
+                            depth + 1, true, proof, angle_source, null, if (native_source != null) &action_style else null);
+                        if (!try self.finishOrdinaryActionGroup(&group_pending, group_first)) if (action_style) |captured| {
+                            _ = try self.finishNativeExternalAction(group_pending.token, native_source, s, captured,
+                                .{ .target = captured.target, .external = true }, group_first);
+                        };
                     }
                 },
                 .template => try self.resolveTemplate(token.text, s, depth),

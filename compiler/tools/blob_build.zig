@@ -69488,6 +69488,126 @@ test "native interwiki Tools preserve unknown source and nested action refusals"
     }
 }
 
+const IaNativeActionToolsTest = struct {
+    // Exact original IA source lines, recovered in Reader's RD923142:
+    // cession p12746/r45192 e632be54; etymologiseur p12726/r45150 af4aeb39;
+    // lemmatizator p12724/r45145 e697dfac. These are snippets, not whole pages.
+    const cession =
+        \\* [https://www.etymonline.com/word/cession''cession''] Online Etymology Dictionary
+        \\* [https://micmap.org/dicfro/search/gaffiot/cessio''cessio''] Dictionnaire latin-français, Félix Gaffiot
+        \\* [https://www.google.com/search?q=define:cessio''cessior''] google define
+    ;
+    const etymologiseur = "* [https://www.google.com/search?q=define:etymologiseur''etymologiseur''] google define";
+    const lemmatizator =
+        \\* [https://www.thefreedictionary.com/lemmatizator''lemmatizator''] in ''The Free Dictionary''
+        \\* [https://www.google.com/search?q=define:lemmatizator ''lemmatizator''] google define
+    ;
+    fn appendLabel(a: std.mem.Allocator, text: *std.ArrayList(u8), span: anytype) !void {
+        try text.appendSlice(a, span.text);
+        if (@TypeOf(span) != encoder.presentation_compile.Span) try text.appendSlice(a, span.trail);
+    }
+    fn label(a: std.mem.Allocator, owner: anytype) ![]const u8 {
+        var text: std.ArrayList(u8) = .empty;
+        if (owner.inline_action_group) |group| {
+            for (group.spans) |child| try appendLabel(a, &text, child);
+        } else try appendLabel(a, &text, owner);
+        return text.toOwnedSlice(a);
+    }
+    fn roundtrip(a: std.mem.Allocator, r: *encoder.presentation_compile.Renderer,
+        blocks: []const encoder.presentation_compile.Block) !encoder.presentation_types.Stored
+    {
+        const Section = struct { level: u8 = 2, title: []const u8 = "Interlingua", blocks: []const encoder.presentation_compile.Block };
+        const sections = [_]Section{.{ .blocks = blocks }};
+        const bytes = try encoder.presentation_codec.encodeBuildAlloc(a, &[_]encoder.presentation_compile.Span{}, &sections,
+            encoder.presentation_types.Layout{}, try r.finishReferences(), r.media.items);
+        try std.testing.expectEqualStrings("DPRV", bytes[0..4]);
+        const stored = try encoder.presentation_codec.decodeAlloc(a, bytes, r.context.title, .language, .{ .code = "ia", .heading = "Interlingua" });
+        try std.testing.expectEqualSlices(u8, bytes, try encoder.presentation_codec.encodeAlloc(a, stored));
+        return stored;
+    }
+};
+
+test "native external Tools IA authored label boundaries retain styling and existing numbering" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const Case = struct { title: []const u8, source: []const u8, targets: []const []const u8, labels: []const []const u8, groups: usize };
+    const cases = [_]Case{
+        .{ .title = "cession", .source = IaNativeActionToolsTest.cession, .groups = 3,
+            .targets = &.{ "https://www.etymonline.com/word/cession", "https://micmap.org/dicfro/search/gaffiot/cessio", "https://www.google.com/search?q=define:cessio" },
+            .labels = &.{ "cession [1]", "cessio [2]", "cessior [3]" } },
+        .{ .title = "etymologiseur", .source = IaNativeActionToolsTest.etymologiseur, .groups = 1,
+            .targets = &.{"https://www.google.com/search?q=define:etymologiseur"}, .labels = &.{"etymologiseur [1]"} },
+        .{ .title = "lemmatizator", .source = IaNativeActionToolsTest.lemmatizator, .groups = 1,
+            .targets = &.{ "https://www.thefreedictionary.com/lemmatizator", "https://www.google.com/search?q=define:lemmatizator" },
+            .labels = &.{ "lemmatizator [1]", "lemmatizator" } },
+    };
+    for (cases) |case| {
+        var renderer: encoder.presentation_compile.Renderer = .{ .a = a, .content_root = .parser_output, .context = .{ .title = case.title } };
+        const blocks = try renderer.renderBody(case.source);
+        try std.testing.expectEqualDeep(@TypeOf(renderer.fallbacks){}, renderer.fallbacks);
+        var count: usize = 0;
+        for (blocks) |block| for (block.spans) |owner| if (owner.kind == .external_link) {
+            try std.testing.expect(count < case.targets.len);
+            try std.testing.expectEqualStrings(case.targets[count], owner.target);
+            try std.testing.expectEqualStrings(case.labels[count], try IaNativeActionToolsTest.label(a, owner));
+            if (count < case.groups) {
+                try std.testing.expect(owner.text.len == 0 and owner.inline_action_group != null and !owner.flags.underline);
+                const children = owner.inline_action_group.?.spans;
+                try std.testing.expectEqual(@as(usize, 3), children.len);
+                try std.testing.expect(children[0].flags.italic and !children[1].flags.italic and !children[2].flags.italic);
+                try std.testing.expectEqualStrings(" ", children[1].text);
+                for (children) |child| try std.testing.expect(child.kind == .text and child.target.len == 0);
+            } else try std.testing.expect(owner.inline_action_group == null and owner.flags.italic);
+            count += 1;
+        };
+        try std.testing.expectEqual(case.targets.len, count);
+        const stored = try IaNativeActionToolsTest.roundtrip(a, &renderer, blocks);
+        count = 0;
+        for (stored.entry.sections[0].blocks) |block| for (block.spans) |owner| if (owner.kind == .external_link) {
+            try std.testing.expectEqualStrings(case.targets[count], owner.target);
+            try std.testing.expectEqualStrings(case.labels[count], try IaNativeActionToolsTest.label(a, owner));
+            try std.testing.expectEqual(count < case.groups, owner.inline_action_group != null);
+            count += 1;
+        };
+        try std.testing.expectEqual(case.targets.len, count);
+    }
+    var adjacent: encoder.presentation_compile.Renderer = .{ .a = a, .content_root = .parser_output, .context = .{} };
+    const repeated = "[https://example.test''label''][https://example.test''label'']";
+    const blocks = try adjacent.renderBody(repeated);
+    try std.testing.expectEqual(@as(usize, 2), blocks[0].spans.len);
+    const first = blocks[0].spans[0]; const second = blocks[0].spans[1];
+    try std.testing.expect(first.inline_action_group != null and second.inline_action_group != null and first.inline_action_group != second.inline_action_group);
+    try std.testing.expectEqualStrings(first.target, second.target);
+    try std.testing.expectEqualStrings("label [1]", try IaNativeActionToolsTest.label(a, first));
+    try std.testing.expectEqualStrings("label [2]", try IaNativeActionToolsTest.label(a, second));
+    _ = try IaNativeActionToolsTest.roundtrip(a, &adjacent, blocks);
+}
+
+test "native external Tools preserve unknown nested and non-number protected label boundaries" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const token = "[https://example.test <i>label</i> <nowiki>[1]</nowiki>]";
+    var unknown: encoder.presentation_compile.Renderer = .{ .a = a, .content_root = .parser_output, .context = .{} };
+    defer unknown.spans.deinit(a);
+    try unknown.inlineTextWithMissing(.{ .bytes = token, .unknown = true }, .{}, 0);
+    for (unknown.spans.items) |owner| try std.testing.expect(owner.inline_action_group == null);
+    for ([_][]const u8{
+        "[https://example.test <i>one</i> [[Target|two]]]",
+        "[https://example.test <i>one</i> <a href='https://elsewhere.test'>two</a>]",
+        "[https://example.test <i>one</i> <nowiki>[0]</nowiki>]",
+        "[https://example.test <i>one</i> <nowiki>[01]</nowiki>]",
+        "[https://example.test <i>one</i> <nowiki>x</nowiki>]",
+        "[https://example.test <i>one</i> <nowiki>[1]</nowiki><nowiki>[2]</nowiki>]",
+        "[https://example.test <b>one</i> <nowiki>[1]</nowiki>]",
+    }) |source| {
+        var renderer: encoder.presentation_compile.Renderer = .{ .a = a, .content_root = .parser_output, .context = .{} };
+        defer renderer.spans.deinit(a);
+        renderer.inlineTextWithMissing(.{ .bytes = source }, .{}, 0) catch |failure| switch (failure) {
+            error.UncompiledPresentation, error.UncompiledTemplate => continue,
+            else => return failure,
+        };
+        for (renderer.spans.items) |owner| try std.testing.expect(owner.inline_action_group == null);
+    }
+}
+
 test "ordinary bona root table card changes only language owner with full body and codec parity" {
     var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
