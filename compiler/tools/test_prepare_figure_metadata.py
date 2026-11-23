@@ -258,6 +258,389 @@ class D191ProfileTests(unittest.TestCase):
                 figure.figure_profile(D191_CORE, figure.FIGURE_PROFILE_V4, changed)
 
 
+class CurrentSvgIdentityTests(unittest.TestCase):
+    def setUp(self):
+        root = Path(__file__).parent / 'testdata/vi-imageinfo-87f'
+        self.namespace = (root/'namespace-registry.tsv').read_bytes()
+        self.raw = figure.zstd.decompress((root/'raw.jsonl.zst').read_bytes())
+        self.expected = figure.zstd.decompress((root/'projection.jsonl.zst').read_bytes())
+        self.selected = figure.zstd.decompress((root/'selected-defaults.json.zst').read_bytes())
+        self.observed = gzip.decompress((root/'defaultoptions.raw.json.gz').read_bytes())
+        header, *frames = self.raw.splitlines(True)
+        self.batches = [figure.raw_record_decode(line, figure.raw_record_encoding(figure.decode(header))) for line in frames]
+        self.site = self.batches[0]['response'].encode()
+
+    def replay(self, batches, **options):
+        settings = dict(has_batches=True, record_limit=44, profile_kind=figure.FIGURE_PROFILE_V4,
+                        allow_compatible_epochs=True, current_file_supplements=True)
+        return figure.file_records(batches, self.namespace, 'viwiktionary', '20261001', self.site, **(settings|options))
+
+    def test_vietnamese_svg_axes_absence_and_width_match_ordinary_stream(self):
+        figure.verify_file_defaults(self.selected,self.observed)
+        doc = self.replay(self.batches)
+        header, *records = map(figure.decode,self.expected.splitlines())
+        self.assertEqual(header['source_profile'],doc['source_profile'])
+        self.assertEqual(doc['records'],records)
+        self.assertEqual((doc['base_batches'],doc['observed_batches'],len(records)),(2,1,44))
+        by_name = {row['requested_file']:row for row in records}
+        self.assertEqual(by_name['Tập tin:Vi-hanoi-m-uy ky pê đi a.ogg']['state'],'missing')
+        self.assertEqual(by_name['Tập tin:Wikipedia-logo-v2.svg']['observed_svg_width_px'],250)
+        for options in (dict(current_file_supplements=False),dict(profile_kind=figure.FIGURE_PROFILE_V5)):
+            with self.assertRaises(ValueError): self.replay(self.batches, **options)
+        for old,new in ((self.selected+b' ',self.observed),(self.selected,self.observed+b' ')):
+            with self.assertRaises(ValueError): figure.verify_file_defaults(old,new)
+
+    def test_vietnamese_ordinary_identity_requires_literal_absence_or_positive_svg(self):
+        for property_name,value in [('missing',1),('missing','yes'),('missing',False),('missing',None),
+                ('mime','image/tiff'),('height',0),('mediatype','BITMAP'),('canonicaltitle','Tập tin:Other.svg'),
+                ('wikiid','frwiktionary'),('rtl',True),('git-hash','0'*40)]:
+            batches=copy.deepcopy(self.batches)
+            data=json.loads(batches[1]['response'])
+            pages=data['query']['pages']
+            if property_name=='missing':
+                target=next(p for p in pages if p['imagerepository']=='')
+            elif property_name in ('wikiid','rtl','git-hash'):
+                target=data['query']['general']
+            else:
+                target=next(p for p in pages if p.get('imageinfo'))['imageinfo'][0]
+            target[property_name]=value
+            batches[1]['response']=figure.encoded(data).decode()
+            with self.subTest(property_name=property_name,value=value),self.assertRaises(ValueError):
+                self.replay(batches)
+
+
+class EnglishMaterializedWidthTests(unittest.TestCase):
+    def test_historical_webp_profile_and_current_pngs_survive_moved_parents(self):
+        import test_prepare_figure_files as files_tests
+        fixtures = Path(__file__).parent/'testdata'
+        shared = fixtures/'current-file-observations'
+        docs = figure.decode(figure.zstd.decompress((shared/'en-v5-materialized-proofs.json.zst').read_bytes()))
+        cases = figure.decode(figure.zstd.decompress((shared/'historical-file-facts.json.zst').read_bytes()))
+        namespace = next(case['namespace'] for case in cases if case['wiki']=='enwiktionary').encode()
+        width = figure.raw_record_decode((shared/'observations.jsonl').read_bytes().splitlines(True)[-1], figure.RAW_RECORD_ENCODING)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            defaults = root/'defaults'
+            defaults.mkdir()
+            prefix = site.PREFIX+'source-'
+            for name, source in site.primary_sources(fixtures/'kw-figure-defaults-bfe249', prefix).items():
+                (defaults/(prefix+name)).write_bytes(source)
+            (defaults/(site.PREFIX+'namespace-registry.tsv')).write_bytes(namespace)
+            for name, source in docs['defaults'].items():
+                (defaults/name).write_bytes(source.encode())
+            refs, names = [], []
+            for index, members in enumerate([*docs['bases'], docs['current']]):
+                folder = root/str(index)
+                folder.mkdir()
+                (folder/figure.metadata.NAMESPACE).write_bytes(namespace)
+                for name, data in members.items():
+                    (folder/name).write_bytes(data.encode())
+                ref = folder/'retained-observation.json'
+                record = figure.decode(ref.read_bytes())
+                if 'observed_svg_width_px' in record:
+                    receipt = figure.decode((folder/record['batch']['accepted_receipt']).read_bytes())
+                    (folder/receipt['response']).write_bytes(width['response'].encode())
+                else:
+                    names.extend(figure.decode((folder/record['batch']['request']).read_bytes())['titles'])
+                refs.append(ref)
+            self.assertEqual((len(names), len(set(names)), len(refs)), (850, 850, 18))
+            sql_escape = str.maketrans({'\\': '\\\\', "'": "\\'"})
+            escaped = [name.split(':', 1)[1].replace(' ', '_').translate(sql_escape) for name in names]
+            args = argparse.Namespace(root=root, wiki='enwiktionary', date='20261001', defaults=defaults,
+                output=root/'base', reuse=[], reuse_batch=refs[:-1], figure_profile=figure.FIGURE_PROFILE_V4,
+                batch_size=50, delay=1, wall_seconds=300, max_inflight=1, metadata_mode='full')
+            args.sql, args.dumpstatus = files_tests.FigureFileTests.inventory(args, links=escaped)
+            def offline(*_):
+                self.fail('All authentic request and response bytes are available offline')
+            figure.capture_files(args, transport=offline)
+            # Match the retained English parent storage: one gzip member per raw
+            # record, with sequential compression for its other five large roles.
+            for name in (figure.ROLES['figure-sizing-raw'], figure.ROLES['figure-sizing'], figure.MANIFEST,
+                         figure.PROVIDER, figure.FILE_REQUESTS, figure.INVENTORY):
+                path = args.output/name
+                stored = path.with_name(name+'.gz')
+                with path.open('rb') as source, stored.open('xb') as output:
+                    if name == figure.ROLES['figure-sizing-raw']:
+                        for line in source:
+                            output.write(gzip.compress(line, compresslevel=1, mtime=0))
+                    else:
+                        output.write(gzip.compress(source.read(), compresslevel=1, mtime=0))
+                path.unlink()
+            args.reuse = [args.output]
+            args.output = root/'appended'
+            args.gzip_output = True
+            args.figure_profile = figure.FIGURE_PROFILE_V5
+            args.reuse_batch = [refs[-1]]
+            figure.capture_files(args, transport=offline)
+            materialized = root/'materialized'
+            figure.materialize_complete_capture(args.output/figure.MANIFEST, materialized)
+            (root/'base').rename(root/'retired-base')
+            (root/'appended').rename(root/'retired-appended')
+            self.assertEqual(figure.verify(materialized)['coverage']['files'], 850)
+            for name in (figure.ROLES['figure-sizing-raw'], figure.ROLES['figure-sizing'], figure.PROVIDER):
+                self.assertFalse((materialized/name).exists())
+                self.assertTrue((materialized/(name+'.gz')).is_file())
+            plan = figure.inventory_document(materialized/figure.PLAN)
+            self.assertEqual((plan['figure_profile'], plan['replay_contract'], plan['base_batches'], plan['observed_batches']),
+                             (figure.FIGURE_PROFILE_V5, figure.REPLAY_CONTRACT, 17, 1))
+            with self.assertRaises(ValueError):
+                figure.figure_profile(site.FIGURE_WMF5_CORE, figure.FIGURE_PROFILE_V5, wiki='enwiktionary')
+            current_path = refs[-1]
+            current_path.write_bytes(current_path.read_bytes()+b' ')
+            with self.assertRaises(ValueError):
+                figure.verify(materialized)
+
+
+class CurrentOrdinaryWidthTests(unittest.TestCase):
+    def test_current_thai_and_italian_pngs_match_their_distinct_ordinary_files(self):
+        path = Path(__file__).parent/'testdata/current-file-observations/th-it-ordinary-source.json.zst'
+        cases = figure.decode(figure.zstd.decompress(path.read_bytes()))
+        self.assertEqual([case['wiki'] for case in cases], ['thwiktionary', 'itwiktionary'])
+        for case, expected in zip(cases, ((59, [50, 100, 200, 250, 400]), (52, [600])), strict=True):
+            batches = case['batches']
+            wiki = case['wiki']
+            site_raw = batches[0]['response'].encode()
+            def replay(source, **overrides):
+                options = dict(has_batches=True, record_limit=64, profile_kind=figure.FIGURE_PROFILE_V4,
+                               allow_compatible_epochs=True, current_file_supplements=True)
+                return figure.file_records(source, case['namespace'].encode(), wiki, '20261001', site_raw,
+                                           **(options | overrides))
+            with self.subTest(wiki=wiki):
+                figure.verify_file_defaults(case['selected_defaults'].encode(), case['observed_defaults'].encode())
+                doc = replay(batches)
+                self.assertEqual(doc['records'], case['records'])
+                self.assertEqual(doc['source_profile'], case['source_profile'])
+                widths = sorted({r['observed_svg_width_px'] for r in doc['records'] if 'observed_svg_width_px' in r})
+                self.assertEqual((len(doc['records']), widths), expected)
+                with self.assertRaises(ValueError):
+                    replay([batches[0], *batches[2:]])
+                with self.assertRaises(ValueError):
+                    replay(batches, current_file_supplements=False)
+                with self.assertRaises(ValueError):
+                    replay(batches, profile_kind=figure.FIGURE_PROFILE_V5)
+                for extra in ({'jpeg_metadata_only':True}, {'observed_svg_occurrences':[]}):
+                    with self.assertRaises(ValueError):
+                        replay(batches[:2]+[dict(batches[1], **extra)])
+                changed = copy.deepcopy(batches[2])
+                response = figure.decode(changed['response'].encode())
+                response['query']['pages'][0]['imageinfo'][0]['thumbmime'] = 'image/webp'
+                changed['response'] = figure.encoded(response).decode()
+                with self.assertRaises(ValueError):
+                    replay(batches[:2]+[changed])
+
+
+class CurrentOrdinaryImageInfoTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        source = Path(__file__).parent/'testdata/current-file-observations/ordinary-source.json.zst'
+        cls.cases = figure.decode(figure.zstd.decompress(source.read_bytes()))
+
+    def replay(self, case, batches, **overrides):
+        batch = case['imageinfo']
+        options = dict(has_batches=True, record_limit=50, profile_kind=figure.FIGURE_PROFILE_V4,
+                       allow_compatible_epochs=True, current_file_supplements=True)
+        return figure.file_records(batches, case['namespace'].encode(), case['wiki'], '20261001',
+                                   batch['response'].encode(), **(options | overrides))
+
+    def test_authentic_ordinary_facts_require_their_own_defaults(self):
+        self.assertEqual([c['wiki'] for c in self.cases], ['dewiktionary', 'ruwiktionary'])
+        for case, other in zip(self.cases, reversed(self.cases), strict=True):
+            defaults = case['selected_defaults'].encode()
+            observed = case['observed_defaults'].encode()
+            wiki = case['wiki']
+            with self.subTest(wiki=wiki):
+                figure.verify_file_defaults(defaults, observed)
+                self.assertTrue(figure.bound_file_core(site.FIGURE_WMF5_CORE, figure.FIGURE_CURRENT_CORE, observed, wiki=wiki))
+                doc = self.replay(case, [case['imageinfo']])
+                self.assertEqual(doc['source_profile'], case['source_profile'])
+                self.assertEqual(doc['records'], case['records'])
+                self.assertEqual(doc['source_profile']['selected_defaults_sha256'], figure.digest(defaults))
+                self.assertEqual(doc['source_profile']['observed_defaults_response_sha256'], figure.digest(observed))
+                self.assertFalse(figure.bound_file_core(site.FIGURE_WMF5_CORE, figure.FIGURE_CURRENT_CORE, observed, wiki=other['wiki']))
+                self.assertFalse(figure.bound_file_core(site.FIGURE_WMF5_CORE, figure.FIGURE_CURRENT_CORE, None, wiki=wiki))
+                with self.assertRaises(ValueError):
+                    figure.verify_file_defaults(defaults, other['observed_defaults'].encode())
+                with self.assertRaises(ValueError):
+                    figure.verify_file_defaults(other['selected_defaults'].encode(), observed)
+                for key, value in [('thumbsize', 0), ('skin', 'monobook')]:
+                    changed = figure.decode(observed)
+                    changed['query']['defaultoptions'][key] = value
+                    with self.assertRaises(ValueError):
+                        figure.verify_file_defaults(defaults, figure.encoded(changed))
+
+    def test_verified_ordinary_capture_and_materialization_survive_moved_parent(self):
+        import test_prepare_figure_files as files_tests
+        fixtures = Path(__file__).parent/'testdata'
+        proofs = figure.decode(figure.zstd.decompress((fixtures/'current-file-observations/ordinary-proofs.json.zst').read_bytes()))
+        prefix = site.PREFIX+'source-'
+        sources = site.primary_sources(fixtures/'kw-figure-defaults-bfe249', prefix)
+        for case in self.cases:
+            wiki = case['wiki']
+            with self.subTest(wiki=wiki), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory).resolve()
+                selected, observed, image = (root/name for name in ('selected', 'observed', 'image'))
+                for package in (selected, observed, image):
+                    package.mkdir()
+                    for name, data in proofs[wiki][package.name].items():
+                        (package/name).write_bytes(data.encode())
+                for package in (selected, observed):
+                    (package/(site.PREFIX+'namespace-registry.tsv')).write_bytes(case['namespace'].encode())
+                    for name, data in sources.items():
+                        (package/(prefix+name)).write_bytes(data)
+                (selected/site.SNAPSHOT).write_bytes(case['selected_defaults'].encode())
+                (observed/'site-info.01.raw.json').write_bytes(case['observed_defaults'].encode())
+                (image/figure.metadata.NAMESPACE).write_bytes(case['namespace'].encode())
+                (image/'file-metadata.response-000001-01.raw.json').write_bytes(case['imageinfo']['response'].encode())
+                failure = figure.digest((observed/'site-info.failure.json').read_bytes())
+                site.revalidate(observed, failure)
+                with self.assertRaises(ValueError):
+                    site.validate_snapshot(observed/site.SNAPSHOT, wiki, '20261101', file_defaults=True)
+                seed = argparse.Namespace(root=root, wiki=wiki, date='20261001')
+                names = [name.split(':', 1)[1].replace(' ', '_') for name in case['imageinfo']['requests']]
+                paths, status = files_tests.FigureFileTests.inventory(seed, links=names)
+                source, appended, materialized = (root/name for name in ('source', 'appended', 'materialized'))
+                args = argparse.Namespace(wiki=wiki, date='20261001', defaults=selected, file_defaults=observed,
+                    sql=paths, dumpstatus=status, batch_size=50, delay=1, wall_seconds=30, max_inflight=1,
+                    metadata_mode='lean-tiff-v1' if wiki=='ruwiktionary' else 'full', figure_profile=figure.FIGURE_PROFILE_V4,
+                    output=source, reuse=[], reuse_batch=[image/'retained-observation.json'])
+                def offline(*_):
+                    self.fail('The verified source requires no further request')
+                self.assertEqual(figure.capture_files(args, transport=offline)['coverage']['files'], 1)
+                args.output, args.reuse, args.reuse_batch = appended, [source], []
+                figure.capture_files(args, transport=offline)
+                figure.materialize_complete_capture(appended/figure.MANIFEST, materialized)
+                source.rename(root/'retired-source')
+                appended.rename(root/'retired-appended')
+                self.assertEqual(figure.verify(materialized)['coverage']['files'], 1)
+                descriptor = figure.decode((image/'retained-observation.json').read_bytes())
+                receipt = image/descriptor['batch']['accepted_receipt']
+                original = receipt.read_bytes()
+                receipt.write_bytes(original + b' ')
+                with self.assertRaises(ValueError):
+                    figure.verify(materialized)
+                receipt.write_bytes(original)
+                witness = materialized/figure.FILE_DEFAULTS
+                self.assertEqual(witness.read_bytes(), case['observed_defaults'].encode())
+                witness.unlink()
+                with self.assertRaises((OSError, ValueError)):
+                    figure.verify(materialized)
+
+    def test_ordinary_does_not_grant_supplements_or_other_profiles(self):
+        for case in self.cases:
+            batch = case['imageinfo']
+            for role in ({'observed_svg_width_px':250}, {'jpeg_metadata_only':True}, {'observed_svg_occurrences':[]}):
+                with self.subTest(wiki=case['wiki'], role=role), self.assertRaises(ValueError):
+                    self.replay(case, [batch, dict(batch, **role)])
+            with self.subTest(wiki=case['wiki']), self.assertRaises(ValueError):
+                self.replay(case, [batch], profile_kind=figure.FIGURE_PROFILE_V5)
+            for change in ('registration', 'case', 'rtl', 'core'):
+                changed = copy.deepcopy(case)
+                data = figure.decode(batch['response'].encode())
+                if change == 'registration':
+                    next(e for e in data['query']['extensions'] if e['type'] == 'media')['vcs-version'] = '0'*40
+                elif change == 'core':
+                    data['query']['general']['git-hash'] = '0'*40
+                else:
+                    data['query']['general'][change] = True if change == 'rtl' else 'first-letter'
+                changed['imageinfo']['response'] = figure.encoded(data).decode()
+                with self.subTest(wiki=case['wiki'], change=change), self.assertRaises(ValueError):
+                    self.replay(changed, [changed['imageinfo']])
+
+
+class CurrentFileObservationTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        source = Path(__file__).parent/'testdata/current-file-observations'
+        cases = figure.decode(figure.zstd.decompress((source/'historical-file-facts.json.zst').read_bytes()))
+        remaining = iter((source/'observations.jsonl').read_bytes().splitlines(True))
+        cls.cases = [(case, [figure.raw_record_decode(next(remaining), figure.RAW_RECORD_ENCODING)
+                            for _ in range(case['fresh_count'])]) for case in cases]
+        assert next(remaining, None) is None
+
+    def replay(self, case, current, **overrides):
+        base = case['base']
+        options = dict(has_batches=True, record_limit=2000, profile_kind=case['source_profile']['kind'],
+                       allow_compatible_epochs=True, current_file_supplements=True)
+        return figure.file_records([*base, *current], case['namespace'].encode(), case['wiki'], '20261001',
+                                   base[0]['response'].encode(), **(options | overrides))
+
+    def test_current_ogg_states_and_explicit_svg_widths(self):
+        counts = {}
+        for case, batches in self.cases:
+            wiki = case['wiki']
+            with self.subTest(wiki=wiki):
+                doc = self.replay(case, batches)
+                self.assertEqual(doc['records'], case['records'])
+                self.assertEqual(doc['core_revision'], figure.FIGURE_CURRENT_CORE)
+                rows = {row['requested_file']:row for row in doc['records']}
+                expected = []
+                for batch in batches:
+                    for name in batch['requests']:
+                        row = rows[name]
+                        if 'observed_svg_width_px' in batch:
+                            self.assertEqual(row['observed_svg_width_px'], batch['observed_svg_width_px'])
+                            expected.append('width')
+                        elif wiki == 'huwiktionary':
+                            self.assertEqual((row['state'], row['file_sha1']), ('missing', ''))
+                            expected.append('missing')
+                        else:
+                            self.assertEqual((row['state'], row['mime'], row['mediatype']),
+                                             ('unsupported', 'application/ogg', 'AUDIO'))
+                            expected.append('audio')
+                counts[wiki] = (expected.count('width'), expected.count('missing'), expected.count('audio'))
+        self.assertEqual(counts, {'huwiktionary': (0, 1, 0), 'elwiktionary': (18, 0, 3),
+                                 'thwiktionary': (8, 0, 0), 'itwiktionary': (2, 0, 0), 'enwiktionary': (18, 0, 0)})
+
+    def test_audio_states_refuse_redirects_and_namespace_aliases(self):
+        for case, batches in self.cases[:2]:
+            batch = batches[0]
+            for change in ('redirect', 'normalized'):
+                data = figure.decode(batch['response'].encode())
+                if change == 'redirect':
+                    data['query']['pages'][0]['redirect'] = True
+                else:
+                    title = batch['requests'][0]
+                    data['query']['normalized'] = [{'from':title, 'to':title}]
+                with self.subTest(wiki=case['wiki'], change=change), self.assertRaises(ValueError):
+                    self.replay(case, [dict(batch, response=figure.encoded(data).decode())])
+            if case['wiki'] == 'elwiktionary':
+                data = figure.decode(batch['response'].encode())
+                file = data['query']['pages'][0]['imageinfo'][0]
+                file['canonicaltitle'] = 'File:' + file['canonicaltitle'].split(':', 1)[1]
+                with self.assertRaises(ValueError):
+                    self.replay(case, [dict(batch, response=figure.encoded(data).decode())])
+
+    def test_edition_profile_registration_and_file_role_are_required(self):
+        for case, batches in self.cases:
+            wiki = case['wiki']
+            wrong_profile = figure.FIGURE_PROFILE_V4 if wiki == 'enwiktionary' else figure.FIGURE_PROFILE_V5
+            for change in ('source', 'registration', 'role', 'typed-file-fact', 'response-context'):
+                changed = copy.deepcopy(batches[0])
+                data = figure.decode(changed['response'].encode())
+                page = data['query']['pages'][0]
+                if change == 'source':
+                    data['query']['general']['git-hash'] = '0'*40
+                elif change == 'registration':
+                    next(e for e in data['query']['extensions'] if e['type'] == 'media')['vcs-version'] = '0'*40
+                elif change == 'role':
+                    changed.pop('observed_svg_width_px', None)
+                    changed['jpeg_metadata_only'] = True
+                elif change == 'response-context':
+                    data['query']['general']['rtl'] = True
+                elif wiki == 'huwiktionary':
+                    page['known'] = True
+                elif wiki == 'elwiktionary':
+                    page['imageinfo'][0]['mime'] = 'video/ogg'
+                else:
+                    page['imageinfo'][0]['thumbmime'] = 'image/webp'
+                changed['response'] = figure.encoded(data).decode()
+                with self.subTest(wiki=wiki, change=change), self.assertRaises(ValueError):
+                    self.replay(case, [changed])
+            for opts in ({'current_file_supplements':False}, {'profile_kind':wrong_profile}):
+                with self.subTest(wiki=wiki, options=opts), self.assertRaises(ValueError):
+                    self.replay(case, batches, **opts)
+
+
 class FrenchCurrentSupplementTests(unittest.TestCase):
     def setUp(self):
         fixtures = Path(__file__).parent/'testdata'

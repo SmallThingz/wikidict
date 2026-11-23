@@ -2036,6 +2036,12 @@ def verified_figure_tuple(helper, paths, edition=None, date=None, *, parent_path
                 stamp, _ = guard[1][path]
                 size = stamp[1][6]
                 digest = inventory[name]
+                if (stored := manifest.get('_raw_storage')) and name == helper.ROLES['figure-sizing-raw']:
+                    if (stored['size'] != size or re.fullmatch('[0-9a-f]{64}', stored['sha256']) is None or
+                            manifest['artifacts'].get(name, {}).get('sha256') != digest):
+                        raise ValueError('Figure raw storage proof differs from the capture readset')
+                    guard[1][path] = (stamp, dict(stored))
+                    continue
                 if (not isinstance(digest, str) or re.fullmatch('[0-9a-f]{64}', digest) is None or
                         (name not in (helper.MANIFEST, helper.COMPLETE) and
                          manifest['artifacts'].get(name) != {'bytes': size, 'sha256': digest})):
@@ -2719,7 +2725,7 @@ def resolve_figure_snapshot_options(root, manifest, selected, downloads, namespa
         return {name:Path(path) for name,path in paths.items()}
 
 
-def materialize_snapshot_selection(workspace, view, selection, capture_root, journal=()):
+def materialize_snapshot_selection(workspace, view, selection, capture_root, journal=(), *, figure_raw_storage=None):
     """Create a private package view before ordinary edition resolution and validation."""
     workspace = workspace.resolve(strict=True)
 
@@ -2816,7 +2822,13 @@ def materialize_snapshot_selection(workspace, view, selection, capture_root, jou
     # a previous run must never take precedence over a selected encoded source.
     for source in files - stored_names.keys():
         providers.setdefault(source, (source, 'identity', None, None))
-    for logical, (source, codec, size, digest) in providers.items():
+    figure_raw = auxiliary_snapshot_filename('figure-sizing-raw')
+    delayed = []
+    for logical, provider in providers.items():
+        source, codec, size, digest = provider
+        if figure_raw_storage is not None and codec == 'gzip' and logical.name == figure_raw:
+            delayed.append((logical, provider))
+            continue
         target = destination(logical)
         target.parent.mkdir(parents=True, exist_ok=True)
         if codec == 'identity':
@@ -2826,10 +2838,38 @@ def materialize_snapshot_selection(workspace, view, selection, capture_root, jou
         else:
             with target.open('xb') as output:
                 copy_decoded_snapshot(source, output, size, digest, codec)
+    for logical, (source, codec, size, digest) in delayed:
+        target = destination(logical)
+        root = target.parent
+        manifest = root / 'figure-inputs.manifest.json'
+        plan = root / 'figure-capture-plan.json'
+        if manifest.is_file() and plan.is_file() and (root / 'figure-inputs.complete.json').is_file():
+            import prepare_figure_metadata as figure
+            declaration = figure.decode(figure.small(manifest))
+            if declaration.get('capture_format') == figure.FILES_STREAM_SCHEMA:
+                plan_record = figure.inventory_document(plan)
+                if (plan_record.get('metadata_mode', 'full') == 'full' and
+                        not any(plan_record.get(key) for key in ('closed_prefixes', 'complete_captures', 'metadata_light_titles', 'retained', 'observed'))):
+                    if declaration.get('artifacts', {}).get(figure_raw) != {'bytes': size, 'sha256': digest}:
+                        raise ValueError('Stored Figure raw identity differs from complete capture manifest')
+                    if figure_raw_storage:
+                        raise ValueError('Multiple compressed Figure raw selections')
+                    # The normal forward replay authenticates both byte identities.
+                    os.link(source, target)
+                    stamp = _figure_replay_identity(target)
+                    with target.open('rb') as selected_archive:
+                        if selected_archive.read(2) != b'\x1f\x8b':
+                            raise ValueError('Stored Figure raw member is not gzip')
+                    if _figure_replay_identity(target) != stamp:
+                        raise ValueError('Stored Figure raw member changed at selection')
+                    figure_raw_storage.update(path=target, stamp=stamp)
+                    continue
+        with target.open('xb') as output:
+            copy_decoded_snapshot(source, output, size, digest, codec)
     return roles, destination(capture) if capture else None
 
 
-def resolve_edition_snapshot_options(manifest, groups, downloads, overrides=None, *, workspace=None, metadata_network='offline', figure_reuse_batches=()):
+def resolve_edition_snapshot_options(manifest, groups, downloads, overrides=None, *, workspace=None, metadata_network='offline', figure_reuse_batches=(), _figure_raw_storage=None):
     """Resolve each edition independently; never reuse another edition's captures."""
     workspace=PROJECT if workspace is None else workspace
     if metadata_network not in ('offline', 'allow'):
@@ -2941,8 +2981,16 @@ def resolve_edition_snapshot_options(manifest, groups, downloads, overrides=None
             language_record=languages.get((edition,date))
             language=Path(snapshots['language-registry'])
             if not language_record or language_record.get('name')!='language-registry.tsv' or language.stat().st_size!=language_record.get('size') or sha256_file(language)!=language_record.get('sha256'):raise ValueError('Language registry differs from pinned inventory')
-            verified_auxiliary_hashes(snapshots,edition,date,
-                captured_selection=(capture,selected,root) if captured is not None else None)
+            selection = (capture, selected, root) if captured is not None else None
+            if _figure_raw_storage:
+                _, captures = _validated_auxiliary_state(snapshots, edition, date, captured_selection=selection)
+                raw = captures.get('figure-sizing-raw')
+                path = _figure_raw_storage['path']
+                if (snapshots.get('figure-sizing-raw') != path or raw is None or
+                        not raw[0].get('_raw_storage') or _figure_replay_identity(path) != _figure_raw_storage['stamp']):
+                    raise ValueError('Stored Figure gzip selection changed during validation')
+            else:
+                verified_auxiliary_hashes(snapshots, edition, date, captured_selection=selection)
             result[(edition,date)]={'auxiliary_snapshots':snapshots}
             if captured is not None:
                 triple=[root/name for name in ('interwiki-map.tsv','interwiki-map.raw.json','interwiki-map.provenance.json')]
@@ -3022,8 +3070,13 @@ def pinned_auxiliary_snapshots(snapshots, hashes, destination, capture_hashes=No
             raise ValueError('Auxiliary borrowing requires retained native input guards')
         if borrower is not None:borrower.staged_provider_inputs={}
         figures=validated_figure_tuple(snapshots)
+        raw_figure = figures.get('figure-sizing-raw')
+        raw_storage = raw_figure[0].get('_raw_storage') if raw_figure is not None else None
+        raw_source = Path(snapshots['figure-sizing-raw']) if raw_storage is not None else None
         def add_copy(source,folder,filename,digest):
             key=(folder,filename)
+            if source == raw_source:
+                digest = raw_storage['sha256']
             if key in copies and copies[key][1]!=digest:
                 raise ValueError('Conflicting auxiliary capture artifact: '+filename)
             copies.setdefault(key,(source,digest))
@@ -3333,6 +3386,9 @@ def build_input_identity(items, zig, auxiliary_hashes, interwiki_sha, expansion_
         hashes,captures=_validated_auxiliary_state(auxiliary_snapshots,
             items[0]['wiki'] if items else None,items[0]['date'] if items else None)
         identity['auxiliary_snapshot_sha256']=hashes
+        raw = captures.get('figure-sizing-raw')
+        if raw is not None and (stored := raw[0].get('_raw_storage')):
+            identity['figure_raw_storage'] = stored
         manifests,artifacts=_project_auxiliary_capture_identities(captures)
     else:
         manifests,artifacts=auxiliary_capture_identities(auxiliary_snapshots,
@@ -9101,6 +9157,8 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
     native_ready=True
     writer_transition=getattr(retained_roles, 'writer_figure_transition', None) if retained_roles is not None else None
     worker_auxiliary_hashes=auxiliary_hashes
+    if (stored := (build_identity or {}).get('figure_raw_storage')):
+        worker_auxiliary_hashes = {**auxiliary_hashes, 'figure-sizing-raw': stored['sha256']}
     if initial_reference is not None:
         worker_auxiliary_hashes=initial_sealed_worker_hashes(auxiliary_hashes,retained_roles.closed_native_origin['identity']['providers'])
     if closed_whole is not None:
@@ -10686,6 +10744,7 @@ def run_main(p, a, resources):
                if getattr(a,name.replace('-','_')+'_snapshot') is not None}
     if a.snapshot_storage_journal and not a.snapshot_selection:
         p.error('--snapshot-storage-journal requires --snapshot-selection')
+    figure_raw_storage = {}
     if a.snapshot_selection:
         if len(groups) != 1 or auxiliary or a.interwiki_map_snapshot:
             p.error('Stored snapshots require one edition and a single selection')
@@ -10703,8 +10762,10 @@ def run_main(p, a, resources):
             with ExitStack() as readers:
                 rows = (map(json.loads, readers.enter_context(a.snapshot_storage_journal.open()))
                         if a.snapshot_storage_journal else ())
+                can_stream_figure = (_PYTHON_TOOLING is None and a.retained_native_roles_json is None and
+                    a.retained_native_roles_ref is None and a.metadata_network == 'offline' and not a.figure_reuse_batch)
                 auxiliary, staged = materialize_snapshot_selection(workspace, Path(temporary),
-                    selection['snapshots'], capture, rows)
+                    selection['snapshots'], capture, rows, figure_raw_storage=figure_raw_storage if can_stream_figure else None)
             a.interwiki_map_snapshot = auxiliary.pop('interwiki-snapshot', None)
             if staged is not None:
                 manifest = dict(manifest, auxiliary_capture_roots={edition: str(staged.relative_to(workspace))})
@@ -10765,7 +10826,7 @@ def run_main(p, a, resources):
     if a.staged_input_root is not None: options['staged_input_root']=a.staged_input_root.absolute()
     if a.extraction_cache_root is not None: options['extraction_cache_root']=a.extraction_cache_root.absolute()
     if a.interwiki_map_snapshot: options['interwiki_snapshot']=a.interwiki_map_snapshot.resolve()
-    try: options['edition_options']=resolve_edition_snapshot_options(manifest,groups,a.downloads.resolve(),auxiliary,workspace=workspace,metadata_network=a.metadata_network,figure_reuse_batches=tuple(a.figure_reuse_batch))
+    try: options['edition_options']=resolve_edition_snapshot_options(manifest,groups,a.downloads.resolve(),auxiliary,workspace=workspace,metadata_network=a.metadata_network,figure_reuse_batches=tuple(a.figure_reuse_batch), **({'_figure_raw_storage': figure_raw_storage} if figure_raw_storage else {}))
     except (ValueError,OSError) as error:p.error(str(error))
     # Retained tools and relocated Python producers keep their established
     # transport unless it was explicitly selected. The maintained normal

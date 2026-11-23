@@ -42,6 +42,14 @@ SCRIBUNTO = 'b109cb6e5866c13871e308859ef78249b1bd3ea2'
 FIGURE_WMF5_CORE = '87f311882d8c84ec21e288d0bde8aa289df8dc56'
 FIGURE_WMF5_SCRIBUNTO = '25f7cdefa45a3b8417d7fa296f86b76537927f43'
 FIGURE_WMF5_SR_RAW = '9755bd766754d1d6e0ede764ca11eb351c4da75363cb6297c70668dba657b31f'
+FIGURE_WMF5_DEFAULTS = {
+    'thwiktionary': ('20261001', '424f330eb29ae006d684238cf2d8dedc254af22f49d4a01e2224224212e85ac2'),
+    'itwiktionary': ('20261001', 'd99f3db235d0de81adc47a2951306c4d534c38d7e97bb67ebfa4dfe4ab560b93'),
+    'dewiktionary': ('20261001', 'fcec36637c8e8422b07a70996c64f9f9a12eba3259c902e737d304a834319357'),
+    'ruwiktionary': ('20261001', '271ab18b8e25afe3e1c5e7fcda9514c6b5f5bfbcc04bc38c93434201db514b50'),
+    'srwiktionary': ('20261001', FIGURE_WMF5_SR_RAW),
+    'viwiktionary': ('20261001', '36f91d60b106a4cd26045775717de845d267faa5e76b4a801682db2dcd497ad4'),
+}
 MAX_RESPONSE = 2 * 1024 * 1024
 MAX_MANIFEST = 64 * 1024
 MAX_INTEGER = 2**53 - 1
@@ -135,7 +143,7 @@ def figure_thumbnail_width(result):
     return limits[index]
 
 
-def response(data, wiki, language, profile=PROFILE, *, raw_sha=None):
+def response(data, wiki, language, profile=PROFILE, *, raw_sha=None, date=None):
     if not isinstance(data, dict) or any(key in data for key in ('error', 'errors', 'warnings', 'continue')):
         raise ValueError('Unsuccessful or incomplete site-info API response')
     result = data.get('query')
@@ -143,8 +151,10 @@ def response(data, wiki, language, profile=PROFILE, *, raw_sha=None):
     if (not isinstance(general, dict) or general.get('wikiid') != wiki
             or general.get('lang') != language or not reviewed_source(general.get('git-hash'), profile, wiki)):
         raise ValueError('Site-info edition/language/source mismatch')
-    if general.get('git-hash') == FIGURE_WMF5_CORE and raw_sha != FIGURE_WMF5_SR_RAW:
-        raise ValueError('Unreviewed Figure default-options observation')
+    if general.get('git-hash') == FIGURE_WMF5_CORE:
+        reviewed_date, reviewed_sha = FIGURE_WMF5_DEFAULTS[wiki]
+        if raw_sha != reviewed_sha or (date is not None and date != reviewed_date):
+            raise ValueError('Unreviewed Figure default-options observation')
     legacy.validate_server(general.get('server'))
     stamp(general.get('time'))
     counters = result.get('statistics')
@@ -158,7 +168,7 @@ def response(data, wiki, language, profile=PROFILE, *, raw_sha=None):
 
 
 def reviewed_source(core, profile, wiki):
-    return core in CORE_PROFILES or (core == FIGURE_WMF5_CORE and profile == FIGURE_PROFILE and wiki == 'srwiktionary')
+    return core in CORE_PROFILES or (core == FIGURE_WMF5_CORE and profile == FIGURE_PROFILE and isinstance(wiki, str) and wiki in FIGURE_WMF5_DEFAULTS)
 
 
 def scribunto_reference(core):
@@ -167,7 +177,7 @@ def scribunto_reference(core):
 
 
 def render(data, config, retrieved, raw_sha):
-    result = response(data, config['wiki'], config['content_language'], config['profile'], raw_sha=raw_sha)
+    result = response(data, config['wiki'], config['content_language'], config['profile'], raw_sha=raw_sha, date=config['date'])
     return evidence.encoded({'schema': HEADER, **config, 'temporal_scope': 'current-api-observation',
         'retrieved_utc': retrieved, 'raw_response_sha256': raw_sha, 'query': result})
 
@@ -230,7 +240,7 @@ def capture(args, transport=None, sleep=time.sleep):
                 data = evidence.decode(raw)
                 if isinstance(data, dict) and isinstance(data.get('error'), dict):
                     retry = data['error'].get('code') in ('maxlag', 'ratelimited', 'readonly')
-                response(data, args.wiki, language, profile, raw_sha=receipt['response_sha256'])
+                response(data, args.wiki, language, profile, raw_sha=receipt['response_sha256'], date=args.date)
                 receipt.update(accepted=True, ended_utc=evidence.utc())
                 evidence.document(root / (name + '.receipt.json'), receipt)
                 accepted = name + '.receipt.json'

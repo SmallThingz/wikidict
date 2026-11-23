@@ -1,5 +1,6 @@
 import argparse
 import copy
+import gzip
 import json
 import os
 from pathlib import Path
@@ -116,6 +117,21 @@ class SiteInfoCaptureTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'source mismatch'):
             self.collect(name, data=unknown)
         return args.output, unknown
+
+    def test_current_imageinfo_observations_are_bound_to_edition_date_and_exact_bytes(self):
+        fixtures = Path(__file__).parent/'testdata/current-imageinfo-defaults'
+        for lang in ('de', 'it', 'ru', 'th', 'vi'):
+            wiki = lang+'wiktionary'
+            raw = gzip.decompress((fixtures/(wiki+'.json.gz')).read_bytes())
+            data = s.evidence.decode(raw)
+            sha = s.evidence.digest(raw)
+            def read(w=wiki, language=lang, profile=s.FIGURE_PROFILE, date='20261001', digest=sha):
+                return s.response(data, w, language, profile, date=date, raw_sha=digest)
+            with self.subTest(wiki=wiki):
+                self.assertEqual(s.figure_thumbnail_width(read()),250)
+                for options in ({'w':'srwiktionary'}, {'language':'sr'}, {'profile':s.PROFILE},
+                                {'date':'20261002'},{'digest':'0'*64}):
+                    with self.assertRaises(ValueError):read(**options)
 
     def test_revalidation_preserves_original_failed_http_and_observation(self):
         root, data = self.source_refusal()

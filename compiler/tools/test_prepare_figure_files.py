@@ -1464,6 +1464,40 @@ class FigureFileTests(unittest.TestCase):
         (args.sql[1]).write_bytes(b'changed keeper')
         with self.assertRaises(ValueError):figure.verify(args.output)
 
+    def test_archived_transport_is_preserved_without_http(self):
+        args = self.args(links=('Example.svg','Second.svg'))
+        args.max_inflight=1
+        args.batch_size=1
+        clock=[0.0]
+        def transport(url,timeout):
+            title=parse_qs(urlsplit(url).query)['titles'][0]
+            return 200,{},figure.encoded(self.response(title))
+        with patch.object(figure.time,'monotonic',side_effect=lambda:clock[0]):
+            original=figure.capture_files(args,transport=transport,sleep=lambda d:clock.__setitem__(0,clock[0]+d))
+        original_root = args.output
+        replay=copy.copy(args);replay.output=self.root/'imported';replay.import_archived_http=original_root/figure.MANIFEST
+        def offline(*args):raise AssertionError('archived import reached transport')
+        second=figure.capture_files(replay,transport=offline)
+        self.assertEqual(figure.verify(replay.output),second)
+        self.assertEqual(original['coverage'],second['coverage'])
+        for name in ('file-metadata.response-000001-01.receipt.json','file-metadata.request-000001.json','file-metadata.response-000002-01.receipt.json','file-metadata.request-000002.json','figure-sizing.raw.json'):
+            self.assertEqual((original_root/name).read_bytes(),(replay.output/name).read_bytes())
+        for name in (figure.MANIFEST,figure.FILE_REQUESTS,figure.ROLES['figure-sizing-raw']):
+            logical=original_root/name
+            logical.with_name(name+'.gz').write_bytes(gzip.compress(logical.read_bytes(),mtime=0))
+            logical.unlink()
+        replay.import_archived_http=original_root/(figure.MANIFEST+'.gz');replay.output=self.root/'compressed-import'
+        compressed=figure.capture_files(replay,transport=offline)
+        self.assertEqual(figure.verify(replay.output),compressed)
+        self.assertEqual((replay.output/'figure-sizing.raw.json').read_bytes(),(self.root/'imported/figure-sizing.raw.json').read_bytes())
+        archive=original_root/(figure.ROLES['figure-sizing-raw']+'.gz'); archive_bytes=archive.read_bytes();archive.write_bytes(archive_bytes[:-5]);replay.output=self.root/'truncated'
+        with self.assertRaises((EOFError,ValueError)):figure.capture_files(replay,transport=offline)
+        self.assertFalse((replay.output/figure.COMPLETE).exists());archive.write_bytes(archive_bytes)
+        (original_root/'file-metadata.request-000001.json').write_bytes(b'{}')
+        replay.output=self.root/'invalid-import'
+        with self.assertRaises(ValueError):figure.capture_files(replay,transport=offline)
+        self.assertFalse((replay.output/figure.COMPLETE).exists())
+
     def test_missing_file_batch_uses_existing_transport_and_full_replay(self):
         args = self.args(links=('Example.svg', 'Second.svg'))
         args.batch_size = 1

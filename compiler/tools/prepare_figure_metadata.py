@@ -33,13 +33,79 @@ sys.dont_write_bytecode = True
 import prepare_file_metadata as evidence
 import prepare_file_metadata_v2 as metadata
 import prepare_site_info as site_info
+import figure_gzip_members as gzip_members
 
 MAX_RESPONSE = metadata.MAX_RESPONSE
 MAX_METADATA = metadata.MAX_METADATA
 MAX_TITLES = metadata.MAX_TITLES
-digest, encoded, small, decode = evidence.digest, evidence.encoded, evidence.small, evidence.decode
+digest, encoded, decode = evidence.digest, evidence.encoded, evidence.decode
 require_edition, wiktionary_api = evidence.require_edition, evidence.wiktionary_api
 classify_response = metadata.classify_response
+
+
+def _gzip_role_names():
+    return {MANIFEST, INVENTORY, FILE_REQUESTS, PROVIDER, ROLES['figure-sizing'], ROLES['figure-sizing-raw']}
+
+
+def _physical_role(path):
+    path = Path(path)
+    if path.name not in _gzip_role_names():
+        return path
+    stored = path.with_name(path.name + '.gz')
+    if not os.path.lexists(stored):
+        return path
+    if os.path.lexists(path):
+        raise ValueError('Figure capture has mixed storage for one logical member: ' + str(path))
+    return stored
+
+
+def small(path, limit=MAX_METADATA):
+    physical = _physical_role(path)
+    if physical.name == Path(path).name:
+        return evidence.small(physical, limit)
+    stamp = evidence.stamp(physical)
+    raw = bytearray()
+    with physical.open('rb') as held, gzip.GzipFile(fileobj=held, mode='rb') as source:
+        while block := source.read(min(1024 * 1024, limit - len(raw) + 1)):
+            raw.extend(block)
+            if len(raw) > limit:
+                raise ValueError('Decoded Figure metadata exceeds its bound')
+        if gzip_members.held_stamp(held) != stamp or evidence.stamp(physical) != stamp:
+            raise ValueError('Compressed Figure metadata changed during reading')
+    return bytes(raw)
+
+
+def _write_gzip_artifact(path, rows):
+    physical = path.with_name(path.name + '.gz')
+    hashed = hashlib.sha256()
+    length = 0
+    with physical.open('xb') as held:
+        with gzip.GzipFile(filename='', fileobj=held, mode='wb', compresslevel=1, mtime=0) as output:
+            for row in rows:
+                output.write(row)
+                hashed.update(row)
+                length += len(row)
+        held.flush()
+        os.fsync(held.fileno())
+        stamp = gzip_members.held_stamp(held)
+    if evidence.stamp(physical) != stamp:
+        raise ValueError('Compressed Figure output changed before manifest creation')
+    return physical.resolve(), stamp, {'bytes': length, 'sha256': hashed.hexdigest()}
+
+
+def _role_identity(path, limit):
+    stamp = evidence.stamp(path)
+    logical_sha = hashlib.sha256()
+    logical_size = 0
+    with path.open('rb') as held, gzip.GzipFile(fileobj=held, mode='rb') as source:
+        while block := source.read(min(1024 * 1024, limit - logical_size + 1)):
+            logical_size += len(block)
+            if logical_size > limit:
+                raise ValueError('Decoded Figure member exceeds its sealed size')
+            logical_sha.update(block)
+        if gzip_members.held_stamp(held) != stamp or evidence.stamp(path) != stamp:
+            raise ValueError('Compressed Figure member changed during hashing')
+    return {'bytes': logical_size, 'sha256': logical_sha.hexdigest()}
 
 
 REPLAY_CONTRACT_V1 = 'wikidict.figure-files-replay.v1'
@@ -60,7 +126,8 @@ def replay_contract(document):
 
 
 def producer():
-    return {"generator_sha256": digest(small(Path(__file__)))}
+    return {'generator_sha256':digest(small(Path(__file__))),
+            'dependency_sha256':{'figure_gzip_members':digest(small(Path(gzip_members.__file__)))}}
 
 
 # Build-only, offline figure authority. This does not classify handlers by MIME
@@ -200,6 +267,10 @@ FIGURE_MEDIA_VARIANTS = {
 FIGURE_MEDIA_VARIANTS['6e76237de1cf29c08427d191f110a2c38c2b4cf9'] = FIGURE_MEDIA_VARIANTS['992ad5e3679f848254828e823860ba8b3ad3b39b']
 FIGURE_MEDIA_VARIANTS['f03f1fdaa2d112807b6ce63170eb50e86de615bd'] = FIGURE_MEDIA_VARIANTS['992ad5e3679f848254828e823860ba8b3ad3b39b']
 
+CURRENT_FILE_PROFILES = {
+    'frwiktionary': FIGURE_PROFILE_V4, 'elwiktionary': FIGURE_PROFILE_V4, 'huwiktionary': FIGURE_PROFILE_V4,
+    'thwiktionary': FIGURE_PROFILE_V4, 'itwiktionary': FIGURE_PROFILE_V4, 'enwiktionary': FIGURE_PROFILE_V5,
+}
 FIGURE_WMF5_MEDIA = FIGURE_MEDIA_VARIANTS['f03f1fdaa2d112807b6ce63170eb50e86de615bd']
 
 # Between d191 and 87f only FlaggedRevs, Wikibase and the DB load monitor
@@ -207,12 +278,29 @@ FIGURE_WMF5_MEDIA = FIGURE_MEDIA_VARIANTS['f03f1fdaa2d112807b6ce63170eb50e86de61
 # widths and the ImageInfo half of current height-only SVG controls.
 FILE_DEFAULTS = 'figure-imageinfo-defaultoptions.raw.json'
 SR_SELECTED_DEFAULTS = 'cd0624188c22163e38bdee69bbe0e67bf74f231eeeb023a2834abd84de4cc2d7'
+VI_SELECTED_DEFAULTS = 'eb0dd59011bfb846be294843217806fa3c2de3eeec75d24fb9960eb083d19efc'
+
+# The raw response and selected defaults envelope are distinct authenticated inputs.
+# The new ordinary records use the V4 ImageInfo handler model only.
+ORDINARY_FILE_DEFAULTS = {
+    'srwiktionary': ('0470f6c99a6456a366635bf25a517a1f951de6f5', SR_SELECTED_DEFAULTS),
+    'thwiktionary': (FIGURE_CURRENT_CORE, '2701fcde41f03e6a73ed15eb4d127aeb5b4dbc304ad70f18bbc89b6cecd0cca6'),
+    'itwiktionary': (FIGURE_CURRENT_CORE, '58177d7029c25bdbb248f6b457c5872f304f2a4012cf054f68c35786f14e77db'),
+    'dewiktionary': (FIGURE_CURRENT_CORE, '3df21e8c1899d5e8c2fcf832c27078937f0bdd0184c1d47f4efc0aafe0e8fcf2'),
+    'ruwiktionary': (FIGURE_CURRENT_CORE, '57790899614f832d11c349fce6494be8bea952a498cfb3073a3a115ea8f23a75'),
+}
+
+SELECTED_FILE_DEFAULTS = {**ORDINARY_FILE_DEFAULTS,
+    'viwiktionary': ('0470f6c99a6456a366635bf25a517a1f951de6f5', VI_SELECTED_DEFAULTS)}
+SCOPED_FILE_EDITIONS = {*CURRENT_FILE_PROFILES, 'viwiktionary'}
 
 
 def verify_file_defaults(selected, observed):
     old, new = decode(selected)['query'], decode(observed)['query']
-    if (digest(selected) != SR_SELECTED_DEFAULTS or digest(observed) != site_info.FIGURE_WMF5_SR_RAW or
-            old['general']['git-hash'] != '0470f6c99a6456a366635bf25a517a1f951de6f5' or
+    wiki = old['general'].get('wikiid')
+    binding = SELECTED_FILE_DEFAULTS.get(wiki)
+    if (binding is None or binding != (old['general']['git-hash'], digest(selected)) or
+            digest(observed) != site_info.FIGURE_WMF5_DEFAULTS[wiki][1] or
             new['general']['git-hash'] != site_info.FIGURE_WMF5_CORE or
             old['defaultoptions'] != new['defaultoptions'] or
             site_info.figure_thumbnail_width(old) != site_info.figure_thumbnail_width(new) or
@@ -221,13 +309,20 @@ def verify_file_defaults(selected, observed):
         raise ValueError('Figure default-options source binding differs')
 
 
-def bound_file_core(core, selected_core, observed):
+def bound_file_core(core, selected_core, observed, *, wiki='srwiktionary'):
+    if wiki == 'viwiktionary' and core == FIGURE_CURRENT_CORE and observed is not None:
+        return (selected_core == '0470f6c99a6456a366635bf25a517a1f951de6f5' and
+                digest(observed) == site_info.FIGURE_WMF5_DEFAULTS['viwiktionary'][1])
     if observed is not None or core == site_info.FIGURE_WMF5_CORE:
-        return observed is not None and core == site_info.FIGURE_WMF5_CORE and selected_core == '0470f6c99a6456a366635bf25a517a1f951de6f5'
+        if observed is None or core != site_info.FIGURE_WMF5_CORE:
+            return False
+        binding = ORDINARY_FILE_DEFAULTS.get(wiki)
+        return (binding is not None and selected_core == binding[0] and
+                digest(observed) == site_info.FIGURE_WMF5_DEFAULTS[wiki][1])
     return figure_source_compatible(core, selected_core)
 
 
-def figure_profile(core, kind, media_extensions=None):
+def figure_profile(core, kind, media_extensions=None, *, wiki=None):
     if core in ('d1919ec5e4ebd7b0dea1ff6ea1cb4347a9349ca2', site_info.FIGURE_WMF5_CORE):
         # Only the V4 handler model and this complete registration set were observed.
         registered = FIGURE_WMF5_MEDIA
@@ -235,8 +330,13 @@ def figure_profile(core, kind, media_extensions=None):
             raise ValueError('Unreviewed Figure handler profile or media registration')
         approved = dict(FIGURE_WMF4_PROFILE, media_extensions=dict(registered))
         if core == site_info.FIGURE_WMF5_CORE:
-            approved.update(selected_defaults_sha256=SR_SELECTED_DEFAULTS,
-                            observed_defaults_response_sha256=site_info.FIGURE_WMF5_SR_RAW)
+            # Context-free calls check only whether an origin epoch is recognized.
+            # Actual projection and response calls supply their authenticated wiki.
+            selected_wiki = 'srwiktionary' if wiki is None else wiki
+            if selected_wiki not in ORDINARY_FILE_DEFAULTS:
+                raise ValueError('Unreviewed ordinary ImageInfo edition')
+            approved.update(selected_defaults_sha256=ORDINARY_FILE_DEFAULTS[selected_wiki][1],
+                            observed_defaults_response_sha256=site_info.FIGURE_WMF5_DEFAULTS[selected_wiki][1])
         return approved
     # GIF inherits bitmap geometry. This profile does not certify animated
     # thumbnail pixels, frame selection, or deployed animation limits.
@@ -521,7 +621,7 @@ def _figure_site_profile(site_raw, general, wiki, source_profile, approved):
     _figure_site_registration(decode(site_raw), general, wiki, approved)
 
 
-def _figure_site_registration(site, general, wiki, approved, *, french_supplement=False):
+def _figure_site_registration(site, general, wiki, approved, *, scoped_file_observation=False):
     """Validate registration from this caller's already decoded response."""
     require_edition(site, wiki)
     if any(key in site for key in ('error', 'errors', 'warnings')):
@@ -541,8 +641,8 @@ def _figure_site_registration(site, general, wiki, approved, *, french_supplemen
         raise ValueError('Unreviewed media registration set or version')
     if other.get('git-hash') == site_info.FIGURE_WMF5_CORE:
         limits = other.get('thumblimits')
-        language = 'fr' if french_supplement else 'sr'
-        if (wiki != language + 'wiktionary' or other.get('lang') != language or other.get('rtl') is not False or
+        editions = SCOPED_FILE_EDITIONS if scoped_file_observation else ORDINARY_FILE_DEFAULTS
+        if (wiki not in editions or other.get('lang') != wiki.removesuffix('wiktionary') or other.get('rtl') is not False or
                 other.get('case') != 'case-sensitive' or limits != {'0': 180, '1': 250, '2': 400} or
                 any(type(width) is not int for width in limits.values())):
             raise ValueError('ImageInfo differs from its reviewed default-options context')
@@ -925,9 +1025,30 @@ def validate_stream_header(header, schema, file_bytes):
     return rows
 
 
-def stream_values(path, schema, *, allow_encoded=True, identity_out=None, record_offsets=None, _encoded_record=None):
+class _HashedGzipInput:
+    def __init__(self, source):
+        self.source = source
+        self.sha = hashlib.sha256()
+        self.size = 0
+
+    def read(self, size):
+        block = self.source.read(size)
+        self.sha.update(block)
+        self.size += len(block)
+        return block
+
+
+def stream_values(path, schema, *, allow_encoded=True, identity_out=None, record_offsets=None, _encoded_record=None, _gzip_size=None, _storage_out=None):
     """Yield the header and exact declared records with bounded transient input."""
-    path = Path(path)
+    logical = Path(path)
+    path = _physical_role(logical)
+    if path != logical and _gzip_size is None:
+        manifest = decode(small(logical.parent / MANIFEST))
+        _gzip_size = manifest['artifacts'][logical.name]['bytes']
+        if type(_gzip_size) is not int or _gzip_size <= 0:
+            raise ValueError('Invalid decoded Figure role length')
+        if identity_out is None:
+            identity_out = {}
     if identity_out is not None and (type(identity_out) is not dict or identity_out):
         raise ValueError('Stream identity output must be an empty dictionary')
     if record_offsets is not None and (type(record_offsets) is not list or record_offsets or schema != RAW_STREAM_SCHEMA):
@@ -937,31 +1058,44 @@ def stream_values(path, schema, *, allow_encoded=True, identity_out=None, record
     before = evidence.stamp(path)
     sha = hashlib.sha256() if identity_out is not None else None
     size = 0
-    with path.open('rb') as source:
+    logical_size = before[2] if _gzip_size is None else _gzip_size
+    if _gzip_size is not None and (schema not in (RAW_STREAM_SCHEMA, FILES_STREAM_SCHEMA) or identity_out is None):
+        raise ValueError('Compressed Figure source requires authenticated forward stream replay')
+    framed = _gzip_size is not None and record_offsets is not None
+    compressed_sha = hashlib.sha256() if framed else None
+    with path.open('rb', buffering=gzip_members.BUFFER_BYTES if framed else -1) as held:
+        stored = None if _gzip_size is None or framed else _HashedGzipInput(held)
+        source = held if stored is None else gzip.GzipFile(fileobj=stored, mode='rb')
+        def line(bound):
+            if framed:
+                return gzip_members.read_member(held, bound, before[2], stored_sha=compressed_sha)
+            return source.readline(bound + 1)
         if sha is not None:
-            opened = os.fstat(source.fileno())
+            opened = os.fstat(held.fileno())
             if (not stat.S_ISREG(opened.st_mode) or
                     (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns, opened.st_ctime_ns) != before):
                 raise ValueError('Figure stream replaced before reading')
-        raw = source.readline(STREAM_HEADER_LIMIT + 1)
-        if len(raw) > STREAM_HEADER_LIMIT:
+        raw = line(min(STREAM_HEADER_LIMIT, logical_size))
+        if len(raw) > min(STREAM_HEADER_LIMIT, logical_size):
             raise ValueError('Figure stream header exceeds its bound')
         if sha is not None:
             sha.update(raw); size += len(raw)
         header = stream_decode(raw)
-        count = validate_stream_header(header, schema, before[2] - len(raw))
+        count = validate_stream_header(header, schema, logical_size - len(raw))
         encoding = raw_record_encoding(header, allow_encoded=allow_encoded) if schema == RAW_STREAM_SCHEMA else None
         yield header
         limit = STREAM_RAW_LINE_LIMIT if schema == RAW_STREAM_SCHEMA else STREAM_FACT_LINE_LIMIT
         for _ in range(count):
             offset = source.tell() if record_offsets is not None else None
-            raw = source.readline(limit + 1)
-            if len(raw) > limit:
+            bound = min(limit, logical_size - size) if sha is not None else limit
+            raw = line(bound)
+            if len(raw) > bound:
                 raise ValueError('Figure stream record exceeds its bound')
             if sha is not None:
                 sha.update(raw); size += len(raw)
             if record_offsets is not None:
-                record_offsets.append((offset, len(raw), digest(raw)))
+                record_offsets.append((offset, source.tell()-offset, len(raw), digest(raw)) if framed else
+                                      (offset, len(raw), digest(raw)))
             value = raw_record_decode(raw, encoding) if schema == RAW_STREAM_SCHEMA else stream_decode(raw)
             if _encoded_record is not None:
                 _encoded_record.clear()
@@ -970,27 +1104,37 @@ def stream_values(path, schema, *, allow_encoded=True, identity_out=None, record
         if source.read(1):
             raise ValueError('Trailing Figure stream records or bytes')
         if sha is not None:
-            opened = os.fstat(source.fileno())
+            opened = os.fstat(held.fileno())
             if (not stat.S_ISREG(opened.st_mode) or
                     (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns, opened.st_ctime_ns) != before):
                 raise ValueError('Figure stream changed during reading')
+        if stored is not None:
+            source.close()
+            if stored.size != before[2]:
+                raise ValueError('Compressed Figure source did not reach physical EOF')
     if evidence.stamp(path) != before:
         raise ValueError('Figure stream changed during replay')
     if sha is not None:
-        if size != before[2]:
+        if size != logical_size:
             raise ValueError('Figure stream byte count changed during replay')
         # Publish only after complete iteration, exact EOF and both identities.
         # Closing or failing this generator cannot leave a success identity.
         identity_out.update(size=size, sha256=sha.hexdigest())
+        if _storage_out is not None:
+            if framed:
+                _storage_out.update(size=before[2], sha256=compressed_sha.hexdigest())
+            elif stored is not None:
+                _storage_out.update(size=stored.size, sha256=stored.sha.hexdigest())
 
 
-def figure_stream_document(raw_path, namespace_raw, wiki, date, site_raw, *, profile_kind=FIGURE_PROFILE_V3, allow_tiff_companion=True, allow_encoded=True, allow_compatible_epochs=True, allow_decimal_tiff_axes=True, allow_default_tiff_page=True, current_file_supplements=False, _http_replay=None):
+def figure_stream_document(raw_path, namespace_raw, wiki, date, site_raw, *, profile_kind=FIGURE_PROFILE_V3, allow_tiff_companion=True, allow_encoded=True, allow_compatible_epochs=True, allow_decimal_tiff_axes=True, allow_default_tiff_page=True, current_file_supplements=False, _http_replay=None, _gzip_size=None, _storage_out=None):
     before = evidence.stamp(Path(raw_path))
     identity = {}
     if _http_replay is not None and type(_http_replay) is not _HttpBatchReplay:
         raise ValueError('Invalid private Figure HTTP stream replay')
+    storage = {} if _gzip_size is None else dict(_gzip_size=_gzip_size, _storage_out=_storage_out)
     values = stream_values(raw_path, RAW_STREAM_SCHEMA, allow_encoded=allow_encoded, identity_out=identity,
-                           record_offsets=None if _http_replay is None else _http_replay.offsets)
+                           record_offsets=None if _http_replay is None else _http_replay.offsets, **storage)
     header = next(values)
     def observed_values():
         for batch in values:
@@ -1020,25 +1164,30 @@ def figure_stream_document(raw_path, namespace_raw, wiki, date, site_raw, *, pro
     return result
 
 
+def _projection_rows(document):
+    header = {key: value for key, value in document.items() if key != 'records'}
+    validate_stream_header(header, FILES_STREAM_SCHEMA, 2**64-1)
+    raw = stream_encoded(header)
+    if len(raw) > STREAM_HEADER_LIMIT:
+        raise ValueError('Figure projection header exceeds its bound')
+    yield raw
+    previous = None
+    for record in document['records']:
+        key = record['requested_file'].encode('utf-8')
+        if previous is not None and key <= previous:
+            raise ValueError('Figure projection records are not strictly ordered')
+        previous = key
+        raw = stream_encoded(record)
+        if len(raw) > STREAM_FACT_LINE_LIMIT:
+            raise ValueError('Figure projection record exceeds its bound')
+        yield raw
+
+
 def write_projection_stream(path, document, *, identity_out=None):
     if identity_out is not None and (type(identity_out) is not dict or identity_out):
         raise ValueError('Projection identity output must be an empty dictionary')
-    header = {key: value for key, value in document.items() if key != 'records'}
-    validate_stream_header(header, FILES_STREAM_SCHEMA, 2**64-1)
     with Path(path).open('xb') as output:
-        raw = stream_encoded(header)
-        if len(raw) > STREAM_HEADER_LIMIT:
-            raise ValueError('Figure projection header exceeds its bound')
-        output.write(raw)
-        previous = None
-        for record in document['records']:
-            key = record['requested_file'].encode('utf-8')
-            if previous is not None and key <= previous:
-                raise ValueError('Figure projection records are not strictly ordered')
-            previous = key
-            raw = stream_encoded(record)
-            if len(raw) > STREAM_FACT_LINE_LIMIT:
-                raise ValueError('Figure projection record exceeds its bound')
+        for raw in _projection_rows(document):
             output.write(raw)
         if identity_out is not None:
             output.flush()
@@ -1125,7 +1274,7 @@ class _ReprojectionRecords:
         return document
 
 
-def verify_stream_document(projection_path, raw_path, namespace_raw, wiki, date, site_raw, *, regenerate_projection=None, _reprojection_records=None, _http_replay=None):
+def verify_stream_document(projection_path, raw_path, namespace_raw, wiki, date, site_raw, *, regenerate_projection=None, _reprojection_records=None, _http_replay=None, _gzip_size=None, _storage_out=None):
     if _reprojection_records is not None and (type(_reprojection_records) is not _ReprojectionRecords or regenerate_projection is not None):
         raise ValueError('Invalid private reprojection record reuse')
     if regenerate_projection is None:
@@ -1170,6 +1319,10 @@ def verify_stream_document(projection_path, raw_path, namespace_raw, wiki, date,
         if regenerate_projection is not None or _reprojection_records is not None:
             raise ValueError('HTTP stream reuse cannot replace projection regeneration')
         options['_http_replay'] = _http_replay
+    if _gzip_size is not None:
+        if header['raw_bytes'] != _gzip_size:
+            raise ValueError('Compressed Figure source size differs from its projection')
+        options.update(_gzip_size=_gzip_size, _storage_out=_storage_out)
     expected = (figure_stream_document(raw_path, namespace_raw, wiki, date, site_raw,
                     current_file_supplements=header.get('replay_contract') == REPLAY_CONTRACT, **options)
                 if _reprojection_records is None else
@@ -1285,36 +1438,78 @@ def jpeg_unrotated_metadata(info):
     return 'Orientation' not in fields or (type(fields['Orientation']) is int and fields['Orientation'] == 1)
 
 
-def french_file_supplement(batch, data, registry):
-    """Certify only the returned PNG width or JPEG metadata, against the f458 French base."""
+def current_svg_identity_batch(batch, data, registry, rows):
+    # The foreign epoch supplies file identity and intrinsic SVG axes only.
+    # Ordinary replay separately proves any requested thumbnail width.
+    query = data['query']
+    pages = {page['title']: page for page in query['pages']}
+    for title in batch['requests']:
+        row = rows[title]
+        page = pages[row['response_title']]
+        if title != row['response_title'] or (row['exists'] and title != row['canonicaltitle']):
+            raise ValueError('Mixed-epoch file identity cannot retarget its request')
+        if not row['exists']:
+            if (page.get('missing') is not True or page.get('imagerepository') != '' or
+                    'imageinfo' in page or 'observed_svg_width_px' in batch):
+                raise ValueError('Current file absence lacks a negative repository result')
+            continue
+        info = page['imageinfo'][0]
+        if (info.get('mime') != 'image/svg+xml' or row['mediatype'] != 'DRAWING' or
+                min(row['width'], row['height']) <= 0):
+            raise ValueError('Current file identity lacks positive intrinsic SVG axes')
+
+
+def current_file_observation(batch, data, registry):
+    """Derive only the returned file state or thumbnail role qualified for this edition."""
     kind = set(batch) - {'response', 'requests'}
     general = data['query']['general']
-    if (registry.wiki != 'frwiktionary' or registry.date != '20261001' or
-            general.get('git-hash') != site_info.FIGURE_WMF5_CORE or
-            kind not in ({'observed_svg_width_px'}, {'jpeg_metadata_only'})):
-        raise ValueError('Unreviewed French supplemental ImageInfo scope')
-    registered = FIGURE_WMF5_MEDIA
-    _figure_site_registration(data, general, registry.wiki, {'media_extensions':registered}, french_supplement=True)
+    wiki = registry.wiki
+    width_role = kind == {'observed_svg_width_px'} and wiki in CURRENT_FILE_PROFILES and wiki != 'huwiktionary'
+    jpeg_role = kind == {'jpeg_metadata_only'} and wiki == 'frwiktionary'
+    ogg_role = not kind and wiki in ('huwiktionary', 'elwiktionary')
+    if (registry.date != '20261001' or general.get('git-hash') != site_info.FIGURE_WMF5_CORE or
+            not (width_role or jpeg_role or ogg_role)):
+        raise ValueError('Unreviewed current ImageInfo observation role')
+    _figure_site_registration(data, general, wiki, {'media_extensions':FIGURE_WMF5_MEDIA}, scoped_file_observation=True)
     rows = metadata.classify_response(data, batch['requests'], registry)
-    pages = {page['title']: page for page in data['query']['pages']}
+    pages = {page['title']:page for page in data['query']['pages']}
     records = []
     for name in batch['requests']:
         row = rows[name]
+        page = pages[row['response_title']]
+        if ogg_role:
+            if (row['response_title'] != name or page.get('redirect') or not name.endswith('.ogg') or
+                    any(data['query'].get(key) for key in ('redirects', 'normalized'))):
+                raise ValueError('Current Ogg state requires the directly requested file')
+            if wiki == 'huwiktionary':
+                if (row['exists'] or page.get('missing') is not True or 'known' in page or
+                        page.get('imagerepository') != '' or 'imageinfo' in page):
+                    raise ValueError('Hungarian Ogg absence is not explicit')
+                records.append(dict(requested_file=name, canonical_file=name, state='missing', file_sha1='',
+                    file_timestamp='', original_width=0, original_height=0, mime='', mediatype=''))
+                continue
         if not row['exists'] or _figure_utc_key(row['file_timestamp']) > _figure_utc_key(data['curtimestamp']):
-            raise ValueError('French supplemental file identity is absent or postdates ImageInfo')
-        info = pages[row['response_title']]['imageinfo'][0]
-        if 'observed_svg_width_px' in batch:
+            raise ValueError('Current file identity is absent or postdates ImageInfo')
+        info = page['imageinfo'][0]
+        if width_role:
             width = batch['observed_svg_width_px']
             if (type(width) is not int or info.get('thumbmime') != 'image/png' or
                     observed_svg_width(info, info.get('mime'), row['mediatype'], row['width'], row['height']) != width):
-                raise ValueError('French supplement lacks the exact rasterized PNG width')
-        elif (batch['jpeg_metadata_only'] is not True or name != row['canonicaltitle'] or
-                info.get('mime') != 'image/jpeg' or row['mediatype'] != 'BITMAP' or
-                min(row['width'], row['height']) <= 0 or not jpeg_unrotated_metadata(info)):
-            raise ValueError('French JPEG supplement lacks positive unrotated file metadata')
-        records.append(dict(requested_file=name, canonical_file=row['canonicaltitle'], state='eligible',
-            file_sha1=row['file_sha1'], file_timestamp=row['file_timestamp'], original_width=row['width'],
-            original_height=row['height'], mime=info['mime'], mediatype=row['mediatype']))
+                raise ValueError('Current supplement lacks the exact rasterized PNG width')
+        elif jpeg_role:
+            if (batch['jpeg_metadata_only'] is not True or name != row['canonicaltitle'] or
+                    info.get('mime') != 'image/jpeg' or row['mediatype'] != 'BITMAP' or
+                    min(row['width'], row['height']) <= 0 or not jpeg_unrotated_metadata(info)):
+                raise ValueError('French JPEG supplement lacks positive unrotated file metadata')
+        else:
+            # Shared repository canonical spelling can differ in ASCII case.
+            if (page.get('imagerepository') != 'shared' or page.get('known') is not True or
+                    name.encode().lower() != info['canonicaltitle'].encode().lower() or
+                    (info.get('mime'), row['mediatype'], row['width'], row['height']) != ('application/ogg', 'AUDIO', 0, 0)):
+                raise ValueError('Greek Ogg observation lacks a directly identified unsupported audio revision')
+        records.append(dict(requested_file=name, canonical_file=row['canonicaltitle'],
+            state='unsupported' if ogg_role else 'eligible', file_sha1=row['file_sha1'], file_timestamp=row['file_timestamp'],
+            original_width=row['width'], original_height=row['height'], mime=info['mime'], mediatype=row['mediatype']))
     return records
 
 
@@ -1350,8 +1545,11 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
     if (core in (FIGURE_RESPONSE_CORE, *FIGURE_REGISTRATION_EPOCHS, *FIGURE_WMF4_CORES, site_info.FIGURE_WMF5_CORE) or profile_kind == FIGURE_PROFILE_V5) and not allow_compatible_epochs:
         raise ValueError('Compatible response epochs require replay contract v3')
     profile = None
+    if core == site_info.FIGURE_WMF5_CORE and (wiki not in ORDINARY_FILE_DEFAULTS or
+            date != site_info.FIGURE_WMF5_DEFAULTS[wiki][0]):
+        raise ValueError('Unreviewed ordinary ImageInfo edition/date')
     if has_batches:
-        approved = figure_profile(core, profile_kind, _figure_media_extensions(registration))
+        approved = figure_profile(core, profile_kind, _figure_media_extensions(registration), wiki=wiki)
         if approved is None:
             raise ValueError('Unreviewed Figure handler source version; retain the response for source reconciliation')
         profile = dict(approved, site_raw_sha256=digest(site_raw))
@@ -1377,6 +1575,9 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
         observation = batch.get('observed_svg_width_px')
         occurrences = batch.get('observed_svg_occurrences')
         supplemental = 'observed_svg_width_px' in batch or 'observed_svg_occurrences' in batch or jpeg_supplement
+        if core == site_info.FIGURE_WMF5_CORE and wiki != 'srwiktionary' and supplemental:
+            if wiki not in ('thwiktionary', 'itwiktionary') or observation is None or not current_file_supplements:
+                raise ValueError('Current ordinary ImageInfo does not grant this supplemental file observation')
         if core == site_info.FIGURE_WMF5_CORE and jpeg_supplement:
             raise ValueError('Unreviewed ImageInfo supplement at this revision')
         if 'observed_svg_occurrences' in batch:
@@ -1414,20 +1615,29 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
         require_edition(data, wiki)
         general = data['query']['general']
         batch_core = general.get('git-hash')
-        french_supplement = (current_file_supplements and allow_compatible_epochs and profile_kind == FIGURE_PROFILE_V4 and
-            wiki == 'frwiktionary' and core == FIGURE_CURRENT_CORE and batch_core == site_info.FIGURE_WMF5_CORE and
-            (observation is not None or jpeg_supplement))
-        if (general.get('lang') != language or (batch_core != core and not french_supplement and not (
+        scoped_observation = (batch_index > 0 and current_file_supplements and allow_compatible_epochs and
+            CURRENT_FILE_PROFILES.get(wiki) == profile_kind and core == FIGURE_CURRENT_CORE and
+            batch_core == site_info.FIGURE_WMF5_CORE)
+        vi_imageinfo = (batch_index > 0 and current_file_supplements and allow_compatible_epochs and profile_kind == FIGURE_PROFILE_V4 and
+            (wiki, date) == ('viwiktionary', site_info.FIGURE_WMF5_DEFAULTS['viwiktionary'][0]) and
+            core == FIGURE_CURRENT_CORE and batch_core == site_info.FIGURE_WMF5_CORE and
+            set(batch) - {'requests', 'response'} in (set(), {'observed_svg_width_px'}))
+        if (general.get('lang') != language or (batch_core != core and not (scoped_observation or vi_imageinfo) and not (
                 allow_compatible_epochs and profile_kind in (FIGURE_PROFILE_V4, FIGURE_PROFILE_V5) and
                 core in FIGURE_RESPONSE_EPOCHS and batch_core in FIGURE_RESPONSE_EPOCHS))):
             raise ValueError('Figure batches mix site/source versions')
         if occurrences is not None and batch_core not in (FIGURE_CURRENT_CORE, FIGURE_REGISTRATION_CORE, site_info.FIGURE_WMF5_CORE):
             raise ValueError('Compatible response epochs do not grant HTML occurrence authority')
-        if french_supplement:
-            french_file_supplement(batch, data, registry)
+        if vi_imageinfo:
+            _figure_site_registration(data, general, wiki, {'media_extensions': FIGURE_WMF5_MEDIA}, scoped_file_observation=True)
+            profile.update(selected_defaults_sha256=VI_SELECTED_DEFAULTS,
+                           observed_defaults_response_sha256=site_info.FIGURE_WMF5_DEFAULTS[wiki][1])
+            batch_profile = approved
+        elif scoped_observation:
+            current_file_observation(batch, data, registry)
             batch_profile = approved
         else:
-            batch_profile = figure_profile(batch_core, profile_kind, _figure_media_extensions(data))
+            batch_profile = figure_profile(batch_core, profile_kind, _figure_media_extensions(data), wiki=wiki)
             # Exact per-core registrations differ, but the proved image profile does
             # not. Both complete registration inventories are checked below.
             if ({key: value for key, value in batch_profile.items() if key != 'media_extensions'} !=
@@ -1441,6 +1651,8 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
             raise ValueError('Missing same-response Figure observation time')
         observed_key = _figure_utc_key(observed)
         rows = metadata.classify_response(data, titles, registry)
+        if vi_imageinfo:
+            current_svg_identity_batch(batch, data, registry, rows)
         pages = {page['title']: page for page in data['query']['pages']}
         tiff_info = (tiff_metadata_companion(batch, data, rows, registry, wiki, batch_core, language, batch_profile)
                      if 'tiff_metadata_response' in batch else {})
@@ -1685,8 +1897,10 @@ def provider_chunks(projection):
 
 
 def verify_provider_stream(path, projection):
-    before = evidence.stamp(Path(path))
-    with Path(path).open('rb') as source:
+    logical = Path(path)
+    path = _physical_role(logical)
+    before = evidence.stamp(path)
+    with (path.open('rb') if path == logical else gzip.open(path, 'rb')) as source:
         for expected in provider_chunks(projection):
             if source.read(len(expected)) != expected:
                 raise ValueError('Provider TSV differs from the authenticated file batches')
@@ -1698,17 +1912,26 @@ def verify_provider_stream(path, projection):
 
 def inventory_document(path):
     # This is the compact selected-name set, not a retained HTTP response DOM.
-    before = evidence.stamp(Path(path))
-    with Path(path).open('r', encoding='utf-8') as source:
-        value = json.load(source, object_pairs_hook=evidence.unique_object,
-                          parse_constant=lambda _: (_ for _ in ()).throw(ValueError('Nonfinite inventory number')))
+    logical = Path(path)
+    path = _physical_role(logical)
+    before = evidence.stamp(path)
+    options = dict(object_pairs_hook=evidence.unique_object,
+                   parse_constant=lambda _: (_ for _ in ()).throw(ValueError('Nonfinite inventory number')))
+    if path == logical:
+        with path.open('r', encoding='utf-8') as source:
+            value = json.load(source, **options)
+    else:
+        expected = decode(small(logical.parent / MANIFEST))['artifacts'][logical.name]['bytes']
+        if type(expected) is not int or not 0 < expected <= MAX_METADATA:
+            raise ValueError('Invalid decoded Figure inventory size')
+        value = json.loads(small(logical, expected), **options)
     if evidence.stamp(Path(path)) != before:
         raise ValueError('Figure inventory changed during reading')
     return value
 
 
 def output_roles(root):
-    return {**ROLES, **({'file-metadata': PROVIDER} if (Path(root) / PROVIDER).exists() else {})}
+    return {**ROLES, **({'file-metadata': PROVIDER} if _physical_role(Path(root) / PROVIDER).exists() else {})}
 
 
 def source_inventory(namespace_raw, wiki, date, dumpstatus_raw, paths):
@@ -1812,7 +2035,7 @@ def source_inventory(namespace_raw, wiki, date, dumpstatus_raw, paths):
 
 def inventory_runtime_authority():
     # Preserve real helper locations as well as their content identities.
-    helpers = [Path(module.__file__).absolute() for module in (evidence, metadata, site_info)]
+    helpers = [Path(module.__file__).absolute() for module in (evidence, metadata, site_info, gzip_members)]
     helpers.append(Path(__file__).absolute())
     helpers.extend(evidence.REPO / name for name in evidence.dependencies())
     return (capture_source(), tuple((str(path), str(path.resolve()), evidence.stamp(path))
@@ -2100,7 +2323,10 @@ def capture_member_paths(root, *, include_markers=False):
     directories = {root: complete_capture_directory_stamp(root)}
     members, declared = {}, None
     for path in sorted(root.iterdir()):
-        if not include_markers and path.name in (MANIFEST, COMPLETE):
+        role = path.name[:-3] if path.suffix == '.gz' and path.name[:-3] in _gzip_role_names() else path.name
+        if role in _gzip_role_names() and _physical_role(root / role) != path:
+            raise ValueError('Unexpected compressed Figure member path')
+        if not include_markers and role in (MANIFEST, COMPLETE):
             continue
         value = path.lstat()
         if stat.S_ISDIR(value.st_mode):
@@ -2120,7 +2346,9 @@ def capture_member_paths(root, *, include_markers=False):
                 members[path.name + '/' + child.name] = child
         else:
             evidence.stamp(path)
-            members[path.name] = path
+            if role in members:
+                raise ValueError('Duplicate Figure logical member')
+            members[role] = path
     if declared is not None and {path.name for path in directories if path != root} != declared:
         raise ValueError('Materialized Figure origin directory is missing')
     if any(complete_capture_directory_stamp(path) != before for path, before in directories.items()):
@@ -2128,17 +2356,23 @@ def capture_member_paths(root, *, include_markers=False):
     return members, directories
 
 
-def payload(root, *, _verified_raw=None):
+def payload(root, *, _verified_raw=None, _expected=None, _written=None):
     result = {}
     members, directories = capture_member_paths(root)
     for name, path in members.items():
-        if (_verified_raw is not None and name == ROLES['figure-sizing-raw']):
-            resolved, stamp, identity = _verified_raw
+        proof = _verified_raw if name == ROLES['figure-sizing-raw'] else (_written or {}).get(name)
+        if proof is not None:
+            resolved, stamp, identity = proof
             if path.resolve(strict=True) != resolved or evidence.stamp(path) != stamp:
                 raise ValueError('Figure verified raw changed before content authentication')
             result[name] = dict(identity)
             if evidence.stamp(path) != stamp:
                 raise ValueError('Figure verified raw changed during content authentication')
+        elif path.name != name and path.name == name + '.gz':
+            expected = None if _expected is None else _expected.get(name)
+            if not isinstance(expected, dict) or type(expected.get('bytes')) is not int or expected['bytes'] <= 0:
+                raise ValueError('Missing decoded Figure member identity')
+            result[name] = _role_identity(path, expected['bytes'])
         else:
             identity = evidence.fingerprint(path)
             result[name] = {'bytes': identity['size'], 'sha256': identity['sha256']}
@@ -2170,7 +2404,9 @@ def replay(root, wiki, date, *, retained_cache=None, inventory_cache=None, regen
             retained_cache=retained_cache, inventory_cache=inventory_cache,
             regenerate_projection=regenerate_projection, _reprojection_records=_reprojection_records,
             _raw_index_out=_raw_index_out, _inventory_sources_out=_inventory_sources_out, _raw_payload_out=_raw_payload_out)
-    with (root / ROLES['figure-sizing']).open('rb') as source:
+    logical_projection = root / ROLES['figure-sizing']
+    projection_path = _physical_role(logical_projection)
+    with (projection_path.open('rb') if projection_path == logical_projection else gzip.open(projection_path, 'rb')) as source:
         first = source.readline(STREAM_HEADER_LIMIT + 1)
     try:
         stream_header = stream_decode(first) if len(first) <= STREAM_HEADER_LIMIT else None
@@ -2253,7 +2489,7 @@ def replay(root, wiki, date, *, retained_cache=None, inventory_cache=None, regen
 def _figure_capture_manifest(root, require_complete=True):
     manifest_raw = small(root / MANIFEST)
     manifest = decode(manifest_raw)
-    if (not isinstance(manifest, dict) or manifest.get('schema') != SCHEMA or
+    if (not isinstance(manifest, dict) or manifest.get('schema') != SCHEMA or '_raw_storage' in manifest or
             not isinstance(manifest.get('generator_sha256'), str) or
             re.fullmatch('[0-9a-f]{64}', manifest['generator_sha256']) is None):
         raise ValueError('Invalid Figure capture manifest')
@@ -2267,7 +2503,7 @@ def _authenticate_figure_capture_files(root, manifest, inventory_cache, *, _veri
     directory_stamp = complete_capture_directory_stamp(root)
     members, member_directories = capture_member_paths(root, include_markers=True)
     before = {path: evidence.stamp(path) for path in members.values()}
-    artifacts = payload(root, _verified_raw=_verified_raw)
+    artifacts = payload(root, _verified_raw=_verified_raw, _expected=manifest.get('artifacts'))
     if manifest.get('artifacts') != artifacts:
         raise ValueError('Figure capture differs from source replay')
     # Each output is already fully hashed in this invocation. Bind
@@ -2283,7 +2519,7 @@ def _authenticate_figure_capture_files(root, manifest, inventory_cache, *, _veri
         raise ValueError('Figure capture changed during content authentication')
 
 
-def verify(root, require_complete=True, *, retained_cache=None, inventory_cache=None, regenerate_projection=None, _reprojection_records=None, _raw_index_out=None):
+def verify(root, require_complete=True, *, retained_cache=None, inventory_cache=None, regenerate_projection=None, _reprojection_records=None, _raw_index_out=None, _raw_storage_out=None):
     if _raw_index_out is not None and (type(_raw_index_out) is not dict or _raw_index_out):
         raise ValueError('Verified raw index output must be an empty dictionary')
     inventory_cache = {} if inventory_cache is None else inventory_cache
@@ -2310,7 +2546,7 @@ def verify(root, require_complete=True, *, retained_cache=None, inventory_cache=
     if coverage['kind'] == 'file-logical-axes':
         keys = ('wiki', 'date', 'name', 'url', 'size', 'sha1')
         if inventory_sources:
-            path = root / INVENTORY
+            path = _physical_role(root / INVENTORY)
             if (path.resolve(), evidence.stamp(path)) != (inventory_sources['path'], inventory_sources['stamp']):
                 raise ValueError('Figure inventory changed before source selection comparison')
             expected_sources = [dict(zip(keys, row, strict=True)) for row in inventory_sources['sources']]
@@ -2331,6 +2567,8 @@ def verify(root, require_complete=True, *, retained_cache=None, inventory_cache=
         raise ValueError('Figure capture completed during projection regeneration')
     if _raw_index_out is not None:
         _raw_index_out.update(raw_index)
+    if _raw_storage_out is not None and 'storage' in raw_payload:
+        _raw_storage_out.update(raw_payload['storage'])
     return manifest
 
 
@@ -2478,7 +2716,10 @@ def verify_tuple(paths, wiki=None, date=None, *, retained_cache=None, inventory_
 
     before = capture_identity()
     manifest_raw = small(root / MANIFEST)
-    manifest = verify(root, retained_cache=retained_cache, inventory_cache=inventory_cache)
+    storage = {}
+    with _physical_role(root / ROLES['figure-sizing-raw']).open('rb') as raw:
+        options = {'_raw_storage_out': storage} if raw.read(2) == b'\x1f\x8b' else {}
+    manifest = verify(root, retained_cache=retained_cache, inventory_cache=inventory_cache, **options)
     coverage = manifest.get('coverage', {})
     if coverage.get('selected_page_only') is True:
         if selected_page is None or encoded(selected_page) != encoded(coverage['selected_page']):
@@ -2501,6 +2742,8 @@ def verify_tuple(paths, wiki=None, date=None, *, retained_cache=None, inventory_
         raise ValueError('Figure source capture changed during validation')
     inventory = {**{name: row['sha256'] for name, row in manifest['artifacts'].items()},
                  MANIFEST: digest(manifest_raw), COMPLETE: digest(marker_raw)}
+    if storage:
+        manifest = {**manifest, '_raw_storage': storage}
     return {role: ({**manifest, 'output_sha256': manifest['outputs'][role]}, dict(inventory))
             for role in paths}
 
@@ -2827,14 +3070,17 @@ WALL_ERRORS = ('Original capture wall deadline reached', 'Capture wall deadline 
 
 
 def capture_source():
-    return {**producer(), 'dependency_sha256': {**metadata.producer()['dependency_sha256'], **{
+    source = producer()
+    return {**source, 'dependency_sha256': {**metadata.producer()['dependency_sha256'], **source['dependency_sha256'], **{
         module.__name__: evidence.fingerprint(Path(module.__file__))['sha256']
         for module in (evidence, metadata, site_info)}}}
 
 
 def source_records(path, expected):
-    before = evidence.stamp(Path(path))
-    with Path(path).open('rb') as stream:
+    logical = Path(path)
+    path = _physical_role(logical)
+    before = evidence.stamp(path)
+    with (path.open('rb') if path == logical else gzip.open(path, 'rb')) as stream:
         line = stream.readline(STREAM_HEADER_LIMIT + 1)
         if len(line) > STREAM_HEADER_LIMIT:
             raise ValueError('Figure request header exceeds its bound')
@@ -3099,12 +3345,24 @@ def replay_stream_capture(root, wiki, date, defaults, namespace, general, *, ret
     if _raw_index_out is not None and (type(_raw_index_out) is not dict or _raw_index_out):
         raise ValueError('Verified raw index output must be an empty dictionary')
     site_raw = small(root / ROLES['figure-sizing-site'], MAX_RESPONSE)
-    raw_path = root / ROLES['figure-sizing-raw']
+    raw_path = _physical_role(root / ROLES['figure-sizing-raw'])
     if _raw_payload_out is not None and (type(_raw_payload_out) is not dict or _raw_payload_out):
         raise ValueError('Verified raw payload output must be an empty dictionary')
     def raw_identity():
         return (raw_path.resolve(), evidence.stamp(raw_path), complete_capture_directory_stamp(root))
     raw_before = raw_identity()
+    with raw_path.open('rb') as candidate:
+        compressed = candidate.read(2) == b'\x1f\x8b'
+    storage = {}
+    gzip_size = None
+    if compressed:
+        if regenerate_projection is not None or _reprojection_records is not None:
+            raise ValueError('Compressed Figure source requires complete stream replay')
+        manifest = decode(small(root / MANIFEST))
+        raw_artifact = manifest['artifacts'][ROLES['figure-sizing-raw']]
+        gzip_size = raw_artifact['bytes']
+        if type(gzip_size) is not int or gzip_size <= 0:
+            raise ValueError('Invalid decoded Figure source size')
     generation = {} if regenerate_projection is None else {'regenerate_projection': regenerate_projection}
     if _reprojection_records is not None:
         generation['_reprojection_records'] = _reprojection_records
@@ -3116,8 +3374,12 @@ def replay_stream_capture(root, wiki, date, defaults, namespace, general, *, ret
     http_replay = (_HttpBatchReplay(root, wiki, date, namespace, early_plan, indexed=_raw_index_out is not None)
         if regenerate_projection is None and _reprojection_records is None and
            isinstance(early_plan, dict) and early_plan.get('metadata_mode', 'full') == 'full' else None)
+    if compressed and (not isinstance(early_plan, dict) or early_plan.get('metadata_mode', 'full') not in ('full', MATERIALIZED_HTTP_MODE)):
+        raise ValueError('Compressed Figure source requires a full replay plan')
     try:
         options = {} if http_replay is None else {'_http_replay': http_replay}
+        if compressed:
+            options.update(_gzip_size=gzip_size, _storage_out=storage)
         projection = verify_stream_document(root / ROLES['figure-sizing'], raw_path,
                                             namespace, wiki, date, site_raw, **generation, **options)
         if http_replay is not None:
@@ -3156,17 +3418,17 @@ def replay_stream_capture(root, wiki, date, defaults, namespace, general, *, ret
             raise ValueError('Figure raw identity changed before root semantic reuse')
         return verified_count
     observed = None
-    if projection['core_revision'] == site_info.FIGURE_WMF5_CORE:
+    if (projection.get('source_profile') or {}).get('observed_defaults_response_sha256') is not None:
         if projection.get('replay_contract') != REPLAY_CONTRACT:
             raise ValueError('The bound ImageInfo defaults require streamed Figure replay v6')
         observed = small(root / FILE_DEFAULTS, MAX_RESPONSE)
         verify_file_defaults(small(root / ROLES['figure-siteinfo'], MAX_RESPONSE), observed)
-    if not bound_file_core(projection['core_revision'], general.get('git-hash'), observed):
+    if not bound_file_core(projection['core_revision'], general.get('git-hash'), observed, wiki=wiki):
         raise ValueError('Figure defaults and streamed facts use different source versions')
-    inventory_path = root / INVENTORY
+    inventory_path = _physical_role(root / INVENTORY)
     inventory_before = ((inventory_path.resolve(), evidence.stamp(inventory_path))
                         if _inventory_sources_out is not None else None)
-    inventory = verify_inventory(inventory_document(inventory_path), namespace, wiki, date, inventory_cache=inventory_cache)
+    inventory = verify_inventory(inventory_document(root / INVENTORY), namespace, wiki, date, inventory_cache=inventory_cache)
     query_inputs = decode(small(root / QUERY_INPUTS))
     query_titles = provider_query_titles(root, query_inputs, namespace, wiki, date)
     coverage = file_coverage(projection, inventory, query_titles)
@@ -3209,8 +3471,9 @@ def replay_stream_capture(root, wiki, date, defaults, namespace, general, *, ret
         frames = ((batch, source, archive, None) for batch, source, archive in http_replay.frames)
     else:
         encoded_record = {}
+        options = {'_gzip_size': gzip_size} if compressed else {}
         batches = stream_values(raw_path, RAW_STREAM_SCHEMA, identity_out=replay_identity, record_offsets=offsets,
-                                _encoded_record=encoded_record)
+                                _encoded_record=encoded_record, **options)
         header = next(batches)
         sources = source_records(root / FILE_REQUESTS, header['base_batches']+header['observed_batches'])
         frames = ((batch, source, None, dict(encoded_record)) for batch, source in zip(batches, sources, strict=True))
@@ -3233,11 +3496,14 @@ def replay_stream_capture(root, wiki, date, defaults, namespace, general, *, ret
             for number in sorted(selected):
                 if type(number) is not int or not 0 <= number < len(offsets):
                     raise ValueError('Invalid Figure selected raw index')
-                offset, size, sha = offsets[number]
-                source.seek(offset)
-                raw = source.read(size)
-                if len(raw) != size or digest(raw) != sha:
-                    raise ValueError('Figure indexed raw record changed')
+                if compressed:
+                    raw = gzip_members.read_indexed_row(raw_path, raw_before[1], offsets[number])
+                else:
+                    offset, size, sha = offsets[number]
+                    source.seek(offset)
+                    raw = source.read(size)
+                    if len(raw) != size or digest(raw) != sha:
+                        raise ValueError('Figure indexed raw record changed')
                 yield raw_record_decode(raw, encoding)
             if held_stamp() != raw_before[1] or raw_identity() != raw_before:
                 raise ValueError('Figure raw identity changed during selected replay')
@@ -3319,7 +3585,7 @@ def replay_stream_capture(root, wiki, date, defaults, namespace, general, *, ret
     expected = {*defaults['artifacts'], site_info.MANIFEST, site_info.COMPLETE, *ROLES.values(),
                 INVENTORY, FILE_REQUESTS, QUERY_INPUTS, PROVIDER, PLAN, *http_files,
                 *(row['path'] for row in query_inputs)}
-    if projection['core_revision'] == site_info.FIGURE_WMF5_CORE:
+    if observed is not None:
         expected.add(FILE_DEFAULTS)
     if materialized is not None:
         if replay_identity != {'size': projection['raw_bytes'], 'sha256': projection['raw_sha256']}:
@@ -3357,6 +3623,8 @@ def replay_stream_capture(root, wiki, date, defaults, namespace, general, *, ret
             (REPLAY_CONTRACT_V2, REPLAY_CONTRACT_V3, REPLAY_CONTRACT_V4, REPLAY_CONTRACT))
         _raw_index_out.update(header=header, offsets=offsets, encoding=encoding,
                               identity=replay_identity, stamp=raw_before[1])
+        if compressed:
+            _raw_index_out['storage'] = storage
     if _raw_payload_out is not None:
         if (replay_identity != {'size': projection['raw_bytes'], 'sha256': projection['raw_sha256']} or
                 raw_identity() != raw_before):
@@ -3364,6 +3632,8 @@ def replay_stream_capture(root, wiki, date, defaults, namespace, general, *, ret
         # stream_values publishes only after forward complete-byte iteration,
         # exact EOF and held-descriptor/path checks. Publish after all replay
         # semantics pass; partial/failed replay cannot mint this proof.
+        if storage:
+            _raw_payload_out['storage'] = storage
         _raw_payload_out['proof'] = (raw_before[0], raw_before[1],
             {'bytes': replay_identity['size'], 'sha256': replay_identity['sha256']})
     if _inventory_sources_out is not None:
@@ -3698,7 +3968,7 @@ def read_complete_capture(path, cache=None, *, inventory_cache=None, include_doc
             raise ValueError('Cyclic complete Figure source')
         # The first replay and final check cover every parent member. Between
         # batches guard the directory and the exact authorities consumed here.
-        selected = (path, value['root'] / COMPLETE, value['raw_path'])
+        selected = (_physical_role(path), value['root'] / COMPLETE, value['raw_path'])
         if (complete_capture_directory_stamp(value['root']) != value['directory_stamp'] or
                 any(complete_capture_directory_stamp(p) != before
                     for p, before in value.get('member_directories', {}).items()) or
@@ -3726,7 +3996,7 @@ def read_complete_capture(path, cache=None, *, inventory_cache=None, include_doc
                 finally:
                     values.close()
                 if (header != value['projection_header'] or
-                        identity != {'size': value['stamps'][value['root'] / ROLES['figure-sizing']][2],
+                        identity != {'size': value['manifest']['artifacts'][ROLES['figure-sizing']]['bytes'],
                                      'sha256': value['manifest']['outputs']['figure-sizing']}):
                     raise ValueError('Complete Figure selection document changed')
                 check_prefix_cache(cache)
@@ -3756,13 +4026,16 @@ def read_complete_capture(path, cache=None, *, inventory_cache=None, include_doc
             document = dict(header, records=list(values)) if include_document else None
         finally:
             values.close()
-        raw_path = root / ROLES['figure-sizing-raw']
+        raw_path = _physical_role(root / ROLES['figure-sizing-raw'])
         # The semantic source traversal already decoded every physical record,
         # checked exact EOF and hashed these same bytes. Keep its small index,
         # never a second decoded batch graph or another raw-file traversal.
+        storage = raw_index.pop('storage', None)
+        artifact_size = manifest['artifacts'][ROLES['figure-sizing-raw']]['bytes'] if storage is not None else before[raw_path][2]
         if (set(raw_index) != {'header', 'offsets', 'encoding', 'identity', 'stamp'} or
+                (storage is not None and storage.get('size') != before[raw_path][2]) or
                 raw_index['stamp'] != before[raw_path] or
-                raw_index['identity'] != {'size': before[raw_path][2],
+                raw_index['identity'] != {'size': artifact_size,
                                          'sha256': manifest['outputs']['figure-sizing-raw']}):
             raise ValueError('Complete Figure verified raw index differs')
         offsets, encoding = raw_index['offsets'], raw_index['encoding']
@@ -3777,6 +4050,7 @@ def read_complete_capture(path, cache=None, *, inventory_cache=None, include_doc
         value = {'root': root, 'manifest': manifest, 'manifest_sha256': digest(manifest_raw),
             'namespace': namespace, 'projection_header': header, 'offsets': offsets,
             'raw_path': raw_path, 'raw_encoding': encoding, 'stamps': before, 'directory_stamp': directory_stamp,
+            'raw_storage': storage,
             'member_directories': member_directories,
             'inventory': inventory_document(root / INVENTORY),
             'query_inputs': decode(small(root / QUERY_INPUTS)),
@@ -3810,23 +4084,27 @@ def _complete_stream_batch(reference, cache, *, inventory_cache=None, _encoded_b
     number = reference['batch']
     if complete['manifest_sha256'] != reference['sha256'] or not 0 <= number < len(complete['offsets']):
         raise ValueError('Complete Figure batch identity changed')
-    offset, size, sha = complete['offsets'][number]
     raw_path = complete['raw_path']
     expected_stamp = complete['stamps'][raw_path]
-    with raw_path.open('rb') as source:
-        def held_stamp():
-            value = os.fstat(source.fileno())
-            if not stat.S_ISREG(value.st_mode):
+    locator = complete['offsets'][number]
+    if complete.get('raw_storage') is not None:
+        raw = gzip_members.read_indexed_row(raw_path, expected_stamp, locator)
+    else:
+        offset, size, sha = locator
+        with raw_path.open('rb') as source:
+            def held_stamp():
+                value = os.fstat(source.fileno())
+                if not stat.S_ISREG(value.st_mode):
+                    raise ValueError('Complete Figure raw source changed')
+                return (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
+            if held_stamp() != expected_stamp:
                 raise ValueError('Complete Figure raw source changed')
-            return (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
-        if held_stamp() != expected_stamp:
-            raise ValueError('Complete Figure raw source changed')
-        source.seek(offset)
-        raw = source.read(size)
-        if held_stamp() != expected_stamp or evidence.stamp(raw_path) != expected_stamp:
-            raise ValueError('Complete Figure raw source changed during read')
-    if len(raw) != size or digest(raw) != sha:
-        raise ValueError('Complete Figure batch bytes changed')
+            source.seek(offset)
+            raw = source.read(size)
+            if held_stamp() != expected_stamp or evidence.stamp(raw_path) != expected_stamp:
+                raise ValueError('Complete Figure raw source changed during read')
+        if len(raw) != size or digest(raw) != sha:
+            raise ValueError('Complete Figure batch bytes changed')
     # The enclosing current stream already decoded this exact immutable byte
     # string. Parent validation and every indexed read/hash fence above remain.
     if _encoded_batch is not None:
@@ -3865,7 +4143,8 @@ def _verified_contained_http_leaf(node, slot, batch, cache, namespace, source_st
         raise ValueError('Verified HTTP frame is not selected')
     authorities={node['path'],node['root']/PLAN,node['root']/FILE_REQUESTS}
     if imported:authorities.add(container/PLAN)
-    for path in authorities:
+    for role_path in authorities:
+        path = _physical_role(role_path)
         expected=complete['stamps'].get(path)
         if expected is None or source_stamps.get(path)!=expected or evidence.stamp(path)!=expected:
             raise ValueError('Verified HTTP journal or authority changed')
@@ -4415,12 +4694,87 @@ def selected_inventory(args, namespace, *, inventory_cache=None):
     return inventory
 
 
+def import_archived_http(manifest_path, destination, wiki, date, namespace, planned):
+    """Rehydrate only matching independent full HTTP records, preserving their transport bytes."""
+    path = Path(manifest_path)
+    root = path.parent
+    if path.name not in (MANIFEST, MANIFEST+'.gz') or path.resolve() != path.absolute() or Path(destination).resolve().is_relative_to(root.resolve()):
+        raise ValueError('Unsafe archived HTTP source or destination')
+    def archived_bytes(member, limit):
+        if member.suffix != '.gz':
+            return small(member, limit)
+        before = evidence.stamp(member)
+        with gzip.open(member, 'rb') as stream:
+            data = stream.read(limit+1)
+        if len(data) > limit or evidence.stamp(member) != before:
+            raise ValueError('Oversized or changed compressed HTTP source metadata')
+        return data
+    def storage(name):
+        raw = root/name
+        gz = root/(name+'.gz')
+        if raw.exists() == gz.exists():
+            raise ValueError('Missing or ambiguous archived HTTP source member: '+name)
+        return raw if raw.exists() else gz
+    if path != storage(MANIFEST):
+        raise ValueError('Mismatched archived HTTP source manifest codec')
+    raw_manifest = archived_bytes(path, MAX_METADATA)
+    manifest = decode(raw_manifest)
+    if (decode(small(root/COMPLETE)) != {'schema': SCHEMA, 'manifest_sha256': digest(raw_manifest)} or
+            manifest.get('schema') != SCHEMA or manifest.get('capture_format') != FILES_STREAM_SCHEMA or
+            manifest.get('wiki') != wiki or manifest.get('date') != date or
+            manifest.get('namespace_registry_sha256') != digest(namespace)):
+        raise ValueError('Archived HTTP source edition/date/namespace or completion differs')
+    artifacts = manifest['artifacts']
+    def checked(name, limit=MAX_METADATA):
+        data = archived_bytes(storage(name), limit)
+        if artifacts.get(name) != {'bytes': len(data), 'sha256': digest(data)}:
+            raise ValueError('Archived HTTP artifact differs from original manifest')
+        return data
+    journal = checked(FILE_REQUESTS).splitlines()
+    identity = {}
+    raw_name = ROLES['figure-sizing-raw']
+    raw_path = storage(raw_name)
+    codec = {'_gzip_size': artifacts[raw_name]['bytes']} if raw_path.suffix == '.gz' else {}
+    frames = stream_values(raw_path, RAW_STREAM_SCHEMA, identity_out=identity, **codec)
+    header = next(frames)
+    count = header['base_batches'] + header['observed_batches']
+    if (header['wiki'] != wiki or header['namespace_registry_sha256'] != digest(namespace) or
+            len(journal) != count+1 or decode(journal[0]) != {'schema': REQUEST_STREAM_SCHEMA, 'batches': count}):
+        raise ValueError('Archived HTTP source journals differ')
+    selected = 0
+    names_seen = set()
+    for frame, line in zip(frames, journal[1:], strict=True):
+        ref = decode(line)
+        if ref.get('kind') != 'http-archived':
+            continue
+        # Unselected frames confer no authority; require original request numbering
+        # and exact ordered titles for every frame imported into this capture.
+        if selected == len(planned) or frame['requests'] != planned[selected]:
+            continue
+        response_name, _ = replay_http_source(root, ref, frame, wiki, names_seen, light=False)
+        if ref['batch']['request'] != f'file-metadata.request-{selected+1:06d}.json':
+            raise ValueError('Archived HTTP request number differs from new plan')
+        for name in ref['artifacts']:
+            evidence.put(destination/name, checked(name, MAX_RESPONSE))
+        evidence.put(destination/response_name, frame['response'].encode())
+        selected += 1
+        yield ref['batch']
+    if (selected != len(planned) or artifacts.get(ROLES['figure-sizing-raw']) !=
+            {'bytes': identity['size'], 'sha256': identity['sha256']}):
+        raise ValueError('Archived HTTP source lacks the complete planned requests or stream identity')
+
+
 def capture_files(args, transport=None, sleep=time.sleep, *, target_contract=REPLAY_CONTRACT,
                   _after_capture=None):
     """Capture or append with an explicit v4/v6 policy; ordinary callers keep v6."""
     if target_contract not in (REPLAY_CONTRACT_V4, REPLAY_CONTRACT):
         raise ValueError('Unsupported Figure capture replay contract')
     root = Path(args.output)
+    archived_source = getattr(args, 'import_archived_http', None)
+    if archived_source is not None and (root.resolve().is_relative_to(Path(archived_source).parent.resolve()) or
+            getattr(args, 'resume', None) is not None or getattr(args, 'max_inflight', 1) != 1 or
+            getattr(args, 'metadata_mode', 'full') != 'full'):
+        raise ValueError('Archived HTTP import requires a separate fresh sequential full capture')
     file_defaults = getattr(args, 'file_defaults', None)
     if file_defaults is not None and root.resolve().is_relative_to(Path(file_defaults).resolve()):
         raise ValueError('Figure capture cannot modify its default-options witness')
@@ -4492,6 +4846,9 @@ def _capture_files(args, transport=None, sleep=time.sleep, *, target_contract=RE
         raise ValueError('Invalid Figure capture limits')
     root, defaults_root = Path(args.output), Path(args.defaults)
     resume_path = getattr(args, 'resume', None)
+    compressed_output = getattr(args, 'gzip_output', False)
+    if compressed_output and (resume_path is not None or lean):
+        raise ValueError('Gzip Figure output requires a fresh complete offline replay')
     if root.is_symlink() or (root.exists() and resume_path is None):
         raise ValueError('Figure capture output already exists; preserve original evidence')
     for source in (defaults_root, *(Path(p) for p in args.reuse),
@@ -4581,6 +4938,10 @@ def _capture_files(args, transport=None, sleep=time.sleep, *, target_contract=RE
         retained.extend(dict(reference, batch=i) for i in range(base))
         observed.extend(dict(reference, batch=i) for i in range(base, len(complete['offsets'])))
         used.update(names)
+        if compressed_output:
+            # The append needs selected names and immutable row locators, not
+            # the parent's full fact graph alongside the child's reducer.
+            complete.pop('document', None)
     # Retain descriptors, not response strings. Each source is replayed lazily.
     for path in args.reuse:
         raw = small(Path(path) / MANIFEST)
@@ -4626,6 +4987,8 @@ def _capture_files(args, transport=None, sleep=time.sleep, *, target_contract=RE
     # Reserve the full query's URL budget so even an all-TIFF response has one
     # bounded followup with the same ordered subset of at most fifty titles.
     planned = list(metadata.title_batches(args.wiki, remaining, args.batch_size, figure_axes=True))
+    if compressed_output and (planned or not complete_captures):
+        raise ValueError('Gzip Figure output requires complete retained sources and no transport requests')
     if light_titles and not lean:
         if not light_titles <= set(remaining):
             raise ValueError('Metadata-light titles are not uncommitted selected names')
@@ -4754,13 +5117,21 @@ def _capture_files(args, transport=None, sleep=time.sleep, *, target_contract=RE
             transport or evidence.get_response, sleep, deadline, args.delay, pacing, figure_axes=True,
             figure_metadata_light=light, first_attempt=state.get('first_attempt', 1),
             prepared_request=True, artifact_stage=stage)
+    archived_source = getattr(args, 'import_archived_http', None)
+    imported = None if archived_source is None else import_archived_http(
+        archived_source, root, args.wiki, args.date, namespace, planned)
     def fetch(number):
+        if imported is not None:
+            reference = next(imported, None)
+            if reference is None:
+                raise ValueError('Archived HTTP source did not supply the next planned batch')
+            return None, reference
         state = pending_http.get(number, {})
         if lean:
             rows, base = fetch_stage(number, planned[number-1], state)
             names, raw, _, _ = captured_http_stage(root, base, args.wiki, light=True)
             batch = {'requests': names, 'response': raw.decode('utf-8')}
-            if not bound_file_core(decode(raw)['query']['general']['git-hash'], defaults['core'], file_defaults):
+            if not bound_file_core(decode(raw)['query']['general']['git-hash'], defaults['core'], file_defaults, wiki=args.wiki):
                 raise ValueError('Lean Figure and defaults source versions differ')
             titles = lean_tiff_titles(batch, namespace, args.wiki, args.date, profile_kind, allow_compatible_epochs=True)
             reference = {'base': base}
@@ -4793,6 +5164,9 @@ def _capture_files(args, transport=None, sleep=time.sleep, *, target_contract=RE
     slots = (metadata.OrderedRequestBatches(fetch, committed_http+1, len(planned), pacing,
               warm=bool(retained or committed), wall_errors=WALL_ERRORS) if max_inflight == 2 else None)
     raw_path, request_path = root / ROLES['figure-sizing-raw'], root / FILE_REQUESTS
+    if compressed_output:
+        raw_path = raw_path.with_name(raw_path.name + '.gz')
+    compressed_raw = None
     count = committed
     def retained_batch(source):
         if source['kind'] == 'complete-stream':
@@ -4803,7 +5177,7 @@ def _capture_files(args, transport=None, sleep=time.sleep, *, target_contract=RE
             return retained_file_batch(Path(source['path']), args.wiki, args.date)
         return retained_metadata_batch(Path(source['path']), args.wiki, args.date, namespace)
     def iterator():
-        nonlocal site_raw, count
+        nonlocal site_raw, count, compressed_raw
         encoding = RAW_RECORD_ENCODING
         if resume_path is not None:
             archived = {}
@@ -4858,8 +5232,9 @@ def _capture_files(args, transport=None, sleep=time.sleep, *, target_contract=RE
                                for name in state['artifacts'] if (root/name).exists())
             if set(payload(root)) != allowed:
                 raise ValueError('Figure checkpoint contains uncommitted HTTP or publication artifacts')
-        with (append_prefix(raw_path, raw_size) if resume_path is not None else raw_path.open('xb')) as raw_output, \
+        with (append_prefix(raw_path, raw_size) if resume_path is not None else raw_path.open('xb')) as raw_file, \
                 (append_prefix(request_path, journal_size) if resume_path is not None else request_path.open('xb')) as request_output:
+            raw_output = gzip_members.Writer(raw_file) if compressed_output else raw_file
             if resume_path is None:
                 request_output.write(stream_encoded({'schema': REQUEST_STREAM_SCHEMA, 'batches': total}))
             for index in range(committed, total):
@@ -4911,7 +5286,7 @@ def _capture_files(args, transport=None, sleep=time.sleep, *, target_contract=RE
                     raise ValueError('Figure response record exceeds its bound')
                 if index == 0:
                     site_raw = batch['response'].encode()
-                    if not bound_file_core(decode(site_raw)['query']['general']['git-hash'], defaults['core'], file_defaults):
+                    if not bound_file_core(decode(site_raw)['query']['general']['git-hash'], defaults['core'], file_defaults, wiki=args.wiki):
                         raise ValueError('Defaults and Figure observations use different source versions')
                     if resume_path is not None:
                         if small(root / ROLES['figure-sizing-site'], MAX_RESPONSE) != site_raw:
@@ -4926,7 +5301,7 @@ def _capture_files(args, transport=None, sleep=time.sleep, *, target_contract=RE
                         raw_output.write(stream_encoded(header))
                 raw_output.write(line)
                 request_output.write(stream_encoded(source))
-                raw_output.flush(); os.fsync(raw_output.fileno())
+                raw_file.flush(); os.fsync(raw_file.fileno())
                 request_output.flush(); os.fsync(request_output.fileno())
                 # Only the newly owned accepted duplicate is retired after its
                 # exact bytes and receipt have a durable place in the raw role.
@@ -4946,6 +5321,9 @@ def _capture_files(args, transport=None, sleep=time.sleep, *, target_contract=RE
                     'core_revision': decode(site_raw)['query']['general']['git-hash'],
                     'namespace_registry_sha256': digest(namespace), 'records_count': 0,
                     'base_batches': 0, 'observed_batches': 0, 'record_encoding': RAW_RECORD_ENCODING}))
+            if compressed_output:
+                raw_file.flush(); os.fsync(raw_file.fileno())
+                compressed_raw = (raw_path.resolve(), gzip_members.held_stamp(raw_file), raw_output.identity())
     try:
         batches = iterator()
         # The first response establishes the exact API epoch for the shared
@@ -4954,33 +5332,43 @@ def _capture_files(args, transport=None, sleep=time.sleep, *, target_contract=RE
         document = file_records(itertools.chain(() if first is None else (first,), batches),
             namespace, args.wiki, args.date, site_raw, has_batches=bool(base_count), record_limit=len(desired),
             profile_kind=profile_kind, **replay_policy)
+        if imported is not None and next(imported, None) is not None:
+            raise ValueError('Archived HTTP source emitted an unselected batch')
         if slots is not None and (error := slots.close()) is not None:
             raise error
-        if not bound_file_core(document['core_revision'], defaults['core'], file_defaults):
+        if not bound_file_core(document['core_revision'], defaults['core'], file_defaults, wiki=args.wiki):
             raise ValueError('Defaults and Figure observations use different source versions')
         check_prefix_cache(prefix_cache)
-        raw_id = evidence.fingerprint(raw_path)
+        raw_id = ({'size': compressed_raw[2]['bytes'], 'sha256': compressed_raw[2]['sha256']} if compressed_output
+                  else evidence.fingerprint(raw_path))
         document.update(schema=FILES_STREAM_SCHEMA, records_count=len(document['records']),
             raw_bytes=raw_id['size'], raw_sha256=raw_id['sha256'], generator_sha256=producer()['generator_sha256'], replay_contract=target_contract)
         coverage = file_coverage(document, inventory, query_titles)
-        write_projection_stream(root / ROLES['figure-sizing'], document)
-        with (root / PROVIDER).open('xb') as output:
-            for chunk in provider_chunks(document):
-                output.write(chunk)
+        written = {}
+        if compressed_output:
+            projection_name = ROLES['figure-sizing']
+            written[projection_name] = _write_gzip_artifact(root / projection_name, _projection_rows(document))
+            written[PROVIDER] = _write_gzip_artifact(root / PROVIDER, provider_chunks(document))
+        else:
+            write_projection_stream(root / ROLES['figure-sizing'], document)
+            with (root / PROVIDER).open('xb') as output:
+                for chunk in provider_chunks(document):
+                    output.write(chunk)
         # Selection and both serializations are finished. The independent final
         # replay needs ancestor proofs, not either retained record graph.
         del document
         for cache_key, complete in prefix_cache.items():
             if type(cache_key) is tuple and len(cache_key) == 2 and cache_key[0] == 'complete-stream':
                 complete.pop('document', None)
+        final_artifacts = payload(root, _verified_raw=compressed_raw, _written=written)
         manifest = {'schema': SCHEMA, 'capture_format': FILES_STREAM_SCHEMA,
             **producer(), 'wiki': args.wiki, 'date': args.date,
             'namespace_registry_sha256': defaults['namespace_registry_sha256'], 'coverage': coverage,
-            'artifacts': payload(root), 'resumes': resumes,
+            'artifacts': final_artifacts, 'resumes': resumes,
             'source_dump_files': [{**{key: row[key] for key in ('wiki', 'date', 'name', 'size', 'sha1')},
                                    'url': 'https://dumps.wikimedia.org'+row['url']}
                                   for row in inventory['sources']],
-            'outputs': {role: evidence.fingerprint(root / name)['sha256'] for role, name in output_roles(root).items()}}
+            'outputs': {role: final_artifacts[name]['sha256'] for role, name in output_roles(root).items()}}
         evidence.document(root / MANIFEST, manifest)
         if _verification_caches is not None:
             def output_state():
@@ -5013,6 +5401,9 @@ def _capture_files(args, transport=None, sleep=time.sleep, *, target_contract=RE
             _verification_caches['output_check'] = check_output
         return manifest
     except BaseException as original:
+        if compressed_output:
+            original.add_note('Incomplete gzip Figure output remains unpublished and cannot be resumed')
+            raise
         if slots is not None:
             original = slots.close(original) or original
         try:
@@ -5027,7 +5418,7 @@ def _capture_files(args, transport=None, sleep=time.sleep, *, target_contract=RE
                     names, raw, _, _ = captured_http_stage(root, accepted[0], args.wiki, light=True)
                     lean_tiff_titles({'requests': names, 'response': raw.decode('utf-8')},
                                      namespace, args.wiki, args.date, profile_kind, allow_compatible_epochs=True)
-                    if not bound_file_core(decode(raw)['query']['general']['git-hash'], defaults['core'], file_defaults):
+                    if not bound_file_core(decode(raw)['query']['general']['git-hash'], defaults['core'], file_defaults, wiki=args.wiki):
                         raise ValueError('First accepted lean response changed default source family')
                     if small(request_path) != stream_encoded({'schema': REQUEST_STREAM_SCHEMA, 'batches': total}):
                         raise ValueError('Empty lean prefix has uncommitted request records')
@@ -5081,7 +5472,7 @@ def select_reuse_batches(paths, wiki, date, namespace):
             raise ValueError('Figure batch has no unambiguous edition/date identity')
         record_wiki, record_date = record['wiki'], record['date']
         wiktionary_api(record_wiki)
-        required_base_core = None
+        required_base_cores = None
         is_prefix = record.get('schema') in CLOSED_PREFIX_SCHEMAS
         is_complete = record.get('schema') == SCHEMA and record.get('capture_format') == FILES_STREAM_SCHEMA
         if is_complete:
@@ -5106,20 +5497,25 @@ def select_reuse_batches(paths, wiki, date, namespace):
                 raise ValueError('Unsupported retained Figure request profile')
             selected_profile = FIGURE_PROFILE_V4 if height_supplement or jpeg_supplement else retained_profile
             width_supplement = 'observed_svg_width_px' in batch
-            data = decode(batch['response'].encode()) if record_wiki == 'frwiktionary' and (width_supplement or jpeg_supplement) else None
+            scoped = record_wiki in CURRENT_FILE_PROFILES and (width_supplement or jpeg_supplement or
+                record_wiki in ('huwiktionary', 'elwiktionary'))
+            data = decode(batch['response'].encode()) if scoped else None
             if (data is not None and selected_profile == FIGURE_PROFILE_V4 and
                     data['query']['general'].get('git-hash') == site_info.FIGURE_WMF5_CORE):
                 registry = evidence.Registry(own_namespace, record_wiki, record_date)
-                result = {'records':french_file_supplement(batch, data, registry), 'core_revision':site_info.FIGURE_WMF5_CORE}
-                required_base_core = FIGURE_CURRENT_CORE
+                result = {'records':current_file_observation(batch, data, registry), 'core_revision':site_info.FIGURE_WMF5_CORE}
+                required_base_cores = {FIGURE_CURRENT_CORE}
+                if width_supplement and record_wiki in ('thwiktionary', 'itwiktionary'):
+                    required_base_cores.add(site_info.FIGURE_WMF5_CORE)
             else:
                 result = file_records((plain, batch) if height_supplement else (plain,), own_namespace, record_wiki, record_date,
                                       batch['response'].encode(), has_batches=True, record_limit=50,
                                       profile_kind=selected_profile, allow_compatible_epochs=selected_profile == FIGURE_PROFILE_V4)
             supplement = width_supplement or height_supplement or jpeg_supplement
         group = (record_wiki, record_date)
-        base_core = required_base_core or result['core_revision']
-        if cores.setdefault(group, base_core) != base_core:
+        base_cores = required_base_cores or {result['core_revision']}
+        cores[group] = cores.get(group, base_cores) & base_cores
+        if not cores[group]:
             raise ValueError('Explicit Figure batches mix source versions')
         source_observed = set()
         for row in result['records']:
@@ -5451,12 +5847,21 @@ def materialized_origin_catalog(root, plan, wiki, date, namespace, inventory):
                 type(origin_plan.get('observed_batches')) is not int or origin_plan.get('observed_batches') < 0):
             raise ValueError('Materialized Figure origin input or mode differs')
         materialized_observations(origin_plan)
+        profile_kind = origin_plan.get('figure_profile', FIGURE_PROFILE_V3)
+        english_v5 = (profile_kind == FIGURE_PROFILE_V5 and wiki == 'enwiktionary' and date == '20261001' and
+                      origin_plan.get('replay_contract') in (REPLAY_CONTRACT_V4, REPLAY_CONTRACT))
+        if profile_kind not in (FIGURE_PROFILE_V3, FIGURE_PROFILE_V4) and not english_v5:
+            raise ValueError('Unknown materialized Figure source profile')
+        # A V6 English origin can own current PNG width observations. The
+        # full V5 model stays bound to its historical first response below.
+        width_epoch = site_info.FIGURE_WMF5_CORE if english_v5 and origin_plan.get('replay_contract') == REPLAY_CONTRACT else None
         if (not isinstance(row['files'], dict) or not isinstance(row['pending'], list) or
                 len(row['pending']) > 2 or not isinstance(row['frame_map'], list) or
                 any(type(number) is not int or number < 0 for number in row['frame_map']) or
                 row['frame_map'] != sorted(set(row['frame_map'])) or
                 not isinstance(row['epochs'], list) or row['epochs'] != sorted(set(row['epochs'])) or
-                any(not isinstance(core, str) or figure_profile(core,origin_plan.get('figure_profile',FIGURE_PROFILE_V3)) is None for core in row['epochs'])):
+                any(not isinstance(core, str) or core != width_epoch and figure_profile(core, profile_kind) is None
+                    for core in row['epochs'])):
             raise ValueError('Invalid materialized Figure origin source echo')
         failure, closure, proof = None, None, None
         if source['kind'] == 'complete-stream':
@@ -5529,8 +5934,6 @@ def materialized_origin_catalog(root, plan, wiki, date, namespace, inventory):
             committed = failure.get('committed_batches')
             if closure.get('committed_batches') != committed:
                 raise ValueError('Materialized Figure committed prefix differs')
-        if origin_plan.get('figure_profile', FIGURE_PROFILE_V3) not in (FIGURE_PROFILE_V3, FIGURE_PROFILE_V4):
-            raise ValueError('Unknown materialized Figure source profile')
         if proof is not None and proof['schema']==CLOSED_PREFIX_SCHEMA:
             for role in ('actual_request','actual_receipt','actual_response'):
                 reference=closure.get(role,{})
@@ -5712,6 +6115,9 @@ def validate_materialized_echo(state, plan, wiki, date, namespace, *, root_recor
         own_epochs=set(); pending_numbers=[]
         for index,(source,number) in enumerate(zip(sources,row['frame_map'],strict=True)):
             frame=frames[number]
+            if (old.get('figure_profile') == FIGURE_PROFILE_V5 and frame['core'] == site_info.FIGURE_WMF5_CORE and
+                    (index < old['base_batches'] or source.get('kind') != 'retained-request')):
+                raise ValueError('English V5 current ImageInfo is restricted to retained width observations')
             if index >= old['base_batches'] and index < node['committed']:
                 if source != observed[index-old['base_batches']] or frame['source'] != source:
                     raise ValueError('Materialized original observation identity differs')
@@ -5722,6 +6128,13 @@ def validate_materialized_echo(state, plan, wiki, date, namespace, *, root_recor
                 slot=source['batch']; mapping=nodes[other]['row']['frame_map']
                 if not 0<=slot<len(mapping) or mapping[slot]!=number:
                     raise ValueError('Materialized Figure ancestor source echo differs')
+                continue
+            if source.get('kind') == 'retained-request':
+                # replay_source authenticated this exact request, receipt and response.
+                # It occupies its declared retained slot without consuming an HTTP slot.
+                if index >= len(retained) or source != retained[index] or frame['source'] != source:
+                    raise ValueError('Materialized retained Figure base authority differs')
+                own_epochs.add(frame['core'])
                 continue
             if source.get('kind') not in ('http-archived','http-archived-light','http-archived-lean'):
                 raise ValueError('Unresolved materialized Figure terminal authority')
@@ -5813,6 +6226,9 @@ def validate_materialized_echo(state, plan, wiki, date, namespace, *, root_recor
                     any(frames[number]['core']!=FIGURE_CURRENT_CORE for number in row['frame_map'][:node['committed']])):
                 raise ValueError('Materialized original source epoch context differs')
         original_site=small(Path(node['own_root'])/ROLES['figure-sizing-site'],MAX_RESPONSE)
+        if (old.get('figure_profile') == FIGURE_PROFILE_V5 and
+                decode(original_site)['query']['general'].get('git-hash') != FIGURE_CURRENT_CORE):
+            raise ValueError('English V5 materialized geometry requires its historical file source')
         options=dict(has_batches=bool(selected),record_limit=old['records_count'],
             profile_kind=old.get('figure_profile',FIGURE_PROFILE_V3),
             allow_tiff_companion=True,
@@ -6017,11 +6433,11 @@ def materialize_complete_capture(source, output, *, max_batches=64, max_input_by
                 raise ValueError('Failed Figure owned cleanup changed source custody')
             accept_owned_link(before,after);linked.pop(root/name)
     def saved(path, maximum=max_input_bytes):
-        path=Path(path);before=evidence.stamp(path)
+        path=Path(path);physical=_physical_role(path);before=evidence.stamp(physical)
         if before[2]>maximum:raise ValueError('Offline Figure fixture/input bound exceeded')
         raw=small(path,maximum)
-        if evidence.stamp(path)!=before:raise ValueError('Offline Figure source changed')
-        stamps[path]=before
+        if evidence.stamp(physical)!=before:raise ValueError('Offline Figure source changed')
+        stamps[physical]=before
         return raw
     def check():
         if any(identity(path)!=expected for path,expected in source_identities.items()):
@@ -6073,7 +6489,10 @@ def materialize_complete_capture(source, output, *, max_batches=64, max_input_by
         if root.is_symlink() or root.resolve()!=root or not root.is_dir():
             raise ValueError('Unsafe offline Figure source root')
         if output.resolve().is_relative_to(root):raise ValueError('Offline Figure output aliases its ancestor')
-        if evidence.stamp(root/ROLES['figure-sizing-raw'])[2]>max_input_bytes:
+        raw_name = ROLES['figure-sizing-raw']
+        raw_path = _physical_role(root / raw_name)
+        if (evidence.stamp(raw_path)[2] > max_input_bytes or
+                reference['kind']=='complete-stream' and authority['artifacts'][raw_name]['bytes']>max_input_bytes):
             raise ValueError('Offline Figure fixture/input bound exceeded')
         plan=decode(saved(root/PLAN))
         observations=materialized_observations(plan)
@@ -6153,6 +6572,8 @@ def materialize_complete_capture(source, output, *, max_batches=64, max_input_by
     phase('source_verify')
     complete=read_complete_capture(source,cache,include_document=False)
     if complete['manifest_sha256']!=digest(manifest_raw):raise ValueError('Offline complete Figure identity differs')
+    if link_current_payloads and complete.get('raw_storage') is not None:
+        raise ValueError('Compressed Figure materialization requires its bounded copy route')
     observations.update(source_complete_verified=True,source_manifest_sha256=digest(manifest_raw))
     for node in nodes.values():
         if node['reference']['kind']=='closed-prefix' and 'imported_row' not in node:
@@ -6248,10 +6669,16 @@ def materialize_complete_capture(source, output, *, max_batches=64, max_input_by
         fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
         output.mkdir(mode=0o700,exist_ok=False)
         owned_output=output_identity();observations['output_root']=owned_output
-        def put(relative,path):
+        def put(relative,path, *, stored=False):
             observed_artifact_name(Path(relative).name)
             destination=output/relative;destination.parent.mkdir(mode=0o700,parents=True,exist_ok=True)
-            before=evidence.stamp(path)
+            path = Path(path)
+            physical = path if stored else _physical_role(path)
+            before=evidence.stamp(physical)
+            if physical != path:
+                raw = saved(path)
+                evidence.put(destination, raw)
+                return {'path':relative,'bytes':len(raw),'sha256':digest(raw)}
             if before[2]>max_input_bytes:raise ValueError('Offline Figure copy bound exceeded')
             if destination.exists():
                 if evidence.stamp(destination)[2]!=before[2] or digest(small(destination,max_input_bytes))!=digest(saved(path)):
@@ -6285,7 +6712,26 @@ def materialize_complete_capture(source, output, *, max_batches=64, max_input_by
               *(row['path'] for row in query_inputs)}
         if top['plan'].get('observed_defaults_response_sha256') is not None:
             base.add(FILE_DEFAULTS)
-        for name in sorted(base):put(name,root/name)
+        written = {}
+        raw_proof = None
+        for name in sorted(base):
+            source_path = root / name
+            physical = _physical_role(source_path)
+            if physical == source_path:
+                put(name, source_path)
+                continue
+            original = original_manifest['artifacts'][name]
+            if original['bytes'] > max_input_bytes or evidence.stamp(physical) != complete['stamps'][physical]:
+                raise ValueError('Compressed Figure source changed or exceeds its bound')
+            copied = put(physical.name, physical, stored=True)
+            final_path = output / physical.name
+            proof = (final_path.resolve(), evidence.stamp(final_path), original)
+            if name == ROLES['figure-sizing-raw']:
+                if {'size': copied['bytes'], 'sha256': copied['sha256']} != complete.get('raw_storage'):
+                    raise ValueError('Materialized raw gzip bytes changed during copy')
+                raw_proof = proof
+            else:
+                written[name] = proof
         rows=[]
         for identifier,node in nodes.items():
             origin_root=node['root'];own=output/identifier;own.mkdir(mode=0o700)
@@ -6338,7 +6784,7 @@ def materialize_complete_capture(source, output, *, max_batches=64, max_input_by
             stream.flush();os.fsync(stream.fileno())
         manifest=copy.deepcopy(original_manifest)
         manifest.update(producer());manifest['resumes']=[]
-        manifest['artifacts']=payload(output)
+        manifest['artifacts']=payload(output, _verified_raw=raw_proof, _written=written)
         evidence.document(output/MANIFEST,manifest)
         # Authenticate the fresh output once. Publication adds only its exact
         # marker; retain all verified files and origin directories across it.
@@ -6556,7 +7002,7 @@ def reproject_capture(source, output, *, target_contract=REPLAY_CONTRACT_V4,
     expected_header = dict(header)
     if target_profile is not None:
         general = decode(site)['query']['general']
-        expected_header['source_profile'] = dict(figure_profile(general['git-hash'], target_profile, _figure_media_extensions(decode(site))),
+        expected_header['source_profile'] = dict(figure_profile(general['git-hash'], target_profile, _figure_media_extensions(decode(site)), wiki=manifest['wiki']),
             site_raw_sha256=digest(site))
     if ({key: value for key, value in new_header.items() if key not in ('generator_sha256', 'replay_contract')} !=
             {key: value for key, value in expected_header.items() if key not in ('generator_sha256', 'replay_contract')}):
@@ -6659,9 +7105,11 @@ def main():
     for name in ('defaults', 'dumpstatus', 'output'):
         collect.add_argument('--' + name, type=Path, required=True)
     collect.add_argument('--sql', type=Path, action='append', required=True)
+    collect.add_argument('--import-archived-http', type=Path, help='replay exact existing full HTTP requests and accepted receipts offline')
     collect.add_argument('--downloads', type=Path, help='Archive root for SQL recorded by a relocated complete parent')
     collect.add_argument('--file-defaults', type=Path, help='verified matching default-options observation for the selected ImageInfo revision')
     collect.add_argument('--reuse', type=Path, action='append', default=[])
+    collect.add_argument('--gzip-output', action='store_true', help='Store a fresh offline complete retained capture as gzip')
     collect.add_argument('--reuse-batch', type=Path, action='append', default=[],
                          help='existing normal request/receipt evidence record, replayed without refetching')
     collect.add_argument('--log', type=Path, action='append', default=[],
