@@ -26496,9 +26496,28 @@ test "Writer retained HY korfbol preserves nested lexical angles complete owner 
             ipa_action: bool = false,
             citation: bool = false,
             sport_hint: bool = false,
+            sport_boxes: usize = 0,
             fn spans(self: *@This(), a: std.mem.Allocator, values: []const encoder.presentation_types.Span) !void {
                 for (values) |span| {
                     try self.visible.appendSlice(a, span.text);
+                    if (span.inline_box_group) |box| {
+                        if (std.mem.eql(u8, span.tooltip orelse "", "սպորտային")) {
+                            self.sport_boxes += 1;
+                            try std.testing.expect(span.kind == .text and span.text.len == 0 and span.target.len == 0);
+                            try std.testing.expect(span.inline_style != null and span.inline_style.?.cursor == .help);
+                            try std.testing.expect(box.border.top == .none and box.border.right == .none and box.border.left == .none);
+                            try std.testing.expect(box.border.bottom == .dotted);
+                            const line = box.border.bottom.dotted;
+                            try std.testing.expect(line.width.unit == .px and line.width.value == 1 and line.color == .current_color);
+                            try std.testing.expectEqual(@as(usize, 1), box.spans.len);
+                            const child = box.spans[0];
+                            try std.testing.expect(child.kind == .text and child.target.len == 0);
+                            try std.testing.expectEqualStrings("(սպորտ․)", child.text);
+                            try std.testing.expectEqualStrings("սպորտային", child.tooltip orelse "");
+                            try std.testing.expect(child.inline_style != null and child.inline_style.?.cursor == .help);
+                        }
+                        try self.spans(a, box.spans);
+                    }
                     try self.visible.appendSlice(a, span.trail);
                     if (std.mem.indexOf(u8, span.classes, "citation") != null) self.citation = true;
                     if (std.mem.indexOf(u8, span.text, "սպորտ") != null) self.sport_hint = true;
@@ -26605,6 +26624,7 @@ test "Writer retained HY korfbol preserves nested lexical angles complete owner 
     try std.testing.expectEqual(@as(usize, 1), scan.cells);
     try std.testing.expectEqual(@as(usize, 1), scan.actions);
     try std.testing.expect(scan.ipa_action and scan.citation and scan.sport_hint);
+    try std.testing.expectEqual(@as(usize, 1), scan.sport_boxes);
     for ([_][]const u8{ F.literal, "[kɔɾfˈbɔl]", "Ստուգաբանություն", "շվեդական թիմային բասկետբոլատիպ գնդակախաղ", "Թարգմանություն", "Աղբյուրներ", "Միքայել Իսպիրյան", "Մարզանունների բացատրական բառարան", "1984", "180" }) |text| {
         errdefer std.debug.print("HY korfbol missing text={s}\n", .{text});
         try std.testing.expect(std.mem.indexOf(u8, scan.visible.items, text) != null);
