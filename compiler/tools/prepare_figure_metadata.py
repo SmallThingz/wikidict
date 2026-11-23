@@ -1577,7 +1577,9 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
             raise ValueError('Unreviewed Figure handler source version; retain the response for source reconciliation')
         profile = dict(approved, site_raw_sha256=digest(site_raw))
         _figure_site_registration(registration, site_general, wiki, approved)
-    records, seen, canonical_facts, observed_files, height_keys = [], set(), {}, set(), set()
+    records, seen, canonical_facts, height_keys = [], set(), {}, set()
+    widths, heights = {}, {}
+    request_aliases = None
     jpeg_evidence, jpeg_supplemented = {}, set()
     observing = False
     base_count = observed_count = 0
@@ -1764,19 +1766,20 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
                 continue
             if observation is not None:
                 canonical = record['canonical_file']
-                if (record['state'] != 'eligible' or canonical in observed_files or
+                if (record['state'] != 'eligible' or canonical in widths or
                         (batch_core == site_info.FIGURE_WMF5_CORE and info.get('thumbmime') != 'image/png') or
                         observed_svg_width(info, record['mime'], record['mediatype'], record['original_width'], record['original_height']) != observation):
                     raise ValueError('Unproved or duplicate observed SVG width')
-                observed_files.add(canonical)
-                same_request = False
-                for base in records:
-                    if base['canonical_file'] == canonical:
-                        same_request |= base['requested_file'] == title
-                        base['observed_svg_width_px'] = observation
-                        base['observed_batch'] = batch_index
-                if batch_core == site_info.FIGURE_WMF5_CORE and not same_request:
-                    raise ValueError('Observed PNG width retargets its original file request')
+                widths[canonical] = observation, batch_index
+                if (batch_core == site_info.FIGURE_WMF5_CORE and
+                        (previous['batch'] >= base_count or previous['requested_file'] != title)):
+                    # The requested title already exists in the completed base. Only
+                    # build its nonidentity alias map if the first canonical row differs.
+                    if request_aliases is None:
+                        request_aliases = {base['requested_file']: base['canonical_file'] for base in records
+                                           if base['requested_file'] != base['canonical_file']}
+                    if request_aliases.get(title, title) != canonical:
+                        raise ValueError('Observed PNG width retargets its original file request')
                 continue
             records.append(record)
         if occurrences is not None:
@@ -1789,13 +1792,18 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
                 if key in height_keys:
                     raise ValueError('Duplicate exact SVG occurrence authority')
                 height_keys.add(key);used.add(canonical)
-                for base in records:
-                    if base['requested_file'] == canonical and base['canonical_file'] == canonical:
-                        base.setdefault('observed_svg_heights', []).append(value)
+                heights.setdefault(canonical, []).append(value)
             if used != set(titles):
                 raise ValueError('SVG occurrence batch has unaccounted identity requests')
     for record in records:
-        target = canonical_facts.get(record['requested_file'])
+        # Supplements follow every base frame. Visiting the finished base rows once
+        # preserves width aliases and the direct-request rule for height observations.
+        requested, canonical = record['requested_file'], record['canonical_file']
+        if widths and (width := widths.get(canonical)) is not None:
+            record['observed_svg_width_px'], record['observed_batch'] = width
+        if heights and requested == canonical and canonical in heights:
+            record['observed_svg_heights'] = heights[canonical]
+        target = canonical_facts.get(requested)
         if (target is not None and target is not record and
                 file_fact_identity(target) != file_fact_identity(record)):
             raise ValueError('Requested file conflicts with an authenticated canonical alias')

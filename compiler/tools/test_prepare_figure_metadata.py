@@ -786,6 +786,33 @@ class FrenchCurrentSupplementTests(unittest.TestCase):
             with self.subTest(change=change), self.assertRaises(ValueError):
                 self.replay(self.batches[:5], [width])
 
+    def test_width_aliases_duplicates_and_original_error_order(self):
+        width = self.batches[5]
+        canonical = width['requests'][0]
+        alias = 'Fichier:Test alias.svg'
+        original = next(b for b in self.batches[:5] if canonical in b['requests'])
+
+        def redirect(batch, title):
+            source = figure.decode(batch['response'].encode())
+            query = source['query']
+            query['pages'] = [page for page in query['pages'] if page['title'] == canonical]
+            query['redirects'] = [{'from': title, 'to': canonical}]
+            return dict(batch, requests=[title], response=figure.encoded(source).decode())
+
+        base = [*self.batches[:5], redirect(original, alias)]
+        alias_width = redirect(width, alias)
+        result = self.replay(base, [alias_width], record_limit=251)
+        matches = {row['requested_file']: (row['observed_svg_width_px'], row['observed_batch'])
+                   for row in result['records'] if 'observed_svg_width_px' in row}
+        self.assertEqual(matches, {canonical: (120, 6), alias: (120, 6)})
+        with self.assertRaisesRegex(ValueError, 'duplicate observed SVG width'):
+            self.replay(base, [alias_width, width], record_limit=251)
+        with self.assertRaisesRegex(ValueError, 'supplements must follow ordinary'):
+            self.replay(base, [alias_width, original], record_limit=251)
+        crossed = redirect(width, 'Fichier:table a couture nommee orphee.jpg')
+        with self.assertRaisesRegex(ValueError, 'retargets its original file request'):
+            self.replay(base, [crossed, original], record_limit=251)
+
     def test_jpeg_requires_omission_positive_metadata_and_matching_file(self):
         base = copy.deepcopy(self.batches[:5])
         target = 'Fichier:Mouchoir.JPG'
