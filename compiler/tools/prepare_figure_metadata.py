@@ -296,6 +296,13 @@ SCOPED_FILE_EDITIONS = {*CURRENT_FILE_PROFILES, 'viwiktionary'}
 FIGURE_WMF5_ROLLOUT_CORE = '57f2a6bfacc3c5cecc269214a8d726b0b6faa596'
 
 
+MON_CURRENT_DEFAULTS_SHA = '4835a6193e22b52a58ad189058ccc887b4d76a34065d3c016b4968fb4755aa8b'
+
+
+def mon_current_file_scope(wiki, date, profile_kind):
+    return (wiki, date, profile_kind) == ('mnwwiktionary', '20261001', FIGURE_PROFILE_V4)
+
+
 def ordinary_rollout_scope(wiki, date, profile_kind):
     # Only these three bound WMF5 captures observed this deployment transition.
     return wiki in ('dewiktionary', 'ruwiktionary', 'thwiktionary') and date == '20261001' and profile_kind == FIGURE_PROFILE_V4
@@ -336,6 +343,10 @@ def bound_file_core(core, selected_core, observed, *, wiki='srwiktionary'):
 
 
 def figure_profile(core, kind, media_extensions=None, *, wiki=None):
+    if core == FIGURE_WMF5_ROLLOUT_CORE and wiki == 'mnwwiktionary':
+        if kind != FIGURE_PROFILE_V4 or media_extensions != FIGURE_WMF5_MEDIA:
+            raise ValueError('Unreviewed Mon Figure handler profile or registration')
+        return dict(FIGURE_WMF4_PROFILE, media_extensions=dict(FIGURE_WMF5_MEDIA))
     if core in ('d1919ec5e4ebd7b0dea1ff6ea1cb4347a9349ca2', site_info.FIGURE_WMF5_CORE):
         # Only the V4 handler model and this complete registration set were observed.
         registered = FIGURE_WMF5_MEDIA
@@ -655,6 +666,8 @@ def _figure_site_registration(site, general, wiki, approved, *, scoped_file_obse
     if other.get('git-hash') in (site_info.FIGURE_WMF5_CORE, FIGURE_WMF5_ROLLOUT_CORE):
         limits = other.get('thumblimits')
         editions = SCOPED_FILE_EDITIONS if scoped_file_observation else ORDINARY_FILE_DEFAULTS
+        if other.get('git-hash') == FIGURE_WMF5_ROLLOUT_CORE:
+            editions = {*editions, 'mnwwiktionary'}
         if other.get('git-hash') == FIGURE_WMF5_ROLLOUT_CORE and other.get('generator') != 'MediaWiki 1.48.0-wmf.5':
             raise ValueError('Figure ImageInfo rollout generator differs')
         if (wiki not in editions or other.get('lang') != wiki.removesuffix('wiktionary') or other.get('rtl') is not False or
@@ -1566,6 +1579,10 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
     profile = None
     # Per-batch TIFF classification consumes one response in isolation. This
     # local validation cannot provide the registration header of a capture.
+    mon_current = core == FIGURE_WMF5_ROLLOUT_CORE and wiki == 'mnwwiktionary'
+    if mon_current and (not mon_current_file_scope(wiki, date, profile_kind) or not allow_compatible_epochs or
+            not current_file_supplements or digest(namespace_raw) != '8dc45cc79e24e5d489b2a52cd10f528d6f93cf75451ef1af2ca27977017d4ffa'):
+        raise ValueError('Unreviewed same-epoch Mon ImageInfo replay scope')
     lean_rollout = (_lean_batch_validation and core == FIGURE_WMF5_ROLLOUT_CORE and
         allow_compatible_epochs and ordinary_rollout_scope(wiki, date, profile_kind))
     if core == site_info.FIGURE_WMF5_CORE and (wiki not in ORDINARY_FILE_DEFAULTS or
@@ -1600,6 +1617,8 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
         observation = batch.get('observed_svg_width_px')
         occurrences = batch.get('observed_svg_occurrences')
         supplemental = 'observed_svg_width_px' in batch or 'observed_svg_occurrences' in batch or jpeg_supplement
+        if mon_current and supplemental:
+            raise ValueError('Selected Mon ImageInfo authority covers ordinary batches')
         if _lean_batch_validation and (supplemental or batch_index != 0):
             raise ValueError('Lean validation accepts one ordinary ImageInfo batch')
         if core == site_info.FIGURE_WMF5_CORE and wiki != 'srwiktionary' and supplemental:
@@ -1655,6 +1674,8 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
             (wiki, date) == ('viwiktionary', site_info.FIGURE_WMF5_DEFAULTS['viwiktionary'][0]) and
             core == FIGURE_CURRENT_CORE and batch_core == site_info.FIGURE_WMF5_CORE and
             set(batch) - {'requests', 'response'} in (set(), {'observed_svg_width_px'}))
+        if mon_current and batch_core != core:
+            raise ValueError('Current Mon Figure facts require the same observed deployment')
         if (general.get('lang') != language or (batch_core != core and not (scoped_observation or vi_imageinfo or rollout) and not (
                 allow_compatible_epochs and profile_kind in (FIGURE_PROFILE_V4, FIGURE_PROFILE_V5) and
                 core in FIGURE_RESPONSE_EPOCHS and batch_core in FIGURE_RESPONSE_EPOCHS))):
@@ -3482,12 +3503,19 @@ def replay_stream_capture(root, wiki, date, defaults, namespace, general, *, ret
             raise ValueError('The bound ImageInfo defaults require streamed Figure replay v6')
         observed = small(root / FILE_DEFAULTS, MAX_RESPONSE)
         verify_file_defaults(small(root / ROLES['figure-siteinfo'], MAX_RESPONSE), observed)
+    if projection['core_revision'] == FIGURE_WMF5_ROLLOUT_CORE and wiki == 'mnwwiktionary' and (
+            projection.get('replay_contract') != REPLAY_CONTRACT or observed is not None or
+            digest(small(root / ROLES['figure-siteinfo'], MAX_RESPONSE)) != MON_CURRENT_DEFAULTS_SHA):
+        raise ValueError('Current Mon Figure facts require their own verified defaults')
     if not bound_file_core(projection['core_revision'], general.get('git-hash'), observed, wiki=wiki):
         raise ValueError('Figure defaults and streamed facts use different source versions')
     inventory_path = _physical_role(root / INVENTORY)
     inventory_before = ((inventory_path.resolve(), evidence.stamp(inventory_path))
                         if _inventory_sources_out is not None else None)
     inventory = verify_inventory(inventory_document(root / INVENTORY), namespace, wiki, date, inventory_cache=inventory_cache)
+    if projection['core_revision'] == FIGURE_WMF5_ROLLOUT_CORE and wiki == 'mnwwiktionary' and \
+            inventory.get('schema') != SELECTED_PAGE_INVENTORY_SCHEMA:
+        raise ValueError('Current Mon Figure facts require a selected original page')
     query_inputs = decode(small(root / QUERY_INPUTS))
     query_titles = provider_query_titles(root, query_inputs, namespace, wiki, date)
     coverage = file_coverage(projection, inventory, query_titles)
@@ -5089,10 +5117,14 @@ def _capture_files(args, transport=None, sleep=time.sleep, *, target_contract=RE
         if root.resolve().is_relative_to(source.resolve()):
             raise ValueError('Figure capture cannot modify a retained source')
     defaults_path = defaults_root / site_info.SNAPSHOT
-    defaults = site_info.validate_snapshot(defaults_path, args.wiki, args.date)
+    mon_current = (target_contract == REPLAY_CONTRACT and mon_current_file_scope(args.wiki, args.date, profile_kind) and
+        getattr(args, 'page_selection', None) is not None and digest(small(defaults_path, MAX_RESPONSE)) == MON_CURRENT_DEFAULTS_SHA)
+    defaults = site_info.validate_snapshot(defaults_path, args.wiki, args.date, file_defaults=True) if mon_current else \
+        site_info.validate_snapshot(defaults_path, args.wiki, args.date)
     if defaults['profile'] != site_info.FIGURE_PROFILE:
         raise ValueError('Missing Figure default-options capture')
-    artifacts = site_info.capture_artifacts(defaults_path, defaults)
+    artifacts = (site_info.capture_artifacts(defaults_path, defaults, file_defaults=True) if mon_current else
+                 site_info.capture_artifacts(defaults_path, defaults))
     saved = {name: small(defaults_root / name) for name in artifacts}
     if any(digest(saved[name]) != expected for name, expected in artifacts.items()):
         raise ValueError('Figure defaults changed before capture')

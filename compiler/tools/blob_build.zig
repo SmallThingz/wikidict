@@ -661,15 +661,18 @@ fn loadFigureSiteAt(io: std.Io, a: std.mem.Allocator, namespace_path: []const u8
     const site = try parseSiteMainPage(a, mapped.bytes, &isolated);
     defer a.free(site.title);
     try isolated.attachLanguageConversion(mapped.bytes);
+    const mon_defaults = if (isolated.figure_source_defaults == null)
+        try isolated.loadCurrentMonFigureDefaults(mapped.bytes) else null;
     return .{
         .source_context = .{ .namespace_sha256 = namespaces.source_sha256,
-            .defaults = isolated.figure_source_defaults orelse return error.InvalidFigureSizingSource,
+            .defaults = isolated.figure_source_defaults orelse mon_defaults orelse return error.InvalidFigureSizingSource,
             // The six MissingMedia dependencies are byte-identical at these
             // exact cores. This tag identifies their implementation semantics;
             // core_revision and the original source/default digest stay intact.
             .missing_media_profile = if (std.mem.eql(u8, site.figure_core_revision orelse "", "f45897451256aa3799aecc5d7ee320ade22beaec") or
                 std.mem.eql(u8, site.figure_core_revision orelse "", "0470f6c99a6456a366635bf25a517a1f951de6f5")) .f45897 else null },
-        .core_revision = site.figure_core_revision orelse return error.InvalidFigureSizingSource,
+        .core_revision = site.figure_core_revision orelse if (mon_defaults != null)
+            namespace_registry.Registry.mon_current_figure_core else return error.InvalidFigureSizingSource,
         .source_sha256 = site.digest,
     };
 }

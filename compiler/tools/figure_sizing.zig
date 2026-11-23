@@ -706,7 +706,7 @@ fn officialServer(a: A, wiki: []const u8) ![]u8 {
 fn general(value: Value, wiki: []const u8, language: []const u8, server: []const u8, core: []const u8) !Value {
     return generalWithEpoch(value, wiki, language, server, core, false, .ordinary);
 }
-const ImageInfoScope = enum { ordinary, rollout_base, svg_width, french_jpeg, hungarian_missing_ogg, greek_audio_ogg, vietnamese_svg };
+const ImageInfoScope = enum { ordinary, rollout_base, mon_current, svg_width, french_jpeg, hungarian_missing_ogg, greek_audio_ogg, vietnamese_svg };
 
 // These roles use only the file state or explicit thumbnail returned by
 // ImageInfo. The deployment does not supply general file or parser authority.
@@ -736,7 +736,9 @@ fn generalWithEpoch(value: Value, wiki: []const u8, language: []const u8, server
     const bare = if (std.mem.startsWith(u8, remote, "https:")) remote[6..] else remote;
     if (!equal(try string(item, "wikiid"), wiki) or !equal(try string(item, "lang"), language) or
         !equal(try string(item, "git-hash"), core) or !equal(bare, server)) return invalid;
-    if (scope == .rollout_base or equal(core, wmf5_imageinfo_core)) {
+    if (scope == .mon_current and (!equal(core, wmf5_rollout_core) or !equal(wiki, "mnwwiktionary") or
+        !equal(try string(item, "generator"), "MediaWiki 1.48.0-wmf.5"))) return invalid;
+    if (scope == .rollout_base or scope == .mon_current or equal(core, wmf5_imageinfo_core)) {
         if (scope == .rollout_base and (!equal(core, wmf5_rollout_core) or
             (!equal(wiki, "dewiktionary") and !equal(wiki, "ruwiktionary") and !equal(wiki, "thwiktionary")) or
             !equal(try string(item, "generator"), "MediaWiki 1.48.0-wmf.5"))) return invalid;
@@ -858,7 +860,7 @@ fn mediaProfileSet(value: Value) ![media_extensions.len][]const u8 {
     return revisions;
 }
 fn d191Profile(core: []const u8, value: Value) bool {
-    if (!equal(core, d191_core) and !equal(core, wmf5_imageinfo_core)) return true;
+    if (!equal(core, d191_core) and !equal(core, wmf5_imageinfo_core) and !equal(core, wmf5_rollout_core)) return true;
     if (value != .object) return false;
     const kind = value.object.get("kind") orelse return false;
     return kind == .string and equal(kind.string, "wikimedia-imagehandler-v4");
@@ -1189,6 +1191,9 @@ fn validateFileSource(a: A, doc: anytype, records_count: u64, batch_count: u64, 
     const ns_digest = std.fmt.bytesToHex(ns.source_sha256, .lower);
     const source_core = defaults.core orelse return invalid;
     const binding = if (equal(doc.core_revision, wmf5_imageinfo_core)) ordinaryImageInfoDefaults(ns.wiki) orelse return invalid else null;
+    const mon_current = equal(doc.core_revision, wmf5_rollout_core);
+    if (mon_current and (!contract or !epochs or records_count == 0 or
+        !equal(source_core, wmf5_rollout_core) or !ns.isCurrentMonFigureDefaults(defaults.sha256 orelse return invalid))) return invalid;
     if (binding) |bound| {
         // The selected Book defaults and the independently captured ImageInfo
         // defaults belong to this edition and date. Neither supplies parser rules.
@@ -1215,15 +1220,15 @@ fn validateFileSource(a: A, doc: anytype, records_count: u64, batch_count: u64, 
             !equal(try string(empty_general, "git-hash"), doc.core_revision)) return invalid;
         return null;
     }
-    if ((binding == null and !acceptedResponseCore(doc.core_revision, epochs)) or !d191Profile(source_core, doc.source_profile)) return invalid;
+    if ((binding == null and !mon_current and !acceptedResponseCore(doc.core_revision, epochs)) or !d191Profile(source_core, doc.source_profile)) return invalid;
     try profile(doc.source_profile, site, doc.core_revision, binding);
     if (webpProfile(doc.source_profile) and (!contract or !epochs)) return invalid;
     const gif = gifProfile(doc.source_profile);
     if ((equal(doc.core_revision, response_core) or registrationEpoch(doc.core_revision) or wmf4Epoch(doc.core_revision)) and !gif) return invalid;
-    if (gif and (!(binding != null or equal(doc.core_revision, current_core) or (epochs and responseEpoch(doc.core_revision))) or (!contract and !svgOccurrenceGenerator(doc.generator_sha256) and
+    if (gif and (!(binding != null or mon_current or equal(doc.core_revision, current_core) or (epochs and responseEpoch(doc.core_revision))) or (!contract and !svgOccurrenceGenerator(doc.generator_sha256) and
         !equal(doc.generator_sha256, "7bce7ec0bd0acdf6a9d726ed50c1e85a64bc089731d0347d048f1787003d4c0b")))) return invalid;
     const server = try officialServer(a, ns.wiki);
-    const site_query = try generalWithEpoch(registration, ns.wiki, ns.content_language, server, doc.core_revision, epochs, .ordinary);
+    const site_query = try generalWithEpoch(registration, ns.wiki, ns.content_language, server, doc.core_revision, epochs, if (mon_current) .mon_current else .ordinary);
     _ = try mediaRegistration(site_query, try mediaProfileSet(try field(doc.source_profile, "media_extensions")));
     if ((try timestamp(try string(registration, "curtimestamp"))).fraction.len != 0) return invalid;
     return server;
@@ -1251,7 +1256,7 @@ fn readStreamHeaders(a: A, temp: A, projection: *StreamInput, raw: *StreamInput)
         if (!nonnegativeInteger(try field(header_value, name))) return invalid;
     const contract = try explicitReplayContract(header_value);
     const header = try std.json.parseFromValueLeaky(StreamHeader, a, try replayDocumentShape(a, header_value), .{ .allocate = .alloc_always });
-    if (equal(header.core_revision, wmf5_imageinfo_core) and
+    if ((equal(header.core_revision, wmf5_imageinfo_core) or equal(header.core_revision, wmf5_rollout_core)) and
         (!contract or !equal(try string(header_value, "replay_contract"), replay_contract_v6))) return invalid;
     const count_u64 = std.math.add(u64, header.base_batches, header.observed_batches) catch return invalid;
     const max_requests = std.math.mul(u64, header.base_batches, 50) catch return invalid;
@@ -1996,7 +2001,11 @@ pub const Registry = struct {
             // The rollout occurred during three full captures. Only their later ordinary
             // rows may use the new core. The first authenticated registration, defaults
             // and every supplemental observation retain their original source rules.
-            const scope: ImageInfoScope = if (equal(batch_core, wmf5_rollout_core)) scope: {
+            const scope: ImageInfoScope = if (equal(doc.core_revision, wmf5_rollout_core)) scope: {
+                // validateFileSource already bound the exact Mon defaults.
+                if (!batches.streamed_v6 or !equal(batch_core, wmf5_rollout_core) or supplement) return invalid;
+                break :scope .mon_current;
+            } else if (equal(batch_core, wmf5_rollout_core)) scope: {
                 if (batch_index == 0 or !batches.streamed_v6 or !equal(doc.core_revision, wmf5_imageinfo_core) or supplement) return invalid;
                 break :scope .rollout_base;
             } else if (batch_index != 0 and batches.streamed_v6 and equal(doc.core_revision, current_core) and equal(batch_core, wmf5_imageinfo_core))
@@ -2015,7 +2024,7 @@ pub const Registry = struct {
             var tiff_companion: ?TiffCompanion = if (batch.tiff_metadata_response) |response| blk: {
                 if (supplement or (!contract and !equal(doc.generator_sha256, file_generator_sha256))) return invalid;
                 break :blk try TiffCompanion.init(temp, response, ns, server, batch_core, batch.requests.len, epochs,
-                    if (scope == .rollout_base) .rollout_base else .ordinary, try mediaRegistration(query, null));
+                    if (scope == .rollout_base or scope == .mon_current) scope else .ordinary, try mediaRegistration(query, null));
             } else null;
             _ = try mediaRegistration(query, null);
             const observed = try timestamp(try string(source, "curtimestamp"));
@@ -8676,4 +8685,47 @@ test "Serbian original 23 JPEG thumbnails obtain width limits only from matching
         }
     }
     try std.testing.expect(lean_only > 100);
+}
+
+
+test "selected Mon Figure tuple authenticates same-epoch defaults and first File batch" {
+    const a = std.testing.allocator;
+    const snapshots = "testdata/mon-current-figure-probe/";
+    const defaults = @embedFile(snapshots ++ "figure-siteinfo.raw.json");
+    var ns = try namespaces.Registry.init(a, @embedFile(snapshots ++ "namespace-registry.tsv"));
+    defer ns.deinit();
+    try ns.attachLanguageConversion(defaults);
+    try std.testing.expectEqual(@as(?namespaces.FigureSourceDefaults, null), ns.figure_source_defaults);
+    const selected = (try ns.loadCurrentMonFigureDefaults(defaults)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(?u32, 250), selected.default_thumbnail_width);
+    try std.testing.expect(!selected.rtl);
+    try std.testing.expectEqual(@as(?namespaces.FigureSourceDefaults, null), try ns.loadCurrentMonFigureDefaults(defaults ++ " "));
+    var digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(defaults, &digest, .{});
+    try std.testing.expect(ns.isCurrentMonFigureDefaults(digest));
+
+    const projection_bytes = @embedFile(snapshots ++ "figure-sizing.json");
+    const raw_bytes = @embedFile(snapshots ++ "figure-sizing.raw.json");
+    const site = @embedFile(snapshots ++ "figure-sizing.site.json");
+    var projection_source: StreamTestSource.Slice = .{ .bytes = projection_bytes };
+    var raw_source: StreamTestSource.Slice = .{ .bytes = raw_bytes };
+    var projection = projection_source.input();
+    var raw = raw_source.input();
+    const direct: DefaultsSource = .{ .core = namespaces.Registry.mon_current_figure_core, .sha256 = digest };
+    var registry = try Registry.initStreamWithDefaults(a, &projection, &raw, site, &ns, direct);
+    defer registry.deinit();
+    const file = "ဝှာင်:Giant Mudskipper (Periophthalmodon schlosseri) (15184970133).jpg";
+    try std.testing.expectEqual(@as(?types.FigureSizingPolicy, .requested_fit), try Registry.resolve(&registry, a, file, .thumbnail, selected.default_thumbnail_width, null));
+    try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null), try Registry.resolve(&registry, a, file, .thumbnail, 4001, null));
+    try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null), try Registry.resolve(&registry, a, "ဝှာင်:Another.jpg", .thumbnail, selected.default_thumbnail_width, null));
+
+    projection = projection_source.input();
+    raw = raw_source.input();
+    try std.testing.expectError(error.InvalidFigureSizingSource, Registry.checkStreamCompatibilityWithDefaults(a, &projection, &raw, site, &ns,
+        .{ .core = wmf5_imageinfo_core, .sha256 = digest }));
+    digest[0] ^= 1;
+    projection = projection_source.input();
+    raw = raw_source.input();
+    try std.testing.expectError(error.InvalidFigureSizingSource, Registry.checkStreamCompatibilityWithDefaults(a, &projection, &raw, site, &ns,
+        .{ .core = namespaces.Registry.mon_current_figure_core, .sha256 = digest }));
 }

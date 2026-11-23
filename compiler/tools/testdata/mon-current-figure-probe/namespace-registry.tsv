@@ -1,0 +1,36 @@
+# wikidict-namespace-registry-v1
+# wiki	mnwwiktionary
+# dump-date	20261001
+# content-language	mnw
+-2	မဳဒဳယာ	Media	case-sensitive	0	0	0		compile_only	virtual_namespace
+-1	တၟေင်	Special	first-letter	0	0	0		compile_only	virtual_namespace
+0			case-sensitive	0	1	0		main	dictionary_entries
+1	ဓရီုကျာ	Talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+2	ညးလွပ်	User	first-letter	1	0	0		compile_only	standard_build_input
+3	ညးလွပ် ဓရီုကျာ	User talk	first-letter	1	0	0		compile_only	discussion_namespace
+4	ဝိက်ရှေန်နရဳ	Project	case-sensitive	1	0	0		compile_only	standard_build_input
+5	ဝိက်ရှေန်နရဳ ဓရီုကျာ	Project talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+6	ဝှာင်	File	case-sensitive	0	0	0		compile_only	standard_build_input	Image
+7	ဝှာင် ဓရီုကျာ	File talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Image talk
+8	မဳဒဳယာဝဳကဳ	MediaWiki	first-letter	1	0	0		compile_only	standard_build_input
+9	မဳဒဳယာဝဳကဳ ဓရီုကျာ	MediaWiki talk	first-letter	1	0	0		compile_only	discussion_namespace
+10	ထာမ်ပလိက်	Template	case-sensitive	1	0	0		compile_only	standard_build_input
+11	ထာမ်ပလိက် ဓရီုကျာ	Template talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+12	ရီု	Help	case-sensitive	1	0	0		compile_only	standard_build_input
+13	ရီု ဓရီုကျာ	Help talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+14	ကဏ္ဍ	Category	case-sensitive	0	0	0		compile_only	standard_build_input
+15	ကဏ္ဍ ဓရီုကျာ	Category talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+100	အဆက်လက္ကရဴ	အဆက်လက္ကရဴ	case-sensitive	1	0	0		supplemental	unclassified_subject_retained	Appendix
+101	အဆက်လက္ကရဴ ဓရီုကျာ	အဆက်လက္ကရဴ ဓရီုကျာ	case-sensitive	1	0	0		compile_only	discussion_namespace	Appendix talk
+106	ကာရန်	ကာရန်	case-sensitive	1	0	0		supplemental	unclassified_subject_retained	Rhymes
+107	ကာရန် ဓရီုကျာ	ကာရန် ဓရီုကျာ	case-sensitive	1	0	0		compile_only	discussion_namespace	Rhymes talk
+110	အဘိဓာန်	အဘိဓာန်	case-sensitive	1	0	0		supplemental	unclassified_subject_retained	Thesaurus
+111	အဘိဓာန် ဓရီုကျာ	အဘိဓာန် ဓရီုကျာ	case-sensitive	1	0	0		compile_only	discussion_namespace	Thesaurus talk
+118	ဗီုပြၚ်သိုၚ်တၟိ	ဗီုပြၚ်သိုၚ်တၟိ	case-sensitive	1	0	0		supplemental	unclassified_subject_retained	Reconstruction	ဗီုပြင်သိုင်တၟိ
+119	ဗီုပြၚ်သိုၚ်တၟိ ဓရီုကျာ	ဗီုပြၚ်သိုၚ်တၟိ ဓရီုကျာ	case-sensitive	1	0	0		compile_only	discussion_namespace	Reconstruction talk	ဗီုပြင်သိုင်တၟိ ဓရီုကျာ
+710	TimedText	TimedText	case-sensitive	0	0	0		compile_only	ancillary_site_input
+711	TimedText talk	TimedText talk	case-sensitive	0	0	0		compile_only	discussion_namespace
+828	မဝ်ဂျူ	Module	case-sensitive	1	0	0		compile_only	standard_build_input
+829	မဝ်ဂျူ ဓရီုကျာ	Module talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+1728	Event	Event	case-sensitive	1	0	0		compile_only	ancillary_site_input
+1729	Event talk	Event talk	case-sensitive	1	0	0		compile_only	discussion_namespace

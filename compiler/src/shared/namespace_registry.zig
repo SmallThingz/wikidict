@@ -209,6 +209,34 @@ pub const Registry = struct {
         result.arena = arena;
         return result;
     }
+    pub const mon_current_figure_core = "57f2a6bfacc3c5cecc269214a8d726b0b6faa596";
+
+    pub fn isCurrentMonFigureDefaults(self: *const Registry, digest: [32]u8) bool {
+        return std.mem.eql(u8, self.wiki, "mnwwiktionary") and std.mem.eql(u8, self.content_language, "mnw") and
+            std.mem.eql(u8, self.dump_date, "20261001") and
+            std.mem.eql(u8, &std.fmt.bytesToHex(self.source_sha256, .lower), "8dc45cc79e24e5d489b2a52cd10f528d6f93cf75451ef1af2ca27977017d4ffa") and
+            std.mem.eql(u8, &std.fmt.bytesToHex(digest, .lower), "4835a6193e22b52a58ad189058ccc887b4d76a34065d3c016b4968fb4755aa8b");
+    }
+
+    /// The ordinary Figure input role may consume this selected current
+    /// observation. It does not grant the main-page or conversion role.
+    pub fn loadCurrentMonFigureDefaults(self: *const Registry, raw: []const u8) !?FigureSourceDefaults {
+        if (raw.len > 1024 * 1024) return null;
+        var digest: [32]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash(raw, &digest, .{});
+        if (!self.isCurrentMonFigureDefaults(digest)) return null;
+        const parsed = try std.json.parseFromSlice(std.json.Value, self.arena.child_allocator, raw, .{});
+        defer parsed.deinit();
+        if (parsed.value != .object) return null;
+        const query = parsed.value.object.get("query") orelse return null;
+        if (query != .object) return null;
+        const general = query.object.get("general") orelse return null;
+        if (general != .object) return null;
+        const rtl = general.object.get("rtl") orelse return null;
+        if (rtl != .bool) return null;
+        return .{ .rtl = rtl.bool, .default_thumbnail_width = figureThumbnailWidth(query) orelse return null };
+    }
+
     /// The selected installed site-info capture supplies conversion authority.
     /// Missing/legacy snapshots never infer it from an edition or language name.
     pub fn attachLanguageConversion(self: *Registry, raw: []const u8) !void {
