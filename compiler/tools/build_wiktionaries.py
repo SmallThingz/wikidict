@@ -6530,14 +6530,15 @@ def selected_staged_input_root(items, root, output, raw_shard_root=None, extract
     if raw_shard_root is not None:protected.append(Path(raw_shard_root).absolute())
     if extraction_cache_root is not None:protected.append(Path(extraction_cache_root).absolute())
     protected=[variant for path in protected for variant in (path,path.resolve())]
-    borrowed=[root,root/'.complete.json']
+    # Reject overlapping ownership before inspecting the borrowed receipt.
+    if any(root.is_relative_to(path) or path.is_relative_to(root) for path in protected):
+        raise ValueError('Borrowed staged input overlaps owned build paths')
     archive=original_archive_record(root)
     if archive is not None:
         block,source=original_archive_paths(archive)
         _staged_path_stamp(block);_staged_path_stamp(source,directory=True)
-        borrowed.extend((block,source))
-    if any(path.is_relative_to(p) or p.is_relative_to(path) for path in borrowed for p in protected):
-        raise ValueError('Borrowed staged input overlaps owned build paths')
+        if any(path.is_relative_to(p) or p.is_relative_to(path) for path in (block,source) for p in protected):
+            raise ValueError('Borrowed staged input overlaps owned build paths')
     return root
 
 
@@ -10604,7 +10605,7 @@ def main():
     ordinary_source_root=(PROJECT if _PYTHON_TOOLING is None and PROJECT==_script_source_root() else None)
     try:
         for value in options['edition_options'].values():
-            registry=value['auxiliary_snapshots'].get('language-registry')
+            registry=value.get('auxiliary_snapshots',{}).get('language-registry')
             if registry is not None:
                 validate_writer_reviewed_alias_markers(registry,retained_roles,ordinary_source_root=ordinary_source_root)
     except (ValueError,OSError) as error:p.error(str(error))

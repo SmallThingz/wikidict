@@ -2056,7 +2056,7 @@ class BuildTest(PreparedToolsFixture):
                 b.main()
             self.assertEqual(groups.call_args.kwargs,{
                 'interwiki_snapshot':interwiki.resolve(),
-                'edition_options':{('enwiktionary','20260901'):{'interwiki_snapshot':interwiki.resolve(),'auxiliary_snapshots':{'category-stats':category.resolve(),**{k:v.resolve() for k,v in write_namespace_fixture(root/'enwiktionary/20260901').items()}}}},
+                'edition_options':{('enwiktionary','20260901'):{'original_archives':True,'interwiki_snapshot':interwiki.resolve(),'auxiliary_snapshots':{'category-stats':category.resolve(),**{k:v.resolve() for k,v in write_namespace_fixture(root/'enwiktionary/20260901').items()}}}},
             })
 
     def test_watchdog_mode_is_explicit_locked_and_deadline_bounded(self):
@@ -5656,7 +5656,7 @@ class PageCountRoutingTests(unittest.TestCase):
                     self.assertEqual(cached.call_count,attempt+1)
                     self.assertEqual(stage.call_count,1)
                     self.assertEqual(stage.call_args.args[:3],([item],root,workspace/'input'))
-                    cached.assert_called_with([item],root,workspace)
+                    cached.assert_called_with([item],root,workspace,1)
                     source=json.loads((workspace/'input/.complete.json').read_text())
                     self.assertEqual(source['source_pages'],pages)
                     self.assertEqual(source['dump_sha256'],b.sha256_file(dump))
@@ -6998,7 +6998,8 @@ class BorrowedStagedInputTests(PreparedToolsFixture):
             with self.subTest(failure=failure),tempfile.TemporaryDirectory() as tmp:
                 root=Path(tmp);item,borrowed=self.fixture(root);before=self.identities(borrowed)
                 output=root/'output';workspace=output/item['wiki']/(item['date']+'.shards')
-                def finish(*args):
+                def finish(*args, _indexed_originals):
+                    self.assertIsNone(_indexed_originals)
                     workspace.mkdir(parents=True);(workspace/'input').mkdir();(workspace/'input/owned').write_bytes(b'owned')
                     b.cleanup_shard_workspace(workspace)
                     if failure:raise self.RouteReached()
@@ -7195,7 +7196,8 @@ class BorrowedStagedInputTests(PreparedToolsFixture):
     def test_postcheck_keeps_original_build_exception_as_context(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);item,borrowed=self.fixture(root);original=self.RouteReached('original build failure')
-            def fail(*args):
+            def fail(*args, _indexed_originals):
+                self.assertIsNone(_indexed_originals)
                 (borrowed/'pages.xml.zst').write_bytes(b'changed source')
                 raise original
             with patch.object(b,'_build_locked',side_effect=fail):
