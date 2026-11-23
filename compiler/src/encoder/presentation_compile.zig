@@ -11568,11 +11568,24 @@ pub const Renderer = struct {
         if (!original.is("span") or original.closing or original.self_closing or original.end != at + original_opening.len) return;
         element.source_fragment_target_absent = htmlOwnAttributePresence(&original, "id") == .absent;
         const parent = element.parent orelse return;
-        if (!std.ascii.eqlIgnoreCase(parent.tag, "span") or at == 0 or source[at - 1] != '>') return;
-        const start = std.mem.lastIndexOfScalar(u8, source[0..at], '<') orelse return;
+        if (!std.ascii.eqlIgnoreCase(parent.tag, "span") or at == 0) return;
+        const parent_end = if (source[at - 1] == '>') at else end: {
+            // A relative span can start with ordinary text before its overlay.
+            // Authenticate the complete prefix from that live owner's opening.
+            const owner = self.inline_box_owner orelse return;
+            if (!wikiClassContains(owner.body, opening)) return;
+            const length = @intFromPtr(opening.ptr) - @intFromPtr(owner.body.ptr);
+            if (length == 0 or length > 4096 or length >= at or !observedReadyCaptionPlainText(owner.body[0..length])) return;
+            const prefix = owner.body[0 .. length + opening.len];
+            if (!noLiParentSourceRange(tracked, prefix)) return;
+            const original_prefix = self.wikiCellCurrentBodyRange(root.source, prefix) orelse return;
+            if (original_prefix.ptr != source[at - length ..].ptr) return;
+            break :end at - length;
+        };
+        const start = std.mem.lastIndexOfScalar(u8, source[0..parent_end], '<') orelse return;
         const article_parent = syntax.tagAt(source, start) orelse return;
         if (!article_parent.is("span") or article_parent.closing or article_parent.self_closing or
-            article_parent.end != at or !noLiParentSourceRange(root.source, source[start..original.end]) or
+            article_parent.end != parent_end or !noLiParentSourceRange(root.source, source[start..original.end]) or
             htmlOwnAttributePresence(&article_parent, "class") == .unknown) return;
         const pair = syntax.matchingTag(source, article_parent) orelse return;
         const child = syntax.matchingTag(source, original) orelse return;
@@ -128606,6 +128619,41 @@ test "Serbian pitch native list source retains only an exact planned citation" {
     try std.testing.expect(!Renderer.containerPositionChildCompleteIn(body, true, plan));
     const foreign = try std.fmt.allocPrint(a, "<ref {s}='0' name='foreign'><cite>[[Book]]</cite></ref>", .{plan.attribute});
     try std.testing.expect(!Renderer.containerPositionChildCompleteIn(foreign, true, plan));
+}
+
+test "Serbian pitch text before its empty overlay retains both authored borders" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const css = ".character-sample > :only-child { display:block }" ++
+        "body.action-info .mw-body-content :target,.citation:target { background-color:#def;background-color:rgba(0,127,255,0.133) }";
+    var profile = try table_style_profile.parseForTargetAlloc(a, css, .screen);
+    defer profile.deinit();
+    const prefix = "<span lang=\"ja\" class=\"Jpan\">";
+    const before_child = "<span style=\"border-top:1px solid;position:relative;padding:1px;\">";
+    const after_text = "<span style=\"position:absolute;top:0;bottom:67%;right:0%;border-right:1px solid;\"></span></span>ち</span>";
+    var renderer: Renderer = .{ .a = a, .content_root = .parser_output, .context = .{ .table_styles = &profile } };
+    const spans = try renderer.parseSpans(prefix ++ before_child ++ "に" ++ after_text, .{});
+    try std.testing.expectEqualStrings("にち", try flattened(a, spans));
+    var found: usize = 0;
+    for (spans) |span| if (span.inline_box_group) |box| {
+        found += 1;
+        try std.testing.expectEqualStrings("に", box.spans[0].text);
+        try std.testing.expect(box.border.top == .solid);
+        try std.testing.expectEqual(@as(usize, 1), box.overlays.len);
+        const overlay = box.overlays[0];
+        try std.testing.expect(overlay.content == null and overlay.border.right == .solid);
+        try std.testing.expectEqualDeep(presentation_types.InlineBoxInset{ .unit = .percent, .value = 67 }, overlay.insets.bottom.?);
+    };
+    try std.testing.expectEqual(@as(usize, 1), found);
+    const stored = try FormattingScopeTest.encode(a, &renderer, &.{.{ .kind = .paragraph, .spans = spans }});
+    const codec = @import("blob_encoder").presentation_codec;
+    const encoded = try codec.encodeAlloc(a, stored);
+    const decoded = try codec.decodeAlloc(a, encoded, stored.entry.title, .language, .{ .heading = stored.entry.language.?, .code = stored.entry.language_code });
+    try std.testing.expectEqualDeep(stored, decoded);
+    var ambiguous: Renderer = .{ .a = a, .content_root = .parser_output, .context = .{ .table_styles = &profile } };
+    const selected_parent = "<span class='character-sample' style='border-top:1px solid;position:relative;padding:1px;'>";
+    try std.testing.expectError(error.UncompiledPresentation, ambiguous.parseSpans(prefix ++ selected_parent ++ "に" ++ after_text, .{}));
 }
 
 test "Serbian pitch selector facts preserve local source custody" {
