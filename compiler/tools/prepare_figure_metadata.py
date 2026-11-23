@@ -200,8 +200,8 @@ FIGURE_MEDIA_VARIANTS['6e76237de1cf29c08427d191f110a2c38c2b4cf9'] = FIGURE_MEDIA
 FIGURE_MEDIA_VARIANTS['f03f1fdaa2d112807b6ce63170eb50e86de615bd'] = FIGURE_MEDIA_VARIANTS['992ad5e3679f848254828e823860ba8b3ad3b39b']
 
 # Between d191 and 87f only FlaggedRevs, Wikibase and the DB load monitor
-# changed. Its exact registration binds ordinary ImageInfo and the ImageInfo
-# half of independently observed, current height-only SVG controls.
+# changed. Its exact registration binds ordinary ImageInfo, observed PNG thumbnail
+# widths and the ImageInfo half of current height-only SVG controls.
 FILE_DEFAULTS = 'figure-imageinfo-defaultoptions.raw.json'
 SR_SELECTED_DEFAULTS = 'cd0624188c22163e38bdee69bbe0e67bf74f231eeeb023a2834abd84de4cc2d7'
 
@@ -1338,7 +1338,7 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
         observation = batch.get('observed_svg_width_px')
         occurrences = batch.get('observed_svg_occurrences')
         supplemental = 'observed_svg_width_px' in batch or 'observed_svg_occurrences' in batch or jpeg_supplement
-        if core == site_info.FIGURE_WMF5_CORE and supplemental and occurrences is None:
+        if core == site_info.FIGURE_WMF5_CORE and jpeg_supplement:
             raise ValueError('Unreviewed ImageInfo supplement at this revision')
         if 'observed_svg_occurrences' in batch:
             if (profile_kind not in (FIGURE_PROFILE_V4, FIGURE_PROFILE_V5) or core not in (FIGURE_CURRENT_CORE, FIGURE_REGISTRATION_CORE, site_info.FIGURE_WMF5_CORE) or
@@ -1475,6 +1475,7 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
             if observation is not None:
                 canonical = record['canonical_file']
                 if (record['state'] != 'eligible' or canonical in observed_files or
+                        (batch_core == site_info.FIGURE_WMF5_CORE and info.get('thumbmime') != 'image/png') or
                         observed_svg_width(info, record['mime'], record['mediatype'], record['original_width'], record['original_height']) != observation):
                     raise ValueError('Unproved or duplicate observed SVG width')
                 observed_files.add(canonical)

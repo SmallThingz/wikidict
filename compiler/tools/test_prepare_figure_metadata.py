@@ -330,9 +330,36 @@ class SrImageInfoBindingTests(unittest.TestCase):
             triple['receipt'] = figure.encoded(receipt).decode()
             with self.subTest(change=change), self.assertRaisesRegex(ValueError, 'ImageInfo source or HTTP date'):
                 replay(altered)
-        for other in ({'observed_svg_width_px':250}, {'jpeg_metadata_only':True}):
-            with self.subTest(supplement=other), self.assertRaisesRegex(ValueError, 'Unreviewed ImageInfo supplement'):
-                replay(dict(base, **other))
+        with self.assertRaisesRegex(ValueError, 'Unproved or duplicate observed SVG width'):
+            replay(dict(base, observed_svg_width_px=250))
+        with self.assertRaisesRegex(ValueError, 'Unreviewed ImageInfo supplement'):
+            replay(dict(base, jpeg_metadata_only=True))
+
+    def test_current_svg_width_requires_exact_rasterized_png_from_registered_response(self):
+        fixtures = Path(__file__).parent/'testdata'
+        namespace = (fixtures/'figure-page-observations/sr-fuhe-served-set/namespace-registry.tsv').read_bytes()
+        body = (fixtures/'sr-imageinfo-87f/sun-width75.raw.json').read_text()
+        names = ['Датотека:Sun symbol.svg']
+        base = {'requests':names, 'response':body}
+        def replay(raw, width):
+            supplement = {'requests':names, 'response':raw, 'observed_svg_width_px':width}
+            return figure.file_records((base, supplement), namespace, 'srwiktionary', '20261001',
+                body.encode(), has_batches=True, record_limit=1,
+                profile_kind=figure.FIGURE_PROFILE_V4, allow_compatible_epochs=True)['records'][0]
+        row = replay(body, 75)
+        self.assertEqual((row['canonical_file'], row['observed_svg_width_px'], row['observed_batch']), (names[0],75,1))
+        with self.assertRaises(ValueError):
+            replay(body, 74)
+        for key, value in (('thumbmime', None), ('thumbmime', 'image/jpeg'), ('thumbheight', 1),
+                           ('thumburl', 'original'), ('sha1', '0'*40)):
+            altered = json.loads(body)
+            info = altered['query']['pages'][0]['imageinfo'][0]
+            if value is None:
+                del info[key]
+            else:
+                info[key] = info['url'] if value == 'original' else value
+            with self.subTest(key=key, value=value), self.assertRaises(ValueError):
+                replay(figure.encoded(altered).decode(), 75)
 
     def test_changed_defaults_profile_and_media_are_rejected(self):
         for group, key, value in (('defaultoptions', 'thumbsize', 0), ('defaultoptions', 'skin', 'vector'),
