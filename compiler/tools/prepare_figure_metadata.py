@@ -4789,6 +4789,165 @@ def import_archived_http(manifest_path, destination, wiki, date, namespace, plan
         raise ValueError('Archived HTTP source lacks the complete planned requests or stream identity')
 
 
+def import_closed_http(arguments, destination, plan, namespace, planned, light_titles):
+    """Validate an immutable epoch-stop capture before supplying any fresh request."""
+    failure_path, failure_hash, watchdog_path, watchdog_hash = arguments
+    failure_path, watchdog_path = Path(failure_path).absolute(), Path(watchdog_path).absolute()
+    root = failure_path.parent
+    if (failure_path.name != 'figure-failure-0001.json' or failure_path.resolve() != failure_path or
+            watchdog_path.resolve() != watchdog_path):
+        raise ValueError('Unsafe closed Figure HTTP evidence locator')
+    stamps = {path: evidence.stamp(path) for path in (failure_path, watchdog_path)}
+    failure_raw, watchdog_raw = small(failure_path), small(watchdog_path)
+    if digest(failure_raw) != failure_hash or digest(watchdog_raw) != watchdog_hash:
+        raise ValueError('Closed Figure HTTP failure or watchdog identity changed')
+    failure, watchdog = decode(failure_raw), decode(watchdog_raw)
+    guardian_path = Path(watchdog['guardian_report'])
+    if (not guardian_path.is_absolute() or guardian_path.parent != watchdog_path.parent or
+            guardian_path.resolve() != guardian_path):
+        raise ValueError('Unsafe closed Figure HTTP guardian locator')
+    stamps[guardian_path] = evidence.stamp(guardian_path)
+    guardian = decode(small(guardian_path))
+    if (watchdog.get('cleanup_complete') is not True or watchdog.get('runtime_started') is not True or
+            watchdog.get('termination_reason') != 'child_exit' or watchdog.get('child_exit_status') != 1 or
+            watchdog.get('guardian_exit_status') != 0 or guardian.get('status') != 'disarmed' or
+            guardian.get('reason') != 'normal_done' or any(type(watchdog.get(key)) is not int or
+                watchdog[key] <= 0 or watchdog[key] != guardian.get(other) for key, other in
+                (('guardian_pid', 'guardian_pid'), ('child_pid', 'root_pid'),
+                 ('child_start_time_ticks', 'root_start')))):
+        raise ValueError('Closed Figure HTTP source lacks terminal process cleanup')
+    directory_stamp = complete_capture_directory_stamp(root)
+    artifacts = failure['artifacts']
+    members = {failure_path.name, *artifacts}
+    if {path.name for path in root.iterdir()} != members:
+        raise ValueError('Closed Figure HTTP source contains unaccounted members')
+    for name, identity in artifacts.items():
+        path = root / observed_artifact_name(name)
+        before = evidence.stamp(path)
+        if prefix_identity(path, before[2]) != identity:
+            raise ValueError('Closed Figure HTTP source member changed: ' + name)
+        stamps[path] = before
+    old = inventory_document(root / PLAN)
+    lean = plan.get('metadata_mode') == 'lean-tiff-v1'
+    error = 'Lean Figure and defaults source versions differ' if lean else 'Figure batches mix site/source versions'
+    committed = failure['committed_batches']
+    retained = plan['retained']
+    if (failure.get('error') != error or failure.get('resumes') != [] or
+            failure.get('source') != old.get('source') or failure.get('plan_sha256') != digest(encoded(old)) or
+            dict(old, source=plan['source']) != plan or type(committed) is not int or
+            not len(retained) < committed <= plan['base_batches']):
+        raise ValueError('Closed Figure HTTP source changed the original capture plan or stop')
+    if digest(namespace) != old.get('namespace_registry_sha256') or digest(encoded(planned)) != old.get('planned_requests_sha256'):
+        raise ValueError('Closed Figure HTTP namespace or planned requests changed')
+    wiki, date = plan['wiki'], plan['date']
+    profile = plan.get('figure_profile', FIGURE_PROFILE_V3)
+    raw_path = root / ROLES['figure-sizing-raw']
+    http_files, origins = set(), []
+    def check_source():
+        if (complete_capture_directory_stamp(root) != directory_stamp or
+                any(evidence.stamp(path) != stamp for path, stamp in stamps.items())):
+            raise ValueError('Closed Figure HTTP evidence changed during import')
+    with raw_path.open('rb') as raw, (root / FILE_REQUESTS).open('rb') as journal:
+        def read_line(stream, limit):
+            line = stream.readline(limit+1)
+            if len(line) > limit:
+                raise ValueError('Closed Figure HTTP stream exceeds record bound')
+            return line
+        header = stream_decode(read_line(raw, STREAM_HEADER_LIMIT))
+        encoding = raw_record_encoding(header)
+        site = decode(small(root / ROLES['figure-sizing-site'], MAX_RESPONSE))
+        expected = {'schema': RAW_STREAM_SCHEMA, 'wiki': wiki, 'core_revision': site['query']['general']['git-hash'],
+            **{key: plan[key] for key in ('namespace_registry_sha256','records_count','base_batches','observed_batches')}}
+        if encoding is not None:
+            expected['record_encoding'] = encoding
+        requests = stream_decode(read_line(journal, STREAM_HEADER_LIMIT))
+        if header != expected or requests != {'schema': REQUEST_STREAM_SCHEMA,
+                'batches': plan['base_batches']+plan['observed_batches']}:
+            raise ValueError('Closed Figure HTTP stream header changed')
+        for index in range(committed):
+            offset = raw.tell()
+            line = read_line(raw, STREAM_RAW_LINE_LIMIT)
+            batch = raw_record_decode(line, encoding)
+            source = stream_decode(read_line(journal, STREAM_HEADER_LIMIT))
+            if index < len(retained):
+                if source != retained[index]:
+                    raise ValueError('Closed Figure HTTP retained selection changed')
+                replay_source(root, source, batch, wiki, date, namespace, http_files, {})
+                continue
+            number = index-len(retained)+1
+            light = set(planned[number-1]) <= light_titles
+            kind = 'http-archived-lean' if lean else 'http-archived-light' if light else 'http-archived'
+            if (source.get('kind') != kind or source['batch']['request'] != f'file-metadata.request-{number:06d}.json' or
+                    batch['requests'] != planned[number-1]):
+                raise ValueError('Closed Figure HTTP original request order changed')
+            replay_source(root, source, batch, wiki, date, namespace, http_files, {},
+                profile_kind=profile, allow_compatible_epochs=True, origin_plan=old)
+            origins.append((source, (offset, len(line), digest(line))))
+        if raw.read(1) or journal.read(1):
+            raise ValueError('Closed Figure HTTP stream contains trailing data')
+    pending = pending_http_records(root, old, failure, planned, allow_compatible_epochs=True)
+    first = len(origins)+1
+    if sorted(pending) != list(range(first, first+len(pending))):
+        raise ValueError('Closed Figure HTTP pending slots are not contiguous')
+    for state in pending.values():
+        base, tiff = state['accepted'], state.get('tiff')
+        if base is None or (tiff is not None and tiff['accepted'] is None):
+            raise ValueError('Closed Figure HTTP pending request is not accepted')
+        if lean:
+            reference = {'base': base}
+            if tiff is not None:
+                reference['tiff'] = tiff['accepted']
+            batch = source_epoch_pending_batch(root, reference, wiki, set(artifacts))
+            validate_lean_batch(batch, namespace, wiki, date, profile, allow_compatible_epochs=True)
+        origins.append((state, None))
+        http_files.update(state['artifacts'])
+    expected_files = {*old['defaults'], ROLES['figure-siteinfo'], ROLES['figure-sizing-raw'],
+        ROLES['figure-sizing-site'], INVENTORY, PLAN, FILE_REQUESTS, QUERY_INPUTS,
+        *http_files, *(row['path'] for row in old['query_inputs'])}
+    if 'observed_defaults_response_sha256' in old:
+        expected_files.add(FILE_DEFAULTS)
+    if set(artifacts) != expected_files:
+        raise ValueError('Closed Figure HTTP captured artifacts are unrelated or incomplete')
+    check_source()
+
+    def restore(number):
+        source, locator = origins[number-1]
+        def copy(name):
+            raw = small(root / name, MAX_RESPONSE)
+            if artifacts[name] != {'bytes': len(raw), 'sha256': digest(raw)}:
+                raise ValueError('Closed Figure HTTP imported artifact changed')
+            evidence.put(destination / name, raw)
+        if locator is None:
+            for name in source['artifacts']:
+                copy(name)
+            base, tiff = source['accepted'], source.get('tiff')
+            if not lean:
+                return base
+            return {'base': base} if tiff is None else {'base': base, 'tiff': tiff['accepted']}
+        offset, length, sha256 = locator
+        with raw_path.open('rb') as raw:
+            raw.seek(offset)
+            line = raw.read(length)
+        if len(line) != length or digest(line) != sha256:
+            raise ValueError('Closed Figure HTTP imported frame changed')
+        batch = raw_record_decode(line, encoding)
+        def stage(reference, names, response):
+            for name in names:
+                copy(name)
+            receipt = decode(small(destination / reference['accepted_receipt']))
+            evidence.put(destination / metadata.safe_name(receipt['response']), response.encode('utf-8'))
+        base = source['batch']
+        stage(base, source['artifacts'], batch['response'])
+        if not lean:
+            return base
+        if 'tiff_batch' not in source:
+            return {'base': base}
+        tiff = source['tiff_batch']
+        stage(tiff, source['tiff_artifacts'], batch['tiff_metadata_response'])
+        return {'base': base, 'tiff': tiff}
+    return len(origins), restore, check_source
+
+
 def capture_files(args, transport=None, sleep=time.sleep, *, target_contract=REPLAY_CONTRACT,
                   _after_capture=None):
     """Capture or append with an explicit v4/v6 policy; ordinary callers keep v6."""
@@ -4800,6 +4959,12 @@ def capture_files(args, transport=None, sleep=time.sleep, *, target_contract=REP
             getattr(args, 'resume', None) is not None or getattr(args, 'max_inflight', 1) != 1 or
             getattr(args, 'metadata_mode', 'full') != 'full'):
         raise ValueError('Archived HTTP import requires a separate fresh sequential full capture')
+    closed_source = getattr(args, 'import_closed_http', None)
+    if closed_source is not None:
+        failure = Path(closed_source[0]).resolve()
+        if (root.resolve().is_relative_to(failure.parent) or archived_source is not None or
+                getattr(args, 'resume', None) is not None):
+            raise ValueError('Closed HTTP import requires a separate fresh Figure generation')
     file_defaults = getattr(args, 'file_defaults', None)
     if file_defaults is not None and root.resolve().is_relative_to(Path(file_defaults).resolve()):
         raise ValueError('Figure capture cannot modify its default-options witness')
@@ -5073,6 +5238,9 @@ def _capture_files(args, transport=None, sleep=time.sleep, *, target_contract=RE
         evidence.document(root / INVENTORY, inventory)
         evidence.document(root / PLAN, plan)
         site_raw = saved[site_info.SNAPSHOT]
+    closed_source = getattr(args, 'import_closed_http', None)
+    imported_count, restore_http, check_closed_http = (0, None, None) if closed_source is None else import_closed_http(
+        closed_source, root, plan, namespace, planned, light_titles)
     deadline = time.monotonic()+args.wall_seconds
     registry = evidence.Registry(namespace, args.wiki, args.date)
     pacing = metadata.RequestStartPacing(args.delay, sleep)
@@ -5191,8 +5359,8 @@ def _capture_files(args, transport=None, sleep=time.sleep, *, target_contract=RE
             transport or evidence.get_response, sleep, deadline, args.delay, pacing, figure_axes=True,
             figure_metadata_light=set(planned[number-1]) <= light_titles,
             first_attempt=state.get('first_attempt', 1), prepared_request=prepared)
-    slots = (metadata.OrderedRequestBatches(fetch, committed_http+1, len(planned), pacing,
-              warm=bool(retained or committed), wall_errors=WALL_ERRORS) if max_inflight == 2 else None)
+    slots = (metadata.OrderedRequestBatches(fetch, max(committed_http, imported_count)+1, len(planned), pacing,
+              warm=bool(retained or committed or imported_count), wall_errors=WALL_ERRORS) if max_inflight == 2 else None)
     raw_path, request_path = root / ROLES['figure-sizing-raw'], root / FILE_REQUESTS
     if compressed_output:
         raw_path = raw_path.with_name(raw_path.name + '.gz')
@@ -5279,7 +5447,12 @@ def _capture_files(args, transport=None, sleep=time.sleep, *, target_contract=RE
                     number = index-len(retained)+1
                     titles = planned[number-1]
                     light = set(titles) <= light_titles
-                    _, reference = slots.next(number) if slots is not None else fetch(number)
+                    if number <= imported_count:
+                        reference = restore_http(number)
+                    else:
+                        if imported_count and number == imported_count+1:
+                            check_closed_http()
+                        _, reference = slots.next(number) if slots is not None else fetch(number)
                     if lean:
                         actual, response, names, accepted = captured_http_stage(root, reference['base'], args.wiki, light=True)
                         batch = {'requests': actual, 'response': response.decode('utf-8')}
@@ -5369,6 +5542,8 @@ def _capture_files(args, transport=None, sleep=time.sleep, *, target_contract=RE
         if not bound_file_core(document['core_revision'], defaults['core'], file_defaults, wiki=args.wiki):
             raise ValueError('Defaults and Figure observations use different source versions')
         check_prefix_cache(prefix_cache)
+        if check_closed_http is not None:
+            check_closed_http()
         raw_id = ({'size': compressed_raw[2]['bytes'], 'sha256': compressed_raw[2]['sha256']} if compressed_output
                   else evidence.fingerprint(raw_path))
         document.update(schema=FILES_STREAM_SCHEMA, records_count=len(document['records']),
@@ -7140,6 +7315,9 @@ def main():
     for name in ('defaults', 'dumpstatus', 'output'):
         collect.add_argument('--' + name, type=Path, required=True)
     collect.add_argument('--sql', type=Path, action='append', required=True)
+    collect.add_argument('--import-closed-http', nargs=4,
+        metavar=('FAILURE', 'FAILURE_SHA256', 'WATCHDOG', 'WATCHDOG_SHA256'),
+        help='preserve accepted HTTP from a closed Figure source-epoch stop before capturing its missing suffix')
     collect.add_argument('--import-archived-http', type=Path, help='replay exact existing full HTTP requests and accepted receipts offline')
     collect.add_argument('--downloads', type=Path, help='Archive root for SQL recorded by a relocated complete parent')
     collect.add_argument('--file-defaults', type=Path, help='verified matching default-options observation for the selected ImageInfo revision')

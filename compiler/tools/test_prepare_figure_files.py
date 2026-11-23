@@ -1498,6 +1498,132 @@ class FigureFileTests(unittest.TestCase):
         with self.assertRaises(ValueError):figure.capture_files(replay,transport=offline)
         self.assertFalse((replay.output/figure.COMPLETE).exists())
 
+    def closed_http_arguments(self, failure):
+        watchdog, guardian = self.root/'watchdog.json', self.root/'guardian.json'
+        figure.evidence.document(guardian, {'guardian_pid': 12, 'root_pid': 11,
+            'root_start': 10, 'status': 'disarmed', 'reason': 'normal_done'})
+        figure.evidence.document(watchdog, {'guardian_report': str(guardian), 'runtime_started': True,
+            'cleanup_complete': True, 'termination_reason': 'child_exit', 'child_exit_status': 1,
+            'guardian_exit_status': 0, 'guardian_pid': 12, 'child_pid': 11, 'child_start_time_ticks': 10})
+        return [failure, figure.digest(failure.read_bytes()), watchdog, figure.digest(watchdog.read_bytes())]
+
+    def test_closed_epoch_http_import_keeps_original_transport_and_only_fetches_suffix(self):
+        args = self.args(links=('A.svg', 'B.svg', 'C.svg'))
+        args.max_inflight, args.batch_size = 1, 1
+        calls, clock = [], [0.0]
+        def transport(url, timeout):
+            title = parse_qs(urlsplit(url).query)['titles'][0]
+            calls.append(title)
+            return 200, {'content-type': 'application/json'}, figure.encoded(self.response(title))
+        def stop_after_two(batches, *args, **kwargs):
+            # Let the actual writer durably commit two accepted frames, then
+            # simulate its mixed-source reducer refusal. No receipt is fabricated.
+            next(batches)
+            next(batches)
+            raise ValueError('Figure batches mix site/source versions')
+        def run(args):
+            with patch.object(figure.time, 'monotonic', side_effect=lambda: clock[0]):
+                return figure.capture_files(args, transport=transport,
+                    sleep=lambda delay: clock.__setitem__(0, clock[0]+delay))
+        with patch.object(figure, 'file_records', side_effect=stop_after_two), self.assertRaisesRegex(
+                ValueError, 'Figure batches mix site/source versions'):
+            run(args)
+        old = args.output
+        failure = old / 'figure-failure-0001.json'
+        evidence = self.closed_http_arguments(failure)
+        original = {path.name: path.read_bytes() for path in old.iterdir()}
+        prefix = calls[:]
+        self.assertEqual(len(prefix), 2)
+        args.import_closed_http = evidence
+        args.output = self.root/'rebound'
+        calls.clear()
+        published = run(args)
+        self.assertEqual(len(calls), 1)
+        self.assertNotIn(calls[0], prefix)
+        for name in original:
+            if name.startswith('file-metadata.'):
+                self.assertEqual((args.output/name).read_bytes(), original[name])
+        old_stream = original[figure.ROLES['figure-sizing-raw']].splitlines()
+        self.assertEqual((args.output/figure.ROLES['figure-sizing-raw']).read_bytes().splitlines()[:3], old_stream)
+        self.assertEqual(original, {path.name:path.read_bytes() for path in old.iterdir()})
+        old.rename(self.root/'temporarily-unavailable')
+        try:
+            self.assertEqual(figure.verify(args.output), published)
+            materialized = self.root/'materialized'
+            figure.materialize_complete_capture(args.output/figure.MANIFEST, materialized)
+            self.assertEqual(figure.verify(materialized)['coverage'], published['coverage'])
+        finally:
+            (self.root/'temporarily-unavailable').rename(old)
+
+        calls.clear()
+        args.output = self.root/'wrong-plan'
+        args.batch_size = 2
+        with self.assertRaisesRegex(ValueError, 'original capture plan'):
+            run(args)
+        args.batch_size = 1
+        args.output = self.root/'wrong-proof'
+        args.import_closed_http = [failure, '0'*64, *evidence[2:]]
+        with self.assertRaisesRegex(ValueError, 'failure or watchdog identity'):
+            run(args)
+        args.import_closed_http = evidence
+        args.output = old/'forbidden-output'
+        with self.assertRaisesRegex(ValueError, 'separate fresh Figure generation'):
+            run(args)
+        self.assertFalse(args.output.exists())
+        args.output = self.root/'wrong-transport'
+        (old/'file-metadata.request-000001.json').write_bytes(b'{}')
+        with self.assertRaisesRegex(ValueError, 'source member changed'):
+            run(args)
+        self.assertEqual(calls, [])
+        self.assertFalse((args.output/figure.COMPLETE).exists())
+
+    def test_closed_epoch_http_import_drains_two_slot_tiff_prefix_before_network(self):
+        args = self.lean_capture_args(('A.png', 'B.png', 'C.tif', 'D.png', 'E.png'))
+        args.batch_size, args.max_inflight = 1, 2
+        completed = threading.Event()
+        base = self.lean_transport([])
+        def initial(url, timeout):
+            query = parse_qs(urlsplit(url).query)
+            result = base(url, timeout)
+            if query['titles'][0].endswith('C.tif') and 'metadata' in query['iiprop'][0].split('|'):
+                completed.set()
+            return result
+        reduce = figure.file_records
+        def stop_with_lookahead(batches, *args, **kwargs):
+            if kwargs['record_limit'] != 5:
+                return reduce(batches, *args, **kwargs)
+            next(batches)
+            next(batches)
+            self.assertTrue(completed.wait(5), 'TIFF lookahead never reached transport')
+            raise ValueError('Lean Figure and defaults source versions differ')
+        now, advance = self.overlap_clock()
+        with patch.object(figure.time, 'monotonic', side_effect=now), patch.object(
+                figure, 'file_records', side_effect=stop_with_lookahead), self.assertRaisesRegex(
+                    ValueError, 'Lean Figure and defaults source versions differ'):
+            figure.capture_files(args, transport=initial, sleep=advance)
+        old = args.output
+        failure = old/'figure-failure-0001.json'
+        checkpoint = figure.decode(failure.read_bytes())
+        self.assertEqual((checkpoint['committed_batches'], checkpoint['pending_http']), (2, [3]))
+        args.import_closed_http = self.closed_http_arguments(failure)
+        args.output = self.root/'rebound-lean'
+        calls = []
+        base = self.lean_transport(calls)
+        def suffix(url, timeout):
+            with (args.output/figure.ROLES['figure-sizing-raw']).open('rb') as stream:
+                encoding = figure.raw_record_encoding(figure.stream_decode(stream.readline()))
+                frames = [figure.raw_record_decode(stream.readline(), encoding) for _ in range(3)]
+            self.assertEqual([batch['requests'][0] for batch in frames[:3]], ['ملف:A.png', 'ملف:B.png', 'ملف:C.tif'])
+            self.assertEqual(frames[2]['response'].encode(), (old/'file-metadata.response-000003-01.raw.json').read_bytes())
+            self.assertEqual(frames[2]['tiff_metadata_response'].encode(),
+                             (old/'file-metadata.tiff-response-000003-01.raw.json').read_bytes())
+            return base(url, timeout)
+        now, advance = self.overlap_clock()
+        with patch.object(figure.time, 'monotonic', side_effect=now):
+            result = figure.capture_files(args, transport=suffix, sleep=advance)
+        self.assertCountEqual(calls, [(['ملف:D.png'], False), (['ملف:E.png'], False)])
+        self.assertEqual(figure.verify(args.output), result)
+
     def test_missing_file_batch_uses_existing_transport_and_full_replay(self):
         args = self.args(links=('Example.svg', 'Second.svg'))
         args.batch_size = 1
