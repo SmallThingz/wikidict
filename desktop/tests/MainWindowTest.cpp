@@ -11781,7 +11781,7 @@ private slots:
         LibraryDialog dialog(&window, root.path()); dialog.show();
         QTRY_VERIFY_WITH_TIMEOUT(!dialog.worker_, 30000);
         for (bool unknown : {true, false}) {
-            const QByteArray payload = unknown ? QByteArrayLiteral("DPRZ") : QByteArrayLiteral("DPRN");
+            const QByteArray payload = unknown ? QByteArrayLiteral("DPRX") : QByteArrayLiteral("DPRN");
             const QByteArray bytes = QByteArrayLiteral("WIKBLB08") + char(7) + QByteArray("rule\0", 5) + char(4) + payload;
             const QString path = root.filePath(QStringLiteral("source.wikblb"));
             QFile file(path); QVERIFY(file.open(QIODevice::WriteOnly)); QCOMPARE(file.write(bytes), bytes.size()); file.close();
@@ -15284,7 +15284,9 @@ private slots:
         invalid.append(QJsonObject{{"owner_font", pixels}, {"owner_font_scale", 1.25}});
         auto noFamily = owner; noFamily.insert("font_family", QJsonValue());
         invalid.append(QJsonObject{{"owner_font", noFamily}, {"font_family", "sans_serif"}});
-        invalid.append(QJsonObject{{"owner_font", owner}, {"positioning", "relative_auto"}});
+        const QJsonObject positioned{{"owner_font", owner}, {"positioning", "relative_auto"}};
+        QCOMPARE(CompiledContent::containerStyle(positioned), positioned);
+        invalid.append(QJsonObject{{"owner_font", owner}, {"positioning", "absolute"}});
         for (const auto &bad : invalid) QVERIFY_EXCEPTION_THROWN(CompiledContent::containerStyle(bad), std::exception);
         MainWindow window{QString()}; window.show(); QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 30000);
         const QJsonObject source{{"kind", "container"}, {"spans", QJsonArray{}}, {"container", QJsonObject{{"style", style},
@@ -21488,13 +21490,15 @@ private slots:
     }
 
     void retainedNorskEntryComposesOrdinaryParagraphsAndTables() {
-        // Exact retained Reader JSON from the failed genuine NO GUI import.
-        // This is a consumer regression; it does not rerun the producer or FFI.
-        QFile input(qEnvironmentVariable("WIKIDICT_NO134_READER_JSON"));
-        QVERIFY2(input.open(QIODevice::ReadOnly), "The retained NO134 Reader fixture is required.");
-        const QByteArray bytes = input.readAll();
-        QCOMPARE(QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex(),
-            QByteArrayLiteral("31385b056efca5526003180245d4d38b8050334a1e46f3c411670a332e268ecf"));
+        // The default is the ordinary FFI lookup of norsk member 78cd2515, record 4684,
+        // from the sealed 20261001 publication. An explicit capture keeps its original digest.
+        const QString capture = qEnvironmentVariable("WIKIDICT_NO134_READER_JSON");
+        QFile input(capture.isEmpty() ? QFINDTESTDATA("fixtures/no-bibringe-reader.qz") : capture);
+        QVERIFY2(input.open(QIODevice::ReadOnly), qPrintable(input.errorString()));
+        const QByteArray bytes = capture.isEmpty() ? qUncompress(input.readAll()) : input.readAll();
+        QCOMPARE(QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex(), capture.isEmpty()
+            ? QByteArrayLiteral("6a2fa0ab990831638b1129cadbc068741295688fd147ac68d78b75e438d1d2ba")
+            : QByteArrayLiteral("31385b056efca5526003180245d4d38b8050334a1e46f3c411670a332e268ecf"));
         QJsonParseError error;
         const auto response = QJsonDocument::fromJson(bytes, &error);
         QCOMPARE(error.error, QJsonParseError::NoError);
@@ -35256,11 +35260,12 @@ private slots:
             auto *inputAccessible = QAccessible::queryAccessibleInterface(input);
             QVERIFY(inputAccessible);
             QCOMPARE(inputAccessible->text(QAccessible::Name), QStringLiteral("Unscramble answer"));
+            input->setFocus(); QTRY_VERIFY(input->hasFocus());
             QTest::keyClicks(input, "dog");
             QCOMPARE(input->text(), QStringLiteral("dog"));
             QCOMPARE(inputAccessible->text(QAccessible::Name), QStringLiteral("Unscramble answer"));
             QTest::keyClick(input, Qt::Key_Return);
-            QVERIFY(dialog->isVisible());
+            QVERIFY(dialog->isVisible()); QVERIFY(input->hasFocus());
             QCOMPARE(window.learning_.answerCount(), 1);
             QCOMPARE(window.learning_.study().value(word.key).right, 1);
             QTest::keyClick(input, Qt::Key_Return);
@@ -35274,6 +35279,7 @@ private slots:
             QTest::keyClick(input, Qt::Key_Return);
             QCOMPARE(window.learning_.answerCount(), 2);
             QCOMPARE(window.learning_.study().value(word.key).wrong, 1);
+            QTest::keyClick(input, Qt::Key_Escape); QVERIFY(!dialog->isVisible());
         });
         window.showLearningDialog(2);
         QVERIFY(exercised);

@@ -7794,7 +7794,18 @@ void MainWindow::showLearningDialog(int tab) {
     QFont scrambleFont = scrambled->font(); scrambleFont.setPointSize(24); scrambleFont.setBold(true); scrambled->setFont(scrambleFont);
     auto *scrambleClue = new QLabel(scramblePage); scrambleClue->setWordWrap(true);
     scrambleClue->setTextFormat(Qt::PlainText);
-    auto *scrambleInput = new QLineEdit(scramblePage); scrambleInput->setPlaceholderText(QStringLiteral("Type the word"));
+    class ScrambleAnswerEdit final : public QLineEdit {
+    public:
+        using QLineEdit::QLineEdit;
+    protected:
+        void keyPressEvent(QKeyEvent *event) override {
+            QLineEdit::keyPressEvent(event);
+            // Return submits this answer. Keep it from activating the dialog's default Close button.
+            if (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter) event->accept();
+        }
+    };
+    auto *scrambleInput = new ScrambleAnswerEdit(scramblePage);
+    scrambleInput->setPlaceholderText(QStringLiteral("Type the word"));
     scrambleInput->setAccessibleName(QStringLiteral("Unscramble answer"));
     auto *scrambleResult = new QLabel(scramblePage);
     scrambleResult->setTextFormat(Qt::PlainText);

@@ -268,7 +268,7 @@ int main(int argc, char **argv) {
                 require(invalid, "malformed known N remains invalid after successful capability probe");
             }
             bool unsupported = false;
-            try { second.validateRecord(header, "rule", QByteArrayLiteral("DPRZ")); }
+            try { second.validateRecord(header, "rule", QByteArrayLiteral("DPRX")); }
             catch (const DictApiError &error) {
                 unsupported = error.isUnsupportedPresentation() && !error.isInvalidEntryData();
             }
@@ -283,7 +283,7 @@ int main(int argc, char **argv) {
         // A malformed alias envelope must be rejected before inspecting its
         // inner capability, even if that inner prefix names a future version.
         {
-            QByteArray badAlias = aliasRecord("Cats", "cat", QByteArrayLiteral("DPRZ"));
+            QByteArray badAlias = aliasRecord("Cats", "cat", QByteArrayLiteral("DPRX"));
             badAlias[9] = char(2);
             write(source, aliasBlob(badAlias));
             bool invalidAlias = false;
