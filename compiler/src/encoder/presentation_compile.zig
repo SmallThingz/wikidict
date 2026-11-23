@@ -39661,6 +39661,86 @@ pub const Renderer = struct {
         return null;
     }
 
+    // A real trailing paragraph in a colon-list item remains a paragraph
+    // inside that item. Inline flattening loses the boundary between the
+    // final gloss and the next field label in retained HSB info output.
+    fn trailingIndentedParagraphOffset(self: *Renderer, body: []const u8) Error!?usize {
+        if (self.pre_block or self.parsed_pre or self.block_formatting.code or self.in_reference or
+            self.in_template_literal_scope or self.body_link_target.len != 0 or
+            self.explicit_wiki_label != null or self.inline_source_domain != null or
+            self.navigation_target_probe != null or self.inline_image_attribute or
+            std.mem.indexOfAny(u8, body, "\r\n") != null) return null;
+        // Most colon-list lines have no paragraph tail. Avoid slicing the
+        // page provenance ranges for those ordinary lines.
+        if (std.mem.indexOf(u8, body, "<p") == null or
+            std.mem.indexOf(u8, body, "style=\"margin-bottom: -0.5em;\"") == null) return null;
+        for ([_]?MissingText{ self.body_missing, self.inline_missing }) |parent| if (parent) |tracked_parent| {
+            // Paragraph structure does not prove missing-input absence. Keep
+            // unknown on the ordinary recursive render, but require a real
+            // slice: a detached copy is not an authored paragraph boundary.
+            if (tracked_parent.generated_source != null) return null;
+            const base = @intFromPtr(tracked_parent.bytes.ptr);
+            const at = @intFromPtr(body.ptr);
+            if (at < base or at - base > tracked_parent.bytes.len or
+                body.len > tracked_parent.bytes.len - (at - base)) return null;
+            const tracked = try missingSlice(self.a, tracked_parent, body);
+            if (tracked.lost_missing_range or tracked.ranges.len != 0 or
+                tracked.literal_curly_ranges.len != 0 or tracked.generated_links.len != 0) return null;
+        };
+        var at: usize = 0;
+        var opaque_scan: syntax.OpaqueScan = .{};
+        while (at < body.len) {
+            if (opaque_scan.protectedEnd(body, at, null)) |end| { at = end; continue; }
+            if (starts(body[at..], "{{") or starts(body[at..], "-{")) return null;
+            if (starts(body[at..], "[[")) {
+                const pair = syntax.balancedWithOpaqueScan(body, at, &opaque_scan) orelse return null;
+                at = pair.end;
+                continue;
+            }
+            if (body[at] == '[' and ir.hasExternalProtocol(body[at + 1 ..])) {
+                var iterator: ir.InlineIterator = .{ .input = body[at..], .renderer_boundaries = true };
+                const token = iterator.next() orelse return null;
+                if (token.kind != .external_link) return null;
+                at += iterator.cursor;
+                continue;
+            }
+            if (body[at] == '<') {
+                const tag = (try self.semanticTagAt(body, at)) orelse return null;
+                if (tag.closing or !formattingAngleAttributesBalanced(tag.attrs) or
+                    std.mem.indexOfAny(u8, tag.attrs, "<>\r\n") != null) return null;
+                if (tag.is("p")) {
+                    if (trim(body[0..at]).len == 0 or tag.self_closing) return null;
+                    // These retained field providers have one literal margin
+                    // declaration and an optional title. Class/id/display
+                    // owners need their own ordinary style proof.
+                    const attributes = trim(tag.attrs);
+                    const margin = "style=\"margin-bottom: -0.5em;\"";
+                    if (!starts(attributes, margin)) return null;
+                    if (attributes.len > margin.len and !std.ascii.isWhitespace(attributes[margin.len])) return null;
+                    const remainder = trim(attributes[margin.len..]);
+                    if (remainder.len != 0) {
+                        if (!starts(remainder, "title=\"") or remainder.len < 8 or
+                            remainder[remainder.len - 1] != '"' or
+                            std.mem.indexOfScalar(u8, remainder[7 .. remainder.len - 1], '"') != null) return null;
+                    }
+                    const pair = optionalParagraphEnd(body, tag, self.behaviorControlMatcher());
+                    if (pair.end != body.len or trim(body[tag.end..pair.inner_end]).len == 0) return null;
+                    return at;
+                }
+                if (tag.is("br") or tag.is("wbr")) {
+                    at = tag.end;
+                    continue;
+                }
+                if (tag.self_closing or (blockFormattingFlags(tag) == null and !tag.is("span"))) return null;
+                const pair = syntax.matchingTagWithOpaqueScan(body, tag, &opaque_scan) orelse return null;
+                at = pair.end;
+                continue;
+            }
+            at += 1;
+        }
+        return null;
+    }
+
     fn ordinaryWikiListTableTail(raw: []const u8) bool {
         if (std.mem.indexOfAny(u8, raw, "\r\n") != null) return false;
         const tail = std.mem.lastIndexOf(u8, raw, "|}") orelse return false;
@@ -41439,6 +41519,19 @@ pub const Renderer = struct {
                                 try self.appendBlockBudgeted(&blocks, child);
                             continue;
                         }
+                    }
+                }
+                if (!anchored_inline and !link_label_scope and std.mem.eql(u8, path, ":")) {
+                    if (try self.trailingIndentedParagraphOffset(body)) |opening| {
+                        try self.bodyRawBlock(&blocks, input, body[0..opening], &body_quotes, kind, path, number, 0);
+                        const tail = body[opening..];
+                        const source_offset = @intFromPtr(tail.ptr) - @intFromPtr(input.ptr);
+                        const quote = try self.rawBodyQuoteSeed(input, tail, &body_quotes);
+                        const paragraphs = try self.renderBodySlice(tail, false, false,
+                            if (origin) |base| base + source_offset else null, quote);
+                        for (try self.indentTableBlocks(paragraphs, path)) |indented_paragraph|
+                            try self.appendBlockBudgeted(&blocks, indented_paragraph);
+                        continue;
                     }
                 }
                 const first_list_block = blocks.items.len;
@@ -128927,6 +129020,81 @@ test "nominal MIDI timed options keep reference actions separate from audio play
     try std.testing.expectEqual(media_types.Kind.audio, gallery.media.items[0].kind);
     // MIDI gallery support is unchanged; this control claims ordinary File references only.
 }
+
+test "indented literal paragraph keeps unknown provenance and refuses detached or overlapping source" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = ":[1] [[sense]]<p style=\"margin-bottom: -0.5em;\">'''Pochad:'''";
+    const body = source[1..];
+    const opening = std.mem.indexOf(u8, body, "<p").?;
+    const tracked: MissingText = .{ .bytes = source, .unknown = true };
+    var renderer: Renderer = .{ .a = a, .context = .{}, .body_missing = tracked, .inline_missing = tracked };
+    try std.testing.expectEqual(@as(?usize, opening), try renderer.trailingIndentedParagraphOffset(body));
+    try std.testing.expect(renderer.body_missing.?.unknown and renderer.inline_missing.?.unknown);
+    const blocks = try renderer.renderBodyWithMissing(tracked);
+    try std.testing.expectEqual(@as(usize, 2), blocks.len);
+    try std.testing.expect(blocks[0].kind == .indent);
+    try std.testing.expect(blocks[1].kind == .paragraph);
+    try std.testing.expectEqualStrings(":", blocks[1].list_path);
+    try std.testing.expectEqual(@as(u8, 1), blocks[1].depth);
+    try std.testing.expectEqual(@as(usize, 1), blocks[1].spans.len);
+    try std.testing.expectEqualStrings("Pochad:", blocks[1].spans[0].text);
+    try std.testing.expect(blocks[1].spans[0].flags.bold);
+    try std.testing.expect(renderer.body_missing.?.unknown and renderer.inline_missing.?.unknown);
+    // The ordinary leading paragraph follows the same unknown-preserving path.
+    var paragraph_renderer: Renderer = .{ .a = a, .context = .{} };
+    const tail = try missing_dependency.slice(a, tracked, 1 + opening, source.len);
+    try std.testing.expect(tail.unknown);
+    const ordinary = try paragraph_renderer.renderBodyWithMissing(tail);
+    try std.testing.expectEqual(@as(usize, 1), ordinary.len);
+    try std.testing.expectEqualDeep(ordinary[0].spans, blocks[1].spans);
+    // Unknown is never a substitute for the actual parent/source relationship.
+    const copy = try a.dupe(u8, source);
+    for ([_]bool{ false, true }) |inline_parent| {
+        var detached: Renderer = .{ .a = a, .context = .{}, .body_missing = tracked, .inline_missing = tracked };
+        if (inline_parent) detached.inline_missing = .{ .bytes = copy, .unknown = true }
+        else detached.body_missing = .{ .bytes = copy, .unknown = true };
+        try std.testing.expectEqual(@as(?usize, null), try detached.trailingIndentedParagraphOffset(body));
+    }
+    for (0..5) |variant| {
+        var refused = tracked;
+        switch (variant) {
+            0 => refused.ranges = &.{.{ .start = 1, .end = 2, .occurrence = 1 }},
+            1 => refused.lost_missing_range = true,
+            2 => refused.literal_curly_ranges = &.{.{ .start = 1, .end = 2 }},
+            3 => refused.ranges = &.{.{ .start = @intCast(1 + opening), .end = @intCast(source.len), .occurrence = 1 }},
+            4 => refused.generated_source = source,
+            else => unreachable,
+        }
+        var rejected: Renderer = .{ .a = a, .context = .{}, .body_missing = refused };
+        if (variant == 2) {
+            // This original malformed metadata marks '[' as a brace. Keep its
+            // validator failure distinct from a valid literal-range refusal.
+            try std.testing.expectError(error.InvalidLiteralProvenance, rejected.trailingIndentedParagraphOffset(body));
+        } else {
+            try std.testing.expectEqual(@as(?usize, null), try rejected.trailingIndentedParagraphOffset(body));
+        }
+        try std.testing.expect(rejected.body_missing.?.unknown);
+    }
+    const curly_source = ":{} [1] [[sense]]<p style=\"margin-bottom: -0.5em;\">'''Pochad:'''";
+    const curly_parent: MissingText = .{ .bytes = curly_source, .unknown = true,
+        .literal_curly_ranges = &.{.{ .start = 1, .end = 3 }} };
+    try std.testing.expectEqualStrings("{}", curly_source[1..3]);
+    var curly_renderer: Renderer = .{ .a = a, .context = .{}, .body_missing = curly_parent };
+    try std.testing.expectEqual(@as(?usize, null), try curly_renderer.trailingIndentedParagraphOffset(curly_source[1..]));
+    try std.testing.expect(curly_renderer.body_missing.?.unknown);
+    try std.testing.expectEqualDeep(curly_parent.literal_curly_ranges, curly_renderer.body_missing.?.literal_curly_ranges);
+    // Source outside this contained line stays attached to the parent.
+    const after = source ++ "\nmissing";
+    const parent: MissingText = .{ .bytes = after, .unknown = true,
+        .ranges = &.{.{ .start = source.len + 1, .end = after.len, .occurrence = 1 }} };
+    var disjoint: Renderer = .{ .a = a, .context = .{}, .body_missing = parent };
+    try std.testing.expectEqual(@as(?usize, opening), try disjoint.trailingIndentedParagraphOffset(after[1..source.len]));
+    try std.testing.expect(disjoint.body_missing.?.unknown);
+    try std.testing.expectEqualDeep(parent.ranges, disjoint.body_missing.?.ranges);
+}
+
 
 test "German caption bidi preserves equivalent font only CSS whitespace nested scopes styles actions and codec" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();

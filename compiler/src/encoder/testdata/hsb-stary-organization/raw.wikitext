@@ -1,0 +1,253 @@
+'''stary'''
+== stary ({{rěč|hornjoserbšćina}}) ==
+=== {{słowna družina|adjektiw|hornjoserbšćina}} ===
+
+{{hsb-adjektiw
+|nominatiw=stary
+|zdónk=star
+|palatalny zdónk=star
+|komparatiw=starjejšy
+|diminutiw=[[staruški|staruške/~a/~i]]
+}}
+
+{{info
+|dźělenje słowow=sta·ry[[koma|,]] ''[[komparatiw]]'' sta·rjej·šy
+|IPA={{zwukowe pismo|'starɛ / 'stara / 'starɨɪ}}
+|słuchowe přikłady=
+|woznamy= [[dołhi|dołho]] [[eksistować|eksistowacy]]
+|woznamy2= [[wottrjebać|wottrjebany]], [[wotnosyć|wotnošeny]]
+|woznamy3= [[njeaktualny]], [[prjedawši]], [[bywši]], [[starodawny]]
+|woznamy4= [[skaženy]], [[njeluby]], [[njespodobny]]
+|skrótšenki=
+|pochad=[[wot]] [[prasłowjanski|prasłowjanskeho]] ''*starъ <sup><small><nowiki>[</nowiki>[[:en:Appendix:Proto-Slavic/starъ|→en]]<nowiki>]</nowiki></small></sup>''
+|synonymy=[[wobstarny]]
+|synonymy2=[[krjechki]], [[wottrjebany]], [[wotnošeny]]
+|synonymy3=[[njeaktualny]], [[zestarjeny]], [[woteznać|woteznaty]]
+|synonymy4= [[skaženy]], [[njeluby]], [[njespodobny]]
+|antonymy=[[młody]], [[nowy]]
+|hyperonymy=
+|hyponymy=
+|kollokacije=[[chětro]] stary; [[jara]] stary; stary [[muž]]
+|přikłady=[[a|A]] [[zasy]] [[dyrbjeć|dyrbješe]] [[na]] [[tón|te]] '''stare''' [[wěšćenje|wěšćenjo]] [[myslić]] [[a]] [[kaž]] [[z]] [[mróz]]om [[wón|joho]] [[woběžeć|woběža]] [[strach]], [[zo]] [[być|je]] [[tón]] [[čas]] [[hižo]] [[tu]] [[abo]] [[so]] [[počinać|počina]] [[dopjelnjeć]]. {{žórło-radlubin_bethlehemske.dzecatko_1916}}
+
+:[[po|Po]] [[štom]]ach [[sedźeć|sedźachu]] [[pisany|pisane]] [[ptačk]]i [[z]] [[cuzy]]ch [[kraj]]ow [[a]] [[w]]e [[wulki|wulkej]] [[klětka|klětce]] [[z]]e [[złoty]]mi [[tyčka]]mi [[być|bě]] [[so]] '''stary''', [[čorny]] [[rapak]] [[wusydnyć so|wusydnył]], [[kotryž]] [[nastajnosći]] [[bledźeć|bledźo]] [[bać|baješe]]: „[[witać|Witajće]]! [[witać|witajće]]! [[jěsć|Jěsće]] [[a]] [[pić|pijće]]! [[njehladać|Njehladajće]] [[kazać|kazanja]]!” {{žórło-radlubin_bethlehemske.dzecatko_1916}}
+
+|přikłady2=
+|přikłady3=[[ale|Ale]] [[na]] '''starych''' [[sudnistwo|sudnistwach]] – [[a]] [[tam]] [[dźě]] [[być|su]] [[sprawdu]] [[rěčeć|rěčeli]] [[a]] [[wažić|wažili]], [[a]] [[štož]] [[je]] [[sudniski|sudnisce]] [[wotwažić|wotwažene]], [[to]] [[płaćić|płaći]] – [[być|su]] [[wón|ju]] [[wotwažić|wotwažili]]: [[pjeć]] [[toler]]i [[dyrbjeć|dyrbi]] [[płaćić]]. {{žórło-radlubin_plista_1914}}
+
+|přikłady4=[[na|Na]] [[dompuć]] [[trochu]] [[zabyćiwy|zabyćiweho]] [[hósć|hosća]] [[móc|njemóžes]] [[tež]] [[přecy]] [[z]]e [[stary]]m [[hrib]]om [[přirunać]]. {{žórło-radlubin_plista_1914}}
+
+:„[[kac|Kac]], [[plac]]! [[blink]], [[flink]]! [[ty]] '''stara''' [[wćipny|wćipna]] [[Jěwa]]!” [[rěkać|rěka]] [[kónc]] [[basnička|basnički]]: „[[za]] [[wšón|wšěmi]] [[durje]]mi [[a]] [[škałba]]mi [[sydać]] [[być|njeje]] [[ty|će]] <nowiki>[sic!]</nowiki> [[hańba]]?” (<small>''[[w:Mikławš Bjedrich-Radlubin|Mikławš Bjedrich-Radlubin]]''</small>)
+|rěčne wobroty= Starej [[baba|babje]] [[dwoji|dwoje]] [[hrabje]], [[młody|młodej]] [[holca|holcy]] [[štwory|štwore]] [[cypy]]
+|wotwodźene wopřijeća= [[prastary]], [[starodawny]], [[staršej]], [[starc]], [[starka]], [[wobstarny]], [[zastarski]], [[zazastarski]], [[zastarny]], [[zestarić]], [[zestarjeć]], [[zestarjeny]], [[staroba]], [[starosć]], [[starać so]]
+}}
+
+<br style="clear:both;" />
+==== Přełožki ====
+===== Zapadosłowjanske =====
+{{p-nalěwo}}
+* {{cs}}: [1] {{p|cs|staré}} {{n}}, {{p|cs|stará}} {{f}}, {{p|cs|starý}} {{m}}
+* {{dsb}}: [1] {{p|dsb|#stary (delnjoserbšćina)|stare}} {{n}}, {{p|dsb|#stary (delnjoserbšćina)|stara}} {{f}}, {{p|dsb|#stary (delnjoserbšćina)|stary}} {{m}}
+* {{hsb}}: [1] {{p|hsb|stare}} {{n}} {{f}}, {{p|hsb|stara}} {{f}}, {{p|hsb|stary}} {{m}}
+* {{csb}}: [1] {{p|csb|stôré}} {{n}}, {{p|csb|stôrô}} {{f}}, {{p|csb|stôri}} {{m}}
+{{p-distanca}}
+* {{pox}}: [1] {{p|pox|store}}
+* {{pl}}: [1] {{p|pl|#stary (pólšćina)|stare}} {{n}}, {{p|pl|#stary (pólšćina)|stara}} {{f}}, {{p|pl|#stary (pólšćina)|stary}} {{m}}
+* {{sk}}: [1] {{p|sk|staré}} {{n}}, {{p|sk|stará}} {{f}}, {{p|sk|starý}} {{m}}
+* {{szl}}: [1]
+{{p-naprawo}}
+
+===== Wšitke =====
+{{p-nalěwo}}
+* {{ar}}: [1] {{p|ar|قديم}}
+* {{be}}: [1] {{p|be|стары}}
+* {{bg}}: [1] {{p|bg|стар}}
+* {{cs}}: [1] {{p|cs|starý}}
+* {{da}}: [1] {{p|da|gammel}}
+* {{dsb}}: [1] {{p|dsb|stary}}
+* {{eo}}: [1] {{p|eo|maljuna}}, {{p|eo|malnova}}
+* {{et}}: [1] {{p|et|vana}}
+* {{fa}}: [1] {{p|fa|مسن}}
+* {{fi}}: [1] {{p|fi|vanha}}
+* {{fr}}: [1] {{p|fr|vieux}}
+* {{el}}: [1] {{p|el|παλαιός}}
+* {{hi}}: [1] {{p|hi|पुराना}}
+* {{hsb}}: [1] {{p|hsb|stary}}
+* {{zh}}: [1] {{p|zh|旧的}}
+* {{hr}}: [1] {{p|hr|star}}
+* {{ga}}: [1] {{p|ga|sean}}
+* {{is}}: [1] {{p|is|gamall}}
+* {{it}}: [1] {{p|it|vecchio}}
+* {{en}}: [1] {{p|en|old}}
+* {{csb}}: [1] {{p|csb|stôri}}
+* {{cy}}: [1] {{p|cy|hen}}
+{{p-distanca}}
+* {{la}}: [1] {{p|la|vetus}}
+* {{lv}}: [1] {{p|lv|vecs}}, {{p|lv|sens}}
+* {{lt}}: [1] {{p|lt|senas}}
+* {{mk}}: [1] {{p|mk|стар}}
+* {{de}}: [1] {{p|de|alt}}
+* {{nl}}: [1] {{p|nl|oud}}
+* {{no}}: [1] {{p|no|gammel}}
+* {{oc}}: [1] {{p|oc|vièlh}}
+* {{pox}}: [1] {{p|pox|store}}
+* {{pl}}: [1] {{p|pl|stary}}
+* {{pt}}: [1] {{p|pt|velho}}
+* {{ro}}: [1] {{p|ro|vechi}}
+* {{ru}}: [1] {{pxx|ru|staryj|старый}}
+* {{sr}}: [1] {{p|sr|стар}}
+* {{sk}}: [1] {{p|sk|starý}}
+* {{sl}}: [1] {{p|sl|star}}
+* {{sla}}: [1] {{p|sla|starju}}
+* {{sw}}: [1] {{p|sw|zee}}
+* {{es}}: [1] {{p|es|viejo}}
+* {{sv}}: [1] {{p|sv|gammal}}
+* {{uk}}: [1] {{pxx|uk|staryj|старий}}
+* {{zul}}: [1] {{p|zul|-dala}}
+{{p-naprawo}}
+<br style="clear:both;" />
+
+{{2x---- ‎}}
+
+== stary ({{rěč|delnjoserbšćina}}) ==
+
+=== {{słowna družina|adjektiw|delnjoserbšćina}} ===
+{{dsb-adjektiw
+|wobraz=
+|wulkosć=
+|wopis wobraza=
+|nominatiw=stary
+|zdónk=star
+|komparatiw=staršy
+|diminutiw=[[staručki|staručke/~a/~i]]
+|awgmentatiw=
+|dokładny adwerb=
+}}
+{{ortografija}}
+{{dźělenje słowow}}
+:
+
+{{wurjekowanje}}
+:[[Pomoc:IPA|Mfa]]: {{zwukowe pismo|'starɛ / 'stara / 'starɨ}}
+:[[Pomoc:Słuchowe přikłady|Słuchowe přikłady]]:
+
+{{semantika}}
+{{woznamy}}
+:[1] [[stary#stary (hornjoserbšćina)|stary]]
+
+{{wujasnjenja}}
+:[1]
+
+{{skrótšenki}}
+:[1]
+
+{{pochad}}
+:[1]
+
+{{synonymy}}
+:[1]
+
+{{antonymy}}
+:[1] [[młody#młody (delnjoserbšćina)|młod/-a/-y]]; [[nowy#nowy (delnjoserbšćina)|nowe/-a/-y]]
+
+{{hyperonymy}}
+:[1]
+
+{{hyponymy}}
+:[1]
+
+{{kollokacije}}
+:[1]
+
+{{přikłady}}
+:[1]
+
+{{rěčne wobroty}}
+:[1]
+
+{{wotwodźene wopřijeća}}
+:[1] [[starstwo#starstwo (delnjoserbšćina)|starstwo]]; [[starjeś#starjeś (delnjoserbšćina)|starjeś]], [[zestarjeś#zestarjeś (delnjoserbšćina)|zestarjeś]]; [[starjejšej#starjejšej (delnjoserbšćina)|starjejšej]], [[starcownja#starcownja (delnjoserbšćina)|starcownja]]
+
+==== Přełožki ====
+{{p-nalěwo}}
+:[1] [[hladać|hlej]] [[nastawk]] ''[[stary#Přełožki|stare/~a/~y]]''
+<!--{{p-distanca}}-->
+{{p-naprawo}}
+
+{{referency}}
+:
+
+{{2x---- ‎}}
+
+== stary ({{rěč|pólšćina}}) ==
+
+=== {{słowna družina|adjektiw|pólšćina}} ===
+{{pl-adjektiw
+|wobraz=
+|wulkosć=
+|wopis wobraza=
+|nominatiw=stary
+|zdónk=star
+|palatalny zdónk=starz
+|komparatiw=starszy
+|diminutiw=
+|awgmentatiw=
+|dokładny adwerb=[[staro]]
+}}
+{{ortografija}}
+{{dźělenje słowow}}
+:sta·ry[[koma|,]] ''[[nominatiw]] [[plural|pl.]]'' sta·rzi
+
+{{wurjekowanje}}
+:[[Pomoc:IPA|Mfa]]: {{zwukowe pismo|'starɛ / 'stara / 'starɪ}}[[koma|,]] ''[[nominatiw]] [[plural|pl.]]'' {{zwukowe pismo|'staži}}
+:[[Pomoc:Słuchowe přikłady|Słuchowe přikłady]]:
+
+{{semantika}}
+{{woznamy}}
+:[1] [[stary#stary (hornjoserbšćina)|stary]]
+
+{{wujasnjenja}}
+:[1]
+
+{{skrótšenki}}
+:[1]
+
+{{pochad}}
+:[1]
+
+{{synonymy}}
+:[1]
+
+{{antonymy}}
+:[1] [[młody#młody (pólšćina)|młod/-a/-y]]; [[nowy#nowy (pólšćina)|nowe/-a/-y]]
+
+{{hyperonymy}}
+:[1]
+
+{{hyponymy}}
+:[1]
+
+{{kollokacije}}
+:[1]
+
+{{přikłady}}
+:[1]
+
+{{rěčne wobroty}}
+:[1]
+
+{{wotwodźene wopřijeća}}
+:[1] [[starczy#starczy (pólšćina)|starczy]], [[staro-#staro- (pólšćina)|staro-]]; [[starość#starość (pólšćina)|starość]], [[starszeństwo#starszeństwo (pólšćina)|starszeństwo]], [[starowina#starowina (pólšćina)|starowina]], [[staruszka#staruszka (pólšćina)|staruszka]], [[staruszek#staruszek (pólšćina)|staruszek]], [[starzec#starzec (pólšćina)|starzec]], [[starszyzna#starszyzna (pólšćina)|starszyzna]], [[starówka#starówka (pólšćina)|starówka]], [[starzyna#starzyna (pólšćina)|starzyna]]; [[starzeć się#starzeć się (pólšćina)|starzeć się]], [[postarzeć się#postarzeć się (pólšćina)|postarzeć się]], [[zestarzeć się#zestarzeć się (pólšćina)|zestarzeć się]]
+
+==== Přełožki ====
+{{p-nalěwo}}
+:[1] [[hladać|hlej]] [[nastawk]] ''[[stary#Přełožki|stare/~a/~y]]''
+<!--{{p-distanca}}-->
+{{p-naprawo}}
+
+{{referency}}
+
+{{2x---- ‎}}
+
+== Noty ==
+<references />

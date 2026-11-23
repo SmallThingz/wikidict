@@ -1,0 +1,400 @@
+'''stary'''
+== stary ([[hornjoserbšćina|hornjoserbšćina]][[Category:hornjoserbšćina]]) ==
+=== [[Pomoc:słowna družina|adjektiw]][[Category:adjektiw (hornjoserbšćina)]][[Category:adjektiw]] ===
+
+{| style="float:right; margin-left:0.5em; margin-bottom:0.5em; border: 1px solid #AAAAAA; border-collapse:collapse;" cellpadding="3" rules="all"
+
+|-
+! width="65" bgcolor="#F4F4F4" | [[Pomoc:Kazus|kazus]]
+! bgcolor="#FFFFE0" | [[Pomoc:Singular|singular f]]
+! bgcolor="#FFFFE0" | [[Pomoc:Singular|singular m]]
+! bgcolor="#FFFFE0" | [[Pomoc:Singular|singular n]]
+! bgcolor="#FFFFE0" | [[Pomoc:Dual|dual]]
+! bgcolor="#FFFFE0" | [[Pomoc:Plural|plural]]
+|- style="font-weight: bold;"
+| bgcolor="#F4F4F4" | [[Pomoc:Nominatiw|nominatiw]]
+| |stara || stary ||stare ||starej<br />(staraj) || stare<br /> (stari)
+|- 
+| bgcolor="#F4F4F4" | '''[[Pomoc:Genitiw|genitiw]]'''
+| |stareje || stareho || stareho || stareju || starych
+|- 
+| bgcolor="#F4F4F4" | '''[[Pomoc:Datiw|datiw]]'''
+| |starej || staremu ||staremu ||starymaj || starym
+|- 
+| bgcolor="#F4F4F4" | '''[[Pomoc:Akuzatiw|akuzatiw]]'''
+| |staru || stary<br /> (stareho) ||stare ||starej<br /> (stareju) || stare<br /> (starych)
+|- 
+| bgcolor="#F4F4F4" | '''[[Pomoc:Instrumental|instrumental]]'''
+| starej || starym ||starym || starymaj || starymi
+|- 
+| bgcolor="#F4F4F4" | '''[[Pomoc:Lokatiw|lokatiw]]'''
+| |starej || starym || starym  || starymaj || starych
+|-
+|}
+
+<br style="clear:right;" />
+{| style="float:right; margin-left:0.5em; margin-bottom:0.5em; border: 1px solid #AAAAAA; border-collapse:collapse;" cellpadding="3" rules="all"
+|-
+! width="65" bgcolor="#F4F4F4" | [[Pomoc:Adjektiw|adjektiw]]
+! bgcolor="#FFFFE0" | stary
+|-
+
+! width="65" bgcolor="#F4F4F4" | [[Pomoc:Komparatiw|komparatiw]]
+! bgcolor="#FFFFE0" | starjejšy 
+|-
+! width="65" bgcolor="#F4F4F4" | [[Pomoc:Superlatiw|superlatiw]]
+! bgcolor="#FFFFE0" | najstarjejšy 
+|-
+! width="65" bgcolor="#F4F4F4" | [[Pomoc:Absolutiw|absolutiw]]
+! bgcolor="#FFFFE0" | nanajstarjejšy 
+|-
+! width="65" bgcolor="#F4F4F4" | [[Pomoc:Diminutiw|diminutiw]]
+! bgcolor="#FFFFE0" | [[staruški|staruške/~a/~i]] 
+|-
+
+|}
+
+
+==== Ortografija ====
+<p style="margin-bottom: -0.5em;" title="dźělenje słowow">'''Dźělenje słowow:'''
+ sta·ry[[koma|,]] ''[[komparatiw]]'' sta·rjej·šy
+<br /><br />
+==== Wurjekowanje ====
+:[[Pomoc:IPA|IPA]]: [<span style="font-family: 'Arial Unicode MS', 'Lucida Sans Unicode', 'Chrysanthi Unicode', 'Doulos SIL', Gentium, GentiumAlt, Code2000, 'TITUS Cyberbit Basic', 'DejaVu Sans', 'Bitstream Vera Sans', 'Bitstream Cyberbit', 'Hiragino Kaku Gothic Pro', 'Matrix Unicode', 'Lucida Grande', 'MV Boli', 'MS Mincho', Arial, sans-serif; padding: 0 1px; text-decoration: none;">'starɛ / 'stara / 'starɨɪ</span>]
+====Semantika====
+<p style="margin-bottom: -0.5em;" title="woznamy">'''Woznamy:'''
+:[1] [[dołhi|dołho]] [[eksistować|eksistowacy]]
+:[2] [[wottrjebać|wottrjebany]], [[wotnosyć|wotnošeny]]
+:[3] [[njeaktualny]], [[prjedawši]], [[bywši]], [[starodawny]]
+:[4] [[skaženy]], [[njeluby]], [[njespodobny]]<p style="margin-bottom: -0.5em;" title="etymologija">'''Pochad:'''
+:[1] [[wot]] [[prasłowjanski|prasłowjanskeho]] ''*starъ <sup><small><nowiki>[</nowiki>[[:en:Appendix:Proto-Slavic/starъ|→en]]<nowiki>]</nowiki></small></sup>''<p style="margin-bottom: -0.5em;" title="Słowa, kiž móža we wěstych kontekstach samsny woznam měć">'''Synonymy:'''
+:[1] [[wobstarny]]
+:[2] [[krjechki]], [[wottrjebany]], [[wotnošeny]]
+:[3] [[njeaktualny]], [[zestarjeny]], [[woteznać|woteznaty]]
+:[4] [[skaženy]], [[njeluby]], [[njespodobny]]<p style="margin-bottom: -0.5em;" title="Słowa, kiž móža we wěstych kontekstach napřećiwny woznam měć">'''Antonymy:'''
+:[1] [[młody]], [[nowy]]<p style="margin-bottom: -0.5em;">'''Kolokacije:'''
+:[1] [[chětro]] stary; [[jara]] stary; stary [[muž]]<p style="margin-bottom: -0.5em;">'''Přikłady:'''
+:[1] [[a|A]] [[zasy]] [[dyrbjeć|dyrbješe]] [[na]] [[tón|te]] '''stare''' [[wěšćenje|wěšćenjo]] [[myslić]] [[a]] [[kaž]] [[z]] [[mróz]]om [[wón|joho]] [[woběžeć|woběža]] [[strach]], [[zo]] [[być|je]] [[tón]] [[čas]] [[hižo]] [[tu]] [[abo]] [[so]] [[počinać|počina]] [[dopjelnjeć]]. (<small>''[[w:Mikławš Bjedrich-Radlubin|Mikławš Bjedrich-Radlubin]]''</small>) <ref name="radlubin bethlehemske.dzecatko 1916">[[w:Mikławš Bjedrich-Radlubin|Mikławš Bjedrich-Radlubin]]: ''Bethlehemske dźěćatko a druhe legendy.'' Wotćišč z "Katolskoho Pósta". Serbska knihownja čo. 6. Budyšin: L. A. Donnerhakec, 1916. Citowane po uni-leipzig.de: [http://corpora.informatik.uni-leipzig.de/?dict=hsb_news_1999 Wortschatz.de]</ref>
+
+:[[po|Po]] [[štom]]ach [[sedźeć|sedźachu]] [[pisany|pisane]] [[ptačk]]i [[z]] [[cuzy]]ch [[kraj]]ow [[a]] [[w]]e [[wulki|wulkej]] [[klětka|klětce]] [[z]]e [[złoty]]mi [[tyčka]]mi [[być|bě]] [[so]] '''stary''', [[čorny]] [[rapak]] [[wusydnyć so|wusydnył]], [[kotryž]] [[nastajnosći]] [[bledźeć|bledźo]] [[bać|baješe]]: „[[witać|Witajće]]! [[witać|witajće]]! [[jěsć|Jěsće]] [[a]] [[pić|pijće]]! [[njehladać|Njehladajće]] [[kazać|kazanja]]!” (<small>''[[w:Mikławš Bjedrich-Radlubin|Mikławš Bjedrich-Radlubin]]''</small>) <ref name="radlubin bethlehemske.dzecatko 1916">[[w:Mikławš Bjedrich-Radlubin|Mikławš Bjedrich-Radlubin]]: ''Bethlehemske dźěćatko a druhe legendy.'' Wotćišč z "Katolskoho Pósta". Serbska knihownja čo. 6. Budyšin: L. A. Donnerhakec, 1916. Citowane po uni-leipzig.de: [http://corpora.informatik.uni-leipzig.de/?dict=hsb_news_1999 Wortschatz.de]</ref>
+:[3] [[ale|Ale]] [[na]] '''starych''' [[sudnistwo|sudnistwach]] – [[a]] [[tam]] [[dźě]] [[być|su]] [[sprawdu]] [[rěčeć|rěčeli]] [[a]] [[wažić|wažili]], [[a]] [[štož]] [[je]] [[sudniski|sudnisce]] [[wotwažić|wotwažene]], [[to]] [[płaćić|płaći]] – [[być|su]] [[wón|ju]] [[wotwažić|wotwažili]]: [[pjeć]] [[toler]]i [[dyrbjeć|dyrbi]] [[płaćić]]. (<small>''[[w:Mikławš Bjedrich-Radlubin|Mikławš Bjedrich-Radlubin]]''</small>) <ref name="radlubin_plista_1914">[[w:Mikławš Bjedrich-Radlubin|Mikławš Bjedrich-Radlubin]]: I. ''Plista. Žortna bjesada.'' II. ''Ducy z kowarnje. Humoristiski wobraz.'' Serbska knihownja čo. 4. Budyšin: L. A. Donnerhakec, 1914. Citowane po uni-leipzig.de: [http://corpora.informatik.uni-leipzig.de/?dict=hsb_news_1999 Wortschatz.de]</ref>
+:[4] [[na|Na]] [[dompuć]] [[trochu]] [[zabyćiwy|zabyćiweho]] [[hósć|hosća]] [[móc|njemóžes]] [[tež]] [[přecy]] [[z]]e [[stary]]m [[hrib]]om [[přirunać]]. (<small>''[[w:Mikławš Bjedrich-Radlubin|Mikławš Bjedrich-Radlubin]]''</small>) <ref name="radlubin_plista_1914">[[w:Mikławš Bjedrich-Radlubin|Mikławš Bjedrich-Radlubin]]: I. ''Plista. Žortna bjesada.'' II. ''Ducy z kowarnje. Humoristiski wobraz.'' Serbska knihownja čo. 4. Budyšin: L. A. Donnerhakec, 1914. Citowane po uni-leipzig.de: [http://corpora.informatik.uni-leipzig.de/?dict=hsb_news_1999 Wortschatz.de]</ref>
+
+:„[[kac|Kac]], [[plac]]! [[blink]], [[flink]]! [[ty]] '''stara''' [[wćipny|wćipna]] [[Jěwa]]!” [[rěkać|rěka]] [[kónc]] [[basnička|basnički]]: „[[za]] [[wšón|wšěmi]] [[durje]]mi [[a]] [[škałba]]mi [[sydać]] [[być|njeje]] [[ty|će]] <nowiki>[sic!]</nowiki> [[hańba]]?” (<small>''[[w:Mikławš Bjedrich-Radlubin|Mikławš Bjedrich-Radlubin]]''</small>)<p style="margin-bottom: -0.5em;">'''Rěčne wobroty:'''
+:Starej [[baba|babje]] [[dwoji|dwoje]] [[hrabje]], [[młody|młodej]] [[holca|holcy]] [[štwory|štwore]] [[cypy]]<p style="margin-bottom: -0.5em;" title="wotwodźene wopřijeća">'''Wotwodźene wopřijeća:'''
+:[[prastary]], [[starodawny]], [[staršej]], [[starc]], [[starka]], [[wobstarny]], [[zastarski]], [[zazastarski]], [[zastarny]], [[zestarić]], [[zestarjeć]], [[zestarjeny]], [[staroba]], [[starosć]], [[starać so]]
+
+<br style="clear:both;" />
+==== Přełožki ====
+===== Zapadosłowjanske =====
+{| border="0" width="100%" style="clear:both;" title="přełožki"
+|-
+| bgcolor="#EAF3FC" valign="top" width="48%" |
+* [[čěski]]: [1] <span class="Latn" lang="cs">[[:staré#čěšćina|staré]]</span>[[Category:Terms with čěšćina translations|STARY]] <strong class="error"><span class="scribunto-error">Lua error in Modul:links/templates: Parameter 1 is required.</span></strong>, <span class="Latn" lang="cs">[[:stará#čěšćina|stará]]</span>[[Category:Terms with čěšćina translations|STARY]] <em title="genus: femininum">f</em>, <span class="Latn" lang="cs">[[:starý#čěšćina|starý]]</span>[[Category:Terms with čěšćina translations|STARY]] <em title="genus: masulinum">m</em>
+* [[delnjoserbski]]: [1] <strong class="error"><span class="scribunto-error">Lua error in Modul:translations: The tag "stare" in the gender specification "stare" is not valid. See [[Modul:gender and number]] for a list of valid tags.</span></strong> <strong class="error"><span class="scribunto-error">Lua error in Modul:links/templates: Parameter 1 is required.</span></strong>, <strong class="error"><span class="scribunto-error">Lua error in Modul:translations: The tag "stara" in the gender specification "stara" is not valid. See [[Modul:gender and number]] for a list of valid tags.</span></strong> <em title="genus: femininum">f</em>, <strong class="error"><span class="scribunto-error">Lua error in Modul:translations: The tag "stary" in the gender specification "stary" is not valid. See [[Modul:gender and number]] for a list of valid tags.</span></strong> <em title="genus: masulinum">m</em>
+* [[hornjoserbski]]: [1] <span class="Latn" lang="hsb">[[:stare#Hornjoserbšćina|stare]]</span>[[Category:Terms with Hornjoserbšćina translations|STARY]] <strong class="error"><span class="scribunto-error">Lua error in Modul:links/templates: Parameter 1 is required.</span></strong> <em title="genus: femininum">f</em>, <span class="Latn" lang="hsb">[[:stara#Hornjoserbšćina|stara]]</span>[[Category:Terms with Hornjoserbšćina translations|STARY]] <em title="genus: femininum">f</em>, <span class="Latn" lang="hsb">[[:stary#Hornjoserbšćina|stary]]</span>[[Category:Terms with Hornjoserbšćina translations|STARY]] <em title="genus: masulinum">m</em>
+* [[kašubski]]: [1] <span class="Latn" lang="csb">[[:stôré#Kashubian|stôré]]</span>[[Category:Terms with Kashubian translations|STARY]] <strong class="error"><span class="scribunto-error">Lua error in Modul:links/templates: Parameter 1 is required.</span></strong>, <span class="Latn" lang="csb">[[:stôrô#Kashubian|stôrô]]</span>[[Category:Terms with Kashubian translations|STARY]] <em title="genus: femininum">f</em>, <span class="Latn" lang="csb">[[:stôri#Kashubian|stôri]]</span>[[Category:Terms with Kashubian translations|STARY]] <em title="genus: masulinum">m</em>
+| width="1%" |
+| bgcolor="#EAF3FC" valign="top" width="48%" |
+* [[połobski]]: [1] <span class="Latn" lang="pox">[[:store#Polabian|store]]</span>[[Category:Terms with Polabian translations|STARY]]
+* [[pólski]]: [1] <strong class="error"><span class="scribunto-error">Lua error in Modul:translations: The tag "stare" in the gender specification "stare" is not valid. See [[Modul:gender and number]] for a list of valid tags.</span></strong> <strong class="error"><span class="scribunto-error">Lua error in Modul:links/templates: Parameter 1 is required.</span></strong>, <strong class="error"><span class="scribunto-error">Lua error in Modul:translations: The tag "stara" in the gender specification "stara" is not valid. See [[Modul:gender and number]] for a list of valid tags.</span></strong> <em title="genus: femininum">f</em>, <strong class="error"><span class="scribunto-error">Lua error in Modul:translations: The tag "stary" in the gender specification "stary" is not valid. See [[Modul:gender and number]] for a list of valid tags.</span></strong> <em title="genus: masulinum">m</em>
+* [[słowakski]]: [1] <span class="Latn" lang="sk">[[:staré#słowakšćina|staré]]</span>[[Category:Terms with słowakšćina translations|STARY]] <strong class="error"><span class="scribunto-error">Lua error in Modul:links/templates: Parameter 1 is required.</span></strong>, <span class="Latn" lang="sk">[[:stará#słowakšćina|stará]]</span>[[Category:Terms with słowakšćina translations|STARY]] <em title="genus: femininum">f</em>, <span class="Latn" lang="sk">[[:starý#słowakšćina|starý]]</span>[[Category:Terms with słowakšćina translations|STARY]] <em title="genus: masulinum">m</em>
+* [[šleski]]: [1]
+|}<div style="clear:both;"></div>
+
+===== Wšitke =====
+{| border="0" width="100%" style="clear:both;" title="přełožki"
+|-
+| bgcolor="#EAF3FC" valign="top" width="48%" |
+* [[arabski]]: [1] <span class="Arab" lang="ar">[[:قديم#arabišćina|قديم]]</span>[[Category:Terms with arabišćina translations|STARY]]
+* [[běłoruski]]: [1] <span class="Cyrl" lang="be">[[:стары#běłorušćina|стары]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="be-Latn" class="tr Latn">stary</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Terms with běłorušćina translations|STARY]]
+* [[bołharski]]: [1] <span class="Cyrl" lang="bg">[[:стар#bołharšćina|стар]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="bg-Latn" class="tr Latn">star</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Terms with bołharšćina translations|STARY]]
+* [[čěski]]: [1] <span class="Latn" lang="cs">[[:starý#čěšćina|starý]]</span>[[Category:Terms with čěšćina translations|STARY]]
+* [[danski]]: [1] <span class="Latn" lang="da">[[:gammel#danšćina|gammel]]</span>[[Category:Terms with danšćina translations|STARY]]
+* [[delnjoserbski]]: [1] <span class="Latn" lang="dsb">[[:stary#Lower&#95;Sorbian|stary]]</span>[[Category:Terms with Lower Sorbian translations|STARY]]
+* [[esperanto]]: [1] <span class="Latn" lang="eo">[[:maljuna#esperanto|maljuna]]</span>[[Category:Terms with esperanto translations|STARY]], <span class="Latn" lang="eo">[[:malnova#esperanto|malnova]]</span>[[Category:Terms with esperanto translations|STARY]]
+* [[estiski]]: [1] <span class="Latn" lang="et">[[:vana#estišćina|vana]]</span>[[Category:Terms with estišćina translations|STARY]]
+* [[farsi]]: [1] <span class="Arab fa-Arab" lang="fa">[[:مسن#persišćina|مسن]]</span>[[Category:Terms with persišćina translations|STARY]]
+* [[finski]]: [1] <span class="Latn" lang="fi">[[:vanha#finšćina|vanha]]</span>[[Category:Terms with finšćina translations|STARY]]
+* [[francoski]]: [1] <span class="Latn" lang="fr">[[:vieux#francošćina|vieux]]</span>[[Category:Terms with francošćina translations|STARY]]
+* [[grjekski]]: [1] <span class="Grek" lang="el">[[:παλαιός#grjekšćina|παλαιός]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="el-Latn" class="tr Latn">palaiós</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Terms with grjekšćina translations|STARY]]
+* [[hindi]]: [1] <strong class="error"><span class="scribunto-error">Lua error in Modul:translations: Substitution data 'hi-translit' does not match an existing module.</span></strong>
+* [[hornjoserbski]]: [1] <span class="Latn" lang="hsb">[[:stary#Hornjoserbšćina|stary]]</span>[[Category:Terms with Hornjoserbšćina translations|STARY]]
+* [[chinski]]: [1] <span class="Hans" lang="zh">[[:旧的#chinšćina|旧的]]</span>[[Category:Terms with chinšćina translations|STARY]]
+* [[chorwatski]]: [1] <span class="Latn" lang="hr">[[:star#chorwatšćina|star]]</span>[[Category:Terms with chorwatšćina translations|STARY]]
+* [[irski]]: [1] <span class="Latn" lang="ga">[[:sean#irišćina|sean]]</span>[[Category:Terms with irišćina translations|STARY]]
+* [[islandski]]: [1] <span class="Latn" lang="is">[[:gamall#islandšćina|gamall]]</span>[[Category:Terms with islandšćina translations|STARY]]
+* [[italski]]: [1] <span class="Latn" lang="it">[[:vecchio#italšćina|vecchio]]</span>[[Category:Terms with italšćina translations|STARY]]
+* [[jendźelski]]: [1] <span class="Latn" lang="en">[[:old#jendźelšćina|old]]</span>[[Category:Terms with jendźelšćina translations|STARY]]
+* [[kašubski]]: [1] <span class="Latn" lang="csb">[[:stôri#Kashubian|stôri]]</span>[[Category:Terms with Kashubian translations|STARY]]
+* [[kymriski]]: [1] <span class="Latn" lang="cy">[[:hen#kimrišćina|hen]]</span>[[Category:Terms with kimrišćina translations|STARY]]
+| width="1%" |
+| bgcolor="#EAF3FC" valign="top" width="48%" |
+* [[łaćonski]]: [1] <span class="Latn" lang="la">[[:vetus#łaćonšćina|vetus]]</span>[[Category:Terms with łaćonšćina translations|STARY]]
+* [[letiski]]: [1] <span class="Latn" lang="lv">[[:vecs#letišćina|vecs]]</span>[[Category:Terms with letišćina translations|STARY]], <span class="Latn" lang="lv">[[:sens#letišćina|sens]]</span>[[Category:Terms with letišćina translations|STARY]]
+* [[litawski]]: [1] <span class="Latn" lang="lt">[[:senas#litawšćina|senas]]</span>[[Category:Terms with litawšćina translations|STARY]]
+* [[makedonski]]: [1] <span class="Cyrl" lang="mk">[[:стар#makedonšćina|стар]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="mk-Latn" class="tr Latn">star</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Terms with makedonšćina translations|STARY]]
+* [[němski|němski]]: [1] <span class="Latn" lang="de">[[:alt#němčina|alt]]</span>[[Category:Terms with němčina translations|STARY]]
+* [[nižozemski]]: [1] <span class="Latn" lang="nl">[[:oud#nižozemšćina|oud]]</span>[[Category:Terms with nižozemšćina translations|STARY]]
+* [[norwegski]]: [1] <span class="Latn" lang="no">[[:gammel#norwegšćina|gammel]]</span>[[Category:Terms with norwegšćina translations|STARY]]
+* [[okcitanski]]: [1] <span class="Latn" lang="oc">[[:vièlh#okcitanšćina|vièlh]]</span>[[Category:Terms with okcitanšćina translations|STARY]]
+* [[połobski]]: [1] <span class="Latn" lang="pox">[[:store#Polabian|store]]</span>[[Category:Terms with Polabian translations|STARY]]
+* [[pólski]]: [1] <span class="Latn" lang="pl">[[:stary#pólšćina|stary]]</span>[[Category:Terms with pólšćina translations|STARY]]
+* [[portugalski]]: [1] <span class="Latn" lang="pt">[[:velho#portugalšćina|velho]]</span>[[Category:Terms with portugalšćina translations|STARY]]
+* [[rumunski]]: [1] <span class="Latn" lang="ro">[[:vechi#rumunšćina|vechi]]</span>[[Category:Terms with rumunšćina translations|STARY]]
+* [[ruski]]: [1] [[старый|<span lang="ru" xml:lang="ru">старый</span>]]&nbsp;(staryj)&nbsp;[[:ru:старый|<sup>(ru)</sup>]]
+* [[serbiski]]: [1] <span class="Cyrl" lang="sr">[[:стар#serbišćina|стар]]</span>[[Category:Terms with serbišćina translations|STARY]]
+* [[słowakski]]: [1] <span class="Latn" lang="sk">[[:starý#słowakšćina|starý]]</span>[[Category:Terms with słowakšćina translations|STARY]]
+* [[słowjenski]]: [1] <span class="Latn" lang="sl">[[:star#słowjenšćina|star]]</span>[[Category:Terms with słowjenšćina translations|STARY]]
+* [[:Předłoha:sla]]: [1] <strong class="error"><span class="scribunto-error">Lua error in Modul:translations: Parameter 1 must be a valid language or etymology language code; the value "sla" is not valid. See [[WT:LOL]] and [[WT:LOL/E]].</span></strong>
+* [[swahili]]: [1] <span class="Latn" lang="sw">[[:zee#swahilišćina|zee]]</span>[[Category:Terms with swahilišćina translations|STARY]]
+* [[španiski]]: [1] <span class="Latn" lang="es">[[:viejo#španišćina|viejo]]</span>[[Category:Terms with španišćina translations|STARY]]
+* [[šwedski]]: [1] <span class="Latn" lang="sv">[[:gammal#šwedšćina|gammal]]</span>[[Category:Terms with šwedšćina translations|STARY]]
+* [[ukrainski]]: [1] [[старий|<span lang="uk" xml:lang="uk">старий</span>]]&nbsp;(staryj)&nbsp;[[:uk:старий|<sup>(uk)</sup>]]
+* [[zulu]]: [1] <strong class="error"><span class="scribunto-error">Lua error in Modul:translations: Parameter 1 must be a valid language or etymology language code; the value "zul" is not valid. See [[WT:LOL]] and [[WT:LOL/E]].</span></strong>
+|}<div style="clear:both;"></div>
+<br style="clear:both;" />
+
+<p style="margin-top: 0.5em;">
+</p>
+----
+----
+<p style="margin-bottom: 0.5em;">
+</p>
+
+== stary ([[delnjoserbšćina|delnjoserbšćina]][[Category:delnjoserbšćina]]) ==
+
+=== [[Pomoc:słowna družina|adjektiw]][[Category:adjektiw (delnjoserbšćina)]][[Category:adjektiw]] ===
+{| style="float:right; margin-left:0.5em; margin-bottom:0.5em; border: 1px solid #AAAAAA; border-collapse:collapse;" cellpadding="3" rules="all"
+
+|-
+! width="65" bgcolor="#F4F4F4" | [[Pomoc:Kazus|kazus]]
+! bgcolor="#FFFFE0" | [[Pomoc:Singular|singular f]]
+! bgcolor="#FFFFE0" | [[Pomoc:Singular|singular m]]
+! bgcolor="#FFFFE0" | [[Pomoc:Singular|singular n]]
+! bgcolor="#FFFFE0" | [[Pomoc:Dual|dual]]
+! bgcolor="#FFFFE0" | [[Pomoc:Plural|plural]]
+|- style="font-weight: bold;"
+| bgcolor="#F4F4F4" | [[Pomoc:Nominatiw|nominatiw]]
+| |stara || stary ||stare ||starej || stare
+|- 
+| bgcolor="#F4F4F4" | '''[[Pomoc:Genitiw|genitiw]]'''
+| |stareje || starego || starego || stareju || starych
+|- 
+| bgcolor="#F4F4F4" | '''[[Pomoc:Datiw|datiw]]'''
+| |starej || staremu ||staremu ||starymaj || starym
+|- 
+| bgcolor="#F4F4F4" | '''[[Pomoc:Akuzatiw|akuzatiw]]'''
+| |staru || stary<br /> (starego) ||stare ||starej<br /> (stareju) || stare<br /> (starych)
+|- 
+| bgcolor="#F4F4F4" | '''[[Pomoc:Instrumental|instrumental]]'''
+| stareju || starym ||starym || starymaj || starymi
+|- 
+| bgcolor="#F4F4F4" | '''[[Pomoc:Lokatiw|lokatiw]]'''
+| |starej || starym || starym  || starymaj || starych
+|-
+|}
+
+<br style="clear:right;" />
+{| style="float:right; margin-left:0.5em; margin-bottom:0.5em; border: 1px solid #AAAAAA; border-collapse:collapse;" cellpadding="3" rules="all"
+|-
+! width="65" bgcolor="#F4F4F4" | [[Pomoc:Adjektiw|adjektiw]]
+! bgcolor="#FFFFE0" | stary
+|-
+
+! width="65" bgcolor="#F4F4F4" | [[Pomoc:Komparatiw|komparatiw]]
+! bgcolor="#FFFFE0" | staršy 
+|-
+! width="65" bgcolor="#F4F4F4" | [[Pomoc:Superlatiw|superlatiw]]
+! bgcolor="#FFFFE0" | najstaršy 
+|-
+! width="65" bgcolor="#F4F4F4" | [[Pomoc:Absolutiw|absolutiw]]
+! bgcolor="#FFFFE0" | nanajstaršy 
+|-
+! width="65" bgcolor="#F4F4F4" | [[Pomoc:Diminutiw|diminutiw]]
+! bgcolor="#FFFFE0" | [[staručki|staručke/~a/~i]] 
+|-
+
+|}
+
+====Ortografija====
+<p style="margin-bottom: -0.5em;" title="dźělenje słowow">'''Dźělenje słowow:'''
+
+:
+
+====Wurjekowanje====
+:[[Pomoc:IPA|Mfa]]: [<span style="font-family: 'Arial Unicode MS', 'Lucida Sans Unicode', 'Chrysanthi Unicode', 'Doulos SIL', Gentium, GentiumAlt, Code2000, 'TITUS Cyberbit Basic', 'DejaVu Sans', 'Bitstream Vera Sans', 'Bitstream Cyberbit', 'Hiragino Kaku Gothic Pro', 'Matrix Unicode', 'Lucida Grande', 'MV Boli', 'MS Mincho', Arial, sans-serif; padding: 0 1px; text-decoration: none;">'starɛ / 'stara / 'starɨ</span>]
+:[[Pomoc:Słuchowe přikłady|Słuchowe přikłady]]:
+
+====Semantika====
+<p style="margin-bottom: -0.5em;" title="woznamy">'''Woznamy:'''
+:[1] [[stary#stary (hornjoserbšćina)|stary]]
+
+<p style="margin-bottom: -0.5em;" title="dalše wujasnjenja">'''Dalše wujasnjenja:'''
+:[1]
+
+<p style="margin-bottom: -0.5em;" title="akronymy, skrótšenki, abrewiatury">'''Skrótšenki:'''
+:[1]
+
+<p style="margin-bottom: -0.5em;" title="etymologija">'''Pochad:'''
+:[1]
+
+<p style="margin-bottom: -0.5em;" title="Słowa, kiž móža we wěstych kontekstach samsny woznam měć">'''Synonymy:'''
+:[1]
+
+<p style="margin-bottom: -0.5em;" title="Słowa, kiž móža we wěstych kontekstach napřećiwny woznam měć">'''Antonymy:'''
+:[1] [[młody#młody (delnjoserbšćina)|młod/-a/-y]]; [[nowy#nowy (delnjoserbšćina)|nowe/-a/-y]]
+
+<p style="margin-bottom: -0.5em;" title="Nadzapřijeća">'''Hyperonymy:'''
+:[1]
+
+<p style="margin-bottom: -0.5em;" title="Podzapřijeća">'''Hyponymy:'''
+:[1]
+
+<p style="margin-bottom: -0.5em;">'''Kolokacije:'''
+:[1]
+
+<p style="margin-bottom: -0.5em;">'''Přikłady:'''
+:[1]
+
+<p style="margin-bottom: -0.5em;">'''Rěčne wobroty:'''
+:[1]
+
+<p style="margin-bottom: -0.5em;" title="wotwodźene wopřijeća">'''Wotwodźene wopřijeća:'''
+:[1] [[starstwo#starstwo (delnjoserbšćina)|starstwo]]; [[starjeś#starjeś (delnjoserbšćina)|starjeś]], [[zestarjeś#zestarjeś (delnjoserbšćina)|zestarjeś]]; [[starjejšej#starjejšej (delnjoserbšćina)|starjejšej]], [[starcownja#starcownja (delnjoserbšćina)|starcownja]]
+
+==== Přełožki ====
+{| border="0" width="100%" style="clear:both;" title="přełožki"
+|-
+| bgcolor="#EAF3FC" valign="top" width="48%" |
+:[1] [[hladać|hlej]] [[nastawk]] ''[[stary#Přełožki|stare/~a/~y]]''
+|}<div style="clear:both;"></div>
+
+==== Referency a dalše informacije====
+:
+
+<p style="margin-top: 0.5em;">
+</p>
+----
+----
+<p style="margin-bottom: 0.5em;">
+</p>
+
+== stary ([[pólšćina|pólšćina]][[Category:pólšćina]]) ==
+
+=== [[Pomoc:słowna družina|adjektiw]][[Category:adjektiw (pólšćina)]][[Category:adjektiw]] ===
+{| style="float:right; margin-left:0.5em; margin-bottom:0.5em; border: 1px solid #AAAAAA; border-collapse:collapse;" cellpadding="3" rules="all"
+
+|-
+! width="65" bgcolor="#F4F4F4" | [[Pomoc:Kazus|kazus]]
+! bgcolor="#FFFFE0" | [[Pomoc:Singular|singular f]]
+! bgcolor="#FFFFE0" | [[Pomoc:Singular|singular m]]
+! bgcolor="#FFFFE0" | [[Pomoc:Singular|singular n]]
+! bgcolor="#FFFFE0" | [[Pomoc:Plural|plural]]
+|- style="font-weight: bold;"
+| bgcolor="#F4F4F4" | [[Pomoc:Nominatiw|nominatiw]]&nbsp;([[mianownik]])
+| |stara || stary ||stare || {{#if: | stare<br /> (starzi)
+|- 
+| bgcolor="#F4F4F4" | '''[[Pomoc:Genitiw|genitiw]]'''&nbsp;([[dopełniacz]])
+| |starej || starego || starego || starych
+|- 
+| bgcolor="#F4F4F4" | '''[[Pomoc:Datiw|datiw]]'''&nbsp;([[celownik]])
+| |starej || staremu ||staremu || starym
+|- 
+| bgcolor="#F4F4F4" | '''[[Pomoc:Akuzatiw|akuzatiw]]'''&nbsp;([[biernik]])
+| |starą || stary<br /> (starego) ||stare || stare<br /> (starych)
+|- 
+| bgcolor="#F4F4F4" | '''[[Pomoc:Instrumental|instrumental]]'''&nbsp;([[narzędnik]])
+| starą || starym ||starym || starymi
+|- 
+| bgcolor="#F4F4F4" | '''[[Pomoc:Lokatiw|lokatiw]]'''&nbsp;([[miejscownik]])
+| |starej || starym || starym  || starych
+|-
+| bgcolor="#F4F4F4" | '''[[Pomoc:Wokatiw|wokatiw]]'''&nbsp;([[wołacz]])
+| |stara || stary ||stare || stare
+|- 
+|}
+
+<br style="clear:right;" />
+{| style="float:right; margin-left:0.5em; margin-bottom:0.5em; border: 1px solid #AAAAAA; border-collapse:collapse;" cellpadding="3" rules="all"
+|-
+! width="65" bgcolor="#F4F4F4" | [[Pomoc:Adjektiw|adjektiw]]
+! bgcolor="#FFFFE0" | stary
+|-
+! width="65" bgcolor="#F4F4F4" | [[Pomoc:Adwerb|adwerb]]
+! bgcolor="#FFFFE0" | [[staro]]
+|-
+! width="65" bgcolor="#F4F4F4" | [[Pomoc:Komparatiw|komparatiw]]
+! bgcolor="#FFFFE0" | starszy 
+|-
+! width="65" bgcolor="#F4F4F4" | [[Pomoc:Superlatiw|superlatiw]]
+! bgcolor="#FFFFE0" | najstarszy 
+|-
+
+
+|}
+
+====Ortografija====
+<p style="margin-bottom: -0.5em;" title="dźělenje słowow">'''Dźělenje słowow:'''
+
+:sta·ry[[koma|,]] ''[[nominatiw]] [[plural|pl.]]'' sta·rzi
+
+====Wurjekowanje====
+:[[Pomoc:IPA|Mfa]]: [<span style="font-family: 'Arial Unicode MS', 'Lucida Sans Unicode', 'Chrysanthi Unicode', 'Doulos SIL', Gentium, GentiumAlt, Code2000, 'TITUS Cyberbit Basic', 'DejaVu Sans', 'Bitstream Vera Sans', 'Bitstream Cyberbit', 'Hiragino Kaku Gothic Pro', 'Matrix Unicode', 'Lucida Grande', 'MV Boli', 'MS Mincho', Arial, sans-serif; padding: 0 1px; text-decoration: none;">'starɛ / 'stara / 'starɪ</span>][[koma|,]] ''[[nominatiw]] [[plural|pl.]]'' [<span style="font-family: 'Arial Unicode MS', 'Lucida Sans Unicode', 'Chrysanthi Unicode', 'Doulos SIL', Gentium, GentiumAlt, Code2000, 'TITUS Cyberbit Basic', 'DejaVu Sans', 'Bitstream Vera Sans', 'Bitstream Cyberbit', 'Hiragino Kaku Gothic Pro', 'Matrix Unicode', 'Lucida Grande', 'MV Boli', 'MS Mincho', Arial, sans-serif; padding: 0 1px; text-decoration: none;">'staži</span>]
+:[[Pomoc:Słuchowe přikłady|Słuchowe přikłady]]:
+
+====Semantika====
+<p style="margin-bottom: -0.5em;" title="woznamy">'''Woznamy:'''
+:[1] [[stary#stary (hornjoserbšćina)|stary]]
+
+<p style="margin-bottom: -0.5em;" title="dalše wujasnjenja">'''Dalše wujasnjenja:'''
+:[1]
+
+<p style="margin-bottom: -0.5em;" title="akronymy, skrótšenki, abrewiatury">'''Skrótšenki:'''
+:[1]
+
+<p style="margin-bottom: -0.5em;" title="etymologija">'''Pochad:'''
+:[1]
+
+<p style="margin-bottom: -0.5em;" title="Słowa, kiž móža we wěstych kontekstach samsny woznam měć">'''Synonymy:'''
+:[1]
+
+<p style="margin-bottom: -0.5em;" title="Słowa, kiž móža we wěstych kontekstach napřećiwny woznam měć">'''Antonymy:'''
+:[1] [[młody#młody (pólšćina)|młod/-a/-y]]; [[nowy#nowy (pólšćina)|nowe/-a/-y]]
+
+<p style="margin-bottom: -0.5em;" title="Nadzapřijeća">'''Hyperonymy:'''
+:[1]
+
+<p style="margin-bottom: -0.5em;" title="Podzapřijeća">'''Hyponymy:'''
+:[1]
+
+<p style="margin-bottom: -0.5em;">'''Kolokacije:'''
+:[1]
+
+<p style="margin-bottom: -0.5em;">'''Přikłady:'''
+:[1]
+
+<p style="margin-bottom: -0.5em;">'''Rěčne wobroty:'''
+:[1]
+
+<p style="margin-bottom: -0.5em;" title="wotwodźene wopřijeća">'''Wotwodźene wopřijeća:'''
+:[1] [[starczy#starczy (pólšćina)|starczy]], [[staro-#staro- (pólšćina)|staro-]]; [[starość#starość (pólšćina)|starość]], [[starszeństwo#starszeństwo (pólšćina)|starszeństwo]], [[starowina#starowina (pólšćina)|starowina]], [[staruszka#staruszka (pólšćina)|staruszka]], [[staruszek#staruszek (pólšćina)|staruszek]], [[starzec#starzec (pólšćina)|starzec]], [[starszyzna#starszyzna (pólšćina)|starszyzna]], [[starówka#starówka (pólšćina)|starówka]], [[starzyna#starzyna (pólšćina)|starzyna]]; [[starzeć się#starzeć się (pólšćina)|starzeć się]], [[postarzeć się#postarzeć się (pólšćina)|postarzeć się]], [[zestarzeć się#zestarzeć się (pólšćina)|zestarzeć się]]
+
+==== Přełožki ====
+{| border="0" width="100%" style="clear:both;" title="přełožki"
+|-
+| bgcolor="#EAF3FC" valign="top" width="48%" |
+:[1] [[hladać|hlej]] [[nastawk]] ''[[stary#Přełožki|stare/~a/~y]]''
+|}<div style="clear:both;"></div>
+
+==== Referency a dalše informacije====
+
+<p style="margin-top: 0.5em;">
+</p>
+----
+----
+<p style="margin-bottom: 0.5em;">
+</p>
+
+== Noty ==
+<references />

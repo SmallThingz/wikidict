@@ -1847,6 +1847,123 @@ fn analyzeMarkedParagraph(a: A, marker: MarkedParagraphPart, index: usize, etymo
     return lexical;
 }
 
+// Předłoha:słowna družina p34/r51 declares adjektiw; info p20/r10410
+// places meanings and examples in separate fields of its Semantika child.
+// Repeated numbers in origins, synonyms and collocations are not senses.
+const HsbMeaningScope = struct { parent: usize, end: usize };
+const HsbField = enum { meanings, examples, support };
+fn hsbField(block: wiki.Block) ?HsbField {
+    if (block.kind != .paragraph or block.spans.len != 1 or block.table != null or block.figure != null or
+        block.container != null or block.flow != null or block.feature != null or
+        !((block.depth == 0 and block.list_path.len == 0) or
+          (block.depth == 1 and std.mem.eql(u8, block.list_path, ":")))) return null;
+    const span = block.spans[0];
+    if (span.provenance != .parsed or span.generated_diagnostic or span.kind != .text or
+        span.target.len != 0 or span.image != null or !span.flags.bold or span.flags.code) return null;
+    if (std.mem.eql(u8, span.text, "Woznamy:")) return .meanings;
+    if (std.mem.eql(u8, span.text, "Přikłady:")) return .examples;
+    for ([_][]const u8{ "Dalše wujasnjenja:", "Skrótšenki:", "Pochad:", "Synonymy:", "Antonymy:", "Hyperonymy:", "Hyponymy:", "Kolokacije:", "Rěčne wobroty:", "Wotwodźene wopřijeća:" }) |label|
+        if (std.mem.eql(u8, span.text, label)) return .support;
+    return null;
+}
+fn hsbPlainIndentedText(block: wiki.Block, references: bool) bool {
+    if (block.kind != .indent or block.depth != 1 or !std.mem.eql(u8, block.list_path, ":") or
+        block.spans.len == 0 or block.table != null or block.container != null or
+        block.flow != null or block.feature != null or block.figure != null) return false;
+    var visible = false;
+    for (block.spans) |span| {
+        if (references and span.provenance == .protected_literal and span.kind == .link and
+            span.role == .reference and span.flags.superscript and !span.generated_diagnostic and
+            std.mem.startsWith(u8, span.target, "#reference-") and span.target.len > "#reference-".len)
+        {
+            for (span.target["#reference-".len..]) |digit| if (!std.ascii.isDigit(digit)) return false;
+            continue;
+        }
+        // A line break followed by a field label must first be represented as
+        // its own paragraph. Do not nominally accept the old flattened tail.
+        const literal_example = references and span.provenance == .protected_literal and
+            span.kind == .text and span.target.len == 0 and wiki.compiledTextRejection(span.text) == null;
+        if ((span.provenance != .parsed and !literal_example) or span.generated_diagnostic or span.flags.code or
+            span.kind == .line_break or span.image != null) return false;
+        visible = visible or std.mem.trim(u8, span.text, " \t\r\n").len != 0;
+    }
+    return visible;
+}
+fn hsbSenseNumber(block: wiki.Block, references: bool) ?usize {
+    if (!hsbPlainIndentedText(block, references)) return null;
+    const first = block.spans[0];
+    if (first.provenance != .parsed or first.kind != .text or first.target.len != 0 or
+        first.text.len < 4 or first.text[0] != '[') return null;
+    const close = std.mem.indexOfScalar(u8, first.text, ']') orelse return null;
+    if (close < 2 or close + 1 >= first.text.len or first.text[1] == '0' or first.text[close + 1] != ' ') return null;
+    for (first.text[1..close]) |digit| if (!std.ascii.isDigit(digit)) return null;
+    const number = std.fmt.parseInt(usize, first.text[1..close], 10) catch return null;
+    if (number == 0) return null;
+    var gloss = std.mem.trim(u8, first.text[close + 2 ..], " \t\r\n").len != 0;
+    for (block.spans[1..]) |span| if (span.role != .reference and std.mem.trim(u8, span.text, " \t\r\n").len != 0) { gloss = true; };
+    return if (gloss) number else null;
+}
+fn hsbMeaningScope(sections: anytype, index: usize, owner: ?[]const u8, code: []const u8, wiki_id: []const u8) ?HsbMeaningScope {
+    const language = owner orelse return null;
+    if (language.len == 0 or std.mem.eql(u8, language, "Unclassified") or code.len == 0 or
+        !std.mem.eql(u8, wiki_id, "hsbwiktionary")) return null;
+    const section = sections[index];
+    if (section.level != 4 or !std.mem.eql(u8, section.title, "Semantika") or
+        !czechMeaningHeading(section) or section.blocks.len < 3 or hsbField(section.blocks[0]) != .meanings) return null;
+    var end: usize = 1;
+    while (end < section.blocks.len and hsbSenseNumber(section.blocks[end], false) == end) : (end += 1) {}
+    if (end == 1 or end == section.blocks.len or hsbField(section.blocks[end]) != .support) return null;
+    var previous = index;
+    while (previous > 0) {
+        previous -= 1;
+        const parent = sections[previous];
+        if (parent.level >= section.level) continue;
+        const S = @TypeOf(parent);
+        if (!@hasField(S, "is_heading") or !@hasField(S, "title_depth") or
+            !@hasField(S, "title_list_path") or !@hasField(S, "title_spans")) return null;
+        if (parent.level != 3 or !std.mem.eql(u8, parent.title, "adjektiw") or !parent.is_heading or
+            parent.title_depth != 0 or parent.title_list_path.len != 0 or parent.title_spans.len != 1) return null;
+        const span = parent.title_spans[0];
+        if (span.provenance != .parsed or span.generated_diagnostic or span.flags.code or span.image != null or
+            span.kind != .link or !std.mem.eql(u8, span.text, "adjektiw") or
+            !std.mem.eql(u8, span.target, "Pomoc:słowna družina")) return null;
+        return .{ .parent = previous, .end = end };
+    }
+    return null;
+}
+fn analyzeHsbMeanings(a: A, index: usize, origin: ?usize, blocks: []const wiki.Block, scope: HsbMeaningScope) !Lexeme {
+    const count = scope.end - 1;
+    const senses = try a.alloc(Sense, count);
+    const examples = try a.alloc(std.ArrayList(usize), count);
+    for (senses, examples, 0..) |*sense, *items, n| {
+        sense.* = .{ .block = n + 1 };
+        items.* = .empty;
+    }
+    var other: std.ArrayList(usize) = .empty;
+    var in_examples = false;
+    var previous: ?usize = null;
+    for (blocks[scope.end..], scope.end..) |block, at| {
+        if (block.kind == .paragraph) {
+            in_examples = hsbField(block) == .examples;
+            previous = null;
+        } else if (in_examples and hsbPlainIndentedText(block, true)) {
+            if (hsbSenseNumber(block, true)) |number| {
+                previous = if (number <= count) number - 1 else null;
+            } else if (std.mem.startsWith(u8, block.spans[0].text, "[")) {
+                previous = null;
+            }
+            if (previous) |sense| {
+                try examples[sense].append(a, at);
+                continue;
+            }
+        } else previous = null;
+        try other.append(a, at);
+    }
+    for (senses, examples) |*sense, *items| sense.examples = try items.toOwnedSlice(a);
+    return .{ .kind = "Adjective", .section = index, .etymology = origin, .definitions = senses,
+        .introduction = &.{0}, .other_blocks = try other.toOwnedSlice(a) };
+}
+
 // Retained CS homosexuál p6652/r1354217 authors this H3 noun and H4
 // meaning scope. Keep its Czech kind and the independently supplied owner;
 // support headings and literal/list-nested heading text grant no sense scope.
@@ -3120,9 +3237,10 @@ pub fn buildForEntryWithClassifiedCode(a: A, sections: anytype, unclassified: bo
         const own_kind: ?[]const u8 = named_kind orelse if (paragraph_part) |marker| marker.kind
             else if (meaning_paragraph != null) "Значења" else null;
         const lemma = std.mem.eql(u8, section.title, "Lemma") or std.mem.eql(u8, section.title, "Neet-lemma");
+        const hsb_scope = if (own_kind == null and !unclassified) hsbMeaningScope(sections, i, owner, owner_code, wiki_id) else null;
         const czech_parent = if (own_kind == null) czechMeaningParent(sections, i, owner) else null;
         const meaning_parent = if (own_kind == null) slovakMeaningParent(sections, i) orelse kyrgyzMeaningParent(sections, i) else null;
-        const nested_kind: ?[]const u8 = if (czech_parent) |parent| sections[parent].title else if (meaning_parent) |parent| partOfSpeech(sections[parent].title) else if (own_kind == null) nested: {
+        const nested_kind: ?[]const u8 = if (hsb_scope != null) "Adjective" else if (czech_parent) |parent| sections[parent].title else if (meaning_parent) |parent| partOfSpeech(sections[parent].title) else if (own_kind == null) nested: {
             if (af_dictionary and afParticipleMeanings(sections, i)) break :nested "Participle";
             const parent = lemma_parent orelse break :nested null;
             break :nested if (lemma and section.level > parent.level and section.level - parent.level == 1) parent.kind else null;
@@ -3185,7 +3303,9 @@ pub fn buildForEntryWithClassifiedCode(a: A, sections: anytype, unclassified: bo
             }
             active = lexemes.items.len;
             active_level = if (nested_kind != null) section.level - 1 else section.level;
-            var lexical = if (numbered_part != null)
+            var lexical = if (hsb_scope) |scope|
+                try analyzeHsbMeanings(a, i, origin, section.blocks, scope)
+            else if (numbered_part != null)
                 try analyzeProjected(a, name, i, origin, section.blocks, false, .source_numbered)
             else if (paragraph_part) |marker|
                 try analyzeMarkedParagraph(a, marker, i, origin, section.blocks)
@@ -15984,6 +16104,320 @@ test "Malagasy adjective heading preserves four original definitions independent
     const literal = try renderer.renderBody("<nowiki>===Mpamaritra===\n# literal, not a definition</nowiki>");
     const protected = [_]Section{.{ .title = "Unknown", .level = 2, .blocks = literal }};
     try std.testing.expectEqual(@as(usize, 0), (try buildUnclassified(a, &protected)).lexemes.len);
+}
+
+const HsbStaryMeaningTest = struct {
+    const encoder = @import("blob_encoder");
+    const T = encoder.presentation_types;
+    const codec = encoder.presentation_codec;
+    const NS = @import("namespace_registry").Registry;
+    const expanded = @embedFile("testdata/hsb-stary-organization/expanded.wikitext");
+    const raw = @embedFile("testdata/hsb-stary-organization/raw.wikitext");
+    const namespace = @embedFile("testdata/hsb-stary-organization/namespace.tsv");
+    const interwiki = @embedFile("testdata/hsb-stary-organization/interwiki.tsv");
+    const readers = [_][]const u8{
+        @embedFile("testdata/hsb-stary-organization/upper.json"),
+        @embedFile("testdata/hsb-stary-organization/lower.json"),
+        @embedFile("testdata/hsb-stary-organization/polish.json"),
+    };
+    const Section = struct {
+        title: []const u8, level: u8, anchor: []const u8, anchor_fallback: []const u8,
+        blocks: []const wiki.Block, is_heading: bool = true, title_depth: u8 = 0,
+        title_list_path: []const u8 = "", title_spans: []const wiki.Span,
+    };
+    const Case = struct { before: T.Entry, expected: T.Entry, sections: []Section };
+
+    fn region(index: usize) ![]const u8 {
+        const marker = "====Semantika====\n";
+        var start: usize = 0;
+        for (0..index + 1) |_| start = (std.mem.indexOfPos(u8, expanded, start, marker) orelse return error.TestUnexpectedResult) + marker.len;
+        const end = std.mem.indexOfPos(u8, expanded, start, "==== Přełožki ====") orelse return error.TestUnexpectedResult;
+        return expanded[start..end];
+    }
+    fn read(a: A, index: usize) !T.Entry {
+        return (try std.json.parseFromSlice(T.Entry, a, readers[index], .{ .ignore_unknown_fields = true })).value;
+    }
+    fn heading(index: usize) ![]const u8 {
+        const prefix = "=== [[Pomoc:słowna družina|adjektiw]]";
+        var start: usize = 0;
+        for (0..index + 1) |_| start = (std.mem.indexOfPos(u8, expanded, start, prefix) orelse return error.TestUnexpectedResult) + prefix.len;
+        const first = start - prefix.len;
+        const end = std.mem.indexOfScalarPos(u8, expanded, start, '\n') orelse return error.TestUnexpectedResult;
+        const line = expanded[first..end];
+        try std.testing.expect(std.mem.endsWith(u8, line, " ==="));
+        return line[4 .. line.len - 4];
+    }
+    fn correctedUpper(a: A, before: T.Entry) !T.Entry {
+        var expected = before;
+        const sections = try a.dupe(T.Section, before.sections);
+        expected.sections = sections;
+        const original = before.sections[4].blocks;
+        var blocks: std.ArrayList(T.Block) = .empty;
+        var changed: usize = 0;
+        for (original, 0..) |block, index| {
+            const split = switch (index) { 4, 5, 9, 10, 11, 16, 17 => true, else => false };
+            if (!split) { try blocks.append(a, block); continue; }
+            try std.testing.expectEqual(T.BlockKind.indent, block.kind);
+            try std.testing.expectEqual(@as(u8, 1), block.depth);
+            try std.testing.expectEqualStrings(":", block.list_path);
+            const tail = block.spans[block.spans.len - 3 ..];
+            try std.testing.expectEqual(T.InlineKind.line_break, tail[0].kind);
+            try std.testing.expectEqual(T.InlineKind.text, tail[1].kind);
+            try std.testing.expect(tail[1].bold);
+            try std.testing.expectEqual(T.InlineKind.line_break, tail[2].kind);
+            var prefix = block;
+            prefix.spans = block.spans[0 .. block.spans.len - 3];
+            try blocks.append(a, prefix);
+            var paragraph = original[0];
+            paragraph.depth = 1;
+            paragraph.list_path = ":";
+            paragraph.spans = tail[1..2];
+            try blocks.append(a, paragraph);
+            changed += 1;
+        }
+        try std.testing.expectEqual(@as(usize, 7), changed);
+        sections[4].blocks = try blocks.toOwnedSlice(a);
+        return expected;
+    }
+    fn prepare(a: A, index: usize, ns: *const NS) !Case {
+        return prepareTracked(a, index, ns, null);
+    }
+    fn prepareTracked(a: A, index: usize, ns: *const NS, phase_output: ?@import("missing_dependency").Text) !Case {
+        const before = try read(a, index);
+        try std.testing.expectEqualStrings("stary", before.title);
+        try std.testing.expectEqual(@as(usize, 0), before.organization.lexemes.len);
+        try std.testing.expectEqualStrings("adjektiw", before.sections[1].title);
+        try std.testing.expectEqualStrings("Semantika", before.sections[4].title);
+        const expected = if (index == 0) try correctedUpper(a, before) else before;
+        const definitions = try wiki.referenceDefinitionsAlloc(a, expanded);
+        var renderer: wiki.Renderer = .{ .a = a,
+            .context = .{ .title = before.title, .language = before.language.?, .namespace_catalog = ns },
+            .page_reference_definitions = definitions.items };
+        const source_region = try region(index);
+        const rendered = if (phase_output) |parent| tracked: {
+            const dependency = @import("missing_dependency");
+            try std.testing.expectEqualStrings(expanded, parent.bytes);
+            try std.testing.expectEqual(@intFromPtr(expanded.ptr), @intFromPtr(parent.bytes.ptr));
+            const start = @intFromPtr(source_region.ptr) - @intFromPtr(parent.bytes.ptr);
+            const selected = try dependency.slice(a, parent, start, start + source_region.len);
+            try std.testing.expect(selected.unknown);
+            break :tracked try renderer.renderBodyWithMissing(selected);
+        } else try renderer.renderBody(source_region);
+        const references = try renderer.finishReferences();
+        try std.testing.expectEqual(before.references.len, references.len);
+        const sections = try a.alloc(Section, before.sections.len);
+        for (before.sections, sections, 0..) |item, *slot, at| slot.* = .{
+            .title = item.title, .level = item.level, .anchor = item.anchor, .anchor_fallback = item.anchor_fallback,
+            .blocks = if (at == 4) rendered else try RetainedNounSemanticProjection.blocks(a, item.blocks),
+            // These two physical headings are present in the captured expansion.
+            // Other titles do not acquire compiler provenance from Reader JSON.
+            .title_spans = if (at == 1) try renderer.parseSpans(try heading(index), .{}) else
+                if (at == 4) try renderer.parseSpans("Semantika", .{}) else &.{},
+        };
+        const bytes = try codec.encodeBuildAlloc(a, try RetainedNounSemanticProjection.spans(a, before.display_title),
+            sections, before.organization, references, before.media);
+        const decoded = try codec.decodeAlloc(a, bytes, before.title, before.kind,
+            .{ .heading = before.language.?, .code = before.language_code });
+        // Every field outside the seven explicit paragraph boundaries is exact,
+        // including both named references, actions, font/style, tables and media.
+        try std.testing.expectEqualDeep(T.Stored{ .entry = expected }, decoded);
+        return .{ .before = before, .expected = expected, .sections = sections };
+    }
+    fn layout(a: A, sections: []const Section, owner: ?[]const u8, code: []const u8, wiki_id: []const u8, unclassified: bool) !Layout {
+        return buildForEntryWithClassifiedCode(a, sections, unclassified, owner, code, null, wiki_id, &.{}, "stary");
+    }
+    fn refused(a: A, sections: []const Section) !void {
+        const found = try layout(a, sections, "Upper Sorbian", "hsb", "hsbwiktionary", false);
+        try std.testing.expectEqual(@as(usize, 0), found.lexemes.len);
+    }
+};
+
+test "actual HSB stary paragraph fields preserve three full records and organize only their original senses" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const H = HsbStaryMeaningTest;
+    inline for (.{
+        .{ H.raw, "0e6b75c1fa025dd5e7de7be19e973b841b76d3fd4ccf13786341bae1d5022ee6" },
+        .{ H.expanded, "d9dc29fb9fd2acf9ca3c3dd638827b464ab10de8bcd6796c2e3d5cde2e56728f" },
+        .{ H.readers[0], "4baf5b48f2df35021672cca712d8450f555b38fb51e3ec752ef0ceae91db4be0" },
+        .{ H.readers[1], "b3a6532aaf8c62369da4396a3f5a806c33a67f067cf5cf2f21e6293c993ec2fa" },
+        .{ H.readers[2], "abdf77a48ceb251304f046b438d0369379f48502f24a62def9cb1ff622b92748" },
+        .{ H.namespace, "76424f58b5b3428af4b928f92915ecb48009469c8bffc3e335513ba9c8d12d48" },
+        .{ H.interwiki, "b320409ba3e9ea235b7647efc2f72168d336ed5b0a676d8e3b717c81fb2ad273" },
+    }) |fixture| {
+        var digest: [32]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash(fixture[0], &digest, .{});
+        try std.testing.expectEqualStrings(fixture[1], &std.fmt.bytesToHex(digest, .lower));
+    }
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, H.raw, "{{słowna družina|adjektiw|hornjoserbšćina}}"));
+    try std.testing.expectEqual(@as(usize, 3), std.mem.count(u8, H.expanded, "====Semantika===="));
+    var ns = try H.NS.init(a, H.namespace);
+    defer ns.deinit();
+    try ns.attachInterwikiMap(H.interwiki);
+    for ([_][]const u8{ "hsb", "dsb", "pl" }, 0..) |code, index| {
+        const item = try H.prepare(a, index, &ns);
+        try std.testing.expectEqualStrings(code, item.before.language_code);
+        const organized = try H.layout(a, item.sections, item.before.language, code, "hsbwiktionary", false);
+        try std.testing.expectEqual(@as(usize, 1), organized.lexemes.len);
+        const lexical = organized.lexemes[0];
+        try std.testing.expectEqualStrings(item.before.language.?, lexical.language);
+        try std.testing.expectEqualStrings("Adjective", lexical.kind);
+        try std.testing.expectEqual(@as(usize, 4), lexical.section);
+        try std.testing.expectEqual(@as(?usize, null), lexical.etymology);
+        try std.testing.expectEqual(if (index == 0) @as(usize, 4) else @as(usize, 1), lexical.definitions.len);
+        for (lexical.definitions, 0..) |sense, at| {
+            try std.testing.expectEqual(at + 1, sense.block);
+            try std.testing.expectEqual(@as(?usize, null), sense.parent);
+            try std.testing.expectEqual(@as(usize, 0), sense.quotations.len);
+            try std.testing.expectEqual(@as(usize, 0), sense.notes.len);
+            try std.testing.expect(sense.form == null and sense.block_path.len == 0);
+            const examples: []const usize = if (index != 0) &.{} else switch (at) { 0 => &.{17, 18}, 2 => &.{19}, 3 => &.{20, 21}, else => &.{} };
+            try std.testing.expectEqualSlices(usize, examples, sense.examples);
+        }
+        try std.testing.expectEqualSlices(usize, &.{0}, lexical.introduction);
+        const other: []const usize = if (index == 0) &.{ 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 22, 23, 24, 25, 26 } else
+            &.{ 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23 };
+        try std.testing.expectEqualSlices(usize, other, lexical.other_blocks);
+        // The original Polish tail is a peer H2, not an adjective child.
+        // Upper Sorbian section7 is instead the H5 Wšitke translation group.
+        if (index == 2) {
+            try std.testing.expect(std.mem.endsWith(u8, H.raw, "== Noty ==\n<references />"));
+            try std.testing.expect(std.mem.endsWith(u8, H.expanded, "== Noty ==\n<references />"));
+            try std.testing.expectEqualStrings("Noty", item.before.sections[7].title);
+            try std.testing.expectEqual(@as(u8, 2), item.before.sections[7].level);
+        }
+        const other_sections: []const usize = if (index == 2) &.{ 0, 1, 2, 3, 7 } else &.{ 0, 1, 2, 3 };
+        try std.testing.expectEqualSlices(usize, other_sections, organized.other_sections);
+        const related: []const usize = if (index == 0) &.{ 5, 6, 7 } else &.{ 5, 6 };
+        try std.testing.expectEqualSlices(usize, related, lexical.related_sections);
+        var after: H.T.Stored = .{ .entry = item.expected };
+        after.entry.organization = (try std.json.parseFromSlice(H.T.Layout, a, try std.json.Stringify.valueAlloc(a, organized, .{}), .{})).value;
+        const encoded = try H.codec.encodeAlloc(a, after);
+        const decoded = try H.codec.decodeAlloc(a, encoded, after.entry.title, after.entry.kind,
+            .{ .heading = after.entry.language.?, .code = code });
+        try std.testing.expectEqualDeep(after, decoded);
+        try std.testing.expectEqualSlices(u8, encoded, try H.codec.encodeAlloc(a, decoded));
+        var restored = decoded;
+        restored.entry.organization = item.before.organization;
+        try std.testing.expectEqualDeep(H.T.Stored{ .entry = item.expected }, restored);
+    }
+}
+
+test "HSB numbered fields require independently owned exact headings and refuse ambiguous paragraph scopes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const H = HsbStaryMeaningTest;
+    var ns = try H.NS.init(a, H.namespace);
+    defer ns.deinit();
+    try ns.attachInterwikiMap(H.interwiki);
+    const item = try H.prepare(a, 0, &ns);
+    for ([_][]const u8{ "", "dsbwiktionary", "enwiktionary" }) |foreign|
+        try std.testing.expectEqual(@as(usize, 0), (try H.layout(a, item.sections, "Upper Sorbian", "hsb", foreign, false)).lexemes.len);
+    try std.testing.expectEqual(@as(usize, 0), (try H.layout(a, item.sections, null, "hsb", "hsbwiktionary", false)).lexemes.len);
+    try std.testing.expectEqual(@as(usize, 0), (try H.layout(a, item.sections, "", "hsb", "hsbwiktionary", false)).lexemes.len);
+    try std.testing.expectEqual(@as(usize, 0), (try H.layout(a, item.sections, "Unclassified", "", "hsbwiktionary", true)).lexemes.len);
+    try std.testing.expectEqual(@as(usize, 0), (try H.layout(a, item.sections, "Upper Sorbian", "", "hsbwiktionary", false)).lexemes.len);
+    for (0..10) |variant| {
+        const sections = try a.dupe(H.Section, item.sections);
+        const parent_spans = try a.dupe(wiki.Span, sections[1].title_spans);
+        sections[1].title_spans = parent_spans;
+        const blocks = try a.dupe(wiki.Block, sections[4].blocks);
+        sections[4].blocks = blocks;
+        switch (variant) {
+            0 => sections[1].level = 2,
+            1 => sections[1].is_heading = false,
+            2 => sections[1].title_depth = 1,
+            3 => parent_spans[0].target = "Other:słowna družina",
+            4 => parent_spans[0].provenance = .protected_literal,
+            5 => sections[4].title_list_path = ":",
+            6 => sections[4].is_heading = false,
+            7 => { const spans = try a.dupe(wiki.Span, blocks[0].spans); spans[0].generated_diagnostic = true; blocks[0].spans = spans; },
+            8 => { const spans = try a.dupe(wiki.Span, blocks[2].spans); spans[0].text = "[1] "; blocks[2].spans = spans; },
+            9 => { const spans = try a.dupe(wiki.Span, blocks[4].spans); spans[0].provenance = .protected_literal; blocks[4].spans = spans; },
+            else => unreachable,
+        }
+        try H.refused(a, sections);
+    }
+    // A full old flattened fourth definition must not earn a partial pass.
+    const flattened = try a.dupe(H.Section, item.sections);
+    const old = try RetainedNounSemanticProjection.blocks(a, item.before.sections[4].blocks);
+    const blocks = try a.dupe(wiki.Block, flattened[4].blocks);
+    blocks[4] = old[4];
+    flattened[4].blocks = blocks;
+    try H.refused(a, flattened);
+    // Strong parser exclusions: protected or link-contained markup is never a
+    // field boundary, nor are classes, unknown styles or a numbered-list tail.
+    for ([_][]const u8{
+        ":[1] [[sense]]<nowiki><p style=\"margin-bottom: -0.5em;\">'''Pochad:'''</nowiki>",
+        ":[1] [[target|<p style=\"margin-bottom: -0.5em;\">label]]",
+        ":[1] [[sense]]<p class=\"other\" style=\"margin-bottom: -0.5em;\">'''Pochad:'''",
+        ":[1] [[sense]]<p style=\"display:none;\">'''Pochad:'''",
+        "#[1] [[sense]]<p style=\"margin-bottom: -0.5em;\">'''Pochad:'''",
+    }) |source| {
+        var renderer: wiki.Renderer = .{ .a = a, .context = .{ .namespace_catalog = &ns, .title = "stary" } };
+        const parsed = try renderer.renderBody(source);
+        for (parsed) |block| try std.testing.expect(hsbField(block) == null);
+    }
+}
+
+test "actual HSB complete worker missing phase preserves Upper Sorbian paragraphs senses and unknown" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const H = HsbStaryMeaningTest;
+    const dependency = @import("missing_dependency");
+    const phase_bytes = @embedFile("testdata/hsb-stary-organization/missing-phase.json");
+    var phase = try dependency.decode(a, phase_bytes, H.expanded, "");
+    defer phase.deinit();
+    const tracked = phase.output();
+    try std.testing.expect(tracked.unknown and !tracked.lost_missing_range);
+    try std.testing.expectEqual(@as(usize, 1), tracked.ranges.len);
+    try std.testing.expectEqual(@as(u32, 19150), tracked.ranges[0].start);
+    try std.testing.expectEqual(@as(u32, 19169), tracked.ranges[0].end);
+    try std.testing.expectEqualStrings("[[:Předłoha:sla]]", tracked.bytes[19150..19169]);
+    var ns = try H.NS.init(a, H.namespace);
+    defer ns.deinit();
+    try ns.attachInterwikiMap(H.interwiki);
+    // Decode the authentic full-page phase before slicing the exact region.
+    // This exercises the distinction missed by the earlier untracked fixture.
+    const item = try H.prepareTracked(a, 0, &ns, tracked);
+    const organized = try H.layout(a, item.sections, item.before.language, "hsb", "hsbwiktionary", false);
+    try std.testing.expectEqual(@as(usize, 1), organized.lexemes.len);
+    const lexical = organized.lexemes[0];
+    try std.testing.expectEqualStrings(item.before.language.?, lexical.language);
+    try std.testing.expectEqualStrings("Adjective", lexical.kind);
+    try std.testing.expectEqual(@as(usize, 4), lexical.section);
+    try std.testing.expectEqual(@as(?usize, null), lexical.etymology);
+    try std.testing.expectEqual(@as(usize, 4), lexical.definitions.len);
+    for (lexical.definitions, 0..) |sense, at| {
+        try std.testing.expectEqual(at + 1, sense.block);
+        try std.testing.expectEqual(@as(?usize, null), sense.parent);
+        try std.testing.expectEqual(@as(usize, 0), sense.quotations.len);
+        try std.testing.expectEqual(@as(usize, 0), sense.notes.len);
+        try std.testing.expect(sense.form == null and sense.block_path.len == 0);
+        const examples: []const usize = switch (at) { 0 => &.{17, 18}, 2 => &.{19}, 3 => &.{20, 21}, else => &.{} };
+        try std.testing.expectEqualSlices(usize, examples, sense.examples);
+    }
+    try std.testing.expectEqualSlices(usize, &.{0}, lexical.introduction);
+    try std.testing.expectEqualSlices(usize, &.{ 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 22, 23, 24, 25, 26 }, lexical.other_blocks);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 1, 2, 3 }, organized.other_sections);
+    try std.testing.expectEqualSlices(usize, &.{ 5, 6, 7 }, lexical.related_sections);
+    var after: H.T.Stored = .{ .entry = item.expected };
+    after.entry.organization = (try std.json.parseFromSlice(H.T.Layout, a, try std.json.Stringify.valueAlloc(a, organized, .{}), .{})).value;
+    const encoded = try H.codec.encodeAlloc(a, after);
+    const decoded = try H.codec.decodeAlloc(a, encoded, after.entry.title, after.entry.kind,
+        .{ .heading = after.entry.language.?, .code = "hsb" });
+    try std.testing.expectEqualDeep(after, decoded);
+    try std.testing.expectEqualSlices(u8, encoded, try H.codec.encodeAlloc(a, decoded));
+    var restored = decoded;
+    restored.entry.organization = item.before.organization;
+    try std.testing.expectEqualDeep(H.T.Stored{ .entry = item.expected }, restored);
+    // Parsing the literal paragraph never clears or relocates missing evidence.
+    try std.testing.expect(phase.output().unknown);
+    try std.testing.expectEqualDeep(tracked.ranges, phase.output().ranges);
+    try std.testing.expectEqualStrings(phase_bytes, try dependency.encode(a, phase.output(), phase.displayTitle(), phase.occurrences()));
 }
 
 
