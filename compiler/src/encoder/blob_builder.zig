@@ -2761,14 +2761,17 @@ fn sourceCategoryBannerTarget(codes: LanguageCodes, section: language_source.Sec
     if (std.mem.indexOfAny(u8, hidden, "[]{}<>&#\r\n\t") != null) return null;
     const sort = std.mem.indexOfScalar(u8, hidden, '|') orelse return null;
     const sort_key = hidden[sort + 1 ..];
-    // The complete selected provider is separately certified to use ucfirst.
-    // Accept only its exact ASCII first-letter transformation here; other
-    // casing changes and all changes to the remaining title still refuse.
-    const initial_upper = page_title.len > 0 and sort_key.len == page_title.len and
-        std.ascii.isLower(page_title[0]) and sort_key[0] == std.ascii.toUpper(page_title[0]) and
-        std.mem.eql(u8, sort_key[1..], page_title[1..]);
-    if (!std.mem.eql(u8, hidden[0..sort], category_target) or
-        (!std.mem.eql(u8, sort_key, page_title) and !initial_upper)) return null;
+    if (!std.mem.eql(u8, hidden[0..sort], category_target)) return null;
+    if (!std.mem.eql(u8, sort_key, page_title)) {
+        // The indexed provider applies MediaWiki ucfirst to PAGENAME. Map one
+        // codepoint only: every suffix byte (including combining marks) is literal.
+        if (page_title.len == 0 or !std.unicode.utf8ValidateSlice(page_title)) return null;
+        const first_len = std.unicode.utf8ByteSequenceLength(page_title[0]) catch return null;
+        var storage: [64]u8 = undefined;
+        var scratch = std.heap.FixedBufferAllocator.init(&storage);
+        const first = ns.mapper.firstAlloc(scratch.allocator(), page_title[0..first_len]) catch return null;
+        if (!std.mem.startsWith(u8, sort_key, first) or !std.mem.eql(u8, sort_key[first.len..], page_title[first_len..])) return null;
+    }
     return category_target;
 }
 fn sourceCategoryRawTemplate(codes: LanguageCodes, section: language_source.Section) ?[]const u8 {
@@ -19370,6 +19373,35 @@ test "source category banner requires paired observed H2 complete source certifi
         .ranges = &.{.{ .start = body_start, .end = body_start + 1, .occurrence = 1 }} }, expanded));
     try std.testing.expectEqualStrings(F.banner, expanded.heading);
     try std.testing.expectEqualStrings(F.expanded, expanded.source);
+
+    // The first row reproduces the complete H2 from žodis p880/r1807458.
+    // Other rows distinguish Unicode titlecase from uppercase, full folding,
+    // canonical normalization and changes to the unchanged suffix.
+    const cases = [_]struct { title: []const u8, sort: []const u8, accepted: bool }{
+        .{ .title = "žodis", .sort = "Žodis", .accepted = true },
+        .{ .title = "pradžia", .sort = "Pradžia", .accepted = true },
+        .{ .title = "ǆemas", .sort = "ǅemas", .accepted = true },
+        .{ .title = "ǰfoo", .sort = "J̌foo", .accepted = true },
+        .{ .title = "ßeta", .sort = "ßeta", .accepted = true },
+        .{ .title = "žodis", .sort = "ŽodIs", .accepted = false },
+        .{ .title = "žodis", .sort = "Zodis", .accepted = false },
+        .{ .title = "žodis", .sort = "Žodis", .accepted = false },
+        .{ .title = "žodis", .sort = "Žodynas", .accepted = false },
+        .{ .title = "ǆemas", .sort = "Ǆemas", .accepted = false },
+        .{ .title = "ßeta", .sort = "Sseta", .accepted = false },
+    };
+    for (cases) |case| {
+        const source = try std.mem.replaceOwned(u8, a, F.expanded, F.title, case.sort);
+        const heading = blobs.wikitext_syntax.controlHeading(source[0..std.mem.indexOfScalar(u8, source, '\n').?], null).?;
+        var section: language_source.Section = .{ .heading = heading.title, .source = source };
+        const observed = (try simpleRawHeadingProof(a, codes, case.title, source)) orelse return error.TestUnexpectedResult;
+        simpleApplyRootScope(source, @as(*[1]language_source.Section, @ptrCast(&section)), observed.page_wiki_openings);
+        try std.testing.expect(section.root_wiki_heading);
+        const result = try sourceCategoryBannerOwner(codes, case.title, raw, section);
+        if (case.accepted) {
+            try std.testing.expectEqualStrings("lt", (result orelse return error.TestUnexpectedResult).code);
+        } else try std.testing.expect(result == null);
+    }
 }
 
 test "source section formatter only classifies paired raw and expanded observed root H2" {
