@@ -5,6 +5,26 @@ const styles = @import("encoder").table_style_profile;
 const A = std.mem.Allocator;
 const leaf_url = "https://www.mediawiki.org/w/index.php?title=MediaWiki:Gadget-enwp-boxes.css&action=raw&ctype=text/css";
 const root_url = "https://pt.wiktionary.org/w/index.php?title=MediaWiki:Common.css&action=raw&ctype=text/css";
+const ImportProfile = struct {
+    leaf_url: []const u8,
+    root_url: []const u8,
+    resource_wiki: []const u8,
+    resource_title: []const u8,
+    media_groups: bool = false,
+};
+fn importProfile(wiki: []const u8) ?ImportProfile {
+    if (std.mem.eql(u8, wiki, "ptwiktionary")) return .{
+        .leaf_url = leaf_url, .root_url = root_url,
+        .resource_wiki = "mediawikiwiki", .resource_title = "MediaWiki:Gadget-enwp-boxes.css",
+    };
+    if (std.mem.eql(u8, wiki, "jvwiktionary")) return .{
+        .leaf_url = "https://jv.wikipedia.org/w/index.php?title=MediaWiki:Common.css&action=raw&ctype=text/css",
+        .root_url = "https://jv.wiktionary.org/w/index.php?title=MediaWiki:Common.css&action=raw&ctype=text/css",
+        .resource_wiki = "jvwiki", .resource_title = "MédhiaWiki:Common.css", .media_groups = true,
+    };
+    return null;
+}
+
 pub const max_snapshot_bytes = 2 * 1024 * 1024;
 
 pub const Root = struct {
@@ -83,7 +103,7 @@ fn skipSpaceComments(css: []const u8, start: usize) ?usize {
     }
     return at;
 }
-fn firstImportMatches(css: []const u8, selected: Snapshot) bool {
+fn firstImportMatches(css: []const u8, selected: Snapshot, import_profile: ImportProfile) bool {
     const import = selected.import;
     if (import.start >= import.end or import.end > css.len or
         (skipSpaceComments(css, 0) orelse return false) != import.start) return false;
@@ -101,14 +121,17 @@ fn firstImportMatches(css: []const u8, selected: Snapshot) bool {
     if (at >= css.len or !std.mem.eql(u8, css[begin..at], import.authored_url)) return false;
     at = skipSpaceComments(css, at + 1) orelse return false;
     return at < css.len and css[at] == ';' and at + 1 == import.end and
-        (std.mem.eql(u8, import.authored_url, leaf_url) or
-        std.mem.eql(u8, import.authored_url, leaf_url[6..])) and
-        std.mem.eql(u8, import.resolved_url, leaf_url);
+        (std.mem.eql(u8, import.authored_url, import_profile.leaf_url) or
+        std.mem.eql(u8, import.authored_url, import_profile.leaf_url[6..])) and
+        std.mem.eql(u8, import.resolved_url, import_profile.leaf_url);
 }
 fn flatLeaf(css: []const u8) bool {
-    // A bounded initial domain: no imported at-rules, conditional groups,
-    // charset/namespace scopes or cycles. Comments and quoted strings do not
-    // manufacture dependency edges. Unsupported leaves retain the root import.
+    return leafDependenciesKnown(css, false);
+}
+fn leafDependenciesKnown(css: []const u8, media_groups: bool) bool {
+    // Unsupported at-rules, charset/namespace scopes and imports retain the
+    // root dependency. Comments and strings do not manufacture import edges.
+    // The explicit JV profile additionally carries media groups to the parser.
     var at: usize = 0;
     while (at < css.len) {
         if (std.mem.startsWith(u8, css[at..], "/*")) {
@@ -125,7 +148,16 @@ fn flatLeaf(css: []const u8) bool {
             if (at == css.len) return false;
             at += 1;
         } else {
-            if (css[at] == '@') return false;
+            if (css[at] == '@') {
+                // JV's captured leaf contains media groups. The existing profile
+                // parser keeps every conditional declaration uncertain; no media
+                // condition is stripped or assumed. All other at-rules, including
+                // nested imports, keep the original root import unresolved.
+                if (!media_groups or css.len - at < 7 or !std.ascii.eqlIgnoreCase(css[at..][0..6], "@media") or
+                    std.mem.indexOfScalar(u8, " \t\r\n\x0c", css[at + 6]) == null) return false;
+                at += 6;
+                continue;
+            }
             at += 1;
         }
     }
@@ -145,6 +177,7 @@ pub fn joinForTargetAlloc(a: A, root_css: []const u8, root: Root, snapshot_bytes
     return joinImportAlloc(a, root_css, root, snapshot_bytes, target);
 }
 fn joinImportAlloc(a: A, root_css: []const u8, root: Root, snapshot_bytes: []const u8, target: styles.ReadingTarget) !Joined {
+    const import_profile = importProfile(root.wiki) orelse return error.InvalidStylesheetImports;
     if (snapshot_bytes.len > max_snapshot_bytes) return error.InvalidStylesheetImports;
     const parsed = try std.json.parseFromSlice(Snapshot, a, snapshot_bytes, .{});
     defer parsed.deinit();
@@ -155,27 +188,26 @@ fn joinImportAlloc(a: A, root_css: []const u8, root: Root, snapshot_bytes: []con
     const leaf_hash = sha256(resource.css);
     var sha1: [20]u8 = undefined;
     std.crypto.hash.Sha1.hash(resource.css, &sha1, .{});
-    const expected_base = try std.fmt.allocPrint(a, "{s}&oldid={d}", .{ leaf_url, revision.revision_id });
+    const expected_base = try std.fmt.allocPrint(a, "{s}&oldid={d}", .{ import_profile.leaf_url, revision.revision_id });
     defer a.free(expected_base);
     if (!std.mem.eql(u8, value.schema, "wikidict.stylesheet-imports.v1") or
         !std.mem.eql(u8, value.wiki, root.wiki) or !std.mem.eql(u8, value.dump_date, root.dump_date) or
         !std.mem.eql(u8, value.namespace_sha256, root.namespace_sha256) or
         !std.mem.eql(u8, value.root_css_sha256, &root_hash) or value.root_page_id != root.page_id or value.root_revision_id != root.revision_id or
-        !std.mem.eql(u8, value.wiki, "ptwiktionary") or
-        !std.mem.eql(u8, resource.url, leaf_url) or !std.mem.eql(u8, resource.base_url, expected_base) or
-        !std.mem.eql(u8, revision.wiki, "mediawikiwiki") or !std.mem.eql(u8, revision.title, "MediaWiki:Gadget-enwp-boxes.css") or
+        !std.mem.eql(u8, resource.url, import_profile.leaf_url) or !std.mem.eql(u8, resource.base_url, expected_base) or
+        !std.mem.eql(u8, revision.wiki, import_profile.resource_wiki) or !std.mem.eql(u8, revision.title, import_profile.resource_title) or
         !std.mem.eql(u8, revision.content_model, "css") or revision.page_id == 0 or revision.revision_id == 0 or
         revision.revision_timestamp.len != 20 or !std.mem.eql(u8, revision.source_sha1, &std.fmt.bytesToHex(sha1, .lower)) or
         resource.css.len > 1024 * 1024 or resource.css_bytes != resource.css.len or
         !std.mem.eql(u8, resource.css_sha256, &leaf_hash) or !std.unicode.utf8ValidateSlice(resource.css) or
-        !firstImportMatches(root_css, value)) return error.InvalidStylesheetImports;
+        !firstImportMatches(root_css, value, import_profile)) return error.InvalidStylesheetImports;
     var proof: Proof = .{ .snapshot_sha256 = sha256(snapshot_bytes), .resource_sha256 = leaf_hash,
-        .page_id = revision.page_id, .revision_id = revision.revision_id, .joined = false };
-    if (!flatLeaf(resource.css)) return .{ .profile = try styles.parseForTargetAlloc(a, root_css, target), .proof = proof };
+        .page_id = revision.page_id, .revision_id = revision.revision_id, .url = import_profile.leaf_url, .joined = false };
+    if (!leafDependenciesKnown(resource.css, import_profile.media_groups)) return .{ .profile = try styles.parseForTargetAlloc(a, root_css, target), .proof = proof };
     const segments = [_]styles.Source{
-        .{ .css = root_css[0..value.import.start], .base_url = root_url },
+        .{ .css = root_css[0..value.import.start], .base_url = import_profile.root_url },
         .{ .css = resource.css, .base_url = resource.base_url },
-        .{ .css = root_css[value.import.end..], .base_url = root_url, .byte_start = value.import.end },
+        .{ .css = root_css[value.import.end..], .base_url = import_profile.root_url, .byte_start = value.import.end },
     };
     const profile = styles.parseSourcesForTargetAlloc(a, &segments, target) catch |err| switch (err) {
         error.StyleProfileLimit => return .{ .profile = try styles.parseForTargetAlloc(a, root_css, target), .proof = proof },
@@ -828,4 +860,137 @@ test "normal Mai custom context rejects stale bytes and retains a possible palet
     var unknown = try joinForTargetAlloc(a, F.css, F.root, try std.json.Stringify.valueAlloc(a, changed, .{}), .screen); defer unknown.profile.deinit();
     const color = try styles.customColorValue(a, unknown.profile.custom_properties.?.root_environment, "var(--border-color-base,#ff00ff)");
     try std.testing.expect(color == .unknown);
+}
+
+
+const JvStylesheetJoinFixture = struct {
+    const css = @embedFile("testdata/jv-css-imports/root.css");
+    const snapshot = @embedFile("testdata/jv-css-imports/snapshot.json");
+    const root: Root = .{ .wiki = "jvwiktionary", .dump_date = "20261001",
+        .namespace_sha256 = "2b85c196fee979c1205821943a9a9b41b6058e6cb52a5e25014aa3b347dfb4d8",
+        .page_id = 2634, .revision_id = 111278 };
+    fn replacement(a: A, body: []const u8) ![]const u8 {
+        const parsed = try std.json.parseFromSlice(Snapshot, a, snapshot, .{});
+        defer parsed.deinit();
+        var value = parsed.value;
+        value.resource.css = body;
+        value.resource.css_bytes = body.len;
+        const hash = sha256(body); value.resource.css_sha256 = &hash;
+        var digest: [20]u8 = undefined;
+        std.crypto.hash.Sha1.hash(body, &digest, .{});
+        const sha1 = std.fmt.bytesToHex(digest, .lower); value.resource.revision.source_sha1 = &sha1;
+        return std.json.Stringify.valueAlloc(a, value, .{});
+    }
+};
+
+test "actual JV imported stylesheet preserves source order table paint media uncertainty and codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const F = JvStylesheetJoinFixture;
+    try std.testing.expectEqual(@as(usize, 517), F.css.len);
+    try std.testing.expectEqualStrings("b6b63e49daaff945308beb48a2aa069e9574b4eefc3c39476ff6b01321ef66da", &sha256(F.css));
+    try std.testing.expectEqualStrings("f03ba0d96e360d7b9dc216f5c171d7966082fa8f5b323f3e74805011e623e382", &sha256(F.snapshot));
+    var joined = try joinAlloc(a, F.css, F.root, F.snapshot); defer joined.profile.deinit();
+    try std.testing.expect(joined.proof.joined and !joined.profile.globally_unresolved);
+    try std.testing.expect(joined.profile.has_unsupported_rules);
+    try std.testing.expectEqual(@as(u64, 4259), joined.proof.page_id);
+    try std.testing.expectEqual(@as(u64, 1737301), joined.proof.revision_id);
+    try std.testing.expectEqualStrings("02923edddf2833e25353180e85fc5ec20c666a61c4256540a3cc7e845a10081a", &joined.proof.resource_sha256);
+    try std.testing.expectEqualStrings("https://jv.wikipedia.org/w/index.php?title=MediaWiki:Common.css&action=raw&ctype=text/css", joined.proof.url);
+    try std.testing.expectEqual(@as(usize, 3), joined.profile.sources.len);
+    try std.testing.expectEqual(@as(usize, 0), joined.profile.sources[0].bytes);
+    try std.testing.expectEqual(@as(usize, 35148), joined.profile.sources[1].bytes);
+    try std.testing.expectEqualStrings("https://jv.wikipedia.org/w/index.php?title=MediaWiki:Common.css&action=raw&ctype=text/css&oldid=1737301", joined.profile.sources[1].base_url);
+    const parsed = try std.json.parseFromSlice(Snapshot, a, F.snapshot, .{}); defer parsed.deinit();
+    try std.testing.expectEqual(parsed.value.import.end, joined.profile.sources[2].byte_start);
+    try std.testing.expectEqual(F.css.len - parsed.value.import.end, joined.profile.sources[2].bytes);
+    const unknown = try joined.profile.resolveTableWithContext(a, 0, "portal-column-left", .{ .ancestor_classes = "", .own_id = "" }, null, "");
+    try std.testing.expect(unknown.unresolved);
+    // The retained width-dependent media rule can override float:left. No
+    // viewport or media condition has been proved by this source-only join.
+    try std.testing.expect(unknown.style == null or unknown.style.?.float_side == null);
+    const encoder = @import("encoder");
+    for ([_]struct { classes: []const u8, color: []const u8 }{
+        .{ .classes = "cmbox", .color = "#dfe8ff" },
+        .{ .classes = "cmbox cmbox-notice", .color = "#d8e8ff" },
+    }) |case| {
+        errdefer std.debug.print("JV imported table classes={s}, background={s}\n", .{ case.classes, case.color });
+        const resolved = try joined.profile.resolveTableWithContext(a, 0, case.classes, .{ .ancestor_classes = "", .own_id = "" }, null, "");
+        try std.testing.expectEqualStrings(case.color, resolved.style.?.background.?);
+        try std.testing.expectEqual(encoder.presentation_types.BorderCollapse.collapse, resolved.style.?.collapse.?);
+        const source = try std.fmt.allocPrint(a, "{{| class='{s}'\n| [[Visible|paint]] [https://example.test action]\n|}}", .{case.classes});
+        const reference = try std.fmt.allocPrint(a, "{{| class='{s}' style='background:{s}!important'\n| [[Visible|paint]] [https://example.test action]\n|}}", .{ case.classes, case.color });
+        var renderer: encoder.presentation_compile.Renderer = .{ .a = a, .context = .{ .table_styles = &joined.profile } };
+        var control: encoder.presentation_compile.Renderer = .{ .a = a, .context = .{ .table_styles = &joined.profile } };
+        const blocks = try renderer.renderBody(source); const reference_blocks = try control.renderBody(reference);
+        try std.testing.expectEqual(@as(usize, 1), blocks.len);
+        const table = blocks[0].table.?;
+        try std.testing.expectEqualStrings(case.color, table.style.?.background.?);
+        try std.testing.expectEqual(encoder.presentation_types.BorderCollapse.collapse, table.style.?.collapse.?);
+        try std.testing.expectEqual(@as(usize, 1), table.rows.len);
+        try std.testing.expectEqual(@as(usize, 1), table.rows[0].cells.len);
+        var internal: usize = 0; var external: usize = 0; var visible: std.ArrayList(u8) = .empty;
+        for (table.rows[0].cells[0].spans) |span| {
+            try visible.appendSlice(a, span.text);
+            if (span.kind == .link) { internal += 1; try std.testing.expectEqualStrings("Visible", span.target); }
+            if (span.kind == .external_link) { external += 1; try std.testing.expectEqualStrings("https://example.test", span.target); }
+        }
+        try std.testing.expectEqualStrings("paint action", visible.items);
+        try std.testing.expectEqual(@as(usize, 1), internal); try std.testing.expectEqual(@as(usize, 1), external);
+        const Section = struct { level: u8 = 2, title: []const u8 = "Unclassified", blocks: @TypeOf(blocks) };
+        const sections = [_]Section{.{ .blocks = blocks }}; const reference_sections = [_]Section{.{ .blocks = reference_blocks }};
+        const bytes = try encoder.presentation_codec.encodeBuildAlloc(a, &[_]encoder.presentation_compile.Span{}, &sections, encoder.presentation_types.Layout{}, try renderer.finishReferences(), renderer.media.items);
+        const expected_bytes = try encoder.presentation_codec.encodeBuildAlloc(a, &[_]encoder.presentation_compile.Span{}, &reference_sections, encoder.presentation_types.Layout{}, try control.finishReferences(), control.media.items);
+        try std.testing.expectEqualSlices(u8, expected_bytes, bytes);
+        const decoded = try encoder.presentation_codec.decodeAlloc(a, bytes, "JV imported paint", .language, .{ .code = "", .heading = "Unclassified" });
+        try std.testing.expectEqualSlices(u8, bytes, try encoder.presentation_codec.encodeAlloc(a, decoded));
+        try std.testing.expectEqual(@as(usize, 0), decoded.entry.media.len); try std.testing.expectEqual(@as(usize, 0), decoded.entry.references.len);
+    }
+}
+
+test "JV imported media admission retains unresolved dependency and cross-profile guards" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const F = JvStylesheetJoinFixture;
+    const media = "@media only screen and (max-width:800px) { table.cmbox { background:#ffffff; } }";
+    try std.testing.expect(!flatLeaf(media));
+    try std.testing.expect(leafDependenciesKnown(media, true));
+    var conditional = try joinAlloc(a, F.css, F.root, try F.replacement(a, media)); defer conditional.profile.deinit();
+    try std.testing.expect(conditional.proof.joined and !conditional.profile.globally_unresolved);
+    const unknown = try conditional.profile.resolveTableWithContext(a, 0, "cmbox", .{ .ancestor_classes = "", .own_id = "" }, null, "");
+    try std.testing.expect(unknown.unresolved and (unknown.style == null or unknown.style.?.background == null));
+    for ([_][]const u8{
+        "@import 'missing.css'; table.cmbox{background:#fff;}",
+        "@import 'https://jv.wikipedia.org/w/index.php?title=MediaWiki:Common.css&action=raw&ctype=text/css'; table.cmbox{background:#fff;}",
+        "@media screen { @import 'nested.css'; table.cmbox{background:#fff;} }",
+        "@supports (display:grid) { table.cmbox{background:#fff;} }",
+        "@namespace svg 'https://example.test'; table.cmbox{background:#fff;}",
+        "@mediax screen { table.cmbox{background:#fff;} }",
+    }) |body| {
+        try std.testing.expect(!leafDependenciesKnown(body, true));
+        var missing = try joinAlloc(a, F.css, F.root, try F.replacement(a, body)); defer missing.profile.deinit();
+        try std.testing.expect(!missing.proof.joined and missing.profile.globally_unresolved);
+    }
+    // Preserve the current normal ReadingTarget contract through the new
+    // profile: medium selection is proved independently of captured ownership.
+    const target_snapshot = try F.replacement(a,
+        "@media screen{.readingOnly{text-align:right}}@media print{.readingOnly{text-align:left}}");
+    var screen = try joinForTargetAlloc(a, F.css, F.root, target_snapshot, .screen); defer screen.profile.deinit();
+    var print = try joinForTargetAlloc(a, F.css, F.root, target_snapshot, .print); defer print.profile.deinit();
+    var target_unknown = try joinAlloc(a, F.css, F.root, target_snapshot); defer target_unknown.profile.deinit();
+    try std.testing.expect(screen.proof.joined and print.proof.joined and target_unknown.proof.joined);
+    try std.testing.expectEqual(styles.ReadingTarget.screen, screen.profile.reading_target);
+    try std.testing.expectEqual(styles.ReadingTarget.print, print.profile.reading_target);
+    const screen_alignment = try screen.profile.resolveAlignment(a, "div", "readingOnly", "", null, "");
+    const print_alignment = try print.profile.resolveAlignment(a, "div", "readingOnly", "", null, "");
+    try std.testing.expect(!screen_alignment.unresolved and screen_alignment.value.? == .right);
+    try std.testing.expect(!print_alignment.unresolved and print_alignment.value.? == .left);
+    try std.testing.expect((try target_unknown.profile.resolveAlignment(a, "div", "readingOnly", "", null, "")).unresolved);
+    var unresolved_screen = try joinForTargetAlloc(a, F.css, F.root,
+        try F.replacement(a, "@supports(display:grid){.readingOnly{text-align:right}}"), .screen);
+    defer unresolved_screen.profile.deinit();
+    try std.testing.expect(!unresolved_screen.proof.joined and unresolved_screen.profile.globally_unresolved);
+    try std.testing.expectEqual(styles.ReadingTarget.screen, unresolved_screen.profile.reading_target);
+    var wrong_root = F.root; wrong_root.wiki = "ptwiktionary";
+    try std.testing.expectError(error.InvalidStylesheetImports, joinAlloc(a, F.css, wrong_root, F.snapshot));
+    var absent = try styles.parseAlloc(a, F.css); defer absent.deinit();
+    try std.testing.expect(absent.globally_unresolved);
 }

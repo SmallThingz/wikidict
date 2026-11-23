@@ -1,0 +1,14 @@
+@import "//jv.wikipedia.org/w/index.php?title=MediaWiki:Common.css&action=raw&ctype=text/css";
+
+/* Main Page heading removal */
+.page-Wikisastra_Pendhapa #lastmod,
+.page-Wikisastra_Pendhapa #siteSub,
+.page-Wikisastra_Pendhapa #contentSub,
+/* .page-Wikisastra_Pendhapa #siteNotice, */
+.page-Wikisastra_Pendhapa h1.firstHeading,
+.page-Wikisastra_Pendhapa #lastmod,
+.page-Wikisastra_Pendhapa #siteSub,
+.page-Wikisastra_Pendhapa #contentSub,
+.page-Wikisastra_Pendhapa #firstHeading {
+	display: none; /* NOT important */
+}

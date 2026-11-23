@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Capture and replay the one reviewed PT Common.css cross-wiki import.
+"""Capture and replay the reviewed PT and JV Common.css cross-wiki imports.
 
 This immutable build-input generation is not historical API state. It never
 fetches dependencies discovered in CSS, retries a failed response, or edits the
@@ -31,6 +31,22 @@ TITLE = 'MediaWiki:Gadget-enwp-boxes.css'
 MAX_BYTES = 1024 * 1024
 MAX_JSON = 2 * 1024 * 1024
 TEMPORAL_SCOPE = 'Current external revision/source observation associated with exact retained PT root; not historical 20261001 remote state'
+
+
+def import_context(wiki='ptwiktionary'):
+    # Two explicit reviewed roots/leaves, never a CSS-discovered host allowlist.
+    if wiki == 'ptwiktionary':
+        return {'root_title': 'MediaWiki:Common.css',
+                'root_url': 'https://pt.wiktionary.org/w/index.php?title=MediaWiki:Common.css&action=raw&ctype=text/css',
+                'leaf_url': LEAF_URL, 'api': API, 'title': TITLE, 'resource_wiki': 'mediawikiwiki',
+                'temporal_scope': TEMPORAL_SCOPE}
+    if wiki == 'jvwiktionary':
+        return {'root_title': 'MédhiaWiki:Common.css',
+                'root_url': 'https://jv.wiktionary.org/w/index.php?title=MediaWiki:Common.css&action=raw&ctype=text/css',
+                'leaf_url': 'https://jv.wikipedia.org/w/index.php?title=MediaWiki:Common.css&action=raw&ctype=text/css',
+                'api': 'https://jv.wikipedia.org/w/api.php', 'title': 'MediaWiki:Common.css', 'resource_wiki': 'jvwiki',
+                'temporal_scope': 'Current external revision/source observation associated with exact retained JV root; not historical 20261001 remote state'}
+    raise ValueError('Unselected stylesheet root edition')
 
 
 def digest(raw):
@@ -92,7 +108,8 @@ def space_comments(raw, at):
     return at
 
 
-def requirement(css):
+def requirement(css, wiki='ptwiktionary'):
+    context = import_context(wiki)
     # This finite collector admits one complete unconditional quoted first
     # import. It does not regex-match imports inside comments, strings or rules.
     at = space_comments(css, 0)
@@ -115,8 +132,8 @@ def requirement(css):
     at = space_comments(css, at + 1)
     if at >= len(css) or css[at] != ord(';'):
         raise ValueError('Conditional or malformed import remains unresolved')
-    resolved = urllib.parse.urljoin('https://pt.wiktionary.org/w/index.php?title=MediaWiki:Common.css&action=raw&ctype=text/css', authored)
-    if resolved != LEAF_URL:
+    resolved = urllib.parse.urljoin(context['root_url'], authored)
+    if resolved != context['leaf_url']:
         raise ValueError('Unselected stylesheet origin or page')
     return {'start': start, 'end': at + 1, 'authored_url': authored, 'resolved_url': resolved}
 
@@ -125,8 +142,10 @@ def authority(raw, css):
     value = evidence.decode(raw)
     if 'table_styles' in value:
         value = value['table_styles']['authority']
-    if (not isinstance(value, dict) or value.get('wiki') != 'ptwiktionary'
-            or not isinstance(value.get('dump_date'), str) or re.fullmatch(r'\d{8}', value['dump_date']) is None or value.get('title') != 'MediaWiki:Common.css'
+    if not isinstance(value, dict):
+        raise ValueError('Root stylesheet authority mismatch')
+    context = import_context(value.get('wiki'))
+    if (not isinstance(value.get('dump_date'), str) or re.fullmatch(r'\d{8}', value['dump_date']) is None or value.get('title') != context['root_title']
             or value.get('content_model') != 'css' or value.get('decoded_source_bytes') != len(css)
             or value.get('decoded_source_sha256') != digest(css)
             or type(value.get('page_id')) is not int or value['page_id'] <= 0
@@ -137,26 +156,48 @@ def authority(raw, css):
     return value
 
 
-def api_query():
+def api_query(context=None):
+    context = context or import_context()
     return {'action': 'query', 'format': 'json', 'formatversion': '2',
-            'meta': 'siteinfo', 'siprop': 'general', 'prop': 'revisions',
-            'titles': TITLE, 'rvslots': 'main',
+            'meta': 'siteinfo', 'siprop': 'general|namespaces' if context['resource_wiki'] == 'jvwiki' else 'general', 'prop': 'revisions',
+            'titles': context['title'], 'rvslots': 'main',
             'rvprop': 'ids|timestamp|sha1|contentmodel|content'}
 
 
-def parse_api(raw):
+def parse_api(raw, context=None):
+    context = context or import_context()
     value = evidence.decode(raw)
     if any(key in value for key in ('error', 'errors', 'warnings', 'continue')):
         raise ValueError('Incomplete stylesheet API observation')
     query = value.get('query', {})
     general = query.get('general', {})
-    if general.get('wikiid') != 'mediawikiwiki':
+    if general.get('wikiid') != context['resource_wiki']:
         raise ValueError('Stylesheet origin identity mismatch')
+    expected_title = context['title']
+    if context['resource_wiki'] == 'jvwiki':
+        # The authored canonical namespace may normalize to the remote local
+        # name. Require its returned NS8 identity and exact query normalization.
+        namespace = query.get('namespaces', {}).get('8')
+        if not isinstance(namespace, dict) or type(namespace.get('id')) is not int or namespace['id'] != 8:
+            raise ValueError('Missing imported stylesheet namespace authority')
+        name = namespace.get('name')
+        if (not isinstance(name, str) or not name or ':' in name or any(ord(c) < 32 for c in name)
+                or namespace.get('canonical', name) != 'MediaWiki'):
+            raise ValueError('Imported stylesheet namespace identity mismatch')
+        expected_title = name + ':Common.css'
+        normalized = query.get('normalized', [])
+        if normalized:
+            if (not isinstance(normalized, list) or len(normalized) != 1 or not isinstance(normalized[0], dict)
+                    or normalized[0].get('from') != context['title'] or normalized[0].get('to') != expected_title
+                    or ('fromencoded' in normalized[0] and type(normalized[0]['fromencoded']) is not bool)):
+                raise ValueError('Unproved imported stylesheet title normalization')
+        elif expected_title != context['title']:
+            raise ValueError('Unproved imported stylesheet title normalization')
     pages = query.get('pages')
     if not isinstance(pages, list) or len(pages) != 1:
         raise ValueError('Incomplete exact stylesheet page')
     page = pages[0]
-    if page.get('title') != TITLE or type(page.get('ns')) is not int or page.get('ns') != 8 or page.get('missing') or page.get('redirect') or type(page.get('pageid')) is not int or page['pageid'] <= 0:
+    if page.get('title') != expected_title or type(page.get('ns')) is not int or page.get('ns') != 8 or page.get('missing') or page.get('redirect') or type(page.get('pageid')) is not int or page['pageid'] <= 0:
         raise ValueError('Missing, redirected or mismatched stylesheet page')
     revisions = page.get('revisions')
     if not isinstance(revisions, list) or len(revisions) != 1:
@@ -175,7 +216,7 @@ def parse_api(raw):
     sha1 = hashlib.sha1(css).hexdigest()
     if rev.get('sha1') != sha1:
         raise ValueError('API revision/source SHA1 mismatch')
-    return {'wiki': 'mediawikiwiki', 'title': TITLE, 'page_id': page['pageid'],
+    return {'wiki': context['resource_wiki'], 'title': expected_title, 'page_id': page['pageid'],
             'revision_id': rev['revid'], 'revision_timestamp': rev['timestamp'],
             'content_model': model, 'source_sha1': sha1}, css
 
@@ -222,46 +263,128 @@ def request(root, number, url, accept, transport, deadline):
         raise
 
 
+def replay_request(spec_raw, receipt_raw, raw, number, url, accept):
+    specification = evidence.decode(spec_raw)
+    receipt = evidence.decode(receipt_raw)
+    started = observed_utc(receipt.get('started_utc'))
+    ended = observed_utc(receipt.get('ended_utc'))
+    mime = next((str(v).split(';', 1)[0].strip().lower() for k, v in receipt.get('headers', {}).items() if k.lower() == 'content-type'), '')
+    if (ended < started or specification != {'url': url, 'accept': accept, 'method': 'GET', 'retry': False}
+            or receipt.get('request') != f'request-{number:02d}.json' or receipt.get('accepted') is not True
+            or receipt.get('status') != 200 or receipt.get('final_url') != url or mime != accept
+            or receipt.get('response') != f'request-{number:02d}.response'
+            or receipt.get('response_bytes') != len(raw) or receipt.get('response_sha256') != digest(raw)):
+        raise ValueError('Unreplayable stylesheet HTTP evidence')
+    return started, ended
+
+
+def continuation_failure(raw):
+    value = evidence.decode(raw)
+    if (not isinstance(value, dict) or value.get('schema') != SCHEMA or value.get('retry') is not False
+            or not isinstance(value.get('error'), str) or not value['error']):
+        raise ValueError('Invalid retained first-response disposition')
+    checked_producer(value.get('producer'))
+    return observed_utc(value.get('ended_utc'))
+
+
+def finish_capture(root, css, auth, selected, context, revision, raw, identity, continuation=False):
+    pinned = context['leaf_url'] + '&oldid=' + str(revision['revision_id'])
+    evidence.put(root / 'resource.css', raw)
+    snapshot = {'schema': SCHEMA, 'wiki': auth['wiki'], 'dump_date': auth['dump_date'],
+                'namespace_sha256': auth['namespace_sha256'], 'root_css_sha256': digest(css),
+                'root_page_id': auth['page_id'], 'root_revision_id': auth['revision_id'],
+                'import': selected,
+                'resource': {'url': context['leaf_url'], 'base_url': pinned, 'revision': revision,
+                             'css_bytes': len(raw), 'css_sha256': digest(raw), 'css': raw.decode('utf-8')}}
+    evidence.document(root / SNAPSHOT, snapshot)
+    names = ['root-common.css', 'root-authority.json', 'requested.json', 'resource.css', SNAPSHOT]
+    names += [f'request-{n:02d}{suffix}' for n in (1, 2) for suffix in ('.json', '.receipt.json', '.response')]
+    manifest = {'schema': SCHEMA, 'producer': identity, 'retrieved_utc': evidence.utc(),
+                'temporal_scope': context['temporal_scope']}
+    if continuation:
+        names.append('continued-from.failure.json')
+        # This producer assembles a new generation. The first request, receipt,
+        # response and their UTC times remain byte-exact from the old producer.
+        manifest['continuation'] = {'schema': 'wikidict.stylesheet-retained-first.v1',
+                                    'parent_failure_sha256': digest(read(root / 'continued-from.failure.json'))}
+    manifest['artifacts'] = {name: digest(read(root / name)) for name in names}
+    evidence.document(root / MANIFEST, manifest)
+    verify(root, require_complete=False)
+    if identity != producer():
+        raise ValueError('Changed collector/dependency source')
+    evidence.document(root / COMPLETE, {'schema': SCHEMA, 'manifest_sha256': digest(read(root / MANIFEST))})
+    return verify(root)
+
+
+def resume_capture(root, previous, root_css, root_authority, transport=None, wall_seconds=25):
+    """Finish only raw request two after a retained accepted first observation.
+
+    Never reissue the API request, resume access failures, or overwrite the old
+    generation. Any evidence of request two forbids this single-request continuation.
+    """
+    previous = checked_root(previous)
+    destination = Path(root).resolve()
+    if destination == previous.resolve() or previous.resolve() in destination.parents:
+        raise ValueError('Continuation output overlaps retained generation')
+    expected = {'root-common.css', 'root-authority.json', 'requested.json', 'failure.json',
+                'request-01.json', 'request-01.receipt.json', 'request-01.response'}
+    if {p.name for p in previous.iterdir()} != expected:
+        raise ValueError('Retained first response is not an unissued-second-request generation')
+    retained = {name: read(previous / name, MAX_BYTES if name.endswith('.response') or name == 'root-common.css' else MAX_JSON)
+                for name in expected}
+    css = read(root_css, MAX_BYTES)
+    auth = authority(read(root_authority), css)
+    context = import_context(auth['wiki'])
+    selected = requirement(css, auth['wiki'])
+    if (retained['root-common.css'] != css or authority(retained['root-authority.json'], css) != auth
+            or evidence.decode(retained['requested.json']) != {'schema': SCHEMA, 'root_css_sha256': digest(css), 'import': selected, 'max_requests': 2, 'no_retries': True}):
+        raise ValueError('Retained first-response root context mismatch')
+    api_url = context['api'] + '?' + urllib.parse.urlencode(api_query(context))
+    _, ended = replay_request(retained['request-01.json'], retained['request-01.receipt.json'],
+                              retained['request-01.response'], 1, api_url, 'application/json')
+    if continuation_failure(retained['failure.json']) < ended:
+        raise ValueError('Retained first-response disposition predates its response')
+    revision, imported = parse_api(retained['request-01.response'], context)
+    identity = producer()
+    root = Path(root)
+    root.mkdir(parents=True, exist_ok=False)
+    for name, raw in retained.items():
+        evidence.put(root / ('continued-from.failure.json' if name == 'failure.json' else name), raw)
+    deadline = time.monotonic() + wall_seconds
+    try:
+        pinned = context['leaf_url'] + '&oldid=' + str(revision['revision_id'])
+        raw, _ = request(root, 2, pinned, 'text/css', transport or get_response, deadline)
+        if raw != imported:
+            raise ValueError('Pinned raw stylesheet differs from API source bytes')
+        return finish_capture(root, css, auth, selected, context, revision, raw, identity, continuation=True)
+    except BaseException as error:
+        evidence.document(root / 'failure.json', {'schema': SCHEMA, 'error': str(error), 'ended_utc': evidence.utc(), 'producer': identity, 'retry': False})
+        raise
+
+
 def capture(root, root_css, root_authority, transport=None, wall_seconds=25):
     root = Path(root)
     root.mkdir(parents=True, exist_ok=False)
     css = read(root_css, MAX_BYTES)
     raw_authority = read(root_authority)
     auth = authority(raw_authority, css)
-    selected = requirement(css)
+    context = import_context(auth['wiki'])
+    selected = requirement(css, auth['wiki'])
     identity = producer()
     deadline = time.monotonic() + wall_seconds
     evidence.put(root / 'root-common.css', css)
     evidence.document(root / 'root-authority.json', auth)
     evidence.document(root / 'requested.json', {'schema': SCHEMA, 'root_css_sha256': digest(css), 'import': selected, 'max_requests': 2, 'no_retries': True})
     try:
-        query = api_query()
-        api_url = API + '?' + urllib.parse.urlencode(query)
+        query = api_query(context)
+        api_url = context['api'] + '?' + urllib.parse.urlencode(query)
         api_raw, api_receipt = request(root, 1, api_url, 'application/json', transport or get_response, deadline)
-        revision, imported = parse_api(api_raw)
-        pinned = LEAF_URL + '&oldid=' + str(revision['revision_id'])
+        revision, imported = parse_api(api_raw, context)
+        pinned = context['leaf_url'] + '&oldid=' + str(revision['revision_id'])
         raw, raw_receipt = request(root, 2, pinned, 'text/css', transport or get_response, deadline)
         if raw != imported:
             raise ValueError('Pinned raw stylesheet differs from API source bytes')
-        evidence.put(root / 'resource.css', raw)
-        snapshot = {'schema': SCHEMA, 'wiki': auth['wiki'], 'dump_date': auth['dump_date'],
-                    'namespace_sha256': auth['namespace_sha256'], 'root_css_sha256': digest(css),
-                    'root_page_id': auth['page_id'], 'root_revision_id': auth['revision_id'],
-                    'import': selected,
-                    'resource': {'url': LEAF_URL, 'base_url': pinned, 'revision': revision,
-                                 'css_bytes': len(raw), 'css_sha256': digest(raw), 'css': raw.decode('utf-8')}}
-        evidence.document(root / SNAPSHOT, snapshot)
-        names = ['root-common.css', 'root-authority.json', 'requested.json', 'resource.css', SNAPSHOT]
-        names += [f'request-{n:02d}{suffix}' for n in (1, 2) for suffix in ('.json', '.receipt.json', '.response')]
-        manifest = {'schema': SCHEMA, 'producer': identity, 'retrieved_utc': evidence.utc(),
-                    'temporal_scope': TEMPORAL_SCOPE,
-                    'artifacts': {name: digest(read(root / name)) for name in names}}
-        evidence.document(root / MANIFEST, manifest)
-        verify(root, require_complete=False)
-        if identity != producer():
-            raise ValueError('Changed collector/dependency source')
-        evidence.document(root / COMPLETE, {'schema': SCHEMA, 'manifest_sha256': digest(read(root / MANIFEST))})
-        return verify(root)
+        return finish_capture(root, css, auth, selected, context, revision, raw, identity)
     except BaseException as error:
         evidence.document(root / 'failure.json', {'schema': SCHEMA, 'error': str(error), 'ended_utc': evidence.utc(), 'producer': identity, 'retry': False})
         raise
@@ -387,12 +510,19 @@ def verify(root, require_complete=True):
         return verify_custom_properties(root, manifest, require_complete)
     if manifest.get('schema') == CORE_SCHEMA:
         return verify_core_defaults(root, manifest, require_complete)
-    if manifest.get('schema') != SCHEMA or manifest.get('temporal_scope') != TEMPORAL_SCOPE:
-        raise ValueError('Changed stylesheet temporal scope/schema')
+    if manifest.get('schema') != SCHEMA:
+        raise ValueError('Changed stylesheet schema')
     checked_producer(manifest.get('producer'))
     retrieved = observed_utc(manifest.get('retrieved_utc'))
     expected = {'root-common.css', 'root-authority.json', 'requested.json', 'resource.css', SNAPSHOT}
     expected |= {f'request-{n:02d}{suffix}' for n in (1, 2) for suffix in ('.json', '.receipt.json', '.response')}
+    continuation = manifest.get('continuation')
+    if continuation is not None:
+        if (not isinstance(continuation, dict) or set(continuation) != {'schema', 'parent_failure_sha256'}
+                or continuation.get('schema') != 'wikidict.stylesheet-retained-first.v1'
+                or not hash_string(continuation.get('parent_failure_sha256'))):
+            raise ValueError('Invalid stylesheet continuation provenance')
+        expected.add('continued-from.failure.json')
     if set(manifest.get('artifacts', {})) != expected:
         raise ValueError('Unexpected stylesheet evidence inventory')
     for name, wanted in manifest['artifacts'].items():
@@ -404,29 +534,32 @@ def verify(root, require_complete=True):
             raise ValueError('Invalid stylesheet completion')
     css = read(root / 'root-common.css', MAX_BYTES)
     auth = authority(read(root / 'root-authority.json'), css)
-    selected = requirement(css)
+    context = import_context(auth['wiki'])
+    selected = requirement(css, auth['wiki'])
+    if manifest.get('temporal_scope') != context['temporal_scope']:
+        raise ValueError('Changed stylesheet temporal scope/schema')
     if evidence.decode(read(root / 'requested.json')) != {'schema': SCHEMA, 'root_css_sha256': digest(css), 'import': selected, 'max_requests': 2, 'no_retries': True}:
         raise ValueError('Changed stylesheet requirement')
-    revision, imported = parse_api(read(root / 'request-01.response', MAX_BYTES))
-    pinned = LEAF_URL + '&oldid=' + str(revision['revision_id'])
-    urls = [API + '?' + urllib.parse.urlencode(api_query()), pinned]
+    revision, imported = parse_api(read(root / 'request-01.response', MAX_BYTES), context)
+    pinned = context['leaf_url'] + '&oldid=' + str(revision['revision_id'])
+    urls = [context['api'] + '?' + urllib.parse.urlencode(api_query(context)), pinned]
     previous_end = None
+    bounds = []
     for n, (url, accept) in enumerate(zip(urls, ['application/json', 'text/css']), 1):
-        specification = evidence.decode(read(root / f'request-{n:02d}.json'))
-        receipt = evidence.decode(read(root / f'request-{n:02d}.receipt.json'))
         raw = read(root / f'request-{n:02d}.response', MAX_BYTES)
-        started = observed_utc(receipt.get('started_utc'))
-        ended = observed_utc(receipt.get('ended_utc'))
-        if ended < started or ended > retrieved or (previous_end is not None and started < previous_end):
+        started, ended = replay_request(read(root / f'request-{n:02d}.json'),
+                                        read(root / f'request-{n:02d}.receipt.json'), raw, n, url, accept)
+        if ended > retrieved or (previous_end is not None and started < previous_end):
             raise ValueError('Reordered stylesheet observation receipts')
         previous_end = ended
-        mime = next((str(v).split(';', 1)[0].strip().lower() for k, v in receipt.get('headers', {}).items() if k.lower() == 'content-type'), '')
-        if (specification != {'url': url, 'accept': accept, 'method': 'GET', 'retry': False}
-                or receipt.get('request') != f'request-{n:02d}.json' or receipt.get('accepted') is not True
-                or receipt.get('status') != 200 or receipt.get('final_url') != url or mime != accept
-                or receipt.get('response') != f'request-{n:02d}.response'
-                or receipt.get('response_bytes') != len(raw) or receipt.get('response_sha256') != digest(raw)):
-            raise ValueError('Unreplayable stylesheet HTTP evidence')
+        bounds.append((started, ended))
+    if continuation is not None:
+        failure_raw = read(root / 'continued-from.failure.json')
+        if digest(failure_raw) != continuation['parent_failure_sha256']:
+            raise ValueError('Changed stylesheet continuation provenance')
+        ended = continuation_failure(failure_raw)
+        if not bounds[0][1] <= ended <= bounds[1][0]:
+            raise ValueError('Reordered stylesheet continuation observations')
     if observed_utc(revision['revision_timestamp']) > retrieved:
         raise ValueError('Future revision cannot explain recorded current response')
     if read(root / 'resource.css', MAX_BYTES) != imported or read(root / 'request-02.response', MAX_BYTES) != imported:
@@ -435,7 +568,7 @@ def verify(root, require_complete=True):
                          'namespace_sha256': auth['namespace_sha256'], 'root_css_sha256': digest(css),
                          'root_page_id': auth['page_id'], 'root_revision_id': auth['revision_id'],
                          'import': selected,
-                         'resource': {'url': LEAF_URL, 'base_url': pinned, 'revision': revision,
+                         'resource': {'url': context['leaf_url'], 'base_url': pinned, 'revision': revision,
                                       'css_bytes': len(imported), 'css_sha256': digest(imported), 'css': imported.decode('utf-8')}}
     if evidence.decode(read(root / SNAPSHOT)) != expected_snapshot:
         raise ValueError('Changed stylesheet snapshot projection')
@@ -445,6 +578,7 @@ def verify(root, require_complete=True):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--verify', type=Path)
+    parser.add_argument('--resume-first-response', type=Path)
     parser.add_argument('--output', type=Path)
     parser.add_argument('--root-css', type=Path)
     parser.add_argument('--root-authority', type=Path)
@@ -457,6 +591,10 @@ def main():
     args = parser.parse_args()
     if args.verify:
         verify(args.verify)
+    elif args.resume_first_response:
+        if not all((args.output, args.root_css, args.root_authority)):
+            parser.error('continuation requires output, root css and authority')
+        resume_capture(args.output, args.resume_first_response, args.root_css, args.root_authority)
     elif args.custom_properties_capture:
         if not all((args.output, args.root_css, args.root_authority)):
             parser.error('custom properties require root css, authority and retained capture')

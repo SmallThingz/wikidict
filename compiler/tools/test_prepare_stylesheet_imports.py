@@ -266,5 +266,173 @@ class CustomPropertyInputTests(unittest.TestCase):
                 collector.custom_snapshot(artifacts)
 
 
+
+
+class JvStylesheetImportsTests(unittest.TestCase):
+    transport = StylesheetImportsTests.transport
+    capture = StylesheetImportsTests.capture
+    reseal = StylesheetImportsTests.reseal
+
+    def setUp(self):
+        StylesheetImportsTests.setUp(self)
+        self.context = collector.import_context('jvwiktionary')
+        self.css = ('@import "' + self.context['leaf_url'][6:] + '";\n.page-Main {display:none;}\n').encode()
+        self.auth.update(wiki='jvwiktionary', title='MédhiaWiki:Common.css', page_id=2634, revision_id=111278,
+                         decoded_source_bytes=len(self.css), decoded_source_sha256=collector.digest(self.css))
+        self.root_css.write_bytes(self.css)
+        self.authority.write_text(json.dumps(self.auth))
+        self.value['query']['general']['wikiid'] = 'jvwiki'
+        self.value['query']['namespaces'] = {'8': {'id': 8, 'name': 'MediaWiki', 'canonical': 'MediaWiki'}}
+        self.value['query']['pages'][0]['title'] = self.context['title']
+
+    def test_jv_exact_origin_revision_two_requests_and_offline_replay(self):
+        root, snapshot = self.capture()
+        self.assertEqual(2, len(self.calls))
+        self.assertTrue(self.calls[0][0].startswith(self.context['api'] + '?'))
+        self.assertEqual(self.context['leaf_url'] + '&oldid=456', self.calls[1][0])
+        self.assertEqual('jvwiktionary', snapshot['wiki'])
+        self.assertEqual('jvwiki', snapshot['resource']['revision']['wiki'])
+        self.assertEqual(self.context['leaf_url'], snapshot['resource']['url'])
+        self.assertEqual(self.css, (root / 'root-common.css').read_bytes())
+        self.assertEqual(snapshot, collector.verify(root))
+        self.assertEqual(2, len(self.calls))
+
+    def test_jv_profile_does_not_admit_pt_other_hosts_titles_or_conditions(self):
+        for wiki in ['enwiktionary', 'jvwiki', '', None]:
+            with self.assertRaises(ValueError):
+                collector.import_context(wiki)
+        for css in [('@import "' + collector.LEAF_URL + '";').encode(),
+                    b'@import "https://private.invalid/x.css";',
+                    ('@import "' + self.context['leaf_url'] + '" print;').encode(),
+                    ('x{} @import "' + self.context['leaf_url'] + '";').encode()]:
+            with self.assertRaises(ValueError):
+                collector.requirement(css, 'jvwiktionary')
+        with self.assertRaises(ValueError):
+            collector.requirement(self.css)
+        with self.assertRaises(ValueError):
+            collector.parse_api(json.dumps(self.value).encode())
+        wrong = dict(self.auth, title='MediaWiki:Common.css')
+        with self.assertRaises(ValueError):
+            collector.authority(json.dumps(wrong).encode(), self.css)
+        self.assertEqual([], self.calls)
+
+    def test_jv_replay_rejects_resealed_profile_or_temporal_rebinding(self):
+        root, _ = self.capture()
+        original = (root / collector.SNAPSHOT).read_bytes()
+        snapshot = json.loads(original)
+        snapshot['resource']['url'] = collector.LEAF_URL
+        (root / collector.SNAPSHOT).write_text(json.dumps(snapshot))
+        self.reseal(root, collector.SNAPSHOT)
+        with self.assertRaisesRegex(ValueError, 'projection'):
+            collector.verify(root)
+        (root / collector.SNAPSHOT).write_bytes(original)
+        self.reseal(root, collector.SNAPSHOT)
+        manifest = json.loads((root / collector.MANIFEST).read_text())
+        manifest['temporal_scope'] = collector.TEMPORAL_SCOPE
+        (root / collector.MANIFEST).write_text(json.dumps(manifest))
+        (root / collector.COMPLETE).write_text(json.dumps({'schema': collector.SCHEMA, 'manifest_sha256': collector.digest((root / collector.MANIFEST).read_bytes())}))
+        with self.assertRaisesRegex(ValueError, 'temporal'):
+            collector.verify(root)
+        self.assertEqual(2, len(self.calls))
+
+    def test_jv_nested_or_conditional_source_is_retained_without_discovery_fetch(self):
+        self.leaf = b'@import "nested.css";\n@media print {.box {background:#fff;}}\n'
+        rev = self.value['query']['pages'][0]['revisions'][0]
+        rev['sha1'] = hashlib.sha1(self.leaf).hexdigest()
+        rev['slots']['main']['content'] = self.leaf.decode()
+        root, snapshot = self.capture()
+        self.assertEqual(self.leaf.decode(), snapshot['resource']['css'])
+        self.assertEqual(self.leaf, (root / 'resource.css').read_bytes())
+        self.assertEqual(2, len(self.calls))
+        self.assertEqual(snapshot, collector.verify(root))
+        self.assertEqual(2, len(self.calls))
+
+    def test_jv_remote_namespace_normalization_is_proved_not_guessed(self):
+        value = copy.deepcopy(self.value)
+        value['query']['namespaces']['8']['name'] = 'MédhiaWiki'
+        value['query']['normalized'] = [{'fromencoded': False, 'from': 'MediaWiki:Common.css', 'to': 'MédhiaWiki:Common.css'}]
+        value['query']['pages'][0]['title'] = 'MédhiaWiki:Common.css'
+        revision, source = collector.parse_api(json.dumps(value).encode(), self.context)
+        self.assertEqual('MédhiaWiki:Common.css', revision['title'])
+        self.assertEqual(self.leaf, source)
+        for change in (lambda q: q.pop('normalized'),
+                       lambda q: q['namespaces']['8'].update(canonical='Other'),
+                       lambda q: q['namespaces']['8'].update(id=True),
+                       lambda q: q['normalized'][0].update(fromencoded='false'),
+                       lambda q: q['normalized'][0].update(to='MédhiaWiki:Other.css'),
+                       lambda q: q['pages'][0].update(title='MediaWiki:Unrelated.css')):
+            wrong = copy.deepcopy(value)
+            change(wrong['query'])
+            with self.assertRaises(ValueError):
+                collector.parse_api(json.dumps(wrong).encode(), self.context)
+        self.assertEqual([], self.calls)
+
+    def retained_first(self, name):
+        root = self.root / name
+        root.mkdir()
+        collector.evidence.put(root / 'root-common.css', self.css)
+        collector.evidence.document(root / 'root-authority.json', self.auth)
+        selected = collector.requirement(self.css, 'jvwiktionary')
+        collector.evidence.document(root / 'requested.json', {'schema': collector.SCHEMA, 'root_css_sha256': collector.digest(self.css), 'import': selected, 'max_requests': 2, 'no_retries': True})
+        url = self.context['api'] + '?' + collector.urllib.parse.urlencode(collector.api_query(self.context))
+        collector.request(root, 1, url, 'application/json', self.transport, collector.time.monotonic() + 10)
+        producer = collector.producer()
+        producer['generator_sha256'] = '3553a53ccd16366b6bbaead6cb4c947361082387e94d16d33d5f96986ae206b7'
+        collector.evidence.document(root / 'failure.json', {'schema': collector.SCHEMA, 'error': 'old intake stopped', 'ended_utc': collector.evidence.utc(), 'producer': producer, 'retry': False})
+        return root
+
+    def test_retained_first_response_continuation_never_reissues_api_or_restamps_it(self):
+        self.value['query']['namespaces']['8']['name'] = 'MédhiaWiki'
+        self.value['query']['normalized'] = [{'fromencoded': False, 'from': 'MediaWiki:Common.css', 'to': 'MédhiaWiki:Common.css'}]
+        self.value['query']['pages'][0]['title'] = 'MédhiaWiki:Common.css'
+        parent = self.retained_first('first-only')
+        before = {p.name: p.read_bytes() for p in parent.iterdir()}
+        self.calls.clear()
+        root = self.root / 'continued'
+        snapshot = collector.resume_capture(root, parent, self.root_css, self.authority, transport=self.transport)
+        self.assertEqual([(self.context['leaf_url'] + '&oldid=456', 'text/css')], self.calls)
+        for name in ['request-01.json', 'request-01.receipt.json', 'request-01.response', 'root-common.css', 'root-authority.json', 'requested.json']:
+            self.assertEqual(before[name], (root / name).read_bytes())
+        self.assertEqual(before['failure.json'], (root / 'continued-from.failure.json').read_bytes())
+        self.assertEqual(before, {p.name: p.read_bytes() for p in parent.iterdir()})
+        self.assertEqual('MédhiaWiki:Common.css', snapshot['resource']['revision']['title'])
+        self.assertEqual(snapshot, collector.verify(root))
+        self.assertEqual(1, len(self.calls))
+
+    def test_continuation_rejects_failed_or_changed_first_or_any_second_request(self):
+        for number, defect in enumerate(['status', 'response', 'second', 'overlap']):
+            parent = self.retained_first('first-' + str(number))
+            if defect == 'status':
+                receipt = json.loads((parent / 'request-01.receipt.json').read_text())
+                receipt.update(status=403, accepted=False)
+                (parent / 'request-01.receipt.json').write_text(json.dumps(receipt))
+            elif defect == 'response':
+                (parent / 'request-01.response').write_bytes(b'changed')
+            elif defect == 'second':
+                (parent / 'request-02.json').write_text('{}')
+            self.calls.clear()
+            destination = parent / 'nested' if defect == 'overlap' else self.root / ('bad-' + str(number))
+            with self.assertRaises(ValueError):
+                collector.resume_capture(destination, parent, self.root_css, self.authority, transport=self.transport)
+            self.assertEqual([], self.calls)
+            self.assertFalse(destination.exists())
+
+    def test_continuation_preserves_raw_access_failure_without_retry(self):
+        parent = self.retained_first('first-denied')
+        self.calls.clear()
+        def denied(url, timeout, accept):
+            self.calls.append((url, accept))
+            return 403, {'Content-Type': 'text/plain'}, b'denied', url
+        root = self.root / 'raw-denied'
+        with self.assertRaisesRegex(ValueError, 'no retry'):
+            collector.resume_capture(root, parent, self.root_css, self.authority, transport=denied)
+        self.assertEqual(1, len(self.calls))
+        self.assertEqual(b'denied', (root / 'request-02.response').read_bytes())
+        self.assertFalse((root / collector.COMPLETE).exists())
+        with self.assertRaises(ValueError):
+            collector.resume_capture(self.root / 'retry-forbidden', root, self.root_css, self.authority, transport=denied)
+        self.assertEqual(1, len(self.calls))
+
+
 if __name__ == '__main__':
     unittest.main()
