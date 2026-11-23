@@ -10390,6 +10390,7 @@ class ImmutableCaptureBorrowTests(unittest.TestCase):
             roles=b.RetainedNativeToolRoles(records,zig_sha256=b.sha256_file(compiler))
             workspace=root/'workspace';roles.install_role('dict-blob-build',workspace)
             installed=roles.tools['dict-blob-build'].path
+            provenance=roles.provenance()
             b.pinned_auxiliary_snapshots(paths,b.verified_auxiliary_hashes(paths),workspace,borrower=roles)
             staged=set(roles.staged_provider_inputs.values());self.assertTrue(staged<=set(roles.inputs))
             signature=inspect.signature(b._build_locked)
@@ -10398,7 +10399,7 @@ class ImmutableCaptureBorrowTests(unittest.TestCase):
                 # Execute the real verified-staging release/cleanup boundary;
                 # native compilation/coverage itself is outside this unit scope.
                 function=ast.parse(textwrap.dedent(inspect.getsource(b.build_sharded))).body[0]
-                release=next(node for node in function.body if isinstance(node,ast.If) and any(isinstance(call,ast.Call) and isinstance(call.func,ast.Attribute) and call.func.attr=='release_staged_provider_inputs' for call in ast.walk(node)))
+                release=next(node for node in function.body if isinstance(node,ast.If) and any(isinstance(call,ast.Call) and isinstance(call.func,ast.Attribute) and call.func.attr=='release_workspace_inputs' for call in ast.walk(node)))
                 cleanup=function.body[-1]
                 self.assertIsInstance(cleanup,ast.Expr);self.assertEqual(cleanup.value.func.id,'cleanup_shard_workspace')
                 exec(compile(ast.Module(body=[release,cleanup],type_ignores=[]),'<actual-verified-staging-cleanup>','exec'),dict(b.__dict__,workspace=workspace,retained_roles=roles))
@@ -10408,7 +10409,8 @@ class ImmutableCaptureBorrowTests(unittest.TestCase):
             self.assertFalse(workspace.exists());self.assertFalse(installed.exists())
             self.assertFalse(staged&set(roles.inputs));self.assertEqual(roles.staged_provider_inputs,{})
             self.assertTrue(set(paths.values())<=set(roles.inputs));roles.require_inputs_unchanged()
-            with self.assertRaises(OSError):roles.require_unchanged()
+            roles.require_unchanged()
+            self.assertEqual(roles.provenance(),provenance)
             changed=paths['wikibase-entities'];changed.chmod(0o644);changed.write_bytes(changed.read_bytes()+b'x')
             with self.assertRaisesRegex(ValueError,'changed'):roles.require_inputs_unchanged()
 
@@ -11626,6 +11628,202 @@ class BuildEnvelopeTests(unittest.TestCase):
             self.assertEqual(b.read_build_envelope(path), value)
 
 
+class InitialSealedColocatedInputTests(unittest.TestCase):
+    def derived_inputs(self, f, *, relocated=False):
+        import prepare_page_redirects as redirects
+        import prepare_wikibase_page_links as links
+        source_root = f.root / 'original-source'
+        sources = source_root / ('compiler/tools' if relocated else 'tools')
+        sources.mkdir(parents=True)
+        f.roles.records['dict-bundle-build']['source_root']=str(source_root)
+        f.plan['inputs']=[]
+        hashes={}
+        for name in ('prepare_wikibase_page_links.py','prepare_page_redirects.py','category_tree_snapshot.py'):
+            path=sources/name;path.write_bytes(('original source fixture '+name).encode())
+            row=_initial_sealed_reference(path);f.plan['inputs'].append(row);hashes[name]=row['sha256']
+        downloads=f.root/'downloads';wiki='testwiktionary';date='20261001'
+        folder=downloads/wiki/date;folder.mkdir(parents=True)
+        items=list(f.parts)
+        for suffix in ('page_props','redirect'):
+            name=wiki+'-'+date+'-'+suffix+'.sql.gz';raw=gzip.compress(b'original SQL source fixture')
+            (folder/name).write_bytes(raw)
+            items.append(dict(wiki=wiki,date=date,name=name,size=len(raw),sha1=hashlib.sha1(raw).hexdigest(),url='https://example.invalid/'+name))
+        manifest=_initial_sealed_write(f.root/'manifest.json',dict(files=items))
+        f.plan['selection']=_initial_sealed_write(f.root/'selection.json',dict(manifest=manifest,downloads=str(downloads)))
+        folder=f.workspace/'derived-page-links';folder.mkdir()
+        path=folder/'wikibase-page-links.tsv';raw=links.wire({1:'Q42'});path.write_bytes(raw)
+        f.plan['page_links']=_initial_sealed_reference(path)
+        f.seal['identity']['providers'][path.name]=[len(raw),b.sha256_file(path)]
+        identity=dict(schema=links.SCHEMA,source={key:items[1][key] for key in links.SOURCE_FIELDS},
+            generator_sha256=hashes['prepare_wikibase_page_links.py'],parser_sha256=hashes['category_tree_snapshot.py'],
+            namespace_registry_sha256=f.seal['identity']['providers']['namespace-registry.tsv'][1],supplement_artifacts=None)
+        links_proof=folder/'complete.json'
+        _initial_sealed_write(links_proof,dict(input_identity=identity,source_rows=1,sql_positive_rows=1,
+            repository_rows=0,repository_rows_shadowed_by_sql=[],explicit_negative_rows=0,row_count=1,
+            output_bytes=len(raw),output_sha256=b.sha256_file(path)))
+        folder=f.workspace/'derived-page-redirects';folder.mkdir()
+        identity=dict(schema=redirects.SCHEMA,source={key:items[2][key] for key in redirects.FIELDS},
+            sql_sha256=b.sha256_file(downloads/wiki/date/items[2]['name']),
+            generator_sha256=hashes['prepare_page_redirects.py'],parser_sha256=hashes['category_tree_snapshot.py'])
+        path=folder/'page-redirects.tsv';path.write_bytes(redirects.header(identity)+redirects.wire_row((1,0,b'fixture',b'',b''))+b'# end\t1\n')
+        f.plan['page_redirects']=_initial_sealed_reference(path)
+        f.seal['identity']['providers'][path.name]=[path.stat().st_size,b.sha256_file(path)]
+        redirects_proof=folder/'page-redirects.provenance.json'
+        _initial_sealed_write(redirects_proof,dict(identity=identity,output=redirects.validate_wire(path,identity)))
+        # This preparation includes redirects, so its extraction cache must
+        # carry the same Provider identity from the beginning of the check.
+        expected=dict(f.expected,page_redirects_sha256=f.plan['page_redirects']['sha256'])
+        generation=f.cache_root/hashlib.sha256(json.dumps(expected,sort_keys=True).encode()).hexdigest()
+        f.generation.rename(generation);f.generation=generation
+        marker=generation/'.complete.json';record=json.loads(marker.read_text());record['identity']=expected
+        marker.write_text(json.dumps(record,sort_keys=True)+'\n');f.expected=expected
+        return dict(build_identity={'derived_page_redirects':identity}),links_proof,redirects_proof
+
+    def fixture(self, root):
+        import extraction_cache as cache
+        workspace = root / 'prepared'
+        stage = workspace / 'input'
+        stage.mkdir(parents=True)
+        dump = stage / 'pages.xml.zst'
+        dump.write_bytes(b'original staged dump')
+        index = stage / 'pages-index.txt.bz2'
+        index.write_bytes(b'original staged index')
+        parts = [dict(wiki='testwiktionary', date='20261001', name='pages.xml.bz2', size=10, sha1='a'*40)]
+        manifest = _initial_sealed_write(root/'manifest.json', dict(files=parts))
+        selection = _initial_sealed_write(root/'selection.json', dict(manifest=manifest))
+        verified = [b.sha256_file(dump), b.sha256_file(index)]
+        _initial_sealed_write(stage/'.complete.json', dict(version=b.DUMP_STAGING_VERSION,
+            input_sha256=b.dump_input_fingerprint(parts), dump_codec='zstd',
+            dump_stream_kind='multistream-zstd', source_pages=1,
+            dump_size=dump.stat().st_size, dump_sha256=verified[0],
+            index_size=index.stat().st_size, index_sha256=verified[1]))
+        provider = workspace/'namespace-registry.tsv'
+        provider.write_bytes(b'original namespace')
+        providers = {'namespace-registry.tsv':[provider.stat().st_size,b.sha256_file(provider)]}
+        source = root/'extraction'
+        source.mkdir(); (source/'modules').mkdir()
+        for name in cache.FILES:
+            (source/name).write_bytes(name.encode())
+        (source/'modules/123.lua').write_bytes(b'return 1')
+        (source/'compiler-inputs.ready').write_bytes(b'complete\n')
+        (source/'dump-streams.tsv').write_bytes(b'0\t0\t100\n')
+        (source/'page-index.tsv').write_bytes(b'0\t0\t10\tTemplate:fixture\n')
+        tool = {'extractor_sha256':'b'*64,'libraries':[]}
+        expected = dict(version=cache.EXTRACTION_IDENTITY_VERSION,
+            extractor_args=list(cache.EXTRACTOR_ARGS), dump_sha256=verified[0], index_sha256=verified[1],
+            namespace_registry_sha256=providers['namespace-registry.tsv'][1],
+            transclusion_redirects_sha256=None, page_redirects_sha256=None,
+            unicode_case={'libraries':[]}, tool=tool)
+        cache_root = stage/'extraction-cache'
+        cache.publish(cache_root, expected, source)
+        generation = cache_root/hashlib.sha256(json.dumps(expected,sort_keys=True).encode()).hexdigest()
+        object_input = dict(version=cache.OBJECT_VERSION, bitcode=[], clang={}, flags=['-O1'],
+            program_bc=[1,'c'*64],value_leaf={'bitcode':[1,'d'*64]})
+        provenance = {'abi':[[name,'e'*64] for name in cache.ABI_FILES]}
+        name, identity = next(cache.object_entries(object_input))
+        object_dir = cache.object_cache_path(cache_root,identity)
+        object_dir.mkdir(parents=True)
+        (object_dir/'object.o').write_bytes(b'linked object')
+        object_value = cache.record_object(object_dir/'object.o')
+        _initial_sealed_write(object_dir/'.complete.json',dict(identity=identity,provenance=provenance,object=object_value))
+        seal = dict(identity=dict(providers=providers,verified_input=verified,assets=cache.record_assets(source)),
+            link=dict(object_inputs=dict(identity=object_input,provenance=provenance),ordered_objects=[[name,*object_value]]))
+        plan = dict(dump=_initial_sealed_reference(dump),selection=selection,
+            expander_args=['--extraction-cache-root',str(cache_root)])
+        roles = SimpleNamespace(records={'dict-bundle-build':{'dependencies':{'modules':{'path':'original-extractor'}}}})
+        return SimpleNamespace(**locals())
+
+    def check(self, f, **options):
+        import extraction_cache as cache
+        # Only external tool observations are substituted; all stage/cache
+        # receipts, payload hashing and recursive inventory checks are real.
+        def tool_identity(path):
+            self.assertIsInstance(path,Path)
+            return f.tool
+        with patch.object(cache,'tool_identity',side_effect=tool_identity), patch.object(cache,'unicode_case_identity',return_value={'libraries':[]}):
+            return b.initial_sealed_input_inventory(f.workspace,f.plan,f.seal,f.roles,**options)
+
+    def test_nested_stage_extraction_and_linked_object_are_authenticated_without_changes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            f=self.fixture(Path(tmp))
+            before={str(p):p.lstat() for p in f.workspace.rglob('*')}
+            result=self.check(f)
+            self.assertEqual(set(result),set(before))
+            self.assertEqual(before,{str(p):p.lstat() for p in f.workspace.rglob('*')})
+        with tempfile.TemporaryDirectory() as tmp:
+            f=self.fixture(Path(tmp))
+            source=f.root/'namespace-siteinfo.raw.json';source.write_bytes(b'original captured API wrapper')
+            target=f.workspace/source.name;target.write_bytes(source.read_bytes())
+            normalized=b'normalized native siteinfo'
+            f.seal['identity']['providers'][source.name]=[len(normalized),hashlib.sha256(normalized).hexdigest()]
+            f.plan['expander_args'] += ['--site-info-snapshot',str(target)]
+            identity={'auxiliary_snapshot_sha256':{'site-info':b.sha256_file(source)}}
+            with patch.object(b,'validated_auxiliary_capture',return_value=None):
+                result=self.check(f,build_identity=identity,auxiliary_snapshots={'site-info':source})
+            self.assertIn(str(target),result)
+
+    def test_unknown_nested_output_and_symlink_are_refused(self):
+        for kind in ('output','symlink'):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as tmp:
+                f=self.fixture(Path(tmp))
+                if kind=='output':(f.stage/'unexpected.part').write_bytes(b'not an input')
+                else:
+                    path=f.generation/'modules/123.lua';path.unlink();path.symlink_to(f.source/'modules/123.lua')
+                with self.assertRaises(ValueError):self.check(f)
+
+    def test_changed_provider_object_and_forged_link_receipt_are_refused(self):
+        for kind in ('provider','object','receipt'):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as tmp:
+                f=self.fixture(Path(tmp))
+                if kind=='provider':f.provider.write_bytes(b'different namespace')
+                elif kind=='object':(f.object_dir/'object.o').write_bytes(b'different object')
+                else:
+                    path=f.object_dir/'.complete.json';value=json.loads(path.read_text())
+                    value['provenance']['abi'][0][1]='f'*64;path.write_text(json.dumps(value))
+                with self.assertRaises(ValueError):self.check(f)
+
+    def test_changed_stage_or_unsealed_extraction_asset_is_refused(self):
+        for kind in ('stage','extraction'):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as tmp:
+                f=self.fixture(Path(tmp))
+                if kind=='stage':f.dump.write_bytes(b'different staged dump')
+                else:f.seal['identity']['assets']=[row for row in f.seal['identity']['assets'] if row[0]!='modules/123.lua']
+                with self.assertRaises(ValueError):self.check(f)
+        for kind in ('capture_binding','capture_bytes'):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as tmp:
+                f=self.fixture(Path(tmp))
+                source=f.root/'namespace-registry.tsv';source.write_bytes(f.provider.read_bytes())
+                marker=b.auxiliary_manifest_filename('namespace-registry',source)
+                (source.parent/marker).write_bytes(b'original capture receipt')
+                (f.workspace/marker).write_bytes((source.parent/marker).read_bytes())
+                members={source.name:b.sha256_file(source),marker:b.sha256_file(source.parent/marker)}
+                identity=dict(auxiliary_snapshot_sha256={'namespace-registry':members[source.name]},
+                    auxiliary_capture_sha256={'namespace-registry':members[marker]},
+                    auxiliary_capture_artifact_sha256={'namespace-registry':b.auxiliary_artifact_digest(members)})
+                f.plan['expander_args'] += ['--namespace-registry-snapshot',str(f.provider)]
+                if kind=='capture_binding':identity['auxiliary_capture_sha256']['namespace-registry']='f'*64
+                else:(f.workspace/marker).write_bytes(b'different capture receipt')
+                with patch.object(b,'validated_auxiliary_capture',return_value=({},members)):
+                    with self.assertRaises(ValueError):
+                        self.check(f,build_identity=identity,auxiliary_snapshots={'namespace-registry':source})
+
+    def test_derived_inputs_require_original_generators_and_exact_source_output_receipts(self):
+        for kind in ('healthy','relocated','generator','output','extra','symlink'):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as tmp:
+                f=self.fixture(Path(tmp));options,links_proof,redirects_proof=self.derived_inputs(f, relocated=kind=='relocated')
+                if kind in ('healthy','relocated'):
+                    result=self.check(f,**options)
+                    self.assertIn(str(links_proof),result);self.assertIn(str(redirects_proof),result)
+                    continue
+                if kind=='generator':
+                    value=json.loads(links_proof.read_text());value['input_identity']['generator_sha256']='f'*64;links_proof.write_text(json.dumps(value))
+                elif kind=='output':
+                    value=json.loads(redirects_proof.read_text());value['output']['output_sha256']='f'*64;redirects_proof.write_text(json.dumps(value))
+                elif kind=='extra':(links_proof.parent/'unexpected.part').write_bytes(b'not an input')
+                else:links_proof.unlink();links_proof.symlink_to(redirects_proof)
+                with self.assertRaises(ValueError):self.check(f,**options)
+
+
 class OwnedRootInitialSealedTests(unittest.TestCase):
     fixture=InitialSealedGenerationTests.fixture
     adopt=InitialSealedGenerationTests.adopt
@@ -11678,6 +11876,35 @@ class OwnedRootInitialSealedTests(unittest.TestCase):
 
 
 class RetainedNativeRoleCloneTests(unittest.TestCase):
+    def test_workspace_release_refuses_changed_copy_without_dropping_any_guard(self):
+        for kind in ('bytes','same-byte-inode'):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);roles,origin=self.selection(root)
+                workspace=root/'workspace';roles.install_role('dict-blob-build',workspace)
+                tool=roles.tools['dict-blob-build'];before=dict(roles.inputs)
+                if kind=='bytes':tool.path.chmod(0o755);tool.path.write_bytes(b'changed native tool')
+                else:
+                    replacement=root/'replacement';replacement.write_bytes(tool.path.read_bytes());replacement.chmod(0o555);os.replace(replacement,tool.path)
+                with self.assertRaises(ValueError):roles.release_workspace_inputs(workspace)
+                self.assertIs(roles.tools['dict-blob-build'],tool)
+                self.assertEqual(roles.inputs,before)
+
+    def test_workspace_release_refuses_foreign_tool_path_or_selected_origin(self):
+        for kind in ('foreign-path','origin-overlap'):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);roles,origin=self.selection(root)
+                workspace=root/'workspace';roles.install_role('dict-blob-build',workspace)
+                if kind=='foreign-path':
+                    path=workspace/'foreign-tool';path.write_bytes(origin.read_bytes());path.chmod(0o555)
+                    roles.tools['dict-blob-build']=roles.bind_tool('dict-blob-build',path)
+                else:
+                    roles.records['dict-blob-build']['artifact']['path']=str(roles.tools['dict-blob-build'].path)
+                    roles.records['dict-blob-build']['artifact']['mode']=0o555
+                before=dict(roles.inputs);tool=roles.tools['dict-blob-build']
+                with self.assertRaises(ValueError):roles.release_workspace_inputs(workspace)
+                self.assertIs(roles.tools['dict-blob-build'],tool)
+                self.assertEqual(roles.inputs,before)
+
     def test_readonly_origins_keep_existing_zero_install_route(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);records,compiler=RetainedNativeRoleTests().fixture(root)
@@ -16296,7 +16523,13 @@ class InitialSealedRegistryArgumentRoleTests(unittest.TestCase):
                     name=mode.removesuffix('-provider')+'-registry.tsv'
                     f.seal['identity']['providers'][name][1]='9'*64;factory.reseal_graph(f)
                 with factory.contexts(f)[0],factory.contexts(f)[1],factory.contexts(f)[2]:
-                    with self.assertRaisesRegex(ValueError,'^Initial sealed (registry or interwiki source|snapshot or dump inputs) differs?$'):
+                    expected_error = {
+                        'selected-namespace': 'Selected input digest differs from the seal: namespace-registry.tsv',
+                        'missing-namespace': 'Selection omits sealed input: namespace-registry.tsv',
+                        'language-provider': 'Selected input digest differs from the seal: language-registry.tsv',
+                        'namespace-provider': 'Selected input digest differs from the seal: namespace-registry.tsv',
+                    }.get(mode, 'Initial sealed (registry or interwiki source|snapshot or dump inputs) differs?')
+                    with self.assertRaisesRegex(ValueError, '^' + expected_error + '$'):
                         factory.adopt(f)
                 self.assertFalse((f.destination/'state.json').exists())
 

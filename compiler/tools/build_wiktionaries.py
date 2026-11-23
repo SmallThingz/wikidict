@@ -5747,6 +5747,231 @@ def initial_sealed_writer_snapshot_args(initial_reference, closed_whole, snapsho
     return result
 
 
+def initial_sealed_input_inventory(workspace, plan, seal, native_roles, *, build_identity=None, auxiliary_snapshots=None):
+    """Authenticate co-located preparation inputs against their original seal.
+
+    These are read-only inputs, never a second source of output authority.
+    Cache receipts must agree with the linked generation before their exact
+    nested inventory can belong to the retained preparation.
+    """
+    import extraction_cache as cache
+    workspace = Path(workspace)
+    allowed = set()
+    providers = seal['identity']['providers']
+    def regular(path):
+        path = Path(path)
+        if (not path.is_relative_to(workspace) or path == workspace
+                or any(p.is_symlink() for p in (path, *path.parents))):
+            raise ValueError('Unsafe initial sealed input path')
+        st = path.lstat()
+        if not stat.S_ISREG(st.st_mode) or st.st_uid != os.geteuid():
+            raise ValueError('Unsafe initial sealed input file')
+        return st
+    def content(path, expected):
+        before = regular(path)
+        stamp = lambda st: (st.st_dev, st.st_ino, st.st_mode, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+        if ([before.st_size, sha256_file(path)] != list(expected)
+                or stamp(before) != stamp(regular(path))):
+            raise ValueError('Initial sealed input bytes changed: ' + str(path))
+        allowed.add(Path(path))
+    # The original preparation may have copied complete capture receipts next
+    # to a Provider. Bind each companion through that same normal capture
+    # validator and the selected ordinary capture hashes, never its filename.
+    arguments = plan['expander_args']
+    for name, source in (auxiliary_snapshots or {}).items():
+        flag = '--' + name + '-snapshot'
+        positions = [i for i, arg in enumerate(arguments) if arg == flag]
+        # A Writer-only capture or a later replacement need not appear in the
+        # original expander arguments. It contributes no owned workspace files.
+        if not positions and not any(arg.startswith(flag + '=') for arg in arguments):
+            continue
+        if (len(positions) != 1 or positions[0] + 1 >= len(arguments)
+                or any(arg.startswith(flag + '=') for arg in arguments)):
+            raise ValueError('Initial sealed Provider lacks its original argument')
+        target = Path(arguments[positions[0] + 1])
+        if not target.is_relative_to(workspace):
+            continue
+        descriptor = providers.get(auxiliary_snapshot_filename(name))
+        if descriptor is None:
+            raise ValueError('Initial sealed capture has no sealed Provider')
+        # A captured API response can be normalized before becoming a native
+        # Provider (notably site-info). Authenticate the original argv input
+        # here; initial_sealed_writer_inputs owns the source-to-Provider join.
+        source = Path(source)
+        source_digest = (build_identity or {}).get('auxiliary_snapshot_sha256', {}).get(name)
+        if not isinstance(source_digest, str):
+            raise ValueError('Initial sealed capture lacks its ordinary input binding')
+        content(target, [source.stat().st_size, source_digest])
+        capture = validated_auxiliary_capture(name, Path(source))
+        if capture is None:
+            continue
+        _, members = capture
+        if (build_identity is None
+                or members[auxiliary_manifest_filename(name, Path(source))]
+                    != build_identity.get('auxiliary_capture_sha256', {}).get(name)
+                or auxiliary_artifact_digest(members)
+                    != build_identity.get('auxiliary_capture_artifact_sha256', {}).get(name)):
+            raise ValueError('Initial sealed capture differs from original ordinary inputs')
+        for member, digest in members.items():
+            relative = Path(member)
+            if relative.is_absolute() or '..' in relative.parts:
+                raise ValueError('Unsafe initial sealed capture member')
+            original = Path(source).parent / relative
+            content(target.parent / relative, [original.stat().st_size, digest])
+    # Other co-located Provider inputs retain their precise sealed bytes.
+    for name, descriptor in providers.items():
+        path = workspace / name
+        if os.path.lexists(path) and path not in allowed:
+            if descriptor is None or Path(name).name != name:
+                raise ValueError('Unexpected initial sealed Provider input')
+            content(path, descriptor)
+    dump = Path(plan['dump']['path'])
+    if dump.is_relative_to(workspace):
+        stage = dump.parent
+        if stage != workspace / 'input' or dump.name != 'pages.xml.zst':
+            raise ValueError('Unexpected initial sealed staged input location')
+        selection = prepared_metadata({k: plan['selection'][k] for k in ('path', 'bytes', 'sha256')})
+        manifest = prepared_metadata({k: selection['manifest'][k] for k in ('path', 'bytes', 'sha256')})
+        parts = [row for row in manifest['files'] if row['name'].endswith('.xml.bz2')]
+        staged, stamps = validated_staged_dump(parts, stage)
+        if ([staged['dump_sha256'], staged['index_sha256']] != seal['identity']['verified_input']
+                or staged['dump_sha256'] != plan['dump']['sha256']):
+            raise ValueError('Initial sealed stage differs from original source')
+        allowed.update(stamps)
+        args = plan['expander_args']
+        flag = '--extraction-cache-root'
+        if args.count(flag) != 1 or any(arg.startswith(flag + '=') for arg in args):
+            raise ValueError('Initial sealed extraction cache lacks original argument')
+        index = args.index(flag)
+        if index + 1 == len(args) or args[index + 1] != str(stage / 'extraction-cache'):
+            raise ValueError('Initial sealed extraction cache location differs')
+        cache_root = stage / 'extraction-cache'
+        dependencies = native_roles.records['dict-bundle-build']['dependencies']
+        expected = cache.identity(Path(dependencies['modules']['path']), *seal['identity']['verified_input'],
+            providers['namespace-registry.tsv'][1],
+            None if providers.get('transclusion-redirects.tsv') is None else providers['transclusion-redirects.tsv'][1],
+            None if providers.get('page-redirects.tsv') is None else providers['page-redirects.tsv'][1])
+        key = hashlib.sha256(json.dumps(expected, sort_keys=True).encode()).hexdigest()
+        generation = cache_root / key
+        marker = generation / '.complete.json'
+        regular(marker)
+        names = []
+        if not cache.validate(generation, expected, validated_names=names):
+            raise ValueError('Initial sealed extraction cache changed')
+        assets = {name: [size, digest] for name, size, digest in seal['identity']['assets']}
+        for name in names:
+            if name not in assets:
+                raise ValueError('Initial sealed extraction cache has an unsealed asset')
+            content(generation / name, assets[name])
+        allowed.add(marker)
+        linked = seal['link']
+        entries = list(cache.object_entries(linked['object_inputs']['identity']))
+        if [name for name, _ in entries] != [row[0] for row in linked['ordered_objects']]:
+            raise ValueError('Initial sealed object order differs')
+        for (_, identity), (_, size, digest) in zip(entries, linked['ordered_objects']):
+            directory = cache.object_cache_path(cache_root, identity)
+            receipt = directory / '.complete.json'
+            regular(receipt)
+            record = cache.read_marker(receipt)
+            if (not isinstance(record, dict)
+                    or record.get('provenance') != linked['object_inputs']['provenance']
+                    or cache.validated_object(directory, identity) != [size, digest]):
+                raise ValueError('Initial sealed cached object differs from original link')
+            allowed.update((receipt, directory / 'object.o'))
+        # The preparation also owns these normal SQL-derived Provider receipts.
+        # Their source identities and output checks mirror the existing cache
+        # hit contracts; neither helper is allowed to regenerate a missing file.
+        def original_source_digest(name):
+            source = producer_source_path(native_roles.records['dict-bundle-build']['source_root'], 'tools/' + name)
+            refs = [row for row in plan.get('inputs', []) if row.get('path') == str(source)]
+            if len(refs) != 1 or any(p.is_symlink() for p in (source, *source.parents)):
+                raise ValueError('Initial derived input lacks its original generator')
+            row = refs[0]
+            before = source.stat()
+            if (not stat.S_ISREG(before.st_mode) or before.st_uid != os.geteuid()
+                    or before.st_size != row['bytes'] or sha256_file(source) != row['sha256']
+                    or (before.st_dev, before.st_ino, before.st_mtime_ns, before.st_ctime_ns)
+                        != tuple(getattr(source.stat(), key) for key in ('st_dev','st_ino','st_mtime_ns','st_ctime_ns'))):
+                raise ValueError('Initial derived input generator changed')
+            return row['sha256']
+        def proof_json(path):
+            before = regular(path)
+            if before.st_size > 1024 * 1024:
+                raise ValueError('Oversized initial derived input receipt')
+            raw = path.read_bytes()
+            after = regular(path)
+            if ((before.st_dev,before.st_ino,before.st_size,before.st_mtime_ns,before.st_ctime_ns)
+                    != (after.st_dev,after.st_ino,after.st_size,after.st_mtime_ns,after.st_ctime_ns)):
+                raise ValueError('Initial derived input receipt changed')
+            return json.loads(raw)
+        for field, provider, folder, receipt_name in (
+                ('page_links','wikibase-page-links.tsv','derived-page-links','complete.json'),
+                ('page_redirects','page-redirects.tsv','derived-page-redirects','page-redirects.provenance.json')):
+            descriptor = plan.get(field)
+            if not isinstance(descriptor,dict) or not Path(descriptor['path']).is_relative_to(workspace):
+                continue
+            target = workspace / folder / provider
+            if (descriptor['path'] != str(target)
+                    or [descriptor['bytes'],descriptor['sha256']] != providers.get(provider)):
+                raise ValueError('Initial derived input differs from original sealed Provider')
+            content(target, providers[provider])
+            receipt = target.with_name(receipt_name)
+            record = proof_json(receipt)
+            if field == 'page_links':
+                import prepare_wikibase_page_links as links
+                wiki,date = manifest['files'][0]['wiki'],manifest['files'][0]['date']
+                rows = [row for row in manifest['files'] if row['name'] == wiki+'-'+date+'-page_props.sql.gz']
+                if len(rows) != 1:
+                    raise ValueError('Initial page links lack their original SQL selection')
+                source = Path(selection['downloads']) / wiki / date / rows[0]['name']
+                before = source.stat()
+                with source.open('rb') as stream:
+                    source_sha1 = hashlib.file_digest(stream,'sha1').hexdigest()
+                after = source.stat()
+                if (before.st_size != rows[0]['size'] or source_sha1 != rows[0]['sha1']
+                        or (before.st_dev,before.st_ino,before.st_mtime_ns,before.st_ctime_ns)
+                            != (after.st_dev,after.st_ino,after.st_mtime_ns,after.st_ctime_ns)):
+                    raise ValueError('Initial page-link SQL input changed')
+                supplement = (auxiliary_snapshots or {}).get('wikibase-page-links')
+                supplement_manifest = links.validate_snapshot(supplement,wiki,date) if supplement is not None else None
+                expected_identity = dict(schema=links.SCHEMA,
+                    source={key:rows[0][key] for key in links.SOURCE_FIELDS},
+                    generator_sha256=original_source_digest('prepare_wikibase_page_links.py'),
+                    parser_sha256=original_source_digest('category_tree_snapshot.py'),
+                    namespace_registry_sha256=providers['namespace-registry.tsv'][1],
+                    supplement_artifacts=links.capture_artifacts(supplement,supplement_manifest) if supplement is not None else None)
+                raw = target.read_bytes()
+                parsed = links.read_wire(raw)
+                if (record.get('input_identity') != expected_identity
+                        or record.get('output_sha256') != descriptor['sha256']
+                        or record.get('output_bytes') != len(raw) or record.get('row_count') != len(parsed)):
+                    raise ValueError('Initial page-link receipt differs from original inputs')
+            else:
+                import prepare_page_redirects as redirects
+                identity = (build_identity or {}).get('derived_page_redirects')
+                if (not isinstance(identity,dict)
+                        or identity.get('generator_sha256') != original_source_digest('prepare_page_redirects.py')
+                        or identity.get('parser_sha256') != original_source_digest('category_tree_snapshot.py')
+                        or record.get('identity') != identity
+                        or record.get('output') != redirects.validate_wire(target,identity)):
+                    raise ValueError('Initial redirect receipt differs from original inputs')
+            allowed.add(receipt)
+    directories = set()
+    for path in allowed:
+        directories.update(p for p in path.parents if p != workspace and p.is_relative_to(workspace))
+    found = {}
+    for path in allowed | directories:
+        st = path.lstat()
+        if (path.is_symlink() or st.st_uid != os.geteuid()
+                or (not stat.S_ISDIR(st.st_mode) if path in directories else not stat.S_ISREG(st.st_mode))):
+            raise ValueError('Unsafe initial sealed input inventory')
+        found[str(path)] = (st.st_dev, st.st_ino, st.st_mode, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+    for directory in directories:
+        if set(directory.iterdir()) != {p for p in allowed | directories if p.parent == directory}:
+            raise ValueError('Initial sealed inputs have partial or unexpected output')
+    return found
+
+
 def adopt_initial_sealed_workspace(workspace, expected, now_unix, build_identity, dump, reference, native_roles, auxiliary_snapshots=None):
     """Create genuine ordinary initial state for an explicitly selected sealed worker."""
     import extraction_cache as cache
@@ -5898,7 +6123,9 @@ def adopt_initial_sealed_workspace(workspace, expected, now_unix, build_identity
     # Only the expander and the exact required tool copies belong to this
     # preparation. Read-only origins remain outside its owned inventory.
     def inventory():
-        found = {}
+        found = initial_sealed_input_inventory(selected_workspace, plan, seal, native_roles,
+            build_identity=build_identity, auxiliary_snapshots=auxiliary_snapshots)
+        extra_roots = {Path(name).relative_to(selected_workspace).parts[0] for name in found}
         directories = [selected_workspace]
         if copied_roles:
             directories.extend((selected_workspace / 'native-blob-tools', selected_workspace / 'native-blob-tools' / 'bin'))
@@ -5907,7 +6134,7 @@ def adopt_initial_sealed_workspace(workspace, expected, now_unix, build_identity
             if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.geteuid():
                 raise ValueError('Unsafe initial sealed preparation directory')
             found[str(path)] = (st.st_dev, st.st_ino, st.st_mode, st.st_mtime_ns, st.st_ctime_ns)
-        if ({p.name for p in selected_workspace.iterdir()} != ({'expander', 'native-blob-tools'} if copied_roles else {'expander'})
+        if ({p.name for p in selected_workspace.iterdir()} != (({'expander', 'native-blob-tools'} if copied_roles else {'expander'}) | extra_roots)
                 or (copied_roles and ({p.name for p in (selected_workspace / 'native-blob-tools').iterdir()} != {'bin'}
                     or {p.name for p in (selected_workspace / 'native-blob-tools' / 'bin').iterdir()} != copied_roles))):
             raise ValueError('Initial sealed workspace has partial or unexpected output')
@@ -7954,6 +8181,38 @@ class RetainedNativeToolRoles:
             del self.input_identities[path]
         self.staged_provider_inputs={}
 
+    def release_workspace_inputs(self, workspace):
+        """Retire validated transient handles before their owned tree is removed."""
+        workspace=Path(workspace).absolute()
+        if (workspace.resolve()!=workspace or not workspace.is_dir()
+                or any(path.is_symlink() for path in (workspace,*workspace.parents))
+                or workspace.stat().st_uid!=os.geteuid()):
+            raise ValueError('Unsafe retained workspace release')
+        self.require_unchanged()
+        released=[]
+        for role,tool in self.tools.items():
+            if tool is None or not tool.path.is_relative_to(workspace):
+                continue
+            artifact=self.records[role]['artifact']
+            expected=workspace/'native-blob-tools'/'bin'/role
+            if tool.path!=expected or tool.path==Path(artifact['path']):
+                raise ValueError('Workspace cleanup overlaps an unowned native tool')
+            require_private_native_tool(tool.path)
+            if (tool.path.stat().st_size!=artifact['bytes']
+                    or stat.S_IMODE(tool.path.stat().st_mode)!=(artifact['mode'] & ~0o222)
+                    or sha256_file(tool.path)!=artifact['sha256']):
+                raise ValueError('Owned native tool changed before workspace release')
+            tool.require_unchanged()
+            released.append(role)
+        # Validate every tool before releasing any input. Borrowed originals and
+        # their source/ABI guards remain live through publication and closure.
+        self.release_staged_provider_inputs()
+        for role in released:
+            path=self.tools[role].path
+            self.inputs.pop(path,None)
+            self.input_identities.pop(path,None)
+            self.tools[role]=None
+
     def require_command(self, role, args):
         if role not in self.records:
             raise ValueError('Unknown retained native command role')
@@ -9030,7 +9289,7 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
     # The merged staging tree is now the sole verified publication source.
     # Drop raw shards and the transient expander before XZ publication so peak
     # disk usage is not shards + merged raw + compressed output simultaneously.
-    if retained_roles is not None:retained_roles.release_staged_provider_inputs()
+    if retained_roles is not None:retained_roles.release_workspace_inputs(workspace)
     cleanup_shard_workspace(workspace)
 
 
