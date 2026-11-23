@@ -199,6 +199,8 @@ FIGURE_MEDIA_VARIANTS = {
 FIGURE_MEDIA_VARIANTS['6e76237de1cf29c08427d191f110a2c38c2b4cf9'] = FIGURE_MEDIA_VARIANTS['992ad5e3679f848254828e823860ba8b3ad3b39b']
 FIGURE_MEDIA_VARIANTS['f03f1fdaa2d112807b6ce63170eb50e86de615bd'] = FIGURE_MEDIA_VARIANTS['992ad5e3679f848254828e823860ba8b3ad3b39b']
 
+FIGURE_WMF5_MEDIA = FIGURE_MEDIA_VARIANTS['f03f1fdaa2d112807b6ce63170eb50e86de615bd']
+
 # Between d191 and 87f only FlaggedRevs, Wikibase and the DB load monitor
 # changed. Its exact registration binds ordinary ImageInfo, observed PNG thumbnail
 # widths and the ImageInfo half of current height-only SVG controls.
@@ -227,7 +229,7 @@ def bound_file_core(core, selected_core, observed):
 def figure_profile(core, kind, media_extensions=None):
     if core in ('d1919ec5e4ebd7b0dea1ff6ea1cb4347a9349ca2', site_info.FIGURE_WMF5_CORE):
         # Only the V4 handler model and this complete registration set were observed.
-        registered = FIGURE_MEDIA_VARIANTS['f03f1fdaa2d112807b6ce63170eb50e86de615bd']
+        registered = FIGURE_WMF5_MEDIA
         if kind != FIGURE_PROFILE_V4 or (media_extensions is not None and media_extensions != registered):
             raise ValueError('Unreviewed Figure handler profile or media registration')
         approved = dict(FIGURE_WMF4_PROFILE, media_extensions=dict(registered))
@@ -518,7 +520,7 @@ def _figure_site_profile(site_raw, general, wiki, source_profile, approved):
     _figure_site_registration(decode(site_raw), general, wiki, approved)
 
 
-def _figure_site_registration(site, general, wiki, approved):
+def _figure_site_registration(site, general, wiki, approved, *, french_supplement=False):
     """Validate registration from this caller's already decoded response."""
     require_edition(site, wiki)
     if any(key in site for key in ('error', 'errors', 'warnings')):
@@ -538,7 +540,8 @@ def _figure_site_registration(site, general, wiki, approved):
         raise ValueError('Unreviewed media registration set or version')
     if other.get('git-hash') == site_info.FIGURE_WMF5_CORE:
         limits = other.get('thumblimits')
-        if (wiki != 'srwiktionary' or other.get('lang') != 'sr' or other.get('rtl') is not False or
+        language = 'fr' if french_supplement else 'sr'
+        if (wiki != language + 'wiktionary' or other.get('lang') != language or other.get('rtl') is not False or
                 other.get('case') != 'case-sensitive' or limits != {'0': 180, '1': 250, '2': 400} or
                 any(type(width) is not int for width in limits.values())):
             raise ValueError('ImageInfo differs from its reviewed default-options context')
@@ -980,7 +983,7 @@ def stream_values(path, schema, *, allow_encoded=True, identity_out=None, record
         identity_out.update(size=size, sha256=sha.hexdigest())
 
 
-def figure_stream_document(raw_path, namespace_raw, wiki, date, site_raw, *, profile_kind=FIGURE_PROFILE_V3, allow_tiff_companion=True, allow_encoded=True, allow_compatible_epochs=True, allow_decimal_tiff_axes=True, allow_default_tiff_page=True, _http_replay=None):
+def figure_stream_document(raw_path, namespace_raw, wiki, date, site_raw, *, profile_kind=FIGURE_PROFILE_V3, allow_tiff_companion=True, allow_encoded=True, allow_compatible_epochs=True, allow_decimal_tiff_axes=True, allow_default_tiff_page=True, current_file_supplements=False, _http_replay=None):
     before = evidence.stamp(Path(raw_path))
     identity = {}
     if _http_replay is not None and type(_http_replay) is not _HttpBatchReplay:
@@ -1000,7 +1003,7 @@ def figure_stream_document(raw_path, namespace_raw, wiki, date, site_raw, *, pro
                           profile_kind=profile_kind, allow_tiff_companion=allow_tiff_companion,
                           allow_compatible_epochs=allow_compatible_epochs,
                           allow_decimal_tiff_axes=allow_decimal_tiff_axes,
-                          allow_default_tiff_page=allow_default_tiff_page)
+                          allow_default_tiff_page=allow_default_tiff_page, current_file_supplements=current_file_supplements)
     for name in ('wiki', 'core_revision', 'namespace_registry_sha256', 'base_batches', 'observed_batches'):
         if result[name] != header[name]:
             raise ValueError('Figure raw stream differs from its declared identity or counts')
@@ -1066,7 +1069,8 @@ class _ReprojectionRecords:
         self._used = False
         self._document = None
         self._identity = self._source_identity()
-        document = figure_stream_document(raw_path, namespace_raw, wiki, date, site_raw, **options)
+        document = figure_stream_document(raw_path, namespace_raw, wiki, date, site_raw,
+            current_file_supplements=contract == REPLAY_CONTRACT, **options)
         self.check_source()
         document['replay_contract'] = contract
         self._document = document
@@ -1165,7 +1169,8 @@ def verify_stream_document(projection_path, raw_path, namespace_raw, wiki, date,
         if regenerate_projection is not None or _reprojection_records is not None:
             raise ValueError('HTTP stream reuse cannot replace projection regeneration')
         options['_http_replay'] = _http_replay
-    expected = (figure_stream_document(raw_path, namespace_raw, wiki, date, site_raw, **options)
+    expected = (figure_stream_document(raw_path, namespace_raw, wiki, date, site_raw,
+                    current_file_supplements=header.get('replay_contract') == REPLAY_CONTRACT, **options)
                 if _reprojection_records is None else
                 _reprojection_records.take(raw_path, namespace_raw, wiki, date, site_raw,
                                           header.get('replay_contract'), **options))
@@ -1279,6 +1284,39 @@ def jpeg_unrotated_metadata(info):
     return 'Orientation' not in fields or (type(fields['Orientation']) is int and fields['Orientation'] == 1)
 
 
+def french_file_supplement(batch, data, registry):
+    """Certify only the returned PNG width or JPEG metadata, against the f458 French base."""
+    kind = set(batch) - {'response', 'requests'}
+    general = data['query']['general']
+    if (registry.wiki != 'frwiktionary' or registry.date != '20261001' or
+            general.get('git-hash') != site_info.FIGURE_WMF5_CORE or
+            kind not in ({'observed_svg_width_px'}, {'jpeg_metadata_only'})):
+        raise ValueError('Unreviewed French supplemental ImageInfo scope')
+    registered = FIGURE_WMF5_MEDIA
+    _figure_site_registration(data, general, registry.wiki, {'media_extensions':registered}, french_supplement=True)
+    rows = metadata.classify_response(data, batch['requests'], registry)
+    pages = {page['title']: page for page in data['query']['pages']}
+    records = []
+    for name in batch['requests']:
+        row = rows[name]
+        if not row['exists'] or _figure_utc_key(row['file_timestamp']) > _figure_utc_key(data['curtimestamp']):
+            raise ValueError('French supplemental file identity is absent or postdates ImageInfo')
+        info = pages[row['response_title']]['imageinfo'][0]
+        if 'observed_svg_width_px' in batch:
+            width = batch['observed_svg_width_px']
+            if (type(width) is not int or info.get('thumbmime') != 'image/png' or
+                    observed_svg_width(info, info.get('mime'), row['mediatype'], row['width'], row['height']) != width):
+                raise ValueError('French supplement lacks the exact rasterized PNG width')
+        elif (batch['jpeg_metadata_only'] is not True or name != row['canonicaltitle'] or
+                info.get('mime') != 'image/jpeg' or row['mediatype'] != 'BITMAP' or
+                min(row['width'], row['height']) <= 0 or not jpeg_unrotated_metadata(info)):
+            raise ValueError('French JPEG supplement lacks positive unrotated file metadata')
+        records.append(dict(requested_file=name, canonical_file=row['canonicaltitle'], state='eligible',
+            file_sha1=row['file_sha1'], file_timestamp=row['file_timestamp'], original_width=row['width'],
+            original_height=row['height'], mime=info['mime'], mediatype=row['mediatype']))
+    return records
+
+
 class _BatchFileRegistry(evidence.Registry):
     """Reuse successful normalization only within one bounded response batch."""
     def __init__(self, raw, wiki, date):
@@ -1298,7 +1336,7 @@ class _BatchFileRegistry(evidence.Registry):
 
 
 def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, record_limit,
-                 profile_kind=FIGURE_PROFILE_V3, allow_tiff_companion=True, allow_compatible_epochs=False, allow_decimal_tiff_axes=True, allow_default_tiff_page=True):
+                 profile_kind=FIGURE_PROFILE_V3, allow_tiff_companion=True, allow_compatible_epochs=False, allow_decimal_tiff_axes=True, allow_default_tiff_page=True, current_file_supplements=False):
     registry = _BatchFileRegistry(namespace_raw, wiki, date)
     registration = decode(site_raw)
     require_edition(registration, wiki)
@@ -1375,21 +1413,28 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
         require_edition(data, wiki)
         general = data['query']['general']
         batch_core = general.get('git-hash')
-        if (general.get('lang') != language or (batch_core != core and not (
+        french_supplement = (current_file_supplements and allow_compatible_epochs and profile_kind == FIGURE_PROFILE_V4 and
+            wiki == 'frwiktionary' and core == FIGURE_CURRENT_CORE and batch_core == site_info.FIGURE_WMF5_CORE and
+            (observation is not None or jpeg_supplement))
+        if (general.get('lang') != language or (batch_core != core and not french_supplement and not (
                 allow_compatible_epochs and profile_kind in (FIGURE_PROFILE_V4, FIGURE_PROFILE_V5) and
                 core in FIGURE_RESPONSE_EPOCHS and batch_core in FIGURE_RESPONSE_EPOCHS))):
             raise ValueError('Figure batches mix site/source versions')
         if occurrences is not None and batch_core not in (FIGURE_CURRENT_CORE, FIGURE_REGISTRATION_CORE, site_info.FIGURE_WMF5_CORE):
             raise ValueError('Compatible response epochs do not grant HTML occurrence authority')
-        batch_profile = figure_profile(batch_core, profile_kind, _figure_media_extensions(data))
-        # Exact per-core registrations differ, but the proved image profile does
-        # not. Both complete registration inventories are checked below.
-        if ({key: value for key, value in batch_profile.items() if key != 'media_extensions'} !=
-                {key: value for key, value in approved.items() if key != 'media_extensions'}):
-            raise ValueError('Figure response changed its proved handler profile')
-        # This exact response was decoded above. Its constructed profile/hash
-        # compared the same bytes with themselves; keep every registration check.
-        _figure_site_registration(data, general, wiki, batch_profile)
+        if french_supplement:
+            french_file_supplement(batch, data, registry)
+            batch_profile = approved
+        else:
+            batch_profile = figure_profile(batch_core, profile_kind, _figure_media_extensions(data))
+            # Exact per-core registrations differ, but the proved image profile does
+            # not. Both complete registration inventories are checked below.
+            if ({key: value for key, value in batch_profile.items() if key != 'media_extensions'} !=
+                    {key: value for key, value in approved.items() if key != 'media_extensions'}):
+                raise ValueError('Figure response changed its proved handler profile')
+            # This exact response was decoded above. Its constructed profile/hash
+            # compared the same bytes with themselves; keep every registration check.
+            _figure_site_registration(data, general, wiki, batch_profile)
         observed = data.get('curtimestamp')
         if not isinstance(observed, str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z', observed):
             raise ValueError('Missing same-response Figure observation time')
@@ -1479,10 +1524,14 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
                         observed_svg_width(info, record['mime'], record['mediatype'], record['original_width'], record['original_height']) != observation):
                     raise ValueError('Unproved or duplicate observed SVG width')
                 observed_files.add(canonical)
+                same_request = False
                 for base in records:
                     if base['canonical_file'] == canonical:
+                        same_request |= base['requested_file'] == title
                         base['observed_svg_width_px'] = observation
                         base['observed_batch'] = batch_index
+                if batch_core == site_info.FIGURE_WMF5_CORE and not same_request:
+                    raise ValueError('Observed PNG width retargets its original file request')
                 continue
             records.append(record)
         if occurrences is not None:
@@ -3094,6 +3143,7 @@ def replay_stream_capture(root, wiki, date, defaults, namespace, general, *, ret
         allow_tiff_companion=replay_contract(projection) or projection['generator_sha256'] == LEGACY_TIFF_GENERATOR,
         allow_compatible_epochs=projection.get('replay_contract') in (REPLAY_CONTRACT_V3, REPLAY_CONTRACT_V4, REPLAY_CONTRACT),
         allow_decimal_tiff_axes=projection.get('replay_contract') in (REPLAY_CONTRACT_V4, REPLAY_CONTRACT),
+        current_file_supplements=projection.get('replay_contract') == REPLAY_CONTRACT,
         allow_default_tiff_page=projection.get('replay_contract') == REPLAY_CONTRACT)
     verified_count = len(projection['records'])
     def root_record_count(site, **options):
@@ -4422,6 +4472,7 @@ def capture_files(args, transport=None, sleep=time.sleep, *, target_contract=REP
 def _capture_files(args, transport=None, sleep=time.sleep, *, target_contract=REPLAY_CONTRACT,
                    _verification_caches=None):
     replay_policy = dict(allow_tiff_companion=True, allow_compatible_epochs=True,
+                         current_file_supplements=target_contract == REPLAY_CONTRACT,
                          allow_decimal_tiff_axes=True,
                          allow_default_tiff_page=target_contract == REPLAY_CONTRACT)
     mode = getattr(args, 'metadata_mode', 'full')
@@ -5019,6 +5070,7 @@ def select_reuse_batches(paths, wiki, date, namespace):
             raise ValueError('Figure batch has no unambiguous edition/date identity')
         record_wiki, record_date = record['wiki'], record['date']
         wiktionary_api(record_wiki)
+        required_base_core = None
         is_prefix = record.get('schema') in CLOSED_PREFIX_SCHEMAS
         is_complete = record.get('schema') == SCHEMA and record.get('capture_format') == FILES_STREAM_SCHEMA
         if is_complete:
@@ -5042,13 +5094,21 @@ def select_reuse_batches(paths, wiki, date, namespace):
             if retained_profile not in (FIGURE_PROFILE_V3, FIGURE_PROFILE_V4):
                 raise ValueError('Unsupported retained Figure request profile')
             selected_profile = FIGURE_PROFILE_V4 if height_supplement or jpeg_supplement else retained_profile
-            result = file_records((plain, batch) if height_supplement else (plain,), own_namespace, record_wiki, record_date,
-                                  batch['response'].encode(), has_batches=True, record_limit=50,
-                                  profile_kind=selected_profile, allow_compatible_epochs=selected_profile == FIGURE_PROFILE_V4)
             width_supplement = 'observed_svg_width_px' in batch
+            data = decode(batch['response'].encode()) if record_wiki == 'frwiktionary' and (width_supplement or jpeg_supplement) else None
+            if (data is not None and selected_profile == FIGURE_PROFILE_V4 and
+                    data['query']['general'].get('git-hash') == site_info.FIGURE_WMF5_CORE):
+                registry = evidence.Registry(own_namespace, record_wiki, record_date)
+                result = {'records':french_file_supplement(batch, data, registry), 'core_revision':site_info.FIGURE_WMF5_CORE}
+                required_base_core = FIGURE_CURRENT_CORE
+            else:
+                result = file_records((plain, batch) if height_supplement else (plain,), own_namespace, record_wiki, record_date,
+                                      batch['response'].encode(), has_batches=True, record_limit=50,
+                                      profile_kind=selected_profile, allow_compatible_epochs=selected_profile == FIGURE_PROFILE_V4)
             supplement = width_supplement or height_supplement or jpeg_supplement
         group = (record_wiki, record_date)
-        if cores.setdefault(group, result['core_revision']) != result['core_revision']:
+        base_core = required_base_core or result['core_revision']
+        if cores.setdefault(group, base_core) != base_core:
             raise ValueError('Explicit Figure batches mix source versions')
         source_observed = set()
         for row in result['records']:
@@ -5747,6 +5807,7 @@ def validate_materialized_echo(state, plan, wiki, date, namespace, *, root_recor
             allow_tiff_companion=True,
             allow_compatible_epochs=source_epoch or old.get('replay_contract') in (REPLAY_CONTRACT_V3, REPLAY_CONTRACT_V4, REPLAY_CONTRACT),
             allow_decimal_tiff_axes=old.get('replay_contract') in (REPLAY_CONTRACT_V4, REPLAY_CONTRACT),
+            current_file_supplements=old.get('replay_contract') == REPLAY_CONTRACT,
             allow_default_tiff_page=old.get('replay_contract') == REPLAY_CONTRACT)
         original_count=(root_record_count(original_site,**options)
             if identifier==state['root'] and root_record_count is not None else None)

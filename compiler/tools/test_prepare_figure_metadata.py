@@ -3,6 +3,7 @@ import copy
 import gzip
 import json
 from pathlib import Path
+import tempfile
 import time
 import unittest
 from unittest.mock import patch
@@ -255,6 +256,95 @@ class D191ProfileTests(unittest.TestCase):
                         dict(registration, TimedMediaHandler='0' * 40)):
             with self.subTest(changed=changed), self.assertRaises(ValueError):
                 figure.figure_profile(D191_CORE, figure.FIGURE_PROFILE_V4, changed)
+
+
+class FrenchCurrentSupplementTests(unittest.TestCase):
+    def setUp(self):
+        fixtures = Path(__file__).parent/'testdata'
+        self.sources = fixtures/'fr-imageinfo-87f'
+        self.namespace = (fixtures/'figure-page-observations/fr-cauannos-alias/namespace-registry.tsv').read_bytes()
+        wire = (self.sources/'selected-batches.jsonl').read_bytes()
+        self.batches = [figure.raw_record_decode(row, figure.RAW_RECORD_ENCODING) for row in wire.splitlines(True)]
+        self.site = self.batches[0]['response'].encode()
+        self.wiki = 'frwiktionary'
+        self.date = '20261001'
+
+    def replay(self, base, supplements, **overrides):
+        options = dict(has_batches=True, record_limit=250, profile_kind=figure.FIGURE_PROFILE_V4,
+                       allow_compatible_epochs=True, current_file_supplements=True)
+        return figure.file_records([*base, *supplements], self.namespace, self.wiki, self.date,
+                                   self.site, **(options | overrides))
+
+    def test_two_scoped_roles_and_original_jpeg_alias(self):
+        doc = self.replay(self.batches[:5], self.batches[5:])
+        records = {row['requested_file']:row for row in doc['records']}
+        self.assertEqual((len(records), doc['core_revision'], doc['observed_batches']), (250, figure.FIGURE_CURRENT_CORE, 2))
+        self.assertEqual(records['Fichier:75 percent.svg']['observed_svg_width_px'], 120)
+        self.assertEqual(records['Fichier:table a couture nommee orphee.jpg']['canonical_file'], 'Fichier:Table a couture nommee orphee.jpg')
+        self.assertEqual(sum('observed_svg_width_px' in row for row in records.values()), 1)
+        with self.assertRaisesRegex(ValueError, 'mix site/source versions'):
+            self.replay(self.batches[:5], self.batches[5:], current_file_supplements=False)
+        with self.assertRaises(ValueError):
+            self.replay(self.batches[:5], self.batches[5:], profile_kind=figure.FIGURE_PROFILE_V5)
+
+    def test_retargeted_alias_and_unregistered_source(self):
+        width = copy.deepcopy(self.batches[5])
+        data = figure.decode(width['response'].encode())
+        old_title = 'Fichier:table a couture nommee orphee.jpg'
+        width['requests'] = [old_title]
+        data['query']['redirects'] = [{'from':old_title, 'to':data['query']['pages'][0]['title']}]
+        width['response'] = figure.encoded(data).decode()
+        with self.assertRaisesRegex(ValueError, 'retargets its original file request'):
+            self.replay(self.batches[:5], [width])
+        for change in ('registration', 'source', 'pinned-context', 'png'):
+            width = copy.deepcopy(self.batches[5]); data = figure.decode(width['response'].encode())
+            if change == 'registration':
+                next(e for e in data['query']['extensions'] if e['name'] == 'PagedTiffHandler')['vcs-version'] = '0'*40
+            elif change == 'source':
+                data['query']['general']['git-hash'] = '0'*40
+            elif change == 'pinned-context':
+                data['query']['general']['rtl'] = True
+            else:
+                del data['query']['pages'][0]['imageinfo'][0]['thumbmime']
+            width['response'] = figure.encoded(data).decode()
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                self.replay(self.batches[:5], [width])
+
+    def test_jpeg_requires_omission_positive_metadata_and_matching_file(self):
+        base = copy.deepcopy(self.batches[:5])
+        target = 'Fichier:Mouchoir.JPG'
+        previous = next(b for b in base if target in b['requests'])
+        source = figure.decode(previous['response'].encode()); page = next(p for p in source['query']['pages'] if p['title'] == target)
+        page['imageinfo'][0]['metadata'] = [{'name':'Orientation', 'value':8}]
+        previous['response'] = figure.encoded(source).decode()
+        with self.assertRaisesRegex(ValueError, 'does not complete exact omitted'):
+            self.replay(base, self.batches[6:])
+        for field, value in (('sha1', '0'*40), ('size', 5), ('metadata', [{'name':'Orientation','value':6}])):
+            supplement = copy.deepcopy(self.batches[6]); data = figure.decode(supplement['response'].encode())
+            data['query']['pages'][0]['imageinfo'][0][field] = value
+            supplement['response'] = figure.encoded(data).decode()
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                self.replay(self.batches[:5], [supplement])
+
+    def test_explicit_request_reuse_authenticates_both_retained_http_proofs(self):
+        proofs = figure.decode(gzip.decompress((self.sources/'selected-proofs.json.gz').read_bytes()))
+        with tempfile.TemporaryDirectory() as directory:
+            paths = []
+            for i, (documents, batch) in enumerate(zip(proofs, self.batches[5:], strict=True)):
+                root = Path(directory)/str(i); root.mkdir()
+                (root/figure.metadata.NAMESPACE).write_bytes(self.namespace)
+                for name, text in documents.items():
+                    (root/name).write_bytes(text.encode())
+                path = root/'retained-observation.json'; record = figure.decode(path.read_bytes())
+                receipt = figure.decode((root/record['batch']['accepted_receipt']).read_bytes())
+                (root/receipt['response']).write_bytes(batch['response'].encode()); paths.append(path.resolve())
+            self.assertEqual(len(figure.select_reuse_batches(paths, self.wiki, self.date, self.namespace)), 2)
+            with self.assertRaisesRegex(ValueError, 'namespace/date'):
+                figure.select_reuse_batches(paths, self.wiki, '20261101', self.namespace)
+            record = figure.decode(paths[0].read_bytes()); record['figure_profile'] = figure.FIGURE_PROFILE_V3
+            paths[0].write_bytes(figure.encoded(record))
+            with self.assertRaises(ValueError):
+                figure.select_reuse_batches(paths, self.wiki, self.date, self.namespace)
 
 
 class SrImageInfoBindingTests(unittest.TestCase):
