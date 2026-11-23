@@ -99,4 +99,90 @@ class TablePixelLayoutTest {
         assertEquals(40000, pixels.rowOffsets[1000])
     }
 
+    @Test fun oversizedGridKeepsGlobalColumnsAndOriginalCellIdentityAcrossBands() {
+        val first = cell(colspan = 2, rowspan = 2)
+        val last = Cell(listOf(Span("link", "last", target = "destination")), false, 1, 1)
+        val table = Table(emptyList(), List(24999) { row -> when (row) {
+            0 -> listOf(first, cell())
+            1 -> listOf(cell())
+            24998 -> listOf(cell(), last)
+            else -> emptyList()
+        } })
+        val grid = tableGrid(table)
+        val metrics = checkNotNull(tableRenderMetrics(table, 136, 10, 40, 1f))
+        assertSame(metrics, tallOrdinaryTableMetrics(table, metrics, 400))
+        assertNull(tablePixelLayout(grid, metrics.columnWidth, 40, IntArray(grid.cells.size)))
+        val bands = tableRowBands(grid)
+        assertEquals(TableRowBand(0, 2, 0, 3), bands.first())
+        assertEquals(TableRowBand(24998, 24999, 3, 5), bands.last())
+        assertEquals(24998, bands.size)
+        assertEquals(0, tableBandIndex(bands, 1))
+        assertEquals(1, tableBandIndex(bands, 2))
+        assertEquals(bands.lastIndex, tableBandIndex(bands, 24998))
+        assertTrue(tableBandIndex(bands, 24999) < 0)
+        val firstGrid = bands.first().grid(grid)
+        val lastGrid = bands.last().grid(grid)
+        assertEquals(grid.columns, lastGrid.columns)
+        assertSame(first, firstGrid.cells.first().cell)
+        assertEquals(2, firstGrid.cells.first().colspan)
+        assertSame(last, lastGrid.cells.last().cell)
+        assertEquals(grid.cells.last().column, lastGrid.cells.last().column)
+        assertNotNull(tablePixelLayout(lastGrid, metrics.columnWidth, 40, intArrayOf(20,20)))
+        assertNull(tallOrdinaryTableMetrics(table.copy(rows = table.rows.take(1000)), metrics, 400))
+        assertNull(tallOrdinaryTableMetrics(table.copy(rowsHiddenMaxWidthPx = 480), metrics, 400))
+        assertFalse(tableCanUseRowBands(table, metrics.copy(outerBorder = TablePixelInsets(1,0,1,0))))
+    }
+
+    @Test fun adjacentBandsShareTheRealCollapsedEdgeInsteadOfRepeatingTheOuterBorder() {
+        val grid = tableGrid(Table(emptyList(), List(3) { listOf(cell()) }))
+        val bands = tableRowBands(grid)
+        val none = TableStyleBorder(0f, null)
+        val red = TableStyleBorder(4f, "#ff0000")
+        val blue = TableStyleBorder(4f, "#0000ff")
+        val black = TableStyleBorder(8f, "#000000")
+        val all = TableCellBorders(black,black,black,black)
+        val first = TableCellBorders(none,none,red,none)
+        val second = TableCellBorders(blue,none,none,none)
+        val third = TableCellBorders(none,none,none,none)
+        val zero = TablePixelInsets(0,0,0,0)
+        val style = TableResolvedStyle(null, black, true, zero, List(3) { none }, List(3) { zero },
+            cellEdges = listOf(first,second,third), outerEdges = all)
+        val full = checkNotNull(tablePixelLayout(grid, 136, 40, IntArray(3)))
+        val single = checkNotNull(tablePixelLayout(bands[0].grid(grid),136,40,intArrayOf(0)))
+        val original = collapsedTableBorders(grid, full, style).single { it.y1 == 40f && it.y2 == 40f }
+        for (i in 0..1) {
+            val current = collapsedTableBorders(bands[i].grid(grid), single, style, tableBandPaint(grid,style,bands,i))
+            val at = if (i == 0) 40f else 0f
+            assertEquals(original.copy(y1=at,y2=at), current.single { it.y1 == at && it.y2 == at })
+        }
+    }
+
+    @Test fun wrappedRowsCanSwitchToBandsAfterTheirActualMeasurement() {
+        val table = Table(emptyList(), List(3) { listOf(cell()) })
+        val grid = tableGrid(table)
+        val metrics = checkNotNull(tableRenderMetrics(table, 136, 10, 40, 1f))
+        assertNull(tallOrdinaryTableMetrics(table, metrics, 400))
+        val measured = checkNotNull(tableHeightLimit(metrics.width)) / 2
+        assertNull(tablePixelLayout(grid, metrics.columnWidth, 40, IntArray(3) { measured }))
+        assertTrue(tableCanUseRowBands(table, metrics))
+        for (band in tableRowBands(grid)) {
+            val local = checkNotNull(tablePixelLayout(band.grid(grid), metrics.columnWidth, 40, intArrayOf(measured)))
+            assertEquals(measured, local.height)
+        }
+    }
+
+    @Test fun tablePositionBelongsToItsImmutableRecordOrExactStandaloneTable() {
+        val table = Table(emptyList(), listOf(listOf(cell())))
+        val replacement = table.copy()
+        val origin = WordHit("library", "index", "", "supplemental", 49, 1234)
+        val record = "body-dictionary" to origin
+        val stored = TableScrollPosition(table, record, 10, 8, 3)
+        assertTrue(stored.belongsTo(replacement, record))
+        assertFalse(stored.belongsTo(replacement, "other-dictionary" to origin))
+        assertFalse(stored.belongsTo(replacement, "body-dictionary" to origin.copy(offset = 80)))
+        val standalone = TableScrollPosition(table, null, 10, 8, 3)
+        assertTrue(standalone.belongsTo(table, null))
+        assertFalse(standalone.belongsTo(replacement, null))
+    }
+
 }

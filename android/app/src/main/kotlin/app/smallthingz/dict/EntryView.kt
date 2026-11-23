@@ -48,6 +48,7 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.collectionInfo
 import androidx.compose.ui.semantics.collectionItemInfo
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.scrollToIndex
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalUriHandler
@@ -105,6 +106,9 @@ private val LocalEntryMediaOwners = staticCompositionLocalOf { MediaOwners(empty
 internal val LocalEntryEdition = staticCompositionLocalOf { "" }
 private val LocalReaderSettings = staticCompositionLocalOf { AppSettings() }
 private val LocalTextCache = staticCompositionLocalOf<TextCache?> { null }
+private val LocalReadingVisit = staticCompositionLocalOf<EntryReadingState?> { null }
+private val LocalTableRecord = staticCompositionLocalOf<Pair<String, WordHit>?> { null }
+private val LocalEntryScroll = staticCompositionLocalOf<androidx.compose.foundation.lazy.LazyListState?> { null }
 private val LocalDarkReadingPage = compositionLocalOf<Int?> { null }
 
 @Composable
@@ -209,8 +213,16 @@ class EntryReadingState {
     internal val scroll = androidx.compose.foundation.lazy.LazyListState()
     internal val documentScroll = NativeDocumentScrollState()
     internal val disclosure = NativeContainerDisclosureVisit()
+    internal val tablePositions = mutableMapOf<String, TableScrollPosition>()
     internal var foldKey: List<Any?>? = null
     internal var folds: androidx.compose.runtime.snapshots.SnapshotStateMap<String, Boolean>? = null
+}
+
+internal class TableScrollPosition(table: Table, private val record: Pair<String, WordHit>?,
+    val band: Int, val offset: Int, val horizontal: Int) {
+    private val source = java.lang.ref.WeakReference(table)
+    fun belongsTo(table: Table, current: Pair<String, WordHit>?): Boolean =
+        if (record == null) current == null && source.get() === table else record == current
 }
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -226,7 +238,9 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
     val mediaOwners = remember(entry.key, entry.media) { MediaOwners(entry.media) }
     val missingLinkVisits = LocalMissingLinkVisits.current ?: remember { MissingLinkVisits() }
     val missingLinkOwner = remember(entry, readingState) { Any() }
-    CompositionLocalProvider(LocalNativeSemanticBorderInk provides semanticBorderInk,
+    val tableRecord = entry.contentDictionary?.let { dictionary -> entry.origin?.let { dictionary to it } }
+    CompositionLocalProvider(LocalNativeSemanticBorderInk provides semanticBorderInk, LocalReadingVisit provides readingState,
+        LocalTableRecord provides tableRecord,
         LocalEntryMedia provides entry.media, LocalEntryMediaOwners provides mediaOwners,
         LocalEntryEdition provides entry.edition, LocalReaderSettings provides settings, LocalMissingLinkVisits provides missingLinkVisits,
         LocalMissingLinkDocument provides entry.title, LocalMissingLinkOwner provides missingLinkOwner) {
@@ -557,7 +571,7 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
                 }
             }
         }
-        CompositionLocalProvider(LocalTextCache provides cache, LocalInlineImageOwner provides imageOwner,
+        CompositionLocalProvider(LocalTextCache provides cache, LocalInlineImageOwner provides imageOwner, LocalEntryScroll provides scroll,
             LocalCellHeadingRequest provides cellHeadingRequest?.takeUnless { rowsHidden(it.rowsHiddenMaxWidthPx) },
             LocalNativeContainerDisclosureState provides disclosureState,
             LocalNativeClippedAbsoluteCoordinateScope provides clippedCoordinateOwner?.rootScope,
@@ -1307,15 +1321,104 @@ private fun TableView(table: Table, onLink: (EntryLink) -> Unit, path: String = 
                 natural, decorationProjection, { decorationProjection = 0.0 })
         } else BoxWithConstraints(if (inline) Modifier else Modifier.fillMaxWidth()) {
             val viewportWidth = constraints.maxWidth.takeIf { constraints.hasBoundedWidth }
-            // A child grid belongs to the same scroll surface as its outer table.
-            Box((if (inline) Modifier else Modifier.fillMaxWidth()).horizontalScroll(rememberScrollState())) {
-                TableGridView(table, onLink, path, viewportWidth, semanticPath,
-                    natural, decorationProjection, { decorationProjection = 0.0 })
+            val owner = rememberNativeTableBorderSourceKey(table)
+            var measuredOverflow by remember(owner, natural, viewportWidth, density.fontScale) { mutableStateOf<TableRenderMetrics?>(null) }
+            val tall = measuredOverflow ?: remember(owner, natural, viewportWidth, inline) {
+                if (!inline && natural != null) tallOrdinaryTableMetrics(table, natural, viewportWidth) else null
+            }
+            val visit = LocalReadingVisit.current
+            val record = LocalTableRecord.current
+            key(if (tall == null) null else visit, if (tall == null) null else record ?: NativeContainerDisclosureSourceIdentity(table), semanticPath) {
+                val position = if (tall != null) visit?.tablePositions?.get(semanticPath)?.takeIf { it.belongsTo(table, record) } else null
+                val horizontal = rememberScrollState(position?.horizontal ?: 0)
+                Box((if (inline) Modifier else Modifier.fillMaxWidth()).horizontalScroll(horizontal)) {
+                    if (tall != null && decorationHeight != null && decorationHeight > 0) {
+                        TallOrdinaryTable(table, onLink, path, semanticPath, tall, decorationHeight, horizontal, visit, position)
+                    } else TableGridView(table, onLink, path, viewportWidth, semanticPath,
+                        natural, decorationProjection, { decorationProjection = 0.0 }, onHeightOverflow = { actual ->
+                            val supported = !inline && decorationHeight != null && decorationHeight > 0 && tableCanUseRowBands(table, actual)
+                            if (supported) measuredOverflow = actual
+                            supported
+                        })
+                }
             }
         }
     }
   }
   }
+}
+
+/** This viewport uses fixed column widths. Rich cells that own another layout or scroll
+ * surface keep their original parent. A collapsed border may cross a viewport item seam. */
+internal fun tallOrdinaryTableMetrics(table: Table, natural: TableRenderMetrics, reference: Int?): TableRenderMetrics? {
+    val minimumHeight = table.rows.size.toLong() * natural.minRowHeight
+    val percentage = table.style?.width?.unit == StyleWidthUnit.Percent
+    // Percentage sizing can change the packed range at measure time.
+    val capacity = tableHeightLimit(if (percentage) TablePixelLimit else natural.width) ?: return null
+    if (minimumHeight <= capacity) return null
+    val metrics = if (percentage)
+        tableMetricsInWidth(table, natural, tableGrid(table).columns, reference) ?: return null else natural
+    return metrics.takeIf { minimumHeight > checkNotNull(tableHeightLimit(it.width)) && tableCanUseRowBands(table, it) }
+}
+
+internal fun tableCanUseRowBands(table: Table, metrics: TableRenderMetrics): Boolean =
+    metrics.cellSpacing == 0 && metrics.outerBorder.vertical == 0 && (metrics.style?.tablePadding?.vertical ?: 0) == 0 &&
+    table.geometry == null && table.rowsHiddenMaxWidthPx == null && table.blockViewport == null && table.floatViewport == null &&
+    table.style?.let { it.collapse != TableCollapse.Collapse || it.cornerRadii != null } != true &&
+    table.rows.none { row -> row.any { it.blocks != null || it.nestedTable != null || it.hasNativeCellOpacity() } } &&
+    !nativeTableUsesResolvedBorders(table)
+
+@Composable
+private fun TallOrdinaryTable(table: Table, onLink: (EntryLink) -> Unit, path: String, semanticPath: String,
+    metrics: TableRenderMetrics, viewportHeight: Int, horizontal: androidx.compose.foundation.ScrollState,
+    visit: EntryReadingState?, position: TableScrollPosition?) {
+    val owner = rememberNativeTableBorderSourceKey(table)
+    val grid = remember(owner) { tableGrid(table) }
+    val bands = remember(grid) { tableRowBands(grid) }
+    val density = LocalDensity.current
+    val state = rememberLazyListState(position?.band ?: 0, position?.offset ?: 0)
+    val scope = rememberCoroutineScope()
+    val entryScroll = LocalEntryScroll.current
+    val readerHeight by remember(entryScroll) { derivedStateOf { entryScroll?.layoutInfo?.viewportSize?.height ?: 0 } }
+    val height = if (readerHeight > 0) minOf(viewportHeight, readerHeight) else viewportHeight
+    val record = LocalTableRecord.current
+    DisposableEffect(visit, semanticPath, record, state, horizontal) {
+        onDispose { visit?.tablePositions?.set(semanticPath,
+            TableScrollPosition(table, record, state.firstVisibleItemIndex, state.firstVisibleItemScrollOffset, horizontal.value)) }
+    }
+    LazyColumn(Modifier.width(with(density) { metrics.width.toDp() })
+        .heightIn(max = with(density) { height.toDp() })
+        .testTag(if (path == "root") "compiled-table-grid" else "compiled-table-grid-$path")
+        .semantics {
+            collectionInfo = androidx.compose.ui.semantics.CollectionInfo(grid.rows, grid.columns)
+            scrollToIndex { row ->
+                val index = tableBandIndex(bands, row)
+                if (index < 0) false else {
+                    scope.launch { state.scrollToItem(index) }
+                    true
+                }
+            }
+        }, state = state) {
+        items(bands.size, key = { bands[it].firstRow }) { index ->
+            val band = bands[index]
+            val source = remember(owner, band) {
+                table.copy(caption = emptyList(), captionBlocks = null,
+                    rows = table.rows.subList(band.firstRow.coerceAtMost(table.rows.size), band.endRow.coerceAtMost(table.rows.size)))
+            }
+            val localGrid = remember(grid, band) { band.grid(grid) }
+            val localMetrics = remember(metrics, band) { tableBandMetrics(metrics, band) }
+            val paint = remember(metrics, bands, index) { metrics.style?.takeIf { it.collapse }?.let {
+                tableBandPaint(grid, it, bands, index)
+            } }
+            // Scrolling through the dictionary must not retain every built annotated string.
+            CompositionLocalProvider(LocalTextCache provides null) {
+                Box(Modifier.clipToBounds()) {
+                    TableGridView(source, onLink, path, metrics.width, semanticPath, localMetrics, 1.0, {},
+                        ownCollectionSemantics = false, bandGrid = localGrid, band = band, bandPaint = paint)
+                }
+            }
+        }
+    }
 }
 
 @Composable
@@ -1619,7 +1722,9 @@ private fun TableGridView(table: Table, onLink: (EntryLink) -> Unit, path: Strin
     selectionCells: List<CaptionCellSlot>? = null, selectionGeometry: SelectionGeometrySink? = null,
     containerStyle: TextStyle? = null, contentWidths: Boolean = false,
     captionMinimumWidth: NativeLayoutInput<Int>? = null, anonymousGridStyle: TableStyle? = null,
-    pairedHeightIntrinsics: Boolean = false, ownCollectionSemantics: Boolean = true) {
+    pairedHeightIntrinsics: Boolean = false, ownCollectionSemantics: Boolean = true,
+    bandGrid: TableGrid? = null, band: TableRowBand? = null, bandPaint: NativeTableBandPaint? = null,
+    onHeightOverflow: ((TableRenderMetrics) -> Boolean)? = null) {
     val resolvedBorderFailure = nativeTableResolvedBorderFailure(table, anonymousGridStyle ?: table.style,
         anonymousGridStyle != null)
     if (resolvedBorderFailure != null) {
@@ -1631,8 +1736,11 @@ private fun TableGridView(table: Table, onLink: (EntryLink) -> Unit, path: Strin
     val resolvedWidthReference = widthInput?.value ?: widthReference
     val phaseObserver = LocalTablePhaseObserver.current
     val rootViewportCssWidth = tableDocumentViewportCssWidth()
-    val projection = remember(rememberNativeTableBorderSourceKey(table), rootViewportCssWidth, phaseObserver) {
-        observeTablePhase(phaseObserver, TablePhase.Preparation) { nativeTableRowProjection(table, rootViewportCssWidth) }
+    val projection = remember(rememberNativeTableBorderSourceKey(table), rootViewportCssWidth, phaseObserver, bandGrid) {
+        observeTablePhase(phaseObserver, TablePhase.Preparation) {
+            if (bandGrid == null) nativeTableRowProjection(table, rootViewportCssWidth)
+            else NativeTableRowProjection(table, bandGrid, false)
+        }
     }
     val grid = projection.grid
     val intrinsicTable = table.blockViewport?.intrinsicContainingDirection != null
@@ -1777,7 +1885,7 @@ private fun TableGridView(table: Table, onLink: (EntryLink) -> Unit, path: Strin
         widthInput?.tableExtentModifier ?: Modifier else widthInput?.modifier ?: Modifier
     Layout(modifier = widthModifier.then(captionMinimumWidth?.tableExtentModifier ?: Modifier)
         .then(blockLayoutFailure?.tableExtentModifier ?: Modifier)
-        .testTag(if (path == "root") "compiled-table-grid" else "compiled-table-grid-$path")
+        .then(if (band != null) Modifier else Modifier.testTag(if (path == "root") "compiled-table-grid" else "compiled-table-grid-$path"))
         .then(if (scopeClipMinimum != null) Modifier.clipToBounds() else Modifier)
         .onGloballyPositioned { coordinates ->
             delegated?.positionedGrid(coordinates, scopeClipMinimum)
@@ -1793,7 +1901,7 @@ private fun TableGridView(table: Table, onLink: (EntryLink) -> Unit, path: Strin
             val rounded = cornerDecoration
             val collapsedBorders = observeTablePhase(phaseObserver, TablePhase.DrawCache) {
                 if (pixels != null && styled?.collapse == true && !hasResolvedBorders)
-                    collapsedTableBorders(grid, pixels, styled).flatMap(::tableBorderBands) else emptyList()
+                    collapsedTableBorders(grid, pixels, styled, bandPaint).flatMap(::tableBorderBands) else emptyList()
             }
             onDrawBehind {
             observeTablePhase(phaseObserver, TablePhase.Draw) {
@@ -1849,6 +1957,7 @@ private fun TableGridView(table: Table, onLink: (EntryLink) -> Unit, path: Strin
         }, content = {
         observeTablePhase(phaseObserver, TablePhase.Composition, grid.cells.size) {
         grid.cells.forEachIndexed { index, placed ->
+            val sourceIndex = index + (band?.firstCell ?: 0)
             val insets = styled?.cellInsets?.get(index)
             val padding = if (insets == null) with(density) { Modifier.padding((natural.cellPadding + natural.borderWidth).toDp()) }
                 else with(density) { Modifier.absolutePadding(left = insets.left.toDp(), top = insets.top.toDp(),
@@ -1880,11 +1989,11 @@ private fun TableGridView(table: Table, onLink: (EntryLink) -> Unit, path: Strin
                     val color = edge.color?.let { canonicalColorArgb(it)?.let(::Color) } ?: borderColor
                     paintNativeTableBorder(canvas, edge, color.toArgb())
                 }
-            }.testTag("compiled-table-cell-$path-$index").onGloballyPositioned { coordinates ->
+            }.testTag("compiled-table-cell-$path-$sourceIndex").onGloballyPositioned { coordinates ->
                 delegatedCell?.let { it.cellCoordinates = coordinates; it.table.validateAfterPlacement() }
             }.semantics {
                 collectionItemInfo = androidx.compose.ui.semantics.CollectionItemInfo(
-                    placed.row, placed.cell.rowspan, placed.column, placed.colspan)
+                    placed.row + (band?.firstRow ?: 0), placed.cell.rowspan, placed.column, placed.colspan)
                 if (placed.cell.header) heading()
             }.then(padding)) {
                 val cellForeground = cellForegroundContexts[index]
@@ -1898,7 +2007,7 @@ private fun TableGridView(table: Table, onLink: (EntryLink) -> Unit, path: Strin
                     LocalTableLineHeightPixels provides lineHeightPixels.takeIf { cellContext?.cellText == null },
                     LocalCellLetterSpacingPixels provides letterSpacing,
                     LocalCellWeight provides cellWeight) {
-                    val cellPath = "$semanticPath/cell-$index"
+                    val cellPath = "$semanticPath/cell-$sourceIndex"
                     val selection = selectionCells?.get(index)
                     val blocks = delegated?.scopeSource?.blocks?.get(index) ?: placed.cell.blocks
                     val paragraph = if (intrinsicTable) intrinsicTableSingleParagraph(placed.cell) else null
@@ -2017,7 +2126,7 @@ private fun TableGridView(table: Table, onLink: (EntryLink) -> Unit, path: Strin
             else reference
         val minimum = try { minimumWidth(minimumContaining) } catch (_: UnsupportedFloatLayout) { null }
         val minimumUnavailable = table.style?.minWidth != null && minimum == null
-        val metrics = if (minimumUnavailable) null else if (sourceSizedGrid && grid.cells.isEmpty()) {
+        val metrics = if (band != null) natural else if (minimumUnavailable) null else if (sourceSizedGrid && grid.cells.isEmpty()) {
             if (anonymousGridStyle != null) natural else tableMetricsInWidth(table, natural, grid.columns, reference)
         } else if (pairedHeightIntrinsics) {
             val available = widthReference ?: incoming.maxWidth.takeIf { incoming.hasBoundedWidth } ?: TablePixelLimit
@@ -2084,7 +2193,11 @@ private fun TableGridView(table: Table, onLink: (EntryLink) -> Unit, path: Strin
                 if (hasCorners) "Authored table corner geometry is unavailable at this size" else "Anonymous table grid is unavailable at this size")
             drawingPixels = null
             resolvedBorderPaint = null
-            if (table.style?.minWidth == null && !hasCorners && anonymousGridStyle == null && decorationProjection > 0.0 && tableContainsStyle(table) && !tableHasComputedCellStyle(table) && !opacityRequested) removeDecorations()
+            // A valid set of individually representable cells can still exceed the packed height
+            // after wrapping. Preserve their measured column allocation in the lazy viewport.
+            val useBands = pixels == null && onHeightOverflow != null && metrics != null && heightLimit != null &&
+                grid.rows > 1 && children.all { it.height < heightLimit } && onHeightOverflow(metrics)
+            if (!useBands && table.style?.minWidth == null && !hasCorners && anonymousGridStyle == null && decorationProjection > 0.0 && tableContainsStyle(table) && !tableHasComputedCellStyle(table) && !opacityRequested) removeDecorations()
             // Keep the existing cells visible in an explicitly unavailable grid.
             // A later width change measures these same owners again, without
             // replacing active media or latching a composition-only error state.

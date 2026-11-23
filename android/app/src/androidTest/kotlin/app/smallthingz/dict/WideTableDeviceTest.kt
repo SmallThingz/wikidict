@@ -179,7 +179,7 @@ class WideTableDeviceTest {
             ))), emptyList(), edition = "enwiktionary-20261001",
             origin = WordHit(owner, title, "English", "language", 0, 4, owner + "-record"))
 
-    @Test fun unavailableTableShowsReadableFeedbackAndKeepsFollowingLinkReachable() {
+    @Test fun tableJustBeyondPackedHeightRetainsSparseRowsAndFollowingLink() {
         val mode = LearningStore.get(InstrumentationRegistry.getInstrumentation().targetContext).data.settings.darkMode
         // Empty source rows preserve minimum-row spacing without composing thousands
         // of text cells. Derive a genuinely overflowing height from the installed API.
@@ -204,13 +204,13 @@ class WideTableDeviceTest {
             assertTrue("Fixture exceeds the renderer's supported minimum-row height",
                 rowCount.toLong() * 40L > capacity)
             compose.onNodeWithTag("entry-scroll").performScrollToNode(hasText("Oversize forms"))
-            compose.waitUntil(10000) {
-                compose.onAllNodesWithText("Table is too large to display.", useUnmergedTree = true)
-                    .fetchSemanticsNodes(atLeastOneRootRequired = false).isNotEmpty()
-            }
             visibleText("Oversize forms", 1f)
-            visibleText("Table is too large to display.", 1f)
-            compose.onAllNodesWithText("Partial cell", useUnmergedTree = true).assertCountEquals(0)
+            val grid = compose.onNodeWithTag("compiled-table-grid", useUnmergedTree = true)
+            grid.performScrollToIndex(0)
+            compose.onNodeWithTag("compiled-table-cell-root-0", useUnmergedTree = true).assertExists()
+            grid.performScrollToIndex(rowCount - 1)
+            compose.onNodeWithTag("compiled-table-cell-root-1", useUnmergedTree = true).performScrollTo().assertIsDisplayed()
+            compose.onNodeWithText("Table layout is unavailable at this size.", useUnmergedTree = true).assertDoesNotExist()
             tapVisibleLink("After table", 1f)
             compose.runOnIdle { assertEquals(listOf(entry.key to "after-table"), opened) }
         } finally {
@@ -249,6 +249,99 @@ class WideTableDeviceTest {
             compose.runOnIdle {
                 assertEquals(labels.indices.map { entry.key to ("tall-" + it) } + (entry.key to "after-table"), opened)
             }
+        } finally {
+            compose.runOnIdle { compose.activity.setContent {} }
+            compose.waitForIdle()
+        }
+    }
+
+    @Test fun oversizedTableScrollsToMiddleAndFinalLinksWithGlobalCellSemantics() {
+        val mode = LearningStore.get(InstrumentationRegistry.getInstrumentation().targetContext).data.settings.darkMode
+        val last = 6999
+        val table = Table(emptyList(), List(last + 1) { row -> listOf(
+            Cell(listOf(Span("text", row.toString())), row == 0, 1, 1),
+            Cell(listOf(Span("link", "word $row", target = "word-$row")), false, 1, 1)) })
+        val entry = tableEntry("oversized-table-owner", "Frequency", table)
+        val opened = mutableListOf<String>()
+        val visit = EntryReadingState()
+        val selectedVisit = mutableStateOf(visit)
+        val visible = mutableStateOf(true)
+        try {
+            compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+                TableViewport(mode, 1f, fixedDensity = 1f) {
+                    if (visible.value) EntryView(entry, false, {}, readingState = selectedVisit.value, onLink = { opened += it.target },
+                        settings = AppSettings(collapseOtherSections = false, collapseDetails = false))
+                }
+            } }
+            val tag = "compiled-table-grid"
+            compose.onNodeWithTag("entry-scroll").performScrollToNode(hasTestTag(tag))
+            val viewport = compose.onNodeWithTag(tag, useUnmergedTree = true)
+            assertTrue(rawBounds(viewport).height <= rawBounds(compose.onNodeWithTag("entry-scroll")).height + 1f)
+            val collection = viewport.fetchSemanticsNode().config[SemanticsProperties.CollectionInfo]
+            assertEquals(last + 1, collection.rowCount)
+            assertEquals(2, collection.columnCount)
+            compose.onNodeWithText("word $last", useUnmergedTree = true).assertDoesNotExist()
+            for (row in listOf(0, 3500, last, 1)) {
+                viewport.performScrollToIndex(row)
+                val cellTag = "compiled-table-cell-root-${row * 2 + 1}"
+                val cell = compose.onNodeWithTag(cellTag, useUnmergedTree = true)
+                val item = cell.fetchSemanticsNode().config[SemanticsProperties.CollectionItemInfo]
+                assertEquals(row, item.rowIndex)
+                assertEquals(1, item.columnIndex)
+                val link = compose.onNodeWithText("word $row", useUnmergedTree = true)
+                link.performScrollTo().assertIsDisplayed()
+                val count = compose.runOnIdle { opened.size }
+                if (row == last) {
+                    val action = compose.onNode(hasAnyAncestor(hasTestTag(cellTag)) and hasClickAction() and
+                        SemanticsMatcher.keyIsDefined(SemanticsActions.RequestFocus), useUnmergedTree = true)
+                    action.performSemanticsAction(SemanticsActions.RequestFocus) { assertTrue(it()) }
+                    action.assertIsFocused().performKeyInput { pressKey(androidx.compose.ui.input.key.Key.Enter) }
+                } else {
+                    val layouts = mutableListOf<TextLayoutResult>()
+                    link.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+                    link.performTouchInput { click(layouts.single().getBoundingBox(0).center) }
+                }
+                compose.runOnIdle {
+                    assertEquals(count + 1, opened.size)
+                    assertEquals("word-$row", opened.last())
+                }
+                if (row == 3500) {
+                    compose.runOnIdle { visible.value = false }
+                    compose.waitForIdle()
+                    compose.runOnIdle { visible.value = true }
+                    link.assertIsDisplayed()
+                    compose.runOnIdle { selectedVisit.value = EntryReadingState() }
+                    compose.onNodeWithTag("entry-scroll").performScrollToNode(hasTestTag(tag))
+                    compose.onNodeWithText("word 0", useUnmergedTree = true).assertExists()
+                    compose.runOnIdle { selectedVisit.value = visit }
+                    link.assertIsDisplayed()
+                }
+            }
+            tapVisibleLink("After table", 1f)
+            compose.runOnIdle { assertEquals("after-table", opened.last()) }
+        } finally {
+            compose.runOnIdle { compose.activity.setContent {} }
+            compose.waitForIdle()
+        }
+    }
+
+    @Test fun rowHeightsBeyondTheMinimumSwitchToTheScrollableGrid() {
+        val mode = LearningStore.get(InstrumentationRegistry.getInstrumentation().targetContext).data.settings.darkMode
+        val multiline = Cell(List(99) { if (it % 2 == 0) Span("text", "line") else Span("line_break", "") }, false, 1, 1)
+        val last = 319
+        val table = Table(emptyList(), List(last + 1) { row -> listOf(multiline,
+            Cell(listOf(Span("link", "Row $row", target = "row-$row")), false, 1, 1)) })
+        val entry = tableEntry("wrapped-owner", "Wrapped rows", table)
+        try {
+            compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+                TableViewport(mode, 1f, fixedDensity = 1f) {
+                    EntryView(entry, false, {}, settings = AppSettings(collapseOtherSections = false, collapseDetails = false))
+                }
+            } }
+            val grid = hasTestTag("compiled-table-grid") and SemanticsMatcher.keyIsDefined(SemanticsActions.ScrollToIndex)
+            compose.onNodeWithTag("entry-scroll").performScrollToNode(grid)
+            compose.onNode(grid, useUnmergedTree = true).performScrollToIndex(last)
+            compose.onNodeWithText("Row $last", useUnmergedTree = true).performScrollTo().assertIsDisplayed()
         } finally {
             compose.runOnIdle { compose.activity.setContent {} }
             compose.waitForIdle()

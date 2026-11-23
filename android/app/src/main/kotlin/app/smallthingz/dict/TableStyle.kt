@@ -317,11 +317,11 @@ internal data class TableBorderSegment(val x1: Float, val y1: Float, val x2: Flo
 
 /** Resolve each shared edge once: none loses, then width, style, origin and position. */
 internal fun collapsedTableBorders(grid: TableGrid, pixels: TablePixelLayout,
-    style: TableResolvedStyle): List<TableBorderSegment> {
+    style: TableResolvedStyle, band: NativeTableBandPaint? = null): List<TableBorderSegment> {
     if (grid.rows == 0 || grid.columns == 0) {
         return separateCellBorderSegments(0f, 0f, pixels.width.toFloat(), pixels.height.toFloat(), style.outerEdges)
     }
-    val edges = collapsedBorderWinners(grid, style.cellEdges, style.outerEdges, style.rtl)
+    val edges = band?.edges ?: collapsedBorderWinners(grid, style.cellEdges, style.outerEdges, style.rtl)
     fun x(column: Int): Float = if (column == grid.columns) pixels.width.toFloat() else pixels.cellLeft(column).toFloat()
     fun y(row: Int): Float = if (row == grid.rows) pixels.height.toFloat() else pixels.cellTop(row).toFloat()
     return edges.map { (edge, winner) ->
@@ -330,10 +330,45 @@ internal fun collapsedTableBorders(grid: TableGrid, pixels: TablePixelLayout,
             val at = when (edge.fixed) { 0 -> width / 2f; grid.columns -> pixels.width - width / 2f; else -> x(edge.fixed) }
             TableBorderSegment(at, y(edge.interval), at, y(edge.interval + 1), width, winner.border.color, winner.border.stroke)
         } else {
-            val at = when (edge.fixed) { 0 -> width / 2f; grid.rows -> pixels.height - width / 2f; else -> y(edge.fixed) }
+            val at = when {
+                edge.fixed == 0 && band?.first != false -> width / 2f
+                edge.fixed == grid.rows && band?.last != false -> pixels.height - width / 2f
+                else -> y(edge.fixed)
+            }
             TableBorderSegment(x(edge.interval), at, x(edge.interval + 1), at, width, winner.border.color, winner.border.stroke)
         }
     }
+}
+
+internal class NativeTableBandPaint(val first: Boolean, val last: Boolean,
+    val edges: Map<TableEdge, TableEdgeCandidate>)
+
+internal fun tableBandMetrics(metrics: TableRenderMetrics, band: TableRowBand): TableRenderMetrics =
+    metrics.copy(style = metrics.style?.let { style ->
+        style.copy(cellInsets = style.cellInsets.subList(band.firstCell, band.endCell),
+            cellEdges = style.cellEdges.subList(band.firstCell, band.endCell),
+            cellBorders = style.cellBorders.subList(band.firstCell, band.endCell))
+    })
+
+/** Resolve both sides of each shared seam in original cell order. Each clipped item paints
+ * its own half of that seam; an internal boundary never acquires the table's outer border. */
+internal fun tableBandPaint(grid: TableGrid, style: TableResolvedStyle,
+    bands: List<TableRowBand>, index: Int): NativeTableBandPaint {
+    val band = bands[index]
+    val before = bands.getOrNull(index - 1) ?: band
+    val after = bands.getOrNull(index + 1) ?: band
+    val window = TableRowBand(before.firstRow, after.endRow, before.firstCell, after.endCell)
+    val winners = collapsedBorderWinners(window.grid(grid), style.cellEdges.subList(window.firstCell, window.endCell),
+        style.outerEdges, style.rtl)
+    val start = band.firstRow - window.firstRow
+    val end = band.endRow - window.firstRow
+    val edges = buildMap {
+        winners.forEach { (edge, winner) ->
+            if (edge.vertical && edge.interval in start until end) put(edge.copy(interval = edge.interval - start), winner)
+            if (!edge.vertical && edge.fixed in start..end) put(edge.copy(fixed = edge.fixed - start), winner)
+        }
+    }
+    return NativeTableBandPaint(index == 0, index == bands.lastIndex, edges)
 }
 
 /** New computed cell lengths are never rescaled by a descendant font or decoration projection. */
