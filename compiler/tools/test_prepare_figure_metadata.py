@@ -302,6 +302,16 @@ class SrImageInfoBindingTests(unittest.TestCase):
         self.assertEqual({(v['title'], v['observed_width_px'], v['observed_height_px']) for v in observed},
             {('Нови Сад',224,250), ('Ниш',194,250), ('Приштина',156,200), ('Београд',168,200)})
         self.assertTrue(all(v['parse_core_binding_proven'] is False for v in observed))
+        other_batch = figure.stream_decode((fixtures/'sr-svg226/current-height-batch-651.json').read_bytes())
+        other_base = {key: other_batch[key] for key in ('requests', 'response')}
+        projected = figure.file_records((other_base, other_batch), namespace, 'srwiktionary', '20261001',
+            other_base['response'].encode(), has_batches=True, record_limit=4,
+            profile_kind=figure.FIGURE_PROFILE_V4, allow_compatible_epochs=True)
+        other_heights = [v for row in projected['records'] for v in row['observed_svg_heights']]
+        self.assertEqual({(v['title'], v['observed_width_px'], v['observed_height_px']) for v in other_heights},
+            {('Краљево',192,230), ('Зрењанин',194,300), ('рударство',171,150),
+             ('rudarstvo',171,150), ('Зајечар',178,200)})
+        self.assertTrue(all(v['parse_core_binding_proven'] is False for v in other_heights))
         for change in ('unbound', 'wrong-image', 'old-response', 'changed-header', 'fraction'):
             altered = copy.deepcopy(batch)
             triple = altered['observed_svg_occurrences'][0]
