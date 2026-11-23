@@ -41,6 +41,8 @@ CORE_PROFILES = (CORE, '79b81ba96674efc8a803fc956bc501d347d440d2',
 SCRIBUNTO = 'b109cb6e5866c13871e308859ef78249b1bd3ea2'
 FIGURE_WMF5_CORE = '87f311882d8c84ec21e288d0bde8aa289df8dc56'
 FIGURE_WMF5_SCRIBUNTO = '25f7cdefa45a3b8417d7fa296f86b76537927f43'
+FIGURE_MON_CORE = '57f2a6bfacc3c5cecc269214a8d726b0b6faa596'
+FIGURE_MON_DEFAULTS = ('20261001', 'da834f0e0f84cc57b24bfc1ca633fb0969f8c046cd99d8837fbcb91dcf53394a')
 FIGURE_WMF5_SR_RAW = '9755bd766754d1d6e0ede764ca11eb351c4da75363cb6297c70668dba657b31f'
 FIGURE_WMF5_DEFAULTS = {
     'thwiktionary': ('20261001', '424f330eb29ae006d684238cf2d8dedc254af22f49d4a01e2224224212e85ac2'),
@@ -151,8 +153,9 @@ def response(data, wiki, language, profile=PROFILE, *, raw_sha=None, date=None):
     if (not isinstance(general, dict) or general.get('wikiid') != wiki
             or general.get('lang') != language or not reviewed_source(general.get('git-hash'), profile, wiki)):
         raise ValueError('Site-info edition/language/source mismatch')
-    if general.get('git-hash') == FIGURE_WMF5_CORE:
-        reviewed_date, reviewed_sha = FIGURE_WMF5_DEFAULTS[wiki]
+    binding = file_defaults_observation(general.get('git-hash'), wiki)
+    if binding is not None:
+        reviewed_date, reviewed_sha = binding
         if raw_sha != reviewed_sha or (date is not None and date != reviewed_date):
             raise ValueError('Unreviewed Figure default-options observation')
     legacy.validate_server(general.get('server'))
@@ -167,13 +170,21 @@ def response(data, wiki, language, profile=PROFILE, *, raw_sha=None, date=None):
     return result
 
 
+def file_defaults_observation(core, wiki):
+    if core == FIGURE_WMF5_CORE and isinstance(wiki, str):
+        return FIGURE_WMF5_DEFAULTS.get(wiki)
+    if core == FIGURE_MON_CORE and wiki == 'mnwwiktionary':
+        return FIGURE_MON_DEFAULTS
+    return None
+
+
 def reviewed_source(core, profile, wiki):
-    return core in CORE_PROFILES or (core == FIGURE_WMF5_CORE and profile == FIGURE_PROFILE and isinstance(wiki, str) and wiki in FIGURE_WMF5_DEFAULTS)
+    return core in CORE_PROFILES or (profile == FIGURE_PROFILE and file_defaults_observation(core, wiki) is not None)
 
 
 def scribunto_reference(core):
-    # The two site library leaves retain the same SOURCE_PINS at both revisions.
-    return FIGURE_WMF5_SCRIBUNTO if core == FIGURE_WMF5_CORE else SCRIBUNTO
+    # Both WMF5 core revisions select this Scribunto gitlink and the same pinned library leaves.
+    return FIGURE_WMF5_SCRIBUNTO if core in (FIGURE_WMF5_CORE, FIGURE_MON_CORE) else SCRIBUNTO
 
 
 def render(data, config, retrieved, raw_sha):
@@ -439,15 +450,15 @@ def validate_snapshot(path, wiki=None, date=None, *, file_defaults=False):
     if path.name != SNAPSHOT:
         raise ValueError('Unexpected site-info snapshot filename')
     manifest = verify(path.parent)
-    if manifest['core'] == FIGURE_WMF5_CORE and not file_defaults:
+    if file_defaults_observation(manifest['core'], manifest['wiki']) is not None and not file_defaults:
         raise ValueError('This default-options observation is scoped to the ImageInfo source binding')
     if (wiki is not None and manifest['wiki'] != wiki) or (date is not None and manifest['date'] != date):
         raise ValueError('Site-info edition/date mismatch')
     return manifest
 
 
-def capture_artifacts(path, manifest=None):
-    validated = validate_snapshot(path)
+def capture_artifacts(path, manifest=None, *, file_defaults=False):
+    validated = validate_snapshot(path, file_defaults=file_defaults)
     if manifest is not None and validated != manifest:
         raise ValueError('Capture changed during pinning')
     return {**{name: row['sha256'] for name, row in validated['artifacts'].items()},

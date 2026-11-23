@@ -120,7 +120,7 @@ class SiteInfoCaptureTests(unittest.TestCase):
 
     def test_current_imageinfo_observations_are_bound_to_edition_date_and_exact_bytes(self):
         fixtures = Path(__file__).parent/'testdata/current-imageinfo-defaults'
-        for lang in ('de', 'it', 'ru', 'th', 'vi'):
+        for lang in ('de', 'it', 'mnw', 'ru', 'th', 'vi'):
             wiki = lang+'wiktionary'
             raw = gzip.decompress((fixtures/(wiki+'.json.gz')).read_bytes())
             data = s.evidence.decode(raw)
@@ -132,6 +132,20 @@ class SiteInfoCaptureTests(unittest.TestCase):
                 for options in ({'w':'srwiktionary'}, {'language':'sr'}, {'profile':s.PROFILE},
                                 {'date':'20261002'},{'digest':'0'*64}):
                     with self.assertRaises(ValueError):read(**options)
+
+    def test_mon_file_defaults_require_the_observed_rollout_and_own_returned_options(self):
+        fixture = Path(__file__).parent/'testdata/current-imageinfo-defaults/mnwwiktionary.json.gz'
+        raw = gzip.decompress(fixture.read_bytes())
+        response = s.evidence.decode(raw)
+        self.assertEqual(s.scribunto_reference(s.FIGURE_MON_CORE), s.FIGURE_WMF5_SCRIBUNTO)
+        self.assertFalse(s.reviewed_source(s.FIGURE_MON_CORE, s.PROFILE, 'mnwwiktionary'))
+        for field, changed in (('git-hash', s.FIGURE_WMF5_CORE), ('rtl', True), ('thumbsize', 0)):
+            modified = copy.deepcopy(response)
+            group = 'defaultoptions' if field == 'thumbsize' else 'general'
+            modified['query'][group][field] = changed
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                s.response(modified, 'mnwwiktionary', 'mnw', s.FIGURE_PROFILE, date='20261001',
+                           raw_sha=s.evidence.digest(s.evidence.encoded(modified)))
 
     def test_revalidation_preserves_original_failed_http_and_observation(self):
         root, data = self.source_refusal()
