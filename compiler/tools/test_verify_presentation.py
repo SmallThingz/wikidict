@@ -60,6 +60,35 @@ class PagedCatalogTests(unittest.TestCase):
 
 
 class PresentationDiagnosticTests(unittest.TestCase):
+    def test_two_language_owners_cannot_cover_a_missing_main_title(self):
+        for checkpointed in (False, True):
+            for omit in (False, True):
+                with self.subTest(checkpoint=checkpointed, omit=omit), Fixture() as f, ExitStack() as resources:
+                    # The two Zhuang source pages each declare French and English.
+                    titles = ['Chongzuo'] if omit else ['Chongzuo', 'football']
+                    for owner in ('Fazyij', 'Yinghyij'):
+                        f.language(owner, [f.entry(t, 'word', language=owner) for t in titles])
+                    row = dict(id=0, kind='language', expanded_pages=1, fallback_pages=1, alias_pages=0)
+                    (f.root / 'namespace-coverage.json').write_text(json.dumps(dict(version=1, namespaces=[row])))
+                    checkpoint = audit.AuditCheckpoint(resources, f.root / 'check.sqlite', {}) if checkpointed else None
+                    result = audit.scan(f.root, f.query, checkpoint=checkpoint, checkpoint_guard=lambda: None)
+                    self.assertEqual(result['main_title_counts'], dict(expected_distinct=2, observed_distinct=len(titles)))
+                    self.assertIs(result['main_title_count_mismatch'], omit)
+                    self.assertEqual(result['status'], 'failed' if omit else 'passed')
+                    self.assertFalse(result['semantic_acceptance'])
+
+    def test_distinct_main_titles_use_binary_unicode_identity(self):
+        for checkpointed in (False, True):
+            with self.subTest(checkpointed=checkpointed), Fixture() as f, ExitStack() as resources:
+                titles = ['É', 'é', 'E\u0301']
+                f.language('Lang', [f.entry(title, 'word', language='Lang') for title in titles])
+                row = dict(id=0, kind='language', expanded_pages=3, fallback_pages=0, alias_pages=0)
+                (f.root / 'namespace-coverage.json').write_text(json.dumps(dict(version=1, namespaces=[row])))
+                checkpoint = audit.AuditCheckpoint(resources, f.root / 'check.sqlite', {}) if checkpointed else None
+                result = audit.scan(f.root, f.query, checkpoint=checkpoint, checkpoint_guard=lambda: None)
+                self.assertEqual(result['main_title_counts'], dict(expected_distinct=3, observed_distinct=3))
+                self.assertFalse(result['main_title_count_mismatch'])
+
     def test_empty_language_bodies_are_counted_once_with_one_example_per_view(self):
         with Fixture() as f:
             blank = dict(kind='language', language='polski', language_code='pl', display_title=[],

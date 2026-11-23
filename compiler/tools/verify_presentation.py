@@ -277,7 +277,7 @@ def language_catalog(query, page_size):
     return dict(languages=[row['heading'] for row in rows], accounting=rows)
 
 
-def emitted_views(root, catalog, query):
+def emitted_views(root, catalog, query, rows):
     """Native catalog accounting owns language names; fixed filenames own kinds."""
     headings, accounting = catalog['languages'], catalog['accounting']
     require(isinstance(headings, list) and all(isinstance(x, str) and x for x in headings),
@@ -301,7 +301,6 @@ def emitted_views(root, catalog, query):
         require(not headings, 'language payload directory missing')
     views = [dict(kind='language', language=x, minimum_records=owners[x], neutral=False)
              for x in headings]
-    rows = coverage_rows(root)
     for kind in FEATURE_KINDS:
         exists = present(root, kind + '.wikblb')
         expected = any(row['kind'] == kind.replace('-', '_') and
@@ -354,10 +353,11 @@ def scan(root, query, export_page=None, *, observe_record=None, audit_references
 
     destinations = {} if checkpoint is None else checkpoint.mapping('destinations')
     destination_references = {} if checkpoint is None else checkpoint.mapping('references')
+    rows = coverage_rows(root)
     cursor = [0, 0, None, None]
     views = None if checkpoint is None else checkpoint.get('inventory')
     if views is None:
-        views = list(emitted_views(root, language_catalog(ask, catalog_page_size), ask))
+        views = list(emitted_views(root, language_catalog(ask, catalog_page_size), ask, rows))
         if checkpoint is not None:
             checkpoint_guard()
             checkpoint.put('inventory', views)
@@ -546,6 +546,22 @@ def scan(root, query, export_page=None, *, observe_record=None, audit_references
     result['view_count'] = len(result['views'])
     result['scan_complete'] = True
     result['status'] = 'failed' if result['issues'] else 'passed'
+    if rows is not None:
+        expected = sum(row['expanded_pages'] + row['fallback_pages'] - row['alias_pages']
+                       for row in rows if row['kind'] == 'language')
+        # A multilingual page contributes once across all owners. The destination
+        # identity also excludes alias queries that followed an ordinary entry.
+        if checkpoint is None:
+            distinct = len({title for kind, owner, title in destinations if kind == 'language'})
+        else:
+            distinct, = checkpoint.db.execute(
+                "SELECT count(DISTINCT json_extract(key,'$[2]') COLLATE BINARY) FROM maps "
+                "WHERE kind='destinations' AND json_extract(key,'$[0]')='language'"
+            ).fetchone()
+        result['main_title_counts'] = dict(expected_distinct=expected, observed_distinct=distinct)
+        result['main_title_count_mismatch'] = distinct != expected
+        if result['main_title_count_mismatch']:
+            result['status'] = 'failed'
     return result
 
 
@@ -1296,7 +1312,8 @@ def run_audit(args, report_files):
             print(f'AUDIT_INDEX_CLEANUP error {type(error).__name__}: {error}', file=sys.stderr)
             cleanup_failed = True
     if args.summary_json:
-        summary = {k: result[k] for k in ('status', 'scan_complete', 'semantic_acceptance', 'error', 'records', 'empty_language_records') if k in result}
+        summary = {k: result[k] for k in ('status', 'scan_complete', 'semantic_acceptance', 'error', 'records', 'empty_language_records',
+                                          'main_title_counts', 'main_title_count_mismatch') if k in result}
         if 'issues' in result:
             summary['review_fields'] = len(result['issues'])
         if 'source_definitions' in result:
@@ -1307,6 +1324,10 @@ def run_audit(args, report_files):
     else:
         print(f"PRESENTATION_AUDIT {result['status']} records={result['records']} "
               f"issues={len(result['issues'])} views={result['view_count']} commands={result['commands']}")
+        if 'main_title_counts' in result:
+            counts = result['main_title_counts']
+            print(f"MAIN_TITLE_COUNTS expected={counts['expected_distinct']} observed={counts['observed_distinct']} "
+                  f"main_title_count_mismatch={str(result['main_title_count_mismatch']).lower()}")
         if 'source_definitions' in result:
             score = result['source_definitions']
             print(f"SOURCE_DEFINITIONS matched={score['matched']} eligible={score['eligible']} "
