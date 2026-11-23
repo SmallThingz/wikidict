@@ -24553,7 +24553,7 @@ pub const Renderer = struct {
         self.cell_line_context = native;
         defer self.cell_line_context = parent_context;
         defer self.cell_line_owner_font = previous;
-        return if (wiki) self.wikiTableForeground(tag, parent) else self.htmlLanguageDirection(tag, parent);
+        return if (wiki) self.wikiTableForegroundWithFont(tag, parent, parent.font_scale_basis == .css_px and !parent.font_size_unknown) else self.htmlLanguageDirection(tag, parent);
     }
 
     fn cellLineHeightFontRole(self: *Renderer, tag: syntax.Tag, parent: Style) Error!bool {
@@ -25486,7 +25486,7 @@ pub const Renderer = struct {
     }
 
 
-    const RelativeFontSize = struct { value: ?f32, normal_body: bool = false, unknown: bool = false };
+    const RelativeFontSize = struct { value: ?f32, normal_body: bool = false, unknown: bool = false, css_pixels: bool = false };
     fn htmlProjectedFontSize(self: *Renderer, tag: syntax.Tag, parent: ?f32) Error!?RelativeFontSize {
         // Select the winning UA default/author declaration before resolving
         // against the parent. A losing default or declaration may overflow
@@ -25574,11 +25574,23 @@ pub const Renderer = struct {
     }
 
     fn htmlComputedFontSize(self: *Renderer, tag: syntax.Tag, parent: Style) Error!?RelativeFontSize {
+        return self.htmlComputedFontSizeWithPixels(tag, parent, false);
+    }
+    fn ordinaryFontSize(metric: table_style_profile.ObservedFontSizeValue) table_style_profile.FontSizeValue {
+        return switch (metric) {
+            .inherit => .inherit,
+            .absolute => |value| .{ .absolute = value },
+            .relative => |value| .{ .relative = value },
+            .step => |value| .{ .step = value },
+            .css_px, .root_relative, .unknown => .unknown,
+        };
+    }
+    fn htmlComputedFontSizeWithPixels(self: *Renderer, tag: syntax.Tag, parent: Style, own_pixels: bool) Error!?RelativeFontSize {
         if (self.observedFigureCaptionTagStyle(tag)) |known| return .{
             .value = known.font_scale, .normal_body = true, .unknown = false,
         };
         const css = (try self.semanticAttribute(tag, "style")) orelse "";
-        const authored = if (self.context.table_styles) |profile| query: {
+        const authored: ?table_style_profile.FontSizeValue = if (self.context.table_styles) |profile| query: {
             const element = try self.textElement(tag, parent.text_element, parent.language);
             const classes = try self.containerQueryTokens(tag, profile, element, false);
             defer if (classes) |owned| self.a.free(owned);
@@ -25594,8 +25606,26 @@ pub const Renderer = struct {
                 if (ids) |complete| alternative.complete_ancestor_ids = complete;
                 projected.alternative_ancestry = &alternative;
             };
+            if (own_pixels) {
+                const selected = try profile.resolveObservedCellFontSizeIn(self.a, &projected, css, .{ .ctx = &tag, .get = htmlOwnAttributePresence });
+                if (selected) |metric| switch (metric) {
+                    .css_px => |px| return .{ .value = px, .css_pixels = true },
+                    else => break :query ordinaryFontSize(metric),
+                };
+                break :query null;
+            }
             break :query try profile.resolveFontSizeIn(self.a, &projected, css, .{ .ctx = &tag, .get = htmlOwnAttributePresence });
-        } else try table_style_profile.resolveInlineFontSizeAlloc(self.a, css);
+        } else query: {
+            if (own_pixels) {
+                const selected = try table_style_profile.resolveObservedCellInlineFontSizeAlloc(self.a, css);
+                if (selected) |metric| switch (metric) {
+                    .css_px => |px| return .{ .value = px, .css_pixels = true },
+                    else => break :query ordinaryFontSize(metric),
+                };
+                break :query null;
+            }
+            break :query try table_style_profile.resolveInlineFontSizeAlloc(self.a, css);
+        };
         if (authored == null and self.rubyFontDefault(tag)) return .{
             .value = try relative_font.resolve(parent.font_scale, 0.5),
             .normal_body = parent.font_scale_basis == .normal_body, .unknown = parent.font_size_unknown,
@@ -25619,7 +25649,7 @@ pub const Renderer = struct {
             .absolute => |size| return .{ .value = size, .normal_body = true },
             .inherit => return .{ .value = parent.font_scale, .normal_body = body_basis, .unknown = !parent_known },
             .relative => |factor| return .{ .value = try relative_font.resolve(parent.font_scale, factor), .normal_body = body_basis, .unknown = !parent_known },
-            .step => |direction| if (parent_known) {
+            .step => |direction| if (parent_known and parent.font_scale_basis != .css_px) {
                 return .{ .value = try relative_font.resolveKeyword(parent.font_scale orelse 1, direction), .normal_body = true };
             },
             .unknown => {},
@@ -45379,7 +45409,7 @@ pub const Renderer = struct {
                 defer self.page_style_wiki_opening = previous_row_opening;
                 literal_operation.row_opening = line;
                 literal_operation.cell_attrs = null;
-                row_style = if (viewport != null) table_style else try self.wikiTableForegroundAt(row_tag, table_style, line);
+                row_style = if (viewport != null) table_style else try self.wikiTableForegroundAtWithFont(row_tag, table_style, line, true);
                 if (viewport == null) row_style.native_inline_motion = try self.nativeInlineMotionWikiEntry(
                     .wiki_row, line, row_tag, table_style.native_inline_motion);
                 if (viewport != null) try self.applyHtmlTooltip(row_tag, &row_style);
@@ -45611,12 +45641,18 @@ pub const Renderer = struct {
         return self.htmlDisplayNone(tag);
     }
     fn wikiTableForegroundAt(self: *Renderer, tag: syntax.Tag, inherited: Style, opening: []const u8) Error!Style {
+        return self.wikiTableForegroundAtWithFont(tag, inherited, opening, false);
+    }
+    fn wikiTableForegroundAtWithFont(self: *Renderer, tag: syntax.Tag, inherited: Style, opening: []const u8, own_pixels: bool) Error!Style {
         const previous = self.page_style_wiki_opening;
         self.page_style_wiki_opening = .{ .tag = tag, .source = opening, .row_parent = self.retainedWikiRowParent(tag, opening) };
         defer self.page_style_wiki_opening = previous;
-        return self.wikiTableForeground(tag, inherited);
+        return self.wikiTableForegroundWithFont(tag, inherited, own_pixels);
     }
     fn wikiTableForeground(self: *Renderer, tag: syntax.Tag, inherited: Style) Error!Style {
+        return self.wikiTableForegroundWithFont(tag, inherited, false);
+    }
+    fn wikiTableForegroundWithFont(self: *Renderer, tag: syntax.Tag, inherited: Style, own_pixels: bool) Error!Style {
         const previous_page_style_tag = self.page_style_wiki_tag;
         self.page_style_wiki_tag = tag;
         defer self.page_style_wiki_tag = previous_page_style_tag;
@@ -45633,7 +45669,8 @@ pub const Renderer = struct {
         if (hasCompleteAncestorClasses(inherited.text_element) or self.needsFigureAncestry() or (if (self.textPaintProfile()) |profile| profile.hasTextPaint() else false))
             effective.text_element = try self.textElement(tag, inherited.text_element, inherited.language);
         if (!try self.applyObservedCellFont(tag, inherited, &effective)) {
-            if (try self.htmlComputedFontSize(tag, inherited)) |resolved| {
+            if (try self.htmlComputedFontSizeWithPixels(tag, inherited, own_pixels)) |resolved| {
+                if (resolved.css_pixels) effective.font_scale_basis = .css_px;
                 if (resolved.normal_body) effective.font_scale_basis = .normal_body;
                 effective.font_scale = if (effective.font_scale_basis == .normal_body) resolved.value orelse 1 else resolved.value;
                 effective.font_scale_set = true;
@@ -64356,6 +64393,54 @@ test "wiki table physical lines preserve strip regions attributes and ordinary c
     try std.testing.expectEqual(@as(usize, 2), mixed_blocks.len);
     try std.testing.expectEqualStrings("outside", try flattened(a, mixed_blocks[0].spans));
     try std.testing.expectEqualStrings("inside", try flattened(a, mixed_blocks[1].table.?.rows[0].cells[0].spans));
+}
+
+test "Amharic phrase table preserves row CSS pixel font in stored spans" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try renderer.renderBody(@embedFile("testdata/am-row-font/4465-r19710.wikitext"));
+    const stored = try FormattingScopeTest.encode(a, &renderer, blocks);
+    const table = stored.entry.sections[0].blocks[0].table.?;
+    try std.testing.expectEqual(@as(usize, 59), table.rows.len);
+    for (table.rows, 0..) |row, index| {
+        try std.testing.expectEqual(@as(usize, 2), row.cells.len);
+        for (row.cells) |cell| {
+            try std.testing.expect(cell.spans.len != 0);
+            for (cell.spans) |span| {
+                if (index == 0) {
+                    try std.testing.expectEqual(@as(?f32, 26), span.font_scale);
+                    try std.testing.expectEqual(FontScaleBasis.css_px, span.font_scale_basis);
+                    try std.testing.expect(span.bold);
+                } else try std.testing.expectEqual(@as(?f32, null), span.font_scale);
+            }
+        }
+    }
+}
+
+test "Amharic phrase table row font permits local override without sibling leakage" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try renderer.renderBody("{|\n|- style='font-size:26px'\n| style='font-size:12px' | [[Target|Override]]\n| inherited\n| style='font-size:larger' | unresolved\n|-\n| following\n|}\noutside");
+    const stored = try FormattingScopeTest.encode(a, &renderer, blocks);
+    const decoded = stored.entry.sections[0].blocks;
+    const rows = decoded[0].table.?.rows;
+    const link = rows[0].cells[0].spans[0];
+    try std.testing.expectEqualStrings("Target", link.target);
+    try std.testing.expectEqual(@as(?f32, 12), link.font_scale);
+    try std.testing.expectEqual(FontScaleBasis.css_px, link.font_scale_basis);
+    const sibling = rows[0].cells[1].spans[0];
+    try std.testing.expectEqual(@as(?f32, 26), sibling.font_scale);
+    try std.testing.expectEqual(FontScaleBasis.css_px, sibling.font_scale_basis);
+    const keyword = rows[0].cells[2].spans[0];
+    try std.testing.expectEqual(@as(?f32, 26), keyword.font_scale);
+    try std.testing.expectEqual(FontScaleBasis.css_px, keyword.font_scale_basis);
+    try std.testing.expect(renderer.fallbacks.unresolved_table_style);
+    try std.testing.expectEqual(@as(?f32, null), rows[1].cells[0].spans[0].font_scale);
+    try std.testing.expectEqual(@as(?f32, null), decoded[1].spans[0].font_scale);
 }
 
 test "wiki row font styles reach owned cells and respect local normal overrides" {
