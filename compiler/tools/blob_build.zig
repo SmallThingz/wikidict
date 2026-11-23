@@ -19,6 +19,7 @@ comptime {
         _ = page_language;
         _ = page_source_context;
         _ = source_internal_link;
+        _ = SourceTitles;
         _ = figure_sizing;
         _ = figure_page_observations;
         _ = @import("source_stylesheet_imports.zig");
@@ -3651,7 +3652,10 @@ fn loadSiteMainPage(io: std.Io, a: std.mem.Allocator, root: []const u8, namespac
     return site;
 }
 
+const SourceTitles = @import("title_conservation.zig");
+
 const ExpansionPool = struct {
+    source_titles: ?*SourceTitles = null,
     io: std.Io,
     allocator: std.mem.Allocator,
     figure_inputs: ?*WriterFigureInputs = null,
@@ -3754,7 +3758,9 @@ const ExpansionPool = struct {
         const profile_start = if (self.profile_enabled) ParentProfileStamp.now(self.io) else null;
         defer if (profile_start) |started| self.finish_profile.record(started, ParentProfileStamp.now(self.io));
         if (self.figure_inputs) |inputs| try inputs.verify();
+        if (self.source_titles) |titles| writer.record_observer = .{ .ctx = titles, .observe = SourceTitles.observe };
         const stats = try writer.finishDiscardingSpools(codes);
+        if (self.source_titles) |titles| try titles.finish();
         if (self.figure_inputs) |inputs| try inputs.verify();
         return stats;
     }
@@ -4298,6 +4304,7 @@ fn dispatchIndexedPage(
             return;
         }
     }
+    if (pool.source_titles) |titles| try titles.expect(ordinal, line, page, role.?, compiledKey(page.title, role.?));
     if (page.redirect) |xml_target| {
         const index = pool.page_title_index orelse return error.MissingPageTitleIndex;
         const own_ref = (try index.lookup(pool.page_index_bytes, page.title)) orelse return error.InvalidPageTitleIndex;
@@ -4387,6 +4394,7 @@ const PendingShard = struct {
     offset: usize,
     selected: usize = 0,
     published: bool = false,
+    source_titles: ?SourceTitles = null,
 
     fn init(io: std.Io, a: std.mem.Allocator, root: []const u8, start: usize, requested: usize, offset: usize, codes: encoder.blob_builder.LanguageCodes) !PendingShard {
         const final = try std.fmt.allocPrint(a, "{s}/{d:0>8}", .{ root, start });
@@ -4407,6 +4415,7 @@ const PendingShard = struct {
     }
 
     fn deinit(self: *PendingShard) void {
+        if (self.source_titles) |*titles| titles.deinit();
         if (self.writer) |*writer| writer.deinit();
         if (!self.published) std.Io.Dir.cwd().deleteTree(self.io, self.temporary) catch {};
         self.allocator.free(self.temporary);
@@ -4468,7 +4477,10 @@ fn runContinuous(
     var selected: usize = 0;
     var next_progress = std.Io.Clock.awake.now(io).toNanoseconds() + 10 * std.time.ns_per_s;
     var pending: ?PendingShard = null;
-    defer if (pending) |*shard| shard.deinit();
+    defer {
+        pool.source_titles = null;
+        if (pending) |*shard| shard.deinit();
+    }
     while (lines.next()) |line| {
         const line_offset = next_byte_offset;
         next_byte_offset += line.len;
@@ -4480,6 +4492,7 @@ fn runContinuous(
         if (selected == total) break;
         if (pending != null and pending.?.selected == pending.?.requested) {
             try pending.?.publish(pool, dump, codes, index_path, page_index.identity);
+            pool.source_titles = null;
             pending.?.deinit();
             pending = null;
         }
@@ -4488,6 +4501,8 @@ fn runContinuous(
             const requested = @min(shard_pages, total - selected);
             const offset = if (start == 0) 0 else line_offset;
             pending = try PendingShard.init(io, a, output_root, start, requested, offset, codes);
+            pending.?.source_titles = try SourceTitles.init(a, page_index.bytes, pool.page_title_index orelse return error.MissingPageTitleIndex, start, requested);
+            pool.source_titles = &pending.?.source_titles.?;
             if (pool.reviewed_nonlexical) |review| pending.?.writer.?.namespace_coverage.reviewed_nonlexical_sha256 = review.sha256;
         }
         const shard = &pending.?;
@@ -4507,6 +4522,7 @@ fn runContinuous(
     if (selected != total) return error.ShortPageIndex;
     if (pending != null) {
         try pending.?.publish(pool, dump, codes, index_path, page_index.identity);
+        pool.source_titles = null;
         pending.?.deinit();
         pending = null;
     }
@@ -4938,6 +4954,10 @@ fn runOrdinaryOutput(
 
     var writer = try encoder.blob_builder.Writer.init(io, a, if (audit) |value| value.scratch_root else output_root);
     defer writer.deinit();
+    var titles: ?SourceTitles = if (audit == null) try SourceTitles.init(a, page_index.bytes, pool.page_title_index orelse return error.MissingPageTitleIndex, options.start_page, options.limit_pages) else null;
+    defer if (titles) |*value| value.deinit();
+    pool.source_titles = if (titles) |*value| value else null;
+    defer pool.source_titles = null;
     const capture_scope = OrdinaryFailureCaptureScope.begin(&writer);
     defer capture_scope.deinit();
     writer.language_codes = codes;
@@ -66211,20 +66231,31 @@ const IndexedOrdinaryOutputTesting = struct {
     shared: CapturedWriterInputs,
     book: CapturedWriterInputs,
 
-    fn init(a: std.mem.Allocator, root: []const u8, bad_middle_namespace: bool) !*@This() {
+    const Mode = enum { ordinary, invalid_namespace, title_conservation };
+
+    fn init(a: std.mem.Allocator, root: []const u8, mode: Mode) !*@This() {
         const self = try a.create(@This());
         self.a = a; self.root = root;
-        self.namespaces = try namespace_registry.Registry.init(a,
+        const registry =
             "# wikidict-namespace-registry-v1\n# wiki\tenwiktionary\n# dump-date\t20261001\n# content-language\ten\n" ++
             "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
             "10\tTemplate\tTemplate\tfirst-letter\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
-            "14\tCategory\tCategory\tfirst-letter\t1\t0\t0\twikitext\tcompile_only\tcategories\n");
-        const pairs = [_][2][]const u8{ .{ "First", "first" }, .{ "Second", "second" }, .{ "Third", "third" } };
+            "14\tCategory\tCategory\tfirst-letter\t1\t0\t0\twikitext\tcompile_only\tcategories\n";
+        self.namespaces = try namespace_registry.Registry.init(a, if (mode == .title_conservation)
+            registry ++ "110\tThesaurus\tThesaurus\tfirst-letter\t1\t1\t0\twikitext\tthesaurus\tentries\n"
+        else registry);
+        const pairs: [3][2][]const u8 = if (mode == .title_conservation)
+            .{ .{ "Thesaurus:Old", "first" }, .{ "Template:Second", "second" }, .{ "Thesaurus:Old", "third" } }
+        else .{ .{ "First", "first" }, .{ "Second", "second" }, .{ "Third", "third" } };
         var text: std.ArrayList(u8) = .empty;
         var index: std.ArrayList(u8) = .empty;
         for (pairs, 0..) |pair, i| {
             const raw = try std.fmt.allocPrint(a, "#REDIRECT [[{s}]]\n", .{pair[1]});
-            const ns: u32 = if (i == 1 and bad_middle_namespace) 999 else 0;
+            const ns: u32 = switch (mode) {
+                .ordinary => 0,
+                .invalid_namespace => if (i == 1) 999 else 0,
+                .title_conservation => if (i == 1) 10 else 110,
+            };
             self.offsets[i] = index.items.len;
             self.rows[i] = try std.fmt.allocPrint(a,
                 "{d}\t{d}\t{s}\t{s}\t{d}\t{d}\t2026-10-01T00:00:00Z\tUser\twikitext\t{d}\t1\t0\n",
@@ -66283,6 +66314,78 @@ const IndexedOrdinaryOutputTesting = struct {
     }
 };
 
+test "ordinary source title conservation spans empty, superseded and fixed redirect shards and refuses an omitted frame" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const io = std.testing.io;
+    const root = try tmp.dir.realPathFileAlloc(io, ".", a);
+    const f = try IndexedOrdinaryOutputTesting.init(a, root, .title_conservation);
+    defer f.deinit();
+    const shards = try std.fs.path.join(a, &.{ root, "shards" });
+    try runContinuous(io, a, shards, .{ .start_page = 0, .index_byte_offset = 0, .limit_pages = 3, .shard_pages = 1 }, .{},
+        &f.namespaces, &f.pool, &f.dump, &f.page_index, .raw_xml, f.index_path);
+    try std.testing.expect(f.pool.source_titles == null);
+    for (0..3) |i| {
+        const output = try std.fmt.allocPrint(a, "{s}/{d:0>8}", .{ shards, i });
+        var coverage = try encoder.namespace_coverage.Table.read(io, a, output);
+        defer coverage.deinit(a);
+        const row = coverage.rows.get(if (i == 1) 10 else 110) orelse return error.TestUnexpectedResult;
+        const alias_path = try std.fs.path.join(a, &.{ output, "aliases.wikblb" });
+        try std.testing.expectEqual(@as(u64, 1), row.input_rows);
+        try std.testing.expectEqual(@as(u64, @intFromBool(i == 0)), row.duplicate_rows);
+        try std.testing.expectEqual(@as(u64, @intFromBool(i == 1)), row.compile_only_rows);
+        try std.testing.expectEqual(@as(u64, @intFromBool(i == 2)), row.alias_pages);
+        if (i < 2) {
+            try FirstFailureControl.absent(alias_path);
+            continue;
+        }
+        const bytes = try std.Io.Dir.cwd().readFileAlloc(io, alias_path, a, .limited(64 * 1024));
+        const view = try encoder.blob_format.inspect(bytes);
+        var records = view.iterator();
+        const record = (try records.next()) orelse return error.TestUnexpectedResult;
+        const alias = try encoder.alias_codec.decode(record.payload);
+        try encoder.alias_codec.validateKey(record.title, alias);
+        try std.testing.expectEqual(.thesaurus, alias.source_kind);
+        try std.testing.expectEqual(@as(u32, 110), alias.source_namespace);
+        try std.testing.expectEqualStrings("Thesaurus:Old", alias.source_title);
+        try std.testing.expectEqualStrings("Old", alias.source_key);
+        try std.testing.expectEqualStrings("third", alias.xml_target);
+        try std.testing.expect((try records.next()) == null);
+    }
+
+    const negative = try std.fs.path.join(a, &.{ root, "omission" });
+    try std.Io.Dir.cwd().createDirPath(io, negative);
+    const final = try std.fs.path.join(a, &.{ negative, "00000002" });
+    {
+        var pending = try PendingShard.init(io, a, negative, 2, 1, f.offsets[2], .{});
+        defer pending.deinit();
+        pending.source_titles = try SourceTitles.init(a, f.page_index.bytes, f.pool.page_title_index.?, 2, 1);
+        f.pool.source_titles = &pending.source_titles.?;
+        defer f.pool.source_titles = null;
+        pending.selected = 1;
+        const writer = &pending.writer.?;
+        writer.stats.pages_seen = 1;
+        const start = f.offsets[2];
+        const end = std.mem.indexOfScalarPos(u8, f.page_index.bytes, start, '\n').?;
+        try dispatchIndexedPage(&f.pool, writer, &f.dump, .raw_xml, &f.namespaces, f.page_index.bytes[start..end], 2);
+        // Lose only the produced frame, after genuine disposition/alias accounting.
+        try std.testing.expect(writer.spools.aliases.offset != 0);
+        try writer.spools.aliases.file.setLength(io, 0);
+        writer.spools.aliases.offset = 0;
+        try std.testing.expectError(error.MissingCompiledSourceTitle, pending.publish(&f.pool, &f.dump, .{}, f.index_path, f.page_index.identity));
+        try FirstFailureControl.absent(try std.fs.path.join(a, &.{ pending.temporary, "page-coverage.json" }));
+        try FirstFailureControl.absent(final);
+    }
+    try FirstFailureControl.absent(final);
+    var dir = try std.Io.Dir.cwd().openDir(io, negative, .{ .iterate = true });
+    defer dir.close(io);
+    var entries = dir.iterate();
+    try std.testing.expect((try entries.next(io)) == null);
+}
+
 test "ordinary indexed output arguments preserve default options and refuse mixed or ambiguous selections" {
     const z = "0000000000000000000000000000000000000000000000000000000000000000";
     const normal = try parseOptions(&.{ "tool", "/dump", "/out", "--expander-root", "/root" });
@@ -66332,7 +66435,7 @@ test "ordinary indexed outputs equal separate Writer blobs and coverage for nonc
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
     const a = arena.allocator(); const io = std.testing.io;
     const root = try tmp.dir.realPathFileAlloc(io, ".", a);
-    const f = try IndexedOrdinaryOutputTesting.init(a, root, false); defer f.deinit();
+    const f = try IndexedOrdinaryOutputTesting.init(a, root, .ordinary); defer f.deinit();
     const shared = try std.fs.path.join(a, &.{ root, "shared" });
     var cursor: IndexedOutputCursor = .{};
     for ([_]usize{ 0, 2 }) |i| {
@@ -66355,7 +66458,7 @@ test "ordinary indexed output failure keeps earlier complete output and stops be
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
     const a = arena.allocator(); const io = std.testing.io;
     const root = try tmp.dir.realPathFileAlloc(io, ".", a);
-    const f = try IndexedOrdinaryOutputTesting.init(a, root, true); defer f.deinit();
+    const f = try IndexedOrdinaryOutputTesting.init(a, root, .invalid_namespace); defer f.deinit();
     const output = try std.fs.path.join(a, &.{ root, "outputs" });
     var cursor: IndexedOutputCursor = .{};
     var completed: usize = 0;
@@ -66382,7 +66485,7 @@ test "ordinary indexed output reuse refuses changed and newly present shared inp
         var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
         const a = arena.allocator(); const io = std.testing.io;
         const root = try tmp.dir.realPathFileAlloc(io, ".", a);
-        const f = try IndexedOrdinaryOutputTesting.init(a, root, false); defer f.deinit();
+        const f = try IndexedOrdinaryOutputTesting.init(a, root, .ordinary); defer f.deinit();
         const output = try std.fs.path.join(a, &.{ root, "outputs" });
         var cursor: IndexedOutputCursor = .{};
         try f.run(output, f.selected(0), &cursor);

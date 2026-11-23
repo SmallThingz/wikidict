@@ -374,6 +374,7 @@ fn writeBlobFile(
     kind: blob_format.BlobKind,
     metadata: []const u8,
     records: []blob_format.RecordInput,
+    observer: ?RecordObserver,
 ) !void {
     try sortAndValidate(records);
     try blob_format.validateMetadata(kind, metadata);
@@ -393,6 +394,7 @@ fn writeBlobFile(
         var length_buf: [blob_format.max_varuint_len]u8 = undefined;
         try w.writeAll(blob_format.encodePayloadLength(record.payload.len, &length_buf));
         try w.writeAll(record.payload);
+        if (observer) |watch| try watch.observe(watch.ctx, kind, record);
     }
     try w.flush();
 }
@@ -415,6 +417,7 @@ fn finalizeFixedSpool(
     output_root: []const u8,
     name: []const u8,
     kind: blob_format.BlobKind,
+    observer: ?RecordObserver,
 ) !void {
     var mapped = try mmapPath(io, spool.path);
     defer mapped.deinit();
@@ -423,7 +426,7 @@ fn finalizeFixedSpool(
     if (records.len == 0) return;
     const path = try fixedBlobPathAlloc(allocator, output_root, name);
     defer allocator.free(path);
-    try writeBlobFile(io, path, kind, "", records);
+    try writeBlobFile(io, path, kind, "", records, observer);
 }
 
 const LanguageGroup = struct {
@@ -438,6 +441,7 @@ fn finalizeLanguageBucket(
     output_root: []const u8,
     manifest: *std.ArrayList([]const u8),
     owners: *const std.StringHashMapUnmanaged([]const u8),
+    observer: ?RecordObserver,
 ) !usize {
     var mapped = try mmapPath(io, spool.path);
     defer mapped.deinit();
@@ -475,7 +479,7 @@ fn finalizeLanguageBucket(
         defer allocator.free(metadata);
         const path = try languageBlobPathAlloc(allocator, output_root, group.heading);
         defer allocator.free(path);
-        try writeBlobFile(io, path, .language, metadata, group.records.items);
+        try writeBlobFile(io, path, .language, metadata, group.records.items, observer);
         const heading = try allocator.dupe(u8, group.heading);
         errdefer allocator.free(heading);
         try manifest.append(allocator, heading);
@@ -7304,7 +7308,13 @@ fn compileAliasWithRoot(a: std.mem.Allocator, codes: LanguageCodes, record: blob
     return .{ .key = key, .payload = payload };
 }
 
+pub const RecordObserver = struct {
+    ctx: *anyopaque,
+    observe: *const fn (*anyopaque, blob_format.BlobKind, blob_format.RecordInput) anyerror!void,
+};
+
 pub const Writer = struct {
+    record_observer: ?RecordObserver = null,
     namespace_coverage: blobs.namespace_coverage.Table = .{},
     io: std.Io,
     allocator: std.mem.Allocator,
@@ -7567,7 +7577,7 @@ pub const Writer = struct {
         }
         var language_blobs: usize = 0;
         for (&self.spools.language) |*spool| {
-            language_blobs += try finalizeLanguageBucket(self.io, self.allocator, spool, self.output_root, &headings, &self.spools.language_owners);
+            language_blobs += try finalizeLanguageBucket(self.io, self.allocator, spool, self.output_root, &headings, &self.spools.language_owners, self.record_observer);
             if (discard_spools) deleteFileIfExists(self.io, spool.path) catch {};
         }
         std.mem.sort([]const u8, headings.items, {}, struct {
@@ -7589,7 +7599,7 @@ pub const Writer = struct {
             .{ "aliases", "aliases", .alias },
         }) |entry| {
             const spool = &@field(self.spools, entry[0]);
-            try finalizeFixedSpool(self.io, self.allocator, spool, self.output_root, entry[1], entry[2]);
+            try finalizeFixedSpool(self.io, self.allocator, spool, self.output_root, entry[1], entry[2], self.record_observer);
             if (discard_spools) deleteFileIfExists(self.io, spool.path) catch {};
         }
         // Alias-only feature namespaces still have a selected compiled store.
@@ -7605,7 +7615,7 @@ pub const Writer = struct {
                 if (has_alias) {
                     const path = try std.fs.path.join(self.allocator, &.{ self.output_root, blob_catalog.featureBlobFilename(kind).? });
                     defer self.allocator.free(path);
-                    try writeBlobFile(self.io, path, kind, "", &.{});
+                    try writeBlobFile(self.io, path, kind, "", &.{}, self.record_observer);
                 }
             }
         }
