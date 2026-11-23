@@ -12,6 +12,7 @@ from compression import zstd
 from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import datetime
+from email.utils import format_datetime
 import fcntl
 import gzip
 import hashlib
@@ -199,7 +200,8 @@ FIGURE_MEDIA_VARIANTS['6e76237de1cf29c08427d191f110a2c38c2b4cf9'] = FIGURE_MEDIA
 FIGURE_MEDIA_VARIANTS['f03f1fdaa2d112807b6ce63170eb50e86de615bd'] = FIGURE_MEDIA_VARIANTS['992ad5e3679f848254828e823860ba8b3ad3b39b']
 
 # Between d191 and 87f only FlaggedRevs, Wikibase and the DB load monitor
-# changed. This registration covers ordinary ImageInfo geometry only.
+# changed. Its exact registration binds ordinary ImageInfo and the ImageInfo
+# half of independently observed, current height-only SVG controls.
 FILE_DEFAULTS = 'figure-imageinfo-defaultoptions.raw.json'
 SR_SELECTED_DEFAULTS = 'cd0624188c22163e38bdee69bbe0e67bf74f231eeeb023a2834abd84de4cc2d7'
 
@@ -408,7 +410,7 @@ class ObservedFigureHTML(HTMLParser):
         raise ValueError('Unexpected observed Figure declaration')
 
 
-def svg_height_observation(observation, registry, facts, batch_index):
+def svg_height_observation(observation, registry, facts, batch_index, *, imageinfo_observation=None):
     """Corroborate one current page/title/token observation; its parse core is unknown."""
     if (not isinstance(observation, dict) or set(observation) != {'request', 'receipt', 'response'} or
             any(not isinstance(value, str) or len(value.encode()) > MAX_RESPONSE for value in observation.values())):
@@ -459,6 +461,17 @@ def svg_height_observation(observation, registry, facts, batch_index):
             not isinstance(receipt.get('response'), str) or
             re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]*', receipt['response']) is None):
         raise ValueError('SVG occurrence receipt or response identity changed')
+    if imageinfo_observation is not None:
+        # action=parse has no source revision. Bind the actual controlled HTTP
+        # observation to its preceding ImageInfo response and retain that limit.
+        image_sha, image_time = imageinfo_observation
+        observed = receipt.get('observed_utc')
+        headers = receipt.get('headers')
+        if (receipt.get('imageinfo_response_sha256') != image_sha or not isinstance(headers, dict) or
+                not isinstance(observed, str) or len(observed) != 20 or
+                _figure_utc_key(observed) < _figure_utc_key(image_time) or
+                headers.get('date') != format_datetime(datetime.fromisoformat(observed), usegmt=True)):
+            raise ValueError('Controlled SVG observation differs from its ImageInfo source or HTTP date')
     if not isinstance(response, dict) or set(response) != {'parse'}:
         raise ValueError('Unexpected SVG occurrence API result')
     parse = response['parse']
@@ -1325,10 +1338,10 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
         observation = batch.get('observed_svg_width_px')
         occurrences = batch.get('observed_svg_occurrences')
         supplemental = 'observed_svg_width_px' in batch or 'observed_svg_occurrences' in batch or jpeg_supplement
-        if core == site_info.FIGURE_WMF5_CORE and supplemental:
-            raise ValueError('Only ordinary ImageInfo geometry was reviewed at this revision')
+        if core == site_info.FIGURE_WMF5_CORE and supplemental and occurrences is None:
+            raise ValueError('Unreviewed ImageInfo supplement at this revision')
         if 'observed_svg_occurrences' in batch:
-            if (profile_kind not in (FIGURE_PROFILE_V4, FIGURE_PROFILE_V5) or core not in (FIGURE_CURRENT_CORE, FIGURE_REGISTRATION_CORE) or
+            if (profile_kind not in (FIGURE_PROFILE_V4, FIGURE_PROFILE_V5) or core not in (FIGURE_CURRENT_CORE, FIGURE_REGISTRATION_CORE, site_info.FIGURE_WMF5_CORE) or
                     not isinstance(occurrences, list) or not 1 <= len(occurrences) <= 50 or
                     len(stream_encoded(batch)) > STREAM_RAW_LINE_LIMIT):
                 raise ValueError('Invalid bounded SVG occurrence batch or profile')
@@ -1366,7 +1379,7 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
                 allow_compatible_epochs and profile_kind in (FIGURE_PROFILE_V4, FIGURE_PROFILE_V5) and
                 core in FIGURE_RESPONSE_EPOCHS and batch_core in FIGURE_RESPONSE_EPOCHS))):
             raise ValueError('Figure batches mix site/source versions')
-        if occurrences is not None and batch_core not in (FIGURE_CURRENT_CORE, FIGURE_REGISTRATION_CORE):
+        if occurrences is not None and batch_core not in (FIGURE_CURRENT_CORE, FIGURE_REGISTRATION_CORE, site_info.FIGURE_WMF5_CORE):
             raise ValueError('Compatible response epochs do not grant HTML occurrence authority')
         batch_profile = figure_profile(batch_core, profile_kind, _figure_media_extensions(data))
         # Exact per-core registrations differ, but the proved image profile does
@@ -1472,9 +1485,11 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
                 continue
             records.append(record)
         if occurrences is not None:
+            imageinfo = (digest(response_raw), observed) if core == site_info.FIGURE_WMF5_CORE else None
             used = set()
             for item in occurrences:
-                canonical, value = svg_height_observation(item, registry, height_facts, batch_index)
+                canonical, value = svg_height_observation(item, registry, height_facts, batch_index,
+                                                          imageinfo_observation=imageinfo)
                 key = (value['wiki'], value['title'], canonical, value['options'], value['height_px'])
                 if key in height_keys:
                     raise ValueError('Duplicate exact SVG occurrence authority')

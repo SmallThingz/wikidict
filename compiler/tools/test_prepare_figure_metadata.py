@@ -289,6 +289,41 @@ class SrImageInfoBindingTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'scoped to the ImageInfo'):
                 site.validate_snapshot(Path(site.SNAPSHOT))
 
+    def test_current_height_receipts_bind_the_exact_imageinfo_and_http_date(self):
+        fixtures = Path(__file__).parent/'testdata'
+        namespace = (fixtures/'figure-page-observations/sr-fuhe-served-set/namespace-registry.tsv').read_bytes()
+        batch = figure.stream_decode((fixtures/'sr-svg226/current-height-batch.json').read_bytes())
+        base = {key: batch[key] for key in ('requests', 'response')}
+        def replay(supplement):
+            return figure.file_records((base, supplement), namespace, 'srwiktionary', '20261001',
+                base['response'].encode(), has_batches=True, record_limit=4,
+                profile_kind=figure.FIGURE_PROFILE_V4, allow_compatible_epochs=True)
+        observed = [height for row in replay(batch)['records'] for height in row['observed_svg_heights']]
+        self.assertEqual({(v['title'], v['observed_width_px'], v['observed_height_px']) for v in observed},
+            {('Нови Сад',224,250), ('Ниш',194,250), ('Приштина',156,200), ('Београд',168,200)})
+        self.assertTrue(all(v['parse_core_binding_proven'] is False for v in observed))
+        for change in ('unbound', 'wrong-image', 'old-response', 'changed-header', 'fraction'):
+            altered = copy.deepcopy(batch)
+            triple = altered['observed_svg_occurrences'][0]
+            receipt = json.loads(triple['receipt'])
+            if change == 'unbound':
+                del receipt['imageinfo_response_sha256']
+            elif change == 'wrong-image':
+                receipt['imageinfo_response_sha256'] = '0'*64
+            elif change == 'old-response':
+                receipt['observed_utc'] = '2026-11-09T19:14:37Z'
+                receipt['headers']['date'] = 'Mon, 09 Nov 2026 19:14:37 GMT'
+            elif change == 'changed-header':
+                receipt['headers']['date'] = 'Mon, 09 Nov 2026 19:14:37 GMT'
+            else:
+                receipt['observed_utc'] = receipt['observed_utc'].replace('Z', '.0Z')
+            triple['receipt'] = figure.encoded(receipt).decode()
+            with self.subTest(change=change), self.assertRaisesRegex(ValueError, 'ImageInfo source or HTTP date'):
+                replay(altered)
+        for other in ({'observed_svg_width_px':250}, {'jpeg_metadata_only':True}):
+            with self.subTest(supplement=other), self.assertRaisesRegex(ValueError, 'Unreviewed ImageInfo supplement'):
+                replay(dict(base, **other))
+
     def test_changed_defaults_profile_and_media_are_rejected(self):
         for group, key, value in (('defaultoptions', 'thumbsize', 0), ('defaultoptions', 'skin', 'vector'),
                                   ('defaultoptions', 'vector-theme', 'night'), ('general', 'rtl', True)):
