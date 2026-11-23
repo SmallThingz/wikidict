@@ -5098,6 +5098,34 @@ class PreparedGitAuthorityTests(unittest.TestCase):
                 setup.assert_called_once_with(selected)
                 launch.assert_not_called()
 
+    def test_prepared_controller_rejects_readable_bytecode_before_child_setup(self):
+        from importlib.util import cache_from_source
+        import sys
+        import build_wiktionaries as builder
+        actual_source_guard = controller.source_guard
+        with self.repository() as (root, cfg, _, _):
+            (root / '.git' / 'info' / 'exclude').write_text('*\n')
+            with self.initial_preflight(root, cfg) as (config, _, source, gates, setup, launch), \
+                 mock.patch.object(builder, 'PROJECT', root):
+                source.side_effect = actual_source_guard
+                with mock.patch.object(sys, 'pycache_prefix', str(root / 'existing-cache')):
+                    cached = Path(cache_from_source(str(root / 'tools' / 'fixture.py')))
+                    cached.parent.mkdir(parents=True)
+                    cached.write_bytes(b'cannot be part of prepared Python authority')
+                    with self.assertRaisesRegex(ValueError, 'Prepared controller can consume unbound Python bytecode'):
+                        controller.main(['--config', str(config), '--phase', 'all'])
+                gates.assert_not_called()
+                setup.assert_not_called()
+                launch.assert_not_called()
+                self.assertFalse((root / 'state').exists())
+                prefix = root / 'unwritten-cache'
+                with mock.patch.object(sys, 'pycache_prefix', str(prefix)):
+                    with self.assertRaisesRegex(RuntimeError, '^input setup reached$'):
+                        controller.main(['--config', str(config), '--phase', 'all'])
+                self.assertFalse(prefix.exists())
+                self.assertTrue(cached.is_file())
+                launch.assert_not_called()
+
     def test_original_git_bytes_survive_unrelated_head_and_canonical_source_edits(self):
         with self.repository() as (root, cfg, inventory, git):
             authority = controller.prepared_git_source_authority(cfg)

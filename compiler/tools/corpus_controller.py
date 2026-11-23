@@ -9,6 +9,8 @@ qualification and publication/semantic checks remain unchanged. Failed editions 
 retried with --retry-failed; existing accepted outputs are not charged again.
 The builder alone validates providers, resumes work, and verifies publication
 payloads. --revalidate asks that same CLI to verify previously accepted output.
+For prepared custody, isolate the controller’s imports with -B and
+-X pycache_prefix=<unused checkout path> if earlier tooling left bytecode.
 """
 from __future__ import annotations
 
@@ -871,14 +873,14 @@ def retained_source_membership(root):
     return names
 
 
-def retained_bytecode_guard(path):
+def retained_bytecode_guard(path, *, producer='Retained producer'):
     if path.suffix == '.py':
         # -B prevents writes, not reads. Include an external pycache_prefix and
         # helpers imported only by the future builder child, not this process.
         from importlib.util import cache_from_source
         cached = Path(cache_from_source(str(path)))
         require(not cached.exists() and not cached.is_symlink(),
-                'Retained producer can consume unbound Python bytecode: ' + str(cached))
+                f'{producer} can consume unbound Python bytecode: {cached}')
 
 
 def loaded_module_origins():
@@ -1181,6 +1183,7 @@ def source_guard(cfg, prepared_authorization=None):
                 require(not any(name and not name.startswith(('apps/', 'android/', 'desktop/')) for name in untracked),
                         'Untracked producer input requires explicit source qualification')
             if timing is not None: timing.switch("source_guard_inventory")
+            prepared_parent = cfg.get('prepared_source_custody') is True and cfg.get('python_tooling') is None
             verified_files = verified_bytes = 0
             for name, reference in files.items():
                 relative = Path(name)
@@ -1193,6 +1196,8 @@ def source_guard(cfg, prepared_authorization=None):
                         'Retained producer input shares a writable inode: ' + name)
                 if frozen:
                     retained_bytecode_guard(path)
+                elif prepared_parent and builder._python_tool_source(name):
+                    retained_bytecode_guard(path, producer='Prepared controller')
                 require(reference['path'] == str(path) and descriptor(path) == reference,
                         'Producer input bytes changed: ' + name)
                 require(type(modes[name]) is int and path.stat().st_mode & 0o7777 == modes[name],
