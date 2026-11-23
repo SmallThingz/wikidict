@@ -13949,6 +13949,10 @@ fn findBoundary(css: []const u8, pos: *usize) !u8 {
     }
     return error.InvalidStyleProfile;
 }
+fn cssStringNewline(byte: u8) bool {
+    return byte == '\n' or byte == '\r' or byte == '\x0c';
+}
+
 fn closingBrace(css: []const u8, pos: *usize) !usize {
     var depth: usize = 1;
     var quote: u8 = 0;
@@ -13957,11 +13961,14 @@ fn closingBrace(css: []const u8, pos: *usize) !usize {
         const byte = css[at];
         pos.* += 1;
         if (byte == '\\' and pos.* < css.len) {
+            if (quote != 0 and css[pos.*] == '\r' and pos.* + 1 < css.len and css[pos.* + 1] == '\n') pos.* += 1;
             pos.* += 1;
             continue;
         }
         if (quote != 0) {
-            if (byte == quote) quote = 0;
+            // An unescaped newline ends a CSS bad-string token. Continue
+            // locating the block boundary so following rules stay visible.
+            if (byte == quote or cssStringNewline(byte)) quote = 0;
             continue;
         }
         if (byte == '\'' or byte == '"') {
@@ -14611,18 +14618,29 @@ pub fn nextDeclarationAlloc(a: std.mem.Allocator, css: []const u8, pos: *usize) 
     defer out.deinit(a);
     var quote: u8 = 0;
     var depth: usize = 0;
+    var bad_string = false;
     while (pos.* < css.len) {
         const byte = css[pos.*];
         pos.* += 1;
         if (byte == '\\' and pos.* < css.len) {
             try out.append(a, byte);
-            try out.append(a, css[pos.*]);
+            const escaped = css[pos.*];
+            try out.append(a, escaped);
             pos.* += 1;
+            if (quote != 0 and escaped == '\r' and pos.* < css.len and css[pos.*] == '\n') {
+                try out.append(a, css[pos.*]);
+                pos.* += 1;
+            }
             continue;
         }
         if (quote != 0) {
             try out.append(a, byte);
-            if (byte == quote) quote = 0;
+            if (byte == quote) {
+                quote = 0;
+            } else if (cssStringNewline(byte)) {
+                quote = 0;
+                bad_string = true;
+            }
             continue;
         }
         if (byte == '\'' or byte == '"') {
@@ -14644,6 +14662,9 @@ pub fn nextDeclarationAlloc(a: std.mem.Allocator, css: []const u8, pos: *usize) 
         if (byte == ';' and depth == 0) break;
         try out.append(a, byte);
     }
+    // Reject the whole declaration at its next top-level delimiter. In
+    // particular, a semicolon inside the bad string cannot start a new one.
+    if (bad_string) return "";
     return try out.toOwnedSlice(a);
 }
 
@@ -15087,6 +15108,39 @@ test "balanced unknown at-rules remain partial without fetching or stale project
     const unaffected = try known_group.resolveTable(a, 0, "b", null, "");
     try std.testing.expect(!unaffected.unresolved);
     try std.testing.expectEqualStrings("#ffff00", unaffected.style.?.background.?);
+}
+
+test "recover a bad CSS declaration string without losing the next rule" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{ "\n", "\r", "\r\n", "\x0c" }) |newline| {
+        const malformed = try std.mem.concat(a, u8, &.{
+            "\n\tfont-family: Pyidaungsu, MON3 Anonta 1';", newline, "\tfont-size: 130%;\n",
+        });
+        const stylesheet = try std.mem.concat(a, u8, &.{
+            ".Mymr {", malformed, "}\n", "table.after { background-color: #123456; }",
+        });
+        var profile = try parseAlloc(a, stylesheet);
+        defer profile.deinit();
+        try std.testing.expect(try profile.resolveFontSize(a, "span", "Mymr", "", "") == null);
+        const after = try profile.resolveTable(a, 0, "after", null, "");
+        try std.testing.expect(!after.unresolved);
+        try std.testing.expectEqualStrings("#123456", after.style.?.background.?);
+
+        const declarations = try std.mem.concat(a, u8, &.{
+            malformed, " color: red; font-family: 'escaped\\", newline, "name'; color: blue;",
+        });
+        var pos: usize = 0;
+        try std.testing.expectEqualStrings("", (try nextDeclarationAlloc(a, declarations, &pos)).?);
+        try std.testing.expectEqualStrings("color: red", trim((try nextDeclarationAlloc(a, declarations, &pos)).?));
+        const escaped = try std.mem.concat(a, u8, &.{ "font-family: 'escaped\\", newline, "name'" });
+        try std.testing.expectEqualStrings(escaped, trim((try nextDeclarationAlloc(a, declarations, &pos)).?));
+        try std.testing.expectEqualStrings("color: blue", trim((try nextDeclarationAlloc(a, declarations, &pos)).?));
+        try std.testing.expect((try nextDeclarationAlloc(a, declarations, &pos)) == null);
+        const unfinished = try std.mem.concat(a, u8, &.{ ".Mymr {", malformed });
+        try std.testing.expectError(error.InvalidStyleProfile, parseAlloc(a, unfinished));
+    }
 }
 
 test "finite profile limits and incomplete stylesheets fail honestly" {
