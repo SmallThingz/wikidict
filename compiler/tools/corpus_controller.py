@@ -3227,7 +3227,7 @@ def cleanup_superseded_generated(cfg, edition, folder, attempt, locks, *, reconc
     """
     import re
     from build_artifact_root import (OwnedArtifactRoot, execution_mounts, execution_mount_regions,
-                                     PRODUCER_SOURCE_FILES, PRODUCER_SOURCE_DIRECTORIES)
+                                     producer_source_inputs)
     selected = cfg.get('superseded_generated', {}).get(edition, [])
     require(isinstance(selected, list) and len(selected) <= 1, 'Invalid predecessor generation selection')
     if not selected:
@@ -3261,8 +3261,9 @@ def cleanup_superseded_generated(cfg, edition, folder, attempt, locks, *, reconc
                     protected.append(Path(options[name]['path']))
         protected.extend(archive_protected)
         source, workspace = source_roots(cfg)
-        protected.extend([source] if source != workspace else
-                         [source / name for name in (*PRODUCER_SOURCE_FILES, *PRODUCER_SOURCE_DIRECTORIES)])
+        files, directories = producer_source_inputs(source)
+        source_paths = [source / name for name in (*files, *directories)]
+        protected.extend([source] if source != workspace else source_paths)
         protected.extend(Path(replacement[name]['path']) for name in ('complete', 'complete_snapshot'))
         mounts = execution_mounts()
         seen = set()
@@ -3417,7 +3418,7 @@ def cleanup_superseded_generated(cfg, edition, folder, attempt, locks, *, reconc
                     # fresh coordinator supplies their exact consumed generations.
                     derived_protected = [Path(replacement['root']), *[Path(cfg[key]) for key in ('raw_shard_root','state_directory','downloads')],
                         *[Path(old[key]) for key in ('raw_shard_root','state_directory','downloads')],
-                        *[source / name for name in (*PRODUCER_SOURCE_FILES, *PRODUCER_SOURCE_DIRECTORIES)]]
+                        *source_paths]
                     for options in cfg.get('edition_options',{}).values():
                         if 'staged_input_root' in options: derived_protected.append(Path(options['staged_input_root']['path']))
                     derived_protected.extend(archive_protected)

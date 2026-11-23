@@ -3663,6 +3663,12 @@ class BorrowedStagedInputOptionTests(unittest.TestCase):
 
 
 class SupersededGeneratedLifecycleTests(unittest.TestCase):
+    def borrowed_stage(self, f, path):
+        status = path.stat()
+        marker = f['doc'](path/'.complete.json', {'version': 'historical-repack'})
+        return dict(path=str(path), device=status.st_dev, inode=status.st_ino,
+                    uid=status.st_uid, mode=status.st_mode & 0o7777, completion=marker)
+
     @contextmanager
     def fixture(self, root):
         from contextlib import ExitStack
@@ -3780,7 +3786,7 @@ class SupersededGeneratedLifecycleTests(unittest.TestCase):
                     f['roles']['keep_current_outputs'][f['old']['output']] = {'role': 'selected audit'}
                     f['record']['runtime_roles'] = f['doc'](f['root']/'roles.json', f['roles'])
                 elif mode == 'borrowed':
-                    f['cfg']['edition_options'] = {'other': {'staged_input_root': {'path': str(f['paths'][0])}}}
+                    f['cfg']['edition_options'] = {'other': {'staged_input_root': self.borrowed_stage(f, f['paths'][0])}}
                 else:
                     fd = os.open(f['lock_path'], os.O_RDWR); fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 try:
@@ -3926,21 +3932,25 @@ class SupersededGeneratedLifecycleTests(unittest.TestCase):
     def test_source_domains_aliases_and_authorization_files_are_preserved(self):
         from contextlib import ExitStack
         import build_artifact_root
-        for mode in ('frozen-source', 'canonical-source-alias', 'role-receipt', 'old-downloads', 'old-borrowed-input'):
+        for mode in ('frozen-source', 'legacy-source-alias', 'canonical-source-alias', 'role-receipt', 'old-downloads', 'old-borrowed-input'):
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmp, self.fixture(Path(tmp)) as f, ExitStack() as stack:
                 if mode == 'frozen-source':
                     stack.enter_context(mock.patch.object(controller, 'source_roots', return_value=(f['paths'][0], f['root'])))
-                elif mode == 'canonical-source-alias':
+                elif mode in ('legacy-source-alias', 'canonical-source-alias'):
+                    domain = 'src'
+                    if mode == 'canonical-source-alias':
+                        (f['root']/'compiler/tools').mkdir(parents=True)
+                        domain = 'compiler/src'
                     original = build_artifact_root.execution_mount_regions
                     def regions(path, mounts):
-                        return original(f['paths'][0] if path == f['root']/'src' else path, mounts)
+                        return original(f['paths'][0] if path == f['root']/domain else path, mounts)
                     stack.enter_context(mock.patch.object(build_artifact_root, 'execution_mount_regions', side_effect=regions))
                 elif mode == 'role-receipt':
                     f['record']['runtime_roles'] = f['doc'](f['paths'][0]/'released-roles.json', f['roles'])
                 else:
                     old_ref = f['record']['configuration']
                     if mode == 'old-downloads': f['old']['downloads'] = str(f['paths'][0])
-                    else: f['old']['edition_options'] = {'other': {'staged_input_root': {'path': str(f['paths'][0])}}}
+                    else: f['old']['edition_options'] = {'other': {'staged_input_root': self.borrowed_stage(f, f['paths'][0])}}
                     new_ref = f['doc'](Path(old_ref['path']), f['old'])
                     f['record']['configuration'] = new_ref
                     f['closed']['configuration'] = new_ref
@@ -5275,7 +5285,7 @@ class SupersededRawLifecycleTests(SupersededGeneratedLifecycleTests):
                 elif mode in ('owner', 'state'):
                     role[mode] = f['doc'](Path(role[mode]['path']), {'foreign': True})
                 elif mode == 'shared-raw-base': f['cfg']['raw_shard_root'] = f['old']['raw_shard_root']
-                else: f['cfg']['edition_options'] = {'other': {'staged_input_root': {'path':str(payloads[0].parent)}}}
+                else: f['cfg']['edition_options'] = {'other': {'staged_input_root': self.borrowed_stage(f, payloads[0].parent)}}
                 f['roles']['records'][0]['released_raw_intermediates'] = role
                 f['record']['runtime_roles'] = f['doc'](f['root']/'bad-roles.json', f['roles'])
                 before = self.snapshot(f['root'])
