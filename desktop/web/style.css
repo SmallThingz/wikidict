@@ -1,6 +1,6 @@
 @font-face{font-family:Reader;src:url('reader.ttf')}
-:root{--wikidict-normal-body-size:1.2rem;font-family:Interface,system-ui,sans-serif;color-scheme:light;--bg:#f8f5ec;--fg:#26382d;--muted:#657165;--surface:#e9ecdf;--accent:#855128;--selected:#eacbad;--error:#a33e32;--placeholder:#596559;background:var(--bg);color:var(--fg);scrollbar-color:var(--muted) var(--bg);scrollbar-gutter:stable}
-:root[data-theme=dark]{color-scheme:dark;--bg:#17251e;--fg:#e4e7da;--muted:#a7b4a6;--surface:#24382b;--accent:#e9b88a;--selected:#4c3827;--error:#d97567;--placeholder:#a7b4a6}
+:root{--wikidict-normal-body-size:1.2rem;--wikidict-dark-reading-surface:#17251e;font-family:Interface,system-ui,sans-serif;color-scheme:light;--bg:#f8f5ec;--fg:#26382d;--muted:#657165;--surface:#e9ecdf;--accent:#855128;--selected:#eacbad;--error:#a33e32;--placeholder:#596559;background:var(--bg);color:var(--fg);scrollbar-color:var(--muted) var(--bg);scrollbar-gutter:stable}
+:root[data-theme=dark]{color-scheme:dark;--bg:var(--wikidict-dark-reading-surface);--fg:#e4e7da;--muted:#a7b4a6;--surface:#24382b;--accent:#e9b88a;--selected:#4c3827;--error:#d97567;--placeholder:#a7b4a6}
 :root[data-theme=dark] .compiled-inline-image[data-dark-mode-filter=invert_hue_rotate_180]{color-scheme:light;filter:invert(1) hue-rotate(180deg)}
 .table-scroll a{overflow-wrap:normal}
 .reference>span:last-child{min-width:0;overflow-wrap:anywhere}

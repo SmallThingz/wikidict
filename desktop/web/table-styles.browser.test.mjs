@@ -28,6 +28,37 @@ try{
   const css=await readFile(new URL('./style.css',import.meta.url),'utf8');
   await page.setContent('<style>'+css+'</style><main></main>');
   await page.addScriptTag({content:bundle.outputFiles[0].text});
+  const ink=await page.evaluate(()=>{
+   const green='#008000',definition=(text,style={})=>({kind:'definition',spans:[{kind:'text',text,foreground:green,...style}]});
+   const blocks=[definition('Reader surface',{italic:true}),definition('Readable ink',{foreground:'#87e787'}),
+    definition('Authored highlight',{background:'#ffffff'}),
+    {kind:'table',table:{rows:[{cells:[{background:'#ffffff',spans:[],blocks:[definition('Table surface')]}]}]}},
+    {kind:'container',spans:[],container:{style:{background:{rgb:'#ffffff'}},blocks:[definition('Container surface')]}},
+    definition('Authored link',{kind:'link',target:'Destination'})];
+   const input={title:'Text contrast',sections:[{title:'Definitions',blocks}]},original=JSON.stringify(input);
+   const main=document.querySelector('main');main.append(Renderer.renderEntry(input));
+   const inspect=theme=>{
+    document.documentElement.dataset.theme=theme;
+    return ['Reader surface','Readable ink','Authored highlight','Table surface','Container surface','Authored link'].map(text=>{
+     const span=[...main.querySelectorAll('span')].find(el=>el.children.length===0&&el.textContent===text);
+     let owner=span;while(getComputedStyle(owner).backgroundColor==='rgba(0, 0, 0, 0)')owner=owner.parentElement;
+     const css=getComputedStyle(span);
+     return {color:css.color,background:getComputedStyle(owner).backgroundColor,italic:css.fontStyle,href:span.closest('a')?.getAttribute('href')};
+    });
+   };
+   const light=inspect('light'),dark=inspect('dark');
+   delete document.documentElement.dataset.theme;main.replaceChildren();
+   return {light,dark,sourceUnchanged:JSON.stringify(input)===original};
+  });
+  const luma=rgb=>rgb.match(/\d+/g).slice(0,3).map(n=>Number(n)/255).map(v=>v<=.04045?v/12.92:((v+.055)/1.055)**2.4).reduce((sum,v,i)=>sum+v*[.2126,.7152,.0722][i],0);
+  assert.equal(ink.sourceUnchanged,true);
+  assert.equal(ink.light[0].color,'rgb(0, 128, 0)');assert.equal(ink.dark[0].italic,'italic');
+  assert.ok((luma(ink.dark[0].color)+.05)/(luma(ink.dark[0].background)+.05)>=4.5);
+  assert.deepEqual(ink.dark.slice(2,5),ink.light.slice(2,5));
+  assert.ok(ink.dark.slice(2,5).every(value=>value.color==='rgb(0, 128, 0)'&&value.background==='rgb(255, 255, 255)'));
+  assert.equal(ink.dark[1].color,'rgb(135, 231, 135)');
+  assert.equal(ink.dark[5].color,'rgb(0, 128, 0)');assert.equal(ink.dark[5].href,'#Destination');
+
   const sizes=await page.evaluate(()=>{
    const edges=value=>Object.fromEntries(['top','right','bottom','left'].map(k=>[k,{unit:'em',value}]));
    const text=text=>({kind:'text',text});

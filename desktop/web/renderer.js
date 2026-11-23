@@ -1,10 +1,22 @@
 const canonicalRGB=value=>typeof value==='string'&&value.length===7&&/^#[0-9a-f]{6}$/.test(value);
+const rgbBytes=color=>[1,3,5].map(at=>parseInt(color.slice(at,at+2),16));
+const luminance=rgb=>rgb.reduce((sum,value,i)=>{
+  const v=value/255;
+  return sum+[.2126,.7152,.0722][i]*(v<=.04045?v/12.92:((v+.055)/1.055)**2.4);
+},0);
 const contrastInk=background=>{
-  const linear=value=>{value/=255;return value<=0.04045?value/12.92:((value+0.055)/1.055)**2.4;};
-  const rgb=[1,3,5].map(at=>linear(parseInt(background.slice(at,at+2),16)));
-  const luminance=.2126*rgb[0]+.7152*rgb[1]+.0722*rgb[2];
-  return (luminance+.05)/.05>=1.05/(luminance+.05)?'#000000':'#ffffff';
+  const light=luminance(rgbBytes(background));
+  return (light+.05)/.05>=1.05/(light+.05)?'#000000':'#ffffff';
 };
+function darkReadingInk(foreground,background){
+  const source=rgbBytes(foreground),minimum=4.5*(luminance(rgbBytes(background))+.05)-.05;
+  if(luminance(source)>=minimum||minimum>1)return null;
+  // Lift the color toward white by the smallest amount that meets body-text contrast.
+  const mix=amount=>source.map(channel=>Math.round(channel+(255-channel)*amount/255));
+  let low=1,high=255;
+  while(low<high){const mid=(low+high)>>1;if(luminance(mix(mid))>=minimum)high=mid;else low=mid+1;}
+  return '#'+mix(low).map(channel=>channel.toString(16).padStart(2,'0')).join('');
+}
 import {safeURL,linkTargetParts,bookSourcesURL,validateContainerBlock,validateCellMetrics,validateRuby,validateRubyOwner,validateRubySpan,validateActionGroupSpan} from './validate.js';
 import {previewBlocks,inlineText} from './preview.js';
 const node = (tag, text, cls) => { const el = document.createElement(tag); if (text != null) el.textContent = text; if (cls) el.className = cls; return el; };
@@ -140,7 +152,7 @@ function rubySpans(value,onLink,explanations,withinSummary,cellBackground,contex
   }
   return out;
 }
-export function spans(values = [], onLink = () => {}, preserve = false, explanations = null, withinSummary = false, cellBackground = null, rubyFontContext = null) {
+export function spans(values = [], onLink = () => {}, preserve = false, explanations = null, withinSummary = false, cellBackground = null, rubyFontContext = null, darkReadingSurface = null) {
   for(const value of values)if(value.target_fragment!=null){if(value.kind!=='link')throw Error('Invalid target fragment kind');linkTargetParts(value.target,value.target_fragment);}
   if (!preserve && values.some(isPoem)) return poemSpans(values,onLink,explanations,withinSummary,cellBackground);
   const fragment = document.createDocumentFragment();
@@ -171,6 +183,15 @@ export function spans(values = [], onLink = () => {}, preserve = false, explanat
   }
   const inkFor=span=>canonicalRGB(span.foreground)?span.foreground:
     explanations?.captionInk??(canonicalRGB(span.background)?contrastInk(span.background):canonicalRGB(cellBackground)?contrastInk(cellBackground):null);
+  const colorSpan=(el,span)=>{
+    const ink=inkFor(span);
+    if(!ink)return;
+    el.style.color=ink;
+    if(darkReadingSurface&&span.kind==='text'&&canonicalRGB(span.foreground)&&!span.background){
+      const dark=darkReadingInk(ink,darkReadingSurface);
+      if(dark)el.style.color=`light-dark(${ink}, ${dark})`;
+    }
+  };
   const explanationTag=span=>explanations?.isMediaExplanation?.(span)?'span':'abbr';
   const trailNode=(span,i)=>{
     if(!span.explanation&&span.tooltip==null&&!inkFor(span)&&!canonicalRGB(span.background))return document.createTextNode(span.trail||'');
@@ -178,7 +199,7 @@ export function spans(values = [], onLink = () => {}, preserve = false, explanat
     const trail=node(span.explanation?explanationTag(span):'span',span.trail);
     if(span.explanation){trail.title=span.explanation;if(described.has(i))trail.setAttribute('aria-describedby',described.get(i));}
     if(span.tooltip!=null)trail.title=span.tooltip;
-    if(inkFor(span))trail.style.color=inkFor(span);
+    colorSpan(trail,span);
     if(canonicalRGB(span.background)){trail.style.backgroundColor=span.background;trail.style.whiteSpace='pre-wrap';}
     return trail;
   };
@@ -195,7 +216,7 @@ export function spans(values = [], onLink = () => {}, preserve = false, explanat
     if(span.inline_action_group!=null)el.append(spans(span.inline_action_group.spans,onLink,true,explanations,withinSummary,cellBackground,span));
     if(rubyFontContext){el.style.fontWeight=span.bold?'bold':'normal';el.style.fontStyle=span.italic?'italic':'normal';}
     if(span.image){const image=inlineImageElement(span.image,explanations?.inlineImage,{sizing:explanations?.figureSizing,figureImage:explanations?.figureImage});el.append(span.image.map?mappedImage(image,span.image,onLink,explanations):image);}
-    if(inkFor(span))el.style.color=inkFor(span);
+    colorSpan(el,span);
     if(!canonicalRGB(span.foreground)&&inkFor(span)&&((span.kind==='link'&&(span.target||span.target_fragment))||(span.kind==='external_link'&&safeURL(span.target))))el.style.textDecoration='underline';
     if(canonicalRGB(span.background)){el.style.backgroundColor=span.background;el.style.whiteSpace='pre-wrap';}
     if (span.language) el.lang = span.language;
@@ -763,7 +784,11 @@ function blockView(block, onLink, explanations, legacy = '', context = {}) {
   if(block.spans?.some(isPoem)||rich)body.style.flex='1';
   if(block.figure!=null)body.append(figureView(block.figure,onLink,explanations,context));
   else if(block.flow!=null)body.append(flowView(block.flow,onLink,explanations,context));
-  else body.append(spans(block.spans,onLink,false,explanations,false,context.background));
+  else {
+    // Only plain definitions on the Reader surface have a known theme backdrop.
+    const darkSurface=kind==='definition'&&!context.background&&!context.container&&!context.tableDepth&&!context.caption?explanations?.darkReadingSurface:null;
+    body.append(spans(block.spans,onLink,false,explanations,false,context.background,null,darkSurface));
+  }
   if(rich){el.style.display='block';body.style.display='block';if(prefix){const marker=el.querySelector('.prefix');marker.style.cssFloat='inline-start';marker.style.marginInlineEnd='10px';}}
   if(block.style?.margins)styleEdges(el,'margin',block.style.margins);
   if(block.style?.padding)styleEdges(el,'padding',block.style.padding);
@@ -816,7 +841,8 @@ export function renderEntry(entry, onLink, settings = {}, mediaView = () => null
     const hex=[...new TextEncoder().encode(media.file)].map(byte=>byte.toString(16).padStart(2,'0')).join('');
     mediaOwners.set(mediaOwnerPrefix+hex,media.file);
   }
-  const explanations={inlineImage,imageActionURL,sourceEdition:entry.source_edition,isMediaExplanation(span){
+  const darkSurface=globalThis.getComputedStyle?.(document.documentElement).getPropertyValue('--wikidict-dark-reading-surface').trim();
+  const explanations={inlineImage,imageActionURL,sourceEdition:entry.source_edition,darkReadingSurface:canonicalRGB(darkSurface)?darkSurface:null,isMediaExplanation(span){
     if(span.kind!=='link'||span.image)return false;
     const tokens=poemTokens(span),owners=tokens.filter(token=>token.startsWith(mediaOwnerPrefix));
     // Match the compiled media catalog, not an ordinary File link or a legacy abbreviation.
