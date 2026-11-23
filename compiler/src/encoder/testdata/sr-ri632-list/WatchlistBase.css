@@ -1,0 +1,20 @@
+/*  _____________________________________________________________________________
+ * |                                                                             |
+ * |                    === WARNING: GLOBAL GADGET FILE ===                      |
+ * |                  Changes to this page affect many users.                    |
+ * | Please discuss changes on the talk page or on [[WT:Gadget]] before editing. |
+ * |_____________________________________________________________________________|
+ * 
+ * Base styling for updated markers on watchlist, history and recent/related changes
+ */
+
+#mw-wlheader-showupdated,
+#mw-wlheader-bold,
+#mw-wlheader-green,
+#mw-watchlist-resetbutton {
+    display: none;
+}
+.mw-special-Watchlist .mw-changeslist-line-watched .mw-title,
+.mw-enhanced-watched .mw-enhanced-rc-time {
+    font-weight: normal;
+}

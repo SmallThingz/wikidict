@@ -1498,6 +1498,9 @@ pub const CellStyle = struct {
     width: ?StyleWidth = null,
     line_height: ?CellLineHeight = null,
 
+    // Applied once to the completed cell paint group; absent preserves the original surface.
+    opacity: ?f32 = null,
+
     pub fn jsonStringify(self: CellStyle, jw: anytype) !void {
         try writeOptionalStyleFields(self, jw);
     }
@@ -4083,7 +4086,8 @@ pub fn validCellLineHeight(value: CellLineHeight) bool {
 pub fn validCellStyle(value: CellStyle) bool {
     if (value.width) |width| if (!validStyleWidth(width)) return false;
     if (value.min_width) |width| if (!validStyleLength(width)) return false;
-    if (value.border == null and value.padding == null and value.text_align == null and value.min_width == null and value.vertical_align == null and value.width == null and value.line_height == null) return false;
+    if (value.border == null and value.padding == null and value.text_align == null and value.min_width == null and value.vertical_align == null and value.width == null and value.line_height == null and value.opacity == null) return false;
+    if (value.opacity) |alpha| if (!std.math.isFinite(alpha) or alpha < 0 or alpha > 1) return false;
     if (value.border) |border| if (!validBorder(border)) return false;
     if (value.padding) |padding| if (!validStyleEdges(padding)) return false;
     if (value.line_height) |height| if (!validCellLineHeight(height)) return false;

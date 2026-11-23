@@ -52,7 +52,7 @@ pub const CellResolution = struct { style: ?types.CellStyle, background: ?[]cons
 const max_css_bytes = 1024 * 1024;
 const max_rules = 4096;
 const Target = enum { element, table, cell, th, td, other };
-const Property = enum { background, border, corner_radii, collapse, margins, margin_top, margin_right, margin_bottom, margin_left, padding, text_align, float_side, width, min_width, clear, box_sizing, layout_reset, display, vertical_align, line_height, list_style, font_size, text_color, other };
+const Property = enum { background, border, corner_radii, collapse, margins, margin_top, margin_right, margin_bottom, margin_left, padding, text_align, float_side, width, min_width, clear, box_sizing, layout_reset, display, vertical_align, line_height, list_style, font_size, text_color, cell_opacity, other };
 const Value = union(enum) {
     color: []const u8,
     no_background,
@@ -75,6 +75,7 @@ const Value = union(enum) {
     cell_vertical_align_value: types.CellVerticalAlign,
     line_height_em: f32,
     cell_line_height: cell_font_metrics.CellLineHeightSpecified,
+    opacity: f32,
     list_style_none,
     font_size_consumed,
     unsupported,
@@ -140,7 +141,7 @@ const Winners = struct {
             if (border.value) |known| return if (styleBorderFromContainer(known)) |style| .{ .border = style } else .unsupported;
         }
         var selected = self.slots[@backingInt(property)];
-        if (property == .corner_radii or property == .float_side or property == .text_align or property == .width or property == .min_width or property == .clear or property == .padding or property == .box_sizing or property == .display or property == .vertical_align or property == .line_height or property == .list_style or property == .font_size) if (self.slots[@backingInt(Property.layout_reset)]) |reset| {
+        if (property == .corner_radii or property == .float_side or property == .text_align or property == .width or property == .min_width or property == .clear or property == .padding or property == .box_sizing or property == .display or property == .vertical_align or property == .line_height or property == .list_style or property == .font_size or property == .cell_opacity) if (self.slots[@backingInt(Property.layout_reset)]) |reset| {
             if (selected == null or reset.priority.wins(selected.?.priority)) selected = reset;
         };
         return if (selected) |winner| winner.value else null;
@@ -484,13 +485,15 @@ pub fn resolveInlineCellWithLegacyBorderBasisAlloc(a: std.mem.Allocator, legacy_
         const property = propertyFor(name) orelse continue;
         const escaped = std.mem.indexOfScalar(u8, name, '\\') != null;
         if (legacy_basis != null and (property == .layout_reset or property == .corner_radii or property == .other or property == .display or property == .float_side or property == .clear or escaped)) border_context_unknown = true;
-        if (property != .width and property != .min_width and property != .box_sizing and property != .layout_reset and property != .vertical_align and property != .line_height and !(legacy_basis != null and property == .border) and !escaped) continue;
+        if (property != .width and property != .min_width and property != .box_sizing and property != .layout_reset and property != .vertical_align and property != .line_height and property != .cell_opacity and !(legacy_basis != null and property == .border) and !escaped) continue;
         if (try declarationAlloc(a, raw, order)) |declaration| if (try cellLineHeightDeclarationAlloc(a, declaration, .cell, null)) |selected| winners.add(selected, 0, !representedDeclaration(.cell, selected), true);
     }
     const minimum = winners.value(.min_width);
     const minimum_unknown = if (minimum) |value| value != .length_value or winners.value(.box_sizing) != null else false;
     var style: types.CellStyle = .{ .text_align = alignment.value, .min_width = selectedCellMinimumWidth(winners), .width = selectedCellWidth(winners) };
     if (winners.value(.vertical_align)) |value| if (value == .cell_vertical_align_value) { style.vertical_align = value.cell_vertical_align_value; };
+    if (winners.value(.cell_opacity)) |value| if (value == .opacity) { style.opacity = value.opacity; };
+    const opacity_unknown = if (winners.value(.cell_opacity)) |value| value != .opacity else false;
     const vertical_unknown = if (winners.value(.vertical_align)) |value| value != .cell_vertical_align_value else false;
     var border_unknown = false;
     if (legacy_basis) |basis| {
@@ -500,7 +503,7 @@ pub fn resolveInlineCellWithLegacyBorderBasisAlloc(a: std.mem.Allocator, legacy_
         border_unknown = border.unresolved;
     }
     const valid_style = types.validCellStyle(style);
-    return .{ .style = if (valid_style) style else null, .background = null, .background_specified = false, .unresolved = alignment.unresolved or minimum_unknown or vertical_unknown or cellWidthUnresolved(winners) or border_unknown or (legacy_basis != null and !valid_style) or (if (winners.value(.line_height)) |height| height != .cell_line_height else false), .alignment_specified = alignment.specified, .line_height = selectedCellLineHeight(winners) };
+    return .{ .style = if (valid_style) style else null, .background = null, .background_specified = false, .unresolved = alignment.unresolved or minimum_unknown or vertical_unknown or opacity_unknown or cellWidthUnresolved(winners) or border_unknown or (legacy_basis != null and !valid_style) or (if (winners.value(.line_height)) |height| height != .cell_line_height else false), .alignment_specified = alignment.specified, .line_height = selectedCellLineHeight(winners) };
 }
 pub fn resolveInlineAlignmentAlloc(a: std.mem.Allocator, legacy_align: ?[]const u8, css: []const u8) !AlignmentResolution {
     const profile = emptyProfile(a);
@@ -2092,6 +2095,9 @@ pub const TextElement = struct {
     // Query-local negative facts from a tracked, physically authored SPAN.
     source_direct_parent_classes: ?[]const u8 = null,
     source_fragment_target_absent: bool = false,
+    source_nonlink_element: bool = false,
+    // Immediate query only. These tokens can refute local source rules in inherited box checks.
+    source_inline_box_ancestor_classes: ?[]const u8 = null,
     // Query-local native constructor receipt; no root, classes or positive match.
     constructed_direct_parent: ?*const TextElement = null,
     source_literal_div: ?*const SourceLiteralDivProof = null,
@@ -7660,6 +7666,7 @@ pub const ContainerRuleMatches = struct {
 };
 const ContainerCompound = struct {
     compound: TextCompound,
+    requires_hyperlink: bool = false,
     element_index: ?u32 = null,
     direct_parent: bool = false,
 };
@@ -7784,6 +7791,9 @@ const ContainerSelector = struct {
     }
     fn matchBranch(self: @This(), element: *const TextElement, original: *const TextElement, page_scoped: bool) ContainerSelectorMatch {
         if (self.terminal_positive_target and element.source_fragment_target_absent) return .no;
+        if (element.source_nonlink_element and (std.ascii.eqlIgnoreCase(element.tag, "span") or std.ascii.eqlIgnoreCase(element.tag, "i")) and
+            self.necessary_chain.len != 0 and
+            self.necessary_chain[self.necessary_chain.len - 1].requires_hyperlink) return .no;
         if (element.source_direct_parent_classes) |classes| {
             const necessary = if (self.fallback != null) self.necessary_chain else self.chain;
             if (necessary.len >= 2 and necessary[necessary.len - 1].direct_parent)
@@ -10617,6 +10627,7 @@ pub const Profile = struct {
         if (winners.value(.text_align)) |value| if (value == .align_value) {
             style.text_align = value.align_value;
         };
+        if (winners.value(.cell_opacity)) |value| if (value == .opacity) { style.opacity = value.opacity; };
         style.min_width = selectedCellMinimumWidth(winners);
         style.width = selectedCellWidth(winners);
         if (winners.value(.vertical_align)) |value| if (value == .cell_vertical_align_value) { style.vertical_align = value.cell_vertical_align_value; };
@@ -10705,8 +10716,7 @@ pub const Profile = struct {
         if (!rubySourceDeclarationChainValid(element, css, chain)) {
             inlineBoxSourceRejected(diagnostic, .source_chain_invalid); return .{ .unresolved = true };
         }
-        if (!try staticInlineDirectionDefaultsDiagnosedAlloc(a, self, chain, if (element.complete_ancestor_classes) |classes|
-            .{ .classes = classes, .ids = element.complete_ancestor_ids } else null, direction_detail)) {
+        if (!try staticInlineDirectionDefaultsDiagnosedAlloc(a, self, chain, inlineBoxSourceAbsence(element), direction_detail)) {
             inlineBoxSourceRejected(diagnostic, .static_direction_defaults_rejected); return .{ .unresolved = true };
         }
         return self.resolveInlineBoxSourceModeIn(a, element, css, environment, rtl, false, source_declarations, diagnostic, true, rounded_decoration);
@@ -10752,8 +10762,7 @@ pub const Profile = struct {
         // The same current source query supplies negative class/ID facts for
         // static decorations and positioned owners. These facts refute only
         // necessary selectors; they do not establish a physical matching path.
-        const source_absence: ?InlineImageSourceAbsence = if (element.complete_ancestor_classes) |classes|
-            .{ .classes = classes, .ids = element.complete_ancestor_ids } else null;
+        const source_absence = inlineBoxSourceAbsence(element);
         var inherited_detail: InlineImageOccurrenceSourceDetail = .{};
         const inherited_defaults = try inlineBoxSourceInheritedDefaultsCarrierIn(self, a, chain, environment, false, false,
             source_absence, if (@import("builtin").is_test and diagnostic != null) &inherited_detail else null);
@@ -12198,12 +12207,13 @@ const Builder = struct {
     }
     // Keep positive compound facts around an unsupported attribute value or
     // generated-content suffix. This chain can only disprove the old fallback.
-    fn containerNecessaryCompound(self: *Builder, raw: []const u8, terminal: bool) !?TextCompound {
+    fn containerNecessaryCompound(self: *Builder, raw: []const u8, terminal: bool) !?ContainerCompound {
         const text = raw;
         var plain: std.ArrayList(u8) = .empty;
         defer plain.deinit(self.a);
         var at: usize = 0;
         var simple_pseudo = false;
+        var requires_hyperlink = false;
         var positive_attribute = false;
         while (at < text.len) {
             if (text[at] == ':') {
@@ -12216,6 +12226,9 @@ const Builder = struct {
                 const end = paintIdentifierEnd(text, at + 1);
                 if (end < text.len and std.mem.indexOfScalar(u8, ".#[:", text[end]) == null) return null;
                 simple_pseudo = true;
+                const name = text[at + 1 .. end];
+                if (terminal and (std.ascii.eqlIgnoreCase(name, "link") or std.ascii.eqlIgnoreCase(name, "visited") or
+                    std.ascii.eqlIgnoreCase(name, "any-link"))) requires_hyperlink = true;
                 at = end;
                 continue;
             }
@@ -12255,10 +12268,10 @@ const Builder = struct {
         }
         // A pseudo-only compound still requires its own node in the ancestor
         // chain. Retain that universal necessary node instead of collapsing it.
-        if (plain.items.len == 0 and (simple_pseudo or positive_attribute)) return .{};
+        if (plain.items.len == 0 and (simple_pseudo or positive_attribute)) return .{ .compound = .{}, .requires_hyperlink = requires_hyperlink };
         const compound = (try self.paintCompound(plain.items, true)) orelse return null;
         if (compound.tag == null and compound.classes.len == 0 and compound.ids.len == 0) return null;
-        return .{ .tag = compound.tag, .classes = compound.classes, .ids = compound.ids };
+        return .{ .compound = .{ .tag = compound.tag, .classes = compound.classes, .ids = compound.ids }, .requires_hyperlink = requires_hyperlink };
     }
 
     fn containerNecessaryChain(self: *Builder, raw: []const u8) ![]const ContainerCompound {
@@ -12274,8 +12287,9 @@ const Builder = struct {
             if (end == at or chain.items.len == 32) return &.{};
             var next = end;
             while (next < text.len and std.mem.indexOfScalar(u8, " \t\r\n\x0c", text[next]) != null) : (next += 1) {}
-            const compound = (try self.containerNecessaryCompound(text[at..end], next == text.len)) orelse return &.{};
-            try chain.append(self.a, .{ .compound = compound, .direct_parent = direct_parent });
+            var compound = (try self.containerNecessaryCompound(text[at..end], next == text.len)) orelse return &.{};
+            compound.direct_parent = direct_parent;
+            try chain.append(self.a, compound);
             if (next == text.len) break;
             direct_parent = text[next] == '>';
             if (direct_parent) {
@@ -14112,7 +14126,7 @@ fn representedProperty(target: Target, property: Property) bool {
         .width => target == .table or target == .td or target == .th or target == .cell,
         .display, .vertical_align, .line_height, .list_style => target == .table,
         .font_size => target == .table or target == .td or target == .th or target == .cell,
-        .min_width => target == .td or target == .th or target == .cell,
+        .min_width, .cell_opacity => target == .td or target == .th or target == .cell,
         .padding => true,
         // Table alignment is projected separately into inherited cell styles.
         // Dynamic values and uncertain selectors still cascade as unsupported.
@@ -14150,8 +14164,9 @@ fn propertyFor(name: []const u8) ?Property {
     if (std.ascii.eqlIgnoreCase(name, "all")) return .layout_reset;
     if (std.ascii.eqlIgnoreCase(name, "padding") or std.ascii.startsWithIgnoreCase(name, "padding-")) return .padding;
     if (std.ascii.eqlIgnoreCase(name, "text-align")) return .text_align;
+    if (std.ascii.eqlIgnoreCase(name, "opacity")) return .cell_opacity;
     // These affect table/cell presentation but have no projection in this ABI.
-    inline for (.{ "height", "max-width", "min-height", "max-height", "display", "visibility", "position", "color", "font", "font-size", "font-family", "font-weight", "vertical-align", "table-layout", "border-spacing", "opacity", "transform", "all" }) |relevant| if (std.ascii.eqlIgnoreCase(name, relevant)) return .other;
+    inline for (.{ "height", "max-width", "min-height", "max-height", "display", "visibility", "position", "color", "font", "font-size", "font-family", "font-weight", "vertical-align", "table-layout", "border-spacing", "transform", "all" }) |relevant| if (std.ascii.eqlIgnoreCase(name, relevant)) return .other;
     if (name.len == 0 or std.mem.startsWith(u8, name, "--")) return null;
     return .other;
 }
@@ -14487,6 +14502,19 @@ fn declarationAlloc(a: std.mem.Allocator, raw: []const u8, order: u32) !?Declara
         .font_size => {
             if (fontSizeValueIn(true, name, value)) |selected| {
                 if (selected != .unknown) projection = .font_size_consumed;
+            }
+        },
+        .cell_opacity => {
+            if (std.ascii.eqlIgnoreCase(value, "initial") or std.ascii.eqlIgnoreCase(value, "unset")) {
+                projection = .{ .opacity = 1 };
+            } else {
+                const percent = std.mem.endsWith(u8, value, "%");
+                const digits = if (percent) value[0 .. value.len - 1] else value;
+                if (widthNumberSyntax(digits)) {
+                    if (std.fmt.parseFloat(f64, digits)) |number| {
+                        if (std.math.isFinite(number)) projection = .{ .opacity = @floatCast(std.math.clamp(if (percent) number / 100 else number, 0, 1)) };
+                    } else |_| {}
+                }
             }
         },
         .text_color, .other => {},
@@ -16030,6 +16058,73 @@ test "font-only stylesheet cascade selects exact winners and retains unknown com
     defer ordered.deinit();
     const last = (try ordered.resolveFontSize(a, "span", "same", "", "")).?;
     try std.testing.expect(last == .relative and last.relative == 1.25);
+}
+
+test "Serbian article pitch source classes preserve external and ID-dependent cascade uncertainty" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const own = "border-top:1px solid;position:relative;padding:1px;";
+    var el: TextElement = .{ .tag = "span", .source_inline_box_ancestor_classes = "mw-parser-output Jpan" };
+    const local = inlineBoxSourceAbsence(&el).?;
+    try std.testing.expect(local.local_box and local.ids == null);
+    const chain = &[_][]const u8{own, "", "", ""};
+    for ([_]struct { css: []const u8, accepted: bool }{
+        .{ .css = "table.inflection th a:hover{text-decoration:underline}.Mong{writing-mode:vertical-lr}", .accepted = true },
+        .{ .css = "body.external span{text-decoration:underline}", .accepted = false },
+        .{ .css = "#unobserved{text-decoration:underline}", .accepted = false },
+        .{ .css = ".Jpan{text-decoration:underline}", .accepted = false },
+    }) |case| {
+        var profile = try parseForTargetAlloc(a, case.css, .screen);
+        defer profile.deinit();
+        try std.testing.expectEqual(case.accepted, try inlineBoxSourceInheritedDefaultsCarrierIn(&profile, a, chain, .{}, false, false, local, null));
+    }
+    el.complete_ancestor_classes = "existing";
+    el.complete_ancestor_ids = "actual-id";
+    const original = inlineBoxSourceAbsence(&el).?;
+    try std.testing.expect(!original.local_box);
+    try std.testing.expectEqualStrings("existing", original.classes);
+    try std.testing.expectEqualStrings("actual-id", original.ids.?);
+}
+
+test "Serbian article pitch actual mixed-selector colors cannot apply to an authenticated span" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const css = ".partlynew:link,#p-personal :link.partlynew,.partlynew :link{color:#B88D00}" ++
+        ".partlynew:visited,#p-personal .partlynew:visited,.partlynew :visited{color:#826F34}";
+    var profile = try parseForTargetAlloc(a, css, .screen);
+    defer profile.deinit();
+    const own = "position:absolute;top:0;bottom:67%;right:0%;border-right:1px solid;";
+    const chain = &[_][]const u8{ own, "" };
+    const parent: TextElement = .{ .tag = "span", .classes = "partlynew", .id = "p-personal" };
+    var subject: TextElement = .{ .tag = "span", .classes = "partlynew", .parent = &parent, .source_nonlink_element = true };
+    try std.testing.expect((try profile.resolveInlineBoxSourceDiagnosedIn(a, &subject, own, .{}, false, true, chain, null)).inherits_color);
+    try std.testing.expectEqual(@as(usize, 6), profile.container_rules.len);
+    for (profile.container_rules) |rule| try std.testing.expect(rule.selector.matchIn(&subject, false) == .no);
+    subject.tag = "i";
+    for (profile.container_rules) |rule| try std.testing.expect(rule.selector.matchIn(&subject, false) == .no);
+    subject.complete_ancestor_classes = "partlynew mw-parser-output";
+    for (profile.container_rules) |rule| try std.testing.expect(rule.selector.matchIn(&subject, false) == .no);
+    subject.source_nonlink_element = false;
+    try std.testing.expect(profile.container_rules[1].selector.matchIn(&subject, false) != .no);
+    subject.complete_ancestor_classes = null;
+    subject.tag = "span";
+    subject.source_nonlink_element = false;
+    try std.testing.expect(!(try profile.resolveInlineBoxSourceDiagnosedIn(a, &subject, own, .{}, false, true, chain, null)).inherits_color);
+    subject.tag = "a";
+    subject.source_nonlink_element = true;
+    try std.testing.expect(profile.container_rules[1].selector.matchIn(&subject, false) != .no);
+    subject.tag = "span";
+    // A surviving comma-list alternative, ancestor predicate or nested argument
+    // still competes for color. Attribute strings cannot create hyperlink facts.
+    for ([_][]const u8{ ":link,span", "body.external span", ":link span", ":not(:link)", ":is(:link,span)",
+        ":has(:link)", "[title=':visited']", "span:hover" }) |selector| {
+        const competing_css = try std.mem.concat(a, u8, &.{ css, selector, "{color:red}" });
+        var competing = try parseForTargetAlloc(a, competing_css, .screen);
+        defer competing.deinit();
+        try std.testing.expect(!(try competing.resolveInlineBoxSourceDiagnosedIn(a, &subject, own, .{}, false, true, chain, null)).inherits_color);
+    }
 }
 
 test "Serbian pitch own geometry uses only authenticated selector refutations" {
@@ -31447,10 +31542,39 @@ test "consumed own cell weight retains unsupported siblings unknown matches and 
     var inline_profile = try parseForTargetAlloc(a, "", .screen); defer inline_profile.deinit();
     const inline_known = try inline_profile.resolveCellWithContextAndHints(a, 0, 0, "", .{ .font_weight_consumed = true }, false, null, null, "font-weight:bold;padding:2px");
     try std.testing.expect(!inline_known.unresolved);
-    const inline_other = try inline_profile.resolveCellWithContextAndHints(a, 0, 0, "", .{ .font_weight_consumed = true }, false, null, null, "opacity:.5;font-weight:bold");
+    const inline_other = try inline_profile.resolveCellWithContextAndHints(a, 0, 0, "", .{ .font_weight_consumed = true }, false, null, null, "opacity:.5;transform:rotate(3deg);font-weight:bold");
     try std.testing.expect(inline_other.unresolved);
 }
 
+
+test "paint opacity belongs to the selected table cell after the ordinary cascade" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var profile = try parseForTargetAlloc(a, "td{opacity:35%!important}", .screen);
+    defer profile.deinit();
+    const selected = try profile.resolveCell(a, 0, false, null, "opacity:0.20");
+    try std.testing.expect(!selected.unresolved);
+    try std.testing.expectEqual(@as(?f32, 0.35), selected.style.?.opacity);
+    var plain = try parseForTargetAlloc(a, "", .screen);
+    defer plain.deinit();
+    for ([_][]const u8{ "opacity:0", "opacity:0.20", "opacity:100%", "opacity:125%" }, [_]f32{ 0, 0.2, 1, 1 }) |declaration, expected| {
+        const cell = try plain.resolveCell(a, 0, false, null, declaration);
+        try std.testing.expect(!cell.unresolved);
+        try std.testing.expectEqual(@as(?f32, expected), cell.style.?.opacity);
+        const alone = try resolveInlineCellAlloc(a, null, declaration);
+        try std.testing.expect(!alone.unresolved);
+        try std.testing.expectEqual(@as(?f32, expected), alone.style.?.opacity);
+    }
+    const absent = try plain.resolveCell(a, 0, false, null, "text-align:left");
+    try std.testing.expect(absent.style.?.opacity == null);
+    for ([_][]const u8{ "opacity:inherit", "opacity:var(--missing)", "opacity:calc(30% + 5%)", "opacity:.2;transform:rotate(3deg)" }) |unknown| {
+        const cell = try plain.resolveCell(a, 0, false, null, unknown);
+        try std.testing.expect(cell.unresolved);
+    }
+    const table = try plain.resolveTableWithContext(a, 0, "", .{}, null, "opacity:0.2");
+    try std.testing.expect(table.unresolved);
+}
 
 test "Ruby layout scope keeps matching unknown and shorthand refusals without granting unrelated rules" {
     const a = std.testing.allocator;
@@ -35194,6 +35318,7 @@ fn inlineBoxSourceRejected(diagnostic: ?*InlineBoxSourceDiagnostic, reason: Inli
 }
 
 pub const InlineBoxResolution = struct {
+    cursor: ?types.InlineCursor = null,
     static_decoration: bool = false,
     radius: ?types.StyleWidth = null,
     rounded_background: ?[]const u8 = null,
@@ -35954,8 +36079,9 @@ fn inlineBoxDeclarationsIn(a: std.mem.Allocator, declarations: []const ObservedF
             if (neutral.unresolved) return .{ .unresolved = true };
         }
         const cursor = try observedFigureKeyword(a, declarations, "cursor", &.{}, environment,
-            &.{ "auto", "help" }, "auto", null, false, "auto");
+            &.{ "auto", "help" }, "auto", null, true, "auto");
         if (cursor.unresolved or !try inlineBoxStaticBackgroundImageAbsent(a, declarations, environment)) return .{ .unresolved = true };
+        if (std.ascii.eqlIgnoreCase(cursor.value.?, "help")) result.cursor = .help;
     }
     if (image_relative and result.position != .relative) return .{ .unresolved = true };
     if (!try inlineBoxDecorationsAbsent(a, declarations, environment)) return .{ .unresolved = true };
@@ -36108,7 +36234,26 @@ pub const InlineImageSourceAbsence = struct {
     classes: []const u8,
     ids: ?[]const u8 = null,
     no_sup_sub: bool = false,
+    local_box: bool = false,
 };
+
+fn inlineBoxSourceAbsence(element: *const TextElement) ?InlineImageSourceAbsence {
+    if (element.complete_ancestor_classes) |classes| return .{ .classes = classes, .ids = element.complete_ancestor_ids };
+    if (element.source_inline_box_ancestor_classes) |classes| return .{ .classes = classes, .local_box = true };
+    return null;
+}
+
+fn inlineBoxInheritedRuleAbsent(profile: *const Profile, rule: anytype, facts: InlineImageSourceAbsence) bool {
+    if (@TypeOf(rule) == ContainerRule) {
+        if (!inlineImageContainerRuleAbsent(rule.selector, facts)) return false;
+        if (!facts.local_box) return true;
+        const index = counterResetRuleIndex(profile, rule) orelse return false;
+        return inlineOverlayParagraphLocalSelector(profile.observed_figure_rules[index]);
+    }
+    if (@TypeOf(rule) == TextRule) return inlineImageTextRuleAbsent(rule.selector, facts) and
+        (!facts.local_box or inlineOverlayParagraphFigureLocal(profile, rule));
+    return inlineImageObservedRuleAbsent(rule, facts) and (!facts.local_box or inlineOverlayParagraphLocalSelector(rule));
+}
 
 fn inlineImageSimpleScriptCompound(part: TextCompound) bool {
     const tag = part.tag orelse return false;
@@ -36379,21 +36524,21 @@ fn inlineBoxSourceInheritedDefaultsCarrierIn(profile: *const Profile, a: std.mem
         }
         for (selected.container_rules) |rule| {
             if (!clipped_absolute) if (absence) |facts| {
-                if (inlineImageContainerRuleAbsent(rule.selector, facts)) continue;
+                if (inlineBoxInheritedRuleAbsent(selected, rule, facts)) continue;
             };
             try appendObservedFigureDeclarations(scratch, &retained, rule.css,
                 .{ .specificity = rule.selector.specificity, .order = rule.order }, true, true, null, 0);
         }
         for (selected.figure_rules) |rule| {
             if (!clipped_absolute) if (absence) |facts| {
-                if (inlineImageTextRuleAbsent(rule.selector, facts)) continue;
+                if (inlineBoxInheritedRuleAbsent(selected, rule, facts)) continue;
             };
             try appendObservedFigureDeclarations(scratch, &retained, rule.css,
                 .{ .specificity = rule.selector.specificity, .order = rule.order }, true, true, null, 0);
         }
         for (selected.observed_figure_rules) |rule| {
             if (!clipped_absolute) if (absence) |facts| {
-                if (inlineImageObservedRuleAbsent(rule, facts)) continue;
+                if (inlineBoxInheritedRuleAbsent(selected, rule, facts)) continue;
             };
             try appendObservedFigureDeclarations(scratch, &retained, rule.css,
                 .{ .order = rule.order }, true, true, null, 0);
@@ -37054,7 +37199,7 @@ fn staticInlineDirectionDefaultsDiagnosedAlloc(a: std.mem.Allocator, styles: ?*c
         for (selected.container_rules, 0..) |rule, index| {
             // Same authenticated negative-only inventory used by the source
             // query. Refutation grants neither selector matches nor ancestry.
-            if (absence) |facts| if (inlineImageContainerRuleAbsent(rule.selector, facts)) continue;
+            if (absence) |facts| if (inlineBoxInheritedRuleAbsent(selected, rule, facts)) continue;
             if (!try staticInlineDirectionCssDiagnosedAlloc(a, rule.css, detail)) {
                 if (detail) |sink| { sink.kind = .container; sink.profile_depth = count - 1; sink.index = index; }
                 return false;
@@ -37063,7 +37208,7 @@ fn staticInlineDirectionDefaultsDiagnosedAlloc(a: std.mem.Allocator, styles: ?*c
         for (selected.figure_rules, 0..) |rule, index| {
             // Same authenticated negative-only inventory used by the source
             // query. Refutation grants neither selector matches nor ancestry.
-            if (absence) |facts| if (inlineImageTextRuleAbsent(rule.selector, facts)) continue;
+            if (absence) |facts| if (inlineBoxInheritedRuleAbsent(selected, rule, facts)) continue;
             if (!try staticInlineDirectionCssDiagnosedAlloc(a, rule.css, detail)) {
                 if (detail) |sink| { sink.kind = .text; sink.profile_depth = count - 1; sink.index = index; }
                 return false;
@@ -37072,7 +37217,7 @@ fn staticInlineDirectionDefaultsDiagnosedAlloc(a: std.mem.Allocator, styles: ?*c
         for (selected.observed_figure_rules, 0..) |rule, index| {
             // Same authenticated negative-only inventory used by the source
             // query. Refutation grants neither selector matches nor ancestry.
-            if (absence) |facts| if (inlineImageObservedRuleAbsent(rule, facts)) continue;
+            if (absence) |facts| if (inlineBoxInheritedRuleAbsent(selected, rule, facts)) continue;
             if (!try staticInlineDirectionCssDiagnosedAlloc(a, rule.css, detail)) {
                 if (detail) |sink| { sink.kind = .observed; sink.profile_depth = count - 1; sink.index = index; }
                 return false;
@@ -38386,4 +38531,136 @@ test "bidi declaration scanner ignores exact German font rule empty trivia and p
     try std.testing.expect(try profile.sourceBidiScopeUnchanged(a, &second, "font-size:1.4em; \t ; "));
     try std.testing.expect(!try profile.sourceBidiScopeUnchanged(a, &second, " ; broken ; "));
     try std.testing.expect(!try profile.sourceBidiScopeUnchanged(a, &second, "direction:ltr; "));
+}
+
+// Each ordinary in-flow owner retains its own padding or background interval.
+// Descendants may change script/ink, so the effective leaf background alone
+// cannot define the declaring inline's paint band or its horizontal advance.
+pub const StaticInlineOwnerPaint = struct {
+    padding: types.StyleEdges,
+    background: ?[]const u8,
+};
+
+// This is a selection hint only. The full parser and cascade below own every
+// accepted edge and paint; absence of a hint keeps the ordinary parser route.
+pub fn staticInlineOwnerCandidate(css: []const u8) bool {
+    return std.ascii.findIgnoreCase(css, "padding") != null or std.ascii.findIgnoreCase(css, "background") != null;
+}
+
+pub fn staticInlineOwnerValues(a: std.mem.Allocator, css: []const u8, environment: CustomEnvironment) !?StaticInlineOwnerPaint
+{
+    if (css.len == 0 or css.len > max_css_bytes or !staticInlineOwnerCandidate(css)) return null;
+    // This source issuer admits only explicit padding and solid background;
+    // the existing font query resolves a font-size declaration independently.
+    // Every other possible matching declaration keeps its original obligation.
+    var declarations: std.ArrayList(ObservedFigureDeclaration) = .empty;
+    defer declarations.deinit(a);
+    try appendObservedFigureDeclarations(a, &declarations, css, .{ .inline_style = true }, false, false, null, 0);
+    var own_background = false;
+    for (declarations.items) |d| {
+        if (d.syntax_unknown or d.rank_unknown or d.uncertain) return null;
+        if (inlineBoxKeyword(d.name, &.{ "background", "background-color" })) {
+            own_background = true;
+            continue;
+        }
+        if (!inlineBoxKeyword(d.name, &.{ "padding", "padding-left", "padding-right", "padding-top", "padding-bottom", "font-size" })) return null;
+    }
+    const resolved_edges = try observedFigureEdges(a, declarations.items, environment, true, false, 1, null);
+    if (resolved_edges.unresolved or resolved_edges.value == null) return null;
+    const padding = observedFigureFixedEdges(resolved_edges.value.?) orelse return null;
+    if (padding.left.unit != .px or padding.right.unit != .px or padding.top.value != 0 or padding.bottom.value != 0 or
+        (padding.left.value == 0 and padding.right.value == 0 and !own_background)) return null;
+    if (!try inlineBoxStaticBackgroundImageAbsent(a, declarations.items, environment)) return null;
+    var background: ?[]const u8 = null;
+    if (own_background) {
+        const paint = try observedFigureColor(a, declarations.items, "background-color", environment, null, null);
+        if (paint.unresolved or paint.value == null or paint.value.?.kind != .rgb) return null;
+        background = paint.value.?.value;
+    }
+    return .{ .padding = padding, .background = background };
+}
+
+pub fn staticInlineOwnerScope(profile: *const Profile, a: std.mem.Allocator, element: *const TextElement,
+    css: []const u8, environment: CustomEnvironment, chain: []const []const u8) !bool
+{
+    if (!std.ascii.eqlIgnoreCase(element.tag, "span") or !Profile.rubySourceDeclarationChainValid(element, css, chain)) return false;
+    const absent = inlineBoxSourceAbsence(element);
+    if (!try staticInlineDirectionDefaultsWithAbsenceAlloc(a, profile, chain, absent) or
+        !try inlineBoxSourceInheritedDefaultsCarrierIn(profile, a, chain, environment, false, false, absent, null)) return false;
+    var current: ?*const Profile = profile;
+    var remaining: usize = 16;
+    while (current) |sheet| : (current = sheet.page_style_parent) {
+        if (remaining == 0) return false;
+        remaining -= 1;
+        if (!staticInlineOwnerRulesAbsent(sheet, element)) return false;
+    }
+    return true;
+}
+
+// Only a current property-local receipt can refute an otherwise unknown
+// selector. A known matching rule still belongs to this node's cascade.
+pub fn staticInlineOwnerRulesAbsent(profile: *const Profile, element: *const TextElement) bool {
+    if (profile.globally_unresolved or (profile.page_style_parent != null and element.page_style_root == null)) return false;
+    const absence = inlineBoxSourceAbsence(element);
+    for (profile.container_rules) |rule| {
+        switch (rule.selector.matchIn(element, profile.page_style_parent != null)) {
+            .no => continue,
+            .known => return false,
+            .unknown => {
+                const facts = absence orelse return false;
+                if (!facts.local_box or !inlineBoxInheritedRuleAbsent(profile, rule, facts)) return false;
+            },
+        }
+    }
+    return true;
+}
+
+fn staticInlineOwnerPaintIn(profile: *const Profile, a: std.mem.Allocator, element: *const TextElement,
+    css: []const u8, environment: CustomEnvironment, chain: []const []const u8) !?StaticInlineOwnerPaint
+{
+    const selected = (try staticInlineOwnerValues(a, css, environment)) orelse return null;
+    return if (try staticInlineOwnerScope(profile, a, element, css, environment, chain)) selected else null;
+}
+
+test "classifier padding and paint are three independent source-owned inline ranges" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // A local absence may exclude an article-class chain. Actual matching
+    // ancestors and selectors requiring the surrounding HTML retain their CSS.
+    var class_sheet = try parseForTargetAlloc(a, ".Arab i{transform:translateX(2px)}", .screen);
+    defer class_sheet.deinit();
+    var parent_node: TextElement = .{ .tag = "span", .classes = "Arab" };
+    var italic_node: TextElement = .{ .tag = "i", .parent = &parent_node, .source_inline_box_ancestor_classes = "mw-parser-output Arab" };
+    try std.testing.expect(!staticInlineOwnerRulesAbsent(&class_sheet, &italic_node));
+    parent_node.classes = "";
+    italic_node.source_inline_box_ancestor_classes = "mw-parser-output";
+    try std.testing.expect(staticInlineOwnerRulesAbsent(&class_sheet, &italic_node));
+    var outer_sheet = try parseForTargetAlloc(a, "html.Arab i{transform:translateX(2px)}", .screen);
+    defer outer_sheet.deinit();
+    try std.testing.expect(!staticInlineOwnerRulesAbsent(&outer_sheet, &italic_node));
+    var empty = try parseAlloc(a, "");
+    defer empty.deinit();
+    const element: TextElement = .{ .tag = "span" };
+    const outer = "padding-left:15px; font-size:80%";
+    const painted = "background:#EDFFFF";
+    const separator = "padding-left:4px; padding-right:4px";
+    const p = (try staticInlineOwnerPaintIn(&empty, a, &element, outer, .{}, &.{outer})) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualDeep(types.StyleLength{ .unit = .px, .value = 15 }, p.padding.left);
+    try std.testing.expect(p.padding.right.value == 0 and p.background == null);
+    const b = (try staticInlineOwnerPaintIn(&empty, a, &element, painted, .{}, &.{ painted, outer })) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("#edffff", b.background.?);
+    try std.testing.expect(b.padding.left.value == 0 and b.padding.right.value == 0);
+    const s = (try staticInlineOwnerPaintIn(&empty, a, &element, separator, .{}, &.{ separator, painted, outer })) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualDeep(types.StyleLength{ .unit = .px, .value = 4 }, s.padding.left);
+    try std.testing.expectEqualDeep(s.padding.left, s.padding.right);
+    try std.testing.expect(s.background == null);
+    for ([_][]const u8{ "padding:1px", "padding-left:4px;transform:rotate(5deg)", "background:linear-gradient(red,blue)",
+        "padding-right:4px;opacity:.5", "background:rgba(255,255,255,.2)", "background:red;position:relative" }) |other| {
+        try std.testing.expect(try staticInlineOwnerPaintIn(&empty, a, &element, other, .{}, &.{other}) == null);
+    }
+    var styled = try parseAlloc(a, "span{display:inline-block}");
+    defer styled.deinit();
+    try std.testing.expect(try staticInlineOwnerPaintIn(&styled, a, &element, outer, .{}, &.{outer}) == null);
+    try std.testing.expect(try staticInlineOwnerPaintIn(&empty, a, &element, outer, .{}, &.{separator}) == null);
 }

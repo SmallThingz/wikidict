@@ -18162,9 +18162,10 @@ const PtVinrodRetainedFixture = struct {
         italic_vin: bool = false,
         italic_rod: bool = false,
         ipa: bool = false,
-        fn spans(self: *@This(), a: std.mem.Allocator, values: []const encoder.presentation_types.Span) !void {
+        fn spans(self: *@This(), a: std.mem.Allocator, values: []const encoder.presentation_types.Span) anyerror!void {
             for (values) |span| {
                 try self.visible.appendSlice(a, span.text);
+                if (span.inline_box_group) |box| try self.spans(a, box.spans);
                 try self.visible.appendSlice(a, span.trail);
                 if (span.kind == .link and std.mem.eql(u8, span.target, "vin#Sueco")) {
                     try std.testing.expect(span.italic); self.italic_vin = true;
@@ -18221,25 +18222,33 @@ const PtVinrodRetainedFixture = struct {
                 self.self_items += 1;
             };
         }
+        fn borderedBoldWord(owner: encoder.presentation_types.Span, word: []const u8) !void {
+            const box = owner.inline_box_group orelse return error.TestUnexpectedResult;
+            try std.testing.expect(encoder.presentation_types.validInlineBoxGroupOwner(owner));
+            try std.testing.expect(owner.bold and owner.kind == .text and owner.target.len == 0 and owner.text.len == 0);
+            try std.testing.expect(box.border.top == .none and box.border.left == .none and box.border.right == .none);
+            const edge = switch (box.border.bottom) { .solid => |line| line, else => return error.TestUnexpectedResult };
+            try std.testing.expect(edge.width.unit == .px and edge.width.value == 1);
+            try std.testing.expectEqualStrings("#000000", switch (edge.color) { .rgb => |rgb| rgb, else => return error.TestUnexpectedResult });
+            try std.testing.expect(box.overlays.len == 0 and box.spans.len == 1);
+            const child = box.spans[0];
+            try std.testing.expect(child.bold and child.kind == .text and child.target.len == 0 and child.inline_box_group == null);
+            try std.testing.expectEqualStrings(word, child.text);
+        }
         fn blocks(self: *@This(), a: std.mem.Allocator, values: []const encoder.presentation_types.Block) anyerror!void {
             for (values) |block| {
-                var plain: std.ArrayList(u8) = .empty;
-                for (block.spans) |span| try plain.appendSlice(a, span.text);
-                if (std.mem.indexOf(u8, plain.items, "vin.röd")) |begin| {
-                    var offset: usize = 0;
-                    var checked: usize = 0;
-                    for (block.spans) |span| {
-                        const end = offset + span.text.len;
-                        if (end > begin and offset < begin + "vin.röd".len) {
-                            try std.testing.expect(span.bold and span.kind == .text and span.target.len == 0);
-                            checked += @min(end, begin + "vin.röd".len) - @max(offset, begin);
-                        }
-                        offset = end;
-                    }
-                    try std.testing.expectEqual("vin.röd".len, checked);
+                const start = self.visible.items.len;
+                try self.spans(a, block.spans);
+                if (std.mem.eql(u8, self.visible.items[start..], "vin.röd")) {
+                    try std.testing.expect(!self.vin_bold and !self.rod_bold and block.kind == .paragraph);
+                    try std.testing.expectEqual(@as(usize, 3), block.spans.len);
+                    try borderedBoldWord(block.spans[0], "vin");
+                    const dot = block.spans[1];
+                    try std.testing.expectEqualStrings(".", dot.text);
+                    try std.testing.expect(dot.bold and dot.kind == .text and dot.target.len == 0 and dot.inline_box_group == null);
+                    try borderedBoldWord(block.spans[2], "röd");
                     self.vin_bold = true; self.rod_bold = true;
                 }
-                try self.spans(a, block.spans);
                 if (block.table) |value| try self.table(a, value);
                 if (block.container != null) try self.blocks(a, try RetainedContainerChildren347.children(block));
                 try self.visible.append(a, '\n');

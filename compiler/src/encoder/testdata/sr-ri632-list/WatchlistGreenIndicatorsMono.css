@@ -1,0 +1,60 @@
+/*  _____________________________________________________________________________
+ * |                                                                             |
+ * |                    === WARNING: GLOBAL GADGET FILE ===                      |
+ * |                  Changes to this page affect many users.                    |
+ * | Please discuss changes on the talk page or on [[WT:Gadget]] before editing. |
+ * |_____________________________________________________________________________|
+ *
+ * Imported as of 27 may 2015 from [[User:Edokter/vector.css]], [[MediaWiki:Common.css]] and [[MediaWiki:Monobook.css]]
+ * Display green collapsible arrows and green bullets for changed pages in Watchlist, history and recent changes
+ *
+ * Please prefix selectors with .mw-rcfilters-disabled unless they are tested with and intended to work with the new ChangesList UI (RCFilters / WLFilters / Structured Change Filters)
+ */
+
+/* Standard watchlist, history and recent changes */
+.mw-rcfilters-disabled #mw-wlheader-showupdated,
+.mw-rcfilters-disabled #mw-wlheader-green {
+    display: inline;
+}
+.mw-rcfilters-disabled #mw-watchlist-resetbutton {
+    display: block;
+}
+.mw-rcfilters-disabled li.mw-changeslist-line-watched,
+li.mw-history-line-updated {
+    list-style-image: url(//upload.wikimedia.org/wikipedia/commons/f/fa/ChangedBulletMono.png);
+}
+
+/* Enhanced watchlist and recent changes */
+.mw-rcfilters-disabled td.mw-enhanced-rc,
+.mw-rcfilters-disabled .mw-enhanced-rc-time {
+    font-family: monospace, monospace;
+}
+.mw-rcfilters-disabled .mw-enhanced-rc-nested {
+    background-position: 0 1px;
+}
+.mw-rcfilters-disabled .mw-enhancedchanges-arrow-space {
+    background-position: center top;
+}
+.mw-rcfilters-disabled .mw-enhanced-rc-nested,
+.mw-rcfilters-disabled .mw-enhancedchanges-arrow-space {
+    background-repeat: no-repeat;
+    background-image: url(//upload.wikimedia.org/wikipedia/commons/7/7a/Bullet.png);
+}
+.mw-rcfilters-disabled .mw-enhanced-watched .mw-enhanced-rc-nested,
+.mw-rcfilters-disabled .mw-changeslist-line-watched .mw-enhancedchanges-arrow-space {
+    background-image: url(//upload.wikimedia.org/wikipedia/commons/f/fa/ChangedBulletMono.png);
+}
+.mw-rcfilters-disabled .mw-changeslist-line-not-watched .mw-collapsible-arrow.mw-collapsible-toggle-collapsed {
+    background-position: center top;
+    background-image: url(//upload.wikimedia.org/wikipedia/commons/b/bc/Vector_right_arrow_link.png);
+}
+.mw-rcfilters-disabled .mw-changeslist-line-not-watched .mw-collapsible-arrow.mw-collapsible-toggle-expanded {
+    background-position: center top;
+    background-image: url(//upload.wikimedia.org/wikipedia/commons/2/27/Vector_down_arrow_link.png);
+}
+.mw-rcfilters-disabled .mw-changeslist-line-watched .mw-collapsible-arrow.mw-collapsible-toggle-collapsed {
+    background-image: url(//upload.wikimedia.org/wikipedia/commons/a/af/Vector_right_arrow_changed.png);
+}
+.mw-rcfilters-disabled .mw-changeslist-line-watched .mw-collapsible-arrow.mw-collapsible-toggle-expanded {
+    background-image: url(//upload.wikimedia.org/wikipedia/commons/e/e5/Vector_down_arrow_changed.png);
+}

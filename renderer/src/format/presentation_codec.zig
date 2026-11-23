@@ -65,6 +65,7 @@ const container_height_flag: u32 = 0x20000;
 const container_columns_flag: u32 = 0x40000;
 const container_positioning_flag: u32 = 0x80000;
 const container_min_height_flag: u32 = 0x100000;
+const cell_opacity_flag: u8 = 0x10;
 const cell_line_height_flag: u8 = 0x08;
 const cell_width_flag: u8 = 0x20;
 const container_margin_values_flag: u32 = 0x200000;
@@ -1039,7 +1040,7 @@ const Encoder = struct {
             try self.byte(0);
             return;
         };
-        if (!types.validCellStyle(value) or ((value.width != null or value.min_width != null or value.vertical_align != null or value.line_height != null) and self.version != .container_fonts)) return error.InvalidPresentation;
+        if (!types.validCellStyle(value) or ((value.width != null or value.min_width != null or value.vertical_align != null or value.line_height != null or value.opacity != null) and self.version != .container_fonts)) return error.InvalidPresentation;
         try self.byte(1);
         const flags: u8 = @as(u8, @intFromBool(value.border != null)) |
             (@as(u8, @intFromBool(value.padding != null)) << 1) |
@@ -1047,7 +1048,8 @@ const Encoder = struct {
             (if (value.width != null) cell_width_flag else @as(u8, 0)) |
             (if (value.min_width != null) cell_min_width_flag else @as(u8, 0)) |
             (if (value.vertical_align != null) cell_vertical_align_flag else @as(u8, 0)) |
-            (if (value.line_height != null) cell_line_height_flag else @as(u8, 0));
+            (if (value.line_height != null) cell_line_height_flag else @as(u8, 0)) |
+            (if (value.opacity != null) cell_opacity_flag else @as(u8, 0));
         try self.byte(flags);
         if (value.border) |border| try self.styleBorder(border);
         if (value.padding) |padding| try self.styleEdges(padding);
@@ -1056,6 +1058,7 @@ const Encoder = struct {
         if (value.min_width) |width| try self.styleLength(width);
         if (value.vertical_align) |alignment| try self.enumByte(types.CellVerticalAlign, alignment);
         if (value.line_height) |height| try self.cellLineHeight(height);
+        if (value.opacity) |alpha| try self.writeU32(@bitCast(alpha));
     }
     fn styleWidth(self: *Encoder, value: types.StyleWidth) !void {
         if (!types.validStyleWidth(value)) return error.InvalidPresentation;
@@ -2783,7 +2786,7 @@ const Reader = struct {
     fn cellStyle(self: *Reader) !?types.CellStyle {
         if (!try self.presence()) return null;
         const flags = try self.byte();
-        const allowed: u8 = if (self.version == .container_fonts) 0xef else 0x07;
+        const allowed: u8 = if (self.version == .container_fonts) 0xff else 0x07;
         if (flags == 0 or flags & ~allowed != 0) return error.InvalidPresentation;
         const value: types.CellStyle = .{
             .border = if (flags & 1 != 0) try self.styleBorder() else null,
@@ -2793,6 +2796,7 @@ const Reader = struct {
             .min_width = if (flags & cell_min_width_flag != 0) try self.styleLength() else null,
             .vertical_align = if (flags & cell_vertical_align_flag != 0) try self.enumValue(types.CellVerticalAlign) else null,
             .line_height = if (flags & cell_line_height_flag != 0) try self.cellLineHeight() else null,
+            .opacity = if (flags & cell_opacity_flag != 0) @as(f32, @bitCast(try self.readU32())) else null,
         };
         if (!types.validCellStyle(value)) return error.InvalidPresentation;
         return value;
@@ -3873,7 +3877,7 @@ fn contentTableHasFeature(value: anytype, comptime feature: TreeFeature, table_d
             if (comptime @hasField(@TypeOf(cell_value), "style")) if (cell_value.style) |style| if (style.border) |border| if (border == .edges) return true;
         }
         if (feature == .cell_min_width) {
-            if (comptime @hasField(@TypeOf(cell_value), "style")) if (cell_value.style) |style| if (style.width != null or style.min_width != null or style.vertical_align != null or style.line_height != null) return true;
+            if (comptime @hasField(@TypeOf(cell_value), "style")) if (cell_value.style) |style| if (style.width != null or style.min_width != null or style.vertical_align != null or style.line_height != null or style.opacity != null) return true;
         }
         if (feature == .cell_owner_fonts or feature == .extended_font_families) {
             if (comptime @hasField(@TypeOf(cell_value), "style")) if (cell_value.style) |style| if (style.line_height) |height| if (height.strut) |strut| if (strut.owner_font) |font| {
@@ -6185,6 +6189,34 @@ test "DPRC style wire retains null zero none and strict minimum framing" {
     const decoded = try decodeAlloc(a, bytes, "limits", .supplemental, null);
     try std.testing.expectEqualDeep(stored.entry.sections, decoded.entry.sections);
     try std.testing.expectEqualSlices(u8, bytes, try encodeAlloc(a, decoded));
+}
+
+test "DPRM cell group opacity matches the native scalar wire and preserves absent fields" {
+    const a = std.testing.allocator;
+    var encoder: Encoder = .{ .a = a, .version = .container_fonts };
+    defer encoder.deinit();
+    try encoder.cellStyle(.{ .text_align = .left, .opacity = 0.2 });
+    try std.testing.expectEqualSlices(u8, &.{ 1, 0x14, 0, 0xcd, 0xcc, 0x4c, 0x3e }, encoder.out.items);
+    var accepted: Reader = .{ .a = a, .version = .container_fonts, .bytes = encoder.out.items };
+    try std.testing.expectEqualDeep(@as(?types.CellStyle, .{ .text_align = .left, .opacity = 0.2 }), try accepted.cellStyle());
+    var before_m: Reader = .{ .a = a, .version = .reference_blocks, .bytes = encoder.out.items };
+    try std.testing.expectError(error.InvalidPresentation, before_m.cellStyle());
+    for ([_]f32{ 0, 1 }) |value| {
+        encoder.out.clearRetainingCapacity();
+        try encoder.cellStyle(.{ .opacity = value });
+        var reader: Reader = .{ .a = a, .version = .container_fonts, .bytes = encoder.out.items };
+        try std.testing.expectEqual(@as(?f32, value), (try reader.cellStyle()).?.opacity);
+    }
+    for ([_]f32{ -0.01, 1.01, std.math.nan(f32), std.math.inf(f32) }) |invalid| {
+        try std.testing.expectError(error.InvalidPresentation, encoder.cellStyle(.{ .opacity = invalid }));
+        var wire = [_]u8{ 1, 16, 0, 0, 0, 0 };
+        std.mem.writeInt(u32, wire[2..6], @bitCast(invalid), .little);
+        var reader: Reader = .{ .a = a, .version = .container_fonts, .bytes = &wire };
+        try std.testing.expectError(error.InvalidPresentation, reader.cellStyle());
+    }
+    encoder.out.clearRetainingCapacity();
+    try encoder.cellStyle(.{ .text_align = .left });
+    try std.testing.expectEqualSlices(u8, &.{ 1, 4, 0 }, encoder.out.items);
 }
 
 test "DPRC styles reject malformed flags units borders enums colors and empty records" {

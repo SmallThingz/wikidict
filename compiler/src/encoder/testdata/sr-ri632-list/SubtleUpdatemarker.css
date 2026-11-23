@@ -1,0 +1,5 @@
+/* Tone down 'Changed since last visit' colors */
+span.updatedmarker {
+	background-color: transparent;
+	color: #006400;
+}

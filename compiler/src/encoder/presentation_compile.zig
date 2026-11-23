@@ -1658,6 +1658,7 @@ pub const SpanFlags = packed struct(u8) {
     underline: bool = false,
 };
 pub const Span = struct {
+    static_frame_entity: ?*const StaticFrameNonbreakingEntity = null,
     ordinary_action_script: ?*OrdinaryActionScriptBinding = null,
     ordinary_action_entity: ?[]const u8 = null,
     ordinary_action_origin: ?*OrdinaryActionGroupBinding = null,
@@ -1829,6 +1830,13 @@ fn separateGeneratedDiagnosticBoundariesAt(a: A, spans: []Span, ruby_depth: usiz
             span.inline_action_group = group;
         };
         for (spans) |*span| if (span.inline_box_group) |original| {
+            // A single source-bound entity contains no diagnostic boundary to
+            // separate. Sharing it preserves its original group and leaf identity.
+            if (span.static_frame_entity) |held| if (original.spans.len == 1) {
+                const leaf = &original.spans[0];
+                if (staticInlineFrame(span.*, original.*) and staticInlineOrdinarySpan(leaf.*) and
+                    !leaf.generated_diagnostic and held.matches(original, leaf)) continue;
+            };
             const group = try a.create(presentation_types.InlineBoxGroup(Span));
             group.* = original.*;
             group.spans = try rubyDiagnosticChildren(a, original.spans, ruby_depth + 1);
@@ -5865,8 +5873,108 @@ fn staticInlineEdgeWhitespace(cp: u21) bool {
     return cp == 0x20 or cp == 0xa0 or cp == 0x1680 or (cp >= 0x2000 and cp <= 0x200a) or
         cp == 0x202f or cp == 0x205f or cp == 0x3000;
 }
+// A run of nonbreaking spaces in a square swatch has measured advance even
+// though its glyphs have no ink. It has no collapsible edge to transfer.
+fn staticInlineNonbreakingSwatch(span: Span, group: presentation_types.InlineBoxGroup(Span)) bool {
+    if (span.kind != .text or span.target.len != 0 or span.background == null or
+        group.radius != null or group.overlays.len != 0 or group.spans.len != 1) return false;
+    const child = group.spans[0];
+    if (child.kind != .text or child.target.len != 0 or child.text.len == 0) return false;
+    var rest = child.text;
+    while (std.mem.startsWith(u8, rest, "\u{a0}")) rest = rest[2..];
+    if (rest.len != 0) return false;
+    const edge = group.border.top;
+    if (edge != .solid or edge.solid.color != .rgb or edge.solid.width.unit != .px or edge.solid.width.value <= 0) return false;
+    inline for (.{ "top", "right", "bottom", "left" }) |side| {
+        if (@field(group.padding, side).value != 0 or !Renderer.sameFigurePreparationValue(@field(group.border, side), edge)) return false;
+    }
+    return true;
+}
 fn inlineBoxHasAudioControl(span: anytype) bool {
     return if (comptime @hasField(@TypeOf(span), "audio_control")) span.audio_control != null else false;
+}
+// A neutral-border ordinary inline owns a horizontal advance, an opaque paint
+// interval, or both. Each child retains its own font, language, and action.
+fn staticInlineFrame(owner: Span, group: presentation_types.InlineBoxGroup(Span)) bool {
+    if (owner.kind != .text or owner.target.len != 0 or owner.flags.superscript or owner.flags.subscript or
+        owner.flags.underline or owner.flags.strike or owner.inline_style != null or owner.font_size_unknown or
+        group.radius != null or group.overlays.len != 0 or group.padding.top.value != 0 or group.padding.bottom.value != 0 or
+        group.padding.left.unit != .px or group.padding.right.unit != .px or
+        (group.padding.left.value == 0 and group.padding.right.value == 0 and owner.background == null)) return false;
+    inline for (.{ "top", "right", "bottom", "left" }) |edge| if (@field(group.border, edge) != .none) return false;
+    return presentation_types.validInlineBoxGroupOwner(owner);
+}
+
+// Keep the paragraph's direction scan continuous across declaring boundaries.
+// Only neutral-border frames recurse. Bordered children retain the established
+// metric/slice proof and detached overlay content cannot enter this subtree.
+// Build-only source binding for a horizontal frame whose entire child is one
+// original character reference. Recheck the parser node and its exact group
+// when a containing frame or the containing paragraph visits this leaf again.
+const StaticFrameNonbreakingEntity = struct {
+    original: []const u8,
+    group: *const presentation_types.InlineBoxGroup(Span),
+    child: *const Span,
+
+    fn matches(self: @This(), frame: *const presentation_types.InlineBoxGroup(Span), leaf: *const Span) bool {
+        if (self.group != frame or frame.spans.len != 1 or self.child != leaf or leaf != &frame.spans[0] or
+            (frame.padding.left.value == 0 and frame.padding.right.value == 0) or
+            leaf.provenance != .entity_literal or leaf.kind != .text or leaf.target.len != 0 or leaf.inline_box_group != null or
+            !std.mem.eql(u8, leaf.text, "\u{a0}")) return false;
+        const tag = syntax.tagAt(self.original, 0) orelse return false;
+        if (!tag.is("span") or tag.closing or tag.self_closing) return false;
+        const pair = syntax.matchingTag(self.original, tag) orelse return false;
+        if (pair.end != self.original.len or !Renderer.tableNestedSourceClose(self.original, tag.name, pair, false)) return false;
+        const token = self.original[tag.end..pair.inner_end];
+        if (token.len < 3 or token[0] != '&') return false;
+        var buf: [4]u8 = undefined;
+        const decoded = Renderer.decodeEntity(token, &buf, true) orelse return false;
+        return decoded.consumed == token.len and std.mem.eql(u8, decoded.bytes, leaf.text);
+    }
+};
+
+fn scanStaticInlineFrame(paragraph: *StaticInlineTextScan, owner: Span, depth: usize, remaining: *usize) Error!void {
+    if (depth >= presentation_types.max_content_depth) return error.UncompiledPresentation;
+    const frame = owner.inline_box_group orelse return error.UncompiledPresentation;
+    if (!staticInlineFrame(owner, frame.*) or frame.spans.len > remaining.*) return error.UncompiledPresentation;
+    remaining.* -= frame.spans.len;
+    for (frame.spans, 0..) |span, i| {
+        const decoded_text = if (owner.static_frame_entity) |held| held.matches(frame, &frame.spans[i]) else false;
+        if (!staticInlineOrdinarySpan(span) or span.flags.superscript or span.flags.subscript or span.font_size_unknown or
+            (span.provenance != .parsed and !decoded_text) or span.generated_diagnostic or span.generated_link != null or
+            span.external_literal_parameter != null or presentation_types.spanHasClippedAbsolute(span) or
+            inlineBoxHasAudioControl(span) or !presentation_types.validRubyChild(span)) return error.UncompiledPresentation;
+        if (span.inline_box_group) |child| {
+            if (staticInlineFrame(span, child.*)) {
+                try scanStaticInlineFrame(paragraph, span, depth + 1, remaining);
+            } else {
+                if (depth + 1 >= presentation_types.max_content_depth or child.radius != null or child.overlays.len != 0 or
+                    !staticDottedTextLabel(span, child.*) or child.spans.len > remaining.*) return error.UncompiledPresentation;
+                remaining.* -= child.spans.len;
+                const leaf = child.spans[0];
+                if (!staticInlineOrdinarySpan(leaf) or leaf.inline_box_group != null or !presentation_types.validRubyChild(leaf) or
+                    presentation_types.spanHasClippedAbsolute(leaf) or inlineBoxHasAudioControl(leaf) or
+                    !inlineBoxWireMetricEqual(span, leaf)) return error.UncompiledPresentation;
+                var label: StaticInlineTextScan = .{};
+                try label.text(leaf.text);
+                if (label.first == null or staticInlineEdgeWhitespace(label.first.?) or staticInlineEdgeWhitespace(label.last.?))
+                    return error.UncompiledPresentation;
+                try paragraph.text(leaf.text);
+            }
+        } else {
+            try paragraph.text(span.text);
+        }
+    }
+}
+
+fn staticDottedTextLabel(owner: Span, box: presentation_types.InlineBoxGroup(Span)) bool {
+    if (owner.kind != .text or owner.target.len != 0 or box.radius != null or box.overlays.len != 0 or
+        box.spans.len != 1 or box.spans[0].kind != .text or box.spans[0].target.len != 0 or
+        box.border.top != .none or box.border.right != .none or box.border.left != .none or box.border.bottom != .dotted) return false;
+    const line = box.border.bottom.dotted;
+    if (line.color != .rgb or line.width.unit != .px or line.width.value <= 0) return false;
+    inline for (.{ "top", "right", "bottom", "left" }) |side| if (@field(box.padding, side).value != 0) return false;
+    return true;
 }
 fn staticInlineOrdinarySpan(span: Span) bool {
     return (span.kind == .text or span.kind == .link or span.kind == .external_link) and span.direction.len == 0 and
@@ -5875,8 +5983,16 @@ fn staticInlineOrdinarySpan(span: Span) bool {
         span.inline_action_group == null and span.pending_figure == null and span.pending_container == null;
 }
 fn inlineBoxWireMetricEqual(owner: Span, child: Span) bool {
-    return owner.inline_style == null and child.inline_style == null and owner.link_paint == null and child.link_paint == null and
-        std.meta.eql(child.flags, owner.flags) and
+    var child_flags = child.flags;
+    if (owner.inline_box_group) |box| {
+        // A square dotted baseline label uses the declaring font for its border
+        // band and the native child's actual font for shaping and line metrics.
+        if (staticDottedTextLabel(owner, box.*)) child_flags.italic = owner.flags.italic;
+    }
+    const help_style: ?presentation_types.InlineTextStyle = .{ .cursor = .help };
+    return (owner.inline_style == null or Renderer.sameFigurePreparationValue(owner.inline_style, help_style)) and
+        Renderer.sameFigurePreparationValue(owner.inline_style, child.inline_style) and
+        owner.link_paint == null and child.link_paint == null and std.meta.eql(child_flags, owner.flags) and
         Renderer.sameFigurePreparationValue(child.font_scale, owner.font_scale) and child.font_scale_basis == owner.font_scale_basis and
         !child.font_size_unknown and !owner.font_size_unknown and
         Renderer.sameFigurePreparationValue(child.font_features, owner.font_features) and
@@ -5898,6 +6014,7 @@ pub fn validateInlineBoxParagraph(values: []const Span) Error!void {
 // Validate the run here; Document checks final containing blocks before encoding.
 fn validateInlineBoxRunStructure(values: []const Span) Error!void {
     if (!hasInlineBoxParagraphObligation(values)) return;
+    var remaining = presentation_types.max_presentation_items;
     var paragraph: StaticInlineTextScan = .{};
     for (values) |span| {
         // A typed sibling break has no directional character or box contents.
@@ -5932,6 +6049,10 @@ fn validateInlineBoxRunStructure(values: []const Span) Error!void {
         }
         if (!staticInlineOrdinarySpan(span)) return error.UncompiledPresentation;
         if (span.inline_box_group) |group| {
+            if (staticInlineFrame(span, group.*)) {
+                try scanStaticInlineFrame(&paragraph, span, 0, &remaining);
+                continue;
+            }
             if (span.flags.superscript or span.flags.subscript) return error.UncompiledPresentation;
             if (presentation_types.inlineBoxHasOverlayContent(group.*) and
                 !presentation_types.validInlineBoxGroupOwner(span)) return error.UncompiledPresentation;
@@ -5943,7 +6064,8 @@ fn validateInlineBoxRunStructure(values: []const Span) Error!void {
                 try label.text(child.text);
                 try paragraph.text(child.text);
             }
-            if (label.first == null or staticInlineEdgeWhitespace(label.first.?) or staticInlineEdgeWhitespace(label.last.?))
+            if (label.first == null or ((staticInlineEdgeWhitespace(label.first.?) or staticInlineEdgeWhitespace(label.last.?)) and
+                !staticInlineNonbreakingSwatch(span, group.*)))
                 return error.UncompiledPresentation;
         } else {
             if (span.inline_box_group != null) return error.UncompiledPresentation;
@@ -6026,6 +6148,67 @@ fn scanInlineBoxFlowSiblings(scan: *StaticInlineTextScan, spans: []const Span) E
             inlineBoxHasAudioControl(span) or span.font_size_unknown) return error.UncompiledPresentation;
         if (span.kind != .line_break) try scan.text(span.text);
     }
+}
+
+test "plain square nonbreaking swatch keeps its source next to an independent language link" {
+    const spaces = "\u{a0}\u{a0}\u{a0}\u{a0}";
+    var child: [1]Span = .{.{ .text = spaces, .background = "#ffffff" }};
+    var group: presentation_types.InlineBoxGroup(Span) = .{
+        .padding = .all(.{ .unit = .px, .value = 0 }),
+        .border = .all(.{ .solid = .{ .width = .{ .unit = .px, .value = 1 }, .color = .{ .rgb = "#000000" } } }),
+        .spans = &child,
+    };
+    var run = [_]Span{ .{ .text = "", .background = "#ffffff", .inline_box_group = &group }, .{ .text = " " },
+        .{ .kind = .link, .text = "white", .target = "white#Енглески", .language = "en" } };
+    try validateInlineBoxParagraph(&run);
+    for ([_][]const u8{ "", " ", "\u{a0} ", " \u{a0}", "\u{2007}", "\u{a0}X", "X\u{a0}" }) |invalid| {
+        child[0].text = invalid;
+        try std.testing.expectError(error.UncompiledPresentation, validateInlineBoxParagraph(&run));
+    }
+    child[0].text = spaces;
+    group.border.left = .none;
+    try std.testing.expectError(error.UncompiledPresentation, validateInlineBoxParagraph(&run));
+    group.border.left = group.border.top;
+    group.radius = .{ .unit = .px, .value = 2 };
+    try std.testing.expectError(error.UncompiledPresentation, validateInlineBoxParagraph(&run));
+    group.radius = null;
+    group.padding.top.value = 1;
+    try std.testing.expectError(error.UncompiledPresentation, validateInlineBoxParagraph(&run));
+    group.padding.top.value = 0;
+    const edge = group.border.top;
+    group.border = .all(.{ .solid = .{ .width = edge.solid.width, .color = .current_color } });
+    try std.testing.expectError(error.UncompiledPresentation, validateInlineBoxParagraph(&run));
+    group.border = .all(edge);
+    group.overlays = &.{.{ .insets = .{ .top = .{ .unit = .px, .value = 0 }, .right = .{ .unit = .px, .value = 0 } }, .border = .all(.none) }};
+    try std.testing.expectError(error.UncompiledPresentation, validateInlineBoxParagraph(&run));
+    group.overlays = &.{};
+    run[0].text = spaces;
+    try std.testing.expectError(error.InvalidPresentation, presentation_types.validateInlineBoxGroupTree(run[0], 0, 0));
+    run[0].text = "";
+    run[0].kind = .link;
+    run[0].target = "white";
+    try std.testing.expectError(error.UncompiledPresentation, validateInlineBoxParagraph(&run));
+    run[0].kind = .text;
+    run[0].target = "";
+    run[2].text = "\u{05d0}";
+    try std.testing.expectError(error.UncompiledPresentation, validateInlineBoxParagraph(&run));
+}
+
+test "cell group opacity keeps authored cell paint and refuses an unrepresented backdrop" {
+    var cell: table_style_profile.CellResolution = .{ .style = .{ .opacity = 0.2 },
+        .background = "#abcdef", .background_specified = false, .unresolved = false };
+    const table: presentation_types.TableStyle = .{ .background = "#abcdef" };
+    try Renderer.preserveCellGroupBackdrop(&cell, "#abcdef", table, 1);
+    try std.testing.expect(cell.background == null);
+    cell.background_specified = true;
+    cell.background = "#121212";
+    try Renderer.preserveCellGroupBackdrop(&cell, "#abcdef", table, 1);
+    try std.testing.expectEqualStrings("#121212", cell.background.?);
+    try std.testing.expectError(error.UncompiledPresentation, Renderer.preserveCellGroupBackdrop(&cell, "#ffeecc", table, 1));
+    try std.testing.expectError(error.UncompiledPresentation, Renderer.preserveCellGroupBackdrop(&cell, "#abcdef", table, 2));
+    cell.style.?.opacity = 1;
+    try Renderer.preserveCellGroupBackdrop(&cell, "#ffeecc", table, 2);
+    try std.testing.expectEqualStrings("#121212", cell.background.?);
 }
 
 test "inline slice validates the complete directional paragraph including siblings after a break" {
@@ -8696,6 +8879,7 @@ pub const Renderer = struct {
     literal_wiki_cell: ?*const LiteralWikiCell = null,
     literal_wiki_cell_style: ?*const LiteralWikiCell = null,
     literal_wiki_table_operation: ?*LiteralWikiTableOperation = null,
+    inline_box_root_table_opening: ?[]const u8 = null,
     literal_url_root: ?[]const u8 = null,
     heading_source: ?[]const u8 = null,
     page_root_wiki_table_openings: ?*std.ArrayList(usize) = null,
@@ -8730,7 +8914,13 @@ pub const Renderer = struct {
     in_template_literal_scope: bool = false,
     // Borrowed only while an admitted explicit wiki-link label is parsed.
     // Arbitrary inherited action styles and destination strings cannot set it.
+    static_numbered_definition: ?*const OrdinaryBulletLink = null,
+    static_numbered_quotes: ?*const StaticNumberedQuotes = null,
+    static_frame_paint: ?[]const u8 = null,
     inline_box_owner: ?*InlineBoxOwner = null,
+    inline_box_quoted_paragraph: ?InlineBoxQuotedParagraph = null,
+    // Borrowed only while the document body emits this direct, authored list.
+    inline_box_root_list: ?[]const u8 = null,
     inline_box_native_motion_diagnostic: NativeInlineMotionDeclarationDiagnostic = .none,
     inline_box_native_class_diagnostic: NativeSourceClassQueryDiagnostic.Reason = .not_attempted,
     inline_box_profile_diagnostic: table_style_profile.InlineBoxSourceDiagnostic = .none,
@@ -11574,6 +11764,9 @@ pub const Renderer = struct {
         const at = @intFromPtr(original_opening.ptr) - @intFromPtr(source.ptr);
         const original = syntax.tagAt(source, at) orelse return;
         if (!original.is("span") or original.closing or original.self_closing or original.end != at + original_opening.len) return;
+        // The tracked original is an HTML SPAN, including inside a link label.
+        // Its own selector subject cannot be a hyperlink.
+        element.source_nonlink_element = true;
         element.source_fragment_target_absent = htmlOwnAttributePresence(&original, "id") == .absent;
         const parent = element.parent orelse return;
         if (!std.ascii.eqlIgnoreCase(parent.tag, "span") or at == 0) return;
@@ -11601,6 +11794,75 @@ pub const Renderer = struct {
         const classes = (try self.semanticAttribute(article_parent, "class")) orelse "";
         if (!std.mem.eql(u8, classes, parent.classes)) return;
         element.source_direct_parent_classes = classes;
+    }
+
+    fn inlineBoxListAncestorClasses(self: *Renderer, element: *const table_style_profile.TextElement,
+        state: NativeInlineMotionState) Error!?[]const u8
+    {
+        const current_list = self.inline_box_root_list orelse return null;
+        const host = self.native_article_host orelse return null;
+        const held = switch (state) { .proved => |value| value, else => return null };
+        if (self.content_root != .parser_output or !host.native_paragraph_css_subjects or self.context.observe_structure_only or
+            self.native_inline_motion_root != held.root or self.native_inline_motion_epoch != held.epoch or held.epoch == 0 or
+            held.root.reference != null or !host.matchesActive(self, held.root.source) or self.in_reference or
+            self.in_template_literal_scope or self.typed_table_depth != 0 or self.table_viewport_cell_source != null or
+            self.html_blockquote_flow or self.body_link_target.len != 0 or self.explicit_wiki_label != null or
+            self.media_depth != 0 or self.ruby_depth != 0 or self.poem_depth != 0 or self.pre_block or self.parsed_pre) return null;
+        const list = self.wikiCellCurrentBodyRange(held.root.source, current_list) orelse return null;
+        const root_tag = syntax.tagAt(list, 0) orelse return null;
+        const pair = syntax.matchingTag(list, root_tag) orelse return null;
+        if (!oneOf(root_tag.name, &.{ "ul", "ol" }) or pair.end != list.len) return null;
+        var entry = held.last;
+        var cursor: ?*const table_style_profile.TextElement = element;
+        var depth: usize = 0;
+        var saw_item = false;
+        while (cursor) |node| : (cursor = node.parent) {
+            const declaration = entry orelse return null;
+            if (depth >= max_depth or declaration.origin != .html or node.alternative_ancestry != null or
+                !std.mem.eql(u8, declaration.opening, declaration.opening_snapshot)) return null;
+            depth += 1;
+            const tag = syntax.tagAt(declaration.opening, 0) orelse return null;
+            const mapped = self.wikiCellCurrentBodyRange(held.root.source, declaration.opening) orelse return null;
+            if (!wikiClassContains(list, mapped) or tag.end != declaration.opening.len or !tag.is(node.tag) or
+                node.source_key != @intFromPtr(tag.name.ptr) or htmlOwnAttributePresence(&tag, "class") == .unknown or
+                !std.mem.eql(u8, node.classes, (try self.semanticAttribute(tag, "class")) orelse "")) return null;
+            if (node.parent == null) {
+                if (!saw_item or mapped.ptr != list.ptr or declaration.previous != null) return null;
+            } else if (tag.is("li")) {
+                if (saw_item or depth < 2 or !oneOf(node.parent.?.tag, &.{ "ul", "ol" })) return null;
+                saw_item = true;
+            } else if (saw_item or !tag.is("span")) return null;
+            entry = declaration.previous;
+        }
+        if (entry != null or !saw_item) return null;
+        // Conservatively include every authored class in this complete list, including siblings,
+        // as well as both supported native root direction alternatives. No ID fact is issued.
+        var classes: std.ArrayList(u8) = .empty;
+        defer classes.deinit(self.a);
+        try classes.appendSlice(self.a, native_source_root_class_tokens);
+        appendNativeAuthoredSourceClasses(self.a, &classes, list) catch |failure| switch (failure) {
+            error.OutOfMemory => return error.OutOfMemory, error.InvalidSourceClassInventory => return null,
+        };
+        return try classes.toOwnedSlice(self.a);
+    }
+
+    fn inlineBoxListLiteralParent(self: *const Renderer, element: *const table_style_profile.TextElement,
+        state: NativeInlineMotionState) ?[]const u8
+    {
+        // Called only after the complete current authored list chain has been checked.
+        const parent = element.parent orelse return null;
+        if (!std.ascii.eqlIgnoreCase(parent.tag, "span")) return null;
+        const held = switch (state) { .proved => |value| value, else => return null };
+        const entry = held.last orelse return null;
+        const prior = entry.previous orelse return null;
+        const source = held.root.source;
+        const opening = self.wikiCellCurrentBodyRange(source, prior.opening) orelse return null;
+        const child = self.wikiCellCurrentBodyRange(source, entry.opening) orelse return null;
+        const after = @intFromPtr(opening.ptr) - @intFromPtr(source.bytes.ptr) + opening.len;
+        const at = @intFromPtr(child.ptr) - @intFromPtr(source.bytes.ptr);
+        if (at <= after or at - after > 4096 or !noLiParentSourceRange(source, source.bytes[after..at]) or
+            !observedReadyCaptionPlainText(source.bytes[after..at])) return null;
+        return parent.classes;
     }
 
     fn inlineBoxResolution(self: *Renderer, tag: syntax.Tag, style: Style, inherited: Style) Error!table_style_profile.InlineBoxResolution {
@@ -11674,8 +11936,25 @@ pub const Renderer = struct {
         else element;
         var authored_query = source_query.*;
         if (profile != null and !static_decoration) try self.inlineBoxAuthoredSelectorFacts(tag, &authored_query);
-        const query_element: *const table_style_profile.TextElement = if (authored_query.source_fragment_target_absent or
-            authored_query.source_direct_parent_classes != null) &authored_query else source_query;
+        const numbered = profile != null and static_decoration and self.static_numbered_definition != null;
+        const local_classes = if (numbered)
+            try self.staticNumberedAncestorClasses(element, style.native_inline_motion, &authored_query)
+        else if (profile != null and authored_query.complete_ancestor_classes == null and
+            authored_query.source_inline_box_ancestor_classes == null) local: {
+            if (self.inline_box_root_list != null) break :local try self.inlineBoxListAncestorClasses(element, style.native_inline_motion);
+            if (self.inline_box_root_table_opening != null) break :local try self.inlineBoxTableAncestorClasses(element, style.native_inline_motion);
+            if (static_decoration and self.inline_box_quoted_paragraph != null) break :local try self.inlineBoxQuotedParagraphClasses(element, style.native_inline_motion);
+            break :local null;
+        } else null;
+        defer if (local_classes) |classes| self.a.free(classes);
+        if (local_classes) |classes| {
+            if (authored_query.complete_ancestor_classes == null and authored_query.source_inline_box_ancestor_classes == null)
+                authored_query.source_inline_box_ancestor_classes = classes;
+            if (self.inline_box_root_list != null and authored_query.source_direct_parent_classes == null)
+                authored_query.source_direct_parent_classes = self.inlineBoxListLiteralParent(element, style.native_inline_motion);
+        }
+        const query_element: *const table_style_profile.TextElement = if (authored_query.source_nonlink_element or authored_query.source_fragment_target_absent or
+            authored_query.source_direct_parent_classes != null or local_classes != null) &authored_query else source_query;
         if (!static_decoration and query_element != element and self.inline_box_owner == null and
             !try profile.?.hasInlineBoxCandidateIn(self.a, query_element, css)) return .{};
         const use_profile = profile != null and !profile.?.inlineBoxIsolatedProfile();
@@ -11766,6 +12045,343 @@ pub const Renderer = struct {
         return found;
     }
 
+    const StaticNumberedQuotes = struct {
+        operation: *const OrdinaryBulletLink,
+        map: *const QuoteSourceMap,
+        original: MissingText,
+        output: MissingText,
+        digest: [32]u8,
+    };
+
+    // The numbered definition constructor owns this physical line only. The
+    // complete page can have unknown missing coordinates; neither this receipt
+    // nor a retained quote copy changes that flag or issues CSS absence facts.
+    fn currentStaticNumberedBody(self: *const Renderer) ?[]const u8 {
+        const op = self.static_numbered_definition orelse return null;
+        const host = self.native_article_host orelse return null;
+        const root = self.native_inline_motion_root orelse return null;
+        const current = self.body_missing orelse return null;
+        if (!self.figure_implicit_list_context or self.html_list_item_flow or self.html_blockquote_flow or
+            self.content_root != .parser_output or self.in_reference or self.in_template_literal_scope or
+            self.media_depth != 0 or self.ruby_depth != 0 or self.typed_table_depth != 0 or self.table_viewport_cell_source != null or
+            self.poem_depth != 0 or self.pre_block or self.parsed_pre or self.figure_caption_depth != 0 or
+            self.body_link_target.len != 0 or self.explicit_wiki_label != null or self.context.observe_structure_only or
+            root.reference != null or self.native_inline_motion_epoch == 0 or !host.native_paragraph_css_subjects or
+            !host.matchesActive(self, root.source) or !inlineOverlaySameSourceSlice(current.bytes, op.source) or
+            !noLiParentSourceRange(current, op.line) or op.line.len < 2 or op.line[0] != '#' or
+            std.mem.indexOfAny(u8, op.line, "\r\n") != null or std.mem.indexOfScalar(u8, "#*:;", op.line[1]) != null or
+            !inlineOverlaySameSourceSlice(wikiListLineBody(op.line[1..]), op.body)) return null;
+        const line = self.wikiCellCurrentBodyRange(root.source, op.line) orelse return null;
+        const body = self.wikiCellCurrentBodyRange(root.source, op.body) orelse return null;
+        if (!noLiParentSourceRange(root.source, line)) return null;
+        if (!inlineOverlaySameSourceSlice(wikiListLineBody(line[1..]), body)) return null;
+        const at = @intFromPtr(line.ptr) - @intFromPtr(root.source.bytes.ptr);
+        if (at != 0 and root.source.bytes[at - 1] != '\n') return null;
+        if (at + line.len < root.source.bytes.len and root.source.bytes[at + line.len] != '\n') return null;
+        return body;
+    }
+
+    // Closing a SPAN does not prove that formatting inside it was balanced.
+    // An HTML tree builder can reconstruct a misnested I around the next
+    // sibling. Only retain straight, closed inline siblings and plain links.
+    fn staticNumberedClosedSiblings(bytes: []const u8, comptime quote_input: bool) bool {
+        var stack: [max_depth][]const u8 = undefined;
+        var depth: usize = 0;
+        var at: usize = 0;
+        while (std.mem.indexOfAnyPos(u8, bytes, at, "<[]'")) |special| {
+            at = special;
+            switch (bytes[at]) {
+                '<' => {
+                    const tag = syntax.tagAt(bytes, at) orelse return false;
+                    if (!(tag.is("span") or tag.is("i") or tag.is("b")) or tag.self_closing or tag.html_pre or
+                        !formattingAngleAttributesBalanced(tag.attrs)) return false;
+                    if (tag.closing) {
+                        if (depth == 0 or !tag.is(stack[depth - 1]) or trim(tag.attrs).len != 0) return false;
+                        depth -= 1;
+                    } else {
+                        if (depth == stack.len) return false;
+                        stack[depth] = tag.name;
+                        depth += 1;
+                    }
+                    at = tag.end;
+                },
+                '[' => {
+                    var it: ir.InlineIterator = .{ .input = bytes[at..], .renderer_boundaries = true };
+                    const token = it.next() orelse return false;
+                    if (token.kind != .link or it.cursor == 0 or token.link_empty_label or token.link_label_restored_close) return false;
+                    const raw_link = bytes[at..][0..it.cursor];
+                    if (std.mem.indexOfAny(u8, raw_link, "<>") != null or std.mem.indexOf(u8, raw_link, "''") != null) return false;
+                    at += it.cursor;
+                },
+                '\'' => {
+                    if (!quote_input and starts(bytes[at..], "''")) return false;
+                    at += 1;
+                },
+                else => return false,
+            }
+        }
+        return depth == 0;
+    }
+
+    fn staticNumberedSiblingPrefix(self: *Renderer, root: MissingText, begin: usize, end: usize,
+        parent_opening: ?[]const u8, current_opening: []const u8) bool
+    {
+        if (!inlineOverlayCellPrefix(root, begin, end)) return false;
+        const original = root.bytes[begin..end];
+        if (!staticNumberedClosedSiblings(original, true)) return false;
+        if (std.mem.indexOf(u8, original, "''") == null) return true;
+        // Replay the actual emitted B/I boundaries. A source quote count cannot
+        // tell which elements opened or closed across an intervening sibling.
+        const held = self.static_numbered_quotes orelse return false;
+        const output = held.output.bytes;
+        if (!wikiClassContains(output, current_opening)) return false;
+        const projected_end = @intFromPtr(current_opening.ptr) - @intFromPtr(output.ptr);
+        const projected_begin = if (parent_opening) |opening| parent: {
+            if (!wikiClassContains(output, opening)) return false;
+            break :parent @intFromPtr(opening.ptr) - @intFromPtr(output.ptr) + opening.len;
+        } else 0;
+        if (projected_begin >= projected_end) return false;
+        const prefix = output[projected_begin..projected_end];
+        const mapped = self.staticNumberedOriginal(held.output, prefix, false) orelse return false;
+        return inlineOverlaySameSourceSlice(original, mapped) and staticNumberedClosedSiblings(prefix, false);
+    }
+
+    // This inventory belongs to one static inline property query. An actual
+    // single-numbered-line dispatch supplies OL/LI (neither has an authored
+    // class). Every literal ancestor is rejoined to the same root/quote epoch.
+    // No other page region or unknown stylesheet selector gains absence facts.
+    fn staticNumberedAncestorClasses(self: *Renderer, element: *const table_style_profile.TextElement,
+        state: NativeInlineMotionState, query: *table_style_profile.TextElement) Error!?[]const u8
+    {
+        const raw_body = self.currentStaticNumberedBody() orelse return null;
+        const held = switch (state) { .proved => |value| value, else => return null };
+        if (held.root != self.native_inline_motion_root or held.epoch != self.native_inline_motion_epoch or held.epoch == 0) return null;
+        const declarations = (try self.nativeInlineMotionDeclarations(state)) orelse return null;
+        defer self.a.free(declarations);
+        if (declarations.len == 0 or declarations.len > max_depth + 1) return null;
+        var originals: [max_depth + 1][]const u8 = undefined;
+        var entries: [max_depth + 1]*const NativeInlineMotionDeclaration = undefined;
+        var nodes: [max_depth + 1]*const table_style_profile.TextElement = undefined;
+        var entry_cursor = held.last;
+        var node_cursor: ?*const table_style_profile.TextElement = element;
+        var classes: std.ArrayList(u8) = .empty;
+        defer classes.deinit(self.a);
+        try classes.appendSlice(self.a, native_source_root_class_tokens);
+        for (declarations, 0..) |css, index| {
+            const entry = entry_cursor orelse return null;
+            const node = node_cursor orelse return null;
+            if (entry.origin != .html or node.alternative_ancestry != null or node.observed_custom_environment != null) return null;
+            for (entries[0..index]) |prior| if (prior == entry) return null;
+            for (nodes[0..index]) |prior| if (prior == node) return null;
+            const tag = syntax.tagAt(entry.opening, 0) orelse return null;
+            if (tag.closing or tag.self_closing or tag.html_pre or tag.end != entry.opening.len or
+                !(tag.is("span") or tag.is("i")) or !tag.is(node.tag) or
+                !std.mem.eql(u8, css, entry.css) or
+                htmlOwnAttributePresence(&tag, "dir") != .absent or htmlOwnAttributePresence(&tag, "class") == .unknown or
+                !std.mem.eql(u8, node.classes, (try self.semanticAttribute(tag, "class")) orelse "") or
+                !std.mem.eql(u8, node.id, (try self.semanticAttribute(tag, "id")) orelse "")) return null;
+            const original = self.staticNumberedOriginal(entry.source, entry.opening, true) orelse return null;
+            const original_tag = syntax.tagAt(original, 0) orelse return null;
+            if (node.source_key != @intFromPtr(tag.name.ptr) and node.source_key != @intFromPtr(original_tag.name.ptr)) return null;
+            if (node.source_key != @intFromPtr(tag.name.ptr)) {
+                const mapped = self.quoteClassTag(tag) orelse return null;
+                if (mapped.generated or mapped.source_key != node.source_key) return null;
+            }
+            if (!std.mem.eql(u8, entry.opening, entry.opening_snapshot) or !std.mem.eql(u8, original, entry.opening) or
+                !wikiClassContains(raw_body, original)) return null;
+            nativeClassAppendTokens(self.a, &classes, node.classes) catch |failure| switch (failure) {
+                error.OutOfMemory => return error.OutOfMemory, error.InvalidSourceClassInventory => return null,
+            };
+            entries[index] = entry;
+            nodes[index] = node;
+            originals[index] = original;
+            entry_cursor = entry.previous;
+            node_cursor = node.parent;
+        }
+        if (entry_cursor != null or node_cursor != null) return null;
+        const root = held.root.source;
+        var begin = @intFromPtr(raw_body.ptr) - @intFromPtr(root.bytes.ptr);
+        var end = begin + raw_body.len;
+        var preceding_parent: ?[]const u8 = null;
+        var remaining = declarations.len;
+        while (remaining > 0) {
+            remaining -= 1;
+            const opening = originals[remaining];
+            const at = @intFromPtr(opening.ptr) - @intFromPtr(root.bytes.ptr);
+            if (at < begin or at >= end or opening.len > end - at or
+                !self.staticNumberedSiblingPrefix(root, begin, at, preceding_parent, entries[remaining].opening)) return null;
+            preceding_parent = entries[remaining].opening;
+            const tag = syntax.tagAt(root.bytes, at) orelse return null;
+            if (tag.end != at + opening.len) return null;
+            const pair = syntax.matchingTag(root.bytes, tag) orelse return null;
+            if (pair.inner_end < tag.end or pair.end > end or !tableNestedSourceClose(root.bytes, tag.name, pair, false) or
+                !noLiParentSourceRange(root, root.bytes[pair.inner_end..pair.end])) return null;
+            begin = tag.end;
+            end = pair.inner_end;
+        }
+        // This receipt is local to the property query. The original leaf is
+        // an authored HTML SPAN or I, never a hyperlink. Only the represented
+        // direct parent's classes may refute a terminal child combinator.
+        const subject = syntax.tagAt(originals[0], 0) orelse return null;
+        if (!subject.is(query.tag) or query.source_key != element.source_key or query.alternative_ancestry != null) return null;
+        query.source_nonlink_element = true;
+        query.source_fragment_target_absent = htmlOwnAttributePresence(&subject, "id") == .absent;
+        query.source_direct_parent_classes = if (declarations.len > 1) nodes[1].classes else "";
+        return try classes.toOwnedSlice(self.a);
+    }
+
+    fn staticNumberedQuoteInput(self: *const Renderer, original: MissingText) bool {
+        if (!QuoteSourceMap.cleanLocal(original)) return false;
+        const body = self.currentStaticNumberedBody() orelse return false;
+        const mapped = self.wikiCellCurrentBodyRange(self.native_inline_motion_root.?.source, original.bytes) orelse return false;
+        return inlineOverlaySameSourceSlice(body, mapped);
+    }
+
+    fn staticNumberedOriginal(self: *const Renderer, source: MissingText, token: []const u8, comptime copied: bool) ?[]const u8 {
+        const body = self.currentStaticNumberedBody() orelse return null;
+        if (!noLiParentSourceRange(source, token)) return null;
+        const root = self.native_inline_motion_root.?.source;
+        if (self.wikiCellCurrentBodyRange(root, token)) |original|
+            return if (wikiClassContains(body, original)) original else null;
+        const held = self.static_numbered_quotes orelse return null;
+        if (held.operation != self.static_numbered_definition.? or !self.staticNumberedQuoteInput(held.original) or
+            !QuoteSourceMap.cleanLocal(held.output) or !inlineOverlaySameSourceSlice(held.original.bytes, held.map.original) or
+            !inlineOverlaySameSourceSlice(held.output.bytes, held.map.output) or !rootLanguageQuoteMapClean(held.map) or
+            !std.mem.eql(u8, &held.digest, &nativeQuoteMapDigest(held.map))) return null;
+        const original = (if (copied) held.map.copiedOriginal(token) else held.map.coveredOriginal(token, held.original.bytes)) orelse return null;
+        const mapped = self.wikiCellCurrentBodyRange(root, original) orelse return null;
+        return if (wikiClassContains(body, mapped)) mapped else null;
+    }
+
+    fn staticInlineFrameSource(self: *Renderer, tracked: MissingText, at: usize, tag: syntax.Tag, pair: syntax.Pair,
+        effective: Style, inherited: Style, depth: usize) Error!bool
+    {
+        if (!tag.is("span") or self.context.observe_structure_only or self.inline_box_owner != null or
+            self.ruby_depth != 0 or self.table_viewport_cell_source != null or self.typed_table_depth != 0 or
+            self.in_template_literal_scope or self.in_reference or self.poem_depth != 0 or self.pre_block or self.parsed_pre or
+            self.media_depth != 0 or self.figure_caption_depth != 0 or self.bidi_scope_depth != 0 or self.active_bidi_capture != null or
+            self.body_link_target.len != 0 or self.explicit_wiki_label != null or inherited.kind != .text or effective.target.len != 0 or
+            self.content_root != .parser_output or effective.kind != .text or effective.provenance != .parsed) return false;
+        const css = (try self.semanticAttribute(tag, "style")) orelse return false;
+        if (!table_style_profile.staticInlineOwnerCandidate(css)) return false;
+        const ownership = (table_style_profile.staticInlineOwnerValues(self.a, css, self.customParent(effective)) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory, else => return error.UncompiledPresentation,
+        }) orelse return false;
+        const element = try self.textElement(tag, inherited.text_element, effective.language);
+        const chain = (try self.nativeInlineMotionDeclarations(effective.native_inline_motion)) orelse return error.UncompiledPresentation;
+        defer self.a.free(chain);
+        var empty: table_style_profile.Profile = undefined;
+        const selected = self.textPaintProfile() orelse blk: {
+            empty = table_style_profile.parseAlloc(self.a, "") catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory, else => return error.UncompiledPresentation,
+            };
+            break :blk &empty;
+        };
+        defer if (self.textPaintProfile() == null) empty.deinit();
+        const query = (try self.nativeSourceClassQuery(tag, selected, element, effective.native_inline_motion)) orelse element;
+        var scoped_query = query.*;
+        const local_classes = try self.staticNumberedAncestorClasses(element, effective.native_inline_motion, &scoped_query);
+        defer if (local_classes) |owned| self.a.free(owned);
+        if (scoped_query.complete_ancestor_classes == null and scoped_query.source_inline_box_ancestor_classes == null)
+            scoped_query.source_inline_box_ancestor_classes = local_classes;
+        const closed = table_style_profile.staticInlineOwnerScope(selected, self.a, &scoped_query, css, self.customParent(effective), chain) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory, else => return error.UncompiledPresentation,
+        };
+        if (!closed) return error.UncompiledPresentation;
+        // Both the geometry and every character that will enter its range must
+        // belong to this complete paired occurrence in the issuing source.
+        const token = tracked.bytes[at..pair.end];
+        const frame = self.inline_source_domain orelse return error.UncompiledPresentation;
+        const source = frame.tracked orelse return error.UncompiledPresentation;
+        if (((tracked.unknown or source.unknown) and self.staticNumberedOriginal(tracked, token, false) == null) or
+            source.bytes.ptr != frame.source.ptr or source.bytes.len != frame.source.len or
+            !noLiParentSourceRange(tracked, token) or !noLiParentSourceRange(source, token) or depth >= max_depth or
+            effective.font_size_unknown or effective.ruby_script_ambiguous or effective.image != null or effective.self_link_target != null or
+            effective.ruby_unitless_line_height != null or effective.direction.len != 0 or effective.captured_direction != null or
+            effective.subscript or effective.superscript or effective.underline or effective.strike or
+            effective.preserve_whitespace or effective.missing_nonaction or
+            try self.compiledBidiScope(tag) != null or try self.htmlDisplayNoneIn(tag, inherited.text_element)) return error.UncompiledPresentation;
+        if (ownership.background) |own_ink| {
+            if (effective.background == null or !std.mem.eql(u8, own_ink, effective.background.?)) return error.UncompiledPresentation;
+        } else if (!sameFigurePreparationValue(effective.background, inherited.background) or
+            !sameFigurePreparationValue(inherited.background, self.static_frame_paint)) return error.UncompiledPresentation;
+        var declaring = effective;
+        declaring.background = ownership.background;
+        // Leaf paint is independent. The frame paints its own interval once,
+        // including padding around descendant content where a leaf has no ink.
+        var body_style = effective;
+        body_style.text_element = element;
+        const body = tracked.bytes[tag.end..pair.inner_end];
+        const previous = self.spans;
+        self.spans = .empty;
+        const children = blk: {
+            defer self.spans = previous;
+            errdefer self.spans.deinit(self.a);
+            const previous_paint = self.static_frame_paint;
+            self.static_frame_paint = effective.background;
+            defer self.static_frame_paint = previous_paint;
+            try self.inlineTextWithMissing(try self.borrowedInlineHtmlSlice(tracked, body), body_style, depth + 1);
+            break :blk try self.spans.toOwnedSlice(self.a);
+        };
+        const interval = try self.a.create(presentation_types.InlineBoxGroup(Span));
+        interval.* = .{ .padding = ownership.padding, .border = .all(.none), .spans = children };
+        const before = self.spans.items.len;
+        errdefer self.spans.items.len = before;
+        try self.textRawGeneratedWithPayload("", declaring, null, null, null, interval);
+        if (self.spans.items.len != before + 1) return error.UncompiledPresentation;
+        // Restore this independently scoped paint even for a same-color child.
+        self.spans.items[before].background = ownership.background;
+        if (children.len == 1 and children[0].provenance == .entity_literal) {
+            const original = if (tracked.unknown or source.unknown)
+                self.staticNumberedOriginal(tracked, token, true) orelse return error.UncompiledPresentation
+            else token;
+            const evidence: StaticFrameNonbreakingEntity = .{ .original = original, .group = interval, .child = &children[0] };
+            if (!evidence.matches(interval, &children[0])) return error.UncompiledPresentation;
+            const held = try self.a.create(StaticFrameNonbreakingEntity);
+            held.* = evidence;
+            self.spans.items[before].static_frame_entity = held;
+        }
+        const emitted = self.spans.items[before];
+        if (emitted.inline_box_group != interval or !staticInlineFrame(emitted, interval.*)) return error.UncompiledPresentation;
+        var text_scan: StaticInlineTextScan = .{};
+        var remaining = presentation_types.max_presentation_items;
+        try scanStaticInlineFrame(&text_scan, emitted, 0, &remaining);
+        presentation_types.validateInlineBoxGroupTree(emitted, 0, self.ruby_depth) catch return error.UncompiledPresentation;
+        return true;
+    }
+
+    fn staticInlineItalicLabel(self: *Renderer, tracked: MissingText, owner: syntax.Tag, pair: syntax.Pair,
+        style: Style) Error!bool
+    {
+        const body = tracked.bytes[owner.end..pair.inner_end];
+        if (!noLiParentSourceRange(tracked, body)) return false;
+        if (tracked.unknown) {
+            const opening = localTrackedTagOpening(tracked, owner) orelse return false;
+            const offset = @intFromPtr(opening.ptr) - @intFromPtr(tracked.bytes.ptr);
+            if (self.staticNumberedOriginal(tracked, tracked.bytes[offset..pair.end], true) == null) return false;
+        }
+        const child = syntax.tagAt(body, 0) orelse return false;
+        if (!child.is("i") or child.closing or child.self_closing or trim(child.attrs).len != 0) return false;
+        const ends = syntax.matchingTag(body, child) orelse return false;
+        if (ends.end != body.len) return false;
+        const label = body[child.end..ends.inner_end];
+        if (label.len == 0 or std.mem.indexOfAny(u8, label, "<>[]{}|&'\r\n") != null) return false;
+        // No author declaration may introduce another box, override the
+        // inherited cursor, or change how this child participates in the line.
+        if (self.textPaintProfile()) |profile| {
+            const element = try self.textElement(child, style.text_element, style.language);
+            const motion = try self.nativeInlineMotionEntry(child, style.native_inline_motion);
+            const query = (try self.nativeSourceClassQuery(child, profile, element, motion)) orelse element;
+            var scoped = query.*;
+            const classes = try self.staticNumberedAncestorClasses(element, motion, &scoped);
+            defer if (classes) |owned| self.a.free(owned);
+            if (scoped.complete_ancestor_classes == null and scoped.source_inline_box_ancestor_classes == null)
+                scoped.source_inline_box_ancestor_classes = classes;
+            if (!table_style_profile.staticInlineOwnerRulesAbsent(profile, &scoped)) return false;
+        }
+        return true;
+    }
+
     fn typedInlineBox(self: *Renderer, tracked: MissingText, at: usize, tag: syntax.Tag, pair: syntax.Pair,
         effective: Style, inherited: Style, depth: usize) Error!bool
     {
@@ -11807,7 +12423,8 @@ pub const Renderer = struct {
                 return false;
             };
         }
-        if (static_candidate and (std.mem.indexOfScalar(u8, tracked.bytes[tag.end..pair.inner_end], '<') != null or
+        const nested_label = static_candidate and std.mem.indexOfScalar(u8, tracked.bytes[tag.end..pair.inner_end], '<') != null;
+        if (static_candidate and ((nested_label and (rounded_action_candidate or !try self.staticInlineItalicLabel(tracked, tag, pair, effective))) or
             effective.direction.len != 0 or effective.captured_direction != null or effective.superscript or effective.subscript or
             (!rounded_action_candidate and (effective.kind != .text or effective.target.len != 0)))) {
             self.tracePresentationRejection("static_inline_box", "unsupported_source_scope", tracked.bytes, at, 0, error.UncompiledPresentation);
@@ -11876,9 +12493,13 @@ pub const Renderer = struct {
             const owner = self.inline_box_owner orelse { self.tracePresentationRejection("inline_box", "overlay_owner_absent", tracked.bytes, at, 0, error.UncompiledPresentation); return error.UncompiledPresentation; };
             const owner_start = @intFromPtr(owner.body.ptr);
             const current_start = @intFromPtr(tracked.bytes.ptr) + at;
-            if (depth != owner.child_depth or current_start < owner_start or
-                current_start - owner_start > owner.body.len or pair.end - at > owner.body.len - (current_start - owner_start) or
-                !box.inherits_color or !inlineBoxFontAndInkEqual(effective, owner.child_style)) { self.tracePresentationRejection("inline_box", "overlay_owner_mismatch", tracked.bytes, at, 0, error.UncompiledPresentation); return error.UncompiledPresentation; }
+            const source_matches = depth == owner.child_depth and current_start >= owner_start and
+                current_start - owner_start <= owner.body.len and pair.end - at <= owner.body.len - (current_start - owner_start);
+            if (!source_matches or !box.inherits_color or !inlineBoxFontAndInkEqual(effective, owner.child_style)) {
+                const mismatch: u64 = if (!source_matches) 1 else if (!box.inherits_color) 2 else 4;
+                self.tracePresentationRejection("inline_box", "overlay_owner_mismatch", tracked.bytes, at, mismatch, error.UncompiledPresentation);
+                return error.UncompiledPresentation;
+            }
             const content = if (body.len == 0) null else
                 try self.inlineBoxOverlayText(tracked, at, tag, pair, effective, inherited, depth);
             if (!self.spend()) return error.RenderLimit;
@@ -11927,6 +12548,10 @@ pub const Renderer = struct {
                     span.external_literal_parameter != null or span.generated_diagnostic or span.provenance != .parsed or
                     (inherited_action and (span.kind != .text or span.target.len != 0))) { self.tracePresentationRejection("inline_box", "unsupported_child", tracked.bytes, at, 0, error.UncompiledPresentation); return error.UncompiledPresentation; }
             }
+            if (box.cursor) |cursor| for (self.spans.items) |*child| {
+                if (child.inline_style != null) return error.UncompiledPresentation;
+                child.inline_style = .{ .cursor = cursor };
+            };
             children = try self.spans.toOwnedSlice(self.a);
         }
         const group = try self.a.create(presentation_types.InlineBoxGroup(Span));
@@ -11938,7 +12563,12 @@ pub const Renderer = struct {
             return failure;
         };
         if (self.spans.items.len != before + 1) { self.tracePresentationRejection("inline_box", "emitted_count", tracked.bytes, at, 0, error.UncompiledPresentation); return error.UncompiledPresentation; }
+        if (box.cursor) |cursor| {
+            if (self.spans.items[before].inline_style != null) return error.UncompiledPresentation;
+            self.spans.items[before].inline_style = .{ .cursor = cursor };
+        }
         const emitted = self.spans.items[before];
+        if (nested_label and !staticDottedTextLabel(emitted, group.*)) return error.UncompiledPresentation;
         if (emitted.inline_box_group != group or emitted.kind != effective.kind or emitted.font_size_unknown) { self.tracePresentationRejection("inline_box", "emitted_group", tracked.bytes, at, 0, error.UncompiledPresentation); return error.UncompiledPresentation; }
         if (emitted.target.ptr != effective.target.ptr or emitted.target.len != effective.target.len) { self.tracePresentationRejection("inline_box", "emitted_target", tracked.bytes, at, 0, error.UncompiledPresentation); return error.UncompiledPresentation; }
         if (box.static_decoration) for (children) |child| {
@@ -12082,7 +12712,7 @@ pub const Renderer = struct {
         }
         const viewport_inherited_font = box == null and if (self.table_viewport_cell_source) |owned|
             !s.font_scale_set and !s.font_size_unknown and s.font_scale == owned.font_scale and s.font_scale_basis == owned.font_scale_basis else false;
-        try self.spans.append(self.a, .{ .ordinary_action_script = s.ordinary_action_script, .ordinary_action_entity = s.ordinary_action_entity, .ordinary_action_origin = s.ordinary_action_origin, .ruby = ruby, .inline_padding_group = group, .inline_box_group = box, .generated_link = generated, .target_fragment = if (generated != null and std.mem.indexOfScalar(u8, s.target, 35) != null) "" else null, .image = s.image, .image_fields_compiled = s.image_fields_compiled, .kind = s.kind, .provenance = s.provenance, .self_link = self_link, .text = value, .target = s.target, .language = s.language, .classes = s.classes, .direction = s.direction, .captured_direction = s.captured_direction, .explanation = s.explanation, .explanation_set = s.explanation_set, .tooltip = s.tooltip, .tooltip_set = s.tooltip_set, .foreground = s.foreground, .foreground_set = s.foreground_set, .font_scale = if (viewport_inherited_font) null else s.font_scale, .font_scale_basis = if (viewport_inherited_font) .context else s.font_scale_basis, .font_features = s.font_features, .font_family = s.font_family, .link_paint = s.link_paint, .inline_style = inline_style, .font_scale_set = s.font_scale_set, .font_size_unknown = s.font_size_unknown, .background = s.background, .flags = inherited_flags, .role = s.role });
+        try self.spans.append(self.a, .{ .ordinary_action_script = s.ordinary_action_script, .ordinary_action_entity = s.ordinary_action_entity, .ordinary_action_origin = s.ordinary_action_origin, .ruby = ruby, .inline_padding_group = group, .inline_box_group = box, .generated_link = generated, .target_fragment = if (generated != null and std.mem.indexOfScalar(u8, s.target, 35) != null) "" else null, .image = s.image, .image_fields_compiled = s.image_fields_compiled, .kind = s.kind, .provenance = s.provenance, .self_link = self_link, .text = value, .target = s.target, .language = s.language, .classes = s.classes, .direction = s.direction, .captured_direction = s.captured_direction, .explanation = s.explanation, .explanation_set = s.explanation_set, .tooltip = s.tooltip, .tooltip_set = s.tooltip_set, .foreground = s.foreground, .foreground_set = s.foreground_set, .font_scale = if (viewport_inherited_font) null else s.font_scale, .font_scale_basis = if (viewport_inherited_font) .context else s.font_scale_basis, .font_features = s.font_features, .font_family = s.font_family, .link_paint = s.link_paint, .inline_style = inline_style, .font_scale_set = s.font_scale_set, .font_size_unknown = s.font_size_unknown, .background = if (self.static_frame_paint != null and sameFigurePreparationValue(self.static_frame_paint, s.background)) null else s.background, .flags = inherited_flags, .role = s.role });
         if (s.ordinary_action_script) |script| script.emitted += 1;
         if (ordinary_paint_current) s.ordinary_link_paint.?.emitted = true;
     }
@@ -25212,6 +25842,23 @@ pub const Renderer = struct {
         }
     }
 
+    fn hasTranslucentCellGroup(cell: table_style_profile.CellResolution) bool {
+        const style = cell.style orelse return false;
+        return (style.opacity orelse 1) < 1;
+    }
+
+    fn preserveCellGroupBackdrop(cell: *table_style_profile.CellResolution,
+        row_background: ?[]const u8, table: ?presentation_types.TableStyle, rowspan: u16) Error!void
+    {
+        if (!hasTranslucentCellGroup(cell.*)) return;
+        // This model stores no independent row paint. Never move a distinct
+        // row backdrop into the translucent cell's own group. The published
+        // table surface remains behind the cell; an authored cell paint stays.
+        const table_background: ?[]const u8 = if (table) |style| style.background else null;
+        if (rowspan != 1 or !sameFigurePreparationValue(row_background, table_background)) return error.UncompiledPresentation;
+        if (!cell.background_specified) cell.background = null;
+    }
+
     fn resolvedCellStyle(self: *Renderer, tag: syntax.Tag, fallback: ?[]const u8, inherited_alignment: ?presentation_types.CellTextAlign, computed_font: Style, native: CellNativeContext, weight_consumed: bool, cell_ancestor_id_superset: ?[]const u8) Error!table_style_profile.CellResolution {
         const profile = self.context.table_styles orelse {
             const basis = if (self.resolved_legacy_table_border) self.resolvedLegacyBorderBasis(computed_font, 1, .cell) else null;
@@ -25221,7 +25868,11 @@ pub const Renderer = struct {
                 if (resolved.style) |*cell| cell.border = null;
                 resolved.unresolved = true;
             }
-            resolved.background = try self.tableCellBackground(tag, fallback);
+            if (hasTranslucentCellGroup(resolved)) {
+                const paint = try self.authoredColor(tag, "background-color", "bgcolor", null);
+                resolved.background = paint.value;
+                resolved.background_specified = paint.specified;
+            } else resolved.background = try self.tableCellBackground(tag, fallback);
             inheritCellAlignment(&resolved, inherited_alignment);
             if (computed_font.font_scale_basis == .css_px and resolved.line_height == null and !(native.cell_policy_active and native.inherited_height != null)) resolved.unresolved = true;
             self.fallbacks.unresolved_table_style = self.fallbacks.unresolved_table_style or self.traceUnresolvedTableStyle(resolved.unresolved, "resolvedCellStyle.1", tag.attrs);
@@ -26267,6 +26918,147 @@ pub const Renderer = struct {
         state: NativeInlineMotionState) Error!?OwnedInlineOverlayParagraphSource
     {
         if (self.typed_table_depth == 0) return self.inlineBoxOverlayParagraphBulletSource(element, state);
+        return self.inlineBoxOverlayTableSource(element, state, null);
+    }
+
+    const InlineBoxQuotedParagraph = struct {
+        root: *const NativeInlineMotionRoot,
+        epoch: u64,
+        map: *const QuoteSourceMap,
+    };
+
+    // Issue only for a whole, physically top-level native paragraph containing
+    // paired wiki bold and plain SPAN siblings. The quote operation later binds
+    // its generated B and each authored opener to this exact source interval.
+    fn inlineBoxQuotedParagraphInput(self: *Renderer, tracked: MissingText, inherited: Style) bool {
+        const raw = tracked.bytes;
+        if (raw.len < 7 or raw.len > 16 * 1024 or !starts(raw, "'''") or !std.mem.endsWith(u8, raw, "'''") or
+            std.mem.indexOfAny(u8, raw, "\r\n") != null or std.mem.indexOfScalar(u8, raw, '<') == null) return false;
+        const hints = self.semantic_capture orelse return false;
+        const host = self.native_article_host orelse return false;
+        const held = switch (inherited.native_inline_motion) { .proved => |value| value, else => return false };
+        if (!hints.ordinary_paragraph or !host.native_paragraph_css_subjects or !self.wikiClassOrdinaryDomain() or
+            self.context.observe_structure_only or self.rejection_probe_scope or self.body_depth != 1 or
+            self.media_depth != 0 or self.ruby_depth != 0 or self.figure_caption_depth != 0 or self.typed_table_depth != 0 or
+            self.literal_wiki_table_operation != null or self.inline_table_boundaries != null or
+            self.table_css_ancestor_classes.len != 0 or self.body_language_direction != null or inherited.text_element != null or
+            held.last != null or held.epoch == 0 or self.native_inline_motion_root != held.root or
+            self.native_inline_motion_epoch != held.epoch or held.root.reference != null or
+            !QuoteSourceMap.clean(tracked) or !QuoteSourceMap.clean(held.root.source) or !QuoteSourceMap.clean(host.source) or
+            !host.matchesActive(self, held.root.source)) return false;
+        const line = self.wikiCellCurrentBodyRange(held.root.source, raw) orelse return false;
+        const local = @intFromPtr(line.ptr) - @intFromPtr(held.root.source.bytes.ptr);
+        var page = held.root.source;
+        var begin = local;
+        if (host.active_fragment) |fragment| {
+            const original = fragment.original_page orelse return false;
+            if (!inlineOverlaySameSourceSlice(fragment.prepared, page.bytes) or fragment.start > fragment.page.len or
+                page.bytes.len > fragment.page.len - fragment.start or original.len != fragment.page.len) return false;
+            begin = fragment.start + local;
+            if (begin > 16 * 1024 or !std.mem.eql(u8, original[0 .. begin + line.len], fragment.page[0 .. begin + line.len]) or
+                !std.mem.eql(u8, fragment.page[begin..][0..line.len], line)) return false;
+            page.bytes = fragment.page;
+        } else if (!host.active_whole_page or !NativeArticleHost.sameSource(host.source, page)) return false;
+        const end = begin + line.len;
+        if (begin > 16 * 1024 or (begin != 0 and page.bytes[begin - 1] != '\n') or
+            (end != page.bytes.len and page.bytes[end] != '\n' and page.bytes[end] != '\r') or
+            !clippedAbsoluteEnclosurePrefix(page, 0, begin, true)) return false;
+        return inlineBoxQuotedSpanSiblings(raw[3 .. raw.len - 3]);
+    }
+
+    fn inlineBoxQuotedSpanSiblings(interior: []const u8) bool {
+        const special = "<>{}[]'\x7f\r\n";
+        var cursor: usize = 0;
+        var saw_span = false;
+        while (std.mem.indexOfAnyPos(u8, interior, cursor, special)) |at| {
+            const open = syntax.tagAt(interior, at) orelse return false;
+            if (!open.is("span") or open.closing or open.self_closing or open.html_pre or
+                !formattingAngleAttributesBalanced(open.attrs)) return false;
+            const end = std.mem.indexOfAnyPos(u8, interior, open.end, special) orelse return false;
+            const close = syntax.tagAt(interior, end) orelse return false;
+            if (!close.closing or !close.is("span") or trim(close.attrs).len != 0) return false;
+            cursor = close.end;
+            saw_span = true;
+        }
+        return saw_span;
+    }
+
+    fn inlineBoxPairedBoldMap(map: *const QuoteSourceMap, raw: MissingText, quoted: MissingText) bool {
+        if (!QuoteSourceMap.clean(raw) or !QuoteSourceMap.clean(quoted) or raw.bytes.len < 7 or quoted.bytes.len < 8 or
+            !inlineOverlaySameSourceSlice(map.original, raw.bytes) or !inlineOverlaySameSourceSlice(map.output, quoted.bytes) or
+            map.has_literal_quote_edits or map.generated.items.len != 2) return false;
+        const first = map.generated.items[0];
+        const last = map.generated.items[1];
+        if (first.token != .b_open or first.output_start != 0 or first.quote_start != 0 or first.quote_end != 3 or
+            last.token != .b_close or last.output_start != quoted.bytes.len - 4 or last.quote_start != raw.bytes.len - 3 or
+            last.quote_end != raw.bytes.len or !starts(quoted.bytes, "<b>") or !std.mem.endsWith(u8, quoted.bytes, "</b>")) return false;
+        const original = map.copiedOriginal(quoted.bytes[3 .. quoted.bytes.len - 4]) orelse return false;
+        return inlineOverlaySameSourceSlice(original, raw.bytes[3 .. raw.bytes.len - 3]);
+    }
+
+    fn inlineBoxQuotedParagraphClasses(self: *Renderer, element: *const table_style_profile.TextElement,
+        state: NativeInlineMotionState) Error!?[]const u8
+    {
+        const issued = self.inline_box_quoted_paragraph orelse return null;
+        const held = switch (state) { .proved => |value| value, else => return null };
+        if (held.root != issued.root or held.root != self.native_inline_motion_root or
+            held.epoch != issued.epoch or held.epoch != self.native_inline_motion_epoch) return null;
+        const span = held.last orelse return null;
+        const bold = span.previous orelse return null;
+        const parent = element.parent orelse return null;
+        if (span.origin != .html or bold.origin != .html or bold.previous != null or parent.parent != null or
+            element.alternative_ancestry != null or parent.alternative_ancestry != null or
+            !std.ascii.eqlIgnoreCase(parent.tag, "b") or parent.classes.len != 0 or parent.id.len != 0 or
+            !std.ascii.eqlIgnoreCase(element.tag, "span") or !inlineOverlaySameSourceSlice(bold.opening, issued.map.output[0..3]) or
+            parent.source_key != @intFromPtr(bold.opening[1..].ptr)) return null;
+        const original = issued.map.copiedOriginal(span.opening) orelse return null;
+        const tag = syntax.tagAt(span.opening, 0) orelse return null;
+        if (!tag.is("span") or tag.closing or tag.self_closing or tag.html_pre or tag.end != original.len or
+            htmlOwnAttributePresence(&tag, "class") == .unknown or htmlOwnAttributePresence(&tag, "dir") != .absent or
+            !std.mem.eql(u8, element.classes, (try self.semanticAttribute(tag, "class")) orelse "")) return null;
+        if (element.source_key != @intFromPtr(tag.name.ptr)) {
+            const mapped = self.quoteClassTag(tag) orelse return null;
+            if (mapped.generated or mapped.source_key != element.source_key) return null;
+        }
+        // The static decoration resolver also revalidates every declaration and
+        // its source opening before it consumes this property-local inventory.
+        var classes: std.ArrayList(u8) = .empty;
+        defer classes.deinit(self.a);
+        try classes.appendSlice(self.a, native_source_root_class_tokens);
+        nativeClassAppendTokens(self.a, &classes, element.classes) catch |failure| switch (failure) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.InvalidSourceClassInventory => return null,
+        };
+        return try classes.toOwnedSlice(self.a);
+    }
+
+    // This is a property-query-only inventory for a directly dispatched native table.
+    // The existing positive selector and positioning APIs keep their own authorities.
+    fn inlineBoxTableAncestorClasses(self: *Renderer, element: *const table_style_profile.TextElement,
+        state: NativeInlineMotionState) Error!?[]const u8
+    {
+        const opening = self.inline_box_root_table_opening orelse return null;
+        const receipt = (try self.inlineBoxOverlayTableSource(element, state, opening)) orelse return null;
+        defer receipt.deinit(self.a);
+        if (receipt.path.current_first.len != 4) return null;
+        var classes: std.ArrayList(u8) = .empty;
+        defer classes.deinit(self.a);
+        try classes.appendSlice(self.a, native_source_root_class_tokens);
+        for (receipt.path.current_first, receipt.facts) |node, fact| {
+            if (htmlOwnAttributePresence(&fact.tag, "dir") != .absent or
+                htmlOwnAttributePresence(&fact.tag, "class") == .unknown) return null;
+            nativeClassAppendTokens(self.a, &classes, node.element.classes) catch |failure| switch (failure) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.InvalidSourceClassInventory => return null,
+            };
+        }
+        if (!receipt.current(self) or !inlineOverlaySameSourceSlice(opening, self.inline_box_root_table_opening orelse return null)) return null;
+        return try classes.toOwnedSlice(self.a);
+    }
+
+    fn inlineBoxOverlayTableSource(self: *Renderer, element: *const table_style_profile.TextElement,
+        state: NativeInlineMotionState, dispatched_table: ?[]const u8) Error!?OwnedInlineOverlayParagraphSource
+    {
         const held = switch (state) { .proved => |value| value, else => return null };
         const host = self.native_article_host orelse return null;
         const profile = self.textPaintProfile() orelse return null;
@@ -26338,7 +27130,9 @@ pub const Renderer = struct {
         const cell_at = @intFromPtr(original_cell.ptr) - @intFromPtr(held.root.source.bytes.ptr);
         if (table_at + original_table.len >= row_at or row_at + original_row.len >= cell_at or
             (table_at != 0 and held.root.source.bytes[table_at - 1] != '\n') or
-            !clippedAbsoluteEnclosurePrefix(held.root.source, 0, table_at, true) or
+            !(if (dispatched_table) |selected| inlineOverlaySameSourceSlice(original_table, selected) and
+                inlineOverlaySameSourceSlice(selected, self.inline_box_root_table_opening orelse return null) and
+                host.startsPage(self, held.root.source) else clippedAbsoluteEnclosurePrefix(held.root.source, 0, table_at, true)) or
             !inlineOverlayClosedWikiTable(held.root.source, table_at + original_table.len,
                 cell_at + original_cell.len)) return null;
         // The live cell delimiter owns its full first source line. Every HTML
@@ -31421,6 +32215,16 @@ pub const Renderer = struct {
             if (self.poem_depth != 0) self.poem_base_style.italic = italic;
         }
         defer self.block_formatting = inherited_formatting;
+        if (matched != null and try self.staticInlineFrameSource(tracked, at, tag, pair, s, style, depth)) {
+            if (matched_inline_end) |flag| flag.* = true;
+            return pair.end;
+        }
+        if (self.static_frame_paint != null) {
+            // A descendant declaration needs its own paint interval, even if
+            // it resolves to the same RGB as its ancestor's paint.
+            const own = try self.authoredColorIn(tag, "background-color", null, style.background, self.customParent(s));
+            if (own.specified) return error.UncompiledPresentation;
+        }
         if (matched != null and try self.typedInlineBox(tracked, at, tag, pair, s, style, depth)) {
             if (matched_inline_end) |flag| flag.* = true;
             return pair.end;
@@ -37380,7 +38184,9 @@ pub const Renderer = struct {
         var table_link_quote_live = false;
         var selected_table_quote_source = false;
         var local_target_quote_live = false;
+        var static_numbered_quote_live = false;
         var native_quote_input_live = false;
+        var box_quote_input_live = false;
         var root_language_quote_proof: ?*const SourceRootLanguageProof = null;
         const figure_source_domain = self.figureClassSourceDomain();
         const quoted = quoted: {
@@ -37404,6 +38210,8 @@ pub const Renderer = struct {
             figure_quote_input_live = prepared.source.bytes.ptr == unmatched.bytes.ptr and prepared.source.bytes.len == unmatched.bytes.len and
                 comparisons.source.bytes.ptr == unmatched.bytes.ptr and comparisons.source.bytes.len == unmatched.bytes.len and
                 table_tails.source.bytes.ptr == unmatched.bytes.ptr and table_tails.source.bytes.len == unmatched.bytes.len;
+            box_quote_input_live = ordinary and figure_quote_input_live and previous_source_domain == null and
+                self.inlineBoxQuotedParagraphInput(prepared.source, inherited);
             selected_table_quote_source = ordinary and figure_quote_input_live and self.selectedTableQuoteSource(prepared.source);
             table_link_quote_live = ordinary and figure_quote_input_live and (wikiClassCleanText(prepared.source) or selected_table_quote_source) and
                 (if (self.table_viewport_cell_source) |scope| scope.links.len != 0 and
@@ -37411,6 +38219,10 @@ pub const Renderer = struct {
                         wikiClassContains(scope.source, original) else false) else false);
             local_target_quote_live = ordinary and figure_quote_input_live and
                 self.context.local_link_targets != null and QuoteSourceMap.clean(prepared.source);
+            static_numbered_quote_live = ordinary and figure_quote_input_live and prepared.source.unknown and
+                self.static_numbered_definition != null and
+                (table_style_profile.staticInlineOwnerCandidate(prepared.source.bytes) or std.ascii.findIgnoreCase(prepared.source.bytes, "border") != null) and
+                self.staticNumberedQuoteInput(prepared.source);
             native_quote_input_live = ordinary and figure_quote_input_live and self.nativeQuoteInputEligible(prepared.source, previous_source_domain);
             if (ordinary and figure_quote_input_live) root_language_quote_proof = self.rootLanguageQuoteInputProof(prepared.source);
             const selected_quote_source = ordinary and figure_quote_input_live and QuoteSourceMap.cleanLocal(prepared.source) and
@@ -37422,14 +38234,28 @@ pub const Renderer = struct {
             };
             const output = try normalizeWikiQuotesPreparedMappedInDomain(self.a, prepared.source, 0, false, self.context,
                 if (table_tails.seed) |seed| prepared.forwardSeed(comparisons.forwardSeed(seed)) else null,
-                if (quote_scope != null or table_link_quote_live or local_target_quote_live or native_quote_input_live or root_language_quote_proof != null or
+                if (static_numbered_quote_live or quote_scope != null or table_link_quote_live or local_target_quote_live or native_quote_input_live or box_quote_input_live or root_language_quote_proof != null or
                     (ordinary and figure_quote_input_live and (figure_source_domain != null or self.context.body_link_continuations != null))) &quote_map else null,
-                selected_quote_source or selected_table_quote_source);
+                static_numbered_quote_live or selected_quote_source or selected_table_quote_source);
             prepared.release(self.a, comparisons.source, output);
             comparisons.release(self.a, table_tails.source, output);
             table_tails.release(self.a, unmatched, output);
             break :quoted output;
         };
+        const previous_numbered_quotes = self.static_numbered_quotes;
+        var numbered_quotes: StaticNumberedQuotes = undefined;
+        if (static_numbered_quote_live and QuoteSourceMap.cleanLocal(unmatched) and QuoteSourceMap.cleanLocal(quoted) and
+            inlineOverlaySameSourceSlice(quote_map.original, unmatched.bytes) and inlineOverlaySameSourceSlice(quote_map.output, quoted.bytes) and
+            rootLanguageQuoteMapClean(&quote_map)) {
+            numbered_quotes = .{ .operation = self.static_numbered_definition.?, .map = &quote_map, .original = unmatched,
+                .output = quoted, .digest = nativeQuoteMapDigest(&quote_map) };
+            self.static_numbered_quotes = &numbered_quotes;
+        }
+        defer self.static_numbered_quotes = previous_numbered_quotes;
+        const previous_box_quotes = self.inline_box_quoted_paragraph;
+        self.inline_box_quoted_paragraph = if (box_quote_input_live and inlineBoxPairedBoldMap(&quote_map, unmatched, quoted))
+            .{ .root = inherited.native_inline_motion.proved.root, .epoch = inherited.native_inline_motion.proved.epoch, .map = &quote_map } else null;
+        defer self.inline_box_quoted_paragraph = previous_box_quotes;
         const previous_root_language_quotes = self.root_language_quote_source;
         var root_language_quote_domain: ?RootLanguageQuoteDomain = null;
         if (root_language_quote_proof) |proof| root_language_quote_domain =
@@ -41271,7 +42097,13 @@ pub const Renderer = struct {
                         }
                     }
                 } else if (tag.is("ul") or tag.is("ol") or tag.is("dl")) {
-                    try self.htmlList(&blocks, wrapper_source[tag.end..pair.inner_end], tag, "", 0, self.bodyFormattingStyle(self.body_language_direction orelse .{}));
+                    const list_style = self.bodyFormattingStyle(self.body_language_direction orelse .{});
+                    const previous_list = self.inline_box_root_list;
+                    self.inline_box_root_list = if (self.body_depth == 1 and !initial_inline and !anchored_inline and
+                        oneOf(tag.name, &.{ "ul", "ol" }) and list_style.text_element == null and
+                        self.table_css_ancestor_classes.len == 0) wrapper_source[0..pair.end] else null;
+                    defer self.inline_box_root_list = previous_list;
+                    try self.htmlList(&blocks, wrapper_source[tag.end..pair.inner_end], tag, "", 0, list_style);
                 } else if (try self.appendEtymologyTree(&blocks, wrapper_source[tag.end..pair.inner_end], tag)) {
                     // The accepted tree already emitted its data-only nested list.
                 } else {
@@ -41493,6 +42325,28 @@ pub const Renderer = struct {
                         .wiki_table, table_line[table_open..], table_tag, parent_table_style.native_inline_motion);
                     const scoped_table_formatting = if (viewport != null) self.block_formatting
                         else try self.wikiTableFontFormattingAt(table_tag, parent_table_style, table_line[table_open..], self.block_formatting);
+                    const prior_box_table = self.inline_box_root_table_opening;
+                    self.inline_box_root_table_opening = null;
+                    defer self.inline_box_root_table_opening = prior_box_table;
+                    // The root block dispatcher has already consumed the preceding siblings.
+                    // Recursion, indentation, a pending formatting owner, normalized copies
+                    // and a detached source fragment cannot certify a root table opening.
+                    if (viewport == null and !hidden_table and !anchored_inline and !initial_inline and
+                        !terminal_inline and initial_quote == null and initial_list == null and table_path.len == 0 and
+                        table_open == 0 and table_line.ptr == input[start..].ptr and
+                        (start == 0 or input[start - 1] == '\n') and end == physical_end and origin == 0 and
+                        self.body_depth == 1 and self.typed_table_depth == 0 and self.literal_wiki_table_operation == null and
+                        self.content_root == .parser_output and !self.figure_implicit_list_context and
+                        !self.html_list_item_flow and !self.html_blockquote_flow and parent_table_style.text_element == null and
+                        !self.in_reference and !self.pre_block and !self.parsed_pre and !self.in_template_literal_scope and
+                        self.body_link_target.len == 0 and !self.context.observe_structure_only and !self.rejection_probe_scope)
+                    {
+                        if (self.native_article_host) |host| if (self.native_inline_motion_root) |root| {
+                            if (host.native_paragraph_css_subjects and host.startsPage(self, root.source) and
+                                NativeArticleHost.sameSource(prepared_missing, root.source) and
+                                noLiParentSourceRange(root.source, table_line)) self.inline_box_root_table_opening = table_line;
+                        };
+                    }
                     break :parsed try self.parseTable(input, pos, start,
                         if (viewport != null) null else try self.swatchCssHex(table_tag, "background-color"),
                         if (viewport) |known| known.wide_style.background else try self.tableCellBackground(table_tag, null),
@@ -41750,8 +42604,16 @@ pub const Renderer = struct {
                         .list_path = path, .number = number, .relation_note = self.body_formatting_attributes.relation_note,
                     });
                 } else {
+                    const previous_numbered = self.static_numbered_definition;
+                    defer self.static_numbered_definition = previous_numbered;
                     const previous_bullet_link = self.ordinary_bullet_link;
                     const bullet_link: OrdinaryBulletLink = .{ .source = input, .line = physical_line, .body = body };
+                    // A numbered definition is a separate source operation. Existing
+                    // bullet-only proofs continue to require their original dispatcher.
+                    self.static_numbered_definition = if (!anchored_inline and !link_label_scope and kind == .definition and
+                        std.mem.eql(u8, path, "#") and number.len != 0 and list_prefix.body_start == 1 and
+                        labeled_list_opening == null and list_line.ptr == physical_line.ptr and list_line.len == physical_line.len and
+                        (start == 0 or input[start - 1] == '\n')) &bullet_link else null;
                     // The shared list parser already selected this exact path.
                     // Continuations, behavior-control prefixes and split items
                     // do not issue the normal classless wrapper operation.
@@ -44616,6 +45478,7 @@ pub const Renderer = struct {
                 const ordinary_cell_style = try self.cellOwnerStyle(cell_tag, row_style, false, cell_native_context);
                 const cell_style = if (nested_cell_owner) |owner| tableNestedOwnerStyle(ordinary_cell_style, owner) else ordinary_cell_style;
                 var resolved_cell = try self.resolvedCellStyle(cell_tag, background_fallback, row_alignment, cell_style, cell_native_context, false, null);
+                try preserveCellGroupBackdrop(&resolved_cell, row_background, resolved.style, cell_rowspan);
                 var nested_table: ?Table = null;
                 var cell_blocks: ?[]const Block = null;
                 try cells.append(self.a, .{
@@ -45598,6 +46461,7 @@ pub const Renderer = struct {
                             defer self.table_css_ancestor_classes = parent_css;
                             break :scoped try self.resolvedCellStyle(cell_tag, background_fallback, row_alignment, cell_style, cell_native_context, cell_weight_consumed, cell_ids);
                         };
+                        try preserveCellGroupBackdrop(&resolved_cell, row_background, resolved.style, content.rowspan);
                         self.guardCellEmStyleAt(&resolved_cell, cell_style, cell_formatting, cell_tag.attrs);
                         try self.computeCellLineHeight(&resolved_cell, cell_tag, cell_style, &cell_formatting, cell_native_context);
                         current = .{ .line_context_state = if (self.cell_line_source_observation) cellContextState(cell_native_context) else null, .style_font_unresolved = resolved_cell.padding_basis_unresolved, .style_unresolved = self.table_style_unresolved or resolved_cell.line_height_refused, .style = resolved_cell.style, .spans = &.{}, .header = header, .colspan = content.colspan, .rowspan = content.rowspan, .background = resolved_cell.background };
@@ -46653,6 +47517,65 @@ test "native inline box retains Japanese pitch empty child geometry fonts action
     const decoded = try codec.decodeAlloc(a, bytes, "formatting scope", .language, .{ .heading = "English", .code = "en" });
     try std.testing.expectEqualDeep(stored, decoded);
     try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, decoded));
+}
+
+test "dotted inline label retains upright owner italic child help cursor and neighboring link through codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const annotation = "<span style='border-bottom: 1px dotted #000; cursor:help' title='Cantonese'><i>c</i></span>";
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try renderer.renderBody("<span class='Hani' lang='zh'>[[字#Chinese|字]]</span> " ++ annotation ++ "; tail");
+    try std.testing.expectEqual(@as(usize, 1), blocks.len);
+    try std.testing.expectEqualStrings("字 c; tail", try flattened(a, blocks[0].spans));
+    var annotations: usize = 0;
+    var links: usize = 0;
+    for (blocks[0].spans) |span| {
+        if (span.kind == .link) {
+            links += 1;
+            try std.testing.expectEqualStrings("字#Chinese", span.target);
+            try std.testing.expectEqualStrings("zh", span.language);
+            try std.testing.expectEqualStrings("字", span.text);
+        }
+        if (span.inline_box_group) |group| {
+            annotations += 1;
+            try std.testing.expect(!span.flags.italic and span.kind == .text);
+            try std.testing.expectEqualStrings("Cantonese", span.tooltip.?);
+            try std.testing.expectEqual(presentation_types.InlineCursor.help, span.inline_style.?.cursor.?);
+            try std.testing.expect(group.border.top == .none and group.border.left == .none and group.border.right == .none);
+            const bottom = group.border.bottom.dotted;
+            try std.testing.expectEqualDeep(presentation_types.StyleLength{ .unit = .px, .value = 1 }, bottom.width);
+            try std.testing.expectEqualStrings("#000000", bottom.color.rgb);
+            try std.testing.expectEqual(@as(usize, 1), group.spans.len);
+            const child = group.spans[0];
+            try std.testing.expect(child.flags.italic and child.kind == .text and child.target.len == 0);
+            try std.testing.expectEqualStrings("c", child.text);
+            try std.testing.expectEqualStrings("Cantonese", child.tooltip.?);
+            try std.testing.expectEqualDeep(span.inline_style, child.inline_style);
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 1), annotations);
+    try std.testing.expectEqual(@as(usize, 1), links);
+    const stored = try FormattingScopeTest.encode(a, &renderer, blocks);
+    const codec = @import("blob_encoder").presentation_codec;
+    const bytes = try codec.encodeAlloc(a, stored);
+    const decoded = try codec.decodeAlloc(a, bytes, "formatting scope", .language, .{ .heading = "English", .code = "en" });
+    try std.testing.expectEqualDeep(stored, decoded);
+    try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, decoded));
+
+    for ([_][]const u8{
+        "<span style='border-bottom:1px dotted black'><i style='display:block'>c</i></span>",
+        "<span style='border-bottom:1px dotted black'><i>[[Target|c]]</i></span>",
+        "<span style='border-bottom:1px dotted black'><i>c</i> tail</span>",
+        "<span style='border-bottom:1px dotted black'><i><b>c</b></i></span>",
+    }) |source| {
+        var invalid: Renderer = .{ .a = a, .context = .{} };
+        try std.testing.expectError(error.UncompiledPresentation, invalid.renderBody(source));
+    }
+    var profile = try table_style_profile.parseAlloc(a, "i{transform:translateX(2px)}");
+    defer profile.deinit();
+    var positioned: Renderer = .{ .a = a, .context = .{ .table_styles = &profile, .text_paint_styles = &profile } };
+    try std.testing.expectError(error.UncompiledPresentation, positioned.renderBody(annotation));
 }
 
 test "native inline box refuses invented empty child ownership and unsupported native contents" {
@@ -127978,6 +128901,37 @@ test "typed overlay BDI keeps source CSS direction and occurrence barriers" {
     renderer.active_bidi_capture = null; try std.testing.expect(!renderer.bidiBoxSourceCurrent(&proof));
 }
 
+test "direct table box class inventory preserves the native root and requires all original operation owners" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var profile = try table_style_profile.parseForTargetAlloc(a, "", .screen);
+    defer profile.deinit();
+    const value = try InlineOverlayParagraphSource40Test.make(a, &profile);
+    var element = value.element;
+    var state = value.motion;
+    for (0..3) |_| {
+        element = element.parent.?;
+        state.proved.last = state.proved.last.?.previous;
+    }
+    try std.testing.expect(try value.renderer.inlineBoxTableAncestorClasses(element, state) == null);
+    const original = value.operation.table_opening;
+    value.renderer.inline_box_root_table_opening = original;
+    const classes = (try value.renderer.inlineBoxTableAncestorClasses(element, state)) orelse return error.TestUnexpectedResult;
+    defer a.free(classes);
+    for ([_][]const u8{ "mw-parser-output", "mw-content-ltr", "mw-content-rtl", "inflection", "lang-ja" }) |token| try std.testing.expect(table_style_profile.Profile.hasClass(classes, token));
+    try std.testing.expect(!table_style_profile.Profile.hasClass(classes, "Arab"));
+    try std.testing.expect(element.complete_ancestor_classes == null and !element.physical_ancestry_complete);
+    value.renderer.inline_box_root_table_opening = try a.dupe(u8, original);
+    try std.testing.expect(try value.renderer.inlineBoxTableAncestorClasses(element, state) == null);
+    value.renderer.inline_box_root_table_opening = original;
+    value.host.active_whole_page = false;
+    try std.testing.expect(try value.renderer.inlineBoxTableAncestorClasses(element, state) == null);
+    value.host.active_whole_page = true;
+    value.operation.row_opening = try a.dupe(u8, value.row);
+    try std.testing.expect(try value.renderer.inlineBoxTableAncestorClasses(element, state) == null);
+}
+
 test "native overlay paragraph table receipt keeps exact tags attributes auto BDI and final host custody" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
     var profile = try table_style_profile.parseForTargetAlloc(a, "", .screen); defer profile.deinit();
@@ -128867,6 +129821,143 @@ test "Serbian pitch native list source retains only an exact planned citation" {
     try std.testing.expect(!Renderer.containerPositionChildCompleteIn(body, true, plan));
     const foreign = try std.fmt.allocPrint(a, "<ref {s}='0' name='foreign'><cite>[[Book]]</cite></ref>", .{plan.attribute});
     try std.testing.expect(!Renderer.containerPositionChildCompleteIn(foreign, true, plan));
+}
+
+test "Serbian article pitch retains its source list borders kana link and citation" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = @embedFile("testdata/sr-ri632-list/pitch-list.wikitext");
+    // Exact [55225, 56306) of the 150900-byte selected 日 p2404/r702070 expansion.
+    try MilyonLinkedBr210Test.hash(source, "ce92584c1acc7d89d7ce2750370d69a704129dd9f1a22b0c0268a79361e9919f");
+    const NS = @import("namespace_registry");
+    var ns = try NS.Registry.init(a, @embedFile("testdata/sr-ri207-padding/namespace-registry.tsv"));
+    defer ns.deinit();
+    try ns.attachLanguageConversion(@embedFile("testdata/sr-ri207-padding/namespace-siteinfo.raw.json"));
+    try ns.attachInterwikiMap(@embedFile("testdata/sr-ri207-padding/interwiki-map.tsv"));
+    var profile = try table_style_profile.parseSourcesForTargetAlloc(a, &.{
+        .{ .css = @embedFile("testdata/sr-ri207-padding/common.css"), .base_url = "" },
+        .{ .css = @embedFile("testdata/sr-ri632-list/SubtleUpdatemarker.css"), .base_url = "", .unknown_applicability = true },
+        .{ .css = @embedFile("testdata/sr-ri632-list/WatchlistBase.css"), .base_url = "", .unknown_applicability = true },
+        .{ .css = @embedFile("testdata/sr-ri632-list/WatchlistGreenIndicators.css"), .base_url = "", .unknown_applicability = true },
+        .{ .css = @embedFile("testdata/sr-ri632-list/WatchlistGreenIndicatorsMono.css"), .base_url = "", .unknown_applicability = true },
+        .{ .css = @embedFile("testdata/sr-ri632-list/charinsert-styles.css"), .base_url = "" },
+    }, .screen);
+    defer profile.deinit();
+    const context: Context = .{ .title = "日", .namespace_catalog = &ns, .table_styles = &profile, .text_paint_styles = &profile };
+    const tracked: MissingText = .{ .bytes = source, .unknown = true };
+    const prepared = try preparePageExternalLinksWithMissingAlloc(a, tracked, context);
+    var renderer: Renderer = .{ .a = a, .context = context, .content_root = .parser_output, .native_body_language = "ja" };
+    renderer.context.citations = prepared.citations;
+    renderer.context.poem_phase = prepared.poem_phase;
+    renderer.context.external_links_prepared = true;
+    var host: NativeArticleHost = .{ .renderer = &renderer, .source = prepared.missing, .title = "日", .language_code = "ja",
+        .active_source = prepared.missing, .active_snapshot = NativeArticleHost.snapshot(prepared.missing),
+        .active_whole_page = true, .native_paragraph_css_subjects = true };
+    renderer.native_article_host = &host;
+    const blocks = try renderer.renderBodyWithHeadingOffsets(prepared.missing);
+    try RetainedPitch230Walk.assertPitch(a, blocks, "に");
+    const spans = try FigureProducerTest.bodySpans(a, blocks);
+    var kana = false;
+    var linked = false;
+    var reading = false;
+    for (spans) |span| {
+        if (span.inline_box_group) |box| {
+            try std.testing.expectEqualDeep(presentation_types.StyleLength{ .unit = .px, .value = 1 }, box.border.top.solid.width);
+            try std.testing.expect(box.overlays[0].content == null and box.overlays[0].border.right == .solid);
+            try std.testing.expect(box.overlays[0].border.right.solid.color == .current_color);
+        }
+        if (std.mem.indexOf(u8, span.text, "ち") != null and span.kind == .text and span.inline_box_group == null) kana = true;
+        if (std.mem.eql(u8, span.text, "Atamadaka") and std.mem.eql(u8, span.target, "頭高型")) linked = true;
+        if (span.flags.code and std.mem.eql(u8, span.text, "[níꜜchì]")) reading = true;
+    }
+    try std.testing.expect(kana and linked and reading);
+    const refs = try renderer.finishReferences();
+    try std.testing.expectEqual(@as(usize, 1), refs.len);
+    try std.testing.expectEqualStrings("DJR", refs[0].name);
+    const saved = try FormattingScopeTest.encode(a, &renderer, blocks);
+    const codec = @import("blob_encoder").presentation_codec;
+    const encoded = try codec.encodeAlloc(a, saved);
+    const decoded = try codec.decodeAlloc(a, encoded, saved.entry.title, .language, .{ .heading = saved.entry.language.?, .code = saved.entry.language_code });
+    try std.testing.expectEqualDeep(saved, decoded);
+
+    // The actual 百 p31708/r674597 declares its relative box after literal ひゃ.
+    const hundred = @embedFile("testdata/sr-ri632-list/hundred-list.wikitext");
+    try MilyonLinkedBr210Test.hash(hundred, "8c01c530a500747f1d95b2a5bde01de7a70fb6ad661eaf6dfec0dd4612e49041");
+    var second_context = context;
+    second_context.title = "百";
+    const second = try preparePageExternalLinksWithMissingAlloc(a, .{ .bytes = hundred, .unknown = true }, second_context);
+    var next: Renderer = .{ .a = a, .context = second_context, .content_root = .parser_output, .native_body_language = "ja" };
+    next.context.citations = second.citations;
+    next.context.external_links_prepared = true;
+    var second_host = host;
+    second_host.renderer = &next;
+    second_host.title = "百";
+    second_host.source = second.missing;
+    second_host.active_source = second.missing;
+    second_host.active_snapshot = NativeArticleHost.snapshot(second.missing);
+    next.native_article_host = &second_host;
+    const second_blocks = try next.renderBodyWithHeadingOffsets(second.missing);
+    try RetainedPitch230Walk.assertPitch(a, second_blocks, "く");
+    const all = try FigureProducerTest.bodySpans(a, second_blocks);
+    var prefix_found = false;
+    var odaka_found = false;
+    for (all) |span| {
+        if (span.kind == .text and std.mem.indexOf(u8, span.text, "ひゃ") != null and span.inline_box_group == null) prefix_found = true;
+        if (span.kind == .link and std.mem.eql(u8, span.text, "Odaka") and std.mem.eql(u8, span.target, "尾高型")) odaka_found = true;
+    }
+    try std.testing.expect(prefix_found and odaka_found);
+
+    // An actual vertical-writing ancestor remains visible to the cascade.
+    const marked = try std.mem.concat(a, u8, &.{ "<ul class='Mong'>", source["<ul>".len..] });
+    const tagged = try preparePageExternalLinksWithMissingAlloc(a, .{ .bytes = marked, .unknown = true }, context);
+    var witness: Renderer = .{ .a = a, .context = context, .content_root = .parser_output, .native_body_language = "ja" };
+    witness.context.citations = tagged.citations;
+    witness.context.external_links_prepared = true;
+    var negative = host;
+    negative.renderer = &witness;
+    negative.source = tagged.missing;
+    negative.active_source = tagged.missing;
+    negative.active_snapshot = NativeArticleHost.snapshot(tagged.missing);
+    witness.native_article_host = &negative;
+    try std.testing.expectError(error.UncompiledPresentation, witness.renderBodyWithHeadingOffsets(tagged.missing));
+}
+
+test "Serbian article pitch refuses detached list custody stale motion and nested table scope" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const f = try NativePlainLi230Test.fixture(a, false);
+    const renderer = f.renderer;
+    renderer.content_root = .parser_output;
+    renderer.native_body_language = "ja";
+    var host: NativeArticleHost = .{ .renderer = renderer, .source = f.root.source, .title = renderer.context.title,
+        .language_code = "ja", .active_source = f.root.source, .active_snapshot = NativeArticleHost.snapshot(f.root.source),
+        .active_whole_page = true, .native_paragraph_css_subjects = true };
+    renderer.native_article_host = &host;
+    const list = f.current[0..std.mem.indexOf(u8, f.current, " MISSING").?];
+    renderer.inline_box_root_list = list;
+    const item = (try renderer.nativeSourcePlainListItemStyle(f.input, f.item, f.parent)).?;
+    const jp = syntax.tagAt(f.input, 0).?;
+    const parent = try renderer.htmlLanguageDirection(jp, item);
+    const tag = syntax.tagAt(f.input, std.mem.indexOf(u8, f.input, "<span style=").?).?;
+    const current = try renderer.htmlLanguageDirection(tag, parent);
+    const node = current.text_element.?;
+    const classes = (try renderer.inlineBoxListAncestorClasses(node, current.native_inline_motion)).?;
+    try std.testing.expect(table_style_profile.Profile.hasClass(classes, "Jpan"));
+    try std.testing.expect(!table_style_profile.Profile.hasClass(classes, "Mong"));
+    renderer.inline_box_root_list = try a.dupe(u8, list);
+    try std.testing.expect(try renderer.inlineBoxListAncestorClasses(node, current.native_inline_motion) == null);
+    renderer.inline_box_root_list = list;
+    renderer.native_inline_motion_epoch += 1;
+    try std.testing.expect(try renderer.inlineBoxListAncestorClasses(node, current.native_inline_motion) == null);
+    renderer.native_inline_motion_epoch -= 1;
+    renderer.typed_table_depth = 1;
+    try std.testing.expect(try renderer.inlineBoxListAncestorClasses(node, current.native_inline_motion) == null);
+    renderer.typed_table_depth = 0;
+    var detached = node.*;
+    detached.source_key += 1;
+    try std.testing.expect(try renderer.inlineBoxListAncestorClasses(&detached, current.native_inline_motion) == null);
 }
 
 test "Serbian pitch text before its empty overlay retains both authored borders" {
@@ -129861,4 +130952,185 @@ test "figure bidi source and header refusals retain local authored header and fi
         try std.testing.expectEqual(@as(usize, 0), rejected.local_offset);
         try std.testing.expectEqual(@as(u64, if (case == 2) 7 else 0), rejected.reason_bits);
     }
+}
+
+test "ordinary inline frame owns classifier paint, separate padding, nested labels and four destination ranges" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source =
+        \\<span style="padding-left:15px; font-size:80%"><span style="background:#EDFFFF">(''Класификатор'': <span class="Hant" lang="zh-Hant">[[隻#Chinese|隻]]</span><span class="Hani" lang="zh">／</span><span class="Hani" lang="zh">[[只#Chinese|只]]</span> <span style="border-bottom: 1px dotted #000; cursor:help" title="Cantonese"><i>c</i></span>;<span style="padding-left:4px; padding-right:4px">&nbsp;</span><span class="Hant" lang="zh-Hant">[[個#Chinese|個]]</span><span class="Hani" lang="zh">／</span><span class="Hans" lang="zh-Hans">[[个#Chinese|个]]</span> <span style="border-bottom: 1px dotted #000; cursor:help" title="Cantonese"><i>c</i></span>)</span></span>
+    ;
+    var renderer: Renderer = .{ .a = a, .content_root = .parser_output, .context = .{} };
+    const blocks = try renderer.renderBody(source);
+    try std.testing.expectEqual(@as(usize, 1), blocks.len);
+    try std.testing.expectEqual(@as(usize, 1), blocks[0].spans.len);
+    const outer = blocks[0].spans[0];
+    const lead = outer.inline_box_group orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(?f32, 0.8), outer.font_scale);
+    try std.testing.expect(outer.background == null and lead.padding.left.unit == .px and lead.padding.left.value == 15);
+    try std.testing.expect(lead.padding.right.value == 0 and lead.spans.len == 1);
+    const inner = lead.spans[0];
+    const interval = inner.inline_box_group orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("#edffff", inner.background.?);
+    try std.testing.expect(interval.padding.left.value == 0 and interval.padding.right.value == 0);
+    var links: usize = 0;
+    var hints: usize = 0;
+    var separators: usize = 0;
+    const targets = [_][]const u8{ "隻#Chinese", "只#Chinese", "個#Chinese", "个#Chinese" };
+    const languages = [_][]const u8{ "zh-Hant", "zh", "zh-Hant", "zh-Hans" };
+    for (interval.spans) |span| {
+        try std.testing.expect(span.background == null);
+        if (span.kind == .link) {
+            try std.testing.expect(links < targets.len);
+            try std.testing.expectEqualStrings(targets[links], span.target);
+            try std.testing.expectEqualStrings(languages[links], span.language);
+            links += 1;
+        }
+        if (span.inline_box_group) |group| {
+            try std.testing.expectEqual(@as(usize, 1), group.spans.len);
+            const leaf = group.spans[0];
+            try std.testing.expect(leaf.background == null);
+            if (group.border.bottom == .dotted) {
+                try std.testing.expectEqualStrings("Cantonese", span.tooltip.?);
+                try std.testing.expect(!span.flags.italic and leaf.flags.italic);
+                try std.testing.expectEqualStrings("c", leaf.text);
+                try std.testing.expectEqual(presentation_types.InlineCursor.help, span.inline_style.?.cursor.?);
+                hints += 1;
+            } else {
+                try std.testing.expect(group.padding.left.unit == .px and group.padding.left.value == 4);
+                try std.testing.expectEqualDeep(group.padding.left, group.padding.right);
+                try std.testing.expectEqualStrings("\u{a0}", leaf.text);
+                try std.testing.expectEqual(Provenance.entity_literal, leaf.provenance);
+                const held = span.static_frame_entity orelse return error.TestUnexpectedResult;
+                try std.testing.expect(held.matches(group, &group.spans[0]));
+                var stale = held.*;
+                stale.original = "<span>&amp;</span>";
+                try std.testing.expect(!stale.matches(group, &group.spans[0]));
+                try std.testing.expect(!held.matches(group, &leaf));
+                var normalized = [_]Span{span};
+                try separateGeneratedDiagnosticBoundaries(a, &normalized);
+                try std.testing.expect(normalized[0].inline_box_group.? == group);
+                try validateInlineBoxParagraph(&normalized);
+                var detached = group.*;
+                detached.spans = try a.dupe(Span, group.spans);
+                normalized[0].inline_box_group = &detached;
+                try separateGeneratedDiagnosticBoundaries(a, &normalized);
+                try std.testing.expectError(error.UncompiledPresentation, validateInlineBoxParagraph(&normalized));
+                separators += 1;
+            }
+        }
+    }
+    try std.testing.expect(links == 4 and hints == 2 and separators == 1);
+    const stored = try FormattingScopeTest.encode(a, &renderer, blocks);
+    const codec = @import("blob_encoder").presentation_codec;
+    const bytes = try codec.encodeAlloc(a, stored);
+    const decoded = try codec.decodeAlloc(a, bytes, "formatting scope", .language, .{ .heading = "English", .code = "en" });
+    try std.testing.expectEqualDeep(stored, decoded);
+    try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, decoded));
+    var rtl: Renderer = .{ .a = a, .content_root = .parser_output, .context = .{} };
+    try std.testing.expectError(error.UncompiledPresentation, rtl.renderBody("<span style='padding-left:2px'><span style='background:red'>ok</span></span> שלום"));
+}
+
+test "numbered inline selector custody requires closed preceding HTML and quote siblings" {
+    try std.testing.expect(Renderer.staticNumberedClosedSiblings("<span><i class='Arab'>x</i></span> [[Term|label]] ", false));
+    try std.testing.expect(Renderer.staticNumberedClosedSiblings("(<i>Класификатор</i>: <span class='Hant'>[[隻#Chinese|隻]]</span> ", false));
+    try std.testing.expect(!Renderer.staticNumberedClosedSiblings("[[Term|''label]] ", true));
+    for ([_][]const u8{
+        "<span><i class='Arab'>x</span> ", "<i class='Arab'><span>x</i></span>",
+        "<span><i>x</span></i>", "<span/> ", "<span class='Arab'>x", "[[Term|<i class='Arab'>label]] ",
+        "[[Term|''label]] ", "(<i>unfinished quote before child", "unchanged ''quote'' bytes",
+    }) |prefix| try std.testing.expect(!Renderer.staticNumberedClosedSiblings(prefix, false));
+}
+
+test "Serbian numbered mouse classifier retains authenticated unknown coordinates and six source styles" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const line =
+        \\# <span class="usage-label-sense"><span class="ib-brac">(</span><span class="ib-content">[[w:Hong Kong Cantonese|Hong Kong Cantonese]][[Категорија:Hong Kong Cantonese|MOUSE]]<span class="ib-comma">,</span>&#32;[[computing#Noun|computing]][[Категорија:zh:Computing|MOUSE]]</span><span class="ib-brac">)</span></span> [[#English|mouse]] <span style="padding-left:15px; font-size:80%"><span style="background:#EDFFFF">(''Класификатор'': <span class="Hant" lang="zh-Hant">[[隻#Chinese|隻]]</span><span class="Hani" lang="zh">／</span><span class="Hani" lang="zh">[[只#Chinese|只]]</span> <span style="border-bottom: 1px dotted #000; cursor:help" title="Cantonese"><i>c</i></span>;<span style="padding-left:4px; padding-right:4px">&nbsp;</span><span class="Hant" lang="zh-Hant">[[個#Chinese|個]]</span><span class="Hani" lang="zh">／</span><span class="Hans" lang="zh-Hans">[[个#Chinese|个]]</span> <span style="border-bottom: 1px dotted #000; cursor:help" title="Cantonese"><i>c</i></span>)</span></span>[[Категорија:Кинески именице класификоване по 隻/只|mouse]][[Категорија:Кинески именице класификоване по 個/个|mouse]]
+    ;
+    const sources = [_]table_style_profile.Source{
+        .{ .css = @embedFile("testdata/sr-ri207-padding/common.css"), .base_url = "" },
+        .{ .css = @embedFile("testdata/sr-ri632-list/SubtleUpdatemarker.css"), .base_url = "", .unknown_applicability = true },
+        .{ .css = @embedFile("testdata/sr-ri632-list/WatchlistBase.css"), .base_url = "", .unknown_applicability = true },
+        .{ .css = @embedFile("testdata/sr-ri632-list/WatchlistGreenIndicators.css"), .base_url = "", .unknown_applicability = true },
+        .{ .css = @embedFile("testdata/sr-ri632-list/WatchlistGreenIndicatorsMono.css"), .base_url = "", .unknown_applicability = true },
+        .{ .css = @embedFile("testdata/sr-ri632-list/charinsert-styles.css"), .base_url = "" },
+    };
+    var profile = try table_style_profile.parseSourcesForTargetAlloc(a, &sources, .screen);
+    defer profile.deinit();
+    const NS = @import("namespace_registry");
+    var ns = try NS.Registry.init(a, @embedFile("testdata/sr-ri207-padding/namespace-registry.tsv"));
+    defer ns.deinit();
+    try ns.attachLanguageConversion(@embedFile("testdata/sr-ri207-padding/namespace-siteinfo.raw.json"));
+    try ns.attachInterwikiMap(@embedFile("testdata/sr-ri207-padding/interwiki-map.tsv"));
+    const context: Context = .{ .title = "mouse", .namespace_catalog = &ns, .table_styles = &profile, .text_paint_styles = &profile };
+    const tracked: MissingText = .{ .bytes = line, .unknown = true };
+    const prepared = try preparePageExternalLinksWithMissingAlloc(a, tracked, context);
+    var renderer: Renderer = .{ .a = a, .context = context, .content_root = .parser_output, .native_body_language = "zh" };
+    renderer.context.citations = prepared.citations;
+    renderer.context.poem_phase = prepared.poem_phase;
+    renderer.context.external_links_prepared = true;
+    var host: NativeArticleHost = .{ .renderer = &renderer, .source = prepared.missing, .title = "mouse", .language_code = "zh",
+        .active_source = prepared.missing, .active_snapshot = NativeArticleHost.snapshot(prepared.missing),
+        .active_whole_page = true, .native_paragraph_css_subjects = true };
+    renderer.native_article_host = &host;
+    const blocks = try renderer.renderBodyWithHeadingOffsets(prepared.missing);
+    try std.testing.expectEqual(@as(usize, 1), blocks.len);
+    const block = blocks[0];
+    try std.testing.expect(block.kind == .definition);
+    try std.testing.expectEqualStrings("#", block.list_path);
+    try std.testing.expectEqualStrings("1", block.number);
+    var frames: usize = 0;
+    for (block.spans) |span| if (span.inline_box_group) |group| {
+        if (group.padding.left.value != 15) continue;
+        frames += 1;
+        try std.testing.expect(span.background == null and group.spans.len == 1);
+        try std.testing.expectEqualStrings("#edffff", group.spans[0].background.?);
+        const painted = group.spans[0].inline_box_group orelse return error.TestUnexpectedResult;
+        var links: usize = 0;
+        var labels: usize = 0;
+        for (painted.spans) |child| {
+            if (child.kind == .link) links += 1;
+            if (child.inline_box_group) |box| if (box.border.bottom == .dotted) {
+                try std.testing.expectEqualStrings("Cantonese", child.tooltip.?);
+                try std.testing.expectEqualStrings("c", box.spans[0].text);
+                try std.testing.expect(box.spans[0].flags.italic);
+                labels += 1;
+            };
+        }
+        try std.testing.expect(links == 4 and labels == 2);
+    };
+    try std.testing.expectEqual(@as(usize, 1), frames);
+    const stored = try FormattingScopeTest.encode(a, &renderer, blocks);
+    const codec = @import("blob_encoder").presentation_codec;
+    const encoded = try codec.encodeAlloc(a, stored);
+    const decoded = try codec.decodeAlloc(a, encoded, stored.entry.title, .language, .{ .heading = stored.entry.language.?, .code = stored.entry.language_code });
+    try std.testing.expectEqualDeep(stored, decoded);
+    try std.testing.expect(prepared.missing.unknown and renderer.static_numbered_quotes == null and renderer.static_numbered_definition == null);
+}
+
+test "static inline decoration accepts only authored span siblings under the operation's paired wiki bold" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const raw: MissingText = .untracked("'''<span class='Arab'>one</span>.<span>two</span>'''");
+    try std.testing.expect(Renderer.inlineBoxQuotedSpanSiblings(raw.bytes[3 .. raw.bytes.len - 3]));
+    for ([_][]const u8{ "<div><span>x</span></div>", "<span>x", "<span><i>x</i></span>",
+        "<span>x</span>[[a]]", "<span>x</span>\n<span>y</span>", "<span>x</span>''" }) |interior|
+        try std.testing.expect(!Renderer.inlineBoxQuotedSpanSiblings(interior));
+    var map: QuoteSourceMap = .{};
+    defer map.deinit(a);
+    const quoted = try normalizeWikiQuotesPreparedMappedWithMissing(a, raw, 0, false, .{}, null, &map);
+    defer a.free(quoted.bytes);
+    try std.testing.expect(Renderer.inlineBoxPairedBoldMap(&map, raw, quoted));
+    const detached = try a.dupe(u8, quoted.bytes);
+    defer a.free(detached);
+    try std.testing.expect(!Renderer.inlineBoxPairedBoldMap(&map, raw, .untracked(detached)));
+    var unknown = raw;
+    unknown.unknown = true;
+    try std.testing.expect(!Renderer.inlineBoxPairedBoldMap(&map, unknown, quoted));
+    map.generated.items[1].quote_start -= 1;
+    try std.testing.expect(!Renderer.inlineBoxPairedBoldMap(&map, raw, quoted));
 }
