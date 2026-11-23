@@ -5953,13 +5953,18 @@ test "latest registered media epoch refuses legacy mismatched registration conte
 }
 
 const Wmf4EpochTestSource = struct {
+    // The d191 source registers only the four revisions captured by the ET replay.
+    // Earlier epochs keep their original complete set in this compatibility test.
+    fn revision(core: []const u8, index: usize) []const u8 {
+        return if (equal(core, d191_core)) mediaVariant(core).?[index] else wmf4_media_extensions[index][1];
+    }
     fn response(a: A, bytes: []const u8, core: []const u8) ![]const u8 {
         var value = try std.json.parseFromSliceLeaky(Value, a, bytes, .{ .allocate = .alloc_always });
         const query = value.object.getPtr("query").?;
         try query.object.getPtr("general").?.object.put(a, "git-hash", .{ .string = core });
         for (query.object.getPtr("extensions").?.array.items) |*extension| {
-            for (wmf4_media_extensions) |pair| if (equal(try string(extension.*, "name"), pair[0])) {
-                try extension.object.put(a, "vcs-version", .{ .string = pair[1] });
+            for (wmf4_media_extensions, 0..) |pair, i| if (equal(try string(extension.*, "name"), pair[0])) {
+                try extension.object.put(a, "vcs-version", .{ .string = revision(core, i) });
             };
         }
         return std.json.Stringify.valueAlloc(a, value, .{});
@@ -5969,7 +5974,7 @@ const Wmf4EpochTestSource = struct {
         const site = if (new_anchor) try response(a, input.site, core) else input.site;
         if (new_anchor) {
             doc.core_revision = core;
-            for (wmf4_media_extensions) |pair| try doc.source_profile.object.getPtr("media_extensions").?.object.put(a, pair[0], .{ .string = pair[1] });
+            for (wmf4_media_extensions, 0..) |pair, i| try doc.source_profile.object.getPtr("media_extensions").?.object.put(a, pair[0], .{ .string = revision(core, i) });
             var hash: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(site, &hash, .{});
             try doc.source_profile.object.put(a, "site_raw_sha256", .{ .string = try a.dupe(u8, &std.fmt.bytesToHex(hash, .lower)) });
         }

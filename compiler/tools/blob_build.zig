@@ -29115,7 +29115,7 @@ test "normal Writer retained VI dau preserves interrupted citation literal compl
     var images = try namespace_registry.image_options.Registry.init(a, @embedFile("testdata/vi-dau100/image-options.tsv"), ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256, digest); defer images.deinit();
     const css = @embedFile("testdata/vi-dau100/common.css");
     try F.hash(css, "35aa66753ce277ec32a63c12a6d85b9346ca0bf793dc7037e4f99cadc3dfb39a");
-    var styles = try encoder.table_style_profile.parseAlloc(a, css); defer styles.deinit();
+    var styles = try encoder.table_style_profile.parseForTargetAlloc(a, css, .screen); defer styles.deinit();
     var registry = language_registry.Registry.empty(a); defer registry.deinit();
     try registry.addTsv(@embedFile("testdata/vi-dau100/language-registry.tsv"));
     try registry.trustAutonymSnapshot(@embedFile("testdata/vi-dau100/language-names.tsv"), ns.wiki, ns.dump_date, ns.content_language);
@@ -40261,7 +40261,7 @@ test "normal Writer retained VI istoricheskij preserves full display table examp
     var images = try namespace_registry.image_options.Registry.init(a, @embedFile("testdata/vi-istoricheskij129/image-options.tsv"), ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256, behavior_sha); defer images.deinit();
     const css = @embedFile("testdata/vi-istoricheskij129/common.css");
     try F.hash(css, "35aa66753ce277ec32a63c12a6d85b9346ca0bf793dc7037e4f99cadc3dfb39a");
-    var styles = try encoder.table_style_profile.parseAlloc(a, css); defer styles.deinit();
+    var styles = try encoder.table_style_profile.parseForTargetAlloc(a, css, .screen); defer styles.deinit();
     const registry_source = @embedFile("testdata/vi-istoricheskij129/language-registry.tsv");
     try F.hash(registry_source, "df8550b607be9a7a6b3ef964defa941fc0f56040a323f534f2b8a7053258ea9f");
     var registry = language_registry.Registry.empty(a); defer registry.deinit(); try registry.addTsv(registry_source);
@@ -42216,7 +42216,7 @@ test "normal Writer retained VI osada preserves separated malformed braces full 
     var images = try namespace_registry.image_options.Registry.init(a, @embedFile("testdata/vi-istoricheskij129/image-options.tsv"), ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256, behavior_sha); defer images.deinit();
     const css = @embedFile("testdata/vi-istoricheskij129/common.css");
     try F.hash(css, "35aa66753ce277ec32a63c12a6d85b9346ca0bf793dc7037e4f99cadc3dfb39a");
-    var styles = try encoder.table_style_profile.parseAlloc(a, css); defer styles.deinit();
+    var styles = try encoder.table_style_profile.parseForTargetAlloc(a, css, .screen); defer styles.deinit();
     const registry_source = @embedFile("testdata/vi-istoricheskij129/language-registry.tsv");
     try F.hash(registry_source, "df8550b607be9a7a6b3ef964defa941fc0f56040a323f534f2b8a7053258ea9f");
     var registry = language_registry.Registry.empty(a); defer registry.deinit(); try registry.addTsv(registry_source);
@@ -47261,7 +47261,7 @@ test "normal Writer retained VI Wikipedia preserves plain piped Figure caption f
     var images = try namespace_registry.image_options.Registry.init(a, @embedFile("testdata/vi-dau100/image-options.tsv"), ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256, digest); defer images.deinit();
     const css = @embedFile("testdata/vi-dau100/common.css");
     try F.hash(css, "35aa66753ce277ec32a63c12a6d85b9346ca0bf793dc7037e4f99cadc3dfb39a");
-    var styles = try encoder.table_style_profile.parseAlloc(a, css); defer styles.deinit();
+    var styles = try encoder.table_style_profile.parseForTargetAlloc(a, css, .screen); defer styles.deinit();
     const metadata_root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/vi-wikipedia227-metadata", .{tmp.sub_path});
     try std.Io.Dir.cwd().createDirPath(io, try std.fs.path.join(a, &.{metadata_root, "modules"}));
     const metadata_files = .{
@@ -47799,7 +47799,7 @@ const ViFlatArgumentsSaved241 = struct {
         var images = try namespace_registry.image_options.Registry.init(a, @embedFile("testdata/vi-dau100/image-options.tsv"), ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256, digest); defer images.deinit();
         const css = @embedFile("testdata/vi-dau100/common.css");
         try std.testing.expectEqualStrings("35aa66753ce277ec32a63c12a6d85b9346ca0bf793dc7037e4f99cadc3dfb39a", &hash(css));
-        var styles = try encoder.table_style_profile.parseAlloc(a, css); defer styles.deinit();
+        var styles = try encoder.table_style_profile.parseForTargetAlloc(a, css, .screen); defer styles.deinit();
         const metadata_root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/vi-flat-args-metadata", .{tmp.sub_path});
         try std.Io.Dir.cwd().createDirPath(io, try std.fs.path.join(a, &.{metadata_root, "modules"}));
         const metadata_files = .{
@@ -48197,7 +48197,7 @@ test "normal Writer retained VI beech bold local Figure caption preserves both o
     var images = try namespace_registry.image_options.Registry.init(a, @embedFile("testdata/vi-dau100/image-options.tsv"), ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256, digest); defer images.deinit();
     const css = @embedFile("testdata/vi-dau100/common.css");
     try F.hash(css, "35aa66753ce277ec32a63c12a6d85b9346ca0bf793dc7037e4f99cadc3dfb39a");
-    var styles = try encoder.table_style_profile.parseAlloc(a, css); defer styles.deinit();
+    var styles = try encoder.table_style_profile.parseForTargetAlloc(a, css, .screen); defer styles.deinit();
     const metadata_root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/vi-beech22-metadata", .{tmp.sub_path});
     try std.Io.Dir.cwd().createDirPath(io, try std.fs.path.join(a, &.{metadata_root, "modules"}));
     const metadata_files = .{
@@ -48448,7 +48448,7 @@ test "normal Writer retained VI frame plain NOWIKI Figure caption preserves full
     var images = try namespace_registry.image_options.Registry.init(a, @embedFile("testdata/vi-dau100/image-options.tsv"), ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256, digest); defer images.deinit();
     const css = @embedFile("testdata/vi-dau100/common.css");
     try F.hash(css, "35aa66753ce277ec32a63c12a6d85b9346ca0bf793dc7037e4f99cadc3dfb39a");
-    var styles = try encoder.table_style_profile.parseAlloc(a, css); defer styles.deinit();
+    var styles = try encoder.table_style_profile.parseForTargetAlloc(a, css, .screen); defer styles.deinit();
     const metadata_root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/vi-frame250-metadata", .{tmp.sub_path});
     try std.Io.Dir.cwd().createDirPath(io, try std.fs.path.join(a, &.{metadata_root, "modules"}));
     const metadata_files = .{
@@ -51641,7 +51641,7 @@ test "normal Writer retained VI Asia preserves three Figures two audio files own
     var images = try namespace_registry.image_options.Registry.init(a, @embedFile("testdata/vi-dau100/image-options.tsv"), ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256, digest); defer images.deinit();
     const css = @embedFile("testdata/vi-dau100/common.css");
     try F.hash(css, "35aa66753ce277ec32a63c12a6d85b9346ca0bf793dc7037e4f99cadc3dfb39a");
-    var styles = try encoder.table_style_profile.parseAlloc(a, css); defer styles.deinit();
+    var styles = try encoder.table_style_profile.parseForTargetAlloc(a, css, .screen); defer styles.deinit();
     const metadata_root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/vi-asia7-metadata", .{tmp.sub_path});
     try std.Io.Dir.cwd().createDirPath(io, try std.fs.path.join(a, &.{metadata_root, "modules"}));
     const metadata_files = .{
