@@ -45,6 +45,120 @@ def tool_arguments(command):
     return command[command.index('--')+1:]
 
 
+class StoredSnapshotTests(unittest.TestCase):
+    def test_verified_package_and_nested_siblings_in_private_view(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root/'capture'
+            package = source/'messages'
+            nested = package/'witness'
+            nested.mkdir(parents=True)
+            (source/'capture.complete.json').write_text('{}')
+            payload = b'example\n' * 200
+            digest = hashlib.sha256(payload).hexdigest()
+            (package/'language-fallbacks.tsv.gz').write_bytes(gzip.compress(payload))
+            (nested/'origin.tar.gz').write_bytes(gzip.compress(payload))
+            (nested/'evidence.manifest.json').write_text(json.dumps({'artifacts': {'origin.tar': {'size':len(payload), 'sha256':digest}}}))
+            record = {'language-fallbacks': {'path': 'capture/messages/language-fallbacks.tsv.gz', 'codec':'gzip', 'bytes':len(payload), 'sha256':digest}}
+            with tempfile.TemporaryDirectory(dir=root) as stage:
+                paths, capture = b.materialize_snapshot_selection(root, Path(stage), record, 'capture')
+                self.assertEqual(paths['language-fallbacks'].read_bytes(), payload)
+                self.assertEqual((capture/'messages/witness/origin.tar').read_bytes(), payload)
+                self.assertTrue((capture/'capture.complete.json').samefile(source/'capture.complete.json'))
+            self.assertFalse(Path(stage).exists())
+            self.assertFalse((package/'language-fallbacks.tsv').exists())
+
+    def test_main_validates_before_dispatch_and_releases_decoded_paths(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            edition, date = 'testwiktionary', '20261001'
+            write_test_manifest(root, {'files':[dict(wiki=edition, date=date, name='test.xml.bz2',
+                url=f'https://dumps.wikimedia.org/{edition}/{date}/test.xml.bz2', size=1, sha1='a'*40)]})
+            registry = root/edition/date/'language-registry.tsv'
+            payload = registry.read_bytes()
+            archive = registry.with_suffix('.tsv.gz')
+            archive.write_bytes(gzip.compress(payload))
+            registry.unlink()
+            selection = root/'selection.json'
+            selection.write_text(json.dumps({edition:{'snapshots':{'language-registry':{
+                'path':str(archive.relative_to(root)), 'codec':'gzip', 'bytes':len(payload),
+                'sha256':hashlib.sha256(payload).hexdigest()}}}}))
+            argv = ['build_wiktionaries.py','--downloads',str(root),'--output',str(root/'out'),
+                    '--jobs','1','--threads','1','--snapshot-selection',str(selection)]
+            decoded = []
+            def run(*args, **options):
+                path = options['edition_options'][(edition,date)]['auxiliary_snapshots']['language-registry']
+                self.assertEqual(path.read_bytes(), payload)
+                decoded.append(path)
+                return []
+            with (contextlib.chdir(root), patch.object(sys, 'argv', argv), patch.object(b,'PROJECT',root),
+                  patch.object(b,'safe_worker_budget',return_value=1), patch.object(b,'build_groups',side_effect=run)):
+                b.main()
+            self.assertEqual(len(decoded), 1)
+            self.assertTrue(decoded[0].is_relative_to(root/'.tmp'))
+            self.assertFalse(decoded[0].exists())
+            self.assertFalse(registry.exists())
+
+    def test_zstd_selection_wins_over_raw_and_rejects_second_archive(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            package = root/'package'
+            package.mkdir()
+            raw = package/'language-fallbacks.tsv'
+            raw.write_bytes(b'other validly shaped snapshot')
+            payload = b'authentic selected snapshot'
+            digest = hashlib.sha256(payload).hexdigest()
+            selected = package/'cold.data'
+            selected.write_bytes(zstd.compress(payload))
+            row = {'path':str(selected.relative_to(root)), 'codec':'zstd', 'bytes':len(payload), 'sha256':digest}
+            with tempfile.TemporaryDirectory(dir=root) as temp:
+                paths, _ = b.materialize_snapshot_selection(root, Path(temp), {'language-fallbacks':row}, None)
+                self.assertEqual(paths['language-fallbacks'].read_bytes(), payload)
+                pinned = b.copy_verified_snapshot(paths['language-fallbacks'], Path(temp)/'worker/pinned.tsv', digest)
+                self.assertEqual(pinned.read_bytes(), payload)
+            (package/'language-fallbacks.tsv.gz').write_bytes(gzip.compress(payload))
+            (package/'pair.manifest.json').write_text(json.dumps({'artifacts':{raw.name:{'size':len(payload),'sha256':digest}}}))
+            with tempfile.TemporaryDirectory(dir=root) as temp, self.assertRaisesRegex(ValueError,'Conflicting snapshot providers'):
+                b.materialize_snapshot_selection(root, Path(temp), {'language-fallbacks':row}, None)
+
+    def test_capture_root_is_shallow_and_explicit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            capture = root/'capture'
+            old = capture/'other-generation'
+            old.mkdir(parents=True)
+            (old/'unrelated').write_bytes(b'not selected')
+            (capture/'capture.complete.json').write_text('{}')
+            src = capture/'namespace-registry.tsv'
+            src.write_bytes(b'test')
+            row = {'path':'capture/namespace-registry.tsv','bytes':4,'sha256':b.sha256_file(src)}
+            with tempfile.TemporaryDirectory(dir=root) as temp:
+                with self.assertRaisesRegex(ValueError,'must be explicitly selected'):
+                    b.materialize_snapshot_selection(root, Path(temp), {'namespace-registry':row}, None)
+                _, staged = b.materialize_snapshot_selection(root, Path(temp), {'namespace-registry':row}, 'capture')
+                self.assertFalse((staged/'other-generation').exists())
+                with self.assertRaisesRegex(ValueError,'Invalid snapshot identity'):
+                    b.materialize_snapshot_selection(root, Path(temp), {'namespace-registry':dict(row, bytes=None)}, 'capture')
+
+    def test_corrupt_or_unpinned_payload_cleans_private_view(self):
+        data = b'example bytes'
+        sha = hashlib.sha256(data).hexdigest()
+        for stored, size, digest in [(b'bad',len(data),sha), (gzip.compress(data)[:-3],len(data),sha),
+                                     (gzip.compress(data),len(data)-1,sha), (gzip.compress(data),len(data)+1,sha),
+                                     (gzip.compress(data),len(data),'0'*64)]:
+            with self.subTest(size=size, digest=digest, stored=stored), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                package = root/'package'
+                package.mkdir()
+                (package/'language-fallbacks.tsv.gz').write_bytes(stored)
+                row = {'path':'package/language-fallbacks.tsv.gz','codec':'gzip','bytes':size,'sha256':digest}
+                with self.assertRaises(ValueError):
+                    with tempfile.TemporaryDirectory(dir=root) as stage:
+                        b.materialize_snapshot_selection(root, Path(stage), {'language-fallbacks':row}, None)
+                self.assertFalse(Path(stage).exists())
+                self.assertFalse((package/'language-fallbacks.tsv').exists())
+
+
 class WriterReviewedAliasPreflightTests(unittest.TestCase):
     def test_selected_writer_accepts_healthy_subset_and_rejects_stale_explicit_registry(self):
         with tempfile.TemporaryDirectory() as tmp:

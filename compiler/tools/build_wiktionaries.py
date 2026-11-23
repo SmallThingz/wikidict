@@ -2706,6 +2706,116 @@ def resolve_figure_snapshot_options(root, manifest, selected, downloads, namespa
         return {name:Path(path) for name,path in paths.items()}
 
 
+def materialize_snapshot_selection(workspace, view, selection, capture_root, journal=()):
+    """Create a private package view before ordinary edition resolution and validation."""
+    workspace = workspace.resolve(strict=True)
+
+    def source_path(name):
+        path = workspace / name
+        if '..' in path.parts or not path.is_relative_to(workspace) or path.resolve() != path:
+            raise ValueError(f'Unsafe snapshot storage path: {path}')
+        return path
+
+    def destination(logical):
+        return view / logical.relative_to(workspace)
+
+    providers = {}
+    stored_names = {}
+
+    def declare(source, logical, codec, size, digest):
+        if type(size) is not int or size < 0 or not isinstance(digest, str) or not re.fullmatch('[0-9a-f]{64}', digest):
+            raise ValueError(f'Invalid snapshot identity: {logical}')
+        provider = (source, codec, size, digest)
+        if providers.setdefault(logical, provider) != provider or stored_names.setdefault(source, logical) != logical:
+            raise ValueError(f'Conflicting snapshot providers: {logical}')
+
+    capture = source_path(capture_root) if capture_root else None
+    if capture and not (capture / 'capture.complete.json').is_file():
+        raise ValueError(f'Missing selected capture root: {capture}')
+    directories = {capture} if capture else set()
+    files = set()
+    roles = {}
+    if not isinstance(selection, dict):
+        raise ValueError('Invalid stored snapshot selection')
+    for role, record in selection.items():
+        if not isinstance(record, dict):
+            raise ValueError(f'Invalid stored snapshot role: {role}')
+        if role != 'interwiki-snapshot' and role not in AUXILIARY_SNAPSHOT_NAMES:
+            raise ValueError(f'Unknown snapshot role: {role}')
+        source = source_path(record['path'])
+        if not source.is_file():
+            raise ValueError(f'Missing selected snapshot: {source}')
+        codec = record.get('codec', 'identity')
+        if codec not in ('identity', 'gzip', 'zstd'):
+            raise ValueError(f'Unknown snapshot codec: {codec}')
+        logical = source if codec == 'identity' else source.with_name(
+            'interwiki-map.tsv' if role == 'interwiki-snapshot' else auxiliary_snapshot_filename(role))
+        declare(source, logical, codec, record['bytes'], record['sha256'])
+        roles[role] = destination(logical)
+        files.add(source)
+        if role != 'language-registry':
+            directories.add(source.parent)
+
+    def fail_walk(error):
+        raise error
+
+    for directory in directories:
+        if view.is_relative_to(directory):
+            raise ValueError('Snapshot package contains its staging directory')
+        if (directory / 'capture.complete.json').is_file() and directory != capture:
+            raise ValueError(f'Edition capture root must be explicitly selected: {directory}')
+        for folder, children, names in os.walk(directory, onerror=fail_walk):
+            folder = Path(folder)
+            if folder == capture:
+                children.clear()  # The selected roles identify the nested packages used for this build.
+            elif any((folder / child).is_symlink() for child in children):
+                raise ValueError(f'Unsafe snapshot package directory: {folder}')
+            for name in names:
+                source = folder / name
+                if source.is_symlink() or not source.is_file():
+                    raise ValueError(f'Unsafe snapshot package member: {source}')
+                files.add(source)
+    for row in journal:
+        source = workspace / row['path']
+        if source not in files:
+            continue
+        logical = source_path(row['original'])
+        if source != logical.with_name(logical.name + '.gz'):
+            raise ValueError(f'Invalid compressed package member: {source}')
+        declare(source, logical, 'gzip', row['raw_bytes'], row['raw_sha256'])
+    for manifest in files:
+        if not manifest.name.endswith('.manifest.json'):
+            continue
+        record = read_small_json(manifest, 64 * 1024 * 1024)
+        if not isinstance(record, dict) or not isinstance(record.get('artifacts', {}), dict):
+            raise ValueError(f'Invalid stored package manifest: {manifest}')
+        artifacts = record.get('artifacts', {})
+        for name, row in artifacts.items():
+            logical = manifest.parent / name
+            if Path(name).name != name or not isinstance(row, dict):
+                continue
+            archive = logical.with_name(name + '.gz')
+            size = row.get('bytes', row.get('size'))
+            if archive in files and type(size) is int and 'sha256' in row:
+                declare(archive, logical, 'gzip', size, row['sha256'])
+
+    # Decide every logical name before touching the view. A raw sibling left by
+    # a previous run must never take precedence over a selected encoded source.
+    for source in files - stored_names.keys():
+        providers.setdefault(source, (source, 'identity', None, None))
+    for logical, (source, codec, size, digest) in providers.items():
+        target = destination(logical)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if codec == 'identity':
+            os.link(source, target)
+            if size is not None and (target.stat().st_size != size or sha256_file(target) != digest):
+                raise ValueError(f'Selected snapshot differs: {source}')
+        else:
+            with target.open('xb') as output:
+                copy_decoded_snapshot(source, output, size, digest, codec)
+    return roles, destination(capture) if capture else None
+
+
 def resolve_edition_snapshot_options(manifest, groups, downloads, overrides=None, *, workspace=None, metadata_network='offline', figure_reuse_batches=()):
     """Resolve each edition independently; never reuse another edition's captures."""
     workspace=PROJECT if workspace is None else workspace
@@ -9379,22 +9489,33 @@ def open_fallback_report(path, mode):
     return path.open(mode, **options)
 
 
-def require_decoded_fallback_report(path, expected):
+def copy_decoded_snapshot(path, output, size, digest, codec='gzip', *, label='snapshot'):
+    if type(size) is not int or size < 0 or not isinstance(digest, str) or not re.fullmatch('[0-9a-f]{64}', digest):
+        raise ValueError(f'Invalid decoded {label} identity')
     before = index_identity(path.stat())
-    digest = hashlib.sha256()
-    size = 0
+    hashed = hashlib.sha256()
+    total = 0
+    if codec == 'zstd' and zstd is None:
+        raise ValueError('Zstandard support is required for this snapshot')
+    opener = gzip.open if codec == 'gzip' else zstd.open
+    codec_errors = (OSError, EOFError, zlib.error) + ((zstd.ZstdError,) if codec == 'zstd' else ())
     try:
-        with gzip.open(path, 'rb') as stream:
-            while block := stream.read(min(1024 * 1024, expected['size'] - size + 1)):
-                size += len(block)
-                if size > expected['size']:
-                    raise ValueError('Decoded fallback report exceeds its sealed size')
-                digest.update(block)
-    except (OSError, EOFError, zlib.error) as error:
-        raise ValueError('Invalid gzip fallback report') from error
-    if (size != expected['size'] or digest.hexdigest() != expected['sha256']
-            or index_identity(path.stat()) != before):
-        raise ValueError('Decoded fallback report differs from its sealed bytes')
+        with opener(path, 'rb') as stream:
+            while block := stream.read(min(1024 * 1024, size - total + 1)):
+                total += len(block)
+                if total > size:
+                    raise ValueError(f'Decoded {label} exceeds its sealed size')
+                hashed.update(block)
+                if output is not None:
+                    output.write(block)
+    except codec_errors as error:
+        raise ValueError(f'Invalid {codec} {label}') from error
+    if total != size or hashed.hexdigest() != digest or index_identity(path.stat()) != before:
+        raise ValueError(f'Decoded {label} differs from its sealed bytes')
+
+
+def require_decoded_fallback_report(path, expected):
+    copy_decoded_snapshot(path, None, expected['size'], expected['sha256'], label='fallback report')
 
 
 def compress_publication_fallback(root, expected):
@@ -10447,6 +10568,8 @@ def main():
     p.add_argument('--input-manifest-sha256',help='Required SHA256 for --input-manifest')
     p.add_argument('--metadata-network',choices=('offline','allow'),default='offline',
                    help='Reuse verified metadata by default; allow explicitly prepares missing shared Figure inputs from selected official sources')
+    p.add_argument('--snapshot-selection', type=Path, help='Stage one edition from its stored snapshot path, codec, decoded size and SHA-256 records')
+    p.add_argument('--snapshot-storage-journal', type=Path, help='Optional JSONL of additional compressed sibling paths and decoded identities')
     p.add_argument('--exact-snapshot-selection',action='store_true',
                    help='Require the fully validated snapshot roles and paths to equal the explicit selection')
     p.add_argument('--figure-reuse-batch',type=Path,action='append',default=[],
@@ -10459,6 +10582,11 @@ def main():
         p.add_argument('--'+name+'-snapshot',type=Path,
                        help='Optional '+name+' snapshot; its SHA-256 is part of the shard identity')
     a=p.parse_args()
+    with ExitStack() as resources:
+        return run_main(p, a, resources)
+
+
+def run_main(p, a, resources):
     try:selected_shard_pages(a.shard_pages)
     except ValueError as error:p.error(str(error))
     try: workspace=workspace_root(json.loads(a.workspace_root_spec) if a.workspace_root_spec is not None else None)
@@ -10533,6 +10661,32 @@ def main():
     auxiliary={name:getattr(a,name.replace('-','_')+'_snapshot').resolve()
                for name in AUXILIARY_SNAPSHOT_NAMES
                if getattr(a,name.replace('-','_')+'_snapshot') is not None}
+    if a.snapshot_storage_journal and not a.snapshot_selection:
+        p.error('--snapshot-storage-journal requires --snapshot-selection')
+    if a.snapshot_selection:
+        if len(groups) != 1 or auxiliary or a.interwiki_map_snapshot:
+            p.error('Stored snapshots require one edition and a single selection')
+        edition, date = next(iter(groups))
+        try:
+            selection = read_small_json(a.snapshot_selection, 64 * 1024 * 1024)[edition]
+            if not isinstance(selection, dict):
+                raise ValueError('Invalid edition snapshot selection')
+            capture = selection.get('capture_root', manifest.get('auxiliary_capture_roots', {}).get(edition))
+            scratch = workspace / '.tmp'
+            if scratch.is_symlink():
+                raise ValueError('Unsafe snapshot staging root')
+            scratch.mkdir(exist_ok=True)
+            temporary = resources.enter_context(tempfile.TemporaryDirectory(prefix='snapshot-input-', dir=scratch))
+            with ExitStack() as readers:
+                rows = (map(json.loads, readers.enter_context(a.snapshot_storage_journal.open()))
+                        if a.snapshot_storage_journal else ())
+                auxiliary, staged = materialize_snapshot_selection(workspace, Path(temporary),
+                    selection['snapshots'], capture, rows)
+            a.interwiki_map_snapshot = auxiliary.pop('interwiki-snapshot', None)
+            if staged is not None:
+                manifest = dict(manifest, auxiliary_capture_roots={edition: str(staged.relative_to(workspace))})
+        except (ValueError, OSError, TypeError, KeyError) as error:
+            p.error(str(error))
     if (a.interwiki_map_snapshot is not None or auxiliary) and len(groups)!=1:
         p.error('Auxiliary snapshots require exactly one edition')
     if a.staged_input_root is not None and len(groups)!=1:
