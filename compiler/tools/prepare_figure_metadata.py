@@ -1053,7 +1053,7 @@ class _HashedGzipInput:
         return block
 
 
-def stream_values(path, schema, *, allow_encoded=True, identity_out=None, record_offsets=None, _encoded_record=None, _gzip_size=None, _storage_out=None):
+def stream_values(path, schema, *, allow_encoded=True, identity_out=None, record_offsets=None, _encoded_record=None, _gzip_size=None, _storage_out=None, _verified_projection=None):
     """Yield the header and exact declared records with bounded transient input."""
     logical = Path(path)
     path = _physical_role(logical)
@@ -1135,6 +1135,9 @@ def stream_values(path, schema, *, allow_encoded=True, identity_out=None, record
         # Publish only after complete iteration, exact EOF and both identities.
         # Closing or failing this generator cannot leave a success identity.
         identity_out.update(size=size, sha256=sha.hexdigest())
+        if _verified_projection is not None and path != logical and schema == FILES_STREAM_SCHEMA:
+            _verified_projection[logical.name] = (path.resolve(strict=True), before,
+                {'bytes': size, 'sha256': identity_out['sha256']})
         if _storage_out is not None:
             if framed:
                 _storage_out.update(size=before[2], sha256=compressed_sha.hexdigest())
@@ -1290,11 +1293,11 @@ class _ReprojectionRecords:
         return document
 
 
-def verify_stream_document(projection_path, raw_path, namespace_raw, wiki, date, site_raw, *, regenerate_projection=None, _reprojection_records=None, _http_replay=None, _gzip_size=None, _storage_out=None):
+def verify_stream_document(projection_path, raw_path, namespace_raw, wiki, date, site_raw, *, regenerate_projection=None, _reprojection_records=None, _http_replay=None, _gzip_size=None, _storage_out=None, _verified_projection=None):
     if _reprojection_records is not None and (type(_reprojection_records) is not _ReprojectionRecords or regenerate_projection is not None):
         raise ValueError('Invalid private reprojection record reuse')
     if regenerate_projection is None:
-        values = stream_values(projection_path, FILES_STREAM_SCHEMA)
+        values = stream_values(projection_path, FILES_STREAM_SCHEMA, _verified_projection=_verified_projection)
         header = next(values)
     else:
         request = regenerate_projection
@@ -2525,11 +2528,11 @@ def _figure_capture_manifest(root, require_complete=True):
     return manifest_raw, manifest
 
 
-def _authenticate_figure_capture_files(root, manifest, inventory_cache, *, _verified_raw=None):
+def _authenticate_figure_capture_files(root, manifest, inventory_cache, *, _verified_raw=None, _verified_projection=None):
     directory_stamp = complete_capture_directory_stamp(root)
     members, member_directories = capture_member_paths(root, include_markers=True)
     before = {path: evidence.stamp(path) for path in members.values()}
-    artifacts = payload(root, _verified_raw=_verified_raw, _expected=manifest.get('artifacts'))
+    artifacts = payload(root, _verified_raw=_verified_raw, _expected=manifest.get('artifacts'), _written=_verified_projection)
     if manifest.get('artifacts') != artifacts:
         raise ValueError('Figure capture differs from source replay')
     # Each output is already fully hashed in this invocation. Bind
@@ -2588,7 +2591,7 @@ def verify(root, require_complete=True, *, retained_cache=None, inventory_cache=
             manifest.get('coverage') != coverage):
         raise ValueError('Figure capture differs from source replay')
     _authenticate_figure_capture_files(root, manifest, inventory_cache,
-        _verified_raw=raw_payload.get('proof'))
+        _verified_raw=raw_payload.get('proof'), _verified_projection=raw_payload.get('projection'))
     if regenerate_projection is not None and os.path.lexists(root / COMPLETE):
         raise ValueError('Figure capture completed during projection regeneration')
     if _raw_index_out is not None:
@@ -3418,10 +3421,13 @@ def replay_stream_capture(root, wiki, date, defaults, namespace, general, *, ret
            isinstance(early_plan, dict) and early_plan.get('metadata_mode', 'full') == 'full' else None)
     if compressed and (not isinstance(early_plan, dict) or early_plan.get('metadata_mode', 'full') not in ('full', MATERIALIZED_HTTP_MODE)):
         raise ValueError('Compressed Figure source requires a full replay plan')
+    verified_projection = {}
     try:
         options = {} if http_replay is None else {'_http_replay': http_replay}
         if compressed:
             options.update(_gzip_size=gzip_size, _storage_out=storage)
+        if _raw_payload_out is not None and regenerate_projection is None:
+            options['_verified_projection'] = verified_projection
         projection = verify_stream_document(root / ROLES['figure-sizing'], raw_path,
                                             namespace, wiki, date, site_raw, **generation, **options)
         if http_replay is not None:
@@ -3683,6 +3689,8 @@ def replay_stream_capture(root, wiki, date, defaults, namespace, general, *, ret
         # semantics pass; partial/failed replay cannot mint this proof.
         if storage:
             _raw_payload_out['storage'] = storage
+        if verified_projection:
+            _raw_payload_out['projection'] = verified_projection
         _raw_payload_out['proof'] = (raw_before[0], raw_before[1],
             {'bytes': replay_identity['size'], 'sha256': replay_identity['sha256']})
     if _inventory_sources_out is not None:

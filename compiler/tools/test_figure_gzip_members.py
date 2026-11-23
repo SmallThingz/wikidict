@@ -116,6 +116,44 @@ class IndexedArchiveTests(unittest.TestCase):
             finally:
                 path.write_bytes(original)
 
+    def test_completed_compressed_projection_identity_and_mutations(self):
+        fixture, args, _, original = CompleteSelectionDocumentTests.fresh(self)
+        root = args.output
+        name = figure.ROLES['figure-sizing']
+        plain = root / name
+        logical = plain.read_bytes()
+        stored = plain.with_suffix(plain.suffix + '.gz')
+        encoded = gzip.compress(logical, mtime=0)
+        stored.write_bytes(encoded)
+        plain.unlink()
+        authenticate = figure._authenticate_figure_capture_files
+        def proof(*values, **options):
+            self.assertEqual(options['_verified_projection'], {name: (stored.resolve(), figure.evidence.stamp(stored),
+                {'bytes':len(logical), 'sha256':hashlib.sha256(logical).hexdigest()})})
+            return authenticate(*values, **options)
+        with patch.object(figure, '_authenticate_figure_capture_files', side_effect=proof), \
+                patch.object(figure, '_role_identity', side_effect=AssertionError('projection was reinflated')):
+            self.assertEqual(figure.verify(root), original)
+        for mutation in ('inode', 'same-sized content'):
+            def change(*values, **options):
+                if mutation == 'inode':
+                    replacement = fixture.root / 'same-bytes.gz'
+                    replacement.write_bytes(encoded)
+                    replacement.replace(stored)
+                else:
+                    stored.write_bytes(encoded[:-1] + bytes([encoded[-1] ^ 1]))
+                return authenticate(*values, **options)
+            with self.subTest(mutation=mutation), patch.object(figure, '_authenticate_figure_capture_files', side_effect=change):
+                with self.assertRaisesRegex(ValueError, 'changed before content authentication'):
+                    figure.verify(root)
+            stored.write_bytes(encoded)
+        for mutation, data in [('truncated', encoded[:-4]), ('corrupt CRC', encoded[:-8] + bytes([encoded[-8] ^ 1]) + encoded[-7:])]:
+            stored.write_bytes(data)
+            with self.subTest(mutation=mutation), patch.object(figure, '_authenticate_figure_capture_files') as final:
+                with self.assertRaises((EOFError, gzip.BadGzipFile, ValueError)):
+                    figure.verify(root)
+                final.assert_not_called()
+
     def test_parent_append_materialize(self):
         fixture, args, observation, original = CompleteSelectionDocumentTests.fresh(self)
         parent = args.output
