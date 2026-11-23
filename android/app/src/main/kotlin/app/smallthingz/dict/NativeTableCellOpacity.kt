@@ -42,7 +42,8 @@ internal fun nativeCellOpacityTableShape(table: Table): Boolean {
         table.style?.cornerRadii == null && table.blockViewport == null && table.floatViewport == null &&
         table.rowsHiddenMaxWidthPx == null && table.caption.isEmpty() && table.captionBlocks == null &&
         table.rows.all { row -> row.all { cell ->
-            cell.blocks == null && cell.nestedTable == null && cell.colspan == 1 && cell.rowspan == 1 &&
+            cell.blocks == null && cell.nestedTable == null && cell.rowspan == 1 &&
+                (cell.colspan == 1 || !cell.hasNativeCellOpacity()) &&
                 cell.spans.all { span(it, false, !cell.hasNativeCellOpacity()) }
         } }
 }
@@ -124,7 +125,7 @@ internal class NativeCellOpacityTable(val table: Table) {
             if (!grid.opacityEncloses(border) || !border.opacityEncloses(paint)) return
             NativeCellOpacityPlacement(border, boxTops[index], paint)
         }
-        // The original validated 1x1 grid and tablePixelLayout own disjoint row /
+        // The original validated grid and tablePixelLayout own disjoint row /
         // column intervals; do not rebuild or pairwise rescan that same grid.
         placements = actual
     }

@@ -2220,7 +2220,8 @@ private class NativeRubyCompiler(private val original: Spanned, private val pain
             val descendants = prepared.projection.ranges.filter { it.path.startsWith(range.path + "/") }
             val nested = descendants.filter { it.role == RubyTextRole.BoxGroup }
             val pitchChildren = nativeInlineBoxPitchChildren(checkNotNull(range.span))
-            val unsupportedNesting = if (pitchChildren == null)
+            val simpleTree = nativeInlineSimplePaintTree(checkNotNull(range.span))
+            val unsupportedNesting = if (simpleTree) false else if (pitchChildren == null)
                 nested.size > 1 || nested.any { it.start <= range.start || it.end >= range.end }
             else nested.size != pitchChildren.size || nested.any { child ->
                 child.start < range.start || child.end > range.end || child.end - child.start != 1 ||
@@ -2233,7 +2234,7 @@ private class NativeRubyCompiler(private val original: Spanned, private val pain
                 throw UnsupportedFloatLayout("Nested inline decoration cannot inherit a structural action or ruby owner")
             if (descendants.any { it.role in setOf(RubyTextRole.Owner, RubyTextRole.PaddingGroup, RubyTextRole.ActionGroup) } ||
                 unsupportedNesting ||
-                nested.isNotEmpty() && descendants.any { child -> child.span?.let {
+                !simpleTree && nested.isNotEmpty() && descendants.any { child -> child.span?.let {
                     it.kind != "text" || it.usesInlineDirectionIsolate() || it.image != null || it.citationMarker != null
                 } == true })
                 throw UnsupportedFloatLayout("Inline box needs ordinary children or one strict interior static decoration")
@@ -2246,7 +2247,7 @@ private class NativeRubyCompiler(private val original: Spanned, private val pain
             throw UnsupportedFloatLayout("Inline action baseline exceeds native coordinates")
         val rtl = resolveDirection(format.sourceDirection, directText(prepared, range), enclosingRtl)
         if (box != null && parent?.format?.box != null &&
-            (parent.rtl || rtl || !(nativeInlineBoxNestedPair(
+            (parent.rtl || rtl || !(nativeInlineSimplePaintTree(parent.format.box.owner.span) || nativeInlineBoxNestedPair(
                 NativeInlineBoxSpan(parent.format, parent.shift, null), NativeInlineBoxSpan(format, shift, null)) ||
                 nativeInlineBoxPitchPair(NativeInlineBoxSpan(parent.format, parent.shift, null),
                     NativeInlineBoxSpan(format, shift, null)))))
@@ -2292,7 +2293,7 @@ private class NativeRubyCompiler(private val original: Spanned, private val pain
                 }
             }
         }
-        if (nestedDecoration) {
+        if (nestedDecoration && !nativeInlineSimplePaintTree(checkNotNull(range.span))) {
             val primary = NativePrimaryFontMetrics.from(format.paint)
             if (rtl || shift != 0f || styled.getSpans(0, styled.length, NativeAuthoredBaselineShift::class.java).any { it.shift != 0f } ||
                 styled.getSpans(0, styled.length, NativeAuthoredUnderline::class.java).isNotEmpty() ||

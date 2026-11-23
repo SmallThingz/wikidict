@@ -40,7 +40,8 @@ internal class NativeInlineBoxGeometry(
     private val fragments: List<Fragment>
     private val nestingParents: List<Int>
     private val spanIndices = this.spans.withIndex().associate { it.value to it.index }
-    private val nestedChildren: Map<Int, List<Int>>
+    private val sourceDepth: List<Int>
+    private val nestedDescendants: Map<Int, List<Int>>
     private val pitchOwners: Set<Int>
     private val rounded: Map<Fragment, NativeInlineBoxCurvePaint>
     private val cursors = nativeInlineRanges(raw.nativeRubyShapingSource, NativeAuthoredCursor::class.java)
@@ -94,8 +95,18 @@ internal class NativeInlineBoxGeometry(
                 }) throw UnsupportedFloatLayout("Inline box body contains unsupported native controls")
         }
         nestingParents = nativeInlineBoxNesting(this.spans) { range -> ownerRtl(range, firstLine(range)) }
-        nestedChildren = nestingParents.withIndex().filter { it.value >= 0 }
-            .groupBy({ it.value }, { it.index })
+        val descendants = mutableMapOf<Int, MutableList<Int>>()
+        sourceDepth = nestingParents.indices.map { child ->
+            var depth = 0
+            var ancestor = nestingParents[child]
+            while (ancestor >= 0) {
+                descendants.getOrPut(ancestor) { mutableListOf() }.add(child)
+                depth++
+                ancestor = nestingParents[ancestor]
+            }
+            depth
+        }
+        nestedDescendants = descendants
         pitchOwners = this.spans.indices.filter {
             nativeInlineBoxPitchChildren(this.spans[it].value.box.owner.span) != null
         }.toSet()
@@ -115,7 +126,7 @@ internal class NativeInlineBoxGeometry(
             for (owner in active) {
                 val captured = capture.piecesForRange(maxOf(start, owner.start), minOf(end, owner.end))
                 val ownerIndex = spanIndices.getValue(owner)
-                if ((nestingParents[ownerIndex] >= 0 || nestedChildren.containsKey(ownerIndex)) && captured.any { it.rtl })
+                if ((nestingParents[ownerIndex] >= 0 || nestedDescendants.containsKey(ownerIndex)) && captured.any { it.rtl })
                     throw UnsupportedFloatLayout("Nested inline decoration requires actual LTR native runs")
                 val parts = visual(captured)
                 if (parts.isEmpty()) throw UnsupportedFloatLayout("Inline box zero-advance fragment allocation is unavailable")
@@ -141,7 +152,7 @@ internal class NativeInlineBoxGeometry(
             // padding first; nested ends allocate the child border before outer padding.
             val orderedEdges = edges.sortedWith(compareBy({ it.increment.boundary.x },
                 { if (it.leftSide) 1 else 0 }, {
-                    val depth = if (nestingParents[spanIndices.getValue(it.owner)] < 0) 0 else 1
+                    val depth = sourceDepth[spanIndices.getValue(it.owner)]
                     if (it.leftSide) depth else -depth
                 }))
             val added = orderedEdges.fold(0.0) { sum, item -> sum + item.increment.pixels }
@@ -172,7 +183,7 @@ internal class NativeInlineBoxGeometry(
                 val bottom = coordinate(baseline.toDouble() + primary.descent)
                 val ownPieces = mapped.piecesForRange(maxOf(start, owner.start), minOf(end, owner.end))
                 val ownerIndex = spanIndices.getValue(owner)
-                val childIndices = nestedChildren[ownerIndex].orEmpty()
+                val childIndices = nestedDescendants[ownerIndex].orEmpty()
                 // Child edges are real in-flow allocation, including at a wrapped row endpoint.
                 // They extend only the ancestor decoration; source glyph/caret pieces stay exact.
                 val childEdges = if (childIndices.isEmpty()) emptyList() else orderedEdges.filter { edge ->
@@ -414,7 +425,7 @@ internal class NativeInlineBoxGeometry(
         ordinaryPaintBounds.reduceOrNull { a, b -> a.enclosing(b) }, nativeBoundsOf(rectsForRange(0, text.length) + cursorBounds))
     private fun paintBackgrounds(canvas: Canvas, line: Int?) {
         fragments.filter { line == null || it.line == line }
-            .sortedWith(compareBy({ it.line }, { if (nestingParents[spanIndices.getValue(it.owner)] < 0) 0 else 1 })).forEach { fragment ->
+            .sortedWith(compareBy({ it.line }, { sourceDepth[spanIndices.getValue(it.owner)] })).forEach { fragment ->
             val color = fragment.owner.value.format.paint.bgColor
             val curved = rounded[fragment]
             if (curved != null) curved.paint(canvas, color,

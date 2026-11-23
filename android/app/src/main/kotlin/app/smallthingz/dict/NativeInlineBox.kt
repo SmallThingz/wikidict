@@ -214,13 +214,25 @@ internal fun nativeInlineBoxNesting(spans: List<NativeInlineRange<NativeInlineBo
     val pitch = spans.indices.mapNotNull { index ->
         nativeInlineBoxPitchChildren(spans[index].value.box.owner.span)?.let { index to it }
     }.toMap()
-    val parents = nativeInlineBoxNestedParents(spans.map { it.start to it.end }, pitch.keys)
+    val occurrences = spans.map { InlineBoxOccurrence(it.value.box.owner.path,
+        it.value.box.owner.span, it.start, it.end) }
+    val parents = inlineBoxSourceParents(occurrences)
+        ?: throw UnsupportedFloatLayout("Inline box source ancestry or source intervals are inconsistent")
+    val legacy = spans.indices.filter { !nativeInlineSimplePaintTree(occurrences[it].owner) ||
+        parents[it] >= 0 && !nativeInlineSimplePaintTree(occurrences[parents[it]].owner) }
+    val legacyPitch = legacy.indices.filter { legacy[it] in pitch }.toSet()
+    val expected = nativeInlineBoxNestedParents(legacy.map { spans[it].start to spans[it].end }, legacyPitch)
         ?: throw UnsupportedFloatLayout("Inline box ranges are outside the selected nested decoration domains")
+    for ((local, index) in legacy.withIndex()) {
+        val parent = expected[local].let { if (it < 0) -1 else legacy[it] }
+        if (parents[index] != parent) throw UnsupportedFloatLayout("Legacy inline box ancestry differs from its source")
+    }
     parents.forEachIndexed { index, parent ->
-        if (parent >= 0 && (!(if (parent in pitch) nativeInlineBoxPitchPair(spans[parent].value, spans[index].value)
-                    else nativeInlineBoxNestedPair(spans[parent].value, spans[index].value)) ||
-                rtl(spans[parent]) || rtl(spans[index])))
-            throw UnsupportedFloatLayout("Nested inline decoration requires its static equal-metric LTR owners")
+        if (parent >= 0 && (rtl(spans[parent]) || rtl(spans[index]) ||
+            !(nativeInlineSimplePaintTree(occurrences[parent].owner) ||
+                nativeInlineBoxNestedPair(spans[parent].value, spans[index].value) ||
+                nativeInlineBoxPitchPair(spans[parent].value, spans[index].value))))
+            throw UnsupportedFloatLayout("Unsupported nested inline decoration")
     }
     val childrenByParent = parents.withIndex().filter { it.value >= 0 }
         .groupBy({ it.value }, { spans[it.index].value.box.owner.span })
