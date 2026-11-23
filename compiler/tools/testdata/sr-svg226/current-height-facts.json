@@ -1,0 +1,204 @@
+[
+  {
+    "batch": 0,
+    "canonical_file": "Датотека:Coat of Arms of Niš.svg",
+    "file_sha1": "7c02f325d9c0572baa2ce89f8662b82dd4d49ed9",
+    "file_timestamp": "2022-11-06T09:45:35Z",
+    "mediatype": "DRAWING",
+    "mime": "image/svg+xml",
+    "original_height": 415,
+    "original_width": 323,
+    "requested_file": "Датотека:Coat of Arms of Niš.svg",
+    "state": "eligible",
+    "observed_svg_heights": [
+      {
+        "batch": 2,
+        "height_px": 250,
+        "observed_height_px": 250,
+        "observed_width_px": 194,
+        "options": "x250px|мини|д|грб",
+        "parse_core_binding_proven": false,
+        "title": "Ниш",
+        "wiki": "srwiktionary"
+      }
+    ]
+  },
+  {
+    "batch": 1,
+    "canonical_file": "Датотека:Grb Grada Zrenjanina.svg",
+    "file_sha1": "7a0df12e73756cd6cb8f5eddb315c9cd5bc313b3",
+    "file_timestamp": "2025-05-30T10:48:06Z",
+    "mediatype": "DRAWING",
+    "mime": "image/svg+xml",
+    "original_height": 320,
+    "original_width": 207,
+    "requested_file": "Датотека:Grb Grada Zrenjanina.svg",
+    "state": "eligible",
+    "observed_svg_heights": [
+      {
+        "batch": 3,
+        "height_px": 300,
+        "observed_height_px": 300,
+        "observed_width_px": 194,
+        "options": "x300px|мини|д|грб Зрењанина",
+        "parse_core_binding_proven": false,
+        "title": "Зрењанин",
+        "wiki": "srwiktionary"
+      }
+    ]
+  },
+  {
+    "batch": 1,
+    "canonical_file": "Датотека:Grb Zaječara.svg",
+    "file_sha1": "f6265ff20ad1c0aeecc5a69d111fc5d3022b610b",
+    "file_timestamp": "2022-11-06T09:50:47Z",
+    "mediatype": "DRAWING",
+    "mime": "image/svg+xml",
+    "original_height": 121,
+    "original_width": 108,
+    "requested_file": "Датотека:Grb Zaječara.svg",
+    "state": "eligible",
+    "observed_svg_heights": [
+      {
+        "batch": 3,
+        "height_px": 200,
+        "observed_height_px": 200,
+        "observed_width_px": 178,
+        "options": "x200px|мини|грб Зајечара",
+        "parse_core_binding_proven": false,
+        "title": "Зајечар",
+        "wiki": "srwiktionary"
+      }
+    ]
+  },
+  {
+    "batch": 1,
+    "canonical_file": "Датотека:Kraljevo COA.svg",
+    "file_sha1": "47b6def5c61b73df032792916b858cb4d180205a",
+    "file_timestamp": "2016-07-15T18:16:47Z",
+    "mediatype": "DRAWING",
+    "mime": "image/svg+xml",
+    "original_height": 2390,
+    "original_width": 2000,
+    "requested_file": "Датотека:Kraljevo COA.svg",
+    "state": "eligible",
+    "observed_svg_heights": [
+      {
+        "batch": 3,
+        "height_px": 230,
+        "observed_height_px": 230,
+        "observed_width_px": 192,
+        "options": "x230px|мини|д|грб",
+        "parse_core_binding_proven": false,
+        "title": "Краљево",
+        "wiki": "srwiktionary"
+      }
+    ]
+  },
+  {
+    "batch": 0,
+    "canonical_file": "Датотека:Novi Sad Coat of Arms.svg",
+    "file_sha1": "178eff8496c9eee230fc2e7c67552241f95ddbc7",
+    "file_timestamp": "2025-05-29T12:48:24Z",
+    "mediatype": "DRAWING",
+    "mime": "image/svg+xml",
+    "original_height": 552,
+    "original_width": 495,
+    "requested_file": "Датотека:Novi Sad Coat of Arms.svg",
+    "state": "eligible",
+    "observed_svg_heights": [
+      {
+        "batch": 2,
+        "height_px": 250,
+        "observed_height_px": 250,
+        "observed_width_px": 224,
+        "options": "x250px|мини|д|грб",
+        "parse_core_binding_proven": false,
+        "title": "Нови Сад",
+        "wiki": "srwiktionary"
+      }
+    ]
+  },
+  {
+    "batch": 1,
+    "canonical_file": "Датотека:Schlaegel und Eisen nach DIN 21800.svg",
+    "file_sha1": "bd52782a44e9718f4d9ed6372d9fe329247dfbba",
+    "file_timestamp": "2021-01-17T13:42:11Z",
+    "mediatype": "DRAWING",
+    "mime": "image/svg+xml",
+    "original_height": 350,
+    "original_width": 400,
+    "requested_file": "Датотека:Schlaegel und Eisen nach DIN 21800.svg",
+    "state": "eligible",
+    "observed_svg_heights": [
+      {
+        "batch": 3,
+        "height_px": 150,
+        "observed_height_px": 150,
+        "observed_width_px": 171,
+        "options": "x150px|мини|д|Знак рударства: маљ и чекић",
+        "parse_core_binding_proven": false,
+        "title": "рударство",
+        "wiki": "srwiktionary"
+      },
+      {
+        "batch": 3,
+        "height_px": 150,
+        "observed_height_px": 150,
+        "observed_width_px": 171,
+        "options": "x150px|мини|д|Znak rudarstva: malj i čekić",
+        "parse_core_binding_proven": false,
+        "title": "rudarstvo",
+        "wiki": "srwiktionary"
+      }
+    ]
+  },
+  {
+    "batch": 0,
+    "canonical_file": "Датотека:Small Coat of Arms Belgrade.svg",
+    "file_sha1": "cc7d0b90f559a8a862e955f9620e1d2fa89be6ee",
+    "file_timestamp": "2022-07-11T16:42:09Z",
+    "mediatype": "DRAWING",
+    "mime": "image/svg+xml",
+    "original_height": 500,
+    "original_width": 420,
+    "requested_file": "Датотека:Small Coat of Arms Belgrade.svg",
+    "state": "eligible",
+    "observed_svg_heights": [
+      {
+        "batch": 2,
+        "height_px": 200,
+        "observed_height_px": 200,
+        "observed_width_px": 168,
+        "options": "x200px|мини|д|Грб града Београда",
+        "parse_core_binding_proven": false,
+        "title": "Београд",
+        "wiki": "srwiktionary"
+      }
+    ]
+  },
+  {
+    "batch": 0,
+    "canonical_file": "Датотека:Stema e Komunës Prishtinë.svg",
+    "file_sha1": "d882f8314dd94090d1673df57167ca3c2968e04b",
+    "file_timestamp": "2018-12-04T19:52:57Z",
+    "mediatype": "DRAWING",
+    "mime": "image/svg+xml",
+    "original_height": 366,
+    "original_width": 285,
+    "requested_file": "Датотека:Stema e Komunës Prishtinë.svg",
+    "state": "eligible",
+    "observed_svg_heights": [
+      {
+        "batch": 2,
+        "height_px": 200,
+        "observed_height_px": 200,
+        "observed_width_px": 156,
+        "options": "x200px|мини|д|грб",
+        "parse_core_binding_proven": false,
+        "title": "Приштина",
+        "wiki": "srwiktionary"
+      }
+    ]
+  }
+]

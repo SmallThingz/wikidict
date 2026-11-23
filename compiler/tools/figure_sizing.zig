@@ -121,6 +121,12 @@ const RawFileBatch = struct {
     tiff_metadata_response: ?[]const u8 = null,
     jpeg_metadata_only: ?bool = null,
 
+    fn requiresFreshSvgReceipts(self: RawFileBatch, core: []const u8) !bool {
+        if (!equal(core, sr_imageinfo_core)) return false;
+        if (self.jpeg_metadata_only != null) return invalid;
+        return self.observed_svg_occurrences != null;
+    }
+
     pub fn jsonStringify(self: @This(), json_writer: anytype) !void {
         if (self.jpeg_metadata_only) |selected| return json_writer.write(.{
             .requests = self.requests, .response = self.response,
@@ -314,7 +320,43 @@ fn occurrenceRequestUrl(a: A, url: []const u8, server: []const u8, query: Value)
     }
     if (query != .object or used.count() != query.object.count()) return invalid;
 }
-fn parseSvgHeightObservation(a: A, ns: *const namespaces.Registry, server: []const u8, raw: RawSvgHeightObservation) !ParsedSvgHeight {
+// An anonymous action=parse result does not declare a parser revision. For a
+// WMF5 occurrence, require a fresh HTTP observation bound to this batch's
+// independently authenticated ImageInfo response before replaying its HTML.
+const SvgHeightReceiptBinding = struct {
+    response_sha256: [64]u8,
+    imageinfo_time: Timestamp,
+
+    fn init(response: []const u8, observed: Timestamp) SvgHeightReceiptBinding {
+        var digest: [32]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash(response, &digest, .{});
+        return .{ .response_sha256 = std.fmt.bytesToHex(digest, .lower), .imageinfo_time = observed };
+    }
+
+    fn validate(self: *const SvgHeightReceiptBinding, receipt: Value) !void {
+        if (!equal(try string(receipt, "imageinfo_response_sha256"), &self.response_sha256)) return invalid;
+        const text = try string(receipt, "observed_utc");
+        const observed = try timestamp(text);
+        if (observed.fraction.len != 0 or !notAfter(self.imageinfo_time, observed)) return invalid;
+        const date = try string(try field(receipt, "headers"), "date");
+        const months = [_][]const u8{ "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" };
+        const weekdays = [_][]const u8{ "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun" };
+        const year = std.fmt.parseInt(u16, text[0..4], 10) catch return invalid;
+        const month = std.fmt.parseInt(u8, text[5..7], 10) catch return invalid;
+        const day = std.fmt.parseInt(u8, text[8..10], 10) catch return invalid;
+        // 0001-01-01 was Monday in the proleptic Gregorian calendar.
+        const prior: u32 = year - 1;
+        var days = prior * 365 + prior / 4 - prior / 100 + prior / 400 + day - 1;
+        for (1..month) |m| days += std.time.epoch.getDaysInMonth(year, @enumFromInt(m));
+        var buffer: [29]u8 = undefined;
+        const expected = try std.fmt.bufPrint(&buffer, "{s}, {s} {s} {s} {s} GMT", .{
+            weekdays[days % 7], text[8..10], months[month - 1], text[0..4], text[11..19],
+        });
+        if (!equal(date, expected)) return invalid;
+    }
+};
+
+fn parseSvgHeightObservation(a: A, ns: *const namespaces.Registry, server: []const u8, raw: RawSvgHeightObservation, binding: ?SvgHeightReceiptBinding) !ParsedSvgHeight {
     for ([_][]const u8{ raw.request, raw.receipt, raw.response }) |bytes| try preflight(bytes, false);
     const request = try std.json.parseFromSliceLeaky(Value, a, raw.request, .{ .allocate = .alloc_always });
     const receipt = try std.json.parseFromSliceLeaky(Value, a, raw.receipt, .{ .allocate = .alloc_always });
@@ -322,6 +364,7 @@ fn parseSvgHeightObservation(a: A, ns: *const namespaces.Registry, server: []con
     try occurrenceFlag(request, "controlled_single_token", true);
     try occurrenceFlag(request, "full_historical_page_render", false);
     try occurrenceFlag(receipt, "accepted", true);
+    if (binding) |source| try source.validate(receipt);
     if (try positive(request, "request_count") != 1 or try positive(receipt, "request_count") != 1 or
         try positive(receipt, "status") != 200 or try positive(receipt, "response_bytes") != raw.response.len or
         !digestMatches(raw.response, try string(receipt, "response_sha256"))) return invalid;
@@ -1148,7 +1191,7 @@ fn readStreamHeaders(a: A, temp: A, projection: *StreamInput, raw: *StreamInput)
     const contract = try explicitReplayContract(header_value);
     const header = try std.json.parseFromValueLeaky(StreamHeader, a, try replayDocumentShape(a, header_value), .{ .allocate = .alloc_always });
     if (equal(header.core_revision, sr_imageinfo_core) and
-        (!contract or !equal(try string(header_value, "replay_contract"), replay_contract_v6) or header.observed_batches != 0)) return invalid;
+        (!contract or !equal(try string(header_value, "replay_contract"), replay_contract_v6))) return invalid;
     const count_u64 = std.math.add(u64, header.base_batches, header.observed_batches) catch return invalid;
     const max_requests = std.math.mul(u64, header.base_batches, 50) catch return invalid;
     // Counts are bounded by the authenticated physical inputs, not an
@@ -1820,7 +1863,7 @@ pub const Registry = struct {
             }
             if (fact.observed_svg_heights) |observations| {
                 if (!gif or (!contract and !svgOccurrenceGenerator(doc.generator_sha256)) or
-                    (!equal(doc.core_revision, current_core) and !equal(doc.core_revision, registration_core)) or
+                    (!equal(doc.core_revision, current_core) and !equal(doc.core_revision, registration_core) and !equal(doc.core_revision, sr_imageinfo_core)) or
                     observations.len == 0 or !equal(fact.requested_file, fact.canonical_file) or
                     fact.state != .eligible or !equal(fact.mime, "image/svg+xml") or !equal(fact.mediatype, "DRAWING")) return invalid;
                 for (observations) |*observation| {
@@ -1873,7 +1916,7 @@ pub const Registry = struct {
             if (batch.observed_svg_occurrences) |observations| {
                 if (!gif or (!contract and !svgOccurrenceGenerator(doc.generator_sha256)) or observations.len == 0 or observations.len > 50) return invalid;
             }
-            if (equal(doc.core_revision, sr_imageinfo_core) and supplement) return invalid;
+            const sr_occurrences = try batch.requiresFreshSvgReceipts(doc.core_revision);
             if (supplement) observing = true else if (observing) return invalid;
             try preflight(batch.response, false);
             const source = try std.json.parseFromSliceLeaky(Value, temp, batch.response, .{ .allocate = .alloc_always });
@@ -1882,7 +1925,7 @@ pub const Registry = struct {
             if (!d191Profile(batch_core, doc.source_profile)) return invalid;
             if (!equal(batch_core, doc.core_revision) and
                 !(epochs and gif and responseEpoch(doc.core_revision) and responseEpoch(batch_core))) return invalid;
-            if (batch.observed_svg_occurrences != null and !equal(batch_core, current_core) and !equal(batch_core, registration_core)) return invalid;
+            if (batch.observed_svg_occurrences != null and !sr_occurrences and !equal(batch_core, current_core) and !equal(batch_core, registration_core)) return invalid;
             const query = try generalWithEpoch(source, ns.wiki, ns.content_language, server, batch_core, epochs);
             var tiff_companion: ?TiffCompanion = if (batch.tiff_metadata_response) |response| blk: {
                 if (supplement or (!contract and !equal(doc.generator_sha256, file_generator_sha256))) return invalid;
@@ -2029,6 +2072,7 @@ pub const Registry = struct {
                 } else eligible = false;
                 if (fact.state != (if (eligible) FileState.eligible else if (default_page) FileState.tiff_default_page else FileState.unsupported)) return invalid;
                 if (batch.observed_svg_width_px) |observed_width| {
+                    if (equal(batch_core, sr_imageinfo_core) and !equal(try string(image, "thumbmime"), "image/png")) return invalid;
                     if (!eligible or fact.observed_svg_width_px != observed_width or
                         observedSvgWidth(image, fact.mime, fact.mediatype, width, height) != observed_width) return invalid;
                     const observed_slot = try used_observations.getOrPut(a, fact.canonical_file);
@@ -2100,9 +2144,10 @@ pub const Registry = struct {
             if (tiff_companion) |*companion| try companion.finish();
             if (used_pages.count() != by_title.count()) return invalid;
             if (batch.observed_svg_occurrences) |observations| {
+                const binding = if (sr_occurrences) SvgHeightReceiptBinding.init(batch.response, observed) else null;
                 var observed_files: std.StringHashMapUnmanaged(void) = .empty;
                 for (observations) |raw_observation| {
-                    const parsed = try parseSvgHeightObservation(temp, ns, server, raw_observation);
+                    const parsed = try parseSvgHeightObservation(temp, ns, server, raw_observation, binding);
                     if (!used_requests.contains(parsed.canonical_file)) return invalid;
                     const fact = (facts.get(parsed.canonical_file) orelse return invalid).fact;
                     if (!equal(fact.requested_file, fact.canonical_file)) return invalid;
@@ -7850,4 +7895,165 @@ test "Serbian WMF5 ordinary ImageInfo uses the exact selected defaults in a v6 f
     try doc.source_profile.object.put(a, "observed_defaults_response_sha256", .{ .string = sr_selected_defaults });
     try std.testing.expectError(invalid, validateFileSource(a, doc, 50, 1, actual_site, &ns, defaults, true, true));
     try std.testing.expect(!responseEpoch(sr_imageinfo_core));
+}
+
+const SrWmf5SvgTestSource = struct {
+    const site = @embedFile("testdata/sr-imageinfo-87f/imageinfo-first.raw.json");
+
+    fn defaults() DefaultsSource {
+        var defaults_hash: [32]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash(@embedFile("testdata/figure-page-observations/sr-fuhe-served-set/figure-siteinfo.raw.json"), &defaults_hash, .{});
+        return .{ .core = accepted_core, .sha256 = defaults_hash };
+    }
+
+    fn document(a: A, ns: *const namespaces.Registry) !FilesDocument {
+        var doc = try D191RetainedTest.document(a);
+        doc.core_revision = sr_imageinfo_core;
+        doc.wiki = ns.wiki;
+        doc.content_language = ns.content_language;
+        doc.namespace_registry_sha256 = try a.dupe(u8, &std.fmt.bytesToHex(ns.source_sha256, .lower));
+        var site_hash: [32]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash(site, &site_hash, .{});
+        try doc.source_profile.object.put(a, "site_raw_sha256", .{ .string = try a.dupe(u8, &std.fmt.bytesToHex(site_hash, .lower)) });
+        try doc.source_profile.object.put(a, "selected_defaults_sha256", .{ .string = sr_selected_defaults });
+        try doc.source_profile.object.put(a, "observed_defaults_response_sha256", .{ .string = sr_observed_defaults });
+        return doc;
+    }
+};
+
+test "Serbian WMF5 requires fresh response-bound SVG height occurrences" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const site = SrWmf5SvgTestSource.site;
+    const fresh = try std.json.parseFromSliceLeaky(RawFileBatch, a, @embedFile("testdata/sr-svg226/current-height-batch.json"), .{});
+    const second = try std.json.parseFromSliceLeaky(RawFileBatch, a, @embedFile("testdata/sr-svg226/current-height-batch-651.json"), .{});
+    const archive = std.mem.trimEnd(u8, @embedFile("testdata/sr-svg226/figure-sizing.raw.json"), "\n");
+    const start = (std.mem.lastIndexOfScalar(u8, archive, '\n') orelse return error.MissingTestData) + 1;
+    const saved = try std.json.parseFromSliceLeaky(RawFileBatch, a, archive[start..], .{});
+    var ns = try namespaces.Registry.init(a, @embedFile("testdata/figure-page-observations/sr-fuhe-served-set/namespace-registry.tsv"));
+    defer ns.deinit();
+    const defaults = SrWmf5SvgTestSource.defaults();
+    var doc = try SrWmf5SvgTestSource.document(a, &ns);
+
+    const facts = try std.json.parseFromSliceLeaky([]const FileFact, a, @embedFile("testdata/sr-svg226/current-height-facts.json"), .{});
+    try std.testing.expectEqual(@as(usize, 8), facts.len);
+    const base = RawFileBatch{ .requests = fresh.requests, .response = fresh.response };
+    const second_base = RawFileBatch{ .requests = second.requests, .response = second.response };
+    try std.testing.expect(!try base.requiresFreshSvgReceipts(sr_imageinfo_core));
+    try std.testing.expect(try fresh.requiresFreshSvgReceipts(sr_imageinfo_core));
+    var width_only = base;
+    width_only.observed_svg_width_px = 300;
+    try std.testing.expect(!try width_only.requiresFreshSvgReceipts(sr_imageinfo_core));
+    var jpeg_only = base;
+    jpeg_only.jpeg_metadata_only = true;
+    try std.testing.expectError(invalid, jpeg_only.requiresFreshSvgReceipts(sr_imageinfo_core));
+    const Check = enum { exact, non_svg_fact, old_receipts, crossed_digest, mismatched_date, stale, wrong_weekday, historical_imageinfo };
+    for ([_]Check{ .exact, .non_svg_fact, .old_receipts, .crossed_digest, .mismatched_date, .stale, .wrong_weekday, .historical_imageinfo }) |mode| {
+        var supplement = fresh;
+        doc.records = facts;
+        switch (mode) {
+            .non_svg_fact => {
+                const altered = try a.dupe(FileFact, facts);
+                altered[0].mime = "image/jpeg";
+                altered[0].mediatype = "BITMAP";
+                doc.records = altered;
+            },
+            .exact => {},
+            .old_receipts => supplement.observed_svg_occurrences = saved.observed_svg_occurrences,
+            .historical_imageinfo => supplement.response = saved.response,
+            .crossed_digest, .mismatched_date, .stale, .wrong_weekday => {
+                const observations = try a.dupe(RawSvgHeightObservation, fresh.observed_svg_occurrences.?);
+                var receipt = try std.json.parseFromSliceLeaky(Value, a, observations[0].receipt, .{});
+                if (mode == .crossed_digest) try receipt.object.put(a, "imageinfo_response_sha256", .{ .string = sr_selected_defaults });
+                if (mode == .mismatched_date) try receipt.object.put(a, "observed_utc", .{ .string = "2027-01-02T03:04:05Z" });
+                if (mode == .stale) try receipt.object.put(a, "observed_utc", .{ .string = "2020-01-02T03:04:05Z" });
+                if (mode == .stale) try receipt.object.getPtr("headers").?.object.put(a, "date", .{ .string = "Thu, 02 Jan 2020 03:04:05 GMT" });
+                if (mode == .wrong_weekday) {
+                    const headers = receipt.object.getPtr("headers").?;
+                    const date = try string(headers.*, "date");
+                    const changed = try std.mem.concat(a, u8, &.{ if (equal(date[0..3], "Mon")) "Tue" else "Mon", date[3..] });
+                    try headers.object.put(a, "date", .{ .string = changed });
+                }
+                observations[0].receipt = try std.json.Stringify.valueAlloc(a, receipt, .{});
+                supplement.observed_svg_occurrences = observations;
+            },
+        }
+        const input = try ResponseEpochTestSource.seal(a, doc, &.{ base, second_base, supplement, second }, site, true, replay_contract_v6);
+        var p = StreamTestSource.Slice{ .bytes = input.projection, .chunk = 173 };
+        var r = StreamTestSource.Slice{ .bytes = input.raw, .chunk = 197 };
+        var projection = p.input();
+        var raw = r.input();
+        const checked = Registry.initStreamWithDefaults(a, &projection, &raw, site, &ns, defaults);
+        if (mode != .exact) {
+            try std.testing.expectError(invalid, checked);
+            continue;
+        }
+        var registry = try checked;
+        defer registry.deinit();
+        var contexts: usize = 0;
+        for (facts) |fact| {
+            for (fact.observed_svg_heights.?) |observation| {
+                // Zaječar's x200px SVG is the genuine upfit: its 178px output
+                // requires the enclosing logical width bound to round up to 179.
+                const bound: u32 = if (equal(observation.title, "Зајечар")) 179 else fact.original_width;
+                try std.testing.expectEqual(@as(?u32, bound), try Registry.resolveHeightOccurrence(&registry, a, ns.wiki, observation.title, fact.canonical_file, .thumbnail, observation.options, observation.height_px));
+                try std.testing.expectEqual(@as(?u32, null), try Registry.resolveHeightOccurrence(&registry, a, ns.wiki, "Other title", fact.canonical_file, .thumbnail, observation.options, observation.height_px));
+                try std.testing.expectEqual(@as(?u32, null), try Registry.resolveHeightOnlyWidth(&registry, a, fact.canonical_file, .thumbnail, observation.height_px));
+                contexts += 1;
+            }
+        }
+        try std.testing.expectEqual(@as(usize, 9), contexts);
+    }
+}
+
+test "Serbian WMF5 explicit SVG width requires the observed PNG thumbnail and original source axes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile("testdata/figure-page-observations/sr-fuhe-served-set/namespace-registry.tsv"));
+    defer ns.deinit();
+    const site = SrWmf5SvgTestSource.site;
+    const name = "Датотека:Sun symbol.svg";
+    const response = @embedFile("testdata/sr-imageinfo-87f/sun-width75.raw.json");
+    const base = RawFileBatch{ .requests = &.{name}, .response = response };
+    var doc = try SrWmf5SvgTestSource.document(a, &ns);
+    doc.records = &.{.{ .requested_file = name, .canonical_file = name, .state = .eligible, .batch = 0,
+        .file_sha1 = "5d2d872e22ff6862ef60a05507fd4ea511c60e60", .file_timestamp = "2023-08-25T11:17:37Z",
+        .original_width = 16, .original_height = 16, .mime = "image/svg+xml", .mediatype = "DRAWING",
+        .observed_svg_width_px = 75, .observed_batch = 1 }};
+    const Check = enum { exact, missing_thumbmime, wrong_thumbmime, wrong_height, source_url, crossed_width };
+    for ([_]Check{ .exact, .missing_thumbmime, .wrong_thumbmime, .wrong_height, .source_url, .crossed_width }) |mode| {
+        var observed = base;
+        observed.observed_svg_width_px = 75;
+        if (mode != .exact) {
+            var value = try std.json.parseFromSliceLeaky(Value, a, response, .{});
+            const page = &value.object.getPtr("query").?.object.getPtr("pages").?.array.items[0];
+            const thumb = &page.object.getPtr("imageinfo").?.array.items[0];
+            switch (mode) {
+                .exact => unreachable,
+                .missing_thumbmime => _ = thumb.object.swapRemove("thumbmime"),
+                .wrong_thumbmime => try thumb.object.put(a, "thumbmime", .{ .string = "image/jpeg" }),
+                .wrong_height => try thumb.object.put(a, "thumbheight", .{ .integer = 74 }),
+                .source_url => try thumb.object.put(a, "thumburl", try field(thumb.*, "url")),
+                .crossed_width => observed.observed_svg_width_px = 76,
+            }
+            observed.response = try std.json.Stringify.valueAlloc(a, value, .{});
+        }
+        const input = try ResponseEpochTestSource.seal(a, doc, &.{ base, observed }, site, true, replay_contract_v6);
+        var p = StreamTestSource.Slice{ .bytes = input.projection, .chunk = 173 };
+        var r = StreamTestSource.Slice{ .bytes = input.raw, .chunk = 197 };
+        var projection = p.input();
+        var raw = r.input();
+        const checked = Registry.initStreamWithDefaults(a, &projection, &raw, site, &ns, SrWmf5SvgTestSource.defaults());
+        if (mode != .exact) {
+            try std.testing.expectError(invalid, checked);
+            continue;
+        }
+        var registry = try checked;
+        defer registry.deinit();
+        try std.testing.expectEqual(@as(?types.FigureSizingPolicy, .requested_fit), try Registry.resolve(&registry, a, name, .thumbnail, 75, null));
+        try std.testing.expectEqual(@as(u32, 75), registry.records[0].width_px);
+        try std.testing.expectEqual(@as(?u32, null), try Registry.resolveHeightOccurrence(&registry, a, ns.wiki, "Sun", name, .thumbnail, "x75px|thumb", 75));
+    }
 }
