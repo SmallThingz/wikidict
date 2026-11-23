@@ -6996,8 +6996,8 @@ def expander_ready(root, auxiliary_hashes=None, interwiki_sha=None, page_links_s
     except OSError:return False
 
 
-def run_checked(command):
-    subprocess.run(command,cwd=PROJECT,check=True)
+def run_checked(command, *, env=None):
+    subprocess.run(command,cwd=PROJECT,check=True,env=env)
 
 
 def phase_event(edition, date, name, event, **fields):
@@ -8485,11 +8485,13 @@ def prepare_blob_tools(workspace, zig, edition, date, build_identity=None, *, ex
             for name in BLOB_TOOL_NAMES:
                 path=prefix/'bin'/name
                 if path.exists() or path.is_symlink():require_private_native_tool(path)
+            build_env = os.environ.copy()
+            build_env.setdefault('ZIG_GLOBAL_CACHE_DIR', str(PROJECT / '.zig-cache' / 'global'))
             command=[str(compiler),'build','-j1','-Doptimize=fast','--prefix',str(prefix),'prepare-blob-tools']
             if expander_args is not None and figure_inputs is None:
                 command.extend(['--summary','all','build-dictionary','--',*expander_args])
             command_started=time.monotonic()
-            run_checked(command)
+            run_checked(command, env=build_env)
             post_started=time.monotonic()
             if source_fingerprint()!=source or sha256_file(compiler)!=compiler_sha:
                 raise ValueError('Source or compiler changed during native blob tool preparation')
@@ -8507,7 +8509,7 @@ def prepare_blob_tools(workspace, zig, edition, date, build_identity=None, *, ex
                 # must not execute the expensive expander before this check.
                 post_started=None
                 run_checked([str(compiler),'build','-j1','-Doptimize=fast','--prefix',str(prefix),
-                    '--summary','all','build-dictionary','--',*expander_args])
+                    '--summary','all','build-dictionary','--',*expander_args], env=build_env)
                 post_started=time.monotonic()
                 if source_fingerprint()!=source or sha256_file(compiler)!=compiler_sha:
                     raise ValueError('Source or compiler changed during expander preparation')

@@ -6684,7 +6684,7 @@ class PreparedBlobToolsTests(unittest.TestCase):
         identity=dict(source='qualified-source',zig_sha256=b.sha256_file(compiler))
         return workspace,compiler,identity
 
-    def install(self, command, expander_args=None):
+    def install(self, command, expander_args=None, *, env=None):
         self.assertEqual(command[1:4],['build','-j1','-Doptimize=fast'])
         if expander_args is None:
             self.assertEqual(command[-1],'prepare-blob-tools')
@@ -6697,6 +6697,38 @@ class PreparedBlobToolsTests(unittest.TestCase):
             path=prefix/'bin'/name
             path.write_bytes(('installed '+name).encode());path.chmod(0o755)
 
+    def test_normal_zig_commands_use_checkout_global_cache_and_preserve_overrides(self):
+        for override in (False, True):
+            with self.subTest(override=override), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                workspace, compiler, identity = self.fixture(root)
+                args = ['dump', str(workspace / 'expander'), '--expander-only']
+                environ = {'TMPDIR': str(root)}
+                if override:
+                    environ.update(ZIG_LOCAL_CACHE_DIR=str(root / 'custom-local'),
+                                   ZIG_GLOBAL_CACHE_DIR=str(root / 'custom-global'))
+                expected = environ | {'ZIG_GLOBAL_CACHE_DIR': str(root / ('custom-global' if override else '.zig-cache/global'))}
+                invocations = []
+
+                def native(command, *, cwd, check, env):
+                    self.assertEqual(cwd, root)
+                    self.assertTrue(check)
+                    self.assertEqual(env, expected)
+                    invocations.append(command)
+                    if 'prepare-blob-tools' in command:
+                        self.install(command)
+
+                with patch.object(b, 'PROJECT', root), patch.dict(b.os.environ, environ, clear=True), \
+                     patch.object(b, 'source_fingerprint', return_value=identity['source']), \
+                     patch.object(b, 'check_figure_compatibility'), patch.object(b.subprocess, 'run', side_effect=native):
+                    tools = b.prepare_blob_tools(workspace, str(compiler), 'testwiktionary', '20261001',
+                                                 identity, expander_args=args, figure_inputs=())
+                    self.assertEqual(dict(b.os.environ), environ)
+                self.assertEqual(len(invocations), 2)
+                self.assertEqual(invocations[0][-1], 'prepare-blob-tools')
+                self.assertEqual(invocations[1][6:], ['--summary', 'all', 'build-dictionary', '--', *args])
+                self.assertEqual(set(tools), set(b.BLOB_TOOL_NAMES))
+
     def test_combined_graph_preserves_forwarded_arguments_and_binds_all_tools_once(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);workspace,compiler,identity=self.fixture(root);calls=[];phases=[]
@@ -6704,7 +6736,7 @@ class PreparedBlobToolsTests(unittest.TestCase):
                   '--llvm-workers','2','--parse-workers','4','--page-workers','4','--expander-only',
                   '--extraction-cache-root','cache with spaces','--verified-dump-sha256','a'*64,
                   '--verified-index-sha256','b'*64]
-            def install(argv):calls.append(argv);self.install(argv,args)
+            def install(argv, *, env=None):calls.append(argv);self.install(argv,args)
             with patch.object(b,'source_fingerprint',return_value=identity['source']), \
                  patch.object(b,'run_checked',side_effect=install), \
                  patch.object(b,'phase_event',side_effect=lambda edition,date,phase,event,**fields:phases.append((phase,event,fields))):
@@ -6727,7 +6759,7 @@ class PreparedBlobToolsTests(unittest.TestCase):
                 (workspace/'input').mkdir()
                 (workspace/'input/.complete.json').write_text(json.dumps({'dump_sha256':'a'*64,'index_sha256':'b'*64}))
                 error=subprocess.CalledProcessError(7,['original native failure'],output=b'out',stderr=b'err')
-                def run(argv):
+                def run(argv, *, env=None):
                     calls.append(argv)
                     if installed:self.install(argv,tool_arguments(argv))
                     raise error
@@ -6752,7 +6784,7 @@ class PreparedBlobToolsTests(unittest.TestCase):
                 root=Path(tmp);workspace,compiler,identity=self.fixture(root);output=io.StringIO()
                 args=['dump',str(workspace/'expander'),'--expander-only']
                 error=subprocess.CalledProcessError(7,['original'],stderr=b'compiler diagnostic')
-                def run(argv):
+                def run(argv, *, env=None):
                     self.install(argv,args)
                     if fail:raise error
                 ticks=[0,1,1.25,2.25,*([] if fail else [3.25]),3.75,4,10]
@@ -6793,7 +6825,7 @@ class PreparedBlobToolsTests(unittest.TestCase):
                     else:target.write_bytes(b'not executable')
                 if change=='wrong-initial-source':identity['source']='other'
                 if change=='wrong-initial-compiler':identity['zig_sha256']='0'*64
-                def run(argv):
+                def run(argv, *, env=None):
                     calls.append(argv);self.install(argv,args)
                     if change=='compiler':compiler.write_bytes(b'changed compiler')
                 sources=['qualified-source','changed-source'] if change=='source' else ['qualified-source','qualified-source']
@@ -6829,7 +6861,7 @@ class PreparedBlobToolsTests(unittest.TestCase):
                 root=Path(tmp);workspace,compiler,identity=self.fixture(root);calls=[];phases=[]
                 if change=='wrong-initial-source':identity['source']='other'
                 if change=='wrong-initial-compiler':identity['zig_sha256']='0'*64
-                def install(argv):
+                def install(argv, *, env=None):
                     calls.append(argv);self.install(argv)
                     if change=='compiler':compiler.write_bytes(b'changed compiler')
                 values=['qualified-source','changed-source'] if change=='source' else ['qualified-source','qualified-source']
@@ -6844,7 +6876,7 @@ class PreparedBlobToolsTests(unittest.TestCase):
             with self.subTest(kind=kind),tempfile.TemporaryDirectory() as tmp:
                 root=Path(tmp);workspace,compiler,identity=self.fixture(root);phases=[]
                 external=root/'external';external.write_bytes(b'external bytes');external.chmod(0o755)
-                def install(argv):
+                def install(argv, *, env=None):
                     self.install(argv);folder=workspace/'native-blob-tools/bin';path=folder/b.BLOB_TOOL_NAMES[0]
                     path.unlink()
                     if kind=='symlink':path.symlink_to(external)
@@ -6923,7 +6955,7 @@ class PreparedBlobToolsTests(unittest.TestCase):
             cached=workspace/'input';cached.mkdir();(cached/'.complete.json').write_text(json.dumps({
                 'source_pages':2,'dump_sha256':'a'*64,'index_sha256':'b'*64}))
             staging=root/'staging';calls=[];verified=set();payloads={}
-            def run(argv):
+            def run(argv, *, env=None):
                 calls.append(argv)
                 if 'prepare-blob-tools' in argv:
                     self.assertEqual('build-dictionary' in argv,fresh)
@@ -7079,7 +7111,7 @@ class RetainedWorkspaceTests(unittest.TestCase):
             self.assertEqual(b.source_fingerprint(),before)
             with patch.object(b.subprocess,'run') as native:
                 b.run_checked(['zig','build','build-dictionary'])
-            native.assert_called_once_with(['zig','build','build-dictionary'],cwd=source,check=True)
+            native.assert_called_once_with(['zig','build','build-dictionary'],cwd=source,check=True,env=None)
             (source/'build.zig').write_text('actual producer mutation')
             self.assertNotEqual(b.source_fingerprint(),before)
 
@@ -8160,7 +8192,7 @@ class MaintainedFigureCompatibilityTests(unittest.TestCase):
                         tools={name:fixture_blob_tool(root,name) for name in b.BLOB_TOOL_NAMES},
                         require_identity=lambda value:None,require_unchanged=lambda **kw:None)
                 commands=[];checks=[]
-                def install(command):
+                def install(command, *, env=None):
                     commands.append(command)
                     self.assertIn('prepare-blob-tools',command);self.assertNotIn('build-dictionary',command)
                     prefix=Path(command[command.index('--prefix')+1]);(prefix/'bin').mkdir(parents=True,exist_ok=True)
@@ -8192,7 +8224,7 @@ class MaintainedFigureCompatibilityTests(unittest.TestCase):
             root=Path(tmp);compiler=root/'zig';compiler.write_bytes(b'compiler');compiler.chmod(0o755)
             workspace=root/'work';workspace.mkdir();paths=b.figure_compatibility_paths(self.inputs(root))
             calls=[];events=[]
-            def compile_tools(command):
+            def compile_tools(command, *, env=None):
                 calls.append(command)
                 destination=workspace/'native-blob-tools/bin'
                 if 'prepare-blob-tools' in command:
