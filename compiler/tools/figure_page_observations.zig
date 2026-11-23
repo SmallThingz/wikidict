@@ -1204,6 +1204,7 @@ const Occurrence = struct {
     svg_upright_fit: ?SvgUprightFitEvidence = null,
     anchor: ?Inventory,
     centered_width: ?u32 = null,
+    right_anchor_width: ?u32 = null,
     centered_default_size: bool = false,
     right_default_size: bool = false,
     missing_content: ?ObservedMissing = null,
@@ -5135,7 +5136,7 @@ pub const Book = struct {
                     // complete HTML observer. File models alone never grant it.
                     const authored_width: ?u32 = if (occurrence.width) svgLanguageAuthoredWidth(options) orelse return invalid else null;
                     if (!equal(image.svg_language orelse return invalid, language) or image.width != (authored_width orelse default_width) or
-                        !svgObservedWidthFit(image.width, image.height, occurrence.original_width, occurrence.original_height)) return invalid;
+                        !observedWidthDownfit(image.width, image.height, occurrence.original_width, occurrence.original_height)) return invalid;
                     const policy = (try sizing.Registry.resolveSvgLanguageModel(registry, a, canonical, language, .thumbnail, image.width, null)) orelse return invalid;
                     break :proof .{ .authored = occurrence.svg_language != null, .authored_width = authored_width,
                         .language = try a.dupe(u8, language), .width = image.width, .height = image.height, .policy = policy };
@@ -5155,6 +5156,7 @@ pub const Book = struct {
                         .original_width = occurrence.original_width, .observed_width = image.width } else null,
                     .anchor = if (occurrence.anchor_attributes or occurrence.missing_content or occurrence.static_poster) image.anchor else null,
                     .centered_width = if (image.centered) image.width else null,
+                    .right_anchor_width = if (image.right_anchor) image.width else null,
                     .centered_default_size = image.centered_default_size, .right_default_size = image.right_default_size,
                     .missing_content = image.missing_content, .static_poster = poster };
             }
@@ -5412,11 +5414,15 @@ pub const Book = struct {
                     if (!heightThumbnailOptions(context.image_options.?, occurrence.original_options, proof.requested_height) or
                         !heightThumbnailOptions(context.image_options.?, slot.stage_options, proof.requested_height)) return null;
                 }
+                if (occurrence.right_anchor_width) |observed_width| {
+                    if (!alignedThumbnailDimensionOptions(context.image_options.?, occurrence.original_options, "img_right", observed_width, false) or
+                        !alignedThumbnailDimensionOptions(context.image_options.?, slot.stage_options, "img_right", observed_width, false)) return null;
+                }
                 if (occurrence.centered_default_size) {
                     const width = occurrence.width orelse return null;
                     if (occurrence.centered_width != width or
-                        !centeredThumbnailDimensionOptions(context.image_options.?, occurrence.original_options, width, true) or
-                        !centeredThumbnailDimensionOptions(context.image_options.?, slot.stage_options, width, true)) return null;
+                        !alignedThumbnailDimensionOptions(context.image_options.?, occurrence.original_options, "img_center", width, true) or
+                        !alignedThumbnailDimensionOptions(context.image_options.?, slot.stage_options, "img_center", width, true)) return null;
                 } else if (occurrence.centered_width) |observed_width|
                     if (!centeredThumbnailOptions(context.image_options.?, slot.stage_options, observed_width)) return null;
                 if (occurrence.static_poster != null and
@@ -5553,7 +5559,7 @@ fn svgLanguageThumbnailOptionsWithWidth(registry: *const namespaces.image_option
     }
     return thumbnail and language_seen == (language != null) and width_seen == (authored_width != null);
 }
-fn svgObservedWidthFit(width: u32, height: u32, original_width: u32, original_height: u32) bool {
+fn observedWidthDownfit(width: u32, height: u32, original_width: u32, original_height: u32) bool {
     if (width == 0 or height == 0 or original_width == 0 or original_height == 0 or width > original_width) return false;
     const product = @as(u64, original_height) * width;
     return product / original_width + @intFromBool(product % original_width >= (@as(u64, original_width) + 1) / 2) == height;
@@ -5652,12 +5658,12 @@ fn observedHeightFit(width: u32, height: u32, original_width: u32, original_heig
 // shape. Use the selected ordinary image-option registry and delimiter rules;
 // the renderer still owns all placement, caption, style and sizing semantics.
 fn centeredThumbnailOptions(registry: *const namespaces.image_options.Registry, options: []const u8, observed_width: u32) bool {
-    return centeredThumbnailDimensionOptions(registry, options, observed_width, false);
+    return alignedThumbnailDimensionOptions(registry, options, "img_center", observed_width, false);
 }
 
 // Bare upright uses only a selected observed width. No default factor or width
 // is calculated from the retained CSS property or the thumbnail URL.
-fn centeredThumbnailDimensionOptions(registry: *const namespaces.image_options.Registry, options: []const u8, observed_width: u32, bare_upright: bool) bool {
+fn alignedThumbnailDimensionOptions(registry: *const namespaces.image_options.Registry, options: []const u8, comptime alignment: []const u8, observed_width: u32, bare_upright: bool) bool {
     var parts: [4][]const u8 = undefined;
     var count: usize = 0;
     var at: usize = 0;
@@ -5673,8 +5679,8 @@ fn centeredThumbnailDimensionOptions(registry: *const namespaces.image_options.R
     const horizontal = registry.match(parts[1], .image) orelse return false;
     const dimension = registry.match(parts[2], .image) orelse return false;
     if (!equal(format.id, "img_thumbnail") or format.value != null or
-        !equal(horizontal.id, "img_center") or horizontal.value != null or
-        registry.match(parts[3], .image) != null) return false;
+        !equal(horizontal.id, alignment) or horizontal.value != null or
+        (equal(alignment, "img_right") and parts[3].len == 0) or registry.match(parts[3], .image) != null) return false;
     if (bare_upright) return equal(dimension.id, "img_upright") and dimension.value == null and parts[3].len != 0;
     if (!equal(dimension.id, "img_width")) return false;
     const width = dimension.value orelse return false;
@@ -7029,7 +7035,7 @@ const ObservedMissing = struct {
     centered: bool = false,
     left: bool = false,
 };
-const ObservedImage = struct { width: u32, height: u32 = 0, svg_language: ?[]const u8 = null, element: ?Inventory = null, anchor: Inventory, centered: bool = false, centered_default_size: bool = false, right_default_size: bool = false, missing_content: ?ObservedMissing = null, poster_label: ?[]const u8 = null };
+const ObservedImage = struct { width: u32, height: u32 = 0, svg_language: ?[]const u8 = null, element: ?Inventory = null, anchor: Inventory, centered: bool = false, centered_default_size: bool = false, right_anchor: bool = false, right_default_size: bool = false, missing_content: ?ObservedMissing = null, poster_label: ?[]const u8 = null };
 // Returned markup supplies occurrence facts, not computed CSS or image pixels.
 fn missingAnchorFile(a: A, ns: *const namespaces.Registry, anchor: Inventory) !?[]const u8 {
     if (!equal(anchor.get("class") orelse return null, "new")) return null;
@@ -7541,6 +7547,11 @@ fn observedImagesWithServedPaintFailureMode(a: A, ns: *const namespaces.Registry
                 const centered_default_size = equal(figure_classes, "mw-default-size mw-halign-center");
                 const explicit_centered = equal(figure_classes, "mw-halign-center");
                 const centered = explicit_centered or centered_default_size;
+                // Only final observed A attributes are issued for this explicit-width
+                // frame. Its source option spelling and width are checked at selection.
+                const right_anchor = occurrence.anchor_attributes and !occurrence.width and !occurrence.height and
+                    occurrence.svg_language == null and occurrence.resolved_svg_language == null and
+                    equal(figure_classes, "mw-halign-right");
                 const height_right = occurrence.height and equal(figure_classes, "mw-halign-right");
                 const right_default_size = occurrence.width and !occurrence.height and !occurrence.anchor_attributes and
                     occurrence.svg_language == null and occurrence.resolved_svg_language == null and
@@ -7548,11 +7559,12 @@ fn observedImagesWithServedPaintFailureMode(a: A, ns: *const namespaces.Registry
                 if (!equal(stack[depth - 2].attributes.get("typeof") orelse return invalid, "mw:File/Thumb") or
                     (!equal(figure_classes, "mw-default-size") and
                         !(explicit_centered and occurrence.anchor_attributes and !occurrence.width) and
-                        !(centered_default_size and occurrence.width) and !height_right and !right_default_size and
+                        !(centered_default_size and occurrence.width) and !right_anchor and !height_right and !right_default_size and
                         !(explicit_svg_width and class_value == null)) or
                     !equal(anchor.get("class") orelse return invalid, "mw-file-description") or
                     try positiveAttribute(inv, "data-file-width") != occurrence.original_width or try positiveAttribute(inv, "data-file-height") != occurrence.original_height) return invalid;
-                if (occurrence.height and (!height_right or !equal(inv.get("class") orelse "", "mw-file-element") or inv.get("style") != null)) return invalid;
+                if (occurrence.height and !height_right) return invalid;
+                if ((occurrence.height or right_anchor) and (!equal(inv.get("class") orelse "", "mw-file-element") or inv.get("style") != null)) return invalid;
                 for (anchor.attributes) |attr| if (!equal(attr.name, "href") and !equal(attr.name, "class") and !equal(attr.name, "rel") and !equal(attr.name, "title")) return invalid;
                 for (stack[depth - 2].attributes.attributes) |attr| if (!equal(attr.name, "class") and !equal(attr.name, "typeof")) return invalid;
                 try imageSource(a, ns, inv.get("src") orelse return invalid, occurrence.canonical_file);
@@ -7584,8 +7596,9 @@ fn observedImagesWithServedPaintFailureMode(a: A, ns: *const namespaces.Registry
                 const width = try positiveAttribute(inv, "width");
                 if (centered and width > occurrence.original_width) return invalid;
                 const height = try positiveAttribute(inv, "height");
+                if (right_anchor and !observedWidthDownfit(width, height, occurrence.original_width, occurrence.original_height)) return invalid;
                 if (occurrence.height and !observedHeightFit(width, height, occurrence.original_width, occurrence.original_height)) return invalid;
-                selected[index] = .{ .width = width, .height = height, .svg_language = occurrence.svg_language orelse occurrence.resolved_svg_language, .element = inv, .anchor = anchor, .centered = centered, .centered_default_size = centered_default_size, .right_default_size = right_default_size };
+                selected[index] = .{ .width = width, .height = height, .svg_language = occurrence.svg_language orelse occurrence.resolved_svg_language, .element = inv, .anchor = anchor, .centered = centered, .centered_default_size = centered_default_size, .right_anchor = right_anchor, .right_default_size = right_default_size };
             };
         }
         if (!is_void) {
@@ -7804,6 +7817,51 @@ test "supplied Figure Book complete anchor inventory distinguishes absent empty 
     try std.testing.expectEqual(profile.AttributePresence.unknown, Inventory.presence(null, "rel"));
 }
 
+
+test "Vietnamese right-aligned 250px bitmap supplies only the selected final anchor attributes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const prefix = "testdata/vi-ready-anchor626/";
+    const bytes = try @import("wikimedia_dump").decompressZstdBytesAlloc(a, @embedFile(prefix ++ "observation.json.zst"), 256 * 1024);
+    const doc = try std.json.parseFromSliceLeaky(Document, a, bytes, .{ .allocate = .alloc_always });
+    try std.testing.expect(digestMatches(doc.pages[0].response, "f988e4d2bc70592697829ee797d95e88f678cbb4980e3c887fc26a6a30be92fb"));
+    const source = try Testing.source(a, doc);
+    try std.testing.expect(digestMatches(source, "a843c64cc5fa974a68bca05a7e8571b5737a5cce024a10533804ea9871c61adf"));
+    var ns = try namespaces.Registry.init(a, @embedFile("testdata/figure-page-observations/vi-page-served-set/namespace-registry.tsv"));
+    defer ns.deinit();
+    const defaults = Testing.hash(@embedFile("testdata/vi-frame250/figure-siteinfo.raw.json"));
+    const behaviors = @embedFile("testdata/vi-dau100/behavior-switches.tsv");
+    var behavior = try namespaces.behavior_switches.Registry.init(a, behaviors, ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256);
+    defer behavior.deinit();
+    var images = try namespaces.image_options.Registry.init(a, @embedFile("testdata/vi-dau100/image-options.tsv"), ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256, Testing.hash(behaviors));
+    defer images.deinit();
+    var files = try Testing.registry(a, &ns, doc);
+    defer files.deinit();
+    var book = try Book.init(std.testing.allocator, bytes, &ns, &files, defaults, 250);
+    defer book.deinit();
+    const raw = @embedFile(prefix ++ "page.raw.wikitext");
+    const title = "tiếng Việt";
+    const options = "nhỏ|phải|250px|Phân bổ tiếng Việt trên thế giới";
+    const context: compiler.Context = .{ .title = title, .namespace_catalog = &ns, .behavior_switches = &behavior, .image_options = &images };
+    const selected = (try book.select(a, &ns, 0, 626, 2333787, title, raw, source, defaults, 250, context)) orelse return error.TestUnexpectedResult;
+    const attributes = (try SelectedPage.anchor(selected, a, "TiengViet.PNG", .thumbnail, options)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(profile.AttributePresence.absent, attributes.get(attributes.ctx, "rel"));
+    try std.testing.expectEqual(profile.AttributePresence.present, attributes.get(attributes.ctx, "href"));
+    try std.testing.expect((try SelectedPage.width(selected, a, "TiengViet.PNG", .thumbnail, options, 250)) == null);
+    try std.testing.expect((try SelectedPage.anchor(selected, a, "Other.PNG", .thumbnail, options)) == null);
+    try std.testing.expect((try book.select(a, &ns, 0, 626, 2333788, title, raw, source, defaults, 250, context)) == null);
+    for ([_][]const u8{ "nhỏ|trái|250px|caption", "nhỏ|phải|249px|caption", "nhỏ|phải|250px|link=Other" }) |wrong|
+        try std.testing.expect(!alignedThumbnailDimensionOptions(&images, wrong, "img_right", 250, false));
+    const html = try Testing.html(a, doc);
+    const anchor = "<a href=\"/wiki/T%E1%BA%ADp_tin:TiengViet.PNG\" class=\"mw-file-description\"";
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, html, anchor));
+    const changed = try std.mem.replaceOwned(u8, a, html, anchor, anchor ++ " rel=\"mw:referencedBy\"");
+    const with_rel = try observedImages(a, &ns, changed, doc.pages[0].occurrences);
+    try std.testing.expectEqual(profile.AttributePresence.present, Inventory.presence(&with_rel[0].anchor, "rel"));
+    const wrong_height = try std.mem.replaceOwned(u8, a, html, "width=\"250\" height=\"116\"", "width=\"250\" height=\"117\"");
+    try std.testing.expectError(invalid, observedImages(a, &ns, wrong_height, doc.pages[0].occurrences));
+}
 
 test "observed centered explicit thumbnail exposes only exact original page anchor attributes" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
@@ -8444,8 +8502,8 @@ test "centered bare upright option proof refuses explicit factors competing dime
     const behavior_bytes = @embedFile(prefix ++ "behavior-switches.tsv");
     var images = try namespaces.image_options.Registry.init(a, @embedFile(prefix ++ "image-options.tsv"), ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256, Testing.hash(behavior_bytes)); defer images.deinit();
     for ([_][]const u8{ "mini|zentriert| hochkant| caption", "thumb|center|upright|caption", "thumb|center|upright|[[Target|caption]]" }) |options|
-        try std.testing.expect(centeredThumbnailDimensionOptions(&images, options, 190, true));
-    try std.testing.expect(!centeredThumbnailDimensionOptions(&images, "mini|zentriert|hochkant|caption", 0, true));
+        try std.testing.expect(alignedThumbnailDimensionOptions(&images, options, "img_center", 190, true));
+    try std.testing.expect(!alignedThumbnailDimensionOptions(&images, "mini|zentriert|hochkant|caption", "img_center", 0, true));
     for ([_][]const u8{
         "mini|zentriert|hochkant=0.75|caption", "mini|zentriert|hochkant=|caption", "mini|zentriert|190px|caption",
         "mini|zentriert|x190px|caption", "mini|rechts|hochkant|caption", "gerahmt|zentriert|hochkant|caption",
@@ -8453,7 +8511,7 @@ test "centered bare upright option proof refuses explicit factors competing dime
         "mini|zentriert|hochkant|caption|extra", "mini|zentriert|hochkant|hochkant", "mini|zentriert|hochkant|",
     }) |options| {
         errdefer std.debug.print("centered bare upright options refusal={s}\n", .{options});
-        try std.testing.expect(!centeredThumbnailDimensionOptions(&images, options, 190, true));
+        try std.testing.expect(!alignedThumbnailDimensionOptions(&images, options, "img_center", 190, true));
     }
     try std.testing.expect(centeredThumbnailOptions(&images, "mini|zentriert|190px|caption", 190));
     try std.testing.expect(!centeredThumbnailOptions(&images, "mini|zentriert|hochkant|caption", 190));
@@ -11362,9 +11420,9 @@ test "SVG language observation requires exact named PNG transform for every imag
     try std.testing.expectEqualStrings("vi", images[0].svg_language.?);
     try std.testing.expectEqual(@as(u32, 250), images[0].width);
     try std.testing.expectEqual(@as(u32, 208), images[0].height);
-    try std.testing.expect(svgObservedWidthFit(250, 208, 300, 250));
-    try std.testing.expect(!svgObservedWidthFit(250, 209, 300, 250));
-    try std.testing.expect(!svgObservedWidthFit(301, 251, 300, 250));
+    try std.testing.expect(observedWidthDownfit(250, 208, 300, 250));
+    try std.testing.expect(!observedWidthDownfit(250, 209, 300, 250));
+    try std.testing.expect(!observedWidthDownfit(301, 251, 300, 250));
     var changed = occurrence; changed.svg_language = "en";
     try std.testing.expectError(invalid, observedImages(a, &ns, html, &.{changed}));
     try std.testing.expectError(invalid, observedImages(a, &ns, try std.mem.concat(a, u8, &.{html, html}), &.{occurrence}));

@@ -1,0 +1,76 @@
+=={{langname|vi}}==
+{{wp}}
+[[Hình:TiengViet.PNG|nhỏ|phải|250px|Phân bổ tiếng Việt trên thế giới]]
+
+==={{section|etym}}===
+Từ {{ghép|vi|tiếng|Việt|t1=ngôn ngữ}}.
+
+==={{section|pron}}===
+{{vi-pron}}
+
+==={{section|noun}}===
+{{vi-noun|㗂越}}
+
+# {{senseid|vi|Q9199}} [[ngôn ngữ|Ngôn ngữ]] của dân tộc [[Việt]] ([[Kinh]]), là ngôn ngữ chính thức của nước [[Việt Nam]], có nhiều [[thanh điệu]] [[đơn âm]], [[đa thanh]], giàu tính [[biểu cảm]].
+
+===={{section|syn}}====
+* {{l|vi|Việt ngữ}} {{q|cũ}}
+* {{l|vi|tiếng Kinh}}
+* {{l|vi|tiếng Việt Nam}} {{q|hiếm}}
+
+===={{section|trans}}====
+{{trans-top|ngôn ngữ của dân tộc Việt (Kinh)}}
+* {{langname|ar}}: {{t+|ar|اَلْفِيتْنَامِيَّة|f|tr=al-fitnamiyya}}, {{t+|ar|فِيتْنَامِيّ|m|tr=fitnāmiyy}}
+* {{langname|en}}: {{t+|en|Vietnamese}}
+* {{langname|hy}}: {{t+|hy|վիետնամերեն}}
+* {{langname|ast}}: {{t+|ast|vietnamita|m}}, {{t+|ast|vietnamín}}
+* {{langname|fa}}: {{t+|fa|ویتنامی|tr=viyatnâmi}}
+* {{langname|eu}}: {{t+|eu|vietnamera}}
+* {{langname|be}}: {{t+|be|в'етна́мская мо́ва|f}}, {{t+|be|в'етна́мская|f}}
+* {{langname|br}}: {{t+|br|viêtnameg|m}}, {{t+|br|vietnameg|m}}
+* {{langname|ca}}: {{t+|ca|vietnamita|m}}
+* {{langname|et}}: {{t+|et|vietnami}}
+* {{langname|rad}}: {{t+|rad|klei Yuăn}}
+* {{langname|gl}}: {{t+|gl|vietnamita|m}}
+* {{langname|ka}}: {{t+|ka|ვიეტნამური}}
+* {{langname|nl}}: {{t+|nl|Vietnamees}}
+* {{langname|hu}}: {{t+|hu|vietnami}}
+* {{langname|el}}: {{t+|el|βιετναμικά|n-p}}
+* {{langname|km}}: {{t|km|[[ភាសា]][[វៀតណាម]]}}
+* {{langname|ky}}: {{t+|ky|вьетнамча}}
+* {{langname|lo}}: {{t+|lo|ພາສາຫວຽດນາມ}}
+* {{langname|lv}}: {{t+|lv|vjetnamiešu}}
+* {{langname|lt}}: {{t+|lt|vietnamiečių}}
+* {{langname|my}}: {{t+|my|ဗီယက်နမ်}}, {{t|my|[[ဗီယက်နမ်]][[ဘာသာ]]}}
+* {{langname|nv}}: {{t+|nv|Biʼednam Dineʼé bizaad}}
+* {{langname|ru}}: {{t+|ru|вьетна́мский|m}} {{qualifier|язы́к}}, {{t+|ru|вьетна́мский язы́к|m}}
+* {{langname|ja}}: {{t+|ja|ベトナム語|tr=ベトナムご, betonamugo}}
+* {{langname|fr}}: {{t+|fr|vietnamien|m}}
+* {{langname|fi}}: {{t+|fi|vietnam}}
+* {{langname|ro}}: {{t+|ro|vietnameză|f}}
+* {{langname|cs}}: {{t+|cs|vietnamština|f}}
+* {{langname|sh}}:
+*: Kirin: {{t+|sh|вијетнамски|m}} {{qualifier|језик}}
+*: Latinh: {{t+|sh|vijetnamski|m}} {{qualifier|jezik}}
+* {{langname|sk}}: {{t+|sk|vietnamčina|f}}
+* {{langname|sl}}: {{t+|sl|vietnamščina|f}}
+* {{langname|sw}}: {{t+|sw|Kivietinamu}}, {{t+|sw|Kivieti}}
+* {{langname|tl}}: {{t+|tl|Biyetnames}}
+* {{langname|ta}}: {{t+|ta|வியட்நாமியம்}}
+* {{langname|es}}: {{t+|es|vietnamita|m}}
+* {{langname|th}}: {{t+|th|[[ภาษา]][[เวียดนาม]]|tr=paa-săa wîat-naam}}
+* {{langname|tr}}: {{t+|tr|Vietnamca}}, {{t+|tr|Vietnam dili}}
+* {{langname|sv}}: {{t+|sv|vietnamesiska}}
+* {{langname|ko}}: {{t+|ko|베트남어}}
+* {{langname|zh}}:
+*: {{langname|cmn}}: {{t+|cmn|越南語|tr=yuènányǔ}}
+*: {{langname|yue}}: {{t+|yue|越南話|tr=jyut6 naam4 waa6-2}}
+* {{langname|uk}}: {{t+|uk|в'єтна́мська мо́ва|f}}, {{t+|uk|в'єтна́мська|f}} {{qualifier|мо́ва}}
+* {{langname|ur}}: {{t+|ur|ویتنامی|f|tr=viyatnāmī}}
+* {{langname|cy}}: {{t+|cy|Fietnameg}}
+* {{langname|it}}: {{t+|it|vietnamita|m}}
+* {{langname|da}}: {{t+|da|vietnamesisk}}
+* {{langname|de}}: {{t+|de|Vietnamesisch|n}}
+{{cuối}}
+
+{{C|vi|Tên ngôn ngữ}}
