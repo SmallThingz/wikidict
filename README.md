@@ -54,13 +54,11 @@ zig build
 
 The default build installs the reader and C ABI under `zig-out/`.
 
-For repeated builds on a small checkout volume, put Zig's cache and install
-prefix on a volume with enough space. Reuse the same cache across builds. For
-example, when your home directory is on that volume, build the reader with:
+Reuse one checkout-local Zig cache across builds. Keep generated dictionaries,
+packages and temporary working files inside the checkout. For example:
 
 ```sh
-cache="${XDG_CACHE_HOME:-$HOME/.cache}/wikidict-native"
-ZIG_GLOBAL_CACHE_DIR="$cache/global" zig build cli --cache-dir "$cache/local" --prefix "$cache/install"
+ZIG_GLOBAL_CACHE_DIR="$PWD/.zig-cache/global" zig build cli --cache-dir .zig-cache --prefix zig-out
 ```
 
 Useful validation targets:
@@ -172,8 +170,8 @@ up to the four-worker staging limit. Smaller jobs and hosts without `lbzip2`
 use Python's bzip2 decoder. Both paths produce the same page frames and index.
 
 ```sh
-python compiler/tools/download_wiktionaries.py --out data/dumps --wikis enwiktionary
-python compiler/tools/build_wiktionaries.py --in data/dumps --out data/dictionaries \
+python compiler/tools/download_wiktionaries.py --out data/inputs/dumps --wikis enwiktionary
+python compiler/tools/build_wiktionaries.py --in data/inputs/dumps --out data/dictionaries \
   --wikis enwiktionary
 ```
 
@@ -200,12 +198,14 @@ indexed inputs retain their stored coordinates when a build resumes.
 For a single-part download it inflates up to four blocks concurrently and
 feeds verified XML to the framer in source order. `--workers 1` uses the serial
 reader. Both paths check the same SHA-1, block CRCs and stream CRCs.
-The ordinary corpus build above defaults to Zstandard staging. Opt into direct
-archive inputs for new editions with `--original-archives`. This works with
-multiple editions in one ordinary invocation:
+Compatible new corpus builds read the original bzip2 archives by default.
+`--original-archives` selects that mode explicitly. Use `--repack` for temporary
+page-aligned Zstandard staging, including builds that need the extraction and
+native-object cache described below. Neither mode writes a full raw XML copy.
+Multiple editions can share one ordinary invocation:
 
 ```sh
-python3.14 compiler/tools/build_wiktionaries.py --in data/dumps --out data/dictionaries \
+python3.14 compiler/tools/build_wiktionaries.py --in data/inputs/dumps --out data/dictionaries \
   --wikis itwiktionary viwiktionary --original-archives
 ```
 
@@ -231,8 +231,8 @@ file and a new build-input directory. It counts pages while it verifies the
 original archives. This requires only the downloaded dump and its manifest.
 
 ```sh
-python3.14 compiler/tools/index_original_dump.py --downloads data/dumps \
-  --manifest data/dumps/manifest.json --manifest-sha256 "$manifest_sha256" \
+python3.14 compiler/tools/index_original_dump.py --downloads data/inputs/dumps \
+  --manifest data/inputs/dumps/manifest.json --manifest-sha256 "$manifest_sha256" \
   --edition enwiktionary --output en-blocks.json --build-input-root en-original-input
 ```
 
@@ -274,11 +274,14 @@ place. Keep the directory intact until the retry finishes. This also works when
 the previous attempt completed the repack and failed later while compiling an
 entry.
 
-New builds keep their extraction and native-object cache alongside `input` in
+Repacked builds keep their extraction and native-object cache alongside `input` in
 `YYYYMMDD.shards/extraction-cache`. Once the earlier build has ended, pass
 that path as `--extraction-cache-root` along with `--staged-input-root` to
 reuse both. This preserves the dump inode that the extracted indexes refer
 to. Existing workspaces with a cache under `input` keep using it in place.
+Original-archive mode does not currently admit this external extraction cache.
+Do not assume that an unsealed worker from a failed build can be reused after
+its source or metadata changes.
 
 For an edition that repeatedly fails late in a shard, the Python corpus builder
 accepts `--shard-pages 1000` to verify and checkpoint every 1,000 indexed pages.
@@ -332,8 +335,9 @@ conditions so contention is not mistaken for a performance regression.
 - The builder compresses dictionary blobs with XZ preset `-0` and 1 MiB blocks.
   It decodes each compressed file and compares it with the original bytes.
 
-Use `--compress-shards` to limit temporary disk use during a corpus build. The
-controller verifies and compresses each completed shard before asking for the
+Ordinary CLI builds compress temporary shards by default. `--compress-shards`
+selects this explicitly; `--no-compress-shards` is available for diagnostics.
+The controller verifies and compresses each completed shard before asking for the
 next. For ordinary builds with two or more consecutive missing shards at the
 end, a Writer that supports the shard protocol stays open and reuses its loaded
 inputs. On resume, the controller rechecks existing shards before reusing them.
@@ -717,19 +721,19 @@ rebuild it when necessary.
 Resolve the newest complete snapshot for every Wiktionary edition:
 
 ```sh
-python3 compiler/tools/download_wiktionaries.py --plan
+python3 compiler/tools/download_wiktionaries.py --plan --out .tmp/dump-plan
 ```
 
 Download selected editions:
 
 ```sh
-python3 compiler/tools/download_wiktionaries.py --wikis enwiktionary simplewiktionary
+python3 compiler/tools/download_wiktionaries.py --out data/inputs/dumps --wikis enwiktionary simplewiktionary
 ```
 
 Build downloaded snapshots:
 
 ```sh
-python3 compiler/tools/build_wiktionaries.py --in data/dumps --out data/dictionaries
+python3 compiler/tools/build_wiktionaries.py --in data/inputs/dumps --out data/dictionaries
 ```
 
 Whole-edition discovery also snapshots authoritative language names. It needs the
