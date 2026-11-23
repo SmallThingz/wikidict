@@ -4,7 +4,7 @@ export function inlineText(values,lineBreak=' '){
   let budget=1048576;
   const text=(spans,depth)=>{
     if(depth>16||!Array.isArray(spans)||(budget-=spans.length)<0)throw Error('Inline text exceeds reader limit');
-    return spans.map(span=>(span.kind==='line_break'?lineBreak:span.inline_action_group?text(span.inline_action_group.spans,depth+1):span.text||'')+(span.trail||'')).join('');
+    return spans.map(span=>(span.kind==='line_break'?lineBreak:span.inline_action_group||span.inline_box_group?text((span.inline_action_group??span.inline_box_group).spans,depth+1):span.text||'')+(span.trail||'')).join('');
   };
   return text(values,0);
 }

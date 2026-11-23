@@ -1,14 +1,15 @@
 // WIKBLB08 contains compiled semantic pages or typed DAL1 redirect envelopes.
 // A leading U+FEFF belongs to a compiled title or field, not a file BOM.
-import {validateContainerBlock,validateCellMetrics,validateRuby,validateRubyOwner,validateRubySpan,validateActionGroupSpan} from './validate.js';
+import {validateContainerBlock,validateCellMetrics,validateRuby,validateRubyOwner,validateRubySpan,validateActionGroupSpan,validateInlineBoxSpan} from './validate.js';
 const utf8 = new TextDecoder('utf-8', {fatal:true,ignoreBOM:true});
 const kinds = ['language','thesaurus','citations','reconstruction','rhymes','sign_gloss','supplemental','alias'];
 const blocks = ['paragraph','blank','definition','example','quotation','list_item','list_detail','indent','term','heading','preformatted','rule','table','container'];
 const validInlineImageFile=value=>typeof value==='string'&&value.length>0&&new TextEncoder().encode(value).length<=32*1024*1024&&!value.startsWith(' ')&&!value.endsWith(' ')&&!/[_\[\]{}<>|#\x00-\x1f\x7f-\x9f]/u.test(value);
 const roles = ['normal','label','pronunciation','headword','example','quotation','citation','reference'];
+const magicStrings = new Set('23456789ABCDEFGHIJKLMSVY'.split('').map(version=>'DPR'+version));
 const require = (ok, message='Invalid compiled dictionary') => { if (!ok) throw Error(message); };
 export function decode(bytes, metadata) {
-  let p=0, budget=1000000, explained=false, colored=false, anchored=false, painted=false, nested=false, ordered=false, scaled=false, based=false, referenceItems=false, referenceBlocks=false, imageBorder=false, aligned=false, componentTargets=false, dynamicCatalogue=false, tooltips=false, blockGeometry=false, rich=false, inlineTableStyles=false, containers=false, containerFonts=false, contentDepth=0, rubyDepth=0, rubyCount=0, rubyEnabled=false, actionGroupsEnabled=false, actionGroupCount=0, actionGroupDepth=0, mapStringBudget=32*1024*1024;
+  let p=0, budget=1000000, explained=false, colored=false, anchored=false, painted=false, nested=false, ordered=false, scaled=false, based=false, referenceItems=false, referenceBlocks=false, imageBorder=false, aligned=false, componentTargets=false, dynamicCatalogue=false, tooltips=false, blockGeometry=false, rich=false, inlineTableStyles=false, containers=false, containerFonts=false, contentDepth=0, rubyDepth=0, rubyCount=0, rubyEnabled=false, actionGroupsEnabled=false, actionGroupCount=0, actionGroupDepth=0, inlineBoxGroups=false, boxCount=0, boxDepth=0, boxActionDepth=0, mapStringBudget=32*1024*1024;
   const view=new DataView(bytes.buffer,bytes.byteOffset,bytes.byteLength);
   function advance(length) {
     require(length >= 0 && length <= bytes.length - p);
@@ -52,10 +53,12 @@ export function decode(bytes, metadata) {
   const spanValue=()=>{
     const kind=tag(['text','link','external_link','line_break']),role=tag(roles),flags=byte();
     const s={kind,role,text:string(),target:string(),trail:string(),language:string(),classes:string(),direction:string(),explanation:explained?string():'',foreground:colored?rgb():null,background:painted?rgb():null};
-    if(actionGroupDepth)require(kind==='text'&&s.target==='','An inline action child cannot own an action');
+    if(actionGroupDepth||boxActionDepth)require(kind==='text'&&s.target==='','An inline action child cannot own an action');
     const fontFields=scaled?(containerFonts?byte():(presence()?1:0)):0;
-    require((fontFields&~1)===0,'Unsupported span font policy');
+    require((fontFields&~(inlineBoxGroups?0x2b:1))===0,'Unsupported span font policy');
     if(fontFields&1){const value=f32();require(Number.isFinite(value)&&value>=0,'Invalid semantic font scale');s.font_scale=value;if(based){const basis=tag(containerFonts?['context','normal_body','css_px']:['context','normal_body']);if(basis!=='context')s.font_scale_basis=basis;if(tooltips&&value===1&&basis==='context')delete s.font_scale;}}
+    if(fontFields&2)s.font_features=tag(['normal','seven_on']);
+    if(fontFields&8)s.inline_style=inlineTextStyle();
     if(referenceBlocks&&presence()){
       require(kind!=='line_break'&&s.text===''&&s.trail===''&&(kind==='text'?s.target==='':s.target.length>0));const image={file:string()},flags=byte();require((flags&~(inlineTableStyles?127:rich?63:imageBorder?31:15))===0&&validInlineImageFile(image.file));
       for(const [bit,key] of [[1,'width_px'],[2,'height_px']])if(flags&bit){image[key]=u32();require(image[key]>0);}
@@ -63,7 +66,7 @@ export function decode(bytes, metadata) {
     }
     if(componentTargets&&presence()){require(kind==='link','Invalid target fragment kind');s.target_fragment=string();}
     if(tooltips)s.tooltip=presence()?string():null;
-    if(rubyEnabled&&presence()){require(!actionGroupDepth,'Unsupported rich inline action child');s.ruby=rubyValue();validateRubySpan(s);}
+    if(rubyEnabled&&presence()){require(!actionGroupDepth&&!boxActionDepth,'Unsupported rich inline action child');s.ruby=rubyValue();validateRubySpan(s);}
     if(actionGroupsEnabled){
       require(!presence(),'Unsupported inline padding group');
       if(presence()){
@@ -73,17 +76,73 @@ export function decode(bytes, metadata) {
         try{s.inline_action_group=content(()=>({spans:spans()}));}finally{actionGroupDepth--;}
       }
     }
+    if(inlineBoxGroups&&presence()){
+      require(rubyDepth===0&&!actionGroupDepth&&!s.ruby&&!s.inline_action_group,'Unsupported inline box context');
+      const linked=kind==='link'||kind==='external_link';
+      boxCount++;boxDepth++;if(linked)boxActionDepth++;
+      try{s.inline_box_group=content(()=>inlineBoxGroup(!!(fontFields&0x20)));}finally{boxDepth--;if(linked)boxActionDepth--;}
+    }else require(!(fontFields&0x20),'Inline box radius without box');
+    if(boxDepth)require(['text','link','external_link'].includes(kind)&&!s.image,'Invalid inline box child');
     ['bold','italic','code','small','superscript','subscript','strike','underline'].forEach((f,i)=>s[f]=!!(flags&(1<<i)));
-    if(s.inline_action_group)validateActionGroupSpan(s);return s;
+    if(s.inline_action_group)validateActionGroupSpan(s);if(s.inline_box_group)validateInlineBoxSpan(s);if(s.inline_style)checkStyledSpan(s);return s;
   };
-  const spans=()=>list(actionGroupsEnabled?40:rubyEnabled?38:tooltips?37:componentTargets?36:referenceBlocks?35:scaled?34:painted?33:colored?32:explained?31:27,spanValue);
+  const spans=()=>list(inlineBoxGroups?41:actionGroupsEnabled?40:rubyEnabled?38:tooltips?37:componentTargets?36:referenceBlocks?35:scaled?34:painted?33:colored?32:explained?31:27,spanValue);
   const styleLength=()=>{const unit=tag(['px','em']),value=f32();require(Number.isFinite(value)&&value>=0,'Invalid style length');return {unit,value};};
+  const boxEdges=['top','right','bottom','left'];
+  const rgbValue=()=>{const value=string();require(/^#[0-9a-f]{6}$/.test(value));return value;};
+  const boxColor=()=>{
+    const kind=tag(['current_color','transparent','rgb','light_dark']);
+    return kind==='rgb'?{kind,value:rgbValue()}:kind==='light_dark'?{kind,light:rgbValue(),dark:rgbValue()}:{kind};
+  };
+  const boxBorders=()=>Object.fromEntries(boxEdges.map(side=>{
+    const kind=tag(['none','hidden','solid','dotted']);
+    return [side,kind==='solid'||kind==='dotted'?{kind,width:styleLength(),color:boxColor()}:{kind}];
+  }));
+  const inlineBoxGroup=radiusPresent=>{
+    require(bytes.length-p>=32+(radiusPresent?5:0));
+    const padding=edges(),border=boxBorders();
+    const overlays=list(15,()=>{
+      const flags=byte();require((flags&~15)===0&&(flags&5)!==0&&(flags&10)!==0,'Unsupported inline overlay content');
+      const insets={};
+      for(const [index,side] of boxEdges.entries())if(flags&(1<<index)){
+        const unit=tag(['px','em','percent']),value=f32();require(Number.isFinite(value));insets[side]={unit,value};
+      }
+      return {insets,border:boxBorders()};
+    });
+    const children=spans();
+    let radius=null;
+    if(radiusPresent){const unit=tag(['px','em','percent']),value=f32();require(unit!=='em'&&Number.isFinite(value)&&value>=0);radius={unit,value};}
+    return {padding,border,overlays,spans:children,radius};
+  };
+  const computed=(signed=false)=>{
+    const value=f32(),font_scale_basis=tag(['context','normal_body','css_px']);
+    require(Number.isFinite(value)&&(signed||value>=0)&&font_scale_basis!=='context');return {value,font_scale_basis};
+  };
+  const inlineTextStyle=()=>{
+    const flags=byte();require(flags&&(flags&~0x3f)===0);
+    const decoration=flags&1?{style:tag(['solid','dotted']),color:presence()?rgbValue():null,thickness:presence()?styleLength():null}:null;
+    const line_height=flags&2?(tag(['computed','font_relative'])==='computed'?{computed:computed()}:{font_relative:{factor:f32(),font:rubyFontSnapshot()}}):null;
+    if(line_height?.font_relative)require(Number.isFinite(line_height.font_relative.factor)&&line_height.font_relative.factor>=0);
+    const baseline_shift=flags&4?computed(true):null;
+    const cursor=flags&16?tag(['help']):null,wrap=flags&32?tag(['normal','break_word']):null;
+    return {decoration,line_height,baseline_shift,font_normalized:!!(flags&8),cursor,wrap};
+  };
+  const checkStyledSpan=s=>{
+    const style=s.inline_style,group=s.inline_box_group??s.inline_action_group??s.ruby;
+    require(!s.image&&s.kind!=='line_break');
+    require(s.kind==='text'?s.target===''&&(s.text!==''||group||style.line_height&&style.cursor===null&&style.wrap===null):s.target!==''&&(s.text!==''||group));
+    if(style.baseline_shift&&style.line_height?.font_relative){
+      const font=style.line_height.font_relative.font;
+      require((font.font_scale??1)===(s.font_scale??1)&&(font.font_scale_basis??'context')===(s.font_scale_basis??'context')&&font.font_normalized===style.font_normalized);
+      for(const key of ['small','superscript','subscript','bold','italic','code','language','classes','role','font_features'])require((font[key]??null)===(s[key]??null));
+    }
+  };
   const rubyFontSnapshot=()=>{
     const fields=byte();require((fields&~31)===0,'Invalid ruby font flags');
     const value={small:!!(fields&2),superscript:!!(fields&4),subscript:!!(fields&8),font_normalized:!!(fields&16)};
     if(fields&1){const scale=f32(),basis=tag(['context','normal_body','css_px']);require(Number.isFinite(scale)&&scale>=0);if(scale!==1||basis!=='context')value.font_scale=scale;if(basis!=='context')value.font_scale_basis=basis;}
-    const face=byte();require((face&~7)===0,'Unsupported ruby owner font policy');
-    value.bold=!!(face&1);value.italic=!!(face&2);value.code=!!(face&4);value.language=string();value.classes=string();value.role=tag(roles);value.font_features=null;
+    const face=byte();require((face&~(inlineBoxGroups?15:7))===0,'Unsupported ruby owner font policy');
+    value.bold=!!(face&1);value.italic=!!(face&2);value.code=!!(face&4);value.language=string();value.classes=string();value.role=tag(roles);value.font_features=face&8?tag(['normal','seven_on']):null;require(!value.font_normalized||(value.font_scale!=null&&value.font_scale_basis!=null));
     return value;
   };
   const rubyInlineStyle=()=>{
@@ -239,8 +298,9 @@ export function decode(bytes, metadata) {
   };
   const contentContext=value=>['list_item','definition','example','quotation','term','list_detail','indent'].includes(value.kind)||(value.kind==='paragraph'&&value.depth===0&&value.path==='');
   const magic=text(4);
-  require(magic==='DPR2'||magic==='DPR3'||magic==='DPR4'||magic==='DPR5'||magic==='DPR6'||magic==='DPR7'||magic==='DPR8'||magic==='DPR9'||magic==='DPRA'||magic==='DPRB'||magic==='DPRC'||magic==='DPRD'||magic==='DPRE'||magic==='DPRF'||magic==='DPRG'||magic==='DPRH'||magic==='DPRI'||magic==='DPRJ'||magic==='DPRK'||magic==='DPRL'||magic==='DPRM'||magic==='DPRS'||magic==='DPRV','Dictionary contains uncompiled records');
-  actionGroupsEnabled=magic==='DPRV';rubyEnabled=magic==='DPRS'||actionGroupsEnabled;containerFonts=magic==='DPRM'||rubyEnabled;containers=magic==='DPRL'||containerFonts;inlineTableStyles=magic==='DPRK'||containers;rich=magic==='DPRJ'||inlineTableStyles;blockGeometry=magic==='DPRI'||rich;tooltips=magic==='DPRH'||blockGeometry;dynamicCatalogue=magic==='DPRG'||tooltips;componentTargets=magic==='DPRF'||dynamicCatalogue;aligned=magic==='DPRE'||componentTargets;imageBorder=magic==='DPRD'||aligned;referenceBlocks=magic==='DPRC'||imageBorder;based=magic==='DPRB'||referenceBlocks;scaled=magic==='DPRA'||based;referenceItems=magic==='DPR9'||scaled;ordered=magic==='DPR8'||referenceItems;nested=magic==='DPR7'||ordered;if(nested)budget=1<<20;painted=magic==='DPR6'||nested;anchored=magic==='DPR5'||painted;colored=magic==='DPR4'||anchored;explained=magic!=='DPR2';
+  require(magicStrings.has(magic),'Dictionary contains uncompiled records');
+  if(magic==='DPRY'){require(byte()===4,'Unsupported owner geometry features');inlineBoxGroups=true;}
+  actionGroupsEnabled=magic==='DPRV'||inlineBoxGroups;rubyEnabled=magic==='DPRS'||actionGroupsEnabled;containerFonts=magic==='DPRM'||rubyEnabled;containers=magic==='DPRL'||containerFonts;inlineTableStyles=magic==='DPRK'||containers;rich=magic==='DPRJ'||inlineTableStyles;blockGeometry=magic==='DPRI'||rich;tooltips=magic==='DPRH'||blockGeometry;dynamicCatalogue=magic==='DPRG'||tooltips;componentTargets=magic==='DPRF'||dynamicCatalogue;aligned=magic==='DPRE'||componentTargets;imageBorder=magic==='DPRD'||aligned;referenceBlocks=magic==='DPRC'||imageBorder;based=magic==='DPRB'||referenceBlocks;scaled=magic==='DPRA'||based;referenceItems=magic==='DPR9'||scaled;ordered=magic==='DPR8'||referenceItems;nested=magic==='DPR7'||ordered;if(nested)budget=1<<20;painted=magic==='DPR6'||nested;anchored=magic==='DPR5'||painted;colored=magic==='DPR4'||anchored;explained=magic!=='DPR2';
   const entry={...metadata,presentation_version:magic,display_title:spans(),sections:list(anchored?17:9,()=>({level:byte(),title:string(),anchor:anchored?string():'',anchor_fallback:anchored?string():'',blocks:list(blockMinimum(),()=>block())})),preamble_spans:spans()};
   const childPath=(values,root)=>{
     const n=count(4);require(n<=16);let value=values[root];
@@ -273,7 +333,7 @@ export function decode(bytes, metadata) {
     return reference;
   });
   entry.media=list(9,()=>({file:string(),kind:tag(['image','audio']),caption:string()}));
-  if(rubyEnabled){require(byte()===0,'Unsupported extended-record body feature');require(actionGroupsEnabled?actionGroupCount>0:rubyCount>0,actionGroupsEnabled?'DPRV requires inline action payload':'DPRS requires ruby payload');}
+  if(rubyEnabled){require(byte()===0,'Unsupported extended-record body feature');require(inlineBoxGroups?boxCount>0:actionGroupsEnabled?actionGroupCount>0:rubyCount>0,inlineBoxGroups?'DPRY requires inline box payload':actionGroupsEnabled?'DPRV requires inline action payload':'DPRS requires ruby payload');}
   const images=[];
   const inspect=values=>{for(const span of values||[])if(span.image)images.push(span.image);};
   const inspectTable=value=>{inspect(value.caption);if(value.caption_blocks)inspectBlocks(value.caption_blocks);for(const row of value.rows)for(const cell of row.cells){inspect(cell.spans);if(cell.blocks)inspectBlocks(cell.blocks);if(cell.nested_table)inspectTable(cell.nested_table);}};
@@ -384,7 +444,8 @@ export async function buildIndex(source) {
       rows.push({title:alias.source_key,raw_key:title,source_kind:alias.source_kind,source_title:alias.source_title,offset:p,length});
     }else{
       const magic=utf8.decode(await recordBytes(4));
-      require(magic==='DPR2'||magic==='DPR3'||magic==='DPR4'||magic==='DPR5'||magic==='DPR6'||magic==='DPR7'||magic==='DPR8'||magic==='DPR9'||magic==='DPRA'||magic==='DPRB'||magic==='DPRC'||magic==='DPRD'||magic==='DPRE'||magic==='DPRF'||magic==='DPRG'||magic==='DPRH'||magic==='DPRI'||magic==='DPRJ'||magic==='DPRK'||magic==='DPRL'||magic==='DPRM'||magic==='DPRS'||magic==='DPRV');
+      require(magicStrings.has(magic));
+      if(magic==='DPRY')require(length>=5&&(await recordBytes(5))[4]===4,'Unsupported owner geometry features');
       rows.push({title,offset:p,length});
     }
     require(rows.length<=10000000);p+=length;

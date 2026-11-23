@@ -243,3 +243,62 @@ export function validateActionGroupSpan(span){
     if(child.ruby!=null||child.inline_padding_group!=null)throw Error('Unsupported rich inline action child');
   }
 }
+
+const inlineBoxSides = ['top','right','bottom','left'];
+const inlineBoxRgb = value => typeof value === 'string' && /^#[0-9a-f]{6}$/.test(value);
+
+export function validateInlineBoxSpan(owner) {
+  let budget=1048576;
+  const invalid=()=>{throw Error('Invalid compiled inline box group');};
+  const check=(accept)=>{if(!accept)invalid();};
+  const length=(value,units,signed=false)=>{
+    check(value && units.includes(value.unit) && Number.isFinite(value.value) &&
+      Math.abs(value.value)<=3.4028234663852886e38 && (signed||value.value>=0));
+  };
+  const borders=value=>{
+    for(const side of inlineBoxSides){
+      const edge=value?.[side];check(edge&&['none','hidden','solid','dotted'].includes(edge.kind));
+      if(edge.kind==='none'||edge.kind==='hidden')continue;
+      length(edge.width,['px','em']);
+      const color=edge.color;check(color&&['current_color','transparent','rgb','light_dark'].includes(color.kind));
+      if(color.kind==='rgb')check(inlineBoxRgb(color.value));
+      if(color.kind==='light_dark')check(inlineBoxRgb(color.light)&&inlineBoxRgb(color.dark));
+    }
+  };
+  const span=(value,depth,inAction)=>{
+    check(value && depth<=16 && --budget>=0 && ['text','link','external_link'].includes(value.kind));
+    check(typeof value.text==='string'&&typeof value.target==='string'&&typeof (value.trail??'')==='string');
+    const action=value.kind!=='text';
+    check(action?!!value.target&&!inAction:value.target==='');
+    if(value.target_fragment!=null){check(value.kind==='link');linkTargetParts(value.target,value.target_fragment);}
+    check(!value.image&&!value.audio_control&&!value.inline_padding_group&&!value.clipped_absolute);
+    check(!(value.classes??'').split(/[ \t\r\n\f]+/u).some(c=>c==='wikidict-media'||c.startsWith('wikidict-media-file-')));
+    if(value.inline_action_group){validateActionGroupSpan(value);return value.inline_action_group.spans.some(child=>child.text.length||child.trail?.length);}
+    const group=value.inline_box_group;
+    if(!group){
+      if(value.ruby!=null){check(!inAction);validateRubySpan(value);validateRuby(value.ruby);return true;}
+      return value.text.length!==0||(value.trail??'').length!==0;
+    }
+    check(depth<16&&!value.ruby&&value.text===''&&!value.trail&&Array.isArray(group.spans)&&group.spans.length>0&&Array.isArray(group.overlays));
+    budget-=group.overlays.length;check(budget>=0);
+    for(const side of inlineBoxSides)length(group.padding?.[side],['px','em']);
+    borders(group.border);
+    if(group.radius!=null){
+      length(group.radius,['px','percent']);
+      const edge=group.border.top;
+      check(group.overlays.length===0&&(edge.kind==='solid'||edge.kind==='dotted')&&edge.color.kind==='rgb');
+      for(const side of inlineBoxSides){const x=group.border[side];check(x.kind===edge.kind&&x.color.kind==='rgb'&&x.color.value===edge.color.value&&x.width.unit===edge.width.unit&&x.width.value===edge.width.value);}
+    }
+    for(const overlay of group.overlays){
+      check(overlay?.insets && !overlay.content && (overlay.insets.top!=null||overlay.insets.bottom!=null) && (overlay.insets.left!=null||overlay.insets.right!=null));
+      for(const side of inlineBoxSides)if(overlay.insets[side]!=null)length(overlay.insets[side],['px','em','percent'],true);
+      borders(overlay.border);
+    }
+    let text=false;
+    for(const child of group.spans){if(span(child,depth+1,inAction||action))text=true;}
+    check(text);
+    return text;
+  };
+  check(owner?.inline_box_group);
+  span(owner,0,false);
+}

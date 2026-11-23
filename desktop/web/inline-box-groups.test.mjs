@@ -1,0 +1,93 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {decode,buildIndex,RawSource} from './blob.js';
+import {validateInlineBoxSpan} from './validate.js';
+import {spans} from './renderer.js';
+import {inlineText} from './preview.js';
+
+const cat=(...values)=>Buffer.concat(values.map(value=>Array.isArray(value)?Buffer.from(value):value));
+const u=value=>{const bytes=Buffer.alloc(4);bytes.writeUInt32LE(value);return bytes;};
+const f=value=>{const bytes=Buffer.alloc(4);bytes.writeFloatLE(value);return bytes;};
+const string=value=>cat(u(Buffer.byteLength(value)),Buffer.from(value));
+const list=values=>cat(u(values.length),...values);
+const length=(n,unit=0)=>cat([unit],f(n));
+const edge=cat([2],length(1),[2],string('#000000'));
+const border=cat(edge,edge,edge,edge);
+const cleanBorder=[0,0,0,0];
+const zero=length(0);
+const padding=cat(zero,zero,zero,zero);
+const nb='\u00a0'.repeat(4);
+const run=({kind=0,text='sample',target='',background=null,box=null,style=null,radius=false,fragment=null}={})=>cat(
+  [kind,0,0],string(text),string(target),string(''),string(''),string(''),string(''),string(''),
+  [0],background?cat([1],string(background)):[0],[(style?8:0)|(radius?32:0)],style??[],[0],
+  fragment===null?[0]:cat([1],string(fragment)),[0,0,0,0],box?cat([1],box):[0]);
+const box=(children,{overlay=[],radius=null,borders=border}={})=>cat(padding,borders,list(overlay),list(children),radius??[]);
+const block=values=>cat([0,0,0],list(values),[0],string(''),string(''),[0],string(''),string(''),[0,0,0,0]);
+const wire=(values,{flags=4,pending=0}={})=>cat(Buffer.from('DPRY'),[flags],u(0),u(1),[2],string('Meaning'),string(''),string(''),list([block(values)]),u(0),u(0),u(0),u(0),u(0),[pending]);
+const swatch=(overrides={})=>run({text:'',background:'#80ffc0',box:box([run({text:nb})]),...overrides});
+const cursor=[16,0];
+const whiteLink=()=>run({kind:1,text:'white',target:'white',fragment:'Енглески'});
+const decodeSpans=bytes=>decode(bytes,{title:'green',language:'English'}).sections[0].blocks[0].spans;
+
+test('box-only owner geometry decodes measured swatch colors and typed box members without dropping the independent action',()=>{
+  const values=decodeSpans(wire([swatch({style:cursor}),whiteLink(),swatch({background:'#00ff80'}),swatch({background:'#008040'})]));
+  const [first,link]=values;
+  assert.equal(first.inline_style.cursor,'help');
+  assert.deepEqual(values.filter(v=>v.inline_box_group).map(v=>v.background),['#80ffc0','#00ff80','#008040']);
+  assert.deepEqual(first.inline_box_group.border.top,{kind:'solid',width:{unit:'px',value:1},color:{kind:'rgb',value:'#000000'}});
+  assert.equal(first.inline_box_group.spans[0].text,nb);
+  assert.equal(inlineText(values),nb+'white'+nb+nb);
+  assert.equal(link.target,'white');assert.equal(link.target_fragment,'Енглески');
+});
+
+test('box-only geometry preserves radius, signed overlay insets and nested nonaction boxes',()=>{
+  const overlay=cat([9],length(-1),length(0,2),cleanBorder);
+  const value=decodeSpans(wire([swatch({box:box([swatch({radius:true,box:box([run({text:nb})],{radius:length(50,2)})})],{overlay:[overlay]})})]))[0];
+  assert.deepEqual(value.inline_box_group.overlays[0].insets,{top:{unit:'px',value:-1},left:{unit:'percent',value:0}});
+  assert.deepEqual(value.inline_box_group.spans[0].inline_box_group.radius,{unit:'percent',value:50});
+  assert.equal(inlineText([value]),nb);
+});
+
+test('box-only profile keeps clean rejection of malformed geometry, actions, metadata, and depth',async()=>{
+  for(const bytes of [
+    wire([swatch()],{flags:0}),wire([swatch()],{flags:5}),wire([swatch()],{pending:2}),wire([whiteLink()]),
+    wire([run({text:'x',radius:true})]),wire([swatch({box:box([])})]),wire([swatch({text:'conflict'})]),
+    wire([swatch({box:box([run({kind:3,text:''})])})]),wire([swatch({style:[16,1]})]),
+    wire([swatch({kind:1,target:'outer',box:box([whiteLink()])})]),
+    wire([swatch({box:box([run({text:'x'})],{overlay:[cat([0],length(1),length(1),cleanBorder)]})})]),
+    wire([swatch({radius:true,box:box([run({text:'x'})],{radius:length(3,1)})})]),
+    wire([swatch({radius:true,box:box([run({text:'x'})],{radius:length(3),borders:cleanBorder})})]),
+    wire([swatch()]).subarray(0,-3),
+  ]) assert.throws(()=>decodeSpans(bytes));
+  let child=run({text:nb});for(let depth=0;depth<17;depth++)child=swatch({box:box([child])});
+  assert.throws(()=>decodeSpans(wire([child])),/Content depth/);
+  const valid=wire([swatch()]); const vl=n=>{const v=[];do{v.push((n&127)|(n>=128?128:0));n>>>=7;}while(n);return v;};
+  const member=payload=>cat(Buffer.from('WIKBLB08'),[7],Buffer.from('green\0'),vl(payload.length),payload);
+  assert.equal((await buildIndex(new RawSource(new Blob([member(valid)])))).rows[0].title,'green');
+  await assert.rejects(buildIndex(new RawSource(new Blob([member(wire([swatch()],{flags:5}))]))),/Unsupported owner geometry features/);
+});
+
+class Element {
+  constructor(tag,text=''){
+    this.tagName=tag.toUpperCase();this.children=[];this.value=text;
+    this.style={setProperty:(key,value)=>{this.style[key]=value;}};
+    this.dataset={};this.attributes={};this.listeners={};
+    this.classList={add:(...names)=>{this.className=[this.className??'',...names].join(' ').trim();}};
+  }
+  append(...nodes){for(const child of nodes)this.children.push(...(child.tagName==='#FRAGMENT'?child.children:[child]));}
+  set textContent(value){this.value=value;this.children=[];}
+  get textContent(){return this.value+this.children.map(child=>child.textContent).join('');}
+  setAttribute(key,value){this.attributes[key]=value;}
+  addEventListener(key,value){this.listeners[key]=value;}
+}
+const all=root=>[root,...root.children.flatMap(all)];
+const dom=fn=>{const previous=globalThis.document;globalThis.document={createElement:tag=>new Element(tag),createTextNode:text=>new Element('#text',text),createDocumentFragment:()=>new Element('#fragment')};try{return fn();}finally{globalThis.document=previous;}};
+test('rendering retains one inline CSS box, 4 NBSP, cursor and following link ownership',()=>dom(()=>{
+  const [value,link]=decodeSpans(wire([swatch({style:cursor}),whiteLink()]));const calls=[];
+  const fragment=spans([value,link],(...args)=>calls.push(args));const nodes=all(fragment);
+  const boxNode=nodes.find(n=>n.className==='compiled-inline-box');const anchors=nodes.filter(n=>n.tagName==='A');
+  assert.deepEqual([boxNode.textContent,boxNode.style.backgroundColor,boxNode.style['border-top'],boxNode.style.cursor,boxNode.style.boxSizing,boxNode.style.boxDecorationBreak],[nb,'#80ffc0','1px solid #000000','help','content-box','slice']);
+  assert.equal(anchors.length,1);assert.equal(anchors[0].textContent,'white');
+  anchors[0].listeners.click({preventDefault(){}});assert.deepEqual(calls,[['white','Енглески']]);
+  value.inline_box_group.border.left.width.value=NaN;assert.throws(()=>validateInlineBoxSpan(value));
+}));
