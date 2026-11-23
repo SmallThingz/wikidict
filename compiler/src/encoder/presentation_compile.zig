@@ -11548,6 +11548,40 @@ pub const Renderer = struct {
         isolated_geometry_unresolved = 8,
         fn bits(self: @This()) u64 { return @as(u64, @intFromEnum(self)) << 48; }
     };
+    // Transport only local facts about the exact authored SPAN. A clean
+    // opening can carry these facts even when missing source elsewhere on the
+    // page prevents issuing a complete ancestor class/ID inventory.
+    fn inlineBoxAuthoredSelectorFacts(self: *Renderer, tag: syntax.Tag, element: *table_style_profile.TextElement) Error!void {
+        if (!tag.is("span") or self.content_root != .parser_output or self.in_reference or self.in_template_literal_scope or
+            self.pre_block or self.parsed_pre or self.poem_depth != 0 or self.media_depth != 0 or self.ruby_depth != 0 or
+            self.table_viewport_cell_source != null or self.body_link_target.len != 0 or self.explicit_wiki_label != null or
+            element.alternative_ancestry != null or element.source_key != @intFromPtr(tag.name.ptr)) return;
+        const root = self.native_inline_motion_root orelse return;
+        if (!self.native_inline_motion_active or root.reference != null) return;
+        const tracked = self.inline_missing orelse return;
+        const opening = localTrackedTagOpening(tracked, tag) orelse return;
+        if (!noLiParentSourceRange(tracked, opening)) return;
+        const original_opening = self.wikiCellCurrentBodyRange(root.source, opening) orelse return;
+        const source = root.source.bytes;
+        const at = @intFromPtr(original_opening.ptr) - @intFromPtr(source.ptr);
+        const original = syntax.tagAt(source, at) orelse return;
+        if (!original.is("span") or original.closing or original.self_closing or original.end != at + original_opening.len) return;
+        element.source_fragment_target_absent = htmlOwnAttributePresence(&original, "id") == .absent;
+        const parent = element.parent orelse return;
+        if (!std.ascii.eqlIgnoreCase(parent.tag, "span") or at == 0 or source[at - 1] != '>') return;
+        const start = std.mem.lastIndexOfScalar(u8, source[0..at], '<') orelse return;
+        const article_parent = syntax.tagAt(source, start) orelse return;
+        if (!article_parent.is("span") or article_parent.closing or article_parent.self_closing or
+            article_parent.end != at or !noLiParentSourceRange(root.source, source[start..original.end]) or
+            htmlOwnAttributePresence(&article_parent, "class") == .unknown) return;
+        const pair = syntax.matchingTag(source, article_parent) orelse return;
+        const child = syntax.matchingTag(source, original) orelse return;
+        if (child.end > pair.inner_end) return;
+        const classes = (try self.semanticAttribute(article_parent, "class")) orelse "";
+        if (!std.mem.eql(u8, classes, parent.classes)) return;
+        element.source_direct_parent_classes = classes;
+    }
+
     fn inlineBoxResolution(self: *Renderer, tag: syntax.Tag, style: Style, inherited: Style) Error!table_style_profile.InlineBoxResolution {
         return self.inlineBoxResolutionDiagnosed(tag, style, inherited, null);
     }
@@ -11614,9 +11648,13 @@ pub const Renderer = struct {
         const profile = self.textPaintProfile();
         // Class/ID absence belongs only to this current source query. Keep the
         // original element uncertain when it becomes a later child or parent.
-        const query_element = if (profile) |selected_profile|
+        const source_query = if (profile) |selected_profile|
             (try self.nativeSourceClassQueryDiagnosed(tag, selected_profile, element, style.native_inline_motion, source_diagnostic)) orelse element
         else element;
+        var authored_query = source_query.*;
+        if (profile != null and !static_decoration) try self.inlineBoxAuthoredSelectorFacts(tag, &authored_query);
+        const query_element: *const table_style_profile.TextElement = if (authored_query.source_fragment_target_absent or
+            authored_query.source_direct_parent_classes != null) &authored_query else source_query;
         if (!static_decoration and query_element != element and self.inline_box_owner == null and
             !try profile.?.hasInlineBoxCandidateIn(self.a, query_element, css)) return .{};
         const use_profile = profile != null and !profile.?.inlineBoxIsolatedProfile();
@@ -41783,10 +41821,29 @@ pub const Renderer = struct {
     // protected-source owner, or malformed formatting boundary. It certifies
     // original element ownership, not the compiler's emitted block order.
     fn containerPositionChildComplete(source: []const u8) bool {
-        return containerPositionChildCompleteIn(source, false);
+        return containerPositionChildCompleteIn(source, false, null);
     }
 
-    fn containerPositionChildCompleteIn(source: []const u8, native_plain_li: bool) bool {
+    fn plannedPlainListCitationEnd(source: []const u8, tag: syntax.Tag, plan: *const CitationPlan) ?usize {
+        if (!tag.is("ref") or tag.closing or tag.self_closing or tag.html_pre or
+            !formattingAngleAttributesBalanced(tag.attrs) or std.mem.indexOfAny(u8, tag.attrs, "<>{}[]") != null) return null;
+        const marker = tag.attr(plan.attribute) orelse return null;
+        const event_index = std.fmt.parseInt(usize, marker, 10) catch return null;
+        if (event_index >= plan.events.items.len) return null;
+        const event = plan.events.items[event_index];
+        if (event.tag != .ref or !event.marker or event.authored_error or event.batch != null) return null;
+        const item_index = event.item orelse return null;
+        if (item_index >= plan.items.items.len) return null;
+        const item = plan.items.items[item_index];
+        const name = tag.attr("name") orelse return null;
+        if (item.kind != .note or name.len == 0 or !std.mem.eql(u8, name, item.name) or
+            !std.mem.eql(u8, tag.attr("group") orelse "", item.group)) return null;
+        const pair = syntax.matchingTag(source, tag) orelse return null;
+        if (!tableNestedSourceClose(source, tag.name, pair, false)) return null;
+        return pair.end;
+    }
+
+    fn containerPositionChildCompleteIn(source: []const u8, native_plain_li: bool, citations: ?*const CitationPlan) bool {
         // Multiline wiki list/heading/preformatted ownership needs a separate
         // structural certificate. The admitted children are single-line bodies.
         if (std.mem.indexOfAny(u8, source, "\r\n") != null) return false;
@@ -41817,6 +41874,12 @@ pub const Renderer = struct {
             }
             if (source[at] != '<') { at += 1; continue; }
             const tag = syntax.tagAt(source, at) orelse return false;
+            // The current page's Cite plan already owns this complete marker
+            // and its body. The ordinary inline renderer still emits it.
+            if (native_plain_li and tag.is("ref")) {
+                at = plannedPlainListCitationEnd(source, tag, citations orelse return false) orelse return false;
+                continue;
+            }
             if (native_plain_li and tag.is("samp")) {
                 if (tag.closing or tag.self_closing or trim(tag.attrs).len != 0) return false;
                 const pair = syntax.matchingTag(source, tag) orelse return false;
@@ -43769,11 +43832,11 @@ pub const Renderer = struct {
     // Bind its original list source key and validate direct LI children; ignored
     // wrappers and repaired/nested-list structure cannot lend this authority.
     fn sourceBoundPlainListParent(selected: []const u8, item: syntax.Tag, parent: *const table_style_profile.TextElement) bool {
-        return sourceBoundPlainListParentIn(selected, item, parent, false);
+        return sourceBoundPlainListParentIn(selected, item, parent, false, null);
     }
 
     fn sourceBoundPlainListParentIn(selected: []const u8, item: syntax.Tag,
-        parent: *const table_style_profile.TextElement, native_plain_li: bool) bool
+        parent: *const table_style_profile.TextElement, native_plain_li: bool, citations: ?*const CitationPlan) bool
     {
         if (!oneOf(parent.tag, &.{ "ul", "ol" }) or parent.source_key <= @intFromPtr(selected.ptr)) return false;
         const offset = parent.source_key - @intFromPtr(selected.ptr);
@@ -43797,7 +43860,7 @@ pub const Renderer = struct {
             if (pair.end <= at or pair.end > list_pair.inner_end) return false;
             const close = syntax.tagAt(selected, pair.inner_end) orelse return false;
             if (!close.closing or !close.is("li") or trim(close.attrs).len != 0 or
-                !containerPositionChildCompleteIn(selected[child.end..pair.inner_end], native_plain_li)) return false;
+                !containerPositionChildCompleteIn(selected[child.end..pair.inner_end], native_plain_li, citations)) return false;
             if (child.name.ptr == item.name.ptr and child.name.len == item.name.len) found = true;
             count += 1;
             if (count > max_html_normalization_frames) return false;
@@ -43874,7 +43937,7 @@ pub const Renderer = struct {
         // census. It never escapes as a selector/physical ancestry capability.
         var source_parent = parent_node.*;
         source_parent.source_key = @intFromPtr(mapped_list.name.ptr);
-        if (!sourceBoundPlainListParentIn(held.root.source.bytes, original_item, &source_parent, true)) return null;
+        if (!sourceBoundPlainListParentIn(held.root.source.bytes, original_item, &source_parent, true, self.context.citations)) return null;
         // Pin the current opener/body/closer jointly to the same original LI.
         // Checking a copied name or matching body text alone is insufficient.
         var current_occurrence = false;
@@ -128399,6 +128462,52 @@ const NativePlainLiGlossTest = struct {
     const list = "<ul lang='ja' style='font-style:italic'><li>" ++ item_body ++ "</li></ul>";
     const source = list ++ " MISSING";
 };
+
+test "Serbian pitch native list source retains only an exact planned citation" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const body = "<span class='Jpan'>にち</span> <ref name='DJR'><cite>[[Book]]</cite></ref>";
+    const prepared = try preparePageExternalLinksAlloc(a, body, .{});
+    const plan = prepared.citations orelse return error.TestUnexpectedResult;
+    try std.testing.expect(Renderer.containerPositionChildCompleteIn(prepared.source, true, plan));
+    try std.testing.expect(!Renderer.containerPositionChildCompleteIn(prepared.source, false, plan));
+    try std.testing.expect(!Renderer.containerPositionChildCompleteIn(body, true, plan));
+    const foreign = try std.fmt.allocPrint(a, "<ref {s}='0' name='foreign'><cite>[[Book]]</cite></ref>", .{plan.attribute});
+    try std.testing.expect(!Renderer.containerPositionChildCompleteIn(foreign, true, plan));
+}
+
+test "Serbian pitch selector facts preserve local source custody" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const parent_opening = "<span lang=\"ja\" class=\"Jpan\">";
+    const pitch = "<span style=\"border-top:1px solid;position:relative;padding:1px;\">に" ++
+        "<span style=\"position:absolute;top:0;bottom:67%;right:0%;border-right:1px solid;\"></span></span>ち";
+    const live = parent_opening ++ pitch ++ "</span> MISSING";
+    const missing_start = live.len - "MISSING".len;
+    const debt = [_]missing_dependency.Range{.{ .start = missing_start, .end = live.len, .occurrence = 1 }};
+    const tracked: MissingText = .{ .bytes = live, .ranges = &debt, .unknown = true };
+    var renderer: Renderer = .{ .a = a, .context = .{}, .content_root = .parser_output, .inline_missing = tracked };
+    const root: NativeInlineMotionRoot = .{ .source = tracked };
+    const scope = renderer.nativeInlineMotionBegin(&root, false);
+    defer scope.deinit();
+    const tag = syntax.tagAt(live, parent_opening.len).?;
+    const parent: table_style_profile.TextElement = .{ .tag = "span", .classes = "Jpan" };
+    var node: table_style_profile.TextElement = .{ .tag = "span", .parent = &parent, .source_key = @intFromPtr(tag.name.ptr) };
+    try renderer.inlineBoxAuthoredSelectorFacts(tag, &node);
+    try std.testing.expect(node.source_fragment_target_absent);
+    try std.testing.expectEqualStrings("Jpan", node.source_direct_parent_classes.?);
+    try std.testing.expect(node.complete_ancestor_classes == null and !node.physical_ancestry_complete);
+    const detached_bytes = try a.dupe(u8, live);
+    const detached_tag = syntax.tagAt(detached_bytes, parent_opening.len).?;
+    renderer.inline_missing = MissingText.untracked(detached_bytes);
+    node.source_key = @intFromPtr(detached_tag.name.ptr);
+    node.source_fragment_target_absent = false;
+    node.source_direct_parent_classes = null;
+    try renderer.inlineBoxAuthoredSelectorFacts(detached_tag, &node);
+    try std.testing.expect(!node.source_fragment_target_absent and node.source_direct_parent_classes == null);
+}
 
 test "native borrowed LI retains sample code bracket text pitch actions and codec in original and copied source" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);

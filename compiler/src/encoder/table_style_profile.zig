@@ -2089,6 +2089,9 @@ pub const SourceDivParentTagProof = struct { range: SourceRootChildProof, candid
 pub const TextElement = struct {
     // Query-local negative direct-parent fact; never used for positive matching.
     source_parent_tag_nonmatch: ?[]const u8 = null,
+    // Query-local negative facts from a tracked, physically authored SPAN.
+    source_direct_parent_classes: ?[]const u8 = null,
+    source_fragment_target_absent: bool = false,
     // Query-local native constructor receipt; no root, classes or positive match.
     constructed_direct_parent: ?*const TextElement = null,
     source_literal_div: ?*const SourceLiteralDivProof = null,
@@ -7664,6 +7667,7 @@ const ContainerSelector = struct {
     // Exact single-compound inner-control pseudo: absence on a known non-control
     // host refutes only this candidate, without granting attribute or ancestry facts.
     control_pseudo_host: bool = false,
+    terminal_positive_target: bool = false,
     chain: []const ContainerCompound = &.{},
     fallback: ?TextSelector = null,
     necessary_chain: []const ContainerCompound = &.{},
@@ -7779,6 +7783,13 @@ const ContainerSelector = struct {
         return self.matchBranch(element, element, page_scoped);
     }
     fn matchBranch(self: @This(), element: *const TextElement, original: *const TextElement, page_scoped: bool) ContainerSelectorMatch {
+        if (self.terminal_positive_target and element.source_fragment_target_absent) return .no;
+        if (element.source_direct_parent_classes) |classes| {
+            const necessary = if (self.fallback != null) self.necessary_chain else self.chain;
+            if (necessary.len >= 2 and necessary[necessary.len - 1].direct_parent)
+                for (necessary[necessary.len - 2].compound.classes) |required|
+                    if (!Profile.hasClass(classes, required)) return .no;
+        }
         // A separate source-issued element relation remains the only positive
         // sibling authority; the parser-root proof does not add adjacency.
         if (self.adjacent_sibling != null) return self.match(element);
@@ -12164,7 +12175,8 @@ const Builder = struct {
             necessary = one;
         };
         var result: ContainerSelector = .{ .fallback = fallback, .necessary_chain = necessary, .specificity = std.math.maxInt(u64), .uncertain = true,
-            .control_pseudo_host = try self.figureControlPseudo(raw) };
+            .control_pseudo_host = try self.figureControlPseudo(raw),
+            .terminal_positive_target = necessary.len != 0 and std.ascii.endsWithIgnoreCase(trim(raw), ":target") };
         // Parsing this extra factual shape does not alter any global caller.
         const text = trim(raw);
         if (std.mem.indexOfScalar(u8, text, '+')) |plus| {
@@ -15957,6 +15969,34 @@ test "font-only stylesheet cascade selects exact winners and retains unknown com
     defer ordered.deinit();
     const last = (try ordered.resolveFontSize(a, "span", "same", "", "")).?;
     try std.testing.expect(last == .relative and last.relative == 1.25);
+}
+
+test "Serbian pitch own geometry uses only authenticated selector refutations" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const css = ".character-sample > :only-child { display: block; }" ++
+        "body.action-info .mw-body-content :target, .citation:target { background-color:#def; background-color:rgba(0,127,255,0.133); }";
+    var profile = try parseForTargetAlloc(a, css, .screen);
+    defer profile.deinit();
+    const parent: TextElement = .{ .tag = "span", .classes = "Jpan" };
+    var element: TextElement = .{ .tag = "span", .parent = &parent };
+    const own = "border-top:1px solid;position:relative;padding:1px;";
+    const chain = &[_][]const u8{ own, "" };
+    var reason: InlineBoxSourceDiagnostic = .none;
+    try std.testing.expect((try profile.resolveInlineBoxSourceDiagnosedIn(a, &element, own, .{}, false, false, chain, &reason)).unresolved);
+    try std.testing.expectEqual(InlineBoxSourceDiagnostic.own_geometry_unresolved, reason);
+    element.source_direct_parent_classes = parent.classes;
+    try std.testing.expect((try profile.resolveInlineBoxSourceDiagnosedIn(a, &element, own, .{}, false, false, chain, &reason)).unresolved);
+    try std.testing.expectEqual(InlineBoxSourceDiagnostic.own_geometry_unresolved, reason);
+    element.source_fragment_target_absent = true;
+    const exact = try profile.resolveInlineBoxSourceDiagnosedIn(a, &element, own, .{}, false, false, chain, &reason);
+    try std.testing.expect(!exact.unresolved and exact.position == .relative);
+    try std.testing.expect(exact.border.top == .solid);
+    try std.testing.expectEqual(InlineBoxSourceDiagnostic.none, reason);
+    element.source_direct_parent_classes = "character-sample Jpan";
+    try std.testing.expect((try profile.resolveInlineBoxSourceDiagnosedIn(a, &element, own, .{}, false, false, chain, &reason)).unresolved);
+    try std.testing.expectEqual(InlineBoxSourceDiagnostic.own_geometry_unresolved, reason);
 }
 
 test "unsupported paint selectors retain necessary ancestor classes only as nonmatch proof" {
