@@ -15390,7 +15390,13 @@ pub const Renderer = struct {
         }
 
         fn span(self: *FigureCaptionAuthoredInventory, tag: syntax.Tag) bool {
-            if (!tag.is("span") or tag.closing or tag.self_closing) return false;
+            return tag.is("span") and self.inlineElement(tag);
+        }
+
+        // The same complete class/lang-only grammar also applies to literal I.
+        // Keep the span-only entry point strict for independent observed routes.
+        fn inlineElement(self: *FigureCaptionAuthoredInventory, tag: syntax.Tag) bool {
+            if ((!tag.is("span") and !tag.is("i")) or tag.closing or tag.self_closing) return false;
             var class_value: ?[]const u8 = null;
             var language_value: ?[]const u8 = null;
             var at: usize = 0;
@@ -15557,9 +15563,9 @@ pub const Renderer = struct {
                 if (end == caption.len) return false;
                 if (caption[end] != '>') {
                     const authored = inventory orelse return false;
-                    if (close or kind != 's') return false;
+                    if (close or (kind != 's' and kind != 'i')) return false;
                     const tag = syntax.tagAt(caption, pos) orelse return false;
-                    if (!authored.span(tag)) return false;
+                    if (!authored.inlineElement(tag)) return false;
                     end = tag.end - 1;
                 }
                 if (kind == 'r') {
@@ -15596,7 +15602,7 @@ pub const Renderer = struct {
                 const inner_link = caption[pos + 2 .. end];
                 const separator = std.mem.indexOfScalar(u8, inner_link, '|');
                 const raw_target = if (separator) |pipe_offset| inner_link[0..pipe_offset] else inner_link;
-                const caption_target = if (recorded_templates and starts(raw_target, ":") and figureCaptionLocalFragment(raw_target[1..])) raw_target[1..] else raw_target;
+                const caption_target = if (inventory != null and starts(raw_target, ":") and figureCaptionLocalFragment(raw_target[1..])) raw_target[1..] else raw_target;
                 if (trim(caption_target).len == 0 or std.mem.indexOfAny(u8, caption_target, "[]|{}<>&/\\\r\n\x00") != null) return false;
                 if (std.mem.indexOfScalar(u8, caption_target, '#') != null and
                     (inventory == null or !figureCaptionLocalFragment(caption_target))) return false;
@@ -32243,6 +32249,26 @@ pub const Renderer = struct {
     // retain their own provenance, style and child actions under a nonaction
     // parent. Never mark an entire raw wrapper protected merely because one
     // target atom was entity-authored or nowiki-protected.
+    // In a Figure caption a nowiki colon in an unpiped punctuation title
+    // invalidates navigation. The visible double brackets still belong to
+    // the caption (amwiktionary emoticon, page 5075 revision 21756).
+    fn literalColonCaptionTarget(self: *const Renderer, source: MissingText, raw: []const u8, style: Style) bool {
+        if (self.figure_caption_depth != 1 or self.inline_image_attribute or self.navigation_target_probe != null or
+            style.kind != .text or style.target.len != 0 or style.self_link_target != null or
+            style.provenance != .parsed or style.code or style.preserve_whitespace or style.missing_nonaction or
+            !nativeSourceClassClean(source)) return false;
+        const caption = self.body_missing orelse return false;
+        if (!nativeSourceClassClean(caption)) return false;
+        const base = @intFromPtr(caption.bytes.ptr);
+        const at = @intFromPtr(raw.ptr);
+        if (at < base or at - base > caption.bytes.len or raw.len > caption.bytes.len - (at - base)) return false;
+        const prefix = "[[<nowiki>:</nowiki>";
+        if (!starts(raw, prefix) or !std.mem.endsWith(u8, raw, "]]")) return false;
+        const tail = raw[prefix.len .. raw.len - 2];
+        const mouth = if (starts(tail, "-")) tail[1..] else tail;
+        return mouth.len == 1 and (mouth[0] == ')' or mouth[0] == '(');
+    }
+
     fn malformedInternalBody(self: *Renderer, tracked: MissingText, body: []const u8, trail: []const u8, following: []const u8, inherited: Style, depth: usize) Error!void {
         var nonaction = inherited;
         nonaction.kind = .text;
@@ -32694,6 +32720,76 @@ pub const Renderer = struct {
         }
         if (!found) return null;
         return try self.plainWithMagicLinks(plain_text[emitted..], style, tail);
+    }
+
+    // U+200B is an authored non-space before the table marker. The pinned
+    // parser keeps the entire unmatched table-looking paragraph as text.
+    const ZwspTableMarkers = struct { opening: usize, closing: usize };
+    fn zwspTableMarkers(source: []const u8) ?ZwspTableMarkers {
+        const opening = std.mem.indexOf(u8, source, "{|") orelse return null;
+        if (std.mem.indexOfPos(u8, source, opening + 2, "{|") != null) return null;
+        const closing = std.mem.indexOf(u8, source, "|}") orelse return null;
+        if (closing <= opening or std.mem.indexOfPos(u8, source, closing + 2, "|}") != null) return null;
+        var first = opening;
+        while (first != 0 and source[first - 1] != '\n' and source[first - 1] != '\r') first -= 1;
+        if (!std.mem.eql(u8, source[first..opening], "\xe2\x80\x8b")) return null;
+        if (closing != 0 and source[closing - 1] != '\n' and source[closing - 1] != '\r') return null;
+        var last = closing + 2;
+        while (last < source.len and source[last] != '\n' and source[last] != '\r') last += 1;
+        if (std.mem.trim(u8, source[closing + 2 .. last], " \t").len != 0) return null;
+        return .{ .opening = opening, .closing = closing };
+    }
+    fn zwspTableMarkerIn(source: []const u8, marker: []const u8) bool {
+        if (marker.len != 2 or !wikiClassContains(source, marker)) return false;
+        const bounds = zwspTableMarkers(source) orelse return false;
+        const at = @intFromPtr(marker.ptr) - @intFromPtr(source.ptr);
+        return (at == bounds.opening and std.mem.eql(u8, marker, "{|")) or
+            (at == bounds.closing and std.mem.eql(u8, marker, "|}"));
+    }
+    fn zwspTableMarkerCurrent(self: *const Renderer, input: []const u8, marker: []const u8) bool {
+        const tracked = self.inline_missing orelse return false;
+        if (!wikiClassCleanText(tracked) or tracked.bytes.ptr != input.ptr or tracked.bytes.len != input.len or
+            !zwspTableMarkerIn(input, marker)) return false;
+        var domain = self.inline_source_domain;
+        var remaining: usize = max_depth + 1;
+        while (domain) |current| {
+            if (remaining == 0 or !zwspTableMarkerIn(current.source, marker)) return false;
+            remaining -= 1;
+            domain = current.parent;
+        }
+        return true;
+    }
+    fn literalZwspTableMarkers(self: *Renderer, input: []const u8, plain_text: []const u8, style: Style, tail: []const u8) Error!?usize {
+        if (self.typed_table_depth != 0 or style.provenance != .parsed or style.code or style.preserve_whitespace or
+            style.kind != .text or style.target.len != 0 or style.self_link_target != null or style.missing_nonaction or style.image != null or
+            self.pre_block or self.parsed_pre or self.block_formatting.code or self.in_reference or self.in_template_literal_scope or
+            self.body_link_target.len != 0 or self.explicit_wiki_label != null or self.navigation_target_probe != null or self.inline_image_attribute) return null;
+        var emitted: usize = 0;
+        var found = false;
+        var at: usize = 0;
+        while (at + 2 <= plain_text.len) : (at += 1) {
+            if (!starts(plain_text[at..], "{|") and !starts(plain_text[at..], "|}")) continue;
+            const marker = plain_text[at .. at + 2];
+            if (!self.zwspTableMarkerCurrent(input, marker)) continue;
+            _ = try self.plainWithMagicLinks(plain_text[emitted..at], style, "");
+            try self.protectedLiteral(marker, style);
+            self.fallbacks.literal_markup = true;
+            emitted = at + 2;
+            at += 1;
+            found = true;
+        }
+        if (!found) return null;
+        return try self.plainWithMagicLinks(plain_text[emitted..], style, tail);
+    }
+    fn zwspTableParagraphClose(self: *const Renderer, input: []const u8, start: usize, end: usize) bool {
+        if (start > end or end > input.len or self.typed_table_depth != 0 or self.pre_block or self.parsed_pre or
+            self.in_reference or self.in_template_literal_scope or self.body_link_target.len != 0 or
+            self.explicit_wiki_label != null or self.block_formatting.code) return false;
+        const tracked = self.body_missing orelse return false;
+        if (!wikiClassCleanText(tracked) or !wikiClassContains(tracked.bytes, input)) return false;
+        const raw_paragraph = input[start..end];
+        const bounds = zwspTableMarkers(raw_paragraph) orelse return false;
+        return std.mem.trim(u8, raw_paragraph[bounds.closing + 2 ..], " \t\r").len == 0;
     }
 
     // A lone visible close brace followed only by hidden category membership
@@ -36374,6 +36470,8 @@ pub const Renderer = struct {
                     self.fallbacks.literal_markup = true;
                 } else if (try self.literalCodeClassTableMarkers(input, token.text, s, input[it.cursor..])) |consumed| {
                     it.cursor += consumed;
+                } else if (try self.literalZwspTableMarkers(input, token.text, s, input[it.cursor..])) |consumed| {
+                    it.cursor += consumed;
                 } else if (try self.literalCategoryPrefixedTableOpenings(input, token.text, s, input[it.cursor..])) |consumed| {
                     it.cursor += consumed;
                 } else if (try self.literalPlainTableTails(input, token.text, s, input[it.cursor..])) |consumed| {
@@ -36451,6 +36549,13 @@ pub const Renderer = struct {
                         if (probing_root) return;
                         const raw_start = token_start + std.mem.indexOf(u8, input[token_start..it.cursor], "[[").?;
                         const outer_end = it.cursor - token.trail.len;
+                        const raw = input[raw_start..outer_end];
+                        if (trail.len == 0 and !token.link_has_pipe and self.literalColonCaptionTarget(prepared_missing, raw, s)) {
+                            try self.protectedLiteral("[[", s);
+                            try self.inlineTextWithMissing(try missingSlice(self.a, prepared_missing, raw[2 .. raw.len - 2]), s, depth + 1);
+                            try self.protectedLiteral("]]", s);
+                            continue;
+                        }
                         try self.malformedInternalBody(prepared_missing, input[raw_start + 2 .. outer_end - 2], token.trail, input[it.cursor..], s, depth);
                         continue;
                     }
@@ -40435,6 +40540,7 @@ pub const Renderer = struct {
                 !self.in_reference and self.body_link_target.len == 0 and starts(line, "|}"))
             {
                 if (para) |p| {
+                    if (self.zwspTableParagraphClose(input, p, end)) continue;
                     try self.bodyRawParagraph(&blocks, input, input[p..start], if (p == 0) initial_quote else null, &body_quotes, &link_inline_join);
                     para = null;
                 }
@@ -54094,6 +54200,31 @@ test "nowiki label delimiter and apostrophe boundaries retain active links and i
             try std.testing.expect(span.kind != .link);
         }
     }
+}
+
+test "Amharic emoticon protected colon keeps literal bold caption independent of File navigation" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var actual: Renderer = .{ .a = a, .content_root = .parser_output, .context = try FigureProducerTest.context(a) };
+    const source = "[[File:Emoticon Smile Face.svg|thumb|'''[[<nowiki>:</nowiki>-)]]''']]\n\n[[Emoji]]";
+    const blocks = try actual.renderBody(source);
+    try FigureProducerTest.roundtrip(a, &actual, blocks);
+    const figure = try FigureProducerTest.find(blocks);
+    try std.testing.expectEqualStrings("File:Emoticon Smile Face.svg", figure.content.image.span.target);
+    const caption = if (figure.caption_blocks) |children| try FigureProducerTest.bodySpans(a, children) else figure.caption;
+    try std.testing.expectEqualStrings("[[:-)]]", try flattened(a, caption));
+    for (caption) |span| try std.testing.expect(span.flags.bold and span.kind == .text and span.target.len == 0 and !span.generated_diagnostic);
+    try std.testing.expectEqual(@as(usize, 1), actual.media.items.len);
+    try std.testing.expectEqualStrings("[[:-)]]", actual.media.items[0].caption);
+    const raw = "[[<nowiki>:</nowiki>-)]]";
+    var scope: Renderer = .{ .a = a, .context = .{}, .figure_caption_depth = 1, .body_missing = .{ .bytes = raw } };
+    try std.testing.expect(scope.literalColonCaptionTarget(.{ .bytes = raw }, raw, .{}));
+    try std.testing.expect(!scope.literalColonCaptionTarget(.{ .bytes = raw, .unknown = true }, raw, .{}));
+    try std.testing.expect(!scope.literalColonCaptionTarget(.{ .bytes = raw }, try a.dupe(u8, raw), .{}));
+    try std.testing.expect(!scope.literalColonCaptionTarget(.{ .bytes = raw }, raw, .{ .kind = .link, .target = "Other" }));
+    scope.figure_caption_depth = 0;
+    try std.testing.expect(!scope.literalColonCaptionTarget(.{ .bytes = raw }, raw, .{}));
 }
 
 test "nowiki internal title diagnostic precedes namespace effects and preserves enclosing style" {
@@ -129030,6 +129161,159 @@ test "ordinary thumbnail rechecks source root receipt after sizing and final med
         }
         try std.testing.expectEqual(@as(usize, 1), probe.sizing_calls);
     }
+}
+
+test "Amharic Argobba source keeps the inert ZWSP table paragraph and all seventy bold runs" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const document = @import("presentation_document.zig");
+    const codec = @import("blob_encoder").presentation_codec;
+    const source = @embedFile("testdata/am-argobba-literal/full.wikitext");
+    try std.testing.expectEqual(@as(usize, 5860), source.len);
+    const opened = try std.mem.replaceOwned(u8, a, source, "{|", "<nowiki>{|</nowiki>");
+    const reference = try std.mem.replaceOwned(u8, a, opened, "|}", "<nowiki>|}</nowiki>");
+    var report: document.Fallbacks = .{}; var reference_report: document.Fallbacks = .{};
+    const actual = try document.compileReportedAlloc(a, "Argobba literal", .supplemental, null, "", source, null, &report);
+    const expected = try document.compileReportedAlloc(a, "Argobba literal", .supplemental, null, "", reference, null, &reference_report);
+    try std.testing.expectEqualSlices(u8, expected, actual);
+    try std.testing.expect(report.literal_markup);
+    const decoded = try codec.decodeAlloc(a, actual, "Argobba literal", .supplemental, null);
+    try std.testing.expectEqualSlices(u8, actual, try codec.encodeAlloc(a, decoded));
+    var paragraphs: usize = 0; var bold_runs: usize = 0;
+    var flat: std.ArrayList(u8) = .empty; defer flat.deinit(a);
+    for (decoded.entry.sections) |section| for (section.blocks) |block| {
+        try std.testing.expect(block.kind != .table and block.table == null);
+        if (block.kind == .paragraph) paragraphs += 1;
+        for (block.spans) |span| {
+            if (span.bold) bold_runs += 1;
+            try flat.appendSlice(a, span.text);
+        }
+    };
+    try std.testing.expectEqual(@as(usize, 1), paragraphs);
+    try std.testing.expectEqual(@as(usize, 70), bold_runs);
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, flat.items, "\xe2\x80\x8b"));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, flat.items, "{|"));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, flat.items, "|}"));
+    try std.testing.expectEqual(@as(usize, 71), std.mem.count(u8, flat.items, "|-"));
+}
+
+test "inert ZWSP table marker proof preserves actions and refuses real tables taint and foreign domains" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const document = @import("presentation_document.zig"); const codec = @import("blob_encoder").presentation_codec;
+    const source = "\xe2\x80\x8b{| class=wikitable\n| '''bold''' [[Target|label]]\n|}";
+    const reference = "\xe2\x80\x8b<nowiki>{|</nowiki> class=wikitable\n| '''bold''' [[Target|label]]\n<nowiki>|}</nowiki>";
+    var report: document.Fallbacks = .{}; var reference_report: document.Fallbacks = .{};
+    const actual = try document.compileReportedAlloc(a, "inert", .supplemental, null, "", source, null, &report);
+    const expected = try document.compileReportedAlloc(a, "inert", .supplemental, null, "", reference, null, &reference_report);
+    try std.testing.expectEqualSlices(u8, expected, actual);
+    const decoded = try codec.decodeAlloc(a, actual, "inert", .supplemental, null);
+    try std.testing.expectEqualSlices(u8, actual, try codec.encodeAlloc(a, decoded));
+    var link = false; var bold = false;
+    for (decoded.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+        if (span.kind == .link and std.mem.eql(u8, span.target, "Target") and std.mem.eql(u8, span.text, "label")) link = true;
+        if (span.bold and std.mem.indexOf(u8, span.text, "bold") != null) bold = true;
+    };
+    try std.testing.expect(link and bold);
+    var real: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try real.renderBody("{|\n| [[Target|real]]\n|}");
+    try std.testing.expectEqual(@as(usize, 1), blocks.len);
+    try std.testing.expect(blocks[0].kind == .table);
+    const marker = source[3..5];
+    var renderer: Renderer = .{ .a = a, .context = .{}, .inline_missing = MissingText.untracked(source) };
+    try std.testing.expect(renderer.zwspTableMarkerCurrent(source, marker));
+    var tracked = MissingText.untracked(source); tracked.unknown = true; renderer.inline_missing = tracked;
+    try std.testing.expect(!renderer.zwspTableMarkerCurrent(source, marker));
+    tracked = MissingText.untracked(source); tracked.ranges = &.{.{ .start = 0, .end = 1, .occurrence = 1 }}; renderer.inline_missing = tracked;
+    try std.testing.expect(!renderer.zwspTableMarkerCurrent(source, marker));
+    tracked = MissingText.untracked(source); tracked.lost_missing_range = true; renderer.inline_missing = tracked;
+    try std.testing.expect(!renderer.zwspTableMarkerCurrent(source, marker));
+    tracked = MissingText.untracked(source); tracked.literal_curly_ranges = &.{.{ .start = 3, .end = 4 }}; renderer.inline_missing = tracked;
+    try std.testing.expect(!renderer.zwspTableMarkerCurrent(source, marker));
+    renderer.inline_missing = MissingText.untracked(try a.dupe(u8, source));
+    try std.testing.expect(!renderer.zwspTableMarkerCurrent(source, marker));
+    const enclosing = "[[Target|\xe2\x80\x8b{|\n| label\n|}]]";
+    const label = enclosing[9 .. enclosing.len - 2];
+    const parent_domain: InlineSourceDomain = .{ .source = enclosing, .parent = null };
+    renderer.inline_missing = MissingText.untracked(label);
+    renderer.inline_source_domain = &parent_domain;
+    try std.testing.expect(Renderer.zwspTableMarkers(label) != null);
+    try std.testing.expect(!renderer.zwspTableMarkerCurrent(label, label[3..5]));
+    for ([_][]const u8{ "{|\n| real\n|}", "&#8203;{|\n| entity\n|}", "prefix\xe2\x80\x8b{|\n| inline\n|}", "\xef\xbb\xbf{|\n| other\n|}", "\xe2\x80\x8b{|\n{|\n| nested\n|}" }) |other| {
+        try std.testing.expect(Renderer.zwspTableMarkers(other) == null);
+    }
+}
+
+
+test "HSB authored italic caption inventory preserves original language links trails and codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const caption = @embedFile("testdata/hsb-italic-caption01/caption.wikitext");
+    const tracked: MissingText = .{ .bytes = caption, .unknown = true };
+    const facts = Renderer.figureCaptionAuthoredSpan(tracked, caption) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("Latn mention", facts.classes[0..facts.classes_len]);
+    try std.testing.expectEqual(@as(usize, 1), facts.attributed_spans);
+    try std.testing.expect(facts.has_language); // Never issue a no-language-override certificate.
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try renderer.renderBody(caption);
+    const spans = try FigureProducerTest.bodySpans(a, blocks);
+    try std.testing.expectEqualStrings("Pomnik na maćeršćinu (ana dili) w Nachčivanje, Azerbajdźanje", try plainText(a, spans));
+    // The unchanged native emitter retains a default label and its authored
+    // link trail as separate runs carrying the same action and style.
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, caption, "[[Nachčivan]]je"));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, caption, "[[Azerbajdźan]]je"));
+    const targets = [_][]const u8{ "pomnik", "na", "ana dili#azerbajdźanšćina", "w", "Nachčivan", "Nachčivan", "Azerbajdźan", "Azerbajdźan" };
+    const linked_texts = [_][]const u8{ "Pomnik", "na", "ana dili", "w", "Nachčivan", "je", "Azerbajdźan", "je" };
+    var previous_link: ?Span = null;
+    var links: usize = 0; var bold = false; var az = false;
+    for (spans) |span| {
+        if (span.target.len != 0) {
+            try std.testing.expect(links < targets.len);
+            try std.testing.expectEqualStrings(targets[links], span.target);
+            try std.testing.expectEqualStrings(linked_texts[links], span.text);
+            try std.testing.expectEqual(@as(@TypeOf(span.kind), .link), span.kind);
+            if (links == 5 or links == 7) {
+                var expected_trail = previous_link orelse return error.TestUnexpectedResult;
+                expected_trail.text = "je";
+                try std.testing.expectEqualDeep(expected_trail, span);
+            }
+            previous_link = span;
+            links += 1;
+        }
+        if (std.mem.eql(u8, span.text, "maćeršćinu")) { try std.testing.expect(span.flags.bold); bold = true; }
+        if (std.mem.eql(u8, span.target, targets[2])) {
+            try std.testing.expectEqualStrings("ana dili", span.text);
+            try std.testing.expect(span.flags.italic);
+            try std.testing.expectEqualStrings("az", span.language);
+            try std.testing.expect(std.mem.indexOf(u8, span.classes, "Latn") != null);
+            try std.testing.expect(std.mem.indexOf(u8, span.classes, "mention") != null); az = true;
+        }
+    }
+    try std.testing.expect(links == targets.len and bold and az);
+    try FigureProducerTest.roundtrip(a, &renderer, blocks);
+    // Only this finite borrowed source shape lends a class inventory. It does
+    // not grant page ancestry, language absence, a CSS winner or file geometry.
+    const copied = try a.dupe(u8, caption);
+    try std.testing.expect(Renderer.figureCaptionAuthoredSpan(tracked, copied) == null);
+    for ([_]MissingText{
+        .{ .bytes = caption, .lost_missing_range = true },
+        .{ .bytes = caption, .ranges = &.{.{ .start = 0, .end = 1, .occurrence = 1 }} },
+        .{ .bytes = caption, .literal_curly_ranges = &.{.{ .start = 0, .end = 1 }} },
+    }) |bad| try std.testing.expect(Renderer.figureCaptionAuthoredSpan(bad, caption) == null);
+    for ([_][]const u8{
+        "<i class='Latn' style='font-family:serif'>x</i>",
+        "<i class='Latn' dir='rtl'>x</i>", "<i class='Latn' data-x='y'>x</i>",
+        "<i class='Latn' lang='az' lang='ja'>x</i>", "<i class='Latn' class='Cyrl'>x</i>",
+        "<i class=Latn lang='az'>x</i>", "<i lang='az'>x</i>",
+        "<i class='Latn' lang='az'/>x", "<i class='Latn'><span>x</i></span>",
+        "<i class='Latn'>x\n</i>", "<em class='Latn'>x</em>",
+        "<i class='Latn'>[[:en:A#B|x]]</i>", "<i class='Latn'>[[:#B|x]]</i>",
+        "<i class='Latn'>[[:Category:A#B|x]]</i>",
+    }) |bad| try std.testing.expect(Renderer.figureCaptionAuthoredSpan(.{ .bytes = bad }, bad) == null);
+    const barrier = "<i class='Latn' lang=''>[[:A#B|x]]</i>";
+    const empty_language = Renderer.figureCaptionAuthoredSpan(.{ .bytes = barrier }, barrier) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(empty_language.has_language);
+    const foreign = "<i class='Latn' lang='ja'>[[:A#B|x]]</i>";
+    const foreign_language = Renderer.figureCaptionAuthoredSpan(.{ .bytes = foreign }, foreign) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(foreign_language.has_language);
 }
 
 

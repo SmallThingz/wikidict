@@ -12515,12 +12515,22 @@ const Builder = struct {
         while (children.next()) |raw_child| {
             const child = trim(raw_child);
             if (child.len == 0) return false;
-            const target = child.len >= 7 and std.ascii.eqlIgnoreCase(child[child.len - 7 ..], ":target");
-            const prefix = if (target) child[0 .. child.len - 7] else child;
-            if (std.mem.indexOfScalar(u8, prefix, ':') != null) return false;
+            var prefix = child;
+            var target = false;
+            var only_child = false;
+            while (std.mem.lastIndexOfScalar(u8, prefix, ':')) |colon| {
+                const suffix = prefix[colon..];
+                if (std.ascii.eqlIgnoreCase(suffix, ":target") and !target) target = true
+                else if (std.ascii.eqlIgnoreCase(suffix, ":only-child") and !only_child) only_child = true
+                else return false;
+                prefix = prefix[0..colon];
+            }
             const compound = if (prefix.len == 0 and target) PaintCompound{} else
                 (try self.paintCompound(prefix, true) orelse return false);
             const non_div = if (compound.tag) |tag| !std.ascii.eqlIgnoreCase(tag, "div") else false;
+            // Sibling count is unchanged by swapping only the wrapper classes.
+            // Only-child itself excludes nothing: retain the existing necessary
+            // non-DIV type or positive target proof for every relative child.
             if (!non_div and !target) return false;
         }
         return true;
@@ -12593,9 +12603,18 @@ const Builder = struct {
         while (pos < raw.len) {
             if (count == 16 or raw.len - pos < 6 or !std.ascii.eqlIgnoreCase(raw[pos .. pos + 5], ":not(")) return false;
             const end = std.mem.indexOfScalarPos(u8, raw, pos + 5, ')') orelse return false;
-            const argument = try self.paintCompound(trim(raw[pos + 5 .. end]), true) orelse return false;
+            const argument_text = trim(raw[pos + 5 .. end]);
+            const exact = try self.paintCompound(argument_text, true);
+            const argument = exact orelse try self.figureNecessaryCompound(argument_text) orelse return false;
             const compound: TextCompound = .{ .tag = argument.tag, .classes = argument.classes, .ids = argument.ids };
-            if (compound.matches(&ltr) != compound.matches(&rtl)) return false;
+            const match_ltr = compound.matches(&ltr);
+            const match_rtl = compound.matches(&rtl);
+            // An unsupported attribute cannot rescue a positive prefix that
+            // excludes both DIV alternatives. Otherwise keep it unresolved:
+            // class/dir attribute values can distinguish those alternatives.
+            if (exact == null) {
+                if (match_ltr or match_rtl) return false;
+            } else if (match_ltr != match_rtl) return false;
             count += 1;
             pos = end + 1;
         }
@@ -12710,7 +12729,13 @@ const Builder = struct {
             if (end == pos or count == 32) return &.{};
             const compound = (if (trim(text[end..]).len == 0)
                 try self.figureNecessaryDynamicCompound(text[pos..end])
-            else try self.figureNecessaryCompound(text[pos..end])) orelse return &.{};
+            else (try self.figureNecessaryCompound(text[pos..end])) orelse dynamic: {
+                // A state on a bare ancestor type does not remove a later
+                // compound's required classes. It supplies no classes itself.
+                const prefix = (try self.figureNecessaryDynamicCompound(text[pos..end])) orelse return &.{};
+                if (prefix.tag == null or prefix.classes.len != 0 or prefix.ids.len != 0) return &.{};
+                break :dynamic prefix;
+            }) orelse return &.{};
             for (compound.classes) |name| try names.append(self.a, name);
             count += 1;
             var next = end;
@@ -12996,6 +13021,23 @@ const Builder = struct {
         }
         return seen;
     }
+    // This exact inherited-family declaration cannot distinguish the content
+    // wrapper's direction. Its selector stays uncertain in the font cascade;
+    // only a known mismatching language can refute it there.
+    fn figureInheritedFamilyOnly(self: *Builder, css: []const u8) !bool {
+        var pos: usize = 0;
+        var seen = false;
+        while (try nextDeclarationAlloc(self.a, css, &pos)) |raw| {
+            if (trim(raw).len == 0) continue;
+            const colon = std.mem.indexOfScalar(u8, raw, ':') orelse return false;
+            if (!std.ascii.eqlIgnoreCase(trim(raw[0..colon]), "font-family")) return false;
+            const parsed = customPriority(raw[colon + 1 ..]);
+            if (parsed.unknown or !std.ascii.eqlIgnoreCase(trim(parsed.value), "inherit")) return false;
+            seen = true;
+        }
+        return seen;
+    }
+
     fn appendFigureRules(self: *Builder, prelude: []const u8, css: []const u8, conditional: bool, order: u32) !void {
         // Custom definitions contribute through var() consumers, not as direct
         // Figure declarations. Preserve those consumers and their uncertainty.
@@ -13012,6 +13054,7 @@ const Builder = struct {
         if (!relevant and !missing_link_custom) return;
         const root_alignment_only = try self.figureRootAlignmentOnly(css);
         const language_baseline_only = try self.figureLanguageBaselineOnly(css);
+        const inherited_family_only = try self.figureInheritedFamilyOnly(css);
         // Uncertain text selectors use the display terminal scanner, but this
         // separate inventory must not grow the legacy display-class catalogue.
         const display_count = self.display_classes.items.len;
@@ -13020,7 +13063,25 @@ const Builder = struct {
         var selectors: std.ArrayList(TextSelector) = .empty;
         var uncertain_list = false;
         while (try parts.nextAlloc(self.a)) |part| {
-            const selector_value = try self.figureSelector(part, conditional);
+            var selector_value = try self.figureSelector(part, conditional);
+            if (inherited_family_only and selector_value.language_range == null and
+                try self.languageClassCompound(trim(part)) != null)
+            {
+                // Only language is invariant under the two alternative root
+                // classes. A positive dependency on either changing class must
+                // keep the original root-predicate refusal, including compounds.
+                var direction_class = false;
+                for (selector_value.chain) |compound| for (compound.classes) |name| {
+                    direction_class = direction_class or std.mem.eql(u8, name, "mw-content-ltr") or
+                        std.mem.eql(u8, name, "mw-content-rtl");
+                };
+                if (!direction_class) {
+                    const text = trim(part);
+                    const opening = std.mem.indexOfScalar(u8, text, ':').?;
+                    const closing = std.mem.indexOfScalarPos(u8, text, opening + 6, ')').?;
+                    selector_value.language_range = try self.a.dupe(u8, text[opening + 6 .. closing]);
+                }
+            }
             uncertain_list = uncertain_list or selector_value.uncertain;
             try selectors.append(self.a, selector_value);
         }
@@ -21120,6 +21181,11 @@ test "figure ancestor class refutation never uses attribute values functional al
         "html.night + span [style*='background']", "html.night > > span", "html.night >",
         "html.night [style*=background", "html.n\\ight [style*='background']",
     }) |raw| try std.testing.expectEqual(@as(usize, 0), (try builder.figureNecessaryChainClasses(raw)).len);
+    for ([_][]const u8{ "a:hover .redlink", "a:active .redlink" }) |raw| {
+        const required = try builder.figureNecessaryChainClasses(raw);
+        try std.testing.expectEqual(@as(usize, 1), required.len);
+        try std.testing.expectEqualStrings("redlink", required[0]);
+    }
     const from_value = try builder.figureNecessaryChainClasses("body [class~=mw-content-rtl] figcaption a");
     try std.testing.expectEqual(@as(usize, 0), from_value.len);
     for ([_][]const u8{
@@ -38132,6 +38198,175 @@ test "page scoped public paint and geometry require ordered distinct witnesses o
     const absent = try reversed_geometry.resolveContainerIn(a, &detached, "");
     try std.testing.expect(!absent.unresolved and absent.style.width == null);
 }
+
+
+test "HSB inherited-font language class predicates keep exact source and unknown font refusal" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var profile = try parseSourcesForTargetAlloc(a, &.{
+        .{ .css = @embedFile("testdata/hsb-italic-caption01/Gadget-LanguagesAndScripts.css"), .base_url = "" },
+        .{ .css = @embedFile("testdata/hsb-italic-caption01/Gadget-Palette.css"), .base_url = "" },
+        .{ .css = @embedFile("testdata/hsb-italic-caption01/Gadget-Site.css"), .base_url = "" },
+        .{ .css = @embedFile("testdata/hsb-italic-caption01/Common.css"), .base_url = "" },
+    }, .screen); defer profile.deinit();
+    // The actual ordinary first witness names this exact ordered source rule.
+    // This view isolates only that three-selector declaration, not the other
+    // retained source rules or the whole page's unresolved styles.
+    try std.testing.expect(profile.figure_rules.len > 299);
+    const ranges = [_][]const u8{ "ja", "ko", "zh" };
+    for (profile.figure_rules[297..300], ranges) |rule, range| {
+        try std.testing.expectEqualStrings("\n\tfont-family: inherit;\n", rule.css);
+        try std.testing.expectEqualStrings(range, rule.selector.language_range.?);
+        try std.testing.expect(rule.selector.uncertain and rule.selector.root_predicate_unresolved);
+        try std.testing.expectEqual(@as(usize, 1), rule.selector.chain.len);
+        try std.testing.expectEqualStrings("Latn", rule.selector.chain[0].classes[0]);
+    }
+    var view = profile; view.figure_rules = profile.figure_rules[297..300]; view.custom_properties = null;
+    var empty = try parseAlloc(a, ""); defer empty.deinit();
+    for ([_][]const u8{ "mw-content-ltr mw-parser-output", "mw-content-rtl mw-parser-output" }, [_]bool{ false, true }) |classes, rtl| {
+        const root: TextElement = .{ .tag = "div", .classes = classes, .ancestry_complete = true };
+        const az: TextElement = .{ .tag = "i", .classes = "Latn mention", .language = "az", .parent = &root };
+        const unknown: TextElement = .{ .tag = "i", .classes = "Latn mention", .parent = &root };
+        const barrier: TextElement = .{ .tag = "i", .classes = "Latn mention", .language = "", .parent = &root };
+        try std.testing.expectEqual(Profile.FigureRootDirectionUse.independent, view.figureRootDirectionUse(&az));
+        try std.testing.expectEqualDeep(try empty.resolveFigure(a, &az, 1, rtl), try view.resolveFigure(a, &az, 1, rtl));
+        // Independence never proves a possible-match inherited font harmless.
+        try std.testing.expect((try view.resolveFigure(a, &unknown, 1, rtl)).unresolved);
+        try std.testing.expect((try view.resolveFigure(a, &barrier, 1, rtl)).unresolved);
+        for (ranges) |language| {
+            const foreign: TextElement = .{ .tag = "i", .classes = "Latn mention", .language = language, .parent = &root };
+            try std.testing.expect((try view.resolveFigure(a, &foreign, 1, rtl)).unresolved);
+        }
+    }
+    for ([_][]const u8{
+        ".Latn:lang(ja){font-family:serif}", ".Latn:lang(ja){font-family:inherit;color:red}",
+        ".Latn:lang(ja){font-family:var(--family)}", ".Latn:lang(ja){font-family:inherit;unknown:x}",
+        ".Latn:lang('ja'){font-family:inherit}", ".Latn:lang(ja,ko){font-family:inherit}",
+        ".Latn:lang(ja):dir(rtl){font-family:inherit}", ".outer .Latn:lang(ja){font-family:inherit}",
+        ".Latn:lang(ja) > i{font-family:inherit}", ".Latn:lang(ja) + i{font-family:inherit}",
+        ".mw-content-rtl:lang(ja){font-family:inherit}",
+        ".Latn.mw-content-rtl:lang(ja){font-family:inherit}",
+        ".mw-content-ltr:lang(ja).Latn{font-family:inherit}",
+    }) |css| {
+        var strict = try parseAlloc(a, css); defer strict.deinit();
+        try std.testing.expectEqual(Profile.FigureRootDirectionUse.unresolved, strict.figureRootDirectionUse(null));
+    }
+}
+
+test "HSB actual only-child Figure predicate preserves direction independence and unresolved matching" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const site = @embedFile("testdata/hsb-italic-caption01/Gadget-Site.css");
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, site, "p:has(> span.etymid:only-child)"));
+    var profile = try parseSourcesForTargetAlloc(a, &.{
+        .{ .css = @embedFile("testdata/hsb-italic-caption01/Gadget-LanguagesAndScripts.css"), .base_url = "" },
+        .{ .css = @embedFile("testdata/hsb-italic-caption01/Gadget-Palette.css"), .base_url = "" },
+        .{ .css = site, .base_url = "" },
+        .{ .css = @embedFile("testdata/hsb-italic-caption01/Common.css"), .base_url = "" },
+    }, .screen);
+    defer profile.deinit();
+    // This is the next actual ordinary witness after the separately qualified
+    // inherited-font rules. Keep the full ordered CSS around the queried rule.
+    try std.testing.expect(profile.figure_rules.len > 645);
+    const rule = profile.figure_rules[645];
+    try std.testing.expectEqualStrings("\n\tdisplay: inline;\n", rule.css);
+    try std.testing.expect(rule.selector.uncertain and !rule.selector.root_predicate_unresolved);
+    try std.testing.expectEqual(@as(usize, 1), rule.selector.chain.len);
+    try std.testing.expectEqualStrings("p", rule.selector.chain[0].tag.?);
+    var view = profile;
+    view.figure_rules = profile.figure_rules[645..646];
+    view.custom_properties = null;
+    try std.testing.expectEqual(Profile.FigureRootDirectionUse.independent, view.figureRootDirectionUse(null));
+    // Root independence grants no :has/only-child match or computed display.
+    // A possible actual P subject must still retain the unknown style effect.
+    const paragraph: TextElement = .{ .tag = "p" };
+    try std.testing.expect((try view.resolveFigure(a, &paragraph, 1, false)).unresolved);
+    // The next paid witness is the Parsoid heading-sibling selector. Its
+    // META attribute is not a fact about either generated DIV root.
+    const meta_negation = ":not(meta[property=\"mw:PageProp/toc\"])";
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, site, meta_negation));
+    var builder: Builder = .{ .a = a };
+    try std.testing.expect(try builder.invariantRootNegationCompound(meta_negation));
+    for ([_][]const u8{
+        ":not(META[property=\"mw:PageProp/toc\"])",
+        ":not(meta[property])", ":not(meta[property^=\"mw:PageProp/\"])",
+        ":not(meta[property=\"mw:PageProp/toc\"]):not(.toc)",
+        ":not(span.mw-content-rtl[dir=rtl])", ":not(div.impossible[property])",
+    }) |negation| try std.testing.expect(try builder.invariantRootNegationCompound(negation));
+    for ([_][]const u8{
+        ":not(div[property])", ":not([property])",
+        ":not(.mw-content-rtl[property])", ":not(.mw-content-ltr[dir=rtl])",
+        ":not(div[class=\"mw-content-rtl\"])", ":not(div[dir=rtl])",
+        ":not(meta[property=\"unterminated])", ":not(meta[property=])",
+        ":not(meta[property]div)", ":not(meta[property])extra",
+        ":not(meta[property],div)", ":not(meta[property] div)",
+        ":not(meta[property]:dir(rtl))", ":not(meta[property]:has(div))",
+        ":not(meta\\[property])",
+    }) |negation| try std.testing.expect(!try builder.invariantRootNegationCompound(negation));
+    try std.testing.expect(profile.figure_rules.len > 723);
+    const heading_rule = profile.figure_rules[723];
+    try std.testing.expectEqualStrings("\n\tborder-top: 1px solid var(--border-color-base, #a2a9b1);\n\tpadding-top: 1em;\n\tmargin-top: 0.2em;\n", heading_rule.css);
+    try std.testing.expect(heading_rule.selector.uncertain and !heading_rule.selector.root_predicate_unresolved);
+    var heading_view = profile;
+    heading_view.figure_rules = profile.figure_rules[723..724];
+    heading_view.custom_properties = null;
+    try std.testing.expectEqual(Profile.FigureRootDirectionUse.independent, heading_view.figureRootDirectionUse(null));
+    // No adjacent-sibling/attribute/not/first-of-type match is granted.
+    const root: TextElement = .{ .tag = "div", .classes = "mw-parser-output" };
+    const heading: TextElement = .{ .tag = "div", .classes = "mw-heading2", .parent = &root };
+    try std.testing.expect((try heading_view.resolveFigure(a, &heading, 1, false)).unresolved);
+    const tags = [_][]const u8{ "span", "b", "i", "strong", "em", "a", "p", "br", "small", "sup" };
+    var witness: Profile.FigureRootDirectionWitness = .{};
+    const full = profile.figureRootDirectionUseWithCompleteClasses(null, "Latn mention", &tags,
+        null, false, null, null, &witness);
+    if (full == .unresolved) std.debug.print("HSB full CSS next witness reason={s} rule={d} css={s}\n",
+        .{ @tagName(witness.reason), witness.rule_index, witness.css });
+    try std.testing.expect(full != .unresolved);
+    for ([_][]const u8{
+        "p:has(> span.etymid:only-child)",
+        "p:has(> SPAN.etymid:ONLY-CHILD)",
+        "p:has( > span.etymid:only-child )",
+        "p:has(> span.etymid:target:only-child)",
+        "p:has(> span.etymid:only-child:target)",
+        "p:has(> span.mw-content-rtl:only-child)",
+        "p:has(> span.mw-content-ltr:only-child)",
+    }) |selector| {
+        const css = try std.fmt.allocPrint(a, "{s}{{display:inline}}", .{selector});
+        var selected = try parseForTargetAlloc(a, css, .screen);
+        defer selected.deinit();
+        try std.testing.expectEqual(@as(usize, 1), selected.figure_rules.len);
+        try std.testing.expect(selected.figure_rules[0].selector.uncertain);
+        try std.testing.expect(!selected.figure_rules[0].selector.root_predicate_unresolved);
+        try std.testing.expectEqual(Profile.FigureRootDirectionUse.independent, selected.figureRootDirectionUse(null));
+        try std.testing.expect((try selected.resolveFigure(a, &paragraph, 1, false)).unresolved);
+    }
+    for ([_][]const u8{
+        "p:has(> div:only-child)", "p:has(> .etymid:only-child)",
+        "p:has(> :only-child)", "p:has(> span.etymid:only-child > div)",
+        "p:has(> span.etymid:only-child + div)",
+        "p:has(> span.etymid:only-child ~ div)",
+        "p:has(> span.etymid:only-child, div)",
+        "p:has(> span.etymid:only-child:only-child)",
+        "p:has(> span.etymid:only-child:target:target)",
+        "p:has(> span.etymid:only-child:hover)",
+        "p:has(> span.etymid:only-child:dir(rtl))",
+        "p:has(> span.etymid:only-child:lang(az))",
+        "p:has(> span.etymid:only-child:not(.other))",
+        "p:has(> span.etymid:only-child[data-x])",
+        "p:has(> span.etymid:only-child::before)",
+        "p:has(> span.etymid\\:only-child)",
+        "p:has(> span.etymid:only-child >)",
+        "p:has(> span.etymid:only-child):dir(rtl)",
+        "p:has(> span.etymid:only-child):lang(az)",
+    }) |selector| {
+        const css = try std.fmt.allocPrint(a, "{s}{{display:inline}}", .{selector});
+        var strict = try parseForTargetAlloc(a, css, .screen);
+        defer strict.deinit();
+        try std.testing.expectEqual(Profile.FigureRootDirectionUse.unresolved, strict.figureRootDirectionUse(null));
+    }
+}
+
 
 test "bidi declaration scanner ignores exact German font rule empty trivia and preserves malformed refusals" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();

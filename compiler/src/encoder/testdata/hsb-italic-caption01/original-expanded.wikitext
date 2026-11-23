@@ -1,0 +1,102 @@
+==Hornjoserbšćina==
+<div class="interproject-box sister-wikipedia sister-project noprint floatright"><div style="float: left;">[[File:Wikipedia-logo-v2.svg|44px|none|link=|alt=]]</div><div style="margin-left: 60px;">Hornjoserbšćina [[Wikipedija]] ma nastawk wo:<div style="margin-left: 10px;"><b class="Latn" lang="hsb">[[:w&#58;maćeršćina|maćeršćina]]</b></div></div><span class="interProject">[[w:maćeršćina|Wikipedija ]]</span></div><templatestyles src="Modul:interproject/style.css"></templatestyles>
+[[Dataja:Ana_Dili.JPG|thumb|[[pomnik|Pomnik]] [[na]] '''maćeršćinu''' (''<i class="Latn mention" lang="az">[[:ana dili#azerbajdźanšćina|ana dili]]</i>'') [[w]] [[Nachčivan]]je, [[Azerbajdźan]]je]]
+
+===Etymology===
+Wot <i class="Latn mention" lang="hsb">[[:maćerski#Hornjoserbšćina|maćerski]]</i> +&lrm; <i class="Latn mention  nowrap" lang="hsb">[[:-ina#Hornjoserbšćina|-ina]]</i>[[Category:Hornjoserbšćina terms suffixed with -ina|MACERSCINA]].
+
+===Wurjekowanje===
+* 
+*[[Wikisłownik:Mjezynarodny fonetiski alfabet|MFA]]<sup>([[wikipedija:Hornjoserbšćina phonology|kluč]])</sup>:&#32;<span class="IPA">/ˈmaj.t͡ʃɛʀ.ʃt͡ʃi.na/</span>[[Category:Hornjoserbšćina terms with IPA pronunciation|MACERSCINA]]
+* Rymy: [[Rymy:Hornjoserbšćina/ajt͡ʃɛʀʃt͡ʃina|<span class="IPA">-ajt͡ʃɛʀʃt͡ʃina</span>]][[Category:Rymy:Hornjoserbšćina/ajt͡ʃɛʀʃt͡ʃina|MACERSCINA]][[Category:Rymy:Hornjoserbšćina/ajt͡ʃɛʀʃt͡ʃina/4 złóžki|MACERSCINA]]
+* Złóžkowanje: <span class="Latn" lang="hsb">ma‧ćer‧šći‧na</span>
+
+===Wěcownik===
+<span class="headword-line"><strong class="Latn headword" lang="hsb">maćeršćina</strong>&nbsp;<span class="gender"><abbr title="žónski ród">ž</abbr></span></span>[[Category:Hornjoserbšćina lemmas|MACERSCINA]][[Category:Hornjoserbšćina nouns|MACERSCINA]][[Category:Hornjoserbšćina žónske nouns|MACERSCINA]][[Category:Strony z hesłami|MAĆERŠĆINA]][[Category:Pages with 1 entry|MAĆERŠĆINA]][[Category:Pages with nonstandard language headings|MAĆERŠĆINA]]
+
+# [[rěč]], [[kotryž|kotraž]] [[čłowjek]] w [[dźěćatstwo|dźěćatstwje]] [[nawuknyć|nawuknje]] a w [[kotryž|kotrejž]] [[primarnje]] [[myslić|mysli]]
+#: <span class="nyms synonym"><span class="defdate">Synonym:</span> <span class="Latn" lang="hsb">[[:maćerny#Hornjoserbšćina|maćerna]] [[:rěč#Hornjoserbšćina|rěč]]</span></span>
+
+====Skłonjowanje====
+<div>
+<div class="NavFrame" style="max-width: 45em">
+<div class="NavHead" style="background:var(--wikt-palette-lighterblue, #ebf4ff); color:inherit">Skłonjowanje <i lang="hsb">maćeršćina</i> (<span style="font-size: smaller;">žónski twjerdy zdónk</span>)</div>
+<div class="NavContent">
+{| style="text-align:center;width:100%;display:table" class="inflection-table"
+|-
+! style="width:25%;background:var(--wikt-palette-lightblue, #d9ebff);" |
+! style="background:var(--wikt-palette-lightblue, #d9ebff); color:inherit" | jednota
+! style="background:var(--wikt-palette-lightblue, #d9ebff); color:inherit" | dwojota
+! style="background:var(--wikt-palette-lightblue, #d9ebff); color:inherit" | mnohota
+|-
+!style="background:var(--wikt-palette-lighterblue, #ebf4ff); color:inherit"|mjenowak
+| <span class="Latn form-of lang-hsb nom|s-form-of     origin-maćeršćina   " lang="hsb"><strong class="selflink">maćeršćina</strong></span>
+| <span class="Latn form-of lang-hsb nom|d-form-of     origin-maćeršćina   " lang="hsb">[[:maćeršćinje#Hornjoserbšćina|maćeršćinje]]</span>
+| <span class="Latn form-of lang-hsb nom|p-form-of     origin-maćeršćina   " lang="hsb">[[:maćeršćiny#Hornjoserbšćina|maćeršćiny]]</span>
+|-
+!style="background:var(--wikt-palette-lighterblue, #ebf4ff); color:inherit"|rodźak
+| <span class="Latn form-of lang-hsb gen|s-form-of     origin-maćeršćina   " lang="hsb">[[:maćeršćiny#Hornjoserbšćina|maćeršćiny]]</span>
+| <span class="Latn form-of lang-hsb gen|d-form-of     origin-maćeršćina   " lang="hsb">[[:maćeršćinow#Hornjoserbšćina|maćeršćinow]]</span>
+| <span class="Latn form-of lang-hsb gen|p-form-of     origin-maćeršćina   " lang="hsb">[[:maćeršćinow#Hornjoserbšćina|maćeršćinow]]</span>
+|-
+!style="background:var(--wikt-palette-lighterblue, #ebf4ff); color:inherit"|dawak
+| <span class="Latn form-of lang-hsb dat|s-form-of     origin-maćeršćina   " lang="hsb">[[:maćeršćinje#Hornjoserbšćina|maćeršćinje]]</span>
+| <span class="Latn form-of lang-hsb dat|d-form-of     origin-maćeršćina   " lang="hsb">[[:maćeršćinomaj#Hornjoserbšćina|maćeršćinomaj]]</span>
+| <span class="Latn form-of lang-hsb dat|p-form-of     origin-maćeršćina   " lang="hsb">[[:maćeršćinam#Hornjoserbšćina|maćeršćinam]]</span>
+|-
+!style="background:var(--wikt-palette-lighterblue, #ebf4ff); color:inherit"|žadak
+| <span class="Latn form-of lang-hsb acc|s-form-of     origin-maćeršćina   " lang="hsb">[[:maćeršćinu#Hornjoserbšćina|maćeršćinu]]</span>
+| <span class="Latn form-of lang-hsb acc|d-form-of     origin-maćeršćina   " lang="hsb">[[:maćeršćinje#Hornjoserbšćina|maćeršćinje]]</span>
+| <span class="Latn form-of lang-hsb acc|p-form-of     origin-maćeršćina   " lang="hsb">[[:maćeršćiny#Hornjoserbšćina|maćeršćiny]]</span>
+|-
+!style="background:var(--wikt-palette-lighterblue, #ebf4ff); color:inherit"|posrědnik
+| <span class="Latn form-of lang-hsb ins|s-form-of     origin-maćeršćina   " lang="hsb">[[:maćeršćinu#Hornjoserbšćina|maćeršćinu]]</span>
+| <span class="Latn form-of lang-hsb ins|d-form-of     origin-maćeršćina   " lang="hsb">[[:maćeršćinomaj#Hornjoserbšćina|maćeršćinomaj]]</span>
+| <span class="Latn form-of lang-hsb ins|p-form-of     origin-maćeršćina   " lang="hsb">[[:maćeršćinami#Hornjoserbšćina|maćeršćinami]]</span>
+|-
+!style="background:var(--wikt-palette-lighterblue, #ebf4ff); color:inherit"|měsćak
+| <span class="Latn form-of lang-hsb loc|s-form-of     origin-maćeršćina   " lang="hsb">[[:maćeršćinje#Hornjoserbšćina|maćeršćinje]]</span>
+| <span class="Latn form-of lang-hsb loc|d-form-of     origin-maćeršćina   " lang="hsb">[[:maćeršćinomaj#Hornjoserbšćina|maćeršćinomaj]]</span>
+| <span class="Latn form-of lang-hsb loc|p-form-of     origin-maćeršćina   " lang="hsb">[[:maćeršćinach#Hornjoserbšćina|maćeršćinach]]</span>
+|-
+!style="background:var(--wikt-palette-lighterblue, #ebf4ff); color:inherit"|wołak
+| <span class="Latn form-of lang-hsb voc|s-form-of     origin-maćeršćina   " lang="hsb"><strong class="selflink">maćeršćina</strong></span>
+| <span class="Latn form-of lang-hsb voc|d-form-of     origin-maćeršćina   " lang="hsb">[[:maćeršćinje#Hornjoserbšćina|maćeršćinje]]</span>
+| <span class="Latn form-of lang-hsb voc|p-form-of     origin-maćeršćina   " lang="hsb">[[:maćeršćiny#Hornjoserbšćina|maćeršćiny]]</span>
+|}</div></div></div>[[Category:Upper Sorbian žónski twjerdy zdónk nouns|MACERSCINA]]
+
+====Přełožki====
+<div class="NavFrame" id="Přełožki-primarna_rěč"><div class="NavHead" style="text-align:left;cursor:pointer">primarna rěč</div><div class="NavContent"><table class="translations" role="presentation" data-gloss="primarna rěč" style="width:100%"><tr><td class="translations-cell multicolumn-list" colspan="3" style="background-color:var(--wikt-palette-lightyellow, #FFFFe0);color:inherit;vertical-align:top;text-align:left">
+* arabski: <span class="Arab" lang="ar">[[:لغة أم#arabišćina|لُغَة أُم]]</span>&nbsp;<span class="gender"><abbr title="žónski ród">ž</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ar-Latn" class="tr Latn">luḡa(t) ʔum</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Terms with arabišćina translations|MACERSCINA]] 
+* běłoruski: <span class="Cyrl" lang="be">[[:родная мова#běłorušćina|ро́дная мо́ва]]</span>&nbsp;<span class="gender"><abbr title="žónski ród">ž</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="be-Latn" class="tr Latn">ródnaja móva</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Terms with běłorušćina translations|MACERSCINA]]
+* bołharski: <span class="Cyrl" lang="bg">[[:роден език#bołharšćina|ро̀ден езѝк]]</span>&nbsp;<span class="gender"><abbr title="muski ród">m</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="bg-Latn" class="tr Latn">ròden ezìk</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Terms with bołharšćina translations|MACERSCINA]], <span class="Cyrl" lang="bg">[[:майчин език#bołharšćina|ма̀йчин езѝк]]</span>&nbsp;<span class="gender"><abbr title="muski ród">m</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="bg-Latn" class="tr Latn">màjčin ezìk</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Terms with bołharšćina translations|MACERSCINA]]
+* bosniski: 
+*: kyrilica: <span class="Cyrl" lang="bs">[[:матерњи језик#bosnišćina|ма̀те̄рњӣ јѐзик]]</span>&nbsp;<span class="gender"><abbr title="muski ród">m</abbr></span>[[Category:Terms with bosnišćina translations|MACERSCINA]]
+*: latinica: <span class="Latn" lang="bs">[[:maternji jezik#bosnišćina|màtērnjī jèzik]]</span>&nbsp;<span class="gender"><abbr title="muski ród">m</abbr></span>[[Category:Terms with bosnišćina translations|MACERSCINA]]
+* chinski: 
+*: mandarinski: <span class="Hant" lang="cmn">[[:母語#Mandarin|母語]]</span><span class="Zsym mention" style="font-size:100%;">&nbsp;/ </span><span class="Hans" lang="cmn">[[:母语#Mandarin|母语]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="cmn-Latn" class="tr Latn">mǔyǔ</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Terms with Mandarin translations|MACERSCINA]], <span class="Hant" lang="cmn">[[:本族語#Mandarin|本族語]]</span><span class="Zsym mention" style="font-size:100%;">&nbsp;/ </span><span class="Hans" lang="cmn">[[:本族语#Mandarin|本族语]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="cmn-Latn" class="tr Latn">běnzúyǔ</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Terms with Mandarin translations|MACERSCINA]]
+* chorwatski: <span class="Latn" lang="hr">[[:maternji jezik#chorwatšćina|màtērnjī jèzik]]</span>&nbsp;<span class="gender"><abbr title="muski ród">m</abbr></span>[[Category:Terms with chorwatšćina translations|MACERSCINA]]
+* čěski: <span class="Latn" lang="cs">[[:mateřský jazyk#čěšćina|mateřský jazyk]]</span>&nbsp;<span class="gender"><abbr title="muski ród">m</abbr></span>[[Category:Terms with čěšćina translations|MACERSCINA]], <span class="Latn" lang="cs">[[:mateřština#čěšćina|mateřština]]</span>&nbsp;<span class="gender"><abbr title="muski ród">m</abbr></span>[[Category:Terms with čěšćina translations|MACERSCINA]]
+* čornohórski:
+*: kyrilica: <span class="Cyrl" lang="cnr">[[:мађарски#Montenegrin|ма̏ђарски]]</span>&nbsp;<span class="gender"><abbr title="muski ród">m</abbr></span>[[Category:Terms with Montenegrin translations|MACERSCINA]]
+*: latinica: <span class="Latn" lang="cnr">[[:mađarski#Montenegrin|mȁđarski]]</span>&nbsp;<span class="gender"><abbr title="muski ród">m</abbr></span>[[Category:Terms with Montenegrin translations|MACERSCINA]]
+* delnjoserbski: <span class="Latn" lang="dsb">[[:maśeršćina#Lower&#95;Sorbian|maśeršćina]]</span>&nbsp;<span class="gender"><abbr title="žónski ród">ž</abbr></span>[[Category:Terms with Lower Sorbian translations|MACERSCINA]]
+* esperanski: <span class="Latn" lang="eo">[[:hejmlingvo#esperanto|hejmlingvo]]</span><span class="tpos">&nbsp;[[:eo&#58;hejmlingvo|(eo)]]</span>[[Category:Terms with esperanto translations|MACERSCINA]]
+* finski: <span class="Latn" lang="fi">[[:äidinkieli#finšćina|äidinkieli]]</span><span class="tpos">&nbsp;[[:fi&#58;äidinkieli|(fi)]]</span>[[Category:Terms with finšćina translations|MACERSCINA]]
+* islandski: <span class="Latn" lang="is">[[:móðurmál#islandšćina|móðurmál]]</span>&nbsp;<span class="gender"><abbr title="ničeji ród">n</abbr></span>[[Category:Terms with islandšćina translations|MACERSCINA]]
+* jendźelski: <span class="Latn" lang="en">[[:mother tongue#jendźelšćina|mother tongue]]</span><span class="tpos">&nbsp;[[:en&#58;mother tongue|(en)]]</span>[[Category:Terms with jendźelšćina translations|MACERSCINA]], <span class="Latn" lang="en">[[:first language#jendźelšćina|first language]]</span><span class="tpos">&nbsp;[[:en&#58;first language|(en)]]</span>[[Category:Terms with jendźelšćina translations|MACERSCINA]], <span class="Latn" lang="en">[[:mother language#jendźelšćina|mother language]]</span><span class="tpos">&nbsp;[[:en&#58;mother language|(en)]]</span>[[Category:Terms with jendźelšćina translations|MACERSCINA]], <span class="Latn" lang="en">[[:native language#jendźelšćina|native language]]</span><span class="tpos">&nbsp;[[:en&#58;native language|(en)]]</span>[[Category:Terms with jendźelšćina translations|MACERSCINA]], <span class="Latn" lang="en">[[:native tongue#jendźelšćina|native tongue]]</span><span class="tpos">&nbsp;[[:en&#58;native tongue|(en)]]</span>[[Category:Terms with jendźelšćina translations|MACERSCINA]]
+* kašubski: <span class="Latn" lang="csb">[[:rodnô mòwa#Kashubian|rodnô mòwa]]</span>&nbsp;<span class="gender"><abbr title="žónski ród">ž</abbr></span>[[Category:Terms with Kashubian translations|MACERSCINA]]
+* madźarski: <span class="Latn" lang="hu">[[:anyanyelv#madźaršćina|anyanyelv]]</span>[[Category:Terms with madźaršćina translations|MACERSCINA]]
+* makedonski: <span class="Cyrl" lang="mk">[[:мајчин јазик#makedonšćina|мајчин јазик]]</span>&nbsp;<span class="gender"><abbr title="muski ród">m</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="mk-Latn" class="tr Latn">majčin jazik</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Terms with makedonšćina translations|MACERSCINA]]
+* němski: <span class="Latn" lang="de">[[:Muttersprache#němčina|Muttersprache]]</span><span class="tpos">&nbsp;[[:de&#58;Muttersprache|(de)]]</span>&nbsp;<span class="gender"><abbr title="žónski ród">ž</abbr></span>[[Category:Terms with němčina translations|MACERSCINA]], <span class="Latn" lang="de">[[:Erstsprache#němčina|Erstsprache]]</span><span class="tpos">&nbsp;[[:de&#58;Erstsprache|(de)]]</span>&nbsp;<span class="gender"><abbr title="žónski ród">ž</abbr></span>[[Category:Terms with němčina translations|MACERSCINA]]
+* pólski: <span class="Latn" lang="pl">[[:język ojczysty#pólšćina|język ojczysty]]</span><span class="tpos">&nbsp;[[:pl&#58;język ojczysty|(pl)]]</span>&nbsp;<span class="gender"><abbr title="muski ród">m</abbr></span>[[Category:Terms with pólšćina translations|MACERSCINA]]
+* ruski: <span class="Cyrl" lang="ru">[[:родной язык#rušćina|родно́й язы́к]]</span><span class="tpos">&nbsp;[[:ru&#58;родной язык|(ru)]]</span>&nbsp;<span class="gender"><abbr title="muski ród">m</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ru-Latn" class="tr Latn">rodnój jazýk</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Terms with rušćina translations|MACERSCINA]]
+* serbiski:
+*: kyrilica: <span class="Cyrl" lang="sr">[[:матерњи језик#serbišćina|ма̀те̄рњӣ јѐзик]]</span>&nbsp;<span class="gender"><abbr title="muski ród">m</abbr></span>[[Category:Terms with serbišćina translations|MACERSCINA]]
+*: latinica: <span class="Latn" lang="sr">[[:maternji jezik#serbišćina|màtērnjī jèzik]]</span>&nbsp;<span class="gender"><abbr title="muski ród">m</abbr></span>[[Category:Terms with serbišćina translations|MACERSCINA]]
+* słowakski: <span class="Latn" lang="sk">[[:materinský jazyk#słowakšćina|materinský jazyk]]</span>&nbsp;<span class="gender"><abbr title="muski ród">m</abbr></span>[[Category:Terms with słowakšćina translations|MACERSCINA]], <span class="Latn" lang="sk">[[:materčina#słowakšćina|materčina]]</span>&nbsp;<span class="gender"><abbr title="žónski ród">ž</abbr></span>[[Category:Terms with słowakšćina translations|MACERSCINA]], <span class="Latn" lang="sk">[[:materinčina#słowakšćina|materinčina]]</span>&nbsp;<span class="gender"><abbr title="žónski ród">ž</abbr></span>[[Category:Terms with słowakšćina translations|MACERSCINA]]
+* słowjenski: <span class="Latn" lang="sl">[[:materni jezik#słowjenšćina|máterni jêzik]]</span>&nbsp;<span class="gender"><abbr title="muski ród">m</abbr></span>[[Category:Terms with słowjenšćina translations|MACERSCINA]], <span class="Latn" lang="sl">[[:materinščina#słowjenšćina|materȋnščina]]</span>&nbsp;<span class="gender"><abbr title="žónski ród">ž</abbr></span>[[Category:Terms with słowjenšćina translations|MACERSCINA]]
+* turkowski: <span class="Latn" lang="tr">[[:ana dili#turkowšćina|ana dili]]</span><span class="tpos">&nbsp;[[:tr&#58;ana dili|(tr)]]</span>[[Category:Terms with turkowšćina translations|MACERSCINA]]
+* uzbekski: <span class="Latn" lang="uz">[[:ona tili#uzbekšćina|ona tili]]</span><span class="tpos">&nbsp;[[:uz&#58;ona tili|(uz)]]</span>[[Category:Terms with uzbekšćina translations|MACERSCINA]]
+* ukrainski: <span class="Cyrl" lang="uk">[[:рідна мова#ukrainšćina|рі́дна мо́ва]]</span>&nbsp;<span class="gender"><abbr title="žónski ród">ž</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="uk-Latn" class="tr Latn">rídna móva</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Terms with ukrainšćina translations|MACERSCINA]]
+</table></div></div>
