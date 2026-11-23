@@ -31,6 +31,15 @@ const wmf4_core = "d45799ff7a503ab18523e720d5e3686761c84c87";
 // short URLs and unrelated config; V4 geometry stays the same. The response
 // must still prove each exact approved extension registration independently.
 const d191_core = "d1919ec5e4ebd7b0dea1ff6ea1cb4347a9349ca2";
+const sr_imageinfo_core = "87f311882d8c84ec21e288d0bde8aa289df8dc56";
+const sr_selected_defaults = "cd0624188c22163e38bdee69bbe0e67bf74f231eeeb023a2834abd84de4cc2d7";
+const sr_observed_defaults = "9755bd766754d1d6e0ede764ca11eb351c4da75363cb6297c70668dba657b31f";
+
+pub const DefaultsSource = struct {
+    core: ?[]const u8,
+    sha256: ?[32]u8 = null,
+};
+
 const wmf4_cores = [_][]const u8{ wmf4_core, "bb3b6755d485f60478c87c907f0557c53117142d", "93f1cdcc57c0891fb208c960a9f7fff6ca1ca35c", "a2f17941896ce97ea79981632f6ec9ffd9a79802", "992ad5e3679f848254828e823860ba8b3ad3b39b", "bfe24921d500b20f2938fb8fe2a09cf5cac80161", "6c5fe215cf45da0b1448e7ece41bde087e7ef4e2", "f03f1fdaa2d112807b6ce63170eb50e86de615bd", "6e76237de1cf29c08427d191f110a2c38c2b4cf9", d191_core };
 fn wmf4Epoch(core: []const u8) bool {
     for (wmf4_cores) |member| if (equal(core, member)) return true;
@@ -640,7 +649,16 @@ fn generalWithEpoch(value: Value, wiki: []const u8, language: []const u8, server
     const item = try field(query, "general");
     const remote = try string(item, "server");
     const bare = if (std.mem.startsWith(u8, remote, "https:")) remote[6..] else remote;
-    if (!equal(try string(item, "wikiid"), wiki) or !equal(try string(item, "lang"), language) or (!acceptedResponseCore(core, epochs) or !equal(try string(item, "git-hash"), core)) or !equal(bare, server)) return invalid;
+    if (!equal(try string(item, "wikiid"), wiki) or !equal(try string(item, "lang"), language) or
+        !equal(try string(item, "git-hash"), core) or !equal(bare, server)) return invalid;
+    if (equal(core, sr_imageinfo_core)) {
+        const rtl = try field(item, "rtl");
+        const limits = try field(item, "thumblimits");
+        if (!epochs or !equal(wiki, "srwiktionary") or !equal(language, "sr") or !equal(try string(item, "case"), "case-sensitive") or
+            rtl != .bool or rtl.bool or
+            limits != .object or limits.object.count() != 3 or try positive(limits, "0") != 180 or
+            try positive(limits, "1") != 250 or try positive(limits, "2") != 400) return invalid;
+    } else if (!acceptedResponseCore(core, epochs)) return invalid;
     return query;
 }
 
@@ -718,7 +736,7 @@ fn mediaRevision(core: []const u8, name: []const u8, prior: []const u8) []const 
 }
 // Keep complete reviewed sets, not independently interchangeable revisions.
 fn mediaVariant(core: []const u8) ?[media_extensions.len][]const u8 {
-    if (equal(core, d191_core) or equal(core, "992ad5e3679f848254828e823860ba8b3ad3b39b") or equal(core, "6c5fe215cf45da0b1448e7ece41bde087e7ef4e2") or equal(core, "f03f1fdaa2d112807b6ce63170eb50e86de615bd") or equal(core, "6e76237de1cf29c08427d191f110a2c38c2b4cf9")) return .{
+    if (equal(core, sr_imageinfo_core) or equal(core, d191_core) or equal(core, "992ad5e3679f848254828e823860ba8b3ad3b39b") or equal(core, "6c5fe215cf45da0b1448e7ece41bde087e7ef4e2") or equal(core, "f03f1fdaa2d112807b6ce63170eb50e86de615bd") or equal(core, "6e76237de1cf29c08427d191f110a2c38c2b4cf9")) return .{
         "b7208776bccdcbbfa4252f67f3e924b79b6587b9", "7755b61c361899ff83792940cf1eb20923a69bba",
         "6c890ba5064565386a35082e16c0d511b789ac6b", "43498dc2d52c37d98294e4bbf73a0e8a70bd1aea",
     };
@@ -730,7 +748,7 @@ fn mediaVariant(core: []const u8) ?[media_extensions.len][]const u8 {
 }
 fn mediaSetAccepted(core: []const u8, actual: [media_extensions.len][]const u8) bool {
     // This newly observed epoch proves one complete set, not the older WMF set.
-    if (equal(core, d191_core)) {
+    if (equal(core, d191_core) or equal(core, sr_imageinfo_core)) {
         for (mediaVariant(core).?, actual) |expected, revision| if (!equal(expected, revision)) return false;
         return true;
     }
@@ -750,7 +768,7 @@ fn mediaProfileSet(value: Value) ![media_extensions.len][]const u8 {
     return revisions;
 }
 fn d191Profile(core: []const u8, value: Value) bool {
-    if (!equal(core, d191_core)) return true;
+    if (!equal(core, d191_core) and !equal(core, sr_imageinfo_core)) return true;
     if (value != .object) return false;
     const kind = value.object.get("kind") orelse return false;
     return kind == .string and equal(kind.string, "wikimedia-imagehandler-v4");
@@ -759,7 +777,10 @@ fn profile(value: Value, site_bytes: []const u8, core: []const u8) !void {
     if (!d191Profile(core, value)) return invalid;
     const gif = gifProfile(value);
     const webp = webpProfile(value);
-    if (value != .object or value.object.count() != profile_strings.len + 3 + @as(usize, if (gif) 2 else 0) + @as(usize, if (webp) 2 else 0)) return invalid;
+    const sr = equal(core, sr_imageinfo_core);
+    if (sr and (!equal(try string(value, "selected_defaults_sha256"), sr_selected_defaults) or
+        !equal(try string(value, "observed_defaults_response_sha256"), sr_observed_defaults))) return invalid;
+    if (value != .object or value.object.count() != profile_strings.len + 3 + @as(usize, if (sr) 2 else 0) + @as(usize, if (gif) 2 else 0) + @as(usize, if (webp) 2 else 0)) return invalid;
     for (profile_strings) |pair| {
         const expected = if (webp and equal(pair[0], "kind")) "wikimedia-imagehandler-v5" else if (gif and equal(pair[0], "kind")) "wikimedia-imagehandler-v4" else pair[1];
         if (!equal(try string(value, pair[0]), expected)) return invalid;
@@ -1065,11 +1086,20 @@ const RawStreamHeader = struct {
 
 // The caller supplies an already held file (or a test slice), including its
 // exact size. Bytes are hashed once as read, with bounded line allocations.
-fn validateFileSource(a: A, doc: anytype, records_count: u64, batch_count: u64, site: []const u8, ns: *const namespaces.Registry, source_core_revision: ?[]const u8, contract: bool, epochs: bool) !?[]const u8 {
+fn validateFileSource(a: A, doc: anytype, records_count: u64, batch_count: u64, site: []const u8, ns: *const namespaces.Registry, defaults: DefaultsSource, contract: bool, epochs: bool) !?[]const u8 {
     const registration = try std.json.parseFromSliceLeaky(Value, a, site, .{ .allocate = .alloc_always });
     const ns_digest = std.fmt.bytesToHex(ns.source_sha256, .lower);
+    const source_core = defaults.core orelse return invalid;
+    const bound_sr = equal(doc.core_revision, sr_imageinfo_core);
+    if (bound_sr) {
+        // Only the selected Serbian defaults and ordinary current ImageInfo facts
+        // are joined. The current response is not a defaults or parser source.
+        const digest = defaults.sha256 orelse return invalid;
+        if (!contract or !epochs or records_count == 0 or !equal(source_core, accepted_core) or
+            !equal(&std.fmt.bytesToHex(digest, .lower), sr_selected_defaults) or !equal(ns.dump_date, "20261001")) return invalid;
+    } else if (!compatibleResponseCore(source_core, doc.core_revision, epochs)) return invalid;
     if (!equal(doc.wiki, ns.wiki) or !equal(doc.content_language, ns.content_language) or
-        !lowerHex(doc.core_revision, 40) or !compatibleResponseCore(source_core_revision orelse return invalid, doc.core_revision, epochs) or
+        !lowerHex(doc.core_revision, 40) or
         !equal(doc.namespace_registry_sha256, &ns_digest) or (!contract and !fileGenerator(doc.generator_sha256)) or
         !lowerHex(doc.generator_sha256, 64)) return invalid;
     if (records_count == 0) {
@@ -1081,12 +1111,12 @@ fn validateFileSource(a: A, doc: anytype, records_count: u64, batch_count: u64, 
             !equal(try string(empty_general, "git-hash"), doc.core_revision)) return invalid;
         return null;
     }
-    if (!acceptedResponseCore(doc.core_revision, epochs) or !d191Profile(source_core_revision.?, doc.source_profile)) return invalid;
+    if ((!bound_sr and !acceptedResponseCore(doc.core_revision, epochs)) or !d191Profile(source_core, doc.source_profile)) return invalid;
     try profile(doc.source_profile, site, doc.core_revision);
     if (webpProfile(doc.source_profile) and (!contract or !epochs)) return invalid;
     const gif = gifProfile(doc.source_profile);
     if ((equal(doc.core_revision, response_core) or registrationEpoch(doc.core_revision) or wmf4Epoch(doc.core_revision)) and !gif) return invalid;
-    if (gif and (!(equal(doc.core_revision, current_core) or (epochs and responseEpoch(doc.core_revision))) or (!contract and !svgOccurrenceGenerator(doc.generator_sha256) and
+    if (gif and (!(bound_sr or equal(doc.core_revision, current_core) or (epochs and responseEpoch(doc.core_revision))) or (!contract and !svgOccurrenceGenerator(doc.generator_sha256) and
         !equal(doc.generator_sha256, "7bce7ec0bd0acdf6a9d726ed50c1e85a64bc089731d0347d048f1787003d4c0b")))) return invalid;
     const server = try officialServer(a, ns.wiki);
     const site_query = try generalWithEpoch(registration, ns.wiki, ns.content_language, server, doc.core_revision, epochs);
@@ -1117,6 +1147,8 @@ fn readStreamHeaders(a: A, temp: A, projection: *StreamInput, raw: *StreamInput)
         if (!nonnegativeInteger(try field(header_value, name))) return invalid;
     const contract = try explicitReplayContract(header_value);
     const header = try std.json.parseFromValueLeaky(StreamHeader, a, try replayDocumentShape(a, header_value), .{ .allocate = .alloc_always });
+    if (equal(header.core_revision, sr_imageinfo_core) and
+        (!contract or !equal(try string(header_value, "replay_contract"), replay_contract_v6) or header.observed_batches != 0)) return invalid;
     const count_u64 = std.math.add(u64, header.base_batches, header.observed_batches) catch return invalid;
     const max_requests = std.math.mul(u64, header.base_batches, 50) catch return invalid;
     // Counts are bounded by the authenticated physical inputs, not an
@@ -1655,27 +1687,35 @@ pub const Registry = struct {
     // Compatibility only: bounded headers and source profile. Facts, batch
     // payloads and complete digests are still checked by initStream at use.
     pub fn checkStreamCompatibility(backing: A, projection: *StreamInput, raw: *StreamInput, site: []const u8, ns: *const namespaces.Registry, source_core_revision: ?[]const u8) !void {
+        return checkStreamCompatibilityWithDefaults(backing, projection, raw, site, ns, .{ .core = source_core_revision });
+    }
+
+    pub fn checkStreamCompatibilityWithDefaults(backing: A, projection: *StreamInput, raw: *StreamInput, site: []const u8, ns: *const namespaces.Registry, defaults: DefaultsSource) !void {
         try preflight(site, false);
         var arena = std.heap.ArenaAllocator.init(backing);
         defer arena.deinit();
         const a = arena.allocator();
         const parsed_header = try readStreamHeaders(a, a, projection, raw);
         const header = parsed_header.header;
-        _ = try validateFileSource(a, header, header.records_count, header.base_batches + header.observed_batches, site, ns, source_core_revision, parsed_header.contract, parsed_header.response_epochs);
+        _ = try validateFileSource(a, header, header.records_count, header.base_batches + header.observed_batches, site, ns, defaults, parsed_header.contract, parsed_header.response_epochs);
     }
 
     pub fn initStream(backing: A, projection: *StreamInput, raw: *StreamInput, site: []const u8, ns: *const namespaces.Registry, source_core_revision: ?[]const u8) !Registry {
-        return initStreamWithScratchReset(.retain_capacity, backing, projection, raw, site, ns, source_core_revision);
+        return initStreamWithDefaults(backing, projection, raw, site, ns, .{ .core = source_core_revision });
     }
 
-    fn initStreamWithScratchReset(comptime reset_mode: std.heap.ArenaAllocator.ResetMode, backing: A, projection: *StreamInput, raw: *StreamInput, site: []const u8, ns: *const namespaces.Registry, source_core_revision: ?[]const u8) !Registry {
+    pub fn initStreamWithDefaults(backing: A, projection: *StreamInput, raw: *StreamInput, site: []const u8, ns: *const namespaces.Registry, defaults: DefaultsSource) !Registry {
+        return initStreamWithScratchReset(.retain_capacity, backing, projection, raw, site, ns, defaults);
+    }
+
+    fn initStreamWithScratchReset(comptime reset_mode: std.heap.ArenaAllocator.ResetMode, backing: A, projection: *StreamInput, raw: *StreamInput, site: []const u8, ns: *const namespaces.Registry, defaults: DefaultsSource) !Registry {
         var location: FigureStreamFailure = .{};
-        return initStreamLocated(reset_mode, backing, projection, raw, site, ns, source_core_revision, &location) catch |err| {
+        return initStreamLocated(reset_mode, backing, projection, raw, site, ns, defaults, &location) catch |err| {
             if (err != error.OutOfMemory) diagnostics.printLine("figure_source stage={s} record={?d} record_offset={d} projection_offset={d} raw_offset={d} error={s}\n", .{ location.stage, location.record, location.record_offset, projection.diagnosticPosition(), raw.diagnosticPosition(), @errorName(err) });
             return err;
         };
     }
-    fn initStreamLocated(comptime reset_mode: std.heap.ArenaAllocator.ResetMode, backing: A, projection: *StreamInput, raw: *StreamInput, site: []const u8, ns: *const namespaces.Registry, source_core_revision: ?[]const u8, location: *FigureStreamFailure) !Registry {
+    fn initStreamLocated(comptime reset_mode: std.heap.ArenaAllocator.ResetMode, backing: A, projection: *StreamInput, raw: *StreamInput, site: []const u8, ns: *const namespaces.Registry, defaults: DefaultsSource, location: *FigureStreamFailure) !Registry {
 
         try preflight(site, false);
         var arena = std.heap.ArenaAllocator.init(backing);
@@ -1711,7 +1751,7 @@ pub const Registry = struct {
             .content_language = header.content_language, .core_revision = header.core_revision,
             .namespace_registry_sha256 = header.namespace_registry_sha256, .raw_sha256 = header.raw_sha256,
             .generator_sha256 = header.generator_sha256, .source_profile = header.source_profile, .records = records },
-            site, ns, source_core_revision, &batches, parsed_header.contract, parsed_header.response_epochs, parsed_header.decimal_tiff_axes, parsed_header.default_tiff_page, parsed_header.decimal_tiff_page);
+            site, ns, defaults, &batches, parsed_header.contract, parsed_header.response_epochs, parsed_header.decimal_tiff_axes, parsed_header.default_tiff_page, parsed_header.decimal_tiff_page);
     }
 
     fn initFileFacts(arena: *std.heap.ArenaAllocator, value: Value, raw: []const u8, site: []const u8, ns: *const namespaces.Registry, source_core_revision: ?[]const u8) !Registry {
@@ -1733,22 +1773,22 @@ pub const Registry = struct {
         if (!equal(batches.schema, "wikidict.figure-sizing-raw-batches.v1") or
             batches.batches.len > max_batches or doc.records.len > max_records or !digestMatches(raw, doc.raw_sha256)) return invalid;
         var input: ArrayBatches = .{ .items = batches.batches, .count = batches.batches.len };
-        return validateFileFacts(arena, doc, site, ns, source_core_revision, &input, contract, responseEpochContract(value),
+        return validateFileFacts(arena, doc, site, ns, .{ .core = source_core_revision }, &input, contract, responseEpochContract(value),
             contract and (equal(try string(value, "replay_contract"), replay_contract_v4) or (equal(try string(value, "replay_contract"), replay_contract_v6) or equal(try string(value, "replay_contract"), replay_contract_v7))),
             contract and (equal(try string(value, "replay_contract"), replay_contract_v6) or equal(try string(value, "replay_contract"), replay_contract_v7)),
             contract and equal(try string(value, "replay_contract"), replay_contract_v7));
     }
 
-    fn validateFileFacts(arena: *std.heap.ArenaAllocator, doc: FilesDocument, site: []const u8, ns: *const namespaces.Registry, source_core_revision: ?[]const u8, batches: anytype, contract: bool, epochs: bool, decimal_tiff_axes: bool, default_tiff_page: bool, decimal_tiff_page: bool) !Registry {
+    fn validateFileFacts(arena: *std.heap.ArenaAllocator, doc: FilesDocument, site: []const u8, ns: *const namespaces.Registry, defaults: DefaultsSource, batches: anytype, contract: bool, epochs: bool, decimal_tiff_axes: bool, default_tiff_page: bool, decimal_tiff_page: bool) !Registry {
         var location: FigureReplayFailure = .{};
-        return validateFileFactsLocated(arena, doc, site, ns, source_core_revision, batches, contract, epochs, decimal_tiff_axes, default_tiff_page, decimal_tiff_page, &location) catch |err| {
+        return validateFileFactsLocated(arena, doc, site, ns, defaults, batches, contract, epochs, decimal_tiff_axes, default_tiff_page, decimal_tiff_page, &location) catch |err| {
             if (err != error.OutOfMemory) diagnostics.printLine("figure_source stage={s} record={?d} batch={?d} request={?d} file={f} error={s}\n", .{ location.stage, location.record, location.batch, location.request, std.json.fmt(location.file, .{}), @errorName(err) });
             return err;
         };
     }
-    fn validateFileFactsLocated(arena: *std.heap.ArenaAllocator, doc: FilesDocument, site: []const u8, ns: *const namespaces.Registry, source_core_revision: ?[]const u8, batches: anytype, contract: bool, epochs: bool, decimal_tiff_axes: bool, default_tiff_page: bool, decimal_tiff_page: bool, location: *FigureReplayFailure) !Registry {
+    fn validateFileFactsLocated(arena: *std.heap.ArenaAllocator, doc: FilesDocument, site: []const u8, ns: *const namespaces.Registry, defaults: DefaultsSource, batches: anytype, contract: bool, epochs: bool, decimal_tiff_axes: bool, default_tiff_page: bool, decimal_tiff_page: bool, location: *FigureReplayFailure) !Registry {
         const a = arena.allocator();
-        const server = (try validateFileSource(a, doc, doc.records.len, batches.count, site, ns, source_core_revision, contract, epochs)) orelse {
+        const server = (try validateFileSource(a, doc, doc.records.len, batches.count, site, ns, defaults, contract, epochs)) orelse {
             try batches.finish();
             return .{ .arena = arena.*, .namespace_catalog = ns, .records = &.{}, .file_authority = true };
         };
@@ -1833,6 +1873,7 @@ pub const Registry = struct {
             if (batch.observed_svg_occurrences) |observations| {
                 if (!gif or (!contract and !svgOccurrenceGenerator(doc.generator_sha256)) or observations.len == 0 or observations.len > 50) return invalid;
             }
+            if (equal(doc.core_revision, sr_imageinfo_core) and supplement) return invalid;
             if (supplement) observing = true else if (observing) return invalid;
             try preflight(batch.response, false);
             const source = try std.json.parseFromSliceLeaky(Value, temp, batch.response, .{ .allocate = .alloc_always });
@@ -3334,7 +3375,7 @@ const StreamTestSource = struct {
         var p: Slice = .{ .bytes = fixture.projection, .chunk = chunk };
         var r: Slice = .{ .bytes = fixture.raw, .chunk = chunk };
         var projection = p.input(); var raw = r.input();
-        var result = try Registry.initStreamWithScratchReset(.free_all, a, &projection, &raw, fixture.site, ns, accepted_core);
+        var result = try Registry.initStreamWithScratchReset(.free_all, a, &projection, &raw, fixture.site, ns, .{ .core = accepted_core });
         errdefer result.deinit();
         try std.testing.expect(projection.digest != null and raw.digest != null);
         return result;
@@ -4536,7 +4577,7 @@ test "explicit Figure stream replay profile survives overwritten header scratch 
     // Reuse all temporary header bytes before dereferencing the dynamic profile.
     @memset(&scratch_bytes, 0xa5);
     _ = try validateFileSource(owned.allocator(), parsed.header, parsed.header.records_count,
-        parsed.header.base_batches + parsed.header.observed_batches, fixture.site, &ns, accepted_core, parsed.contract, parsed.response_epochs);
+        parsed.header.base_batches + parsed.header.observed_batches, fixture.site, &ns, .{ .core = accepted_core }, parsed.contract, parsed.response_epochs);
     try std.testing.expect(parsed.contract);
     try std.testing.expectEqualStrings(ReplayContractTestSource.producer_b, parsed.header.generator_sha256);
     var registry = try StreamTestSource.init(a, fixture, &ns, 7); defer registry.deinit();
@@ -4943,7 +4984,7 @@ const ResponseEpochTestSource = struct {
         var r = StreamTestSource.Slice{ .bytes = input.raw, .chunk = 17 };
         var projection = p.input(); var raw = r.input();
         var result = if (fresh)
-            try Registry.initStreamWithScratchReset(.free_all, a, &projection, &raw, input.site, ns, current_core)
+            try Registry.initStreamWithScratchReset(.free_all, a, &projection, &raw, input.site, ns, .{ .core = current_core })
         else try Registry.initStream(a, &projection, &raw, input.site, ns, current_core);
         errdefer result.deinit();
         try std.testing.expect(projection.digest != null and raw.digest != null);
@@ -7749,7 +7790,64 @@ test "d191 mixed response rejects unknown epochs legacy profiles and incomplete 
     try D191RetainedTest.v5(temp, &doc.source_profile);
     try std.testing.expect(!d191Profile(d191_core, doc.source_profile));
     // A d191 defaults source cannot acquire a V5 grant from a historical anchor.
-    try std.testing.expectError(invalid, validateFileSource(temp, doc, doc.records.len, 3, D191RetainedTest.input.site, &ns, d191_core, true, true));
+    try std.testing.expectError(invalid, validateFileSource(temp, doc, doc.records.len, 3, D191RetainedTest.input.site, &ns, .{ .core = d191_core }, true, true));
     try doc.source_profile.object.put(temp, "kind", .{ .string = "wikimedia-imagehandler-v3" });
     try std.testing.expect(!d191Profile(d191_core, doc.source_profile));
+}
+
+test "Serbian WMF5 ordinary ImageInfo uses the exact selected defaults in a v6 file replay" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const actual_site = @embedFile("testdata/sr-imageinfo-87f/imageinfo-first.raw.json");
+    const old = @embedFile("testdata/figure-page-observations/sr-fuhe-served-set/figure-siteinfo.raw.json");
+    var ns = try namespaces.Registry.init(a, @embedFile("testdata/figure-page-observations/sr-fuhe-served-set/namespace-registry.tsv"));
+    defer ns.deinit();
+    var old_hash: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(old, &old_hash, .{});
+    const defaults: DefaultsSource = .{ .core = accepted_core, .sha256 = old_hash };
+    var doc = try D191RetainedTest.document(a);
+    doc.core_revision = sr_imageinfo_core;
+    doc.wiki = ns.wiki;
+    doc.content_language = ns.content_language;
+    doc.namespace_registry_sha256 = try a.dupe(u8, &std.fmt.bytesToHex(ns.source_sha256, .lower));
+    doc.records = try std.json.parseFromSliceLeaky([]const FileFact, a, @embedFile("testdata/sr-imageinfo-87f/first-records.json"), .{});
+    try std.testing.expectEqual(@as(usize, 50), doc.records.len);
+    const titles = try a.alloc([]const u8, doc.records.len);
+    for (doc.records, titles) |record, *title| title.* = record.requested_file;
+    var site_hash: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(actual_site, &site_hash, .{});
+    try doc.source_profile.object.put(a, "site_raw_sha256", .{ .string = try a.dupe(u8, &std.fmt.bytesToHex(site_hash, .lower)) });
+    try doc.source_profile.object.put(a, "selected_defaults_sha256", .{ .string = sr_selected_defaults });
+    try doc.source_profile.object.put(a, "observed_defaults_response_sha256", .{ .string = sr_observed_defaults });
+    const batches = &[_]RawFileBatch{.{ .requests = titles, .response = actual_site }};
+    for ([_][]const u8{ replay_contract_v3, replay_contract_v6, replay_contract_v7 }) |contract| {
+        const fixture = try ResponseEpochTestSource.seal(a, doc, batches, actual_site, true, contract);
+        var p = StreamTestSource.Slice{ .bytes = fixture.projection, .chunk = 173 };
+        var r = StreamTestSource.Slice{ .bytes = fixture.raw, .chunk = 197 };
+        var projection = p.input();
+        var raw = r.input();
+        const checked = Registry.initStreamWithDefaults(a, &projection, &raw, actual_site, &ns, defaults);
+        if (!equal(contract, replay_contract_v6)) {
+            try std.testing.expectError(invalid, checked);
+            continue;
+        }
+        var result = try checked;
+        defer result.deinit();
+        var eligible: usize = 0;
+        for (doc.records) |record| if (record.state == .eligible) {
+            eligible += 1;
+            const width = @min(record.original_width, 180);
+            try std.testing.expect((try Registry.resolve(&result, a, record.requested_file, .thumbnail, width, null)) == .requested_fit);
+        };
+        try std.testing.expect(eligible > 0);
+    }
+    const legacy = try ResponseEpochTestSource.seal(a, doc, batches, actual_site, false, replay_contract_v6);
+    try std.testing.expectError(invalid, Registry.init(a, legacy.projection, legacy.raw, actual_site, &ns, accepted_core, generator_sha256));
+    for ([_]DefaultsSource{ .{ .core = accepted_core }, .{ .core = accepted_core, .sha256 = site_hash },
+        .{ .core = d191_core, .sha256 = old_hash }, .{ .core = sr_imageinfo_core, .sha256 = old_hash } }) |crossed|
+        try std.testing.expectError(invalid, validateFileSource(a, doc, 50, 1, actual_site, &ns, crossed, true, true));
+    try doc.source_profile.object.put(a, "observed_defaults_response_sha256", .{ .string = sr_selected_defaults });
+    try std.testing.expectError(invalid, validateFileSource(a, doc, 50, 1, actual_site, &ns, defaults, true, true));
+    try std.testing.expect(!responseEpoch(sr_imageinfo_core));
 }

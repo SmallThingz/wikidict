@@ -764,7 +764,7 @@ fn loadStreamFigureSizingLocated(io: std.Io, a: std.mem.Allocator, paths: [3][]c
     try site_file.accept(site_bytes.len, site_hash);
     const source = source_site orelse return error.InvalidFigureSizingSource;
     if (!std.mem.eql(u8, &source.source_context.namespace_sha256, &namespaces.source_sha256)) return error.InvalidFigureSizingSource;
-    var result = try figure_sizing.Registry.initStream(a, &projection, &raw, site_bytes, namespaces, source.core_revision);
+    var result = try figure_sizing.Registry.initStreamWithDefaults(a, &projection, &raw, site_bytes, namespaces, .{ .core = source.core_revision, .sha256 = source.source_sha256 });
     errdefer result.deinit();
     try projection_file.accept(projection.offset, projection.digest orelse return error.InvalidFigureSizingSource);
     try raw_file.accept(raw.offset, raw.digest orelse return error.InvalidFigureSizingSource);
@@ -889,7 +889,7 @@ fn checkFigureCompatibility(io: std.Io, a: std.mem.Allocator, arguments: []const
     var raw = raw_file.input();
     const site = try std.Io.Dir.cwd().readFileAlloc(io, paths[4], a, .limited(2 * 1024 * 1024));
     defer a.free(site);
-    try figure_sizing.Registry.checkStreamCompatibility(a, &projection, &raw, site, &namespaces, source.core_revision);
+    try figure_sizing.Registry.checkStreamCompatibilityWithDefaults(a, &projection, &raw, site, &namespaces, .{ .core = source.core_revision, .sha256 = source.source_sha256 });
 }
 
 fn loadPageLanguage(io: std.Io, a: std.mem.Allocator, root: []const u8, namespaces: *const namespace_registry.Registry) !page_source_context.Registry {
