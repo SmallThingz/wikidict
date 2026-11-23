@@ -1237,6 +1237,7 @@ class CompletedExpanderTests(unittest.TestCase):
                     staging.mkdir(parents=True)
                     payload = staging / 'partial-blob';payload.write_bytes(b'unique partial output')
                     namespace = dict(builder.__dict__, output=output, edition=current['edition'], date=current['date'],
+                                     staged_input_root=self.base,
                                      retained_roles=SimpleNamespace(sealed_expander_recovery=selected_ref), build_identity=identity)
                     block = ast.fix_missing_locations(ast.Module(body=body[index:end + 1], type_ignores=[]))
                     with self.assertRaisesRegex(ValueError, 'existing partial or published output'):

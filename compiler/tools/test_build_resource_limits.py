@@ -109,7 +109,7 @@ class ResourceLimitsTest(unittest.TestCase):
                 return read_text(path, *args, **kwargs)
             raise AssertionError(f'Unexpected read (including host memory): {path}')
         with tempfile.TemporaryDirectory() as tmp:
-            with patch.object(builder, 'PROJECT', Path(tmp)), \
+            with contextlib.chdir(Path(tmp)), patch.object(builder, 'PROJECT', Path(tmp)), \
                  patch.object(sys, 'argv', ['build_wiktionaries.py']), \
                  patch.object(limits, 'inside_envelope', return_value=False), \
                  patch.object(Path, 'read_text', autospec=True, side_effect=reject_host_memory) as memory, \
@@ -243,7 +243,7 @@ class ResourceLimitsTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             parent = Path(tmp)
             self.parent(parent, controllers='')
-            with patch.object(builder, 'PROJECT', parent), \
+            with contextlib.chdir(parent), patch.object(builder, 'PROJECT', parent), \
                  patch.object(limits, '_delegated_parent',
                               side_effect=limits.ContainmentUnavailable('A writable delegated cgroup is required')), \
                  patch.object(sys, 'argv', ['build_wiktionaries.py', '--downloads',

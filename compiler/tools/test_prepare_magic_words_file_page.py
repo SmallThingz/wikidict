@@ -92,7 +92,11 @@ class ParserFunctionStagingTests(unittest.TestCase):
             # The site/namespace fixtures stand in for independently qualified
             # normal providers; the new facts helper and both joins are real.
             snapshots.update({'namespace-registry':namespace,'site-info':site})
-            with mock.patch.object(builder,'validated_auxiliary_capture',side_effect=selected):
+            capture_helper = builder.auxiliary_capture_helper
+            def selected_helper(name, path):
+                return capture_helper(name, path) if name == 'parser-function-facts' else None
+            with mock.patch.object(builder, 'auxiliary_capture_helper', side_effect=selected_helper), \
+                 mock.patch.object(builder,'validated_auxiliary_capture',side_effect=selected):
                 hashes=builder.verified_auxiliary_hashes(snapshots,fixtures.WIKI,fixtures.DATE)
                 changed=root/'changed-site.json';changed.write_bytes(site.read_bytes()+b' ')
                 with self.assertRaises(ValueError):builder.verified_auxiliary_hashes(dict(snapshots,**{'site-info':changed}),fixtures.WIKI,fixtures.DATE)

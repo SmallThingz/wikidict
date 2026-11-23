@@ -123,11 +123,11 @@ class DiskWatchdogTest(unittest.TestCase):
 
     def test_cli_covers_project_scratch_and_explicit_output_filesystem(self):
         with self.temp() as tmp:
-            project = Path(tmp) / 'project'
-            output = Path(tmp) / 'separate-output'
+            project = Path(tmp).resolve() / 'project'
+            output = Path(tmp).resolve() / 'separate-output'
             project.mkdir()
             for option in ('--output', '--out'):
-                with self.subTest(option=option), \
+                with self.subTest(option=option), contextlib.chdir(project), \
                      patch.object(builder, 'PROJECT', project), \
                      patch.object(sys, 'argv', ['build_wiktionaries.py', '--resource-mode=watchdog', option, str(output)]), \
                      patch.object(limits, 'inside_watchdog', return_value=False), \
@@ -135,7 +135,8 @@ class DiskWatchdogTest(unittest.TestCase):
                     with self.assertRaises(SystemExit) as stopped:
                         builder.cli()
                     self.assertEqual(stopped.exception.code, 0)
-                    launch.assert_called_once_with(wall_seconds=7200, disk_paths=(project / '.tmp', output))
+                    launch.assert_called_once_with(wall_seconds=7200, disk_paths=(project / '.tmp', output),
+                                                  child_nice=max(0, os.getpriority(os.PRIO_PROCESS, 0)))
 
     def test_floor_crossing_reaps_owned_python_child_and_leaves_existing_child_alive(self):
         # Only Python fixtures are launched; no compiler, native build, or corpus input.
@@ -179,7 +180,7 @@ class DiskWatchdogTest(unittest.TestCase):
                 self.assertTrue(controller.watchdog_closed(report))
                 self.assertIn('error',report)
                 # The disk stop still halts normal continuation; cleanup is separate.
-                self.assertIsNone(controller.next_resources(4,controller.MEMORY_INITIAL,report))
+                self.assertIsNone(controller.next_resources(4,controller.MEMORY,report))
                 original=dict(report)
                 closed=dict(outcome='failed',accepted=None,controller_interrupted=False,exit_code=1,
                             cleanup_proven=controller.watchdog_closed(report),source_guard=True,control_proven=True)
