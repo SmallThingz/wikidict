@@ -710,6 +710,10 @@ const FigureStreamFile = struct {
     fn input(self: *FigureStreamFile) figure_sizing.StreamInput {
         return .{ .context = self, .read_at = readAt, .size = self.identity.size };
     }
+    fn compressed(self: *FigureStreamFile) !bool {
+        var magic: [2]u8 = undefined;
+        return try self.file.readPositionalAll(self.io, &magic, 0) == 2 and std.mem.eql(u8, &magic, "\x1f\x8b");
+    }
     fn accept(self: *FigureStreamFile, length: u64, hash: [32]u8) !void {
         if (!std.meta.eql(self.identity, try capturedWriterSourceFileIdentity(self.file)) or
             !std.meta.eql(self.identity, try capturedWriterSourcePathIdentity(self.io, self.path)) or
@@ -718,6 +722,41 @@ const FigureStreamFile = struct {
             std.math.cast(usize, length) orelse return error.InvalidFigureSizingSource, hash);
     }
 };
+
+const FigureRawGzip = @import("figure_raw_gzip.zig");
+
+const FigureGzipFile = struct {
+    source: *FigureStreamFile,
+    reader: std.Io.Reader,
+    offset: u64 = 0,
+    hash: std.crypto.hash.sha2.Sha256 = .init(.{}),
+
+    fn init(source: *FigureStreamFile, buffer: []u8) FigureGzipFile {
+        return .{ .source = source, .reader = .{ .vtable = &.{ .stream = stream }, .buffer = buffer, .seek = 0, .end = 0 } };
+    }
+
+    fn stream(reader: *std.Io.Reader, writer: *std.Io.Writer, limit: std.Io.Limit) std.Io.Reader.StreamError!usize {
+        const self: *FigureGzipFile = @alignCast(@fieldParentPtr("reader", reader));
+        const out = writer.writableSliceGreedy(1) catch return error.WriteFailed;
+        const bytes = out[0..limit.minInt(out.len)];
+        if (bytes.len == 0) return 0;
+        const n = self.source.file.readPositionalAll(self.source.io, bytes, self.offset) catch return error.ReadFailed;
+        if (n == 0) return error.EndOfStream;
+        self.offset = std.math.add(u64, self.offset, n) catch return error.ReadFailed;
+        if (self.offset > self.source.identity.size) return error.ReadFailed;
+        self.hash.update(bytes[0..n]);
+        writer.advance(n);
+        return n;
+    }
+
+    fn accept(self: *FigureGzipFile) !void {
+        var digest: [32]u8 = undefined;
+        self.hash.final(&digest);
+        try self.source.accept(self.offset, digest);
+    }
+};
+
+const FigureProjectionProbe = struct { schema: []const u8, raw_bytes: ?u64 = null };
 
 // Legacy documents retain their existing bounded mapping route. A versioned
 // stream is consumed through held descriptors and never mapped/materialized.
@@ -739,7 +778,7 @@ fn loadStreamFigureSizingLocated(io: std.Io, a: std.mem.Allocator, paths: [3][]c
     };
     const first_line = first orelse return null;
     defer a.free(first_line);
-    const header = std.json.parseFromSlice(struct { schema: []const u8 }, a, first_line, .{ .ignore_unknown_fields = true }) catch |err| switch (err) {
+    const header = std.json.parseFromSlice(FigureProjectionProbe, a, first_line, .{ .ignore_unknown_fields = true }) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         else => return null,
     };
@@ -752,6 +791,16 @@ fn loadStreamFigureSizingLocated(io: std.Io, a: std.mem.Allocator, paths: [3][]c
     var raw_file = (try FigureStreamFile.open(io, raw_path)) orelse return error.InvalidFigureSizingSource;
     defer raw_file.close();
     var raw = raw_file.input();
+    var compressed_buffer: [64 * 1024]u8 = undefined;
+    var window: [std.compress.flate.max_window_len]u8 = undefined;
+    var encoded = FigureGzipFile.init(&raw_file, &compressed_buffer);
+    var decoder: FigureRawGzip = undefined;
+    const compressed = try raw_file.compressed();
+    if (compressed) {
+        const logical_size = header.value.raw_bytes orelse return error.InvalidFigureSizingSource;
+        decoder = .init(&encoded.reader, &window, logical_size);
+        raw = .{ .context = &decoder, .read_at = FigureRawGzip.readAt, .size = logical_size };
+    }
     const site_path = paths[2];
     var site_file = (try FigureStreamFile.open(io, site_path)) orelse return error.InvalidFigureSizingSource;
     defer site_file.close();
@@ -767,7 +816,10 @@ fn loadStreamFigureSizingLocated(io: std.Io, a: std.mem.Allocator, paths: [3][]c
     var result = try figure_sizing.Registry.initStreamWithDefaults(a, &projection, &raw, site_bytes, namespaces, .{ .core = source.core_revision, .sha256 = source.source_sha256 });
     errdefer result.deinit();
     try projection_file.accept(projection.offset, projection.digest orelse return error.InvalidFigureSizingSource);
-    try raw_file.accept(raw.offset, raw.digest orelse return error.InvalidFigureSizingSource);
+    if (compressed) {
+        if (!decoder.done or raw.digest == null) return error.InvalidFigureSizingSource;
+        try encoded.accept();
+    } else try raw_file.accept(raw.offset, raw.digest orelse return error.InvalidFigureSizingSource);
     // A site replacement during the longer raw pass is also a changed input.
     try site_file.accept(site_bytes.len, site_hash);
     return result;
@@ -873,7 +925,7 @@ fn checkFigureCompatibility(io: std.Io, a: std.mem.Allocator, arguments: []const
         else => return err,
     }) orelse return error.InvalidFigureSizingSource;
     defer a.free(first_line);
-    const header = std.json.parseFromSlice(struct { schema: []const u8 }, a, first_line, .{ .ignore_unknown_fields = true }) catch |err| switch (err) {
+    const header = std.json.parseFromSlice(FigureProjectionProbe, a, first_line, .{ .ignore_unknown_fields = true }) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         else => return checkLegacyFigureCompatibility(io, a, paths, &namespaces, source),
     };
@@ -887,6 +939,15 @@ fn checkFigureCompatibility(io: std.Io, a: std.mem.Allocator, arguments: []const
     var raw_file = (try FigureStreamFile.open(io, paths[3])) orelse return error.InvalidFigureSizingSource;
     defer raw_file.close();
     var raw = raw_file.input();
+    var compressed_buffer: [64 * 1024]u8 = undefined;
+    var window: [std.compress.flate.max_window_len]u8 = undefined;
+    var encoded = FigureGzipFile.init(&raw_file, &compressed_buffer);
+    var decoder: FigureRawGzip = undefined;
+    if (try raw_file.compressed()) {
+        const logical_size = header.value.raw_bytes orelse return error.InvalidFigureSizingSource;
+        decoder = .init(&encoded.reader, &window, logical_size);
+        raw = .{ .context = &decoder, .read_at = FigureRawGzip.readAt, .size = logical_size };
+    }
     const site = try std.Io.Dir.cwd().readFileAlloc(io, paths[4], a, .limited(2 * 1024 * 1024));
     defer a.free(site);
     try figure_sizing.Registry.checkStreamCompatibilityWithDefaults(a, &projection, &raw, site, &namespaces, .{ .core = source.core_revision, .sha256 = source.source_sha256 });
@@ -44652,6 +44713,35 @@ test "normal figure defaults preserve reviewed current source and exact observed
 }
 
 test "normal streamed figure loader retains held descriptors full digests and source identity" {
+    try testNormalStreamedFigureLoader(false);
+}
+
+test "Figure gzip normal loader binds exact decoded facts and stored input digest" {
+    try testNormalStreamedFigureLoader(true);
+}
+
+fn storedFigureGzipFixture(a: std.mem.Allocator, plain: []const u8) ![]const u8 {
+    const max_block = std.math.maxInt(u16);
+    const blocks = try std.math.divCeil(usize, plain.len, max_block);
+    const output = try a.alloc(u8, 18 + 5 * blocks + plain.len);
+    @memcpy(output[0..10], "\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\xff");
+    var cursor: usize = 10;
+    var remaining = plain;
+    for (0..blocks) |index| {
+        const size: u16 = @intCast(@min(max_block, remaining.len));
+        output[cursor] = if (index + 1 == blocks) 1 else 0;
+        std.mem.writeInt(u16, output[cursor + 1 ..][0..2], size, .little);
+        std.mem.writeInt(u16, output[cursor + 3 ..][0..2], ~size, .little);
+        @memcpy(output[cursor + 5 ..][0..size], remaining[0..size]);
+        cursor += 5 + @as(usize, size);
+        remaining = remaining[size..];
+    }
+    std.mem.writeInt(u32, output[cursor..][0..4], std.hash.Crc32.hash(plain), .little);
+    std.mem.writeInt(u32, output[cursor + 4 ..][0..4], @truncate(plain.len), .little);
+    return output;
+}
+
+fn testNormalStreamedFigureLoader(compressed: bool) !void {
     var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
     const a = arena.allocator(); const io = std.testing.io;
@@ -44705,7 +44795,8 @@ test "normal streamed figure loader retains held descriptors full digests and so
     const projection_header = try std.json.Stringify.valueAlloc(a, projection, .{});
     const streamed_projection = try std.mem.concat(a, u8, &.{ projection_header, "\n", fact, "\n" });
     const names = .{ "figure-sizing.json", "figure-sizing.raw.json", "figure-sizing.site.json" };
-    const values = .{ streamed_projection, streamed_raw, site_bytes };
+    const raw_payload = if (compressed) try storedFigureGzipFixture(a, streamed_raw) else streamed_raw;
+    const values = .{ streamed_projection, raw_payload, site_bytes };
     inline for (names, values) |name, value| try std.Io.Dir.cwd().writeFile(io, .{
         .sub_path = try std.fs.path.join(a, &.{ parent, name }), .data = value });
     var inputs: CapturedWriterInputs = .{ .io = io, .a = a }; defer inputs.deinit();
@@ -44730,6 +44821,16 @@ test "normal streamed figure loader retains held descriptors full digests and so
     const raw_path = try std.fs.path.join(a, &.{ parent, "figure-sizing.raw.json" });
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = raw_path, .data = try std.mem.concat(a, u8, &.{ streamed_raw, "{}\n" }) });
     try std.testing.expectError(error.CapturedWriterInputsChanged, inputs.verify());
+    if (compressed) {
+        captured_writer_inputs = previous;
+        const projection_path = try std.fs.path.join(a, &.{ parent, "figure-sizing.json" });
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = raw_path, .data = raw_payload });
+        try projection.object.put(a, "raw_sha256", .{ .string = "0000000000000000000000000000000000000000000000000000000000000000" });
+        const wrong_hash_header = try std.json.Stringify.valueAlloc(a, projection, .{});
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = projection_path,
+            .data = try std.mem.concat(a, u8, &.{ wrong_hash_header, "\n", fact, "\n" }) });
+        try std.testing.expectError(error.InvalidFigureSizingSource, loadFigureSizing(io, a, parent, &ns, site));
+    }
 }
 
 test "normal Writer retained SR Apatin height-only thumbnail preserves complete body owners styles actions media and codec" {

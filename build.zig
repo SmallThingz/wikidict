@@ -1864,6 +1864,7 @@ const tools_partitions = [_]ToolsPartition{
         "language_registry.test",
         "reviewed_nonlexical.test",
         "figure_sizing.test",
+        "figure_raw_gzip.test",
         "blob_build.test_",
     } },
 };
@@ -1884,6 +1885,7 @@ const tools_test_files = [_][]const u8{
     "compiler/tools/language_registry.zig",
     "compiler/tools/reviewed_nonlexical.zig",
     "compiler/tools/figure_sizing.zig",
+    "compiler/tools/figure_raw_gzip.zig",
 };
 
 fn isToolsPartition(group: PreparedTestGroup) bool {
