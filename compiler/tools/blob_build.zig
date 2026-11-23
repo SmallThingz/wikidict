@@ -69755,6 +69755,38 @@ const KcgNativeActionToolsTest = struct {
     }
 };
 
+test "flattened table-cell list markers and separators retain their enclosing class" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{ "", "cell-scope" }) |classes| {
+        var renderer: encoder.presentation_compile.Renderer = .{
+            .a = a, .context = .{}, .body_formatting_attributes = .{ .classes = classes },
+        };
+        const blocks = try renderer.renderBody("{|\n| Plain\n* [[First]]\n* [[Second]]\n|}");
+        const cell = blocks[0].table.?.rows[0].cells[0];
+        try std.testing.expect(cell.blocks == null);
+        var markers: usize = 0;
+        var breaks: usize = 0;
+        var links: usize = 0;
+        for (cell.spans) |span| {
+            if (span.kind == .line_break) {
+                try std.testing.expectEqualStrings(classes, span.classes);
+                breaks += 1;
+            } else if (std.mem.indexOf(u8, span.text, "•") != null) {
+                try std.testing.expectEqualStrings(classes, span.classes);
+                markers += 1;
+            } else if (span.kind == .link) {
+                try std.testing.expectEqualStrings(if (links == 0) "First" else "Second", span.target);
+                links += 1;
+            }
+        }
+        try std.testing.expectEqual(@as(usize, 2), breaks);
+        try std.testing.expectEqual(@as(usize, 2), markers);
+        try std.testing.expectEqual(@as(usize, 2), links);
+    }
+}
+
 test "native interwiki Tools genuine Tyap labels keep one action and distinct adjacent occurrences" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
     var ns = try KcgNativeActionToolsTest.registry(a); defer ns.deinit();

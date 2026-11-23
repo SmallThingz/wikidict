@@ -46179,8 +46179,10 @@ pub const Renderer = struct {
             return &.{};
         };
         try self.spans.appendSlice(self.a, prefix);
-        if (prefix.len != 0 and body.len != 0) try self.lineBreak(.{});
-        try self.blocksInline(body_blocks, .{});
+        // Generated separators and list labels retain the surrounding cell classes.
+        const boundary_style: Style = .{ .classes = self.body_formatting_attributes.classes };
+        if (prefix.len != 0 and body.len != 0) try self.lineBreak(boundary_style);
+        try self.blocksInline(body_blocks, boundary_style);
         return self.spans.toOwnedSlice(self.a);
     }
 
