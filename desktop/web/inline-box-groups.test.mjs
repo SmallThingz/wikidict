@@ -87,6 +87,10 @@ test('rendering retains one inline CSS box, 4 NBSP, cursor and following link ow
   const fragment=spans([value,link],(...args)=>calls.push(args));const nodes=all(fragment);
   const boxNode=nodes.find(n=>n.className==='compiled-inline-box');const anchors=nodes.filter(n=>n.tagName==='A');
   assert.deepEqual([boxNode.textContent,boxNode.style.backgroundColor,boxNode.style['border-top'],boxNode.style.cursor,boxNode.style.boxSizing,boxNode.style.boxDecorationBreak],[nb,'#80ffc0','1px solid #000000','help','content-box','slice']);
+  assert.equal(boxNode.style.whiteSpace,undefined);
+  const coloredText=decodeSpans(wire([swatch(),run({text:'  ',background:'#edffff'})]))[1];
+  const painted=all(spans([coloredText])).find(n=>n.style.backgroundColor==='#edffff');
+  assert.equal(painted.style.whiteSpace,'pre-wrap');
   assert.equal(anchors.length,1);assert.equal(anchors[0].textContent,'white');
   anchors[0].listeners.click({preventDefault(){}});assert.deepEqual(calls,[['white','Енглески']]);
   value.inline_box_group.border.left.width.value=NaN;assert.throws(()=>validateInlineBoxSpan(value));
