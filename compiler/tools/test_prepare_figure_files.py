@@ -3489,6 +3489,134 @@ class FigureFileTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'differs from exact dated SQL replay'):
             figure.verify_inventory(forged, namespace, self.wiki, self.date, inventory_cache=cache)
 
+    def test_explicit_downloads_replays_relocated_sql_without_changing_capture(self):
+        args = self.args(links=('Example.svg', 'Missing.ogg'))
+        original = self.root/'old-downloads'
+        archives = original/self.wiki/self.date
+        archives.mkdir(parents=True)
+        args.sql = [path.rename(archives/path.name) for path in args.sql]
+        args, _, manifest = self.complete_stream_fixture(args)
+        before = (args.output/figure.INVENTORY).read_bytes()
+        current = original.rename(self.root/'current-downloads')
+        files = {name: args.output/path for name, path in figure.output_roles(args.output).items()}
+        with self.assertRaises((ValueError, OSError)):
+            figure.verify(args.output)
+        with figure.bind_inventory_downloads(current):
+            self.assertEqual(figure.verify(args.output), manifest)
+            self.assertEqual(set(builder.verified_figure_tuple(figure, files, self.wiki, self.date)), set(files))
+            guard = builder.figure_tuple_guard(figure, args.output)
+            for path in args.sql:
+                self.assertIn(str(current/self.wiki/self.date/path.name), guard[1])
+                self.assertNotIn(str(path), guard[1])
+            self.assertEqual((args.output/figure.INVENTORY).read_bytes(), before)
+            copied = self.root/'materialized'
+            figure.materialize_complete_capture(args.output/figure.MANIFEST, copied)
+            self.assertEqual((copied/figure.INVENTORY).read_bytes(), before)
+            self.assertEqual(figure.verify(copied)['outputs'], manifest['outputs'])
+            def verify_worker(*args, **kwargs):
+                self.assertEqual(figure.inventory_sql_downloads.get(), current)
+                builder.verified_figure_tuple(figure, files, self.wiki, self.date)
+            with patch.object(builder, 'build', side_effect=verify_worker), patch.object(builder, 'safe_worker_budget', return_value=1):
+                self.assertEqual(builder.build_groups({(self.wiki, self.date): []}, current, self.root/'out', 'zig', 1, 1), [])
+        with self.assertRaises((ValueError, OSError)):
+            builder.verified_figure_tuple(figure, files, self.wiki, self.date)
+        with figure.bind_inventory_downloads(current):
+            selected = current/self.wiki/self.date/args.sql[0].name
+            raw = selected.read_bytes()
+            selected.write_bytes(bytes([raw[0] ^ 1]) + raw[1:])
+            with self.assertRaises(ValueError):
+                figure.verify(args.output)
+
+    def test_main_discovers_relocated_figure_from_manifest_and_replays_in_worker(self):
+        # Exercise manifest-only discovery and the real worker pool with a tiny
+        # Figure generation. Unrelated registry projections are fixture inputs.
+        inputs = self.normal_build_inputs()
+        with patch.object(figure.evidence, 'get_response', return_value=(200, {}, figure.encoded(self.response()))):
+            builder.resolve_figure_snapshot_options(self.root, inputs['manifest'], inputs['selected_inputs'],
+                inputs['downloads'], self.namespace, {}, metadata_network='allow')
+        current = inputs['downloads'].rename(self.root/'current-downloads')
+        capture = self.root/'figure-capture'
+        capture.mkdir()
+        (self.root/'figure-inputs').rename(capture/'figure-inputs')
+        self.namespace.rename(capture/self.namespace.name)
+        (capture/'namespace-registry.manifest.json').write_text('{}')
+        receipt = figure.decode((self.root/'capture.complete.json').read_bytes())
+        for name in ('pagetable-dumpstatus.raw.json', 'dump-siteinfo.xml', 'namespace-siteinfo.raw.json'):
+            source = self.root/name
+            raw = source.read_bytes() if source.exists() else b'fixture'
+            (capture/name).write_bytes(raw)
+            receipt['artifacts'][name] = figure.digest(raw)
+        (capture/'capture.complete.json').write_bytes(figure.encoded(receipt))
+        language = current/self.wiki/self.date/'language-registry.tsv'
+        language.write_text('# content-language\tar\nar\tArabic\n')
+        manifest = dict(inputs['manifest'], auxiliary_capture_roots={self.wiki: capture.name},
+            language_registries=[dict(wiki=self.wiki, date=self.date, name=language.name,
+                size=language.stat().st_size, sha256=builder.sha256_file(language))])
+        (current/'manifest.json').write_bytes(figure.encoded(manifest))
+        worker_inputs = []
+        def verify_worker(group, downloads, output, zig, threads, *, auxiliary_snapshots, **options):
+            self.assertEqual(figure.inventory_sql_downloads.get(), current)
+            selection = builder.validated_figure_tuple(auxiliary_snapshots, self.wiki, self.date)
+            self.assertEqual(set(selection), {*figure.ROLES, 'file-metadata'})
+            worker_inputs.append(auxiliary_snapshots['figure-sizing'])
+        def verify_figure(snapshots, edition, date, **unused):
+            return builder.validated_figure_tuple(snapshots, edition, date)
+        argv = ['build_wiktionaries.py', '--downloads', str(current), '--output', str(self.root/'out'),
+                '--jobs', '1', '--threads', '1']
+        with (contextlib.chdir(self.root), patch.object(builder.sys, 'argv', argv),
+              patch.object(builder, 'PROJECT', self.root), patch.object(builder, 'safe_worker_budget', return_value=1),
+              patch('prepare_magic_words_file_page.selected_snapshot_root', return_value=capture/'unused-magic'),
+              patch.object(builder, 'verified_auxiliary_hashes', side_effect=verify_figure),
+              patch.object(builder, 'build', side_effect=verify_worker)):
+            builder.main()
+        self.assertEqual(worker_inputs, [capture/'figure-inputs'/figure.ROLES['figure-sizing']])
+        self.assertIsNone(figure.inventory_sql_downloads.get())
+
+    def test_relocated_sql_refuses_wrong_source_fields_and_unsafe_paths(self):
+        paths, status = self.inventory()
+        namespace = self.namespace.read_bytes()
+        original = self.root/'old'/self.wiki/self.date
+        original.mkdir(parents=True)
+        paths = [path.rename(original/path.name) for path in paths]
+        inventory = figure.source_inventory(namespace, self.wiki, self.date, status.read_bytes(), paths)
+        current = (self.root/'old').rename(self.root/'new')
+        with figure.bind_inventory_downloads(current):
+            custom = self.root/'prepared'
+            custom.mkdir()
+            custom_paths = []
+            for path in paths:
+                local = custom/path.name
+                local.hardlink_to(current/self.wiki/self.date/path.name)
+                custom_paths.append(local)
+            prepared = figure.source_inventory(namespace, self.wiki, self.date, status.read_bytes(), custom_paths)
+            figure.verify_inventory(prepared, namespace, self.wiki, self.date)
+            first = prepared['sources'][0]
+            first['path'] = str(custom)+'/./'+first['name']
+            with self.assertRaisesRegex(ValueError, 'source locator'):
+                figure.verify_inventory(prepared, namespace, self.wiki, self.date)
+            for key, wrong in (('sha256', '0'*64), ('sha1', '0'*40), ('size', 1), ('wiki', 'enwiktionary'),
+                               ('date', '20260101'), ('url', '/other/file'), ('name', '../file.sql.gz'),
+                               ('path', str(original.parent/'20260101'/paths[0].name)),
+                               ('path', str(original/'..'/self.date/paths[0].name))):
+                altered = copy.deepcopy(inventory)
+                altered['sources'][0][key] = wrong
+                with self.subTest(key=key, wrong=wrong), self.assertRaises((ValueError, OSError)):
+                    figure.verify_inventory(altered, namespace, self.wiki, self.date)
+            first = inventory['sources'][0]
+            for edition, date in (('enwiktionary', self.date), (self.wiki, '20260101'), (self.wiki, 'wrong-date')):
+                wrong = original.parent.parent/edition/date/first['name']
+                wrong.parent.mkdir(parents=True, exist_ok=True)
+                wrong.write_bytes((current/self.wiki/self.date/first['name']).read_bytes())
+                altered = copy.deepcopy(inventory)
+                altered['sources'][0]['path'] = str(wrong)
+                with self.subTest(path=wrong), self.assertRaisesRegex(ValueError, 'archive identity'):
+                    figure.verify_inventory(altered, namespace, self.wiki, self.date)
+            actual = current/self.wiki/self.date/paths[0].name
+            moved = actual.rename(self.root/'elsewhere.sql.gz')
+            actual.symlink_to(moved)
+            with self.assertRaisesRegex(ValueError, 'Unsafe relocated'):
+                figure.verify_inventory(inventory, namespace, self.wiki, self.date)
+
     def test_inventory_replay_reauthenticates_sql_bytes_inode_symlink_and_members(self):
         for mode in ('bytes', 'inode', 'symlink', 'missing'):
             with self.subTest(mode=mode):

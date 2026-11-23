@@ -14,6 +14,7 @@ except ImportError:
 import concurrent.futures
 from collections import defaultdict, deque, namedtuple
 from contextlib import contextmanager, ExitStack
+from contextvars import copy_context
 import fcntl
 from functools import lru_cache
 import gzip
@@ -1631,9 +1632,10 @@ def _figure_replay_identity(path, *, directory=False):
 
 class _FigureReadsetGuard(tuple):
     """In-process discovery receipt, not a semantic-verification or hash grant."""
-    def __new__(cls, root, guard):
+    def __new__(cls, root, guard, sql_downloads=None):
         value = super().__new__(cls, guard)
         value._root = str(Path(root).absolute())
+        value.sql_downloads = sql_downloads
         value._readset = value._census()
         return value
 
@@ -1648,6 +1650,11 @@ class _FigureReadsetGuard(tuple):
         # Copies/serialization retain the historical tuple API, not authority
         # to skip discovery in another object or interpreter.
         return tuple, (tuple(self),)
+
+
+def figure_sql_downloads(helper):
+    binding = getattr(helper, 'inventory_sql_downloads', None)
+    return binding.get() if binding is not None else None
 
 
 def figure_tuple_guard(helper, root, *, authenticated=None, deferred_capture=None):
@@ -1705,7 +1712,8 @@ def figure_tuple_guard(helper, root, *, authenticated=None, deferred_capture=Non
         if inventory_path in members:
             inventory = helper.decode(helper.small(inventory_path))
             for source in inventory['sources']:
-                path = Path(source['path'])
+                path = (helper.inventory_sql_path(source, inventory['wiki'], inventory['date'])
+                        if figure_sql_downloads(helper) is not None else Path(source['path']))
                 if not path.is_absolute():
                     raise ValueError('Relative Figure SQL authority')
                 files.add(path)
@@ -1863,7 +1871,7 @@ def figure_tuple_guard(helper, root, *, authenticated=None, deferred_capture=Non
     if type(authenticated) is _FigureReadsetGuard and deferred_capture is None:
         # Only this guard's complete cold discovery can lend its readset. Plain
         # tuples still follow capture(), including every journal/inventory row.
-        if (str(Path(root).absolute()) != authenticated._root or
+        if (str(Path(root).absolute()) != authenticated._root or authenticated.sql_downloads != figure_sql_downloads(helper) or
                 authenticated._census() != authenticated._readset or
                 any(identity is None for _, identity in authenticated[1].values())):
             return None
@@ -1903,7 +1911,7 @@ def figure_tuple_guard(helper, root, *, authenticated=None, deferred_capture=Non
     if (helper.producer(), helper.metadata.producer(), helper.site_info.producer()) != runtime:
         raise ValueError('Figure replay helper changed while hashing')
     return _FigureReadsetGuard(root, (runtime, identities,
-                                     {str(path): value for path, value in directories.items()}))
+                                     {str(path): value for path, value in directories.items()}), figure_sql_downloads(helper))
 
 
 
@@ -1959,6 +1967,8 @@ def verified_figure_tuple(helper, paths, edition=None, date=None, *, parent_path
         return helper.verify_tuple(paths, edition, date)
     with _FIGURE_TUPLE_REPLAY_LOCK:
         previous = _FIGURE_TUPLE_REPLAYS.get(key)
+    if previous is not None and getattr(previous[0], 'sql_downloads', None) != figure_sql_downloads(helper):
+        previous = None  # A distinct explicit archive root needs its own cold replay.
     root = roots.pop()
     deferred = set() if previous is None and callable(getattr(helper, 'capture_member_paths', None)) else None
     guard = figure_tuple_guard(helper, root, authenticated=None if previous is None else previous[0],
@@ -10417,7 +10427,12 @@ def build_groups(groups, downloads, output, zig, threads, jobs, expansion_worker
                 if options.get('llvm_workers',llvm_workers)!=llvm_workers:
                     raise ValueError('Edition inputs cannot override LLVM worker admission')
                 if cpu_admission=='affinity':validate_affinity_workers(threads,jobs,options.get('expansion_workers'),options.get('llvm_workers'))
-                future=pool.submit(build,group,downloads,output,zig,threads,**options)
+                # Archive binding is scoped to this invocation and must also
+                # reach the worker's independent snapshot pin and final replay.
+                if figure_sql_downloads(sys.modules.get('prepare_figure_metadata')) is not None:
+                    future=pool.submit(copy_context().run,build,group,downloads,output,zig,threads,**options)
+                else:
+                    future=pool.submit(build,group,downloads,output,zig,threads,**options)
                 active[future]=key
                 admission_deadline=None
                 admission_report_at=0
@@ -10595,6 +10610,7 @@ def run_main(p, a, resources):
     except ValueError as error:p.error(str(error))
     try: workspace=workspace_root(json.loads(a.workspace_root_spec) if a.workspace_root_spec is not None else None)
     except (ValueError,OSError) as error: p.error(str(error))
+    explicit_downloads = a.downloads
     if a.downloads is None:a.downloads=workspace/'data/dumps'
     if a.output is None:a.output=workspace/'data/dictionaries'
     try: selected_execution_paths(a,workspace)
@@ -10691,6 +10707,18 @@ def run_main(p, a, resources):
                 manifest = dict(manifest, auxiliary_capture_roots={edition: str(staged.relative_to(workspace))})
         except (ValueError, OSError, TypeError, KeyError) as error:
             p.error(str(error))
+    captures = manifest.get('auxiliary_capture_roots', {})
+    discovers_inputs = isinstance(captures, dict) and any(edition in captures for edition, date in groups)
+    if explicit_downloads is not None and (discovers_inputs or set(FIGURE_SNAPSHOT_FILES).intersection(auxiliary)):
+        try:
+            import prepare_figure_metadata as helper
+        except ModuleNotFoundError as error:
+            if error.name != 'prepare_figure_metadata':
+                raise
+        else:
+            binding = getattr(helper, 'bind_inventory_downloads', None)
+            if binding is not None:
+                resources.enter_context(binding(explicit_downloads))
     if (a.interwiki_map_snapshot is not None or auxiliary) and len(groups)!=1:
         p.error('Auxiliary snapshots require exactly one edition')
     if a.staged_input_root is not None and len(groups)!=1:

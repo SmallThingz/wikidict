@@ -9,6 +9,8 @@ import base64
 import binascii
 import copy
 from compression import zstd
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime
 import fcntl
 import gzip
@@ -1843,6 +1845,48 @@ def selected_page_inventory(catalogue, page, namespace_raw, wiki, date):
             'catalogue': catalogue, 'selected_page': page}
 
 
+inventory_sql_downloads = ContextVar('figure_inventory_sql_downloads', default=None)
+
+
+@contextmanager
+def bind_inventory_downloads(downloads):
+    root = Path(downloads).absolute()
+    if root.resolve(strict=True) != root or not root.is_dir():
+        raise ValueError('Unsafe Figure SQL downloads root')
+    token = inventory_sql_downloads.set(root)
+    try:
+        yield
+    finally:
+        inventory_sql_downloads.reset(token)
+
+
+def inventory_sql_path(row, wiki, date):
+    if not isinstance(row, dict) or not isinstance(row.get('path'), str) or not Path(row['path']).is_absolute():
+        raise ValueError('Invalid Figure inventory source locator')
+    recorded = Path(row['path'])
+    root = inventory_sql_downloads.get()
+    if str(recorded) != row['path'] or '..' in recorded.parts:
+        raise ValueError('Invalid Figure inventory source locator')
+    if root is None:
+        return recorded
+    # Older callers also capture locally prepared SQL outside the official
+    # edition/date layout. Those inputs keep their exact original locator.
+    archive_directory = recorded.parent.parent.name.endswith('wiktionary') or re.fullmatch('[0-9]{8}', recorded.parent.name)
+    if not archive_directory and os.path.lexists(recorded):
+        return recorded
+    wiktionary_api(wiki)
+    if (not isinstance(date, str) or not re.fullmatch('[0-9]{8}', date) or row.get('wiki') != wiki or row.get('date') != date or
+            recorded.parent.parts[-2:] != (wiki, date) or
+            recorded.name != row.get('name') or recorded.name not in
+                {f'{wiki}-{date}-{table}.sql.gz' for table in ('image', 'imagelinks', 'linktarget')} or
+            row.get('url') != f'/{wiki}/{date}/{recorded.name}'):
+        raise ValueError('Invalid relocated Figure SQL archive identity')
+    candidate = root / wiki / date / recorded.name
+    if candidate.resolve(strict=True) != candidate or not candidate.is_file():
+        raise ValueError('Unsafe relocated Figure SQL archive')
+    return candidate
+
+
 def verify_inventory(value, namespace_raw, wiki, date, *, inventory_cache=None):
     if isinstance(value, dict) and value.get('schema') == SELECTED_PAGE_INVENTORY_SCHEMA:
         catalogue = value.get('catalogue')
@@ -1856,12 +1900,14 @@ def verify_inventory(value, namespace_raw, wiki, date, *, inventory_cache=None):
     if (not isinstance(value, dict) or value.get('schema') != INVENTORY_SCHEMA or
             not isinstance(value.get('sources'), list) or not isinstance(value.get('dumpstatus_raw'), str)):
         raise ValueError('Invalid Figure inventory authority')
-    paths = []
-    for row in value['sources']:
-        if not isinstance(row, dict) or not isinstance(row.get('path'), str) or not Path(row['path']).is_absolute():
-            raise ValueError('Invalid Figure inventory source locator')
-        paths.append(Path(row['path']))
+    paths = [inventory_sql_path(row, wiki, date) for row in value['sources']]
     expected = verified_source_inventory(namespace_raw, wiki, date, value['dumpstatus_raw'].encode(), paths, inventory_cache)
+    # Only a locator can move. Keep the historical paths for canonical byte
+    # comparison after rederiving every SQL descriptor, title and inventory field.
+    originals = {str(path): row['path'] for path, row in zip(paths, value['sources'], strict=True) if str(path) != row['path']}
+    if originals:
+        for row in expected['sources']:
+            row['path'] = originals.get(row['path'], row['path'])
     if encoded(expected) != encoded(value):
         raise ValueError('Figure file inventory differs from exact dated SQL replay')
     return value
@@ -3578,7 +3624,7 @@ def read_complete_capture(path, cache=None, *, inventory_cache=None, include_doc
             path.is_symlink() or path.parent.is_symlink()):
         raise ValueError('Unsafe complete Figure manifest locator')
     cache = {} if cache is None else cache
-    key = ('complete-stream', str(path))
+    key = complete_stream_cache_key(path)
     if key in cache:
         value = cache[key]
         if value is None:
@@ -3678,6 +3724,11 @@ def read_complete_capture(path, cache=None, *, inventory_cache=None, include_doc
         raise
 
 
+def complete_stream_cache_key(path):
+    root = inventory_sql_downloads.get()
+    return ('complete-stream', str(path) if root is None else (str(root), str(path)))
+
+
 def complete_stream_batch(reference, cache):
     return _complete_stream_batch(reference, cache)[1]
 
@@ -3734,7 +3785,7 @@ def _verified_contained_http_leaf(node, slot, batch, cache, namespace, source_st
             raise ValueError('Verified HTTP origin belongs to another container')
     elif node['root']!=container or node['path']!=Path(reference['path']):
         raise ValueError('Verified HTTP source root differs')
-    complete=cache.get(('complete-stream',str(reference['path'])))
+    complete=cache.get(complete_stream_cache_key(reference['path']))
     if complete is None:return False
     if (complete['root']!=container or complete['manifest_sha256']!=reference['sha256']
             or complete['namespace']!=namespace):
@@ -6191,7 +6242,7 @@ def materialize_complete_capture(source, output, *, max_batches=64, max_input_by
         phase('output_verify')
         members, directories = capture_member_paths(output,include_markers=True)
         output_stamps = {name:evidence.stamp(path) for name,path in members.items()}
-        sql_paths = tuple(Path(row['path']) for row in complete['inventory']['sources'])
+        sql_paths = tuple(inventory_sql_path(row, wiki, date) for row in complete['inventory']['sources'])
         external_authority = inventory_physical_authority(sql_paths)
         verified = verify(output,require_complete=False)
         after, after_directories = capture_member_paths(output,include_markers=True)
@@ -6477,12 +6528,14 @@ def main():
     commands = parser.add_subparsers(dest='command', required=True)
     check = commands.add_parser('verify')
     check.add_argument('output', type=Path)
+    check.add_argument('--downloads', type=Path, help='Explicit root for relocated dated Figure SQL archives')
     complete = commands.add_parser('complete-capture', help='fully verify an owned incomplete stream and insert only its completion marker')
     complete.add_argument('output', type=Path)
     for name in ('manifest-sha256', 'wiki', 'date'):
         complete.add_argument('--'+name, required=True)
     materialize = commands.add_parser('materialize-complete', help='offline self-contained materialization of an authenticated complete stream')
     materialize.add_argument('--source', type=Path, required=True)
+    materialize.add_argument('--downloads', type=Path, help='Explicit root for relocated dated Figure SQL archives')
     materialize.add_argument('--output', type=Path, required=True)
     materialize.add_argument('--max-batches', type=int, default=64)
     materialize.add_argument('--max-input-bytes', type=int, default=64*1024*1024)
@@ -6523,6 +6576,13 @@ def main():
                          default=FIGURE_PROFILE_V3,
                          help='reviewed geometry profile; explicit selection preserves older projection policy')
     args = parser.parse_args()
+    if getattr(args, 'downloads', None) is not None:
+        with bind_inventory_downloads(args.downloads):
+            return run_command(args)
+    return run_command(args)
+
+
+def run_command(args):
     result = (stage(args) if args.command == 'stage' else capture_files(args) if args.command == 'capture-files' else
               materialize_command(args)
               if args.command == 'materialize-complete' else
