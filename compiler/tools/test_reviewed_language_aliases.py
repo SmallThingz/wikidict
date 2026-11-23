@@ -129,10 +129,10 @@ class ReviewedRegistryAdmissionTests(unittest.TestCase):
 
 
 class CombinedReviewedRecordsTest(unittest.TestCase):
-    def test_all_twenty_seven_records_share_current_document_digest(self):
+    def test_all_reviewed_records_share_current_document_digest(self):
         raw = Path(producer.__file__).with_name('reviewed_language_aliases.json').read_bytes()
         document = json.loads(raw)
-        self.assertEqual([(r['code'], r['alias']) for r in document['records']], [('ur', 'اُردو'), ('ar', 'arabsczi'), ('sq', 'albańsczi'), ('ru', 'rusczi'), ('sr', 'serbsczi'), ('pl', 'pòlsczi'), ('ja', 'japòńsczi'), ('hsb', 'górnosorbsczi'), ('cs', 'czesczi'), ('ko', 'kòrejańsczi'), ('en', 'anielsczi'), ('nl', 'Нидерландӣ'), ('nl', 'hòlandzczi'), ('su', 'Basa Sunda'), ('co', 'còrsu'), ('co', 'Còrsu'), ('kok', 'कोंकणी'), ('mr', 'मराठी भाषा'), ('et', 'Estonyano'), ('pl', 'Polones'), ('nan', 'Bân-lâm-gí'), ('nan', 'Tâi-oân-ōe'), ('hsb', 'hornjoserbšćina'), ('csb', 'Kaxubiera'), ('nl', 'Nederlandjs'), ('li', 'Mofers'), ('li', 'Algemein Gesjreve Limburgs')])
+        self.assertEqual([(r['code'], r['alias']) for r in document['records']], [('ur', 'اُردو'), ('ar', 'arabsczi'), ('sq', 'albańsczi'), ('ru', 'rusczi'), ('sr', 'serbsczi'), ('pl', 'pòlsczi'), ('ja', 'japòńsczi'), ('hsb', 'górnosorbsczi'), ('cs', 'czesczi'), ('ko', 'kòrejańsczi'), ('en', 'anielsczi'), ('nl', 'Нидерландӣ'), ('nl', 'hòlandzczi'), ('su', 'Basa Sunda'), ('co', 'còrsu'), ('co', 'Còrsu'), ('kok', 'कोंकणी'), ('mr', 'मराठी भाषा'), ('et', 'Estonyano'), ('pl', 'Polones'), ('nan', 'Bân-lâm-gí'), ('nan', 'Tâi-oân-ōe'), ('hsb', 'hornjoserbšćina'), ('csb', 'Kaxubiera'), ('nl', 'Nederlandjs'), ('li', 'Mofers'), ('li', 'Algemein Gesjreve Limburgs'), ('en', 'ᱤᱝᱜᱽᱨᱟᱡᱤ')])
         rows = ''.join(code + '\tRegistered ' + code + '\n' for code in ['ur', 'ar', 'sq', 'ru', 'sr', 'pl', 'ja', 'hsb', 'cs', 'ko', 'en', 'nl', 'su', 'co', 'kok', 'mr', 'et', 'nan', 'csb', 'li'])
         digest = hashlib.sha256(raw).hexdigest()
         expected = rows + ''.join('# reviewed-alias\t' + r['code'] + '\t' + r['alias'] + '\t' + r['id'] + '\t' + digest + '\n' for r in document['records'])
