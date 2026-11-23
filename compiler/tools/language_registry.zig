@@ -106,6 +106,7 @@ pub const Registry = struct {
     arabic_articleless_names: std.StringHashMapUnmanaged(?DerivedPreferredName) = .empty,
     local_aliases: std.StringHashMapUnmanaged(?[]const u8) = .empty,
     reviewed_aliases: std.StringHashMapUnmanaged([]const u8) = .empty,
+    reviewed_catalogues: std.StringHashMapUnmanaged([]const ReviewedRecord) = .empty,
     reviewed_varieties: std.StringHashMapUnmanaged(void) = .empty,
     source_banners: std.StringHashMapUnmanaged(?SourceLanguageBanner) = .empty,
     source_static_support: std.StringHashMapUnmanaged(?SourceStaticSupport) = .empty,
@@ -157,6 +158,7 @@ pub const Registry = struct {
         self.arabic_articleless_names.deinit(self.arena.allocator());
         self.local_aliases.deinit(self.arena.allocator());
         self.reviewed_aliases.deinit(self.arena.allocator());
+        self.reviewed_catalogues.deinit(self.arena.allocator());
         self.reviewed_varieties.deinit(self.arena.allocator());
         self.source_banners.deinit(self.arena.allocator());
         self.source_static_support.deinit(self.arena.allocator());
@@ -1457,6 +1459,47 @@ pub const Registry = struct {
         return true;
     }
 
+    const ReviewedRecord = struct {
+        id: []const u8,
+        code: []const u8,
+        alias: []const u8,
+        authority_kind: []const u8,
+        preserve_heading: bool = false,
+    };
+
+    fn parseReviewedCatalogue(a: std.mem.Allocator, current: []const u8, digest: []const u8) ![]const ReviewedRecord {
+        // These published catalogues are exact append-only ancestors. Rebuild the
+        // historical JSON bytes and authenticate them before exposing any rows.
+        const revisions = [_]struct { digest: []const u8, prefix: usize }{
+            .{ .digest = "34e7d8c63afe5033037c0940e2526d83214eabf3429d454d33197b544dbd9bff", .prefix = 31247 }, // 053803e3
+            .{ .digest = "f60007d55ec54afcac1fb84b6276bd1e82408a1bcacf0f2646899784a1189799", .prefix = 29086 }, // 447ef180
+            .{ .digest = "889836654b8ba2d3556f97a31113d00538bd0e0a09f5b46b44445bbe43ab669c", .prefix = 27690 }, // e706493d
+            .{ .digest = "23a5fcbc326b119ad4d15aab2284da3c1d25695f8cf7957c3259a6a433decc43", .prefix = 21048 }, // b8ee3366
+            .{ .digest = "5a9097bf32aca51849bdd5e78bbf18e4c0c721a97b5e2e575867cd0d9b70a3dc", .prefix = 18034 }, // c613ff88
+        };
+        var evidence = current;
+        for (revisions) |revision| {
+            if (!std.mem.eql(u8, digest, revision.digest)) continue;
+            if (revision.prefix >= current.len or current[revision.prefix] != ',') return error.InvalidLanguageRegistry;
+            evidence = try std.mem.concat(a, u8, &.{ current[0..revision.prefix], "\n  ]\n}\n" });
+            break;
+        }
+        var hash: [32]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash(evidence, &hash, .{});
+        if (!std.mem.eql(u8, digest, &std.fmt.bytesToHex(hash, .lower))) return error.InvalidLanguageRegistry;
+        const parsed = try std.json.parseFromSliceLeaky(struct { schema: []const u8, records: []const ReviewedRecord }, a, evidence, .{ .ignore_unknown_fields = true });
+        if (!std.mem.eql(u8, parsed.schema, "wikidict.reviewed-language-aliases.v1")) return error.InvalidLanguageRegistry;
+        return parsed.records;
+    }
+
+    fn reviewedCatalogue(self: *Registry, digest: []const u8) ![]const ReviewedRecord {
+        if (self.reviewed_catalogues.get(digest)) |records| return records;
+        const a = self.arena.allocator();
+        const records = try parseReviewedCatalogue(a, @embedFile("reviewed_language_aliases.json"), digest);
+        try self.reviewed_catalogues.put(a, try a.dupe(u8, digest), records);
+        return records;
+    }
+
     // Editorial evidence is separate from source names and strong banner proof.
     // The marker binds the exact reviewed file, not a claimed upstream capture.
     fn addReviewedMarker(self: *Registry, line: []const u8) !void {
@@ -1467,19 +1510,10 @@ pub const Registry = struct {
         const reference = fields.next() orelse return error.InvalidLanguageRegistry;
         const digest = fields.next() orelse return error.InvalidLanguageRegistry;
         if (fields.next() != null) return error.InvalidLanguageRegistry;
-        const evidence = @embedFile("reviewed_language_aliases.json");
-        var hash: [32]u8 = undefined;
-        std.crypto.hash.sha2.Sha256.hash(evidence, &hash, .{});
-        if (!std.mem.eql(u8, digest, &std.fmt.bytesToHex(hash, .lower))) return error.InvalidLanguageRegistry;
-        const parsed = try std.json.parseFromSlice(struct {
-            schema: []const u8,
-            records: []const struct { id: []const u8, code: []const u8, alias: []const u8, authority_kind: []const u8, preserve_heading: bool = false },
-        }, self.arena.allocator(), evidence, .{ .ignore_unknown_fields = true });
-        defer parsed.deinit();
-        if (!std.mem.eql(u8, parsed.value.schema, "wikidict.reviewed-language-aliases.v1")) return error.InvalidLanguageRegistry;
+        const records = try self.reviewedCatalogue(digest);
         var matches: usize = 0;
         var preserve_heading = false;
-        for (parsed.value.records) |record| {
+        for (records) |record| {
             if (std.mem.eql(u8, reference, record.id) and std.mem.eql(u8, code_value, record.code) and
                 std.mem.eql(u8, name, record.alias) and std.mem.eql(u8, record.authority_kind, "reviewed_public_reference"))
             {
@@ -4417,6 +4451,27 @@ const ReviewedAliasTest = struct {
         return std.fmt.allocPrint(a, "# reviewed-alias\tur\tاُردو\tnwe-urdu-exact-v1\t{s}\n", .{std.fmt.bytesToHex(hash, .lower)});
     }
 };
+
+test "reviewed alias markers retain only their authenticated historical catalogue" {
+    const a = std.testing.allocator;
+    var registry = Registry.empty(a);
+    defer registry.deinit();
+    try registry.addTsv(@embedFile("testdata/pt-bor/pt-language-registry.tsv"));
+    const prior = "34e7d8c63afe5033037c0940e2526d83214eabf3429d454d33197b544dbd9bff";
+    try std.testing.expectEqual(@as(usize, 27), (try registry.reviewedCatalogue(prior)).len);
+    try std.testing.expectEqual(@as(usize, 1), registry.reviewed_catalogues.count());
+    try std.testing.expect(registry.codes.contains("en"));
+    try std.testing.expectError(error.InvalidLanguageRegistry, registry.reviewedCatalogue("0000000000000000000000000000000000000000000000000000000000000000"));
+    var oldest = Registry.empty(a);
+    defer oldest.deinit();
+    try oldest.addTsv(@embedFile("testdata/gom-linked-peer/language-registry.tsv"));
+    try std.testing.expectEqual(@as(usize, 16), (try oldest.reviewedCatalogue("5a9097bf32aca51849bdd5e78bbf18e4c0c721a97b5e2e575867cd0d9b70a3dc")).len);
+    try std.testing.expectError(error.InvalidLanguageRegistry, registry.addTsv("# reviewed-alias\ten\tᱤᱝᱜᱽᱨᱟᱡᱤ\tsat-english-exact-p3697-r35372-v1\t" ++ prior ++ "\n"));
+    const corrupt = try a.dupe(u8, @embedFile("reviewed_language_aliases.json"));
+    defer a.free(corrupt);
+    corrupt[0] ^= 1;
+    try std.testing.expectError(error.InvalidLanguageRegistry, Registry.parseReviewedCatalogue(registry.arena.allocator(), corrupt, prior));
+}
 
 test "reviewed exact alias is provenance-bound and preserves source conflicts" {
     const a = std.testing.allocator;
