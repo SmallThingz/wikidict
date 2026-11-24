@@ -1,0 +1,59 @@
+
+
+	/* former fa-Arab */
+	.Arab:lang(az), /* Azerbaijani */
+	.Arab:lang(fa), /* Persian */
+	.Arab:lang(tg), /* Tajik */
+	.Arab:lang(uz), /* Uzbek */
+	.Arab:lang(aee), /* Northeast Pashayi */
+	.Arab:lang(avd), /* Alviri-Vidari */
+	.Arab:lang(awa), /* Awadhi */
+	.Arab:lang(bal), /* Baluchi */
+	.Arab:lang(bft), /* Balti */
+	.Arab:lang(bhh), /* Bukhari */
+	.Arab:lang(bqi), /* Bakhtiari */
+	.Arab:lang(bsg), /* Bashkardi */
+	.Arab:lang(cpg), /* Cappadocian Greek */
+	.Arab:lang(deh), /* Dehwari */
+	.Arab:lang(doi), /* Dogri */
+	.Arab:lang(esh), /* Eshtehardi */
+	.Arab:lang(glh), /* Northwest Pashayi */
+	.Arab:lang(glk), /* Gilaki */
+	.Arab:lang(hrz), /* Harzani */
+	.Arab:lang(kaa), /* Karakalpak */
+	.Arab:lang(kgn), /* Karingani */
+	.Arab:lang(klj), /* Khalaj */
+	.Arab:lang(kok), /* Konkani */
+	.Arab:lang(lki), /* Laki */
+	.Arab:lang(lrc), /* Northern Luri */
+	.Arab:lang(lrl), /* Larestani */
+	.Arab:lang(luz), /* Southern Luri */
+	.Arab:lang(mhj), /* Mogholi */
+	.Arab:lang(oru), /* Ormuri */
+	.Arab:lang(psh), /* Southwest Pashayi */
+	.Arab:lang(psi), /* Southeast Pashayi */
+	.Arab:lang(sgh), /* Shughni */
+	.Arab:lang(shm), /* Shahrudi */
+	.Arab:lang(siy), /* Sivandi */
+	.Arab:lang(smy), /* Semnani */
+	.Arab:lang(srz), /* Shahmirzadi */
+	.Arab:lang(tly), /* Talysh */
+	.Arab:lang(ttt), /* Tat */
+	.Arab:lang(xnr), /* Kangri */
+	.Arab:lang(xme-ker), /* Kermanic */
+	.Arab:lang(xme-taf), /* Tafreshi */
+	/* .Arab:lang(xme-klt), Kilit; there's a comment saying "and fa-Arab?" */
+	.Arab:lang(xme-ott) { /* Old Tati */
+		font-family: 'Iranian Sans', 'Geeza Pro', Tahoma, sans-serif;
+	}
+
+/* Greek (.Grek) removed - [[Wiktionary:Grease pit/2025/February#Sans-serif Greek font]] */
+
+/* Albanian, Pontic, Tsakonian, Turkish and Aromanian in Greek script */
+.Grek:lang(sq),
+.Grek:lang(pnt),
+.Grek:lang(tsd),
+.Grek:lang(ota),
+.Grek:lang(rup) {
+	font-family: 'Gentium', 'Gentium Plus', 'Lucida Sans Unicode', sans-serif;
+}

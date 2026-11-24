@@ -2235,6 +2235,9 @@ const TextSelector = struct {
     // refutes only the isolated, certified content-root node, never a fragment.
     root_subject_excluded: bool = false,
     root_predicate_unresolved: bool = false,
+    // Only the Figure root-direction comparison consumes this flag. It says
+    // nothing about the selector's actual language match or inherited font.
+    figure_direction_class_language_invariant: bool = false,
     // Necessary own classes outside one simple :lang() predicate. This is
     // refusal-only evidence, never a language or selector-match certificate.
     caption_class_guard: []const []const u8 = &.{},
@@ -10292,7 +10295,7 @@ pub const Profile = struct {
             // change language inheritance. This proves direction independence,
             // not that the rule is absent or that its declarations are safe.
             // Keep the ordinary Figure/font cascade responsible for those effects.
-            if (rule.selector.language_range != null) continue;
+            if (rule.selector.language_range != null or rule.selector.figure_direction_class_language_invariant) continue;
             // A fully inventoried caption cannot acquire a subject tag absent
             // from both its native nodes and the actual inherited ancestry.
             // This refutes an effect; it never matches a language predicate.
@@ -13417,9 +13420,23 @@ const Builder = struct {
         var uncertain_list = false;
         while (try parts.nextAlloc(self.a)) |part| {
             var selector_value = try self.figureSelector(part, conditional);
-            if (inherited_family_only and selector_value.language_range == null and
-                try self.languageClassCompound(trim(part)) != null)
-            {
+            const raw = trim(part);
+            const language_compound = if (selector_value.language_range == null and (!conditional or inherited_family_only))
+                try self.languageClassCompound(raw) else null;
+            if (!conditional) if (language_compound) |compound| {
+                const opening = std.mem.indexOfScalar(u8, raw, ':').?;
+                const closing = std.mem.indexOfScalarPos(u8, raw, opening + 6, ')').?;
+                // Direction changes only the two wrapper class tokens. A single
+                // class-qualified language test is independent if it mentions
+                // neither. Keep its regular selector and declaration unresolved
+                // wherever the actual caption/ancestor font source is unknown.
+                var stable = simpleLanguage(raw[opening + 6 .. closing]);
+                for (compound.classes) |name| {
+                    if (std.mem.eql(u8, name, "mw-content-ltr") or std.mem.eql(u8, name, "mw-content-rtl")) stable = false;
+                }
+                selector_value.figure_direction_class_language_invariant = stable;
+            };
+            if (inherited_family_only and language_compound != null) {
                 // Only language is invariant under the two alternative root
                 // classes. A positive dependency on either changing class must
                 // keep the original root-predicate refusal, including compounds.
@@ -40547,4 +40564,54 @@ test "source preceding tag only refutes necessary types in a terminal last-child
         const unsupported = try builder.containerSelector(raw);
         try std.testing.expect(unsupported.last_child_adjacent_types == null);
     }
+}
+
+test "retained English Figure script language font selectors distinguish root direction from actual font matching" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const css = @embedFile("testdata/en-figure-direction/retained-script-fonts.css");
+    var actual = try parseForTargetAlloc(a, css, .screen); defer actual.deinit();
+    var prior = try parseForTargetAlloc(a, css, .screen); defer prior.deinit();
+    try std.testing.expectEqual(@as(usize, 47), actual.figure_rules.len);
+    for (actual.figure_rules, @constCast(prior.figure_rules)) |rule, *baseline| {
+        try std.testing.expect(rule.selector.figure_direction_class_language_invariant);
+        try std.testing.expect(rule.selector.language_range == null);
+        baseline.selector.figure_direction_class_language_invariant = false;
+    }
+    try std.testing.expectEqual(Profile.FigureRootDirectionUse.unresolved,
+        prior.figureRootDirectionUseWithCompleteClasses(null, null, null, null, false, null, null, null));
+    try std.testing.expectEqual(Profile.FigureRootDirectionUse.independent,
+        actual.figureRootDirectionUseWithCompleteClasses(null, null, null, null, false, null, null, null));
+    // These are actual caption classes/languages for the Japanese, Ottoman
+    // Turkish and Greek entries, plus real stylesheet-matching variants.
+    for ([_]struct { classes: []const u8, language: []const u8 }{
+        .{ .classes = "Jpan mention", .language = "ja" }, .{ .classes = "biota", .language = "en" },
+        .{ .classes = "Arab", .language = "ota" }, .{ .classes = "Grek", .language = "el" },
+        .{ .classes = "Arab", .language = "fa" }, .{ .classes = "Grek", .language = "ota" },
+    }) |subject| {
+        for ([_][]const u8{ "mw-content-ltr mw-parser-output", "mw-content-rtl mw-parser-output" }, [_]bool{ false, true }) |classes, rtl| {
+            const root: TextElement = .{ .tag = "div", .classes = classes, .language = "en", .ancestry_complete = true };
+            const figure: TextElement = .{ .tag = "figure", .parent = &root };
+            const caption: TextElement = .{ .tag = "figcaption", .parent = &figure };
+            const span: TextElement = .{ .tag = "span", .parent = &caption, .language = subject.language, .classes = subject.classes };
+            for (actual.figure_rules, prior.figure_rules) |one, two|
+                try std.testing.expectEqual(two.selector.matchIn(&span, false), one.selector.matchIn(&span, false));
+            try std.testing.expectEqualDeep(try prior.resolveFigure(a, &span, 1, rtl), try actual.resolveFigure(a, &span, 1, rtl));
+        }
+    }
+    for ([_][]const u8{
+        ".mw-content-rtl:lang(fa)", ".Arab:lang(fa).mw-content-ltr",
+        ".Arab :lang(fa)", ".mw-content-rtl > .Arab:lang(fa)", ".Arab[lang=fa]:lang(fa)",
+        ".Arab:lang(fa--IR)", ".Arab:lang(fa):hover", ".Arab:not(:lang(fa))",
+    }) |selector| {
+        const source = try std.mem.concat(a, u8, &.{ selector, "{font-family:serif}" });
+        var refused = try parseForTargetAlloc(a, source, .screen); defer refused.deinit();
+        try std.testing.expect(refused.figure_rules.len != 0);
+        for (refused.figure_rules) |rule| try std.testing.expect(!rule.selector.figure_direction_class_language_invariant);
+    }
+    var mixed = try parseForTargetAlloc(a, ".Arab:lang(fa),.mw-content-ltr:lang(fa){font-family:serif}", .screen);
+    defer mixed.deinit();
+    try std.testing.expectEqual(Profile.FigureRootDirectionUse.unresolved,
+        mixed.figureRootDirectionUseWithCompleteClasses(null, null, null, null, false, null, null, null));
 }
