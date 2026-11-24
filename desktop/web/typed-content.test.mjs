@@ -155,6 +155,31 @@ test('M admits authored flow margins while L still rejects them and unknown poli
  for(const value of [NaN,Infinity,-1])assert.throws(()=>decode(wire('M',[block('M',{container:cat(u(0x10000),f(value),u(0))})]),{}));
  assert.throws(()=>decode(wire('N',[]),{}));
 });
+test('original M container margins retain the native range without admitting signed padding or L margins',async()=>{
+ const {createHash}=await import('node:crypto');
+ const sha=bytes=>createHash('sha256').update(bytes).digest('hex');
+ for(const [page,title,locale,size,memberSHA,payloadSHA] of [
+  [3289,'kakophonisch','de',25824,'ca4bdbbdbac2c17d96610f0a34b7d75206b38a75306364f34898a8c687b734e0','ea6b64fcd714b2141c3fd30e497b5bc576b5f39bec8b6bec6dff4a9ce7d008f5'],
+  [519864,'vit som ett lakan','sv',8982,'217f02b706024d06687f47cad03824ddfc474ea2a7f65688a4aac6a11fc013ec','e29be02d4e4f3de59b158a79e6a45024e29e7787c9fe1640c18e14bae67e3a6e'],
+ ]){
+  const bytes=await readFile(new URL(`testdata/de-tiff/p${page}.wikblb`,import.meta.url));
+  assert.deepEqual([bytes.length,sha(bytes)],[size,memberSHA]);
+  const {metadata,rows}=await buildIndex(new RawSource(new Blob([bytes])));
+  assert.deepEqual([metadata.language_code,rows.map(row=>row.title)],[locale,[title]]);
+  const [{offset,length}]=rows,payload=bytes.subarray(offset,offset+length);
+  assert.equal(sha(payload),payloadSHA);
+  const original=decode(payload,{...metadata,title});
+  assert.equal(original.presentation_version,'DPRM');
+  assert.deepEqual(original.sections[2].blocks[2].container.style.margins.bottom,{unit:'em',value:-.5});
+ }
+ const bottom=value=>cat(length(0),length(0),length(value,1),length(0));
+ const container=(version,flags,edges)=>wire(version,[block(version,{container:cat(flags,edges,u(0))})]);
+ const signed=decode(container('M',u(1),bottom(-.5)),{}).sections[0].blocks[0].container.style;
+ assert.deepEqual(signed.margins.bottom,{unit:'em',value:-.5});
+ assert.throws(()=>decode(container('M',u(2),bottom(-.5)),{}),/Invalid style length/);
+ assert.throws(()=>decode(container('L',short(1),bottom(-.5)),{}),/Invalid style length/);
+ for(const value of [NaN,Infinity,-Infinity])assert.throws(()=>decode(container('M',u(1),bottom(value)),{}),/Invalid signed length/);
+});
 // Existing ordinary Writer/Reader export route supplies genuine payload+complete JSON.
 // No constructed page can satisfy this optional cross-decoder artifact assertion.
 test('selected genuine Writer payload and Reader modeled graph agree',{skip:!process.env.WIKIDICT_WEB_TYPED_CASES},async()=>{
@@ -182,7 +207,7 @@ test('selected genuine Writer payload and Reader modeled graph agree',{skip:!pro
    if(Object.hasOwn(result,'depth')&&Object.hasOwn(result,'level')&&Object.hasOwn(result,'spans')){result.feature??=null;result.table??=null;}
    return result;
   };
-  assert.deepEqual(project(actual,true),project(expected,true));
+  assert.deepEqual(project(actual,true),project(expected,true),expected.title);
  }
 });
 

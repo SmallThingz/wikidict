@@ -758,8 +758,8 @@ function flowView(values,onLink,explanations,context){
 }
 
 function styleObject(value){if(value==null)return null;if(typeof value!=='object'||Array.isArray(value)||!Object.values(value).some(field=>field!=null))throw Error('Invalid typed table style');return value;}
-function styleLength(value){
-  if(!value||!['px','em'].includes(value.unit)||typeof value.value!=='number'||!Number.isFinite(value.value)||value.value<0)throw Error('Invalid style length');
+function styleLength(value,signed=false){
+  if(!value||!['px','em'].includes(value.unit)||typeof value.value!=='number'||!Number.isFinite(value.value)||(!signed&&value.value<0))throw Error('Invalid style length');
   // Compiled table lengths share the native readers' normal-body font basis,
   // independently of table typography and nested cell content.
   return value.unit==='em'?`calc(var(--wikidict-normal-body-size) * ${value.value})`:value.value+'px';
@@ -1005,7 +1005,7 @@ function containerDeclarations(style,dark=false){
   const css=[];
   const set=(key,value)=>css.push(key+':'+value);
   if(style.margins)for(const side of ['top','right','bottom','left']){
-    const value=style.margins[side];set('margin-'+side,value.unit?styleLength(value):value.length?styleLength(value.length):'auto');
+    const value=style.margins[side];set('margin-'+side,value.unit?styleLength(value,true):value.length?styleLength(value.length,true):'auto');
   }
   if(style.padding)for(const side of ['top','right','bottom','left'])set('padding-'+side,styleLength(style.padding[side]));
   if(style.width)set('width',containerWidthCSS(style.width));if(style.max_width)set('max-width',containerWidthCSS(style.max_width));

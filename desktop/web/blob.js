@@ -252,7 +252,8 @@ export function decode(bytes, metadata) {
       });const value={segments};validateRuby(value);return value;
     }finally{rubyDepth--;contentDepth--;}
   };
-  const edges=()=>({top:styleLength(),right:styleLength(),bottom:styleLength(),left:styleLength()});
+  const edges=(length=styleLength)=>({top:length(),right:length(),bottom:length(),left:length()});
+  const containerMarginLength=()=>containerFonts?signedLength():styleLength();
   const containerWidth=()=>{const kind=tag(['auto','length','fit_content']);return {[kind]:kind==='length'?{unit:tag(['px','em','percent']),value:f32()}: {}};};
   const containerMaxWidth=()=>presence()?{length:{unit:tag(['px','em','percent']),value:f32()}}:{none:{}};
   const containerColor=()=>{const kind=tag(['transparent','rgb','light_dark']);return {[kind]:kind==='rgb'?string():kind==='light_dark'?{light:string(),dark:string()}: {}};};
@@ -267,7 +268,7 @@ export function decode(bytes, metadata) {
     }))};
   };
   const containerLineHeight=()=>{const kind=tag(['normal','multiplier','length']);return {[kind]:kind==='multiplier'?f32():kind==='length'?styleLength(): {}};};
-  const containerMargins=()=>Object.fromEntries(['top','right','bottom','left'].map(side=>[side,presence()?{length:styleLength()}:{auto:{}}]));
+  const containerMargins=()=>Object.fromEntries(['top','right','bottom','left'].map(side=>[side,presence()?{length:containerMarginLength()}:{auto:{}}]));
   const containerScreen=(following=false)=>{
     const value={max_width_px:u32()},flags=byte();
     const extension=responsiveFlowEnabled?byte():0;
@@ -289,7 +290,7 @@ export function decode(bytes, metadata) {
       if(value==='ordered_list'){style.ordered_marker_weight=tag(['normal','bold']);positionedBody=true;}
       return value;
     };
-    const fields=[['margins',edges],['padding',edges],['width',containerWidth],['float_side',()=>tag(['left','right'])],['clear',()=>tag(['none','left','right','both'])],['max_width',containerMaxWidth],['box_sizing',()=>tag(['content_box','border_box'])],['layout',layout],['align_items',()=>tag(['stretch','start','center','end'])],['flex_item',()=>tag(['none'])],['background',containerColor],['border',containerBorder],['line_height',containerLineHeight],['text_align',()=>tag(['left','center','right'])],['screen_max_width',containerScreen],['overflow',()=>tag(['visible','auto'])],['owner_font_scale',f32],['height',styleLength],['columns',()=>({count:u16(),gap:styleLength()})]];
+    const fields=[['margins',()=>edges(containerMarginLength)],['padding',edges],['width',containerWidth],['float_side',()=>tag(['left','right'])],['clear',()=>tag(['none','left','right','both'])],['max_width',containerMaxWidth],['box_sizing',()=>tag(['content_box','border_box'])],['layout',layout],['align_items',()=>tag(['stretch','start','center','end'])],['flex_item',()=>tag(['none'])],['background',containerColor],['border',containerBorder],['line_height',containerLineHeight],['text_align',()=>tag(['left','center','right'])],['screen_max_width',containerScreen],['overflow',()=>tag(['visible','auto'])],['owner_font_scale',f32],['height',styleLength],['columns',()=>({count:u16(),gap:styleLength()})]];
     require((flags&~(description?0x80000|0x7ffff:0x7ffff))===0,'Unsupported container layout policy');
     fields.forEach(([key,read],bit)=>{if(flags&(1<<bit))style[key]=read();});
     if(description&&(flags&0x80000))style.positioning=tag(['relative_auto']);

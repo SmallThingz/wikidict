@@ -64,13 +64,18 @@ function containerObject(value,keys,required=[]){
   if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).some(key=>!keys.includes(key))||required.some(key=>!Object.hasOwn(value,key)))containerError();
 }
 function containerNumber(value){if(typeof value!=='number'||!Number.isFinite(value)||value<0||value>3.4028234663852886e38)containerError();}
-function containerLength(value,units=['px','em']){containerObject(value,['unit','value'],['unit','value']);if(!units.includes(value.unit))containerError();containerNumber(value.value);}
+function containerLength(value,units=['px','em'],signed=false){
+  containerObject(value,['unit','value'],['unit','value']);
+  if(!units.includes(value.unit)||typeof value.value!=='number')containerError();
+  containerNumber(signed?Math.abs(value.value):value.value);
+}
+const containerMarginLength=(value,signed)=>containerLength(value,['px','em'],signed);
 function containerUnion(value,variants){containerObject(value,Object.keys(variants));const keys=Object.keys(value);if(keys.length!==1)containerError();variants[keys[0]](value[keys[0]]);}
 const emptyContainerTag=value=>containerObject(value,[]);
 const containerWidth=value=>containerUnion(value,{auto:emptyContainerTag,fit_content:emptyContainerTag,length:v=>containerLength(v,['px','em','percent'])});
 const containerMaxWidth=value=>containerUnion(value,{none:emptyContainerTag,length:v=>containerLength(v,['px','em','percent'])});
 const containerLineHeight=value=>containerUnion(value,{normal:emptyContainerTag,multiplier:containerNumber,length:containerLength});
-const containerMargin=value=>containerUnion(value,{auto:emptyContainerTag,length:containerLength});
+const containerMargin=(value,signed)=>containerUnion(value,{auto:emptyContainerTag,length:length=>containerMarginLength(length,signed)});
 function containerEdges(value,check=containerLength){containerObject(value,sides,sides);for(const side of sides)check(value[side]);}
 const containerRGB=value=>{if(typeof value!=='string'||!/^#[0-9a-f]{6}$/.test(value))containerError();};
 const containerColor=value=>containerUnion(value,{transparent:emptyContainerTag,rgb:containerRGB,light_dark:v=>{containerObject(v,['light','dark'],['light','dark']);containerRGB(v.light);containerRGB(v.dark);}});
@@ -86,7 +91,7 @@ export function validateCellMetrics(style){
     containerUnion(value.height,{normal:emptyContainerTag,multiplier:containerNumber,length:v=>metric(v,'value')});
   }
 }
-function containerScreen(value,following=false){
+function containerScreen(value,following=false,signed=false){
   const fields=['width','max_width','box_sizing','line_height','float_side','margins','clear','layout'];
   containerObject(value,['max_width_px',...fields,'following_rules'],['max_width_px']);
   if(!Number.isInteger(value.max_width_px)||value.max_width_px<0||value.max_width_px>0xffffffff||!fields.some(key=>value[key]!=null))containerError();
@@ -94,13 +99,13 @@ function containerScreen(value,following=false){
   if(value.box_sizing!=null)containerEnum(value.box_sizing,['content_box','border_box']);
   if(value.line_height!=null)containerLineHeight(value.line_height);
   if(value.float_side!=null)containerEnum(value.float_side,['none','left','right']);
-  if(value.margins!=null)containerEdges(value.margins,containerMargin);
+  if(value.margins!=null)containerEdges(value.margins,margin=>containerMargin(margin,signed));
   if(value.clear!=null)containerEnum(value.clear,['none','left','right','both']);
   if(value.layout!=null)containerEnum(value.layout,['flow']);
   const rest=value.following_rules??[];
   if(!Array.isArray(rest)||rest.length>=16||(following&&rest.length))containerError();
   let limit=value.max_width_px;
-  for(const rule of rest){containerScreen(rule,true);if(rule.max_width_px>=limit)containerError();limit=rule.max_width_px;}
+  for(const rule of rest){containerScreen(rule,true,signed);if(rule.max_width_px>=limit)containerError();limit=rule.max_width_px;}
 }
 function orderedBox(style,root){
   containerObject(style,['margins','padding','line_height','owner_font_scale',...(root?['layout','ordered_marker_weight']:[])],['margins','padding']);
@@ -121,7 +126,8 @@ export function validateContainerStyle(style,{containerFonts=false,positioned=fa
     containerLength(style.columns.gap);
     if(style.height!=null||style.min_height!=null||style.layout==='flex_row'||style.overflow==='auto'||style.overflow==='hidden'||style.positioning!=null||style.absolute_position!=null)containerError();
   }
-  for(const key of ['margins','padding'])if(style[key]!=null)containerEdges(style[key]);
+  if(style.margins!=null)containerEdges(style.margins,length=>containerMarginLength(length,containerFonts));
+  if(style.padding!=null)containerEdges(style.padding);
   if(style.width!=null)containerWidth(style.width);if(style.max_width!=null)containerMaxWidth(style.max_width);
   if(style.float_side!=null)containerEnum(style.float_side,['left','right']);
   if(style.clear!=null)containerEnum(style.clear,['none','left','right','both']);
@@ -143,7 +149,7 @@ export function validateContainerStyle(style,{containerFonts=false,positioned=fa
   if(style.line_height!=null)containerLineHeight(style.line_height);
   if(style.text_align!=null)containerEnum(style.text_align,['left','center','right']);
   if(style.overflow!=null)containerEnum(style.overflow,['visible','auto']);
-  if(style.screen_max_width!=null)containerScreen(style.screen_max_width);
+  if(style.screen_max_width!=null)containerScreen(style.screen_max_width,false,containerFonts);
   if(responsiveFlow(style)&&(style.layout!=='flex_row'||style.align_items!=null||style.columns!=null))containerError();
   let floating=style.float_side!=null,vertical=!!(style.margins?.top.value||style.margins?.bottom.value);
   if(!containerFonts&&!floating&&vertical)containerError();
