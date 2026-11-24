@@ -423,8 +423,26 @@ private slots:
         QVERIFY(panel.bindAudioOccurrence(other, transport));
         QVERIFY(other->findChild<QSlider *>());
         QVERIFY(!play->isEnabled());
+        QFont testFont = play->font();
+        testFont.setPixelSize(36);
+        play->setFont(testFont);
+        auto colors = play->palette();
+        colors.setColor(QPalette::ButtonText, QColor("#27378a"));
+        colors.setColor(QPalette::Disabled, QPalette::ButtonText, QColor("#a7b8c9"));
+        play->setPalette(colors);
+        play->resize(play->sizeHint());
+        const auto speakerInk = [play](QColor color) {
+            const auto raster = play->grab().toImage();
+            const int right = qMin(raster.width(), qFloor(36 * raster.devicePixelRatio()));
+            for (int y = 0; y < raster.height(); ++y)
+                for (int x = 0; x < right; ++x)
+                    if (raster.pixelColor(x, y) == color) return true;
+            return false;
+        };
+        QVERIFY(speakerInk(QColor("#a7b8c9")));
         QVERIFY(network.urls.isEmpty());
         panel.findChild<QCheckBox *>(QStringLiteral("mediaAllowAudio"))->setChecked(true);
+        QVERIFY(speakerInk(QColor("#27378a")));
         auto *ax = QAccessible::queryAccessibleInterface(play);
         QVERIFY(ax && ax->actionInterface());
         QCOMPARE(ax->text(QAccessible::Name), title);

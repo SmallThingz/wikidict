@@ -639,7 +639,19 @@ protected:
         const int baseline = (height() - fontMetrics().height()) / 2 + fontMetrics().ascent();
         const QRect icon = style()->visualRect(layoutDirection(), rect(),
             QRect(0, baseline - side + qRound(side * 0.1), side, side));
-        speaker_.render(&painter, QRectF(icon));
+        // The source SVG supplies the monochrome silhouette. Use the button's
+        // foreground role for its ink, including the native disabled palette.
+        const qreal dpr = devicePixelRatioF();
+        QImage glyph(QSize(qCeil(side * dpr), qCeil(side * dpr)), QImage::Format_ARGB32_Premultiplied);
+        glyph.setDevicePixelRatio(dpr);
+        glyph.fill(Qt::transparent);
+        QPainter mask(&glyph);
+        speaker_.render(&mask, QRectF(0, 0, side, side));
+        mask.setCompositionMode(QPainter::CompositionMode_SourceIn);
+        const auto group = isEnabled() ? palette().currentColorGroup() : QPalette::Disabled;
+        mask.fillRect(QRectF(0, 0, side, side), palette().brush(group, QPalette::ButtonText));
+        mask.end();
+        painter.drawImage(icon.topLeft(), glyph);
         const auto textRect = style()->visualRect(layoutDirection(), rect(), rect().adjusted(side + cssPixels(2), 0, 0, 0));
         style()->drawItemText(&painter, textRect, int(QStyle::visualAlignment(layoutDirection(), Qt::AlignLeading)) | Qt::AlignVCenter | Qt::TextSingleLine,
             palette(), isEnabled(), caption_, QPalette::ButtonText);
