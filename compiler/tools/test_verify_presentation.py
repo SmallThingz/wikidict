@@ -60,6 +60,43 @@ class PagedCatalogTests(unittest.TestCase):
 
 
 class PresentationDiagnosticTests(unittest.TestCase):
+    def test_qt_layout_refusal_counts_distinct_destinations_and_survives_resume(self):
+        with Fixture() as fixture, ExitStack() as resources:
+            entries = [fixture.entry(title, 'definition', language='Fazyij') for title in ('Chongzuo', 'football')]
+            alias = dict(entries[0], redirect=dict(source_title='redirect', target_title='Chongzuo', followed=True))
+            fixture.language('Fazyij', entries, aliases={'redirect': alias})
+            checkpoint = audit.AuditCheckpoint(resources, fixture.root / 'audit.sqlite', {})
+            observed = []
+
+            def inspect(entry):
+                observed.append(entry['title'])
+                return dict(links=1, tables=1, tallest_table_rows=3,
+                            error='geometry refused' if entry['title'] == 'football' else '')
+
+            def run():
+                kinds = iter(('issues', 'annotations'))
+                return audit.scan(fixture.root, fixture.query, inspect_layout=inspect,
+                                  checkpoint=checkpoint, checkpoint_guard=lambda: None,
+                                  row_factory=lambda: checkpoint.rows(next(kinds), paged=True))
+
+            for _ in range(2):
+                report = run()
+                self.assertEqual(observed, ['Chongzuo', 'football'])
+                self.assertEqual(report['duplicate_destinations'], 1)
+                counts = report['views'][0]['qt_layout']
+                self.assertEqual([counts[key] for key in ('records', 'failures', 'links', 'tables', 'tallest_table_rows')],
+                                 [2, 1, 2, 2, 3])
+                self.assertGreaterEqual(counts['reader_round_trip_ns'], counts['slowest_ns'])
+                self.assertIn(counts['slowest_title'], observed)
+                self.assertEqual(counts['reasons'], {'renderer exception': 1})
+                self.assertEqual(report['status'], 'failed')
+                issues = json.loads(''.join(report['issues'].chunks(audit.nested_json, audit.row_body)))
+                self.assertEqual(len(issues), 1)
+                self.assertEqual(issues[0]['categories'], ['qt-reader-layout'])
+                self.assertEqual(issues[0]['layout']['error'], 'geometry refused')
+                self.assertEqual(issues[0]['title'], 'football')
+                self.assertEqual(issues[0]['member'], 'languages/' + hashlib.sha256(b'Fazyij').hexdigest() + '.wikblb')
+
     def test_two_language_owners_cannot_cover_a_missing_main_title(self):
         for checkpointed in (False, True):
             for omit in (False, True):

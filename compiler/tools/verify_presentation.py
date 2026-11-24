@@ -330,7 +330,7 @@ def emitted_views(root, catalog, query, rows):
     return views
 
 
-def scan(root, query, export_page=None, *, observe_record=None, audit_references=False, row_factory=list,
+def scan(root, query, export_page=None, *, observe_record=None, inspect_layout=None, audit_references=False, row_factory=list,
          catalog_page_size=None, audit_alias_references=False, checkpoint=None, checkpoint_guard=None, browse_page=None):
     require(root.is_dir(), 'root does not exist')
     result = dict(records=0, issues=row_factory(), annotations=row_factory(), views=[], search_matches=0,
@@ -417,12 +417,16 @@ def scan(root, query, export_page=None, *, observe_record=None, audit_references
                 previous = title
                 summary['matches'] += 1
                 result['search_matches'] += 1
+                if inspect_layout is not None:
+                    export_start = time.monotonic_ns()
                 if page_exports is None:
                     exported = ask('export', *selection, '--case-sensitive', '--', title)
                 else:
                     result['commands'] += 1  # Same logical export count; transport is reported separately.
                     exported = next(page_exports, None)
                     require(isinstance(exported, dict), 'incomplete batch export')
+                if inspect_layout is not None:
+                    summary['qt_audit_export_ns'] = summary.get('qt_audit_export_ns', 0) + time.monotonic_ns() - export_start
                 require(exported.get('kind') == view['kind'].replace('-', '_') and
                         exported.get('language') == view['language'], 'export selection owner mismatch')
                 entries = exported['entries']
@@ -495,6 +499,36 @@ def scan(root, query, export_page=None, *, observe_record=None, audit_references
                     summary['empty_language_records'] += 1
                 if observe_record is not None:
                     observe_record(entry)
+                if inspect_layout is not None:
+                    layout_start = time.monotonic_ns()
+                    layout = inspect_layout(entry)
+                    elapsed = time.monotonic_ns() - layout_start
+                    counts = summary.setdefault('qt_layout', dict(records=0, failures=0, links=0, tables=0,
+                        tallest_table_rows=0, reader_round_trip_ns=0, slowest_ns=0, reasons={}))
+                    counts['reader_round_trip_ns'] += elapsed
+                    if elapsed > counts['slowest_ns']:
+                        counts.update(slowest_ns=elapsed, slowest_title=actual_title)
+                    counts['records'] += 1
+                    counts['links'] += layout['links']
+                    counts['tables'] += layout['tables']
+                    counts['tallest_table_rows'] = max(counts['tallest_table_rows'], layout['tallest_table_rows'])
+                    if layout['error']:
+                        counts['failures'] += 1
+                        reason = re.sub(r' \d+$', '', layout['error'])
+                        if reason not in ('composition refused', 'invalid native layout', 'invalid native table geometry',
+                                'missing native reader text interface', 'invalid accessible child', 'invalid exposed link'):
+                            reason = 'renderer exception'
+                        counts['reasons'][reason] = counts['reasons'].get(reason, 0) + 1
+                        member = ('languages/' + hashlib.sha256(owner.encode()).hexdigest()
+                                  if actual_kind == 'language' else
+                                  'aliases' if actual_kind == 'alias' else actual_kind.replace('_', '-')) + '.wikblb'
+                        if (root / (member + '.xz')).is_file():
+                            member += '.xz'
+                        result['issues'].append(dict(kind=actual_kind, language=owner, title=actual_title,
+                            view_kind=view['kind'], view_language=view['language'], query_title=title,
+                            member=member, reader_reference=reference, redirect=redirect,
+                            path='entry', categories=['qt-reader-layout'],
+                            layout=layout, decoded_content_sha256=digest.hex()))
                 for path, text in text_fields(content):
                     categories = diagnostic_categories(text)
                     if categories:
@@ -1118,6 +1152,8 @@ def main():
     parser.add_argument('--root', type=Path, required=True)
     parser.add_argument('--report', type=Path, required=True, help='JSON report path. A .gz suffix writes gzip-compressed JSON.')
     parser.add_argument('--summary-json', action='store_true', help='Print counts and status as JSON after writing the full report.')
+    parser.add_argument('--qt-layout-test', type=Path,
+                        help='Send each distinct decoded destination to the opt-in MainWindow Qt Test layout probe')
     parser.add_argument('--definition-dump', type=Path, action='append',
                         help='Compare simple numbered definitions to the selected original XML. Supply every .xml.bz2 part.')
     parser.add_argument('--definition-registry', type=Path,
@@ -1173,13 +1209,14 @@ def run_audit(args, report_files):
         return cli_query(args.binary, args.root, *parts)
 
     try:
+        qt_test = getattr(args, 'qt_layout_test', None)
         browse_page = None
         exports = None
         checkpoint = None
         disposable = None
         if args.discard_new_indexes:
             disposable = DisposableIndexes(args.root, report_files)
-        if args.batch_size > 1 or args.definition_dump or args.checkpoint or disposable is not None:
+        if args.batch_size > 1 or args.definition_dump or args.checkpoint or qt_test or disposable is not None:
             prepare_index_directories(args.root)
             before = dictionary_snapshot(args.root)
             binary_before = dictionary_snapshot(args.binary)
@@ -1214,6 +1251,10 @@ def run_audit(args, report_files):
                                             catalog_page_size=args.catalog_page_size))
                 if args.audit_browse_session:
                     binding['options']['browse_session'] = True
+                if qt_test:
+                    import qt_layout_audit
+                    binding['options']['qt_layout'] = [str(qt_test.resolve()), digest(qt_test),
+                                                        digest(qt_layout_audit.__file__)]
                 checkpoint = AuditCheckpoint(report_files, path, json.loads(json.dumps(binding)))
                 checkpoint.guard = checkpoint_guard
                 if not checkpoint.get('stage_verified'):
@@ -1260,6 +1301,14 @@ def run_audit(args, report_files):
                                          unchanged, hints, send if args.audit_export_session else None)
         with ExitStack() as resources:
             sessions = resources.enter_context(ExitStack())
+            inspect_layout = None
+            if qt_test:
+                from qt_layout_audit import layout_session
+                inspect_layout, layout_profile = resources.enter_context(layout_session(qt_test))
+                if checkpoint is not None:
+                    previous = checkpoint.get('qt_runtime')
+                    require(previous is None or previous == layout_profile, 'checkpoint Qt runtime changed')
+                    checkpoint.put('qt_runtime', layout_profile)
             review = None
             if args.definition_dump:
                 from source_definition_audit import SourceDefinitions
@@ -1273,10 +1322,24 @@ def run_audit(args, report_files):
                 kinds = iter(('issues', 'annotations'))
                 row_factory = lambda: checkpoint.rows(next(kinds), paged=True)
             result = scan(args.root, query, exports, observe_record=review.observe if review and review.has_definitions else None,
+                          inspect_layout=inspect_layout,
                           audit_references=args.audit_reference_hints, row_factory=row_factory,
                           catalog_page_size=args.catalog_page_size, checkpoint=checkpoint, browse_page=browse_page,
                           checkpoint_guard=checkpoint.guard if checkpoint is not None else None,
                           audit_alias_references=args.audit_alias_references)
+            if qt_test:
+                counts = [view['qt_layout'] for view in result['views'] if 'qt_layout' in view]
+                result['qt_layout'] = dict(layout_profile, **{
+                    key: sum(view[key] for view in counts) for key in ('records', 'failures', 'links', 'tables', 'reader_round_trip_ns')},
+                    export_wait_ns=sum(view.get('qt_audit_export_ns', 0) for view in result['views']),
+                    refusal_reasons={reason: sum(view['reasons'].get(reason, 0) for view in counts)
+                                     for reason in sorted(set().union(*(view['reasons'] for view in counts)))},
+                    tallest_table_rows=max((view['tallest_table_rows'] for view in counts), default=0))
+                seal = args.root / 'complete.json'
+                if seal.is_file():
+                    with seal.open('rb') as stream:
+                        result['qt_layout']['publication_manifest_sha256'] = hashlib.file_digest(stream, 'sha256').hexdigest()
+                require(result['qt_layout']['records'] == result['records'], 'incomplete Qt layout coverage')
             if review is not None:
                 definitions = review.report()
                 result['source_definitions'] = definitions
@@ -1288,7 +1351,7 @@ def run_audit(args, report_files):
                     for location in review.unmatched_locations(after_examples=examples):
                         locations.append(location)
                     result['additional_unmatched_definitions'] = locations
-        if args.batch_size > 1 or args.definition_dump or disposable is not None:
+        if args.batch_size > 1 or args.definition_dump or qt_test or disposable is not None:
             unchanged()
         if checkpoint is not None:
             checkpoint.guard()
