@@ -17420,7 +17420,7 @@ class ShardPagesCliResumeTests(PreparedToolsFixture):
                         write_namespace_coverage(dest,sum(json.loads((Path(p)/'page-coverage.json').read_text())['pages_seen'] for p in args[1:]))
                 write_test_manifest(root,{'files':[item]})
                 argv=['build_wiktionaries.py','--resource-mode=watchdog','--cpu-admission=affinity','--downloads',str(root),'--output',str(root/'output'),'--zig',str(tool),'--threads','1','--jobs','1','--shard-pages',str(interval),'--now-unix','123']+([] if compressed else ['--no-compress-shards'])
-                with patch.object(sys,'argv',argv),patch.object(b,'safe_worker_budget',return_value=1),patch.object(b,'affinity_worker_budget',return_value=1),patch.object(b,'PROJECT',root),                     patch.object(b.shutil,'which',return_value=str(tool)), \
+                with contextlib.chdir(root), patch.object(sys,'argv',argv),patch.object(b,'safe_worker_budget',return_value=1),patch.object(b,'affinity_worker_budget',return_value=1),patch.object(b,'PROJECT',root),                     patch.object(b.shutil,'which',return_value=str(tool)), \
                      patch.object(b.time,'time',return_value=123),patch.object(b,'run_checked',side_effect=run):
                     audit_before=b.source_fingerprint()
                     with self.assertRaises(SystemExit):

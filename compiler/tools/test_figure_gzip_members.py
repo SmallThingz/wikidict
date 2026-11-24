@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import figure_gzip_members as codec
 import prepare_figure_metadata as figure
-from test_prepare_figure_files import CompleteSelectionDocumentTests
+import test_prepare_figure_files as figure_tests
 
 
 class IndexedArchiveTests(unittest.TestCase):
@@ -71,7 +71,7 @@ class IndexedArchiveTests(unittest.TestCase):
             self.assertNotEqual(hashlib.sha256(gzip.decompress(reordered)).hexdigest(), writer.identity()['sha256'])
 
     def test_identity_append_releases_selected_parent_facts_before_child_replay(self):
-        fixture, args, observation, _ = CompleteSelectionDocumentTests.fresh(self)
+        fixture, args, observation, _ = figure_tests.CompleteSelectionDocumentTests.fresh(self)
         parent = args.output
         args.reuse, args.reuse_batch = [parent], [observation]
         args.output = fixture.root / 'identity-lifetime'
@@ -117,7 +117,7 @@ class IndexedArchiveTests(unittest.TestCase):
                 path.write_bytes(original)
 
     def test_completed_compressed_projection_identity_and_mutations(self):
-        fixture, args, _, original = CompleteSelectionDocumentTests.fresh(self)
+        fixture, args, _, original = figure_tests.CompleteSelectionDocumentTests.fresh(self)
         root = args.output
         name = figure.ROLES['figure-sizing']
         plain = root / name
@@ -155,7 +155,7 @@ class IndexedArchiveTests(unittest.TestCase):
                 final.assert_not_called()
 
     def test_parent_append_materialize(self):
-        fixture, args, observation, original = CompleteSelectionDocumentTests.fresh(self)
+        fixture, args, observation, original = figure_tests.CompleteSelectionDocumentTests.fresh(self)
         parent = args.output
         for name in (figure.ROLES['figure-sizing-raw'], figure.ROLES['figure-sizing'],
                      figure.MANIFEST, figure.PROVIDER, figure.FILE_REQUESTS, figure.INVENTORY):

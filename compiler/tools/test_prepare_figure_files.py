@@ -5693,7 +5693,10 @@ class FigureStreamDigestTests(unittest.TestCase):
                 with patch.object(Path, 'open', open_file), patch.object(figure.evidence, 'fingerprint', side_effect=fingerprint):
                     document = figure.figure_stream_document(self.raw, self.fixture.namespace.read_bytes(),
                         self.fixture.wiki, self.fixture.date, self.paths['figure-sizing-site'].read_bytes())
-                self.assertEqual(opens, [(('rb',), {})])
+                self.assertEqual(len(opens), 1)
+                mode_args, options = opens[0]
+                self.assertEqual(mode_args, ('rb',))
+                self.assertIn(options, ({}, {'buffering': -1}))
                 self.assertEqual(document['raw_bytes'], len(raw))
                 self.assertEqual(document['raw_sha256'], hashlib.sha256(raw).hexdigest())
                 self.assertEqual(document['records'], [] if mode == 'empty' else expected_records)
@@ -6062,7 +6065,9 @@ class OfflineFigureMaterializationTests(unittest.TestCase):
         def no_http(*_):
             self.fail('Materialized capture performed HTTP')
         selected_sha = figure.digest((args.defaults/site.SNAPSHOT).read_bytes())
-        with patch.object(figure, 'SR_SELECTED_DEFAULTS', selected_sha):
+        binding = {f.wiki: (selected['query']['general']['git-hash'], selected_sha)}
+        with (patch.dict(figure.SELECTED_FILE_DEFAULTS, binding),
+              patch.dict(figure.ORDINARY_FILE_DEFAULTS, binding)):
             original = figure.capture_files(args, transport=transport)
             materialized, manifest = self.materialize(args)
             args.output.rename(self.root/'original-unavailable')
