@@ -1292,6 +1292,13 @@ fn prepareCounterInventory(scratch: std.mem.Allocator, styles: *const Profile,
     if (styles.observed_figure_rules.len > 8192) return null;
     return .{ .styles = styles, .rules = parsed_rules.items, .safe_strings = safe_string_names.items };
 }
+const counter_subjects = [_]?GeneratedFigurePseudo{ null, .before, .after, .marker, .other };
+
+fn remainingCounterWork(remaining: usize, node_count: usize) ?usize {
+    if (node_count > remaining / counter_subjects.len) return null;
+    return remaining - node_count * counter_subjects.len;
+}
+
 pub fn observedUnobservedCounterResets(a: std.mem.Allocator, styles: *const Profile, root: *const TextElement,
     source_image: *const PageSourceImage, contexts: []const FigureObservedContext, unique_root_class: []const u8,
     complete_inline_styles: []const u8) !?UnobservedCounterResetProof
@@ -1329,7 +1336,7 @@ pub fn observedUnobservedCounterResets(a: std.mem.Allocator, styles: *const Prof
     if (!counterInventoryEqual(styles, contexts[1].styles))
         alternative = (try prepareCounterInventory(scratch, contexts[1].styles, extra_declarations.items)) orelse return null;
     const inventories = [_]PreparedCounterInventory{ primary, alternative };
-    var work: usize = 0;
+    var remaining_work: usize = 2_000_000;
     var covered: std.ArrayList(UnobservedCounterReset) = .empty;
     for (styles.container_rules, 0..) |candidate, candidate_index| {
         if (candidate.rank_unknown or candidate.viewport != .all) continue;
@@ -1364,9 +1371,8 @@ pub fn observedUnobservedCounterResets(a: std.mem.Allocator, styles: *const Prof
                     // without this positive confinement cannot be refuted by a
                     // graph that ends at the parser-output subtree.
                     if (!counterRuleInsideUniqueRoot(rule, unique_root_class)) { valid = false; break; }
-                    if (context.nodes.len > (2_000_000 - work) / 4) return null;
-                    work += context.nodes.len * 4;
-                    for (context.nodes, 0..) |_, subject| for ([_]?GeneratedFigurePseudo{ null, .before, .after, .other }) |pseudo| {
+                    remaining_work = remainingCounterWork(remaining_work, context.nodes.len) orelse return null;
+                    for (context.nodes, 0..) |_, subject| for (counter_subjects) |pseudo| {
                         if (observedStyleRuleMatch(rule, context.nodes, null, @intCast(subject), pseudo, .{}) != .no and
                             observedFigureConditions(rule, .{}) != .no) { valid = false; break; }
                     };
@@ -1490,7 +1496,7 @@ fn sourceInlineOwnerRuleAbsent(styles: *const Profile, candidate: ContainerRule,
         const index = sourceInlineOwnerObservedIdentity(styles, candidate, context.styles) orelse return false;
         const observed = context.styles.observed_figure_rules[index];
         for (context.nodes, 0..) |_, subject| {
-            for ([_]?GeneratedFigurePseudo{ null, .before, .after, .other }) |pseudo|
+            for ([_]?GeneratedFigurePseudo{ null, .before, .after, .marker, .other }) |pseudo|
                 if (observedStyleRuleMatch(observed, context.nodes, null, @intCast(subject), pseudo, .{}) != .no) return false;
         }
     }
@@ -2499,7 +2505,7 @@ fn observedAttributeDefaultSensitive(name: []const u8) bool {
         if (std.ascii.eqlIgnoreCase(name, known)) return true;
     return std.ascii.startsWithIgnoreCase(name, "data-") or std.ascii.startsWithIgnoreCase(name, "aria-");
 }
-const GeneratedFigurePseudo = enum { before, after, other };
+const GeneratedFigurePseudo = enum { before, after, marker, other };
 const ObservedDynamicPseudo = enum { link, any_link, visited, hover, active, focus, focus_visible, focus_within };
 const ObservedFigureLinkState = struct {
     visited: ?bool = null,
@@ -3348,7 +3354,19 @@ fn observedStyleSelectorMatchValidated(selector: GeneratedFigureSelector, nodes:
 {
     if (subject >= nodes.len or selector.chain.len == 0 or selector.chain.len > 16 or selector.chain.len != selector.direct_parent.len) return .unknown;
     if (selector.pseudo != pseudo) return .no;
+    if (evaluation.sole_ordered_item and pseudo == null and selector.chain.len == 1 and
+        selector.necessary_previous_sibling and selector.necessary_previous_adjacent != null) return .no;
     if (observedCompletePreviousRefutes(selector, nodes, subject)) return .no;
+    if (evaluation.previous_element) |edge| {
+        if (edge.nodes.ptr == nodes.ptr and edge.nodes.len == nodes.len and edge.subject == subject and
+            edge.previous < subject and selector.chain.len == 1 and nodes[edge.previous].parent != null and
+            nodes[edge.previous].parent == nodes[subject].parent and nodes[subject].known_previous_element_sibling == edge.previous and
+            nodes[edge.previous].known_next_element_sibling == subject and !nodes[edge.previous].known_no_next_element_sibling and
+            !nodes[subject].known_no_previous_element_sibling) if (selector.necessary_previous_adjacent) |required| {
+            var steps: usize = 4096;
+            if (observedFigureCompoundMatchIn(required, nodes[edge.previous], false, &steps, false, null) == .no) return .no;
+        };
+    }
     // A necessary previous-sibling relation cannot hold on the exact prefix
     // TABLE whose captured AND source graphs carry authenticated absence.
     // This grants no positive sibling match or selector specificity.
@@ -3519,10 +3537,10 @@ fn observedFigureOwnedNodes(a: std.mem.Allocator, context: FigureObservedContext
 fn observedFigureOtherPseudoEffectsWithWitness(context: FigureObservedContext, owned: ObservedFigureOwnedNodes,
     evaluation: ObservedFigureEvaluation, witness: ?*ObservedReadyFigureWitness) bool {
     for (context.styles.observed_figure_rules) |rule| {
-        const other = if (rule.selector) |selector| selector.pseudo == .other else if (rule.weak_selector) |selector| selector.pseudo == .other
-            else std.mem.indexOf(u8, rule.raw_selector, "::") != null;
-        if (!other) continue;
-        for (owned.indices) |index| if (observedFigureRuleMatchWithEffects(rule, context, index, .other, evaluation) != .no) {
+        const pseudo: ?GeneratedFigurePseudo = if (rule.selector) |selector| selector.pseudo else if (rule.weak_selector) |selector| selector.pseudo
+            else if (std.mem.indexOf(u8,rule.raw_selector,"::")!=null) .other else null;
+        if (pseudo!=.marker and pseudo!=.other) continue;
+        for (owned.indices) |index| if (observedFigureRuleMatchWithEffects(rule, context, index, pseudo, evaluation) != .no) {
             observedReadySubject(witness, index);
             if (observedReadyPending(witness)) |out| {
                 const tag = context.nodes[index].tag;
@@ -3542,6 +3560,12 @@ fn observedFigureOtherPseudoEffectsWithWitness(context: FigureObservedContext, o
 }
 const ObservedFigureEvaluation = struct {
     selected_heading_language: bool = false,
+    selected_list_language: bool = false,
+    // Only observedListBox issues this for its physical, sole OL child.
+    sole_ordered_item: bool = false,
+    // A returned, explicitly closed pair of adjacent elements, scoped to one
+    // query on one document. The edge can only disprove the left compound.
+    previous_element: ?struct { nodes: []const ObservedStyleNode, subject: u32, previous: u32 } = null,
     // The paired advisory circle query sets this only for the OS-theme arms.
     prefers_dark: ?bool = null,
     viewport_width: ?f64 = null,
@@ -3759,7 +3783,7 @@ fn observedFigureViewportBoundariesPrepared(a: std.mem.Allocator, operation: *Ob
         if (observedFigureConditions(rule, undecided) == .no) continue;
         var possible = false;
         for (owned.indices) |index| {
-            for ([_]?GeneratedFigurePseudo{ null, .before, .after, .other }) |pseudo| {
+            for ([_]?GeneratedFigurePseudo{ null, .before, .after, .marker, .other }) |pseudo| {
                 if (observedFigureRuleMatchWithEffects(rule, context, index, pseudo, undecided) != .no) { possible = true; break; }
             }
             if (possible) break;
@@ -3861,6 +3885,20 @@ fn observedBareLanguageRefutes(raw: []const u8, nodes: []const ObservedStyleNode
     }
     return false;
 }
+// The ordered-list proof owns the complete physical ancestry. A simple
+// OL language predicate constrains the OL, including when its LI overrides
+// its own language. This is negative evidence only; matches stay uncertain.
+fn observedOrderedListLanguageRefutes(raw: []const u8, nodes: []const ObservedStyleNode, subject: u32) bool {
+    if (subject >= nodes.len or !std.ascii.eqlIgnoreCase(nodes[subject].tag, "li")) return false;
+    const parent = nodes[subject].parent orelse return false;
+    if (parent >= subject or !std.ascii.eqlIgnoreCase(nodes[parent].tag, "ol")) return false;
+    const selector = trim(raw);
+    const child = std.mem.indexOfScalar(u8, selector, '>') orelse return false;
+    if (!std.ascii.eqlIgnoreCase(trim(selector[child + 1 ..]), "li")) return false;
+    const owner = trim(selector[0..child]);
+    if (!std.ascii.startsWithIgnoreCase(owner, "ol:lang(")) return false;
+    return observedBareLanguageRefutes(owner[2..], nodes, parent);
+}
 /// A simple :lang() compound has a fixed CSS specificity even when alias
 /// handling leaves its match unknown. Each other selector in a comma list is
 /// still evaluated independently with its own specificity.
@@ -3919,6 +3957,8 @@ fn observedStyleNodeDeclarationsSelected(a: std.mem.Allocator, styles: *const Pr
             domain.contains(styles, nodes, subject)) continue;
         if (counts) |totals| totals.evaluated_rule_visits +|= 1;
         if (complete_language_path and observedBareLanguageRefutes(rule.raw_selector, nodes, subject)) continue;
+        if (complete_language_path and evaluation.selected_list_language and pseudo == null and
+            observedOrderedListLanguageRefutes(rule.raw_selector, nodes, subject)) continue;
         const heading_language = if (complete_language_path and evaluation.selected_heading_language and pseudo == null)
             selectedHeadingLanguageRank(rule.raw_selector, nodes, subject) else null;
         if (heading_language) |compound| if (!compound.possible) continue;
@@ -7263,7 +7303,7 @@ test "observed Figure rule candidates keep generated style values negation and e
         for ([_]bool{ false, true }) |hover| for ([_]bool{ false, true }) |visited| {
             const evaluation: ObservedFigureEvaluation = .{ .missing_width = width, .viewport_width = 639,
                 .link_subject = link_subject, .link_state = .{ .hover = hover, .visited = visited, .focus = hover } };
-            for ([_]u32{ 4, 5, 7 }) |subject| for ([_]?GeneratedFigurePseudo{ null, .before, .after, .other }) |pseudo|
+            for ([_]u32{ 4, 5, 7 }) |subject| for ([_]?GeneratedFigurePseudo{ null, .before, .after, .marker, .other }) |pseudo|
                 try FigureRuleCandidatesTest.sameDeclarations(a, &baseline, &cached, subject, pseudo, evaluation);
         };
     const plain = (try cached.candidates(5, null, .{})).?;
@@ -9537,6 +9577,8 @@ pub const Profile = struct {
     // stays absent even when it carries an observed article.
     selected_root_per_body: ?f32 = null,
     selected_phonos: []const SelectedPhonos = &.{},
+    selected_terms: []const SelectedTerm = &.{},
+    selected_descriptions: []const SelectedDescriptionExample = &.{},
     selected_wrapped_heading: ?SelectedWrappedHeading = null,
     // Selected views borrow both this immutable page profile and their global
     // parent. No selected view owns or deinitializes either arena.
@@ -12147,7 +12189,7 @@ const Builder = struct {
                 if (!terminal or pseudo.* != null) return null;
                 const name = text[at + 1 ..];
                 if (std.ascii.startsWithIgnoreCase(name, "part(") or std.ascii.startsWithIgnoreCase(name, "slotted(")) return null;
-                pseudo.* = if (std.ascii.eqlIgnoreCase(name, "before")) .before else if (std.ascii.eqlIgnoreCase(name, "after")) .after else .other;
+                pseudo.* = if (std.ascii.eqlIgnoreCase(name, "before")) .before else if (std.ascii.eqlIgnoreCase(name, "after")) .after else if (std.ascii.eqlIgnoreCase(name,"marker")) .marker else .other;
                 specificity.* += 1;
                 at = text.len;
                 continue;
@@ -12262,7 +12304,7 @@ const Builder = struct {
                 if (!terminal) return null;
                 const tail = part[start + 2 ..];
                 if (std.mem.indexOf(u8, tail, "::") != null or std.ascii.startsWithIgnoreCase(tail, "part(") or std.ascii.startsWithIgnoreCase(tail, "slotted(")) return null;
-                pseudo = if (std.ascii.eqlIgnoreCase(tail, "before")) .before else if (std.ascii.eqlIgnoreCase(tail, "after")) .after else .other;
+                pseudo = if (std.ascii.eqlIgnoreCase(tail, "before")) .before else if (std.ascii.eqlIgnoreCase(tail, "after")) .after else if (std.ascii.eqlIgnoreCase(tail,"marker")) .marker else .other;
                 part = part[0..start];
             }
             if (terminal) necessary_has_next = try self.observedAdjacentHasFirst(part);
@@ -16154,6 +16196,8 @@ pub const CustomProfile = struct {
     // default. Other titles retain unknown authority until separately bound.
     page_title: ?[]const u8 = null,
     phonos_article: ?struct { page_id: u64, revision_id: u64, buttons: []const PhonosButton } = null,
+    term_article: ?struct { page_id:u64,revision_id:u64,terms:[]const SourceTerm, theme_layout_conflict:bool=false } = null,
+    description_article: ?struct { page_id: u64, revision_id: u64, examples: []const DescriptionExample } = null,
     font_article: ?struct { page_id: u64, revision_id: u64, root_per_body: f32, heading: ?WrappedHeadingRecipe = null } = null,
     rules: []const CustomRule,
     classes: []const []const u8,
@@ -24221,10 +24265,10 @@ fn observedPageStaticMotionIn(a: std.mem.Allocator, styles: *const Profile, node
         if (rules.items.len == 1024) return false;
         try rules.append(arena, .{ .index = index, .declarations = selected.items });
     }
-    if (rules.items.len != 0 and nodes.len > 2_000_000 / 4 / rules.items.len) return false;
+    if (rules.items.len != 0 and nodes.len > 2_000_000 / 5 / rules.items.len) return false;
     var temporary = std.heap.ArenaAllocator.init(a);
     defer temporary.deinit();
-    for (nodes, 0..) |node, index| for ([_]?GeneratedFigurePseudo{ null, .before, .after, .other }) |pseudo| {
+    for (nodes, 0..) |node, index| for ([_]?GeneratedFigurePseudo{ null, .before, .after, .marker, .other }) |pseudo| {
         _ = temporary.reset(.retain_capacity);
         const scratch = temporary.allocator();
         var declarations: std.ArrayList(ObservedFigureDeclaration) = .empty;
@@ -24236,7 +24280,7 @@ fn observedPageStaticMotionIn(a: std.mem.Allocator, styles: *const Profile, node
             // Marker/vendor/unknown generated subjects are outside the closed
             // before/after domain. A possible motion rule there withholds the
             // whole-page certificate; it cannot be lost by the query loop.
-            if (pseudo == .other) return false;
+            if (pseudo == .other or pseudo == .marker) return false;
             for (prepared.declarations) |original| {
                 var declaration = original;
                 declaration.uncertain = declaration.uncertain or matched == .unknown or condition == .unknown;
@@ -26975,6 +27019,7 @@ fn authoredElementRuleMatchesIn(a: std.mem.Allocator, context: AuthoredElementOb
 pub const WrappedHeadingRun = struct {
     font: types.InlineFontSnapshot,
     ink: []const u8,
+    dark_ink: ?[]const u8 = null,
     line_height: types.ComputedLineHeight,
 };
 pub const WrappedHeadingRecipe = struct {
@@ -26984,6 +27029,375 @@ pub const WrappedHeadingRecipe = struct {
     style: types.SectionHeadingStyle,
     word: WrappedHeadingRun, separator: WrappedHeadingRun, sub: WrappedHeadingRun,
 };
+pub const TermPaint = struct {
+    outer: types.ContainerStyle,
+    list: types.ContainerStyle,
+    term: types.ContainerStyle,
+    image: types.InlineImageOccurrenceLayout,
+    bold: bool,
+    color: []const u8,
+    dark_color: ?[]const u8 = null,
+    responsive_flow: ?types.ContainerScreenMaxWidth = null,
+};
+// The normal image request already supplies width. A source-paired square
+// can also reserve its actual height before the external asset is available.
+pub fn termImageDimensionsUnchanged(a:std.mem.Allocator, sheets:*const Profile, nodes:[]const ObservedStyleNode, body:u32, index:u32)!bool {
+    if(sheets.globally_unresolved or !observedStyleGraphValid(sheets,nodes,body) or index>=nodes.len or !std.ascii.eqlIgnoreCase(nodes[index].tag,"img"))return false;
+    const decl=(try observedStyleNodeDeclarationsWithLanguage(a,sheets,nodes,index,null,null,.{.selected_heading_language=true},true)) orelse return false;
+    for([_] []const u8{"width","height","min-width","min-height","max-width","max-height","inline-size","block-size","min-inline-size","min-block-size","max-inline-size","max-block-size","aspect-ratio","box-sizing","contain-intrinsic-size","zoom","transform"})|key| {
+        const choices=try observedFigurePropertyCandidates(a,decl.items,key,&.{});
+        defer a.free(choices);
+        if(choices.len!=0)return false;
+    }
+    return true;
+}
+pub const SourceTerm = struct { source: []const u8, label: []const u8, file: []const u8, width: u32, height: ?u32=null, paint: TermPaint };
+pub const SelectedTerm = struct { source: []const u8, recipe: SourceTerm };
+
+// A term owner may have one source-proved width band. Treat every unmatched
+// media grammar as potentially responsive until the selector refutes it.
+const TermViewportCondition = union(enum) { independent, unsupported, maximum: u32 };
+fn termViewportCondition(rule: ObservedFigureRule) TermViewportCondition {
+    if (rule.conditional and rule.conditions.len == 0) return .unsupported;
+    var threshold: ?u32 = null;
+    for (rule.conditions) |prelude| {
+        if (!atRuleNamed(prelude, "media")) continue;
+        const atom = observedFigureMediaAtom(prelude) orelse {
+            if (observedFigureCondition(prelude, .{}) == .unknown) return .unsupported;
+            continue;
+        };
+        if (std.ascii.eqlIgnoreCase(atom.name, "prefers-color-scheme")) {
+            if (!std.ascii.eqlIgnoreCase(atom.value, "light") and !std.ascii.eqlIgnoreCase(atom.value, "dark")) return .unsupported;
+            continue;
+        }
+        if (std.ascii.eqlIgnoreCase(atom.name, "prefers-reduced-motion")) {
+            if (!std.ascii.eqlIgnoreCase(atom.value, "reduce") and !std.ascii.eqlIgnoreCase(atom.value, "no-preference")) return .unsupported;
+            continue;
+        }
+        if (!std.ascii.eqlIgnoreCase(atom.name, "max-width")) return .unsupported;
+        const width = figureComputedWidthPx(atom.value, null);
+        if (width != .known or !std.math.isFinite(width.known) or width.known < 0 or
+            width.known > @as(f64, @floatFromInt(std.math.maxInt(u32))) or @trunc(width.known) != width.known)
+            return .unsupported;
+        const limit: u32 = @intFromFloat(width.known);
+        if (threshold != null and threshold.? != limit) return .unsupported;
+        threshold = limit;
+    }
+    return if (threshold) |limit| .{ .maximum = limit } else .independent;
+}
+
+fn termViewportBound(a: std.mem.Allocator, sheets: *const Profile, nodes: []const ObservedStyleNode,
+    body: u32, shell: u32, previous: ?u32) !?u32 {
+    const predecessor = previous orelse return null;
+    if (!observedStyleGraphValid(sheets, nodes, body) or shell >= nodes.len or predecessor >= shell or
+        nodes[predecessor].parent != nodes[shell].parent) return null;
+    const evaluation: ObservedFigureEvaluation = .{ .selected_heading_language = true,
+        .previous_element = .{ .nodes = nodes, .subject = shell, .previous = predecessor } };
+    var owned: [32]u32 = undefined;
+    var used: usize = 0;
+    for (shell..nodes.len) |index| {
+        var current: ?u32 = @intCast(index);
+        while (current) |parent| : (current = nodes[parent].parent) {
+            if (parent < shell) break;
+            if (parent != shell) continue;
+            if (used == owned.len) return null;
+            owned[used] = @intCast(index);
+            used += 1;
+            break;
+        }
+    }
+    var result: ?u32 = null;
+    for (sheets.observed_figure_rules) |rule| {
+        if (observedFigureConditions(rule, evaluation) == .no) continue;
+        const condition = termViewportCondition(rule);
+        if (condition == .independent) continue;
+        for (owned[0..used]) |subject| {
+            if (observedBareLanguageRefutes(rule.raw_selector, nodes, subject)) continue;
+            for ([_]?GeneratedFigurePseudo{ null, .before, .after, .marker, .other }) |pseudo| {
+                const match = observedStyleRuleMatch(rule, nodes, null, subject, pseudo, evaluation);
+                if (match != .no) {
+                    if (subject != shell or pseudo != null or condition != .maximum or match != .known) return null;
+                    var cursor: usize = 0;
+                    var has_display = false;
+                    while (try nextDeclarationAlloc(a, rule.css, &cursor)) |raw| {
+                        defer a.free(raw);
+                        const colon = std.mem.indexOfScalar(u8, raw, ':') orelse return null;
+                        const name = trim(raw[0..colon]);
+                        if (std.ascii.eqlIgnoreCase(name, "display")) has_display = true else
+                        if (!std.ascii.eqlIgnoreCase(name, "margin-top") and !std.ascii.eqlIgnoreCase(name, "margin-right") and
+                            !std.ascii.eqlIgnoreCase(name, "overflow") and !std.ascii.eqlIgnoreCase(name, "color")) return null;
+                    }
+                    if (!has_display or (result != null and result.? != condition.maximum)) return null;
+                    result = condition.maximum;
+                }
+            }
+        }
+    }
+    return result;
+}
+
+// The responsive owner projects only these layout defaults. A computed
+// literal fallback via var() is unsafe because an ancestor can change the
+// input in a range with no owner-selector boundary.
+fn termLiteralKeyword(a: std.mem.Allocator, node: ObservedFigureComputedNode, property: []const u8,
+    aliases: []const []const u8, expected: []const u8) !bool {
+    const candidates = try observedFigurePropertyCandidates(a, node.declarations, property, aliases);
+    defer a.free(candidates);
+    for (candidates) |entry| {
+        if (entry.uncertain or entry.rank_unknown or entry.syntax_unknown or
+            !std.ascii.eqlIgnoreCase(trim(entry.raw), expected)) return false;
+    }
+    return true;
+}
+
+fn termHorizontalWritingMode(a: std.mem.Allocator, sheets: *const Profile, nodes: []const ObservedStyleNode,
+    body: u32, shell: u32, dl: u32, previous: ?u32) !bool {
+    if (!observedStyleGraphValid(sheets, nodes, body) or dl >= nodes.len) return false;
+    var path: [64]u32 = undefined;
+    var count: usize = 0;
+    var current: ?u32 = dl;
+    while (current) |index| : (current = nodes[index].parent) {
+        if (count == path.len) return false;
+        path[count] = index;
+        count += 1;
+    }
+    var inherited: ?[]const u8 = "horizontal-tb";
+    const values: []const []const u8 = &.{ "horizontal-tb", "vertical-lr", "vertical-rl" };
+    const evaluation: ObservedFigureEvaluation = .{ .selected_heading_language = true,
+        .previous_element = if (previous) |index| .{ .nodes = nodes, .subject = shell, .previous = index } else null };
+    while (count != 0) {
+        count -= 1;
+        const index = path[count];
+        const decl = (try observedStyleNodeDeclarationsWithLanguage(a, sheets, nodes, index, null, null, evaluation, true)) orelse return false;
+        const candidates = try observedFigurePropertyCandidates(a, decl.items, "writing-mode", &.{});
+        defer a.free(candidates);
+        for (candidates) |entry| {
+            const literal = trim(entry.raw);
+            if (entry.syntax_unknown or entry.rank_unknown or entry.uncertain or
+                (!std.ascii.eqlIgnoreCase(literal, "horizontal-tb") and !std.ascii.eqlIgnoreCase(literal, "vertical-lr") and
+                    !std.ascii.eqlIgnoreCase(literal, "vertical-rl") and !std.ascii.eqlIgnoreCase(literal, "inherit") and
+                    !std.ascii.eqlIgnoreCase(literal, "initial") and !std.ascii.eqlIgnoreCase(literal, "unset"))) return false;
+        }
+        const used = try observedFigureKeyword(a, decl.items, "writing-mode", &.{}, .{ .complete = true },
+            values, "horizontal-tb", inherited, true, inherited);
+        inherited = if (used.unresolved) null else used.value;
+        if (index == shell or index == dl) {
+            const writing = inherited orelse return false;
+            if (!std.ascii.eqlIgnoreCase(writing, "horizontal-tb")) return false;
+        }
+    }
+    return true;
+}
+
+// Extract the source-convergent paint and physical spacing on the four
+// owners. Flex/block sizing is separate from spacing and border color.
+fn indexedTermPaint(a: std.mem.Allocator, sheets: *const Profile, nodes: []const ObservedStyleNode,
+    body: u32, ids: [4]u32, previous: ?u32, viewport: ?f64) !?TermPaint {
+    if (sheets.globally_unresolved or !observedStyleGraphValid(sheets,nodes,body)) return null;
+    const shell=ids[0]; const dl=ids[1]; const dt=ids[2]; const icon=ids[3];
+    if (icon>=nodes.len or nodes[icon].parent!=dt or nodes[dt].parent!=dl or nodes[dl].parent!=shell) return null;
+    var ancestry:[64]u32=undefined; var used:usize=0; var current:?u32=icon;
+    while(current)|index|{
+        if (used==ancestry.len) return null;
+        ancestry[used]=index;used+=1;current=nodes[index].parent;
+    }
+    if(std.mem.indexOfScalar(u32,ancestry[0..used],body)==null) return null;
+    var root_font:f32=1; var body_font:f32=0;
+    var font:types.FigureMediaStrut=.{.font_scale=1,.direction=.ltr};
+    var inherited_ink:?types.FigureColor=null;
+    var env:CustomEnvironment=.{.complete=true};
+    const evaluation: ObservedFigureEvaluation = .{ .selected_heading_language = true, .viewport_width = viewport,
+        .previous_element = if (previous) |index| .{ .nodes=nodes, .subject=shell, .previous=index } else null };
+    var result:TermPaint=undefined;
+    while(used>0){
+        used-=1;const index=ancestry[used];
+        const decl=(try observedStyleNodeDeclarationsWithLanguage(a,sheets,nodes,index,null,null,evaluation,true)) orelse return null;
+        env=try observedFigureCustomEnvironment(a,decl.items,env,true);
+        if(!try observedFigureStaticMotion(a,decl.items,env))return null;
+        const owner:ObservedFigureComputedNode=.{.index=index,.declarations=decl.items,.environment=env};
+        font=(try observedFigureOwnFontInWithWitness(a,nodes[index],owner,font,1,root_font,true,null)) orelse return null;
+        const ink=try observedFigureColor(a,decl.items,"color",env,inherited_ink,inherited_ink);
+        inherited_ink=if(ink.unresolved)null else ink.value;
+        if(index==0)root_font=font.font_scale;
+        if(index==body)body_font=font.font_scale;
+        if(index<shell)continue;
+        if(font.font_scale<=0 or body_font<=0 or font.direction!=.ltr or !try headingNoGenerated(a,sheets,nodes,index,env))return null;
+        const scale=font.font_scale/body_font;
+        const margins=(try headingUsedEdges(a,owner,false,scale,root_font/body_font)) orelse return null;
+        const padding=(try headingUsedEdges(a,owner,true,scale,root_font/body_font)) orelse return null;
+        const border=(try headingBorders(a,owner)) orelse return null;
+        if(index!=icon and !try observedFigureKeywordIs(a,owner,"position",&.{},"static","static"))return null;
+        if(index==shell){
+            if(border!=.edges or border.edges.top!=.dotted or border.edges.top.dotted.color!=.rgb or
+                border.edges.right!=.none or border.edges.bottom!=.none or border.edges.left!=.none)return null;
+            result.outer=.{.margins=margins,.padding=padding,.border=border};
+            if (viewport != null) {
+                const display_declarations = try observedFigurePropertyCandidates(a, owner.declarations, "display", &.{});
+                defer a.free(display_declarations);
+                if (display_declarations.len == 0) return null;
+                for (display_declarations) |entry| {
+                    const literal = trim(entry.raw);
+                    if (entry.syntax_unknown or entry.uncertain or entry.rank_unknown or
+                        (!std.ascii.eqlIgnoreCase(literal, "block") and !std.ascii.eqlIgnoreCase(literal, "flex"))) return null;
+                }
+                const display = try observedFigureKeyword(a, owner.declarations, "display", &.{}, env,
+                    &.{ "block", "flex" }, "block", null, false, "block");
+                if (display.unresolved or !try termLiteralKeyword(a, owner, "overflow-x", &.{"overflow"}, "visible") or
+                    !try termLiteralKeyword(a, owner, "overflow-y", &.{"overflow"}, "visible")) return null;
+                inline for (.{
+                    .{ "width", "inline-size", "auto" }, .{ "min-width", "min-inline-size", "auto" },
+                    .{ "max-width", "max-inline-size", "none" }, .{ "height", "block-size", "auto" },
+                    .{ "min-height", "min-block-size", "auto" }, .{ "max-height", "max-block-size", "none" },
+                    .{ "flex-direction", "flex-flow", "row" }, .{ "flex-wrap", "flex-flow", "nowrap" },
+                    .{ "row-gap", "gap", "normal" }, .{ "column-gap", "gap", "normal" },
+                }) |metric| if (!try termLiteralKeyword(a, owner, metric[0], &.{metric[1]}, metric[2])) return null;
+                inline for (.{
+                    .{ "box-sizing", "content-box" }, .{ "float", "none" }, .{ "clear", "none" },
+                }) |metric| if (!try termLiteralKeyword(a, owner, metric[0], &.{}, metric[1])) return null;
+                inline for (.{ "align-items", "justify-content", "align-content" }) |metric|
+                    if (!try termLiteralKeyword(a, owner, metric, &.{ "place-items", "place-content" }, "normal")) return null;
+                result.outer.layout = if (std.ascii.eqlIgnoreCase(display.value.?, "flex")) .flex_row else .flow;
+            }
+        }else if(index==dl or index==dt){
+            if(border!=.none or !observedFigureEdgesZero(padding))return null;
+            if(index==dl){
+                if(!observedFigureEdgesZero(margins))return null;
+                if (viewport != null) {
+                    if (!try termLiteralKeyword(a, owner, "display", &.{}, "block") or
+                        !try termLiteralKeyword(a, owner, "float", &.{}, "none") or
+                        !try termLiteralKeyword(a, owner, "clear", &.{}, "none")) return null;
+                    inline for (.{
+                        .{ "width", "inline-size", "auto" }, .{ "min-width", "min-inline-size", "auto" },
+                        .{ "max-width", "max-inline-size", "none" }, .{ "height", "block-size", "auto" },
+                        .{ "min-height", "min-block-size", "auto" }, .{ "max-height", "max-block-size", "none" },
+                        .{ "flex-basis", "flex", "auto" }, .{ "flex-grow", "flex", "0" },
+                        .{ "flex-shrink", "flex", "1" }, .{ "align-self", "place-self", "auto" },
+                    }) |metric| if (!try termLiteralKeyword(a, owner, metric[0], &.{metric[1]}, metric[2])) return null;
+                }
+                result.list=.{.margins=margins};
+            }else{
+                if (!try headingHasWinner(a,owner,"font-weight"))return null;
+                const text= inherited_ink orelse return null;
+                if(text.kind!=.rgb)return null;
+                result.term=.{.margins=margins};result.bold=font.bold;result.color=text.value orelse return null;result.dark_color=null;
+            }
+        }else if(index==icon){
+            if(border!=.none or !observedFigureEdgesZero(margins) or padding.top.value!=0 or padding.bottom.value!=0 or
+                !try observedFigureKeywordIs(a,owner,"position",&.{},"relative","static"))return null;
+            const zero:types.StyleLength=.{.unit=.px,.value=0};
+            const top=try observedFigureComputedLength(a,decl.items,"top",&.{"inset"},env,scale,"auto",.automatic,.unknown,false,true);
+            if(top!=.known)return null;
+            inline for (.{"right","bottom","left"})|axis|if (!try observedFigureKeywordIs(a,owner,axis,&.{"inset"},"auto","auto"))return null;
+            result.image=.{.x=zero,.y=top.known,.padding_left=padding.left,.padding_right=padding.right};
+        }
+    }
+    result.responsive_flow = null;
+    return result;
+}
+
+fn indexedTermResponsiveFlow(a: std.mem.Allocator, sheets: *const Profile, nodes: []const ObservedStyleNode,
+    body: u32, ids: [4]u32, previous: ?u32, base: TermPaint) !?types.ContainerScreenMaxWidth {
+    const limit = (try termViewportBound(a, sheets, nodes, body, ids[0], previous)) orelse return null;
+    if (!try termHorizontalWritingMode(a, sheets, nodes, body, ids[0], ids[1], previous)) return null;
+    const boundary: f64 = @floatFromInt(limit);
+    var narrow = (try indexedTermPaint(a, sheets, nodes, body, ids, previous, boundary)) orelse return null;
+    var wide = (try indexedTermPaint(a, sheets, nodes, body, ids, previous, boundary + 1)) orelse return null;
+    if (narrow.outer.layout != .flow or wide.outer.layout != .flex_row) return null;
+    narrow.outer.layout = null;
+    wide.outer.layout = null;
+    if (!observedFigureDataEqual(TermPaint, base, narrow, 0) or !observedFigureDataEqual(TermPaint, base, wide, 0)) return null;
+    return .{ .max_width_px = limit, .layout = .flow };
+}
+
+pub fn selectedTermPaint(a:std.mem.Allocator,keep:std.mem.Allocator,sheets:*const Profile,day:[]const ObservedStyleNode,
+    night:[]const ObservedStyleNode,body:u32,ids:[4]u32,previous:?u32)!?TermPaint{
+    var light=(try indexedTermPaint(a,sheets,day,body,ids,previous,null)) orelse return null;
+    var dark=(try indexedTermPaint(a,sheets,night,body,ids,previous,null)) orelse return null;
+    const light_flow = try indexedTermResponsiveFlow(a, sheets, day, body, ids, previous, light);
+    const dark_flow = try indexedTermResponsiveFlow(a, sheets, night, body, ids, previous, dark);
+    if (!observedFigureDataEqual(?types.ContainerScreenMaxWidth, light_flow, dark_flow, 0))
+        return error.UnrepresentableTermThemeLayout;
+    light.responsive_flow = light_flow;
+    dark.responsive_flow = dark_flow;
+    const light_border=light.outer.border.?.edges.top.dotted.color.rgb;
+    const dark_border=dark.outer.border.?.edges.top.dotted.color.rgb;
+    dark.outer.border.?.edges.top.dotted.color=.{.rgb=light_border};
+    const dark_text=dark.color;dark.color=light.color;
+    if(!observedFigureDataEqual(TermPaint,light,dark,0))return null;
+    if(!std.mem.eql(u8,light.color,dark_text))light.dark_color=dark_text;
+    if(!std.mem.eql(u8,light_border,dark_border))light.outer.border.?.edges.top.dotted.color=.{.light_dark=.{.light=light_border,.dark=dark_border}};
+    return try observedFigureDataClone(TermPaint,keep,light,0);
+}
+
+pub const PhonosLines = struct { owner: f32, credit: f32 };
+
+// The source DD line strut and the independent superscript have distinct
+// declaring owners. The SUP's UA relative size is represented by the native
+// superscript run rather than guessed from browser pixels.
+fn phonosLineBranch(a: std.mem.Allocator, sheets: *const Profile, nodes: []const ObservedStyleNode,
+    body: u32, dd: u32, extension: u32, sup: u32, link: u32) !?PhonosLines {
+    if (!observedStyleGraphValid(sheets,nodes,body) or link>=nodes.len or sup>=link or extension>=sup or dd>=extension or
+        nodes[link].parent!=sup or nodes[sup].parent!=extension or nodes[extension].parent!=dd or
+        !std.ascii.eqlIgnoreCase(nodes[link].tag,"a") or !std.ascii.eqlIgnoreCase(nodes[sup].tag,"sup") or
+        !std.ascii.eqlIgnoreCase(nodes[extension].tag,"span") or !std.ascii.eqlIgnoreCase(nodes[dd].tag,"dd")) return null;
+    var path:[64]u32=undefined;var count:usize=0;var next:?u32=link;
+    while(next)|index|{
+        if(count==path.len)return null;
+        path[count]=index;count+=1;next=nodes[index].parent;
+    }
+    if(std.mem.indexOfScalar(u32,path[0..count],body)==null)return null;
+    var environment:CustomEnvironment=.{.complete=true};
+    var multiplier:?f32=null;var owner:?f32=null;var relative:?f32=null;
+    while(count!=0){
+        count-=1;const index=path[count];
+        const decl=(try observedStyleNodeDeclarationsWithLanguage(a,sheets,nodes,index,null,null,.{.selected_heading_language=true},true)) orelse return null;
+        environment=try observedFigureCustomEnvironment(a,decl.items,environment,true);
+        if(!try observedFigureStaticMotion(a,decl.items,environment))return null;
+        const line=try authoredElementLineHeight(a,decl.items,environment);
+        if(index<extension){
+            switch(line){.inherit=>{},.multiplier=>|factor|multiplier=factor,else=>multiplier=null}
+            if(index==dd)owner=multiplier;
+            continue;
+        }
+        // Only the ordinary unmodified script font on this semantic run can
+        // identify the used font of the declaring SUP without a new metric.
+        for([_][]const u8{"font-size","font-family","font-weight","font-style","vertical-align"}) |key| {
+            const values=try observedFigurePropertyCandidates(a,decl.items,key,&.{"font"});
+            if(values.len!=0)return null;
+        }
+        if(index==sup){
+            if(line!=.font_relative or line.font_relative<=0)return null;
+            relative=line.font_relative;
+        }else if(line!=.inherit)return null;
+    }
+    return .{.owner=owner orelse return null,.credit=relative orelse return null};
+}
+
+pub fn selectedPhonosLines(a:std.mem.Allocator,sheets:*const Profile,day:[]const ObservedStyleNode,
+    night:[]const ObservedStyleNode,body:u32,dd:u32,extension:u32,sup:u32,link:u32)!?PhonosLines {
+    const light=(try phonosLineBranch(a,sheets,day,body,dd,extension,sup,link)) orelse return null;
+    const dark=(try phonosLineBranch(a,sheets,night,body,dd,extension,sup,link)) orelse return null;
+    return if(std.meta.eql(light,dark)) light else null;
+}
+
+test "a description line strut and its superscript credit retain independent declaring owners" {
+    var arena=std.heap.ArenaAllocator.init(std.testing.allocator);defer arena.deinit();const a=arena.allocator();
+    const nodes=[_]ObservedStyleNode{
+        .{.tag="html",.attributes=&.{},.parent=null}, .{.tag="body",.attributes=&.{},.parent=0},
+        .{.tag="div",.attributes=&.{.{.name="class",.value="mw-parser-output"}},.parent=1},
+        .{.tag="dl",.attributes=&.{},.parent=2}, .{.tag="dd",.attributes=&.{},.parent=3},
+        .{.tag="span",.attributes=&.{},.parent=4}, .{.tag="sup",.attributes=&.{},.parent=5}, .{.tag="a",.attributes=&.{},.parent=6},
+    };
+    const css="body{line-height:1.625}sup{line-height:1em!important}";
+    for ([_][]const u8{"", "a{line-height:2em}","sup{font-size:2em}","dd{line-height:normal}","sup{line-height:1.2!important}"},0..) |extra,index| {
+        var style=try parseSourcesForTargetAlloc(a,&.{.{.base_url="",.css=try std.mem.concat(a,u8,&.{css,extra})}},.screen);defer style.deinit();
+        const result=try selectedPhonosLines(a,&style,&nodes,&nodes,2,4,5,6,7);
+        if(index!=0){try std.testing.expect(result==null);continue;}
+        try std.testing.expect(result!=null and result.?.owner==1.625 and result.?.credit==1);
+        try std.testing.expect((try selectedPhonosLines(a,&style,&nodes,&nodes,2,4,5,7,6))==null);
+    }
+}
+
 pub const PhonosButton = struct {
     file: []const u8,
     language: []const u8,
@@ -26991,7 +27405,181 @@ pub const PhonosButton = struct {
     caption: []const u8,
     accessible_name: []const u8,
     attribution_title: []const u8,
+    attribution_target: []const u8,
     attribution_text: []const u8,
+    description: ?struct {
+        // Exact nonrendered source following this button in its original DD.
+        suffix: []const u8,
+        before: DescriptionBeforeMetrics,
+        ink: types.ContainerColor,
+        lines: ?PhonosLines = null,
+    } = null,
+};
+pub const OrderedDefinition = struct {
+    root: types.ContainerStyle, item: types.ContainerStyle, target: []const u8, label: []const u8,
+};
+
+// Resolve the marker on its own pseudo-element. In particular, an LI's
+// regular definition text and the numbered marker need not have one weight.
+fn observedListBox(a:std.mem.Allocator,sheets:*const Profile,nodes:[]const ObservedStyleNode,body:u32,ol:u32,li:u32) !?struct { ol:types.ContainerStyle, li:types.ContainerStyle } {
+    if(sheets.globally_unresolved or !observedStyleGraphValid(sheets,nodes,body) or li>=nodes.len or nodes[li].parent!=ol or
+        !std.ascii.eqlIgnoreCase(nodes[ol].tag,"ol") or !std.ascii.eqlIgnoreCase(nodes[li].tag,"li"))return null;
+    var path:[64]u32=undefined;var used:usize=0;var next:?u32=li;
+    while(next)|i|{if(used==path.len)return null;path[used]=i;used+=1;next=nodes[i].parent;}
+    if(std.mem.indexOfScalar(u32,path[0..used],body)==null)return null;
+    var root_f:f32=1;var body_f:f32=0;var font:types.FigureMediaStrut=.{.font_scale=1,.direction=.ltr};
+    var env:CustomEnvironment=.{.complete=true};var parent_box:types.ContainerStyle=undefined;
+    var marker_type:?[]const u8="disc";
+    var marker_position:?[]const u8="outside";
+    var marker_image:?[]const u8="none";
+    var line_height:?f32=null;
+    var visibility:?[]const u8="visible";
+    var writing_mode:?[]const u8="horizontal-tb";
+    var inside_article=false;
+    while(used>0){
+        used-=1;const i=path[used];
+        // The returned HTML parser issued both end-of-sibling facts. The
+        // ordinary ordered definition also checked the OL's complete physical
+        // child interval. Array adjacency alone cannot prove a first child.
+        const only_item = i == li and li > 0 and li - 1 == ol and
+            nodes[li].known_no_previous_element_sibling and nodes[li].known_previous_element_sibling == null and
+            nodes[li].known_no_next_element_sibling and nodes[li].known_next_element_sibling == null;
+        const d = (try observedStyleNodeDeclarationsWithLanguage(a, sheets, nodes, i, null, null,
+            .{ .selected_heading_language = true, .selected_list_language = true, .sole_ordered_item = only_item }, true)) orelse return null;
+        env=try observedFigureCustomEnvironment(a,d.items,env,true);
+        const n:ObservedFigureComputedNode=.{.index=i,.declarations=d.items,.environment=env};
+        if(!try observedFigureStaticMotion(a,d.items,env))return null;
+        const parent_font=font;
+        font=(try observedFigureOwnFontInWithWitness(a,nodes[i],n,font,1,root_f,i!=ol and i!=li,null)) orelse return null;
+        const line=try authoredElementLineHeight(a,d.items,env);
+        switch(line){.inherit=>{},.multiplier=>|factor|line_height=factor,else=>line_height=null}
+        // Inherited properties are resolved through every physical ancestor.
+        // An OL's UA decimal rule replaces the inherited list type only when
+        // the author cascade has no winner. The LI inherits that used value.
+        const type_value=try observedFigureKeyword(a,d.items,"list-style-type",&.{"list-style"},env,
+            &.{"decimal","disc","circle","square","none"},"disc",marker_type,true,if(i==ol) "decimal" else marker_type);
+        const position_value=try observedFigureKeyword(a,d.items,"list-style-position",&.{"list-style"},env,
+            &.{"inside","outside"},"outside",marker_position,true,marker_position);
+        const image_value=try observedFigureKeyword(a,d.items,"list-style-image",&.{"list-style"},env,
+            &.{"none"},"none",marker_image,true,marker_image);
+        marker_type=if(type_value.unresolved) null else type_value.value;
+        marker_position=if(position_value.unresolved) null else position_value.value;
+        marker_image=if(image_value.unresolved) null else image_value.value;
+        const vis=try observedFigureKeyword(a,d.items,"visibility",&.{},env,&.{"visible","hidden","collapse"},"visible",visibility,true,visibility);
+        const writing=try observedFigureKeyword(a,d.items,"writing-mode",&.{},env,&.{"horizontal-tb","vertical-lr","vertical-rl"},"horizontal-tb",writing_mode,true,writing_mode);
+        visibility=if(vis.unresolved) null else vis.value;
+        writing_mode=if(writing.unresolved) null else writing.value;
+        if(!try observedFigureKeywordIs(a,n,"opacity",&.{},"1","1"))return null;
+        if(i==0)root_f=font.font_scale;
+        if(inside_article){
+            // Native list markers use the surrounding ordinary article text.
+            // Any descendant paint override requires separate marker ink.
+            if((try observedFigurePropertyCandidates(a,d.items,"color",&.{})).len!=0)return null;
+        }
+        if(i==body){body_f=font.font_scale;inside_article=true;}
+        if(inside_article and (!std.mem.eql(u8,visibility orelse return null,"visible") or
+            !std.mem.eql(u8,writing_mode orelse return null,"horizontal-tb")))return null;
+        if(i!=ol and i!=li)continue;
+        if(body_f<=0 or font.direction!=.ltr or !try headingNoGenerated(a,sheets,nodes,i,env))return null;
+        const display:[]const u8=if(i==ol)"block" else "list-item";
+        if(!try observedFigureKeywordIs(a,n,"display",&.{},display,display) or !try observedFigureKeywordIs(a,n,"position",&.{},"static","static"))return null;
+        inline for (.{"overflow-x","overflow-y"})|axis|if(!try headingAxis(a,n,axis,"visible"))return null;
+        var consumed=try ObservedFigurePropertyUse.init(a,d.items);defer consumed.deinit(a);
+        consumed.customEnvironment();if(!try consumed.staticMotion(a,env))return null;
+        // Mark only fields checked here or carried by the resulting boxes.
+        // Width, background, explicit ink and font family or marker counter
+        // programs have no equivalent in this closed owner representation.
+        inline for (.{"display","position","direction"})|k|consumed.property(k,&.{});
+        consumed.property("overflow-x",&.{"overflow"});consumed.property("overflow-y",&.{"overflow"});
+        inline for (.{"float","transform","writing-mode","counter-reset","counter-increment","counter-set","visibility","opacity"},
+            .{"none","none","horizontal-tb","none","none","none","visible","1"})|key,value|{
+            if(!try observedFigureKeywordIs(a,n,key,&.{},value,value))return null;
+            consumed.property(key,&.{});
+        }
+        if(!std.ascii.eqlIgnoreCase(marker_type orelse return null,"decimal") or
+            !std.ascii.eqlIgnoreCase(marker_position orelse return null,"outside") or
+            !std.ascii.eqlIgnoreCase(marker_image orelse return null,"none"))return null;
+        inline for (.{"list-style-type","list-style-position","list-style-image"}) |k| consumed.property(k,&.{"list-style"});
+        // The transport carries no independent LI ink or font weight. Its
+        // marker may differ via ::marker, while ordinary content inherits.
+        if(font.bold or font.italic or !std.meta.eql(font.font_features,parent_font.font_features))return null;
+        inline for (.{"font-size","font-style","font-weight","font-family","line-height"})|k|consumed.property(k,&.{"font"});
+        if(line_height==null)return null;
+        consumed.boxEdges(false);consumed.boxEdges(true);consumed.borderEdges();
+        // Colour alone cannot paint an outline on these ordinary OL/LI nodes.
+        // Only that property is consumed: every style, width, offset, shorthand
+        // or unknown declaration still fails the complete census below. This
+        // does not reinterpret outline grammar as four-sided border grammar.
+        consumed.property("outline-color", &.{});
+        if(!consumed.complete())return null;
+        const ratio=font.font_scale/body_f;
+        const margin=(try headingUsedEdges(a,n,false,ratio,root_f/body_f)) orelse return null;
+        const padding=(try headingUsedEdges(a,n,true,ratio,root_f/body_f)) orelse return null;
+        const br=(try headingBorders(a,n)) orelse return null;if(br!=.none)return null;
+        if(i==ol){
+            // UA padding and block margins are nonzero; an omitted shorthand
+            // is not evidence that zero actually replaced those defaults.
+            inline for (.{"padding-left","margin-top","margin-bottom"},.{ "padding", "margin", "margin" })|property,shorthand|{
+                const decls=try observedFigurePropertyCandidates(a,d.items,property,&.{shorthand});
+                var supplied=false;for(decls)|dec|if(!dec.syntax_unknown and !dec.uncertain){supplied=true;break;};if(!supplied)return null;
+            }
+            parent_box=.{.layout=.ordered_list,.margins=margin,.padding=padding,.owner_font_scale=ratio,.line_height=.{.multiplier=line_height.?}};
+        }else{
+            const marker=(try observedStyleNodeDeclarationsWithLanguage(a,sheets,nodes,i,null,.marker,.{.selected_heading_language=true,.selected_list_language=true},true)) orelse return null;
+            const marker_env=try observedFigureCustomEnvironment(a,marker.items,env,true);
+            // Other marker declarations (generated text, transformed counters,
+            // changed font axes or ink) have no equivalent in this format.
+            for(marker.items)|decl|if(decl.syntax_unknown or (!std.mem.startsWith(u8,decl.name,"--") and !std.ascii.eqlIgnoreCase(decl.name,"font-weight")))return null;
+            const inherited:[]const u8=if(font.bold)"bold" else "normal";
+            const weight=try observedFigureKeyword(a,marker.items,"font-weight",&.{"font"},marker_env,&.{"normal","400","bold","700"},"normal",inherited,true,inherited);
+            if(weight.unresolved)return null;const value=weight.value orelse return null;
+            parent_box.ordered_marker_weight=if(std.ascii.eqlIgnoreCase(value,"bold") or std.mem.eql(u8,value,"700")) .bold else .normal;
+            return .{.ol=parent_box,.li=.{.margins=margin,.padding=padding,.owner_font_scale=ratio,.line_height=.{.multiplier=line_height.?}}};
+        }
+    }
+    return null;
+}
+pub fn selectedOrderedDefinition(a:std.mem.Allocator,keep:std.mem.Allocator,sheets:*const Profile,day:[]const ObservedStyleNode,night:[]const ObservedStyleNode,
+    body:u32,ol:u32,li:u32,target:[]const u8,label:[]const u8)!?OrderedDefinition{
+    const geometry=(try observedListBox(a,sheets,day,body,ol,li)) orelse return null;
+    const alternate=(try observedListBox(a,sheets,night,body,ol,li)) orelse return null;
+    if(!observedFigureDataEqual(types.ContainerStyle,geometry.ol,alternate.ol,0) or !observedFigureDataEqual(types.ContainerStyle,geometry.li,alternate.li,0))return null;
+    return .{.root=geometry.ol,.item=geometry.li,.target=try keep.dupe(u8,target),.label=try keep.dupe(u8,label)};
+}
+
+pub const DescriptionExample = struct {
+    pub const Text = struct {
+        before: []const u8,
+        bold: []const u8,
+        after: []const u8,
+
+        pub fn fromSource(value: []const u8) ?Text {
+            if (value.len == 0 or value.len > 8192 or std.mem.indexOfAny(u8, value, "&<>[]{}|\r\n") != null) return null;
+            const open = std.mem.indexOf(u8, value, "'''") orelse return null;
+            const close = std.mem.indexOfPos(u8, value, open + 3, "'''") orelse return null;
+            if (close == open + 3 or std.mem.indexOf(u8, value[close + 3..], "''") != null or
+                std.mem.indexOf(u8, value[open + 3..close], "''") != null) return null;
+            return .{ .before = value[0..open], .bold = value[open + 3..close], .after = value[close + 3..] };
+        }
+    };
+    start: []const u8,
+    category: []const u8,
+    key: []const u8,
+    source_text: Text,
+    translation_text: Text,
+    language: []const u8,
+    outer_before: DescriptionBeforeMetrics,
+    inner_before: DescriptionBeforeMetrics,
+    outer_ink: types.ContainerColor,
+    inner_ink: types.ContainerColor,
+    usage_scale: f32,
+    wrapper_scale: f32,
+    wrapper_line_height: ?f32 = null,
+    ordered: ?OrderedDefinition = null,
+};
+pub const SelectedDescriptionExample = struct {
+    definition_source: ?[]const u8 = null,
+    source: []const u8, recipe: DescriptionExample,
 };
 pub const SelectedPhonos = struct {
     source: []const u8,
@@ -27108,7 +27696,32 @@ fn headingPropertiesCovered(a: std.mem.Allocator, state: ObservedFigureComputedN
 const HeadingComputed = struct {
     node:ObservedFigureComputedNode, font:types.FigureMediaStrut, family:?[]const u8, line:ObservedFigureLineHeight, ink:?types.FigureColor,
 };
-pub fn selectedWrappedHeadingStyleAlloc(a:std.mem.Allocator, keep:std.mem.Allocator,sheets:*const Profile, observed:anytype, root_per_body:f32) !?WrappedHeadingRecipe {
+/// Both graphs have the same original heading owners. Admit a paint-only
+/// alternate when the complete physical recipe agrees in both schemes.
+pub fn selectedWrappedHeadingSchemes(a: std.mem.Allocator, keep: std.mem.Allocator, sheets: *const Profile, observed: anytype, schemes: anytype, root_per_body: f32) !?WrappedHeadingRecipe {
+    var subject = observed;
+    subject.nodes = schemes.day;
+    const day = (try selectedWrappedHeadingStyleAlloc(a, a, sheets, subject, root_per_body, false)) orelse return null;
+    subject.nodes = schemes.night;
+    var night = (try selectedWrappedHeadingStyleAlloc(a, a, sheets, subject, root_per_body, true)) orelse return null;
+    var paired = day;
+    inline for (.{ "word", "separator", "sub" }) |name| {
+        const light = @field(day, name).ink;
+        const dark = @field(night, name).ink;
+        if (!std.mem.eql(u8, light, dark)) @field(paired, name).dark_ink = dark;
+        @field(night, name).ink = light;
+    }
+    if (day.style.wrappers.?.outer.border.?.edges.top.dashed.color != .rgb or
+        night.style.wrappers.?.outer.border.?.edges.top.dashed.color != .rgb) return null;
+    const light = day.style.wrappers.?.outer.border.?.edges.top.dashed.color.rgb;
+    const dark = night.style.wrappers.?.outer.border.?.edges.top.dashed.color.rgb;
+    if (!std.mem.eql(u8, light, dark)) paired.style.wrappers.?.outer.border.?.edges.top.dashed.color =
+        .{ .light_dark = .{ .light = light, .dark = dark } };
+    night.style.wrappers.?.outer.border.?.edges.top.dashed.color = .{ .rgb = light };
+    if (!observedFigureDataEqual(WrappedHeadingRecipe, day, night, 0)) return null;
+    return try observedFigureDataClone(WrappedHeadingRecipe, keep, paired, 0);
+}
+fn selectedWrappedHeadingStyleAlloc(a:std.mem.Allocator, keep:std.mem.Allocator,sheets:*const Profile, observed:anytype, root_per_body:f32, night:bool) !?WrappedHeadingRecipe {
     const nodes=observed.nodes;
     var subject_trace:u32=observed.body;
     const Trace=struct{
@@ -27117,7 +27730,8 @@ pub fn selectedWrappedHeadingStyleAlloc(a:std.mem.Allocator, keep:std.mem.Alloca
         }
     };
     if(!observedStyleGraphValid(sheets,nodes,observed.body) or sheets.globally_unresolved) return null;
-    if (!Profile.hasClass(observedFigureAttribute(nodes[0], "class") orelse return null, "skin-theme-clientpref-day")) return null;
+    if (!Profile.hasClass(observedFigureAttribute(nodes[0], "class") orelse return null,
+        if (night) "skin-theme-clientpref-night" else "skin-theme-clientpref-day")) return null;
     const group=nodes[observed.word].parent orelse return null;
     const roles=[_]u32{observed.outer,observed.inner,observed.heading,group,observed.word,observed.sub};
     // UA H3 and SUB defaults are not simply inherited. Require the real source
@@ -27245,6 +27859,126 @@ pub const DescriptionBeforeMetrics = struct {
     color: types.FigureColor,
 };
 
+/// Transfer a unitless inherited line height to one real flow owner only if
+/// each of its original descendants would inherit the same multiplier there.
+/// A length, ambiguous cascade or differing child override has no such proof.
+pub fn observedSubtreeLineHeight(a: std.mem.Allocator, sheets: *const Profile, nodes: []const ObservedStyleNode,
+    body: u32, root: u32) !?f32 {
+    if (root >= nodes.len or !observedStyleGraphValid(sheets, nodes, body)) return null;
+    var ancestors: [64]u32 = undefined;
+    var count: usize = 0;
+    var cursor: ?u32 = root;
+    while (cursor) |index| {
+        if (count == ancestors.len) return null;
+        ancestors[count] = index;
+        count += 1;
+        cursor = nodes[index].parent;
+    }
+    if (std.mem.indexOfScalar(u32, ancestors[0..count], body) == null) return null;
+    var inherited: ?f32 = null;
+    var environment: CustomEnvironment = .{ .complete = true };
+    while (count != 0) {
+        count -= 1;
+        const decl = (try observedStyleNodeDeclarationsWithLanguage(a, sheets, nodes, ancestors[count], null, null,
+            .{ .selected_heading_language = true }, true)) orelse return null;
+        environment = try observedFigureCustomEnvironment(a, decl.items, environment, true);
+        inherited = switch (try authoredElementLineHeight(a, decl.items, environment)) {
+            .inherit => inherited,
+            .multiplier => |value| value,
+            else => null,
+        };
+    }
+    const multiplier = inherited orelse return null;
+    if (!types.validContainerLineHeight(.{ .multiplier = multiplier })) return null;
+    // The selected oldid issuer enumerates the complete DOM in pre-order.
+    // An exit from the root ends the subtree and leaves its sibling unchanged.
+    const Frame = struct { index: u32, environment: CustomEnvironment };
+    var stack: [64]Frame = undefined;
+    stack[0] = .{ .index = root, .environment = environment };
+    var depth: usize = 1;
+    for (nodes[root + 1 ..], @as(usize, root) + 1..) |node, index| {
+        const parent = node.parent orelse break;
+        while (depth != 0 and stack[depth - 1].index != parent) depth -= 1;
+        if (depth == 0) {
+            // Parent indices merely precede their children. Reject a graph that
+            // re-enters a previously closed branch rather than omitting its CSS.
+            for (nodes[index..]) |rest| if (rest.parent) |ancestor| {
+                if (ancestor >= root and ancestor < index) return null;
+            };
+            break;
+        }
+        if (depth == stack.len) return null;
+        const decl = (try observedStyleNodeDeclarationsWithLanguage(a, sheets, nodes, @intCast(index), null, null,
+            .{ .selected_heading_language = true }, true)) orelse return null;
+        const env = try observedFigureCustomEnvironment(a, decl.items, stack[depth - 1].environment, true);
+        switch (try authoredElementLineHeight(a, decl.items, env)) {
+            .inherit => {},
+            .multiplier => |value| if (value != multiplier) return null,
+            else => return null,
+        }
+        stack[depth] = .{ .index = @intCast(index), .environment = env };
+        depth += 1;
+    }
+    return multiplier;
+}
+
+pub fn observedDescriptionWrappers(a: std.mem.Allocator, sheets: *const Profile, nodes: []const ObservedStyleNode,
+    body: u32, wrapper: u32, usage: u32, dl: u32) !?struct { wrapper: f32, usage: f32 } {
+    if (wrapper >= nodes.len or usage >= nodes.len or dl >= nodes.len or nodes[usage].parent != wrapper or nodes[dl].parent != usage or
+        !observedStyleGraphValid(sheets,nodes,body)) return null;
+    var path: [64]u32 = undefined;
+    var count: usize = 0; var next: ?u32 = dl;
+    while (next) |idx| {
+        if (count == path.len) return null;
+        path[count]=idx; count+=1; next=nodes[idx].parent;
+    }
+    var environment: CustomEnvironment = .{.complete=true};
+    var root_font:f32=1; var owner_font:f32=1; var body_font:f32=0;
+    var wrapper_font:f32=0; var usage_font:f32=0;
+    while(count!=0) {
+        count-=1;const idx=path[count];
+        const declarations=(try observedStyleNodeDeclarationsWithLanguage(a,sheets,nodes,idx,null,null,.{.selected_heading_language=true},true)) orelse return null;
+        environment=try observedFigureCustomEnvironment(a,declarations.items,environment,true);
+        owner_font=(try observedFigureRelativeFontSizeInWithWitness(a,declarations.items,environment,owner_font,1,root_font,null)) orelse return null;
+        if (idx==0) root_font=owner_font;
+        if (idx==body) body_font=owner_font;
+        if (idx!=wrapper and idx!=usage and idx!=dl) continue;
+        if (body_font<=0 or owner_font<=0 or root_font<=0) return null;
+        const owner:ObservedFigureComputedNode=.{.index=idx,.declarations=declarations.items,.environment=environment};
+        if (!try observedFigureStaticMotion(a,declarations.items,environment) or !try headingNoGenerated(a,sheets,nodes,idx,environment)) return null;
+        inline for (.{.{"display","block"},.{"position","static"},.{"float","none"},.{"clear","none"},.{"width","auto"},.{"height","auto"},
+            .{"transform","none"},.{"opacity","1"},.{"box-shadow","none"},.{"filter","none"},.{"clip-path","none"} }) |property| {
+            if (!try observedFigureKeywordIs(a,owner,property[0],&.{},property[1],property[1])) return null;
+        }
+        for ([_][]const u8{ "overflow-x","overflow-y" }) |axis| {
+            if (!try observedFigureKeywordIs(a,owner,axis,&.{"overflow"},if(idx==wrapper) "auto" else "visible","visible")) return null;
+        }
+        const border=(try headingBorders(a,owner)) orelse return null;
+        if (border!=.none) return null;
+        const background=try observedFigureColor(a,declarations.items,"background-color",environment,null,null);
+        if (background.unresolved or background.value==null or background.value.?.kind!=.transparent) return null;
+        const ratio=owner_font/body_font;
+        for ([_]bool{false,true})|padding| {
+            const edge=(try headingUsedEdges(a,owner,padding,ratio,root_font/body_font)) orelse return null;
+            if (!observedFigureEdgesZero(edge)) return null;
+        }
+        if (idx==wrapper) wrapper_font=ratio;
+        if (idx==usage) usage_font=ratio;
+        if (idx==dl) {
+            if (ratio!=usage_font) return null;
+            // The UA supplies nonzero vertical DL margins. Both used zeroes
+            // must be earned by authored declarations on this physical owner.
+            for ([_][]const u8{"margin-top","margin-bottom"}) |prop| {
+                const candidates=try observedFigurePropertyCandidates(a,declarations.items,prop,&.{"margin","margin-block"});
+                var definite=false;
+                for (candidates)|candidate| if (!candidate.uncertain and !candidate.syntax_unknown) { definite=true; break; };
+                if (!definite) return null;
+            }
+        }
+    }
+    return if (wrapper_font>0 and usage_font>0) .{.wrapper=wrapper_font,.usage=usage_font} else null;
+}
+
 pub fn observedDescriptionBefore(a: std.mem.Allocator, sheets: *const Profile, nodes: []const ObservedStyleNode,
     body_index: u32, subject: u32) !?DescriptionBeforeMetrics {
     if (subject >= nodes.len or !std.ascii.eqlIgnoreCase(nodes[subject].tag, "dd") or sheets.globally_unresolved or
@@ -27292,10 +28026,28 @@ pub fn observedDescriptionBefore(a: std.mem.Allocator, sheets: *const Profile, n
     const penv = try observedFigureCustomEnvironment(a, generated.items, environment, true);
     const pseudo: ObservedFigureComputedNode = .{ .index = subject, .declarations = generated.items, .environment = penv };
     const content = try observedFigureKeyword(a, pseudo.declarations, "content", &.{}, penv, &.{ "''", "\"\"" }, "normal", null, false, "normal");
-    if (content.unresolved or !try observedFigureKeywordIs(a, pseudo, "position", &.{}, "absolute", "static") or
+    // An absent or reset content declaration computes to normal and creates no box.
+    if (content.unresolved or content.value == null or !(std.mem.eql(u8,content.value.?,"''") or std.mem.eql(u8,content.value.?,"\"\"")) or
+        !try observedFigureKeywordIs(a, pseudo, "position", &.{}, "absolute", "static") or
         !try observedFigureKeywordIs(a, pseudo, "height", &.{}, "auto", "auto") or !try observedFigureKeywordIs(a, pseudo, "right", &.{"inset"}, "auto", "auto") or
         !try observedFigureStaticMotion(a, pseudo.declarations, penv)) return null;
+    inline for (.{ .{"display","inline"}, .{"opacity","1"}, .{"transform","none"}, .{"box-shadow","none"},
+        .{"filter","none"}, .{"clip-path","none"}, .{"z-index","auto"} }) |check| {
+        if (!try observedFigureKeywordIs(a,pseudo,check[0],&.{},check[1],check[1])) return null;
+    }
+    const pseudo_border=(try headingBorders(a,pseudo)) orelse return null;
+    if (pseudo_border!=.none) return null;
     const pseudo_font = (try observedFigureRelativeFontSizeInWithWitness(a, pseudo.declarations, penv, font, 1, root_font, null)) orelse return null;
+    for ([_]bool{ false,true }) |is_padding| {
+        const pseudo_edges=(try headingUsedEdges(a,pseudo,is_padding,pseudo_font/body_font,root_font/body_font)) orelse return null;
+        if (!observedFigureEdgesZero(pseudo_edges)) return null;
+    }
+    // A solid color shorthand is validated below. A competing background image
+    // and explicit clipping/radius can paint a different physical rectangle.
+    for(pseudo.declarations)|decl| {
+        if(std.ascii.eqlIgnoreCase(decl.name,"background-image") or std.ascii.eqlIgnoreCase(decl.name,"background-clip") or
+            std.ascii.endsWithIgnoreCase(decl.name,"radius") or std.ascii.eqlIgnoreCase(decl.name,"mask")) return null;
+    }
     const paint = try observedFigureColor(a, pseudo.declarations, "background-color", penv, null, null);
     if (paint.unresolved or paint.value == null or paint.value.?.kind != .rgb) return null;
     var metrics: DescriptionBeforeMetrics = .{ .owner_scale = ratio, .padding_left = padding.left,
@@ -33430,6 +34182,14 @@ test "unobserved counters audit distinct API and GET inventories without borrowi
     const rows: ClosedRowColorProof = .{ .styles = &api, .source = source, .absent_source = snapshot, .root = &root, .attribute = "bgcolor", .owners = &.{} };
     const source_image: PageSourceImage = .{ .styles = rows.styles, .root = rows.root, .source = rows.source, .snapshot = rows.absent_source.? };
     const proof = (try observedUnobservedCounterResets(a, &api, &root, &source_image, &contexts, "mw-parser-output", "")) orelse return error.TestUnexpectedResult;
+    // Each four-node graph reserves twenty comparisons for one relevant rule.
+    const after_api = remainingCounterWork(40, api_nodes.len) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 20), after_api);
+    try std.testing.expectEqual(@as(?usize, 0), remainingCounterWork(after_api, get_nodes.len));
+    try std.testing.expect(remainingCounterWork(after_api - 1, get_nodes.len) == null);
+    try std.testing.expectEqual(@as(?usize, 0), remainingCounterWork(2_000_000, 400_000));
+    try std.testing.expect(remainingCounterWork(2_000_000, 400_001) == null);
+    try std.testing.expect(remainingCounterWork(2_000_000, std.math.maxInt(usize)) == null);
     try std.testing.expect(proof.rules.ptr == api.container_rules.ptr and proof.rules.len == api.container_rules.len and proof.resets.len != 0);
     for (proof.resets) |entry| try std.testing.expect(entry.rule < api.container_rules.len);
     for ([_][]const u8{
@@ -34371,6 +35131,8 @@ const ObservedStyleInventoryData = struct {
     reading_target: ReadingTarget,
     selected_root_per_body: ?f32,
     selected_phonos: []const SelectedPhonos,
+    selected_terms: []const SelectedTerm,
+    selected_descriptions: []const SelectedDescriptionExample,
     selected_wrapped_heading: ?SelectedWrappedHeading,
     sources: []const SourceRange,
     retained_sources: []const Source,
@@ -34420,6 +35182,8 @@ fn observedStyleInventoryData(styles: *const Profile) ObservedStyleInventoryData
     }
     return .{ .reading_target = styles.reading_target, .selected_root_per_body = styles.selected_root_per_body,
         .selected_phonos = styles.selected_phonos,
+        .selected_terms = styles.selected_terms,
+        .selected_descriptions = styles.selected_descriptions,
         .selected_wrapped_heading = styles.selected_wrapped_heading,
         .sources = styles.sources, .retained_sources = styles.retained_sources,
         .rules = styles.rules, .classes = styles.classes, .ancestor_classes = styles.ancestor_classes,
@@ -40948,4 +41712,103 @@ test "retained English Figure script language font selectors distinguish root di
     defer mixed.deinit();
     try std.testing.expectEqual(Profile.FigureRootDirectionUse.unresolved,
         mixed.figureRootDirectionUseWithCompleteClasses(null, null, null, null, false, null, null, null));
+}
+
+test "ordered list keeps its source inset and independent marker weight only inside a closed cascade" {
+    var arena=std.heap.ArenaAllocator.init(std.testing.allocator);defer arena.deinit();const a=arena.allocator();
+    const nodes=[_]ObservedStyleNode{
+        .{.tag="html",.attributes=&.{},.parent=null}, .{.tag="body",.attributes=&.{},.parent=0},
+        .{.tag="div",.attributes=&.{.{.name="class",.value="mw-parser-output"}},.parent=1},
+        .{.tag="section",.attributes=&.{},.parent=2}, .{.tag="ol",.attributes=&.{},.parent=3},
+        .{.tag="li",.attributes=&.{},.parent=4},
+    };
+    const css="body{line-height:1.625}ol{margin:0 0 0 3.2em;padding:0}ol>li::marker{font-weight:bold}";
+    for ([_][]const u8{"", ":focus{outline-color:var(--outline-color-progressive--focus,#36c)}",
+        "ol,li{outline-color:red}",
+        "section{list-style-position:inside}","section{color:red}","section{visibility:hidden}","section{opacity:.6}","section{writing-mode:vertical-lr}", "section{list-style-image:url(image.png)}", "ol{width:8em}",
+        "li{background:#abc}", "li{color:red}", "li{font-style:italic}", "li{counter-set:count 8}", "li::marker{content:'x'}",
+        "ol{outline:2px solid red}", "li{outline-style:solid}", ":focus{outline-style:solid}",
+        "ol{outline:auto}", "li{outline-style:inherit}", "ol{all:initial}",
+        "ol,li{outline-color:red;outline-width:9px;outline-offset:7px}",
+        "ol,li{outline:solid 2px red;outline-style:none}",
+        "ol{outline:2px solid red;outline-style:none none}",
+        "li{outline:2px solid red;outline-style:none none none none}"},0..) |extra,index| {
+        var style=try parseSourcesForTargetAlloc(a,&.{.{.base_url="",.css=try std.mem.concat(a,u8,&.{css,extra})}},.screen);
+        defer style.deinit();
+        const result=try observedListBox(a,&style,&nodes,2,4,5);
+        if(index>=3){try std.testing.expect(result==null);continue;}
+        const box=result orelse return error.TestMissingProvedOrderedList;
+        try std.testing.expect(box.ol.ordered_marker_weight==.bold and box.ol.margins.?.left.value==3.2 and box.ol.margins.?.left.unit==.em);
+        try std.testing.expect(box.li.ordered_marker_weight==null and box.li.padding.?.left.value==0 and box.ol.line_height.?.multiplier==1.625);
+    }
+}
+
+test "ordered item adjoining selector needs its terminal previous element" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var nodes = [_]ObservedStyleNode{
+        .{ .tag = "html", .attributes = &.{}, .parent = null },
+        .{ .tag = "body", .attributes = &.{}, .parent = 0 },
+        .{ .tag = "div", .attributes = &.{.{ .name = "class", .value = "mw-parser-output" }}, .parent = 1 },
+        .{ .tag = "section", .attributes = &.{}, .parent = 2 },
+        .{ .tag = "ol", .attributes = &.{}, .parent = 3 },
+        .{ .tag = "li", .attributes = &.{}, .parent = 4,
+            .known_no_previous_element_sibling = true, .known_no_next_element_sibling = true },
+    };
+    const base = "body{line-height:1.625}ol{margin:0 0 0 3.2em;padding:0}ol>li::marker{font-weight:bold}";
+    const adjacent = ".mw-parser-output ol > li.has-visible-children + li{margin-top:0.4em!important}";
+    var styles = try parseForTargetAlloc(a, base ++ adjacent, .screen);
+    defer styles.deinit();
+    try std.testing.expect((try observedListBox(a, &styles, &nodes, 2, 4, 5)) != null);
+    nodes[5].known_no_previous_element_sibling = false;
+    try std.testing.expect((try observedListBox(a, &styles, &nodes, 2, 4, 5)) == null);
+    nodes[5].known_no_previous_element_sibling = true;
+    nodes[5].known_no_next_element_sibling = false;
+    try std.testing.expect((try observedListBox(a, &styles, &nodes, 2, 4, 5)) == null);
+    nodes[5].known_no_next_element_sibling = true;
+    // A previous sibling of OL would decide this selector. LI's own first
+    // position says nothing about its parent's previous element.
+    var ancestor = try parseForTargetAlloc(a, base ++ ".prior + ol > li{margin-top:0.4em!important}", .screen);
+    defer ancestor.deinit();
+    try std.testing.expect((try observedListBox(a, &ancestor, &nodes, 2, 4, 5)) == null);
+}
+
+test "ordered list language refutation uses its actual OL and nearest captured language" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var html_attributes = [_]FigureObservedAttribute{.{ .name = "lang", .value = "id" }};
+    const id_attributes = [_]FigureObservedAttribute{.{ .name = "lang", .value = "id" }};
+    const fa_attributes = [_]FigureObservedAttribute{.{ .name = "lang", .value = "fa" }};
+    const empty_attributes = [_]FigureObservedAttribute{.{ .name = "lang", .value = "" }};
+    var nodes = [_]ObservedStyleNode{
+        .{ .tag = "html", .attributes = &html_attributes, .parent = null },
+        .{ .tag = "body", .attributes = &.{}, .parent = 0 },
+        .{ .tag = "div", .attributes = &.{.{ .name = "class", .value = "mw-parser-output" }}, .parent = 1 },
+        .{ .tag = "section", .attributes = &.{}, .parent = 2 },
+        .{ .tag = "ol", .attributes = &.{}, .parent = 3 },
+        .{ .tag = "li", .attributes = &.{}, .parent = 4 },
+    };
+    const css = "body{line-height:1.625}ol{margin:0 0 0 3.2em;padding:0}ol>li::marker{font-weight:bold}" ++
+        "ol:lang(fa) > li{list-style-type:persian}ol:lang(hi) > li{list-style-type:devanagari}";
+    var styles = try parseForTargetAlloc(a, css, .screen); defer styles.deinit();
+    for (0..7) |arm| {
+        html_attributes[0].value = if (arm == 4) "fa" else "id";
+        nodes[3].attributes = if (arm == 5 or arm == 6) &fa_attributes else &.{};
+        nodes[4].attributes = switch (arm) { 1, 2 => &fa_attributes, 3 => &empty_attributes, 4, 6 => &id_attributes, else => &.{} };
+        nodes[5].attributes = if (arm == 2) &id_attributes else &.{};
+        const result = try observedListBox(a, &styles, &nodes, 2, 4, 5);
+        if (arm == 0 or arm == 4 or arm == 6) {
+            const box = result orelse return error.TestMissingProvedOrderedList;
+            try std.testing.expect(box.ol.ordered_marker_weight == .bold and box.ol.layout == .ordered_list);
+        } else try std.testing.expect(result == null);
+    }
+    nodes[3].attributes = &.{}; nodes[4].attributes = &.{}; nodes[5].attributes = &.{};
+    for ([_][]const u8{ "ol:not(:lang(fa)) > li", "ol:lang(fa) li", "ol:lang(fa) > li.active", "ol:lang(fa) > li::marker", "ol:lang(fa) > li > li" }) |unsupported|
+        try std.testing.expect(!observedOrderedListLanguageRefutes(unsupported, &nodes, 5));
+    const incomplete = (try observedStyleNodeDeclarationsWithLanguage(a, &styles, &nodes, 5, null, null,
+        .{ .selected_list_language = true }, false)) orelse return error.TestUnexpectedResult;
+    var retained_foreign = false;
+    for (incomplete.items) |declaration| if (std.mem.eql(u8, declaration.raw, "persian")) { retained_foreign = true; };
+    try std.testing.expect(retained_foreign);
 }

@@ -1592,7 +1592,8 @@ fn idTermSpace(span: wiki.Span) bool {
     return span.kind == .text and span.image == null and span.target.len == 0 and !span.self_link and
         !span.generated_diagnostic and std.mem.trim(u8, span.text, " \t\r\n").len == 0;
 }
-fn idTermKind(block: wiki.Block) ?[]const u8 {
+fn idTermKind(row: wiki.Block) ?[]const u8 {
+    const block=if(row.semantic_term_source)|source|source.* else row;
     if (block.kind != .term or block.depth != 1 or !std.mem.eql(u8, block.list_path, ";") or block.table != null) return null;
     var icon = false;
     var kind: ?[]const u8 = null;

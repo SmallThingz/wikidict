@@ -256,11 +256,12 @@ pub const InlineTextStyle = struct {
     font_normalized: bool = false,
     cursor: ?InlineCursor = null,
     wrap: ?TextWrap = null,
+    dark_foreground: ?[]const u8 = null,
     pub fn jsonStringify(self: @This(), jw: anytype) !void {
         try jw.beginObject();
         inline for (@typeInfo(@This()).@"struct".field_names) |name| {
-            if (comptime std.mem.eql(u8, name, "wrap")) {
-                if (self.wrap) |value| { try jw.objectField(name); try jw.write(value); }
+            if (comptime std.mem.eql(u8, name, "wrap") or std.mem.eql(u8, name, "dark_foreground")) {
+                if (@field(self, name)) |value| { try jw.objectField(name); try jw.write(value); }
             } else { try jw.objectField(name); try jw.write(@field(self, name)); }
         }
         try jw.endObject();
@@ -279,7 +280,8 @@ fn validInlineComputedLength(value: ComputedLineHeight, signed: bool) bool {
         (signed or value.value >= 0);
 }
 pub fn validInlineTextStyle(value: InlineTextStyle) bool {
-    if (value.decoration == null and value.line_height == null and value.baseline_shift == null and !value.font_normalized and value.cursor == null and value.wrap == null) return false;
+    if (value.decoration == null and value.line_height == null and value.baseline_shift == null and !value.font_normalized and value.cursor == null and value.wrap == null and value.dark_foreground == null) return false;
+    if (value.dark_foreground) |ink| if (!isCanonicalRgb(ink)) return false;
     if (value.decoration) |line| {
         if (line.color) |color| if (!isCanonicalRgb(color)) return false;
         if (line.thickness) |length| if (!validStyleLength(length)) return false;
@@ -297,6 +299,13 @@ pub fn validSpanInlineStyle(span: anytype) bool {
     const value = span.inline_style orelse return true;
     if (!validInlineTextStyle(value)) return false;
     const kind = @tagName(span.kind);
+    if (value.dark_foreground) |ink| {
+        if (!std.mem.eql(u8, kind, "text") or span.text.len == 0 or spanHasRuby(span) or
+            spanHasInlinePaddingGroup(span) or spanHasInlineActionGroup(span) or
+            spanHasInlineBoxGroup(span) or spanHasClippedAbsolute(span)) return false;
+        const light = if (comptime @hasField(@TypeOf(span), "foreground")) span.foreground orelse return false else return false;
+        if (!isCanonicalRgb(light) or std.mem.eql(u8, light, ink)) return false;
+    }
     if (!std.mem.eql(u8, kind, "text") and !std.mem.eql(u8, kind, "link") and !std.mem.eql(u8, kind, "external_link")) return false;
     if (comptime @hasField(@TypeOf(span), "image")) if (span.image != null) return false;
     if (std.mem.eql(u8, kind, "text")) {
@@ -348,7 +357,7 @@ pub fn validRubyOwnerContext(value: RubyOwner) bool {
     if (value.foreground) |ink| if (!isCanonicalRgb(ink)) return false;
     if (value.background) |ink| if (!isCanonicalRgb(ink)) return false;
     if (value.inline_style) |style| {
-        if (!validInlineTextStyle(style) or (style.font_normalized and !value.font.font_normalized)) return false;
+        if (style.dark_foreground != null or !validInlineTextStyle(style) or (style.font_normalized and !value.font.font_normalized)) return false;
         if (style.line_height) |height| if (height == .font_relative) {
             if (!rubyFontSnapshotEqual(value.font, height.font_relative.font)) return false;
             if (style.baseline_shift != null and style.font_normalized != value.font.font_normalized) return false;
@@ -2305,7 +2314,10 @@ pub const FlowPart = struct {
 pub const ContainerWidth = union(enum) { auto, length: StyleWidth, fit_content };
 pub const ContainerMaxWidth = union(enum) { none, length: StyleWidth };
 pub const ContainerBoxSizing = enum { content_box, border_box };
-pub const ContainerLayout = enum { flow, flex_row, flex_column };
+// A real OL owns decimal outside markers on its direct LI boxes. Its margin
+// and padding replace the native list defaults exactly once.
+pub const ContainerLayout = enum { flow, flex_row, flex_column, ordered_list };
+pub const OrderedMarkerWeight = enum { normal, bold };
 pub const ContainerAlignItems = enum { stretch, start, center, end };
 // Null keeps the CSS initial flex value 0 1 auto; none is 0 0 auto.
 pub const ContainerFlexItem = enum { none };
@@ -2346,6 +2358,9 @@ pub const ContainerMargins = struct {
     top: ContainerMargin, right: ContainerMargin,
     bottom: ContainerMargin, left: ContainerMargin,
 };
+// Common DPRa header allocation, independent of ContainerStyle field flags.
+pub const responsive_container_flow_wire_feature: u32 = 0x01000000;
+
 pub const ContainerScreenMaxWidth = struct {
     // Compare against the one logical rendering viewport in CSS px, not this
     // box's containing block. Terminal projection explicitly uses 8px/column.
@@ -2359,13 +2374,15 @@ pub const ContainerScreenMaxWidth = struct {
     margins: ?ContainerMargins = null,
     // Null inherits; explicit none clears the preceding/base clearance.
     clear: ?FigureClear = null,
+    // A flex-row owner can become ordinary block flow at this inclusive bound.
+    layout: ?ContainerLayout = null,
     // Semantic viewport bands, greatest bound first. The producer has already
     // resolved CSS importance/order in every band. Children cannot nest lists.
     following_rules: []const ContainerScreenMaxWidth = &.{},
     pub fn jsonStringify(self: ContainerScreenMaxWidth, jw: anytype) !void {
         try jw.beginObject();
         try jw.objectField("max_width_px"); try jw.write(self.max_width_px);
-        inline for (.{ "width", "max_width", "box_sizing", "line_height", "float_side", "margins", "clear" }) |name| {
+        inline for (.{ "width", "max_width", "box_sizing", "line_height", "float_side", "margins", "clear", "layout" }) |name| {
             if (@field(self, name)) |present| { try jw.objectField(name); try jw.write(present); }
         }
         if (self.following_rules.len != 0) { try jw.objectField("following_rules"); try jw.write(self.following_rules); }
@@ -2390,7 +2407,7 @@ pub fn validColumnBreakContext(block: anytype) bool {
         .paragraph, .definition, .example, .quotation, .list_item, .list_detail, .indent, .term => {},
         else => return false,
     }
-    inline for (.{ "table", "feature", "container", "figure", "flow", "rule_style" }) |field|
+    inline for (.{ "table", "feature", "container", "figure", "flow", "rule_style", "description_body" }) |field|
         if (comptime @hasField(@TypeOf(block), field)) { if (@field(block, field) != null) return false; };
     return true;
 }
@@ -2545,7 +2562,7 @@ pub const SectionHeadingWrappers = struct {
             self.outer.border.?.edges.right != .none or self.outer.border.?.edges.bottom != .none or
             self.outer.border.?.edges.left != .none) return false;
         const stroke = self.outer.border.?.edges.top.dashed;
-        if (stroke.width.unit != .px or stroke.width.value <= 0 or stroke.color != .rgb) return false;
+        if (stroke.width.unit != .px or stroke.width.value <= 0 or (stroke.color != .rgb and stroke.color != .light_dark)) return false;
         const margins = self.outer.margins orelse return false;
         const padding = self.inner.padding orelse return false;
         if (margins.top.unit != .em or margins.top.value <= 0 or padding.top.unit != .em or padding.top.value <= 0) return false;
@@ -2770,6 +2787,8 @@ pub const ContainerStyle = struct {
     // Uniform circular border-box radius. Background and border share the
     // rounded edge; overflow:visible descendants are not clipped by it.
     corner_radius_px: ?f32 = null,
+    // Value local to ordered_list. Earlier field ordinals are wire flags.
+    ordered_marker_weight: ?OrderedMarkerWeight = null,
     pub fn jsonStringify(self: ContainerStyle, jw: anytype) !void {
         try writeOptionalStyleFields(self, jw);
     }
@@ -2899,6 +2918,112 @@ pub fn ContainerFor(comptime BlockType: type) type {
 }
 pub const Container = ContainerFor(Block);
 
+// Physical generated ::before in the selected relative DD's padding box.
+// It owns no text, interaction, hit target, or flow space. Its used height is
+// max(0, padding-box height - top - bottom), evaluated after laying out children.
+pub const DescriptionBefore = struct {
+    top: StyleLength,
+    bottom: StyleLength,
+    left: StyleLength,
+    width: StyleLength,
+    fill: ContainerColor,
+};
+pub fn DescriptionBodyFor(comptime BlockType: type) type {
+    return struct { before: DescriptionBefore, box: ContainerFor(BlockType) };
+}
+pub fn contentBox(block: anytype) @TypeOf(block.container) {
+    if (comptime @hasField(@TypeOf(block), "description_body"))
+        if (block.description_body) |description| return description.box;
+    return block.container;
+}
+// This readback check binds the stored navigation spelling to its localized
+// File title. Namespace and exact source origin remain issuance-time proofs.
+pub fn validPhonosCreditDestination(target: []const u8, title: []const u8) bool {
+    const protocol = "https://";
+    const suffix = ".wiktionary.org";
+    if (!std.mem.startsWith(u8, target, protocol) or title.len == 0 or
+        std.mem.indexOfAny(u8, target, "?#\\\r\n\t ") != null) return false;
+    const slash = std.mem.indexOfScalarPos(u8, target, protocol.len, '/') orelse return false;
+    const host = target[protocol.len..slash];
+    if (!std.mem.endsWith(u8, host, suffix) or host.len <= suffix.len) return false;
+    const language = host[0..host.len-suffix.len];
+    if (language[0] < 'a' or language[0] > 'z') return false;
+    var segment_start = true;
+    for (language) |byte| {
+        if (byte == '-') { if (segment_start) return false; segment_start = true; }
+        else { if (!((byte >= 'a' and byte <= 'z') or (byte >= '0' and byte <= '9'))) return false; segment_start = false; }
+    }
+    if (segment_start or !std.mem.startsWith(u8, target[slash..], "/wiki/")) return false;
+    const colon = std.mem.indexOfScalar(u8, title, ':') orelse return false;
+    if (colon == 0 or colon+1 == title.len) return false;
+    const path = target[slash+"/wiki/".len..];
+    var at: usize = 0;
+    for (title) |expected| {
+        if (at == path.len) return false;
+        var byte = path[at]; at += 1;
+        if (byte == '%') {
+            if (path.len-at < 2) return false;
+            const high = std.fmt.charToDigit(path[at], 16) catch return false;
+            const low = std.fmt.charToDigit(path[at+1], 16) catch return false;
+            byte = high*16+low; at += 2;
+        }
+        if ((if (byte == '_') @as(u8, ' ') else byte) !=
+            (if (expected == '_') @as(u8, ' ') else expected)) return false;
+    }
+    return at == path.len;
+}
+pub fn validDescriptionOwner(block: anytype) bool {
+    if (comptime !@hasField(@TypeOf(block), "description_body")) return false;
+    const body = block.description_body orelse return false;
+    const path = block.list_path;
+    if (path.len == 0 or path.len != block.depth or path[path.len - 1] != ':' or
+        block.spans.len != 0 or block.number.len != 0 or block.level != 0 or
+        block.anchor.len != 0 or block.anchor_fallback.len != 0) return false;
+    const kind = std.meta.stringToEnum(BlockKind, @tagName(block.kind)) orelse return false;
+    switch (kind) {
+        .example => if (!std.mem.eql(u8, path, "#:")) return false,
+        .indent => if (!std.mem.eql(u8, path, ":")) return false,
+        else => return false,
+    }
+    inline for (.{ "feature", "table", "container", "figure", "flow", "rule_style", "style", "text_align", "column_break_inside" }) |field|
+        if (comptime @hasField(@TypeOf(block), field)) { if (@field(block, field) != null) return false; };
+    if (body.box.blocks.len == 0 or body.box.disclosure != null or body.box.style.owner_font_scale == null or !validContainerStyle(body.box.style) or
+        body.box.style.positioning != .relative_auto) return false;
+    const style = body.box.style;
+    if (style.line_height) |height| {
+        if (height != .multiplier or height.multiplier<=0 or kind!=.indent or body.box.blocks.len!=1) return false;
+        const line=body.box.blocks[0];
+        if (!std.mem.eql(u8,@tagName(line.kind),"paragraph") or line.spans.len!=2) return false;
+        const button=line.spans[0];const credit=line.spans[1];
+        if (!std.mem.eql(u8,@tagName(button.kind),"link") or
+            (!std.mem.eql(u8,@tagName(credit.kind),"link") and !std.mem.eql(u8,@tagName(credit.kind),"external_link")) or
+            (button.audio_control orelse return false).presentation!=.phonos_button or credit.audio_control!=null) return false;
+        if (std.mem.eql(u8, @tagName(credit.kind), "external_link") and
+            (!std.mem.eql(u8, credit.text, "ⓘ") or credit.target_fragment != null or
+             !validPhonosCreditDestination(credit.target, credit.tooltip orelse return false))) return false;
+        if (std.mem.eql(u8, @tagName(credit.kind), "external_link")) {
+            const title = credit.tooltip.?;
+            const colon = std.mem.indexOfScalar(u8, title, ':') orelse return false;
+            if (!inlineTableMediaOwnerMatches(button, title[colon+1..])) return false;
+        }
+        const sup=if (comptime @hasField(@TypeOf(credit),"superscript")) credit.superscript else credit.flags.superscript;
+        const strut=(credit.inline_style orelse return false).line_height orelse return false;
+        if (!sup or strut!=.font_relative or !strut.font_relative.font.superscript or strut.font_relative.factor<=0) return false;
+    }
+    inline for (@typeInfo(ContainerStyle).@"struct".field_names) |field| {
+        if (comptime !@hasField(@TypeOf(.{ .positioning = {}, .margins = {}, .padding = {}, .owner_font_scale = {}, .line_height = {} }), field))
+            if (@field(style, field) != null) return false;
+    }
+    const padding = style.padding orelse return false;
+    const margins = style.margins orelse return false;
+    inline for (.{ "top", "right", "bottom", "left" }) |field|
+        if (@field(margins, field).value != 0) return false;
+    if (padding.top.value != 0 or padding.right.value != 0 or padding.bottom.value != 0 or padding.left.value <= 0) return false;
+    const before = body.before;
+    return validStyleLength(before.top) and validStyleLength(before.bottom) and validStyleLength(before.left) and
+        validStyleLength(before.width) and before.width.value > 0 and before.fill != .transparent and validContainerColor(before.fill);
+}
+
 /// Authored separator box. Relative lengths have already been normalized to
 /// the normal-body font basis. Width is auto in the containing content box;
 /// border/padding are zero, and margins participate in ordinary block flow.
@@ -2966,13 +3091,14 @@ pub const Block = struct {
     /// Anonymous ordered content; parent block owns role, list, geometry and spacing.
     flow: ?[]const FlowPart = null,
     container: ?Container = null,
+    description_body: ?DescriptionBodyFor(Block) = null,
     rule_style: ?RuleStyle = null,
     column_break_inside: ?ColumnBreakInside = null,
 
     pub fn jsonStringify(self: Block, jw: anytype) !void {
         try jw.beginObject();
         inline for (@typeInfo(Block).@"struct".field_names) |name| {
-            if (comptime std.mem.eql(u8, name, "text_align") or std.mem.eql(u8, name, "style") or std.mem.eql(u8, name, "figure") or std.mem.eql(u8, name, "flow") or std.mem.eql(u8, name, "container") or std.mem.eql(u8, name, "rule_style") or std.mem.eql(u8, name, "column_break_inside")) {
+            if (comptime std.mem.eql(u8, name, "text_align") or std.mem.eql(u8, name, "style") or std.mem.eql(u8, name, "figure") or std.mem.eql(u8, name, "flow") or std.mem.eql(u8, name, "container") or std.mem.eql(u8, name, "rule_style") or std.mem.eql(u8, name, "column_break_inside") or std.mem.eql(u8, name, "description_body")) {
                 if (@field(self, name)) |present| {
                     try jw.objectField(name);
                     try jw.write(present);
@@ -3489,6 +3615,7 @@ pub const DeepTableWork = struct {
     // Existing header256 Container extension census, including disclosure.
     positioned_container_found: bool = false,
     column_layout_found: bool = false,
+    responsive_container_flow_found: bool = false,
     discover_positioned_container: bool = false,
     table_min_width_found: bool = false,
     discover_table_min_width: bool = false,
@@ -3525,6 +3652,7 @@ pub const DeepTableWork = struct {
             if (value.font_family != null) { self.inline_group_font_family = true; };
         if (comptime @hasField(@TypeOf(value), "inline_style")) if (value.inline_style) |style| {
             if (style.wrap != null) self.inline_group_text_flow = true;
+            if (style.dark_foreground != null) self.positioned_container_found = true;
             if (style.line_height) |height| if (height == .font_relative and height.font_relative.font.font_family != null) {
                 self.inline_group_font_family = true;
             };
@@ -3647,10 +3775,11 @@ pub const DeepTableWork = struct {
             if (!validStyleWidth(minimum)) return error.InvalidPresentation;
         }
     }
-    pub fn containerLayouts(display: anytype, sections: anytype, preamble: anytype, references: anytype) struct { positioned: bool, column_layout: bool } {
+    pub fn containerLayouts(display: anytype, sections: anytype, preamble: anytype, references: anytype) struct { positioned: bool, column_layout: bool, responsive_flow: bool } {
         var work: DeepTableWork = .{};
         work.entry(display, sections, preamble, references) catch {};
-        return .{ .positioned = work.positioned_container_found, .column_layout = work.column_layout_found };
+        return .{ .positioned = work.positioned_container_found, .column_layout = work.column_layout_found,
+            .responsive_flow = work.responsive_container_flow_found };
     }
     pub fn hasPositionedContainers(display: anytype, sections: anytype, preamble: anytype, references: anytype) bool {
         var work: DeepTableWork = .{ .discover_positioned_container = true };
@@ -3753,10 +3882,16 @@ pub const DeepTableWork = struct {
                 if (!validColumnBreakContext(value)) return error.InvalidPresentation;
                 self.column_layout_found = true;
             };
-            if (comptime @hasField(@TypeOf(value), "container")) if (value.container) |box| {
+            if (comptime @hasField(@TypeOf(value), "description_body")) if (value.description_body != null) {
+                self.positioned_container_found = true;
+                if (self.discover_positioned_container or !validDescriptionOwner(value)) return error.InvalidPresentation;
+                try self.take(1);
+            };
+            if (comptime @hasField(@TypeOf(value), "container")) if (contentBox(value)) |box| {
                 if (box.style.columns) |columns| if (columns.width != null) {
                     self.column_layout_found = true;
                 };
+                if (containerHasResponsiveFlow(box.style)) self.responsive_container_flow_found = true;
                 if (containerRequiresExtension(box)) {
                     self.positioned_container_found = true;
                     if (self.discover_positioned_container) return error.InvalidPresentation;
@@ -4863,8 +4998,9 @@ pub fn validContainerMargins(value: ContainerMargins) bool {
         validContainerMargin(value.bottom) and validContainerMargin(value.left);
 }
 fn validContainerScreenFields(value: ContainerScreenMaxWidth) bool {
+    if (value.layout) |layout| if (layout != .flow) return false;
     if (value.width == null and value.max_width == null and value.box_sizing == null and value.line_height == null and
-        value.float_side == null and value.margins == null and value.clear == null) return false;
+        value.float_side == null and value.margins == null and value.clear == null and value.layout == null) return false;
     if (value.width) |width| if (!validContainerWidth(width)) return false;
     if (value.max_width) |width| if (!validContainerMaxWidth(width)) return false;
     if (value.line_height) |height| if (!validContainerLineHeight(height)) return false;
@@ -4880,6 +5016,12 @@ pub fn validContainerScreenMaxWidth(value: ContainerScreenMaxWidth) bool {
     }
     return true;
 }
+pub fn containerHasResponsiveFlow(style: ContainerStyle) bool {
+    const screen = style.screen_max_width orelse return false;
+    if (screen.layout != null) return true;
+    for (screen.following_rules) |rule| if (rule.layout != null) return true;
+    return false;
+}
 // Merge only compiled semantic overrides at one stable root viewport. This is
 // separate from applying those fields to the base and from body admission.
 pub fn resolveContainerScreen(style: ContainerStyle, viewport_css_px: f64) error{InvalidPresentation}!?ContainerScreenMaxWidth {
@@ -4891,7 +5033,7 @@ pub fn resolveContainerScreen(style: ContainerStyle, viewport_css_px: f64) error
     for (screen.following_rules) |rule| {
         if (viewport_css_px > @as(f64, @floatFromInt(rule.max_width_px))) break;
         selected.max_width_px = rule.max_width_px;
-        inline for (.{ "width", "max_width", "box_sizing", "line_height", "float_side", "margins", "clear" }) |name| {
+        inline for (.{ "width", "max_width", "box_sizing", "line_height", "float_side", "margins", "clear", "layout" }) |name| {
             if (@field(rule, name)) |present| @field(selected, name) = present;
         }
     }
@@ -4922,7 +5064,7 @@ pub fn containerStyleRequiresPositionedCapability(value: ContainerStyle) bool {
     if (value.border) |border| if (border == .edges) {
         inline for (.{ "top", "right", "bottom", "left" }) |side| if (@field(border.edges, side) == .dashed) return true;
     };
-    return value.overflow == .visible_x_clip_y or value.flex_edge != null or value.layout == .flex_column or value.flex_column_gap != null or value.inline_atomic != null or value.translated_absolute != null or value.corner_radius_px != null or value.absolute_position != null or value.absolute_static != null or value.text_wrap != null or
+    return value.layout == .ordered_list or value.overflow == .visible_x_clip_y or value.flex_edge != null or value.layout == .flex_column or value.flex_column_gap != null or value.inline_atomic != null or value.translated_absolute != null or value.corner_radius_px != null or value.absolute_position != null or value.absolute_static != null or value.text_wrap != null or
         (value.owner_font != null and value.positioning != null);
 }
 // Both sides of the initial sole-inline static anchor have neutral physical
@@ -4994,7 +5136,18 @@ pub fn validSoleStaticInlineContainer(parent: anytype) bool {
     const box = child.container.?;
     return validContainerStyle(box.style) and validContainerAbsoluteStaticBody(box);
 }
+fn orderedListBoxStyle(style: ContainerStyle, root: bool) bool {
+    if (root != (style.ordered_marker_weight != null) or root != (style.layout == .ordered_list) or (!root and style.layout != null) or style.margins == null or style.padding == null) return false;
+    inline for (@typeInfo(ContainerStyle).@"struct".field_names) |name| {
+        if (comptime @hasField(@TypeOf(.{ .layout = {}, .ordered_marker_weight = {}, .margins = {}, .padding = {}, .line_height = {}, .owner_font_scale = {} }),name)) continue;
+        if (@field(style,name) != null) return false;
+    }
+    return true;
+}
+
 pub fn validContainerStyle(value: ContainerStyle) bool {
+    if ((value.layout == .ordered_list) != (value.ordered_marker_weight != null)) return false;
+    if (value.layout == .ordered_list and !orderedListBoxStyle(value,true)) return false;
     if (value.flex_edge) |edge| if (!validContainerFlexEdge(value,edge)) return false;
     // An indefinite main axis has no free-space distribution. Centered children
     // retain their own measured widths and source order in this first domain.
@@ -5102,6 +5255,8 @@ pub fn validContainerStyle(value: ContainerStyle) bool {
     if (value.line_height) |height| if (!validContainerLineHeight(height)) return false;
     if (value.align_items != null and value.layout != .flex_row and value.layout != .flex_column) return false;
     if (value.screen_max_width) |screen| if (!validContainerScreenMaxWidth(screen)) return false;
+    if (containerHasResponsiveFlow(value) and (value.layout != .flex_row or value.align_items != null or
+        value.columns != null or value.flex_column_gap != null)) return false;
     return true;
 }
 /// Initial native auto-height scrollport capability. General Stored validity
@@ -5167,7 +5322,8 @@ fn containerLegacyAdjoiningMarginsSupported(value: anytype, depth: usize) bool {
         if (std.mem.eql(u8, @tagName(block.kind), "heading")) return false;
         if (comptime @hasField(@TypeOf(block), "style")) if (block.style) |style| if (style.margins) |edges| if (nonzeroVertical(edges)) return false;
         if (comptime @hasField(@TypeOf(block), "rule_style")) if (block.rule_style) |style| if (nonzeroVertical(style.margins)) return false;
-        if (comptime @hasField(@TypeOf(block), "container")) if (block.container) |child| if (!containerLegacyAdjoiningMarginsSupported(child, depth + 1)) return false;
+        if (comptime @hasField(@TypeOf(block), "description_body")) if (block.description_body != null and !validDescriptionOwner(block)) return false;
+        if (comptime @hasField(@TypeOf(block), "container")) if (contentBox(block)) |child| if (!containerLegacyAdjoiningMarginsSupported(child, depth + 1)) return false;
     }
     return true;
 }
@@ -5243,10 +5399,38 @@ fn translatedContainerBodySupported(value: anytype) bool {
     }
     return true;
 }
+fn orderedListStructure(value: anytype) bool {
+    if (containerDisclosure(value)!=null or value.blocks.len==0) return false;
+    for (value.blocks,1..) |item,n| {
+        if (comptime !@hasField(@TypeOf(item),"container")) return false;
+        if (!validContainerContext(item)) return false;
+        const li=item.container.?;
+        if (li.blocks.len==0 or !orderedListBoxStyle(li.style,false) or containerDisclosure(li)!=null) return false;
+        const head=li.blocks[0];
+        const kind=@tagName(head.kind);
+        if ((!std.mem.eql(u8,kind,"definition") and !std.mem.eql(u8,kind,"list_item")) or head.depth!=1 or !std.mem.eql(u8,head.list_path,"#") or head.number.len==0 or head.number[0]=='0') return false;
+        for (head.number) |byte| if (!std.ascii.isDigit(byte)) return false;
+        if ((std.fmt.parseInt(usize,head.number,10) catch return false)!=n) return false;
+        for (li.blocks[1..]) |child| {
+            if (!std.mem.eql(u8,@tagName(child.kind),"example") or child.depth!=2 or !std.mem.eql(u8,child.list_path,"#:") or child.number.len!=0) return false;
+        }
+    }
+    return true;
+}
+
 fn containerStructureSupported(value: anytype, depth: usize) bool {
+    if (value.style.layout == .ordered_list and !orderedListStructure(value)) return false;
     if (depth > max_content_depth or value.blocks.len > max_presentation_items or !validContainerStyle(value.style)) return false;
     if (!validContainerDisclosureOwner(value) or !translatedContainerBodySupported(value)) return false;
     if (value.style.flex_edge != null and (containerDisclosure(value) != null or value.blocks.len != 0)) return false;
+    if (containerHasResponsiveFlow(value.style)) {
+        if (containerDisclosure(value) != null or value.blocks.len != 1) return false;
+        const block = value.blocks[0];
+        if (!validContainerContext(block)) return false;
+        if (comptime @hasField(@TypeOf(block), "description_body")) if (block.description_body != null) return false;
+        const child = block.container.?;
+        if (child.style.flex_item != null or child.style.flex_edge != null) return false;
+    }
     if (value.style.layout == .flex_column) {
         if (containerDisclosure(value) != null) return false;
         for (value.blocks) |child| {
@@ -5264,7 +5448,8 @@ fn containerStructureSupported(value: anytype, depth: usize) bool {
         // Margin support does not create nested organization/heading paths.
         if (std.mem.eql(u8, @tagName(block.kind), "heading")) return false;
         if (comptime @hasField(@TypeOf(block), "style")) if (block.style) |style| if (!validBlockStyle(style)) return false;
-        if (comptime @hasField(@TypeOf(block), "container")) if (block.container) |child| if (!containerStructureSupported(child, depth + 1)) return false;
+        if (comptime @hasField(@TypeOf(block), "description_body")) if (block.description_body != null and !validDescriptionOwner(block)) return false;
+        if (comptime @hasField(@TypeOf(block), "container")) if (contentBox(block)) |child| if (!containerStructureSupported(child, depth + 1)) return false;
     }
     return true;
 }
@@ -5288,8 +5473,10 @@ pub fn resolveBlockPath(blocks: []const Block, root: usize, suffix: []const usiz
     if (root >= blocks.len or suffix.len > max_content_depth) return null;
     var current = &blocks[root];
     for (suffix) |index| {
-        if (!validContainerContext(current.*)) return null;
-        const container = current.container.?;
+        if (current.description_body != null) {
+            if (!validDescriptionOwner(current.*)) return null;
+        } else if (!validContainerContext(current.*)) return null;
+        const container = contentBox(current.*) orelse return null;
         if (!validContainerHeader(container) or index >= container.blocks.len) return null;
         current = &container.blocks[index];
     }
@@ -5309,6 +5496,13 @@ pub fn validBlockPaths(blocks: []const Block, roots: []const usize, paths: []con
 fn validateBlock(block: Block, table_depth: usize, media: *ImageValidation) ValidationError!void {
     if (block.rule_style) |style| if (!validRuleStyle(style) or !validRuleStyleContext(block)) return error.InvalidPresentation;
     if (block.column_break_inside != null and !validColumnBreakContext(block)) return error.InvalidPresentation;
+    if (block.description_body) |description| {
+        if (!media.positioned_container_work_checked or media.content_depth >= max_content_depth or
+            !validDescriptionOwner(block) or !validContainerHeader(description.box)) return error.InvalidPresentation;
+        media.content_depth += 1; defer media.content_depth -= 1;
+        for (description.box.blocks) |child| try validateBlock(child, table_depth, media);
+        return;
+    }
     if (block.kind == .container or block.container != null) {
         if (!validContainerContext(block) or !validContainerHeader(block.container.?) or media.content_depth >= max_content_depth) return error.InvalidPresentation;
         if (block.container.?.style.owner_font != null and !media.container_owner_work_checked) return error.InvalidPresentation;
@@ -11658,4 +11852,25 @@ test "absolute shrink-to-fit and nested transformed labels keep their distinct n
     try std.testing.expect(centered.contentWidth(a, 0, 10, 9) == null);
     try std.testing.expect(centered.borderBox(a, -1, 10) == null);
     try std.testing.expect(centered.borderBox(a, 1, std.math.inf(f64)) == null);
+}
+
+test "responsive container flow is inclusive and uses the root viewport" {
+    const tail = [_]ContainerScreenMaxWidth{.{ .max_width_px = 400, .width = .auto }};
+    const style: ContainerStyle = .{ .layout = .flex_row, .screen_max_width = .{
+        .max_width_px = 720, .layout = .flow, .following_rules = &tail,
+    } };
+    try std.testing.expect(validContainerStyle(style));
+    try std.testing.expectEqual(ContainerLayout.flow, (try resolveContainerScreen(style, 720)).?.layout.?);
+    try std.testing.expectEqual(ContainerLayout.flow, (try resolveContainerScreen(style, 399)).?.layout.?);
+    try std.testing.expectEqual(null, try resolveContainerScreen(style, 720.5));
+    try std.testing.expectEqual(null, try resolveContainerScreen(style, 721));
+    var wrong = style;
+    wrong.layout = .flow;
+    try std.testing.expect(!validContainerStyle(wrong));
+    wrong = style;
+    wrong.screen_max_width.?.layout = .ordered_list;
+    try std.testing.expect(!validContainerStyle(wrong));
+    wrong = style;
+    wrong.flex_column_gap = .{ .unit = .px, .value = 3 };
+    try std.testing.expect(!validContainerStyle(wrong));
 }

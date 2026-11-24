@@ -1072,7 +1072,15 @@ fn attachFigurePageObservation(a: std.mem.Allocator, codes: *encoder.blob_builde
             const audio = if (custom.phonos_article) |article|
                 if (page_id == article.page_id and revision_id == article.revision_id) article.buttons else null
             else null;
-            if (font != null or audio != null) {
+            const terms = if (custom.term_article) |article| selected: {
+                if (page_id != article.page_id or revision_id != article.revision_id) break :selected null;
+                if (article.theme_layout_conflict) return error.UnrepresentableTermThemeLayout;
+                break :selected article.terms;
+            } else null;
+            const descriptions = if (custom.description_article) |article|
+                if (page_id == article.page_id and revision_id == article.revision_id) article.examples else null
+            else null;
+            if (font != null or audio != null or descriptions != null or terms != null) {
                 const view = try a.create(encoder.table_style_profile.Profile);
                 view.* = parent.*;
                 if (font) |article| {
@@ -1080,6 +1088,10 @@ fn attachFigurePageObservation(a: std.mem.Allocator, codes: *encoder.blob_builde
                     view.selected_wrapped_heading = if (article.heading) |recipe| try figure_page_observations.bindWrappedHeading(a, expanded, recipe) else null;
                 }
                 if (audio) |buttons| view.selected_phonos = try figure_page_observations.bindPhonos(a, expanded, buttons);
+                if(terms)|list|view.selected_terms=try figure_page_observations.bindTerms(a,expanded,list);
+                if (descriptions) |examples| if (codes.namespace_catalog) |ns| {
+                    view.selected_descriptions=try figure_page_observations.bindDescriptions(a,ns,expanded,examples);
+                };
                 codes.page_style_parent = parent;
                 codes.table_styles = view;
             }
@@ -4092,6 +4104,67 @@ const ControlledFigureFixture = struct {
     }
 };
 
+test "original Babua ordered item loses sibling exclusion with preceding visible children" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const css = @embedFile("testdata/id-swadesh-jawa/common.css");
+    var ns = try namespace_registry.Registry.init(a, @embedFile("testdata/id-swadesh-jawa/namespace-registry.tsv"));
+    defer ns.deinit();
+    var stream: std.Io.Reader = .fixed(@embedFile("testdata/id-babua/stylesheet-imports.json.gz"));
+    var inflater: std.compress.flate.Decompress = .init(&stream, .gzip, &.{});
+    const role = try inflater.reader.allocRemaining(a, .limited(512 * 1024));
+    try std.testing.expect(inflater.err == null and inflater.state == .end);
+    var hash: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(role, &hash, .{});
+    try std.testing.expectEqualStrings("6df1a8508046210ad9292e1bac7ad56b214cc661f98b49b586fe4602d115e621", &std.fmt.bytesToHex(hash, .lower));
+    const snapshot = try std.json.parseFromSlice(struct {
+        page_html: []const u8, page_url: []const u8,
+        sources: []const struct { url: []const u8, css: []const u8 },
+    }, a, role, .{ .ignore_unknown_fields = true });
+    defer snapshot.deinit();
+    const served = try a.alloc(encoder.table_style_profile.Source, snapshot.value.sources.len);
+    for (served, snapshot.value.sources) |*out, src| out.* = .{ .base_url = src.url, .css = src.css };
+    const ancestors = try figure_page_observations.selectedArticleFontAncestors(a, &ns, snapshot.value.page_html, snapshot.value.page_url,
+        served, 1720, 1280692, "babua");
+    const all_sources = try std.mem.concat(a, encoder.table_style_profile.Source,
+        &.{ served, &.{.{ .css = css, .base_url = "" }} });
+    var screen = try encoder.table_style_profile.parseSourcesForTargetAlloc(a, all_sources, .screen);
+    defer screen.deinit();
+    const original = snapshot.value.page_html;
+    const opening = "<li id=\"mwCA\">";
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, original, opening));
+    const changed = try std.mem.replaceOwned(u8, a, original, opening,
+        "<li class=\"has-visible-children\">prior</li>" ++ opening);
+    for ([_][]const u8{ original, changed }, 0..) |html, variant| {
+        const nodes = (try figure_page_observations.selectedArticleStyleNodes(a, &ns, html, ancestors)) orelse return error.TestExpectedArticleBody;
+        const scheme = (try figure_page_observations.selectedArticleSchemeNodes(a, html, ns.wiki, nodes)) orelse return error.TestExpectedOriginalVectorPreference;
+        const li: u32 = found: {
+            for (nodes, 0..) |node, i| {
+                if (!std.mem.eql(u8, node.tag, "li")) continue;
+                for (node.attributes) |attr| {
+                    if (std.mem.eql(u8, attr.name, "id") and std.mem.eql(u8, attr.value, "mwCA")) break :found @intCast(i);
+                }
+            }
+            return error.TestMissingOriginalOrderedItem;
+        };
+        const ol = nodes[li].parent orelse return error.TestMissingOriginalOrderedList;
+        try std.testing.expectEqualStrings("ol", nodes[ol].tag);
+        try std.testing.expectEqual(variant == 0, nodes[li].known_no_previous_element_sibling);
+        if (variant == 1) {
+            const previous = nodes[li].known_previous_element_sibling orelse return error.TestMissingPreviousItem;
+            try std.testing.expectEqualStrings("li", nodes[previous].tag);
+            try std.testing.expectEqual(ol, nodes[previous].parent.?);
+            try std.testing.expectEqual(li, nodes[previous].known_next_element_sibling.?);
+        }
+        // Query the actual scheme graphs even on the mutated page. The outer
+        // definition matcher would already refuse the extra physical child.
+        const ordered = try encoder.table_style_profile.selectedOrderedDefinition(a, a, &screen, scheme.day, scheme.night,
+            @intCast(ancestors.len - 1), ol, li, "perut", "perut");
+        try std.testing.expectEqual(variant == 0, ordered != null);
+    }
+}
+
 test "original Babua description list owns independent outer and translated DD pseudo metrics" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -4136,6 +4209,17 @@ test "original Babua description list owns independent outer and translated DD p
     const usage = nodes[inner_dl].parent.?;
     const wrapper = nodes[usage].parent.?;
     try std.testing.expectEqual(outer_dd, nodes[wrapper].parent.?);
+    try std.testing.expectEqual(@as(?f32, 1.625), try encoder.table_style_profile.observedSubtreeLineHeight(a, &screen, nodes, body, wrapper));
+    const noncontiguous = try a.alloc(encoder.table_style_profile.ObservedStyleNode, nodes.len + 1);
+    @memcpy(noncontiguous[0..nodes.len], nodes);
+    noncontiguous[nodes.len] = .{ .tag = "span", .attributes = &.{}, .parent = wrapper };
+    try std.testing.expect((try encoder.table_style_profile.observedSubtreeLineHeight(a, &screen, noncontiguous, body, wrapper)) == null);
+    const override = try a.alloc(encoder.table_style_profile.Source, all_sources.len + 1);
+    @memcpy(override[0..all_sources.len], all_sources);
+    override[all_sources.len] = .{ .css = ".usex-item .e-translation{line-height:2!important}", .base_url = "" };
+    var changed_screen = try encoder.table_style_profile.parseSourcesForTargetAlloc(a, override, .screen);
+    defer changed_screen.deinit();
+    try std.testing.expect((try encoder.table_style_profile.observedSubtreeLineHeight(a, &changed_screen, nodes, body, wrapper)) == null);
     try std.testing.expectEqualStrings("dl", nodes[inner_dl].tag);
     for ([_]u32{ usage, wrapper }, [_][]const u8{ "h-usage-example", "usex-item" }) |node_id, class| {
         var found = false;
@@ -4156,12 +4240,22 @@ test "original Babua description list owns independent outer and translated DD p
         }
         try std.testing.expectEqualStrings("#cccccc", metric.color.value.?);
     }
+    const scheme = (try figure_page_observations.selectedArticleSchemeNodes(a, snapshot.value.page_html, ns.wiki, nodes)) orelse return error.TestExpectedOriginalVectorPreference;
+    for ([_][]const encoder.table_style_profile.ObservedStyleNode{ scheme.day, scheme.night }, [_][]const u8{ "#cccccc", "#333333" }) |graph, rgb| {
+        for ([_]u32{ outer_dd, inner_dd }) |index| {
+            const stroke = (try encoder.table_style_profile.observedDescriptionBefore(a, &screen, graph, body, index)) orelse return error.TestExpectedOriginalSchemeStroke;
+            try std.testing.expectEqualStrings(rgb, stroke.color.value.?);
+        }
+    }
+    const unrelated = try std.mem.replaceOwned(u8, a, snapshot.value.page_html, "idwiktionarymwclientpreferences=", "otherwikimwclientpreferences=");
+    try std.testing.expect((try figure_page_observations.selectedArticleSchemeNodes(a, unrelated, ns.wiki, nodes)) == null);
     try std.testing.expect((try encoder.table_style_profile.observedDescriptionBefore(a, &screen, nodes, body, inner_dl)) == null);
-    const suppress = try std.mem.concat(a, u8, &.{ css, "\nbody dd::before{content:none!important}" });
-    all_sources[served.len].css = suppress;
-    var no_stroke = try encoder.table_style_profile.parseSourcesForTargetAlloc(a, all_sources, .screen);
-    defer no_stroke.deinit();
-    try std.testing.expect((try encoder.table_style_profile.observedDescriptionBefore(a, &no_stroke, nodes, body, inner_dd)) == null);
+    for ([_][]const u8{ "content:none", "content:initial", "content:unset", "display:none", "opacity:.4" }) |change| {
+        all_sources[served.len].css = try std.mem.concat(a, u8, &.{ css, "\nbody dd::before{",change, "!important}" });
+        var no_stroke = try encoder.table_style_profile.parseSourcesForTargetAlloc(a, all_sources, .screen);
+        defer no_stroke.deinit();
+        try std.testing.expect((try encoder.table_style_profile.observedDescriptionBefore(a, &no_stroke, nodes, body, inner_dd)) == null);
+    }
 }
 
 test "indexed Indonesian babua body font is tied to its original revision and exact advertised screen sheets" {
@@ -4226,12 +4320,129 @@ test "indexed Indonesian babua body font is tied to its original revision and ex
     const expanded = @embedFile("testdata/id-babua/expanded.wikitext");
     std.crypto.hash.sha2.Sha256.hash(expanded,&hash,.{});
     try std.testing.expectEqualStrings("a78babcdb387aa196e94ada5d562674f7dda0ad7ed20ef19437a02b335ec3005",&std.fmt.bytesToHex(hash,.lower));
+    const example_role=shared.custom_properties.?.description_article orelse return error.TestMissingSourceDescription;
+    try std.testing.expect(example_role.page_id==1720 and example_role.revision_id==1280692 and example_role.examples.len==1);
+    const term_role=shared.custom_properties.?.term_article orelse return error.TestMissingSourceTerm;
+    try std.testing.expect(term_role.page_id==1720 and term_role.revision_id==1280692 and term_role.terms.len==1);
+    try std.testing.expectEqualStrings("Nomina",term_role.terms[0].label);
+    try std.testing.expectEqual(@as(?u32,12),term_role.terms[0].height);
+    const term_flow = term_role.terms[0].paint.responsive_flow orelse return error.TestMissingTermResponsiveFlow;
+    try std.testing.expectEqual(@as(u32, 720), term_flow.max_width_px);
+    try std.testing.expect(term_flow.layout == .flow);
+    // The preceding owner is a real SPAN containing just the TemplateStyles.
+    // A matching sibling class or an intervening element invalidates the
+    // refutation, even with exactly the same visible DT and stylesheet.
+    const term_sources = try std.mem.concat(a, encoder.table_style_profile.Source, &.{served,
+        &.{.{.css=css, .base_url=""}}});
+    var term_profile = try encoder.table_style_profile.parseSourcesForTargetAlloc(a, term_sources, .screen);
+    defer term_profile.deinit();
+    for ([_][2][]const u8{
+        .{ "mw-empty-elt\" about=\"#mwt5", "mw-empty-elt responsive-box\" about=\"#mwt5" },
+        .{ "</style></span><div class=\"section-header", "</style></span><i></i><div class=\"section-header" },
+    }) |replace| {
+        const changed_html = try std.mem.replaceOwned(u8,a,html,replace[0],replace[1]);
+        try std.testing.expect(!std.mem.eql(u8,changed_html,html));
+        try std.testing.expect((try figure_page_observations.selectedTermsAlloc(a,a,&ns,changed_html,ancestors,&term_profile)).len==0);
+    }
+    // Change the actual inline STYLE and its indexed response together, keeping the 720px rule.
+    const inline_css = served[2].css;
+    try std.testing.expect(std.mem.count(u8, html, inline_css) == 1);
+    const crossed_css = try std.mem.concat(a, u8, &.{inline_css,
+        "@media(max-width:721px){.skin-theme-clientpref-night .mw-parser-output .section-header{display:block}}"});
+    const crossed_html = try std.mem.replaceOwned(u8, a, html, inline_css, crossed_css);
+    const crossed_snapshot = try std.json.parseFromSlice(std.json.Value, a, role, .{});
+    defer crossed_snapshot.deinit();
+    const response = &crossed_snapshot.value.object.getPtr("sources").?.array.items[2].object;
+    response.getPtr("css").?.* = .{ .string = crossed_css };
+    response.getPtr("bytes").?.* = .{ .integer = @intCast(crossed_css.len) };
+    std.crypto.hash.sha2.Sha256.hash(crossed_css, &hash, .{});
+    response.getPtr("sha256").?.* = .{ .string = try a.dupe(u8, &std.fmt.bytesToHex(hash, .lower)) };
+    crossed_snapshot.value.object.getPtr("page_html").?.* = .{ .string = crossed_html };
+    std.crypto.hash.sha2.Sha256.hash(crossed_html, &hash, .{});
+    crossed_snapshot.value.object.getPtr("page_sha256").?.* = .{ .string = try a.dupe(u8, &std.fmt.bytesToHex(hash, .lower)) };
+    const crossed_role = try std.json.Stringify.valueAlloc(a, crossed_snapshot.value, .{});
+    var crossed_observation = try source_table_styles.observeWithImportsForTarget(a, &ns, &reader, index, titles, crossed_role, .screen);
+    defer crossed_observation.authority.?.deinit();
+    var crossed_codes: encoder.blob_builder.LanguageCodes = .{ .namespace_catalog = &ns, .table_styles = &crossed_observation.authority.?.profile };
+    try std.testing.expectError(error.UnrepresentableTermThemeLayout,
+        attachFigurePageObservation(a, &crossed_codes, null, null, 0, 1720, 1280692, "babua", raw, expanded));
+    try attachFigurePageObservation(a, &crossed_codes, null, null, 0, 1720, 1280693, "babua", raw, expanded);
+
+    // A responsive child declaration is outside the proof even when text,
+    // icon, and outer display remain byte-identical.
+    for ([_][]const u8{
+        "@media(max-width:720px){.mw-parser-output .section-header dt{max-width:50px}}",
+        "@media (prefers-color-scheme:light) and (max-width:500px){.mw-parser-output .section-header dt{max-width:50px}}",
+        ".mw-parser-output .section-header-def{width:120px!important}",
+        ".mw-parser-output .section-header-def{box-sizing:border-box!important}",
+        ".mw-parser-output .section-header-def > dl{float:left!important}",
+        ".mw-parser-output .section-header-def > dl{clear:both!important}",
+        "@media(max-width:720px){.mw-parser-output .section-header-def{display:var(--term-display,block)!important}}" ++
+            "@media(max-width:500px){body{--term-display:flex}}",
+        ".mw-parser-output .section-header-def{width:var(--term-measure,auto)!important}" ++
+            "@media(max-width:500px){body{--term-measure:120px}}",
+        "section{writing-mode:vertical-rl}",
+        "@media(max-width:500px){section{writing-mode:vertical-rl}}",
+    }) |additional_css| {
+        const extra_sources = try std.mem.concat(a, encoder.table_style_profile.Source,
+            &.{ term_sources, &.{.{ .base_url = "", .css = additional_css }} });
+        var extra_profile = try encoder.table_style_profile.parseSourcesForTargetAlloc(a, extra_sources, .screen);
+        defer extra_profile.deinit();
+        const unproved = try figure_page_observations.selectedTermsAlloc(a, a, &ns, html, ancestors, &extra_profile);
+        for (unproved) |term| try std.testing.expect(term.paint.responsive_flow == null);
+    }
+    try std.testing.expect((try figure_page_observations.bindTerms(a,expanded,term_role.terms)).len==1);
+    const nonsquare_image=try std.mem.replaceOwned(u8,a,html,"data-file-height=\"20\" data-file-type=\"drawing\" height=\"12\"", "data-file-height=\"24\" data-file-type=\"drawing\" height=\"12\"");
+    try std.testing.expect(!std.mem.eql(u8,html,nonsquare_image));
+    const nonsquare_term=try figure_page_observations.selectedTermsAlloc(a,a,&ns,nonsquare_image,ancestors,&term_profile);
+    try std.testing.expect(nonsquare_term.len==1 and nonsquare_term[0].height==null);
+    const changed_term=try std.mem.replaceOwned(u8,a,expanded,"|12px|link=","|13px|link=");
+    try std.testing.expect((try figure_page_observations.bindTerms(a,changed_term,term_role.terms)).len==0);
+    const doubled_term=try std.mem.concat(a,u8,&.{expanded,expanded});
+    try std.testing.expect((try figure_page_observations.bindTerms(a,doubled_term,term_role.terms)).len==0);
+    const example_recipe=example_role.examples[0];
+    try std.testing.expectEqualStrings("babua",example_recipe.source_text.bold);
+    try std.testing.expectEqualStrings("Perut",example_recipe.translation_text.bold);
+    try std.testing.expect(example_recipe.outer_ink==.light_dark and example_recipe.inner_ink==.light_dark);
+    const ordered_owner=example_recipe.ordered orelse return error.TestMissingOriginalOrderedList;
+    try std.testing.expect(ordered_owner.root.layout==.ordered_list and ordered_owner.root.ordered_marker_weight==.bold);
+    try std.testing.expectEqualStrings("perut",ordered_owner.target);
+    // The returned-HTML inventory requires an explicit quoted value. Exercise
+    // that refusal separately from the ordered-list policy for this attribute.
+    const bare_reversed = try std.mem.replaceOwned(u8, a, html, "<ol id=", "<ol reversed id=");
+    try std.testing.expect(!std.mem.eql(u8, bare_reversed, html));
+    try std.testing.expectError(error.InvalidFigurePageObservations,
+        figure_page_observations.selectedDescriptionsAlloc(a, a, &ns, bare_reversed, ancestors, &term_profile, &.{}));
+    for ([_][2][]const u8{.{"<ol id=", "<ol reversed=\"\" id="}, .{"<ol id=", "<ol start=\"9\" id="},
+        .{"<li id=\"mwCA\"", "<li value=\"2\" id=\"mwCA\""},
+        .{"<li id=\"mwCA\"", "<li type=\"a\" id=\"mwCA\""}}) |variant| {
+        const mutated=try std.mem.replaceOwned(u8,a,html,variant[0],variant[1]);
+        try std.testing.expect(!std.mem.eql(u8,mutated,html));
+        const examples=try figure_page_observations.selectedDescriptionsAlloc(a,a,&ns,mutated,ancestors,&term_profile,&.{});
+        try std.testing.expect(examples.len==1 and examples[0].ordered==null);
+    }
+    const selected_examples=try figure_page_observations.bindDescriptions(a,&ns,expanded,example_role.examples);
+    try std.testing.expectEqualStrings("[[perut]]",selected_examples[0].definition_source orelse return error.TestMissingPhysicalDefinition);
+    const crossed=try std.mem.replaceOwned(u8,a,expanded,"# [[perut]]","# [[other|perut]]");
+    const mismatched=try figure_page_observations.bindDescriptions(a,&ns,crossed,example_role.examples);
+    try std.testing.expect(mismatched.len==1 and mismatched[0].definition_source==null);
+    try std.testing.expect(selected_examples.len==1 and std.mem.startsWith(u8,selected_examples[0].source,"<div class=\"usex-item\">"));
+    for([_][]const u8{try std.mem.replaceOwned(u8,a,expanded,"Maloppo ","Different "),try std.mem.replaceOwned(u8,a,expanded,"[[Category:bug:","[[File:bug:"),
+        try std.mem.concat(a,u8,&.{expanded,expanded})})|wrong| {
+        try std.testing.expect((try figure_page_observations.bindDescriptions(a,&ns,wrong,example_role.examples)).len==0);
+    }
     const buttons = (shared.custom_properties.?.phonos_article orelse return error.TestExpectedPhonos).buttons;
     try std.testing.expectEqual(@as(usize, 1), buttons.len);
     const audio = buttons[0];
     try std.testing.expectEqualStrings("Putar audio", audio.accessible_name);
     try std.testing.expectEqualStrings("Suara", audio.caption);
     try std.testing.expectEqualStrings("Berkas:LL-Q33190 (bug)-Iripseudocorus-Babbua.wav", audio.attribution_title);
+    try std.testing.expectEqualStrings("https://id.wiktionary.org/wiki/Berkas:LL-Q33190_(bug)-Iripseudocorus-Babbua.wav", audio.attribution_target);
+    for ([_][]const u8{
+        "https://en.wiktionary.org/w/index.php?title=babua&oldid=1280692",
+        "http://id.wiktionary.org/w/index.php?title=babua&oldid=1280692",
+        "https://id.wiktionary.org/wiki/babua",
+    }) |crossed_url| try std.testing.expect((try figure_page_observations.selectedPhonosAlloc(a, a, &ns, html, crossed_url)) == null);
     try std.testing.expect((try figure_page_observations.bindPhonos(a, expanded, buttons)).len == 1);
     const repeated = try std.mem.concat(a, u8, &.{ expanded, expanded });
     try std.testing.expect((try figure_page_observations.bindPhonos(a, repeated, buttons)).len == 0);
@@ -4243,19 +4454,30 @@ test "indexed Indonesian babua body font is tied to its original revision and ex
     const widget_end = std.mem.indexOfPos(u8, html, type_at, tail).? + tail.len;
     const copied_id = try std.mem.replaceOwned(u8, a, html[widget_start..widget_end], "ooui-php-1", "ooui-php-919");
     const copied_about = try std.mem.replaceOwned(u8, a, copied_id, "#mwt4", "#mwt919");
-    const two_html = try std.mem.concat(a, u8, &.{ html[0..widget_end], copied_about, html[widget_end..] });
-    const two_buttons = (try figure_page_observations.selectedPhonosAlloc(a, a, &ns, two_html)).?;
+    const second_spelling = try std.mem.replaceOwned(u8, a, copied_about,
+        "href=\"/wiki/Berkas:LL-Q33190_", "href=\"/wiki/Berkas:%4CL-Q33190_");
+    try std.testing.expect(!std.mem.eql(u8, second_spelling, copied_about));
+    const two_html = try std.mem.concat(a, u8, &.{ html[0..widget_end], second_spelling, html[widget_end..] });
+    const two_buttons = (try figure_page_observations.selectedPhonosAlloc(a, a, &ns, two_html, url)).?;
     try std.testing.expectEqual(@as(usize, 2), two_buttons.len);
     const two = try figure_page_observations.bindPhonos(a, repeated, two_buttons);
     try std.testing.expectEqual(@as(usize, 2), two.len);
     try std.testing.expect(two[0].source.ptr != two[1].source.ptr);
+    try std.testing.expectEqualStrings(audio.attribution_target, two[0].button.attribution_target);
+    try std.testing.expectEqualStrings("https://id.wiktionary.org/wiki/Berkas:%4CL-Q33190_(bug)-Iripseudocorus-Babbua.wav", two[1].button.attribution_target);
+    var scratch = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer scratch.deinit();
+    const retained = (try figure_page_observations.selectedPhonosAlloc(scratch.allocator(), a, &ns, two_html, url)).?;
+    _ = scratch.reset(.free_all);
+    try std.testing.expectEqualStrings(two[1].button.attribution_target, retained[1].attribution_target);
+    try std.testing.expectEqualStrings(audio.attribution_title, retained[1].attribution_title);
     for (two) |entry| {
         try std.testing.expectEqualStrings("Putar audio", encoder.table_style_profile.SelectedPhonos.lookup(two, entry.source).?.accessible_name);
         try std.testing.expect(encoder.table_style_profile.SelectedPhonos.lookup(two, entry.source[1..]) == null);
     }
     const changed_label = try std.mem.replaceOwned(u8, a, copied_about, "Suara", "Lagi");
     const alternate_html = try std.mem.concat(a, u8, &.{ html[0..widget_end], changed_label, html[widget_end..] });
-    const alternate = (try figure_page_observations.selectedPhonosAlloc(a, a, &ns, alternate_html)).?;
+    const alternate = (try figure_page_observations.selectedPhonosAlloc(a, a, &ns, alternate_html, url)).?;
     const second_expansion = try std.mem.replaceOwned(u8, a, expanded, ">Suara<", ">Lagi<");
     const ordered = try std.mem.concat(a, u8, &.{ expanded, second_expansion });
     const reversed = try std.mem.concat(a, u8, &.{ second_expansion, expanded });
@@ -4270,14 +4492,41 @@ test "indexed Indonesian babua body font is tied to its original revision and ex
         .{ .old = "role=\"button\" tabindex=\"0\" href=\"//upload.wikimedia.org/wikipedia/commons/transcoded/",
            .changed = "role=\"link\" tabindex=\"0\" href=\"//upload.wikimedia.org/wikipedia/commons/transcoded/" },
         .{ .old = "aria-label=\"Putar audio\"", .changed = "aria-label=\"changed\"" },
+        .{ .old = "title=\"Berkas:LL-Q33190 (bug)-Iripseudocorus-Babbua.wav\"",
+           .changed = "title=\"Berkas:LL-Q33190_(bug)-Iripseudocorus-Babbua.wav\"" },
+        .{ .old = "href=\"/wiki/Berkas:LL-Q33190_(bug)-Iripseudocorus-Babbua.wav\"",
+           .changed = "download=\"clip.wav\" href=\"/wiki/Berkas:LL-Q33190_(bug)-Iripseudocorus-Babbua.wav\"" },
         .{ .old = "href=\"/wiki/Berkas:LL-Q33190_(bug)-Iripseudocorus-Babbua.wav\"", .changed = "href=\"/wiki/Berkas:Other.wav\"" },
+        .{ .old = "href=\"/wiki/Berkas:LL-Q33190_(bug)-Iripseudocorus-Babbua.wav\"", .changed = "href=\"/wiki/File:LL-Q33190_(bug)-Iripseudocorus-Babbua.wav\"" },
     }) |case| {
         try std.testing.expect(std.mem.indexOf(u8, html, case.old) != null);
         const changed = try std.mem.replaceOwned(u8, a, html, case.old, case.changed);
-        try std.testing.expect((try figure_page_observations.selectedPhonosAlloc(a, a, &ns, changed)) == null);
+        try std.testing.expect((try figure_page_observations.selectedPhonosAlloc(a, a, &ns, changed, url)) == null);
+    }
+    for (0..2) |bad| {
+        const changed_snapshot = try std.json.parseFromSlice(std.json.Value, a, role, .{});
+        defer changed_snapshot.deinit();
+        if (bad == 0) {
+            const changed_url = try std.mem.replaceOwned(u8, a, url, "oldid=1280692", "oldid=1280693");
+            try std.testing.expect(!std.mem.eql(u8, changed_url, url));
+            changed_snapshot.value.object.getPtr("page_url").?.* = .{ .string = changed_url };
+        } else {
+            const changed_html = try std.mem.replaceOwned(u8, a, html, "</head>", "<base href='https://example.invalid/'/></head>");
+            try std.testing.expect(!std.mem.eql(u8, changed_html, html));
+            changed_snapshot.value.object.getPtr("page_html").?.* = .{ .string = changed_html };
+        }
+        const changed_role = try std.json.Stringify.valueAlloc(a, changed_snapshot.value, .{});
+        var custom_copy = shared.custom_properties.?.*;
+        custom_copy.phonos_article = null;
+        var profile_copy = shared.*;
+        profile_copy.custom_properties = &custom_copy;
+        try @import("source_stylesheet_imports.zig").bindIndexedCustomRootFont(a, &profile_copy, css, changed_role, &ns, index, titles);
+        try std.testing.expect(custom_copy.phonos_article == null);
     }
     const recipe=font.heading orelse return error.TestExpectedComputedHeading;
     try std.testing.expectEqualStrings("#333333",recipe.word.ink);
+    try std.testing.expectEqualStrings("#e0e0e0",recipe.word.dark_ink.?);
+    try std.testing.expect(recipe.sub.dark_ink == null);
     try std.testing.expectEqualStrings("#888888",recipe.sub.ink);
     try std.testing.expectApproxEqAbs(@as(f32,1.68),recipe.word.font.font_scale.?,0.00001);
     try std.testing.expectApproxEqAbs(@as(f32,3.2),recipe.style.wrappers.?.title_block_padding_right.value,0.00001);
@@ -4331,7 +4580,11 @@ test "original indexed Indonesian babua emits its anchored headword and complete
         .{.leaf="page-index.tsv",.bytes=46939670,.digest="a2c88308bdbf3392a681a73611cfb7e4e79660a2c097f0ff75bd6727c9273e30"},
     }) |required|try inputs.pin(.{ .path=try std.fs.path.join(a,&.{root,required.leaf}), .bytes=required.bytes, .sha256=required.digest });
     var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
-    const out = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/data", .{tmp.sub_path});
+    const out = if (getenv("WIKIDICT_BABUA_TEST_RESULT")) |requested| retained: {
+        const directory = std.mem.span(requested);
+        try std.Io.Dir.cwd().createDir(io, directory, .default_dir);
+        break :retained try std.fs.path.join(a, &.{directory, "data"});
+    } else try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/data", .{tmp.sub_path});
     const args = [_][]const u8{ "dict-blob-build", dump, out, "--expander-root", root,
         "--start-page", "161", "--index-byte-offset", "21569", "--limit-pages", "1",
         "--workers", "1", "--now-unix", "1791731560" };
@@ -4349,7 +4602,7 @@ test "original indexed Indonesian babua emits its anchored headword and complete
     try std.testing.expectEqualStrings("Bahasa_Bugis", e.sections[0].anchor);
     const section=e.sections[1];
     try std.testing.expectEqualStrings("babua [bug]",section.title);
-    try std.testing.expect(section.level==3 and section.blocks.len==6);
+    try std.testing.expect(section.level==3 and section.blocks.len==5);
     try std.testing.expectEqualStrings("babua_[bug]",section.anchor);
     try std.testing.expectEqualStrings("babua_.5Bbug.5D",section.anchor_fallback);
     const heading=section.blocks[0];
@@ -4360,8 +4613,9 @@ test "original indexed Indonesian babua emits its anchored headword and complete
     const wrappers=style.wrappers orelse return error.TestMissingHeadingOwners;
     try std.testing.expect(wrappers.outer.overflow==.visible_x_clip_y and wrappers.outer.border.?==.edges);
     const top=wrappers.outer.border.?.edges.top;
-    try std.testing.expect(top==.dashed and top.dashed.color==.rgb);
-    try std.testing.expectEqualStrings("#a2a9b1",top.dashed.color.rgb);
+    try std.testing.expect(top==.dashed and top.dashed.color==.light_dark);
+    try std.testing.expectEqualStrings("#a2a9b1",top.dashed.color.light_dark.light);
+    try std.testing.expectEqualStrings("#72777d",top.dashed.color.light_dark.dark);
     try std.testing.expect(top.dashed.width.unit==.px and top.dashed.width.value==1);
     try std.testing.expect(wrappers.outer.margins.?.top.unit==.em and wrappers.inner.padding.?.top.unit==.em and wrappers.title_block_padding_right.unit==.em);
     try std.testing.expectApproxEqAbs(@as(f32,0.4),wrappers.outer.margins.?.top.value,0.00001);
@@ -4375,6 +4629,8 @@ test "original indexed Indonesian babua emits its anchored headword and complete
         try std.testing.expect(span.font_scale_basis==.normal_body and span.direction.len==0);
         try std.testing.expectEqualStrings("headword-wrapper headword-inner headword-text", span.classes);
         if(i==1)continue;
+        if (i==0) try std.testing.expectEqualStrings("#e0e0e0", span.inline_style.?.dark_foreground.?)
+            else try std.testing.expect(span.inline_style.?.dark_foreground==null);
         try std.testing.expect(span.inline_style.?.font_normalized and span.subscript==(i>=2));
         try std.testing.expectEqualStrings(if(i==0)"#333333" else "#888888",span.foreground.?);
         try std.testing.expectApproxEqAbs(if(i==0)@as(f32,1.68) else @as(f32,0.84),span.font_scale.?,0.00001);
@@ -4384,33 +4640,133 @@ test "original indexed Indonesian babua emits its anchored headword and complete
     try std.testing.expect(lexeme.section==1 and lexeme.definitions.len==1);
     try std.testing.expectEqualStrings("Noun",lexeme.kind);
     try std.testing.expect(lexeme.definitions[0].block==4);
-    try std.testing.expectEqualSlices(usize,&.{5},lexeme.definitions[0].examples);
-    const definition=section.blocks[4]; const example=section.blocks[5];
+    const sense=lexeme.definitions[0];
+    try std.testing.expectEqualSlices(usize,&.{0,0},sense.block_path);
+    try std.testing.expectEqualSlices(usize,&.{4},sense.examples);
+    try std.testing.expectEqual(@as(usize,1),sense.example_paths.len);
+    try std.testing.expectEqualSlices(usize,&.{0,1},sense.example_paths[0]);
+    const ol=section.blocks[4].container orelse return error.TestMissingOrderedDefinition;
+    try std.testing.expect(ol.style.layout==.ordered_list and ol.style.ordered_marker_weight==.bold and ol.blocks.len==1);
+    try std.testing.expect(ol.style.margins.?.left.unit==.em and ol.style.margins.?.left.value==3.2);
+    try std.testing.expect(ol.style.padding.?.left.value==0);
+    const li=ol.blocks[0].container orelse return error.TestMissingOrderedItem;
+    try std.testing.expect(li.blocks.len==2 and li.style.margins.?.left.value==0);
+    const definition=li.blocks[0]; const example=li.blocks[1];
+    try std.testing.expectEqualStrings("1",definition.number);
+    try std.testing.expectEqualStrings("#",definition.list_path);
+    try std.testing.expect(!definition.spans[0].bold);
     try std.testing.expect(definition.kind==.definition and definition.spans.len==1 and definition.spans[0].kind==.link and example.kind==.example);
     try std.testing.expectEqualStrings("perut",definition.spans[0].target);
     try std.testing.expectEqualStrings("perut",definition.spans[0].text);
-    var example_text:std.ArrayList(u8)=.empty;
-    for(example.spans)|span|try example_text.appendSlice(a,span.text);
-    try std.testing.expectEqualStrings("Maloppo babuana amboku.\nPerut bapak saya besar.",std.mem.trim(u8,example_text.items," \t\r\n"));
+    try std.testing.expect(example.spans.len==0 and example.depth==2 and std.mem.eql(u8,example.list_path,"#:"));
+    const outer=example.description_body orelse return error.TestMissingOuterDescription;
+    try std.testing.expect(outer.box.blocks.len==1);
+    const usex=outer.box.blocks[0].container orelse return error.TestMissingUsageItem;
+    const line_height = usex.style.line_height orelse return error.TestMissingInheritedUsageLineHeight;
+    try std.testing.expect(line_height == .multiplier and line_height.multiplier == 1.625);
+    try std.testing.expect(usex.style.overflow==.auto and usex.blocks.len==1);
+    const usage=usex.blocks[0].container orelse return error.TestMissingUsageExample;
+    try std.testing.expect(usage.blocks.len==2 and usage.blocks[0].kind==.paragraph and usage.blocks[1].container!=null);
+    try std.testing.expectApproxEqAbs(@as(f32,0.95),usage.style.owner_font_scale.?,0.00001);
+    const dl=usage.blocks[1].container.?;
+    try std.testing.expect(dl.blocks.len==1 and dl.blocks[0].kind==.indent and dl.blocks[0].depth==1 and std.mem.eql(u8,dl.blocks[0].list_path,":"));
+    const inner=dl.blocks[0].description_body orelse return error.TestMissingTranslatedDescription;
+    const empty=section.blocks[1]; const populated=section.blocks[2];
+    try std.testing.expect(empty.kind==.indent and empty.spans.len==0 and empty.description_body==null);
+    try std.testing.expect(populated.kind==.indent and populated.depth==1 and std.mem.eql(u8,populated.list_path,":"));
+    const audio_owner=populated.description_body orelse return error.TestMissingAudioDescription;
+    try std.testing.expect(populated.spans.len==0 and audio_owner.box.blocks.len==1);
+    try std.testing.expect(inner.box.blocks.len==1);
+    for([_]encoder.presentation_types.DescriptionBodyFor(encoder.presentation_types.Block){outer,inner,audio_owner},[_]f32{1,0.95,1})|dd,scale| {
+        try std.testing.expect(dd.box.style.positioning==.relative_auto and dd.box.style.padding.?.left.unit==.em);
+        try std.testing.expectApproxEqAbs(@as(f32,0.8)*scale,dd.box.style.padding.?.left.value,0.00001);
+        for([_]encoder.presentation_types.StyleLength{dd.before.top,dd.before.bottom,dd.before.left})|inset| {
+            try std.testing.expect(inset.unit==.em);
+            try std.testing.expectApproxEqAbs(@as(f32,0.2)*scale,inset.value,0.00001);
+        }
+        try std.testing.expect(dd.before.width.unit==.px and dd.before.width.value==1 and dd.before.fill==.light_dark);
+        try std.testing.expectEqualStrings("#cccccc",dd.before.fill.light_dark.light);
+        try std.testing.expectEqualStrings("#333333",dd.before.fill.light_dark.dark);
+    }
+    const native_example=usage.blocks[0].spans;
+    const native_translation=inner.box.blocks[0].spans;
+    try std.testing.expectEqual(@as(usize,3),native_example.len);
+    try std.testing.expectEqual(@as(usize,2),native_translation.len);
+    for(native_example,[_][]const u8{"Maloppo ","babua","na amboku."},0..) |span,value,i| {
+        try std.testing.expectEqualStrings(value,span.text);
+        try std.testing.expect(span.italic and span.bold==(i==1) and std.mem.eql(u8,span.language,"bug"));
+    }
+    for(native_translation,[_][]const u8{"Perut"," bapak saya besar."},0..) |span,value,i| {
+        try std.testing.expectEqualStrings(value,span.text);
+        try std.testing.expect(!span.italic and span.bold==(i==0));
+    }
     try std.testing.expect(e.media.len==2 and e.media[0].kind==.audio and e.media[1].kind==.image);
     try std.testing.expectEqualStrings("LL-Q33190 (bug)-Iripseudocorus-Babbua.wav",e.media[0].file);
     try std.testing.expectEqualStrings("Suara",e.media[0].caption);
-    const audio_body = section.blocks[2];
-    try std.testing.expect(audio_body.kind == .indent and audio_body.spans.len == 2);
+    const audio_body = audio_owner.box.blocks[0];
+    try std.testing.expect(audio_body.kind == .paragraph and audio_body.spans.len == 2);
     const play = audio_body.spans[0];
     try std.testing.expect(play.kind == .link and play.audio_control != null and play.audio_control.?.presentation == .phonos_button and
         encoder.presentation_types.inlineTableMediaOwnerMatches(play, e.media[0].file));
     try std.testing.expectEqualStrings("Suara", play.text);
     try std.testing.expectEqualStrings("bug", play.language);
     try std.testing.expectEqualStrings("Putar audio", play.tooltip.?);
+    const audio_line = audio_owner.box.style.line_height orelse return error.TestMissingAudioLineHeight;
+    try std.testing.expect(audio_line==.multiplier and audio_line.multiplier==1.625);
     const attribution = audio_body.spans[1];
-    try std.testing.expect(attribution.kind == .link and attribution.audio_control == null and attribution.superscript);
+    const strut=(attribution.inline_style orelse return error.TestMissingAudioCreditLineHeight).line_height orelse return error.TestMissingAudioCreditLineHeight;
+    try std.testing.expect(strut==.font_relative and strut.font_relative.factor==1 and strut.font_relative.font.superscript);
+    try std.testing.expectEqualStrings(attribution.classes,strut.font_relative.font.classes);
+    try std.testing.expect(attribution.kind == .external_link and attribution.audio_control == null and attribution.superscript);
     try std.testing.expectEqualStrings("ⓘ", attribution.text);
-    try std.testing.expectEqualStrings("Berkas:LL-Q33190 (bug)-Iripseudocorus-Babbua.wav", attribution.target);
-    const term=section.blocks[3];
+    try std.testing.expectEqualStrings("https://id.wiktionary.org/wiki/Berkas:LL-Q33190_(bug)-Iripseudocorus-Babbua.wav", attribution.target);
+    try std.testing.expectEqualStrings("Berkas:LL-Q33190 (bug)-Iripseudocorus-Babbua.wav", attribution.tooltip.?);
+    // Revalidate the real DD after changing only the credit route. The
+    // legacy local credit remains decodable, while unrelated URLs do not.
+    var credit_spans = [_]encoder.presentation_types.Span{ play, attribution };
+    var credit_line = audio_body; credit_line.spans = &credit_spans;
+    var credit_blocks = [_]encoder.presentation_types.Block{credit_line};
+    var credit_owner = populated;
+    credit_owner.description_body.?.box.blocks = &credit_blocks;
+    try std.testing.expect(encoder.presentation_types.validDescriptionOwner(credit_owner));
+    for ([_][]const u8{
+        "https://example.invalid/file.wav", "https://id.wiktionary.org/wiki/Berkas:Other.wav",
+        "https://id.wiktionary.org/wiki/Other:LL-Q33190_(bug)-Iripseudocorus-Babbua.wav",
+        "http://id.wiktionary.org/wiki/Berkas:LL-Q33190_(bug)-Iripseudocorus-Babbua.wav",
+    }) |wrong| {
+        credit_spans[1].target = wrong;
+        try std.testing.expect(!encoder.presentation_types.validDescriptionOwner(credit_owner));
+    }
+    credit_spans[1].target = "https://id.wiktionary.org/wiki/Berkas:Other.wav";
+    credit_spans[1].tooltip = "Berkas:Other.wav";
+    try std.testing.expect(!encoder.presentation_types.validDescriptionOwner(credit_owner));
+    credit_spans[1].tooltip = attribution.tooltip;
+    credit_spans[1].target = "https://id.wiktionary.org/wiki/Berkas:%4CL-Q33190_(bug)-Iripseudocorus-Babbua.wav";
+    try std.testing.expect(encoder.presentation_types.validDescriptionOwner(credit_owner));
+    credit_spans[1].kind = .link; credit_spans[1].target = attribution.tooltip.?;
+    try std.testing.expect(encoder.presentation_types.validDescriptionOwner(credit_owner));
+    const term_shell=section.blocks[3].container orelse return error.TestMissingPhysicalTerm;
+    const stroke=term_shell.style.border.?.edges.top.dotted;
+    try std.testing.expect(stroke.width.unit==.px and stroke.width.value==1 and stroke.color==.light_dark);
+    try std.testing.expectEqualStrings("#a2a9b1",stroke.color.light_dark.light);
+    try std.testing.expectEqualStrings("#72777d",stroke.color.light_dark.dark);
+    try std.testing.expect(term_shell.style.margins.?.top.unit==.em and term_shell.style.padding.?.top.unit==.em);
+    try std.testing.expectApproxEqAbs(@as(f32,0.4),term_shell.style.padding.?.top.value,0.00001);
+    try std.testing.expectApproxEqAbs(@as(f32,0.4),term_shell.style.margins.?.top.value,0.00001);
+    const term_dl=term_shell.blocks[0].container.?;
+    try std.testing.expect(term_shell.style.layout == .flex_row);
+    const term_screen = term_shell.style.screen_max_width orelse return error.TestMissingTermResponsiveFlow;
+    try std.testing.expect(term_screen.max_width_px == 720 and term_screen.layout == .flow and term_screen.following_rules.len == 0);
+    const at_limit = (try encoder.presentation_types.resolveContainerScreen(term_shell.style, 720)) orelse return error.TestMissingTermResponsiveFlow;
+    try std.testing.expect(at_limit.layout == .flow);
+    try std.testing.expect((try encoder.presentation_types.resolveContainerScreen(term_shell.style, 721)) == null);
+    const term_frame=term_dl.blocks[0].container.?;
+    const term=term_frame.blocks[0];
+    try std.testing.expectEqualStrings(";",term.list_path);
+    try std.testing.expect(term.spans[1].bold and term.spans[0].image.?.occurrence_layout.?.y.value == -2);
     try std.testing.expect(term.kind==.term and term.spans.len>1 and term.spans[0].image!=null);
     try std.testing.expectEqualStrings("Codex icon tag color-progressive.svg",term.spans[0].image.?.file);
-    try std.testing.expect(term.spans[0].image.?.width_px==12);
+    try std.testing.expect(term.spans[0].image.?.width_px==12 and term.spans[0].image.?.height_px==12);
     const report=try std.Io.Dir.cwd().readFileAlloc(io,try std.fs.path.join(a,&.{out,"fallback-pages.jsonl"}),a,.limited(4096));
     try std.testing.expectEqual(@as(usize,0),std.mem.trim(u8,report," \t\r\n").len);
 }

@@ -615,12 +615,14 @@ const CssPixelFontVisitor = struct {
     }
 };
 
-fn spanPieceText(w: *std.Io.Writer, piece: SpanPiece, color: bool, whitespace: ?*OrdinaryDisplayWhitespace, scripts: *ScriptDisplayRuns, cell_background: ?[3]u8, inherited_header: bool, container_paint: ?SpanContainerPaint) !void {
+fn spanPieceText(w: *std.Io.Writer, piece: SpanPiece, color: bool, whitespace: ?*OrdinaryDisplayWhitespace, scripts: *ScriptDisplayRuns, cell_background: ?[3]u8, inherited_header: bool, container_paint: ?SpanContainerPaint, dark_theme: ?bool) !void {
     const span = piece.span;
     if (span.image) |image| if (image.static_poster != null and !@import("blob_encoder").presentation_types.validInlineImage(image)) return error.InvalidPresentation;
     if (piece.bytes.len == 0) return;
     const image_paint = span.image != null and span.link_paint != null;
-    const explicit_foreground = canonicalRgb(if (image_paint) null else if (span.link_paint) |paint| paint.normal.foreground else span.foreground);
+    const dark_ink = if (span.inline_style) |style| style.dark_foreground else null;
+    const text_ink = if (dark_ink) |night| (if (dark_theme) |dark| (if (dark) night else span.foreground) else null) else span.foreground;
+    const explicit_foreground = canonicalRgb(if (image_paint) null else if (span.link_paint) |paint| paint.normal.foreground else text_ink);
     const foreground = explicit_foreground orelse if (container_paint) |paint| paint.foreground else null;
     const painted_background = canonicalRgb(span.background) orelse if (container_paint) |paint| paint.background else null;
     const authored_background = painted_background orelse cell_background;
@@ -811,7 +813,7 @@ fn spansTextDisplayWithState(w: *std.Io.Writer, spans: []const model.Span, color
             detail_line = true;
         }
         if (projection) |p| try p.record(info) else if (info.marked and !info.rtl) try w.splatByteAll(' ', info.depth);
-        for (0..count) |_| try spanPieceText(w, cursor.next().?, color, if (collapse) &state.whitespace else null, &state.scripts, cell_background, inherited_header, container_paint);
+        for (0..count) |_| try spanPieceText(w, cursor.next().?, color, if (collapse) &state.whitespace else null, &state.scripts, cell_background, inherited_header, container_paint, if (projection) |p| p.dark_theme else null);
         if (projection == null and info.marked and info.rtl) try w.splatByteAll(' ', info.depth);
         if (newline) {
             if (detail_depth != null) pending_breaks += 1 else try w.writeByte('\n');
@@ -1250,7 +1252,7 @@ fn flowContentHasTable(parts: anytype, depth: usize) bool {
 }
 fn contentHasTable(blocks: []const model.Block, depth: usize) bool {
     for (blocks) |block| {
-        if (block.container) |box| if (depth < @import("blob_encoder").presentation_types.max_content_depth and contentHasTable(box.blocks, depth + 1)) return true;
+        if (ContainerTypes.contentBox(block)) |box| if (depth < ContainerTypes.max_content_depth and contentHasTable(box.blocks, depth + 1)) return true;
         if (block.table != null) return true;
         if (comptime @hasField(model.Block, "figure")) if (block.figure) |figure| { if (figureContentHasTable(figure, depth)) return true; };
         if (comptime @hasField(model.Block, "flow")) if (block.flow) |parts| { if (depth < 16 and flowContentHasTable(parts, depth + 1)) return true; };
@@ -1284,7 +1286,7 @@ fn tableCellWidthIndependent(cell: @import("blob_encoder").presentation_types.Ce
     if (cell.blocks) |blocks| {
         if (cell.spans.len != 0 or cell.nested_table != null) return false;
         for (blocks) |block| {
-            if (block.container != null or block.kind == .container or block.figure != null or
+            if (block.description_body != null or block.container != null or block.kind == .container or block.figure != null or
                 block.flow != null or block.rule_style != null or block.text_align != null or
                 block.style != null or block.feature != null) return false;
             if (block.table) |table| {
@@ -2107,6 +2109,7 @@ fn containerResolvedStyle(input: ContainerTypes.ContainerStyle, viewport: usize)
         if (screen.line_height) |value| result.line_height = value;
         if (screen.float_side) |value| result.float_side = switch (value) { .none => null, .left => .left, .right => .right };
         if (screen.clear) |value| result.clear = value;
+        if (screen.layout) |value| result.layout = value;
     }
     result.screen_max_width = null;
     return result;
@@ -2126,7 +2129,7 @@ fn containerUnboundedGeometryUnavailable(input: ContainerTypes.ContainerStyle) b
     if (ContainerTypes.containerStyleRequiresPositionedCapability(input) or ContainerTypes.containerStyleRequiresMForMargins(input) or input.positioning != null or input.columns != null or input.font_family != null or input.owner_font_scale != null or input.height != null or input.min_height != null or
         (input.border != null and input.border.? == .edges) or input.overflow == .auto or input.overflow == .hidden) return true;
     if (input.screen_max_width) |screen| return screen.float_side != null or screen.margins != null or
-        screen.clear != null or screen.following_rules.len != 0;
+        screen.clear != null or screen.layout != null or screen.following_rules.len != 0;
     return false;
 }
 fn containerSemanticFallback(w: *std.Io.Writer, box: ContainerTypes.Container, color: bool, projection: ?*PoemProjection, context: BlockDisplayContext) anyerror!void {
@@ -2637,6 +2640,15 @@ fn blocksTextInContext(w: *std.Io.Writer, blocks: []const model.Block, color: bo
             try w.writeAll(terminal_geometry_notice);
             continue;
         }
+        if (block.description_body) |body| {
+            if (!ContainerTypes.validDescriptionOwner(block) or !ContainerTypes.validContainerHeader(body.box) or
+                context.content_depth >= ContainerTypes.max_content_depth) return error.InvalidPresentation;
+            var child = context;
+            child.content_depth += 1;
+            child.ordinal = ordinal;
+            try containerSemanticFallback(w, body.box, color, projection, child);
+            continue;
+        }
         if (block.container != null or block.kind == .container) {
             var nested = context;
             nested.ordinal = ordinal;
@@ -2870,6 +2882,127 @@ fn sectionHeadingCompanion(section: model.Section) ?[]const model.Span {
     for (section.title) |byte| if (cursor.next() != byte) return null;
     return first.spans;
 }
+const SectionHeadingTerminal = struct {
+    margin_rows: usize,
+    border_rows: usize,
+    padding_rows: usize,
+    right_cells: usize,
+    line_rows: usize,
+};
+
+fn sectionHeadingTerminal(section: model.Section) !?SectionHeadingTerminal {
+    const style = section.heading_style orelse return null;
+    if (!ContainerTypes.validSectionHeadingStyle(style) or !ContainerTypes.validSectionHeadingCompanion(section))
+        return error.InvalidPresentation;
+    const frames = style.wrappers orelse return error.UnsupportedSectionHeadingStyle;
+    if (style.direction != .ltr or style.box.clear.? != .none or hasRecursiveSpans(section.blocks[0].spans))
+        return error.UnsupportedSectionHeadingStyle;
+    // Only the fields accounted for by this projection may enter it. Future
+    // ContainerStyle fields must earn their own terminal implementation.
+    inline for (@typeInfo(ContainerTypes.ContainerStyle).@"struct".field_names) |name| {
+        if (comptime !@hasField(@TypeOf(.{ .margins = {}, .padding = {}, .border = {}, .clear = {},
+            .line_height = {}, .owner_font_scale = {}, .positioning = {}, .font_family = {} }), name))
+            if (@field(style.box, name) != null) return error.UnsupportedSectionHeadingStyle;
+    }
+    var line_rows = try containerLineRows(style.box.line_height.?, style.box.owner_font_scale.?);
+    for (section.blocks[0].spans) |span| {
+        if (span.font_scale_basis == .css_px) return error.UnsupportedSectionHeadingStyle;
+        if (span.inline_style) |inline_style| if (inline_style.line_height) |height| {
+            if (height != .computed or height.computed.font_scale_basis != .normal_body)
+                return error.UnsupportedSectionHeadingStyle;
+            // The heading strut and every authored run contribute to the row
+            // height. Subrow runs cannot shrink the parent's strut.
+            line_rows = @max(line_rows, try containerCells(ContainerTypes.StyleLength{
+                .unit = .em, .value = height.computed.value }, true));
+        };
+    }
+    return .{
+        .margin_rows = try containerCells(frames.outer.margins.?.top, true),
+        .border_rows = try containerCells(frames.outer.border.?.edges.top.dashed.width, true),
+        .padding_rows = try containerCells(frames.inner.padding.?.top, true),
+        .right_cells = try containerCells(ContainerTypes.StyleLength{ .unit = .em,
+            .value = frames.title_block_padding_right.value * style.box.owner_font_scale.? }, false),
+        .line_rows = line_rows,
+    };
+}
+
+fn entrySectionHeadingsPreflight(entry: model.Entry) !bool {
+    var styled = false;
+    for (entry.sections) |section| {
+        if (try sectionHeadingTerminal(section) != null) styled = true;
+    }
+    return styled;
+}
+
+const terminal_heading_notice = "[heading layout uses terminal cells and palette; font metrics and baseline shifts unavailable]\n";
+
+// Return the first title byte offset relative to this complete heading. Folding
+// must select the title after its owned frame, not the frame's blank rows.
+fn sectionHeadingTextProjected(w: *std.Io.Writer, section: model.Section, color: bool, projection: ?*PoemProjection,
+    prefix: []const u8, suffix: []const u8) !usize
+{
+    const geometry = try sectionHeadingTerminal(section);
+    if (geometry == null) {
+        if (color) try w.writeAll("\x1b[1m");
+        try w.writeAll(prefix);
+        try sectionLabelProjected(w, section, color, projection);
+        try terminalText(w, suffix);
+        if (color) try w.writeAll("\x1b[0m");
+        try w.writeByte('\n');
+        return 0;
+    }
+    const shape = geometry.?;
+    const a = if (projection) |parent| parent.allocator else std.heap.page_allocator;
+    var text: std.Io.Writer.Allocating = .init(a);
+    defer text.deinit();
+    var points: std.ArrayList(terminal.PoemLine) = .empty;
+    defer points.deinit(a);
+    var local: PoemProjection = .{ .allocator = a, .frame = &text, .lines = &points,
+        .dark_theme = if (projection) |parent| parent.dark_theme else null };
+    try text.writer.writeAll(prefix);
+    // The entry reports the unavailable font metrics once. Existing span
+    // paint, script text and action semantics still use the ordinary renderer.
+    var state: SpanDisplayState = .{ .inline_style_reported = true };
+    try spansTextDisplayWithState(&text.writer, section.blocks[0].spans, color, &local, false,
+        null, false, null, null, &state);
+    try terminalText(&text.writer, suffix);
+    const columns = if (projection) |parent| parent.table_columns orelse
+        terminal.cellWidth(text.written()) + shape.right_cells else terminal.cellWidth(text.written()) + shape.right_cells;
+    if (columns <= shape.right_cells + 1) return error.UnsupportedTerminalGeometry;
+    const inner_columns = columns - shape.right_cells;
+    const rows = try terminal.wrapStyledProjected(a, text.written(), inner_columns, points.items);
+    defer a.free(rows);
+    // Validate the complete heading before writing it, including indivisible
+    // graphemes and a bounded total cell budget.
+    const total_rows = shape.margin_rows + shape.border_rows + shape.padding_rows + rows.len * shape.line_rows;
+    if (columns == 0 or total_rows > 4 * 1024 * 1024 / columns) return error.UnsupportedTerminalGeometry;
+    for (rows) |row| if (row.left + terminal.cellWidth(row.bytes) + row.right > inner_columns)
+        return error.UnsupportedTerminalGeometry;
+    var rendered: std.Io.Writer.Allocating = .init(a);
+    defer rendered.deinit();
+    try rendered.writer.splatByteAll('\n', shape.margin_rows);
+    const stroke = section.heading_style.?.wrappers.?.outer.border.?.edges.top.dashed;
+    const dark = if (projection) |parent| parent.dark_theme else null;
+    const border = if (stroke.color == .light_dark and dark == null) null else try containerRgb(stroke.color, dark);
+    for (0..shape.border_rows) |_| {
+        if (color) try rendered.writer.writeAll("\x1b[0m");
+        if (color) if (border) |rgb| try rendered.writer.print("\x1b[38;2;{d};{d};{d}m", .{ rgb[0], rgb[1], rgb[2] });
+        try rendered.writer.splatByteAll('-', columns);
+        if (color) try rendered.writer.writeAll("\x1b[0m");
+        try rendered.writer.writeByte('\n');
+    }
+    try rendered.writer.splatByteAll('\n', shape.padding_rows);
+    const title_offset = rendered.written().len;
+    for (rows) |row| {
+        try containerWriteUnclipped(&rendered.writer, row, inner_columns);
+        if (color) try rendered.writer.writeAll("\x1b[0m");
+        try rendered.writer.splatByteAll('\n', shape.line_rows);
+    }
+    try w.writeAll(rendered.written());
+    return title_offset;
+}
+
+
 fn sectionLabelProjected(w: *std.Io.Writer, section: model.Section, color: bool, projection: ?*PoemProjection) !void {
     if (sectionHeadingCompanion(section)) |spans| {
         // The companion owns the authored list indentation even when its rich
@@ -2881,10 +3014,7 @@ fn sectionLabelProjected(w: *std.Io.Writer, section: model.Section, color: bool,
 
 fn sectionTextProjected(w: *std.Io.Writer, section: model.Section, color: bool, projection: ?*PoemProjection) !void {
     try w.writeByte('\n');
-    if (color) try w.writeAll("\x1b[1m");
-    try sectionLabelProjected(w, section, color, projection);
-    if (color) try w.writeAll("\x1b[0m");
-    try w.writeByte('\n');
+    _ = try sectionHeadingTextProjected(w, section, color, projection, "", "");
     const first: usize = if (sectionHeadingCompanion(section) != null) 1 else 0;
     try blocksTextProjected(w, section.blocks[first..], color, projection);
 }
@@ -3095,7 +3225,7 @@ pub fn firstDefinition(blocks: []const model.Block, depth: usize) ?model.Block {
     if (depth > @import("blob_encoder").presentation_types.max_content_depth) return null;
     for (blocks) |block| {
         if (block.kind == .definition) return block;
-        if (block.container) |box| if (firstDefinition(box.blocks, depth + 1)) |found| return found;
+        if (ContainerTypes.contentBox(block)) |box| if (firstDefinition(box.blocks, depth + 1)) |found| return found;
     }
     return null;
 }
@@ -3105,8 +3235,13 @@ fn sectionDefinitionSummary(w: *std.Io.Writer, section: model.Section, color: bo
     for (section.blocks) |block| if (firstDefinition(&.{block}, 0) != null) {
         if (!heading) {
             if (leading_gap) try w.writeByte('\n');
-            try terminalText(w, section.title);
-            try w.writeByte('\n');
+            if (section.heading_style != null) {
+                _ = try sectionHeadingTextProjected(w, section, color, projection, "", "");
+                if (sectionHeadingCompanion(section)) |spans| try captions.observeSpans(spans);
+            } else {
+                try terminalText(w, section.title);
+                try w.writeByte('\n');
+            }
             heading = true;
         }
         try captions.emitBlocks(w, &.{block}, color, projection);
@@ -3155,8 +3290,9 @@ test "plain lookup explains empty language entries in brief and detailed output"
 
 pub fn entryTextWithDetailsProjected(w: *std.Io.Writer, entry: model.Entry, color: bool, details: bool, projection: ?*PoemProjection) !void {
     if (entry.body_adjoining != null) return error.UnsupportedBodyAdjoining;
-    for (entry.sections) |section| if (section.heading_style != null) return error.UnsupportedSectionHeadingStyle;
+    const styled_headings = try entrySectionHeadingsPreflight(entry);
     try entryFontFamilyProjection(w, entry);
+    if (styled_headings) try w.writeAll(terminal_heading_notice);
     var caption_arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
     defer caption_arena.deinit();
     var captions = try VisibleMediaCaptions.init(caption_arena.allocator(), entry.media, details);
@@ -3234,7 +3370,17 @@ pub fn entryTextWithDetailsProjected(w: *std.Io.Writer, entry: model.Entry, colo
                 const section = entry.sections[part.section];
                 const companion = sectionHeadingCompanion(section);
                 const rendered_companion = per_part_headers and companion != null;
-                if (per_part_headers) {
+                if (per_part_headers and section.heading_style != null) {
+                    var suffix: std.Io.Writer.Allocating = .init(caption_arena.allocator());
+                    defer suffix.deinit();
+                    if (part.language.len != 0 and !std.mem.eql(u8, part.language, entry.language orelse "")) {
+                        try suffix.writer.writeAll(" / ");
+                        try terminalText(&suffix.writer, part.language);
+                    }
+                    try w.writeByte('\n');
+                    _ = try sectionHeadingTextProjected(w, section, color, projection, "", suffix.written());
+                    if (companion) |spans| try captions.observeSpans(spans);
+                } else if (per_part_headers) {
                     try w.writeByte('\n');
                     if (color) try w.writeAll("\x1b[1m");
                     if (companion != null) try captions.emitLabel(w, section, color, projection) else try terminalText(w, part.kind);
@@ -3346,9 +3492,12 @@ fn visitBlockSpanLists(blocks: []const model.Block, visitor: anytype, depth: usi
 }
 fn visitBlockSpanListsContent(blocks: []const model.Block, visitor: anytype, depth: usize, content_depth: usize) anyerror!bool {
     for (blocks) |block| {
-        if (block.container != null or block.kind == .container) {
-            if (!containerValidBlock(block) or content_depth >= @import("blob_encoder").presentation_types.max_content_depth) return error.InvalidPresentation;
-            if (try visitBlockSpanListsContent(block.container.?.blocks, visitor, depth, content_depth + 1)) return true;
+        if (block.description_body != null or block.container != null or block.kind == .container) {
+            const box = ContainerTypes.contentBox(block) orelse return error.InvalidPresentation;
+            const valid = if (block.description_body != null)
+                ContainerTypes.validDescriptionOwner(block) and ContainerTypes.validContainerHeader(box) else containerValidBlock(block);
+            if (!valid or content_depth >= ContainerTypes.max_content_depth) return error.InvalidPresentation;
+            if (try visitBlockSpanListsContent(box.blocks, visitor, depth, content_depth + 1)) return true;
             continue;
         }
         if (comptime @hasField(model.Block, "flow")) if (block.flow) |parts| {
@@ -3979,8 +4128,9 @@ pub fn entryTextFolded(frame: *std.Io.Writer.Allocating, entry: model.Entry, col
 }
 pub fn entryTextFoldedProjected(frame: *std.Io.Writer.Allocating, entry: model.Entry, color: bool, preferences: @import("reading_state.zig").Data, expanded: []const usize, selected: usize, projection: ?*PoemProjection) !usize {
     if (entry.body_adjoining != null) return error.UnsupportedBodyAdjoining;
-    for (entry.sections) |section| if (section.heading_style != null) return error.UnsupportedSectionHeadingStyle;
+    const styled_headings = try entrySectionHeadingsPreflight(entry);
     try entryFontFamilyProjection(&frame.writer, entry);
+    if (styled_headings) try frame.writer.writeAll(terminal_heading_notice);
     var caption_arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
     defer caption_arena.deinit();
     var captions = try VisibleMediaCaptions.init(caption_arena.allocator(), entry.media, preferences.details);
@@ -4005,13 +4155,21 @@ pub fn entryTextFoldedProjected(frame: *std.Io.Writer.Allocating, entry: model.E
         const toggled = std.mem.indexOfScalar(usize, expanded, index) != null;
         const closed = section.blocks.len != 0 and (initially_closed != toggled);
         try w.writeByte('\n');
-        if (selected == index) selected_offset = frame.written().len;
-        if (color and selected == index) try w.writeAll("\x1b[1m");
-        try w.writeAll(if (selected == index) "> " else "  ");
-        try captions.emitLabel(w, section, color, projection);
-        if (closed) try w.writeAll(if (meaning) "  [+ notes]" else "  [+]");
-        if (color) try w.writeAll("\x1b[0m");
-        try w.writeByte('\n');
+        if (section.heading_style != null) {
+            const start = frame.written().len;
+            const title = try sectionHeadingTextProjected(w, section, color, projection,
+                if (selected == index) "> " else "  ", if (closed) (if (meaning) "  [+ notes]" else "  [+]") else "");
+            if (selected == index) selected_offset = start + title;
+            if (sectionHeadingCompanion(section)) |spans| try captions.observeSpans(spans);
+        } else {
+            if (selected == index) selected_offset = frame.written().len;
+            if (color and selected == index) try w.writeAll("\x1b[1m");
+            try w.writeAll(if (selected == index) "> " else "  ");
+            try captions.emitLabel(w, section, color, projection);
+            if (closed) try w.writeAll(if (meaning) "  [+ notes]" else "  [+]");
+            if (color) try w.writeAll("\x1b[0m");
+            try w.writeByte('\n');
+        }
         const first: usize = if (sectionHeadingCompanion(section) != null) 1 else 0;
         for (section.blocks[first..]) |block| if (!closed or (meaning and block.kind == .definition)) try captions.emitBlocks(w, &.{block}, color, projection);
     }
@@ -8593,6 +8751,31 @@ test "terminal relative paint phase visibly refuses geometry without losing text
     try std.testing.expectEqualDeep(T.Stored{ .entry = entry }, try codec.decodeAlloc(arena.allocator(), bytes, entry.title, .supplemental, null));
 }
 
+test "terminal description body retains nested example translation and action with physical layout notice" {
+    const zero: ContainerTypes.StyleLength = .{ .unit = .px, .value = 0 };
+    var pad = ContainerTypes.StyleEdges.all(zero);
+    pad.left = .{ .unit = .em, .value = 0.8 };
+    const identity: ContainerTypes.ContainerStyle = .{ .positioning = .relative_auto, .owner_font_scale = 1,
+        .margins = ContainerTypes.StyleEdges.all(zero), .padding = pad };
+    const inset: ContainerTypes.StyleLength = .{ .unit = .em, .value = 0.2 };
+    const before: ContainerTypes.DescriptionBefore = .{ .top = inset, .bottom = inset, .left = inset,
+        .width = .{ .unit = .px, .value = 1 }, .fill = .{ .light_dark = .{ .light = "#cccccc", .dark = "#333333" } } };
+    const first: model.Block = .{ .kind = .paragraph, .spans = &.{.{ .text = "Original example" }} };
+    const translated: model.Block = .{ .kind = .paragraph, .spans = &.{.{ .kind = .link, .text = "Translation", .target = "Perut" }} };
+    const inner: model.Block = .{ .kind = .indent, .list_path = ":", .depth = 1,
+        .description_body = .{ .before = before, .box = .{ .style = identity, .blocks = &.{translated} } } };
+    const outer: model.Block = .{ .kind = .example, .list_path = "#:", .depth = 2,
+        .description_body = .{ .before = before, .box = .{ .style = identity, .blocks = &.{first,inner} } } };
+    var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer out.deinit();
+    try blocksText(&out.writer, &.{outer}, false);
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, out.written(), terminal_geometry_notice));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, out.written(), "Original example"));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, out.written(), "Translation"));
+    const target = try organizationBlock(&.{outer}, 0, &.{1,0});
+    try std.testing.expectEqualStrings("Perut", target.spans[0].target);
+}
+
 test "terminal minimum height and physical Container edges visibly preserve complete text actions and M data" {
     const a = std.testing.allocator;
     const T = MTerminalTest.T;
@@ -11410,4 +11593,106 @@ test "Ruby margin refusal stays in its captured owning flow and preserves decode
         try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, .{ .entry = exported.value }));
         try std.testing.expectEqualStrings(before_json, try std.json.Stringify.valueAlloc(a, entry, .{}));
     }
+}
+
+test "terminal chooses paired text paint only with an established scheme" {
+    const spans = [_]model.Span{.{ .text = "headword", .foreground = "#333333", .inline_style = .{ .dark_foreground = "#e0e0e0" } }};
+    for ([_]?bool{ false, true, null }) |scheme| {
+        var out: std.Io.Writer.Allocating = .init(std.testing.allocator); defer out.deinit();
+        var lines: std.ArrayList(terminal.PoemLine) = .empty; defer lines.deinit(std.testing.allocator);
+        var projection: PoemProjection = .{ .allocator = std.testing.allocator, .frame = &out, .lines = &lines, .dark_theme = scheme };
+        try spansTextProjected(&out.writer, &spans, true, &projection);
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, out.written(), "headword"));
+        try std.testing.expectEqual(scheme == false, std.mem.indexOf(u8, out.written(), "\x1b[38;2;51;51;51m") != null);
+        try std.testing.expectEqual(scheme == true, std.mem.indexOf(u8, out.written(), "\x1b[38;2;224;224;224m") != null);
+    }
+}
+
+test "terminal wrapped heading projects its own frame and keeps folding and following body outside" {
+    const a = std.testing.allocator;
+    const T = ContainerTypes;
+    const zero: T.StyleLength = .{ .unit = .px, .value = 0 };
+    const edges: T.StyleEdges = .{ .top = zero, .right = zero, .bottom = zero, .left = zero };
+    var margins = edges;
+    margins.top = .{ .unit = .em, .value = 0.4 };
+    var padding = edges;
+    padding.top = .{ .unit = .em, .value = 1.25 };
+    var borders = T.ContainerBorderEdges.all(.none);
+    borders.top = .{ .dashed = .{ .width = .{ .unit = .px, .value = 1 },
+        .color = .{ .light_dark = .{ .light = "#a2a9b1", .dark = "#72777d" } } } };
+    const style: T.SectionHeadingStyle = .{
+        .box = .{ .margins = edges, .padding = edges, .border = .none, .clear = .none,
+            .line_height = .{ .multiplier = 1.6 }, .owner_font_scale = 1.2,
+            .positioning = .relative_auto, .font_family = .sans_serif },
+        .font = .{ .font_scale = 1.2, .font_scale_basis = .normal_body, .language = "id", .bold = true },
+        .direction = .ltr,
+        .wrappers = .{ .outer = .{ .margins = margins, .border = .{ .edges = borders }, .overflow = .visible_x_clip_y },
+            .inner = .{ .padding = padding }, .title_block_padding_right = .{ .unit = .em, .value = 3.2 } },
+    };
+    const blocks = [_]model.Block{
+        .{ .kind = .heading, .level = 3, .spans = &.{.{ .text = "babua [bug]", .font_scale = 1.68,
+            .inline_style = .{ .line_height = .{ .computed = .{ .value = 2.352, .font_scale_basis = .normal_body } } } }} },
+        .{ .kind = .paragraph, .spans = &.{.{ .kind = .link, .text = "following body", .target = "Kept" }} },
+    };
+    var section: model.Section = .{ .level = 3, .title = "babua [bug]", .heading_style = style, .blocks = &blocks };
+    const entry: model.Entry = .{ .kind = .supplemental, .title = "babua", .sections = (&section)[0..1] };
+    const before = try std.json.Stringify.valueAlloc(a, entry, .{});
+    defer a.free(before);
+    const shape = (try sectionHeadingTerminal(section)).?;
+    try std.testing.expectEqual(@as(usize, 8), shape.right_cells);
+    try std.testing.expectEqual(@as(usize, 3), shape.line_rows);
+    for ([_]usize{ 18, 40 }) |columns| {
+        var out: std.Io.Writer.Allocating = .init(a);
+        defer out.deinit();
+        var points: std.ArrayList(terminal.PoemLine) = .empty;
+        defer points.deinit(a);
+        var projection: PoemProjection = .{ .allocator = a, .frame = &out, .lines = &points, .table_columns = columns };
+        try entryTextWithDetailsProjected(&out.writer, entry, false, true, &projection);
+        try std.testing.expect(std.mem.indexOf(u8, out.written(), terminal_heading_notice) != null);
+        try std.testing.expect(std.mem.indexOf(u8, out.written(), "following body") != null);
+        try std.testing.expect(std.mem.indexOf(u8, out.written(), "----") != null);
+        const body = std.mem.indexOf(u8, out.written(), "following body").?;
+        try std.testing.expect(body != 0 and out.written()[body - 1] == '\n');
+        out.clearRetainingCapacity();
+        points.clearRetainingCapacity();
+        projection.scanned = 0;
+        projection.line_start = 0;
+        const selected = try entryTextFoldedProjected(&out, entry, false, .{ .details = true }, &.{}, 0, &projection);
+        try std.testing.expect(std.mem.startsWith(u8, out.written()[selected..], "> babua"));
+        try std.testing.expect(std.mem.indexOf(u8, out.written()[selected..], "following body") != null);
+        if (columns == 18) {
+            try std.testing.expect(std.mem.indexOf(u8, out.written()[selected..], "> babua\n\n\n[bug]") != null);
+        } else {
+            try std.testing.expect(std.mem.indexOf(u8, out.written()[selected..], "> babua [bug]\n\n\n") != null);
+        }
+    }
+    const after = try std.json.Stringify.valueAlloc(a, entry, .{});
+    defer a.free(after);
+    try std.testing.expectEqualSlices(u8, before, after);
+    // This spacing-mark cluster occupies three terminal cells and remains one
+    // editing/wrapping unit. Two inner columns must refuse it without clipping.
+    terminal.initLocale();
+    const wide_text = "काः";
+    try std.testing.expectEqual(@as(usize, 3), terminal.cellWidth(wide_text));
+    var wide = section;
+    wide.title = wide_text;
+    wide.blocks = &.{.{ .kind = .heading, .level = 3, .spans = &.{.{ .text = wide_text }} }};
+    var tiny: std.Io.Writer.Allocating = .init(a);
+    defer tiny.deinit();
+    var tiny_points: std.ArrayList(terminal.PoemLine) = .empty;
+    defer tiny_points.deinit(a);
+    var tiny_projection: PoemProjection = .{ .allocator = a, .frame = &tiny, .lines = &tiny_points, .table_columns = 10 };
+    try std.testing.expectError(error.UnsupportedTerminalGeometry,
+        sectionHeadingTextProjected(&tiny.writer, wide, false, &tiny_projection, "", ""));
+    try std.testing.expectEqual(@as(usize, 0), tiny.written().len);
+    tiny_projection.table_columns = 11;
+    _ = try sectionHeadingTextProjected(&tiny.writer, wide, false, &tiny_projection, "", "");
+    try std.testing.expect(std.mem.indexOf(u8, tiny.written(), wide_text) != null);
+    // A valid but unimplemented box field must still refuse before any entry
+    // bytes are written. It cannot be silently lost by the wrapper projection.
+    section.heading_style.?.box.background = .{ .rgb = "#ffffff" };
+    var refused: std.Io.Writer.Allocating = .init(a);
+    defer refused.deinit();
+    try std.testing.expectError(error.UnsupportedSectionHeadingStyle, entryText(&refused.writer, entry, false));
+    try std.testing.expectEqual(@as(usize, 0), refused.written().len);
 }

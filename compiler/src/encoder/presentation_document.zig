@@ -1025,8 +1025,10 @@ const CompilerWalk = struct {
         try self.take(values.len);
         for (@constCast(values)) |*block| {
             try context.block(block);
-            if (block.container) |container| {
-                if (!types.validContainerContext(block.*) or !types.validContainerHeader(container))
+            if (types.contentBox(block.*)) |container| {
+                const valid_owner = if (block.description_body != null) types.validDescriptionOwner(block.*) else types.validContainerContext(block.*);
+                if (block.description_body != null) try self.take(1);
+                if (!valid_owner or !types.validContainerHeader(container))
                     return error.InvalidPresentation;
                 if (self.content_depth >= types.max_content_depth) return error.InvalidPresentation;
                 self.content_depth += 1;
@@ -1340,15 +1342,15 @@ fn selectedFragmentOccurrence(fragment: SourceFragment, tracked: MissingText, so
 
 fn bindFragmentTextClassScope(renderer: *compiler.Renderer, fragment: SourceFragment, tracked: MissingText) void {
     renderer.wrapped_heading_source = null;
-    renderer.phonos_fragment = null;
+    renderer.selected_inline_fragment = null;
     if (renderer.context.table_styles) |styles| {
         if (styles.selected_wrapped_heading) |selected| renderer.wrapped_heading_source = selectedFragmentOccurrence(fragment, tracked, selected.source);
-        if (styles.selected_phonos.len != 0 and fragmentContentRoot(fragment, tracked) == .parser_output and !tracked.lost_missing_range and tracked.generated_source == null) {
+        if ((styles.selected_phonos.len != 0 or styles.selected_descriptions.len != 0 or styles.selected_terms.len != 0) and fragmentContentRoot(fragment, tracked) == .parser_output and !tracked.lost_missing_range and tracked.generated_source == null) {
             const range = fragment.parser_output_range.?;
             if (range.original_page) |original| {
                 if (std.mem.eql(u8, original, range.page) and range.start <= original.len and tracked.bytes.len <= original.len - range.start) {
                     const input = original[range.start..][0..tracked.bytes.len];
-                    if (std.mem.eql(u8, input, tracked.bytes)) renderer.phonos_fragment = .{ .original = input, .projected = tracked.bytes };
+                    if (std.mem.eql(u8, input, tracked.bytes)) renderer.selected_inline_fragment = .{ .original = input, .projected = tracked.bytes };
                 }
             }
         }

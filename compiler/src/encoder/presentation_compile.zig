@@ -2049,8 +2049,11 @@ const AuthoredRuleContainerSource = struct {
 };
 
 pub const Block = struct {
+    ordered_sense_source: ?[]const u8 = null,
+    ordered_example_source: ?*const table_style_profile.SelectedDescriptionExample = null,
     container: ?Container = null,
     authored_rule_container_source: ?*const AuthoredRuleContainerSource = null,
+    description_body: ?presentation_types.DescriptionBodyFor(Block) = null,
     figure: ?Figure = null,
     flow: ?[]const FlowPart = null,
     kind: Kind,
@@ -2076,6 +2079,9 @@ pub const Block = struct {
     relation_note: bool = false,
     // Build-only source role; the unchanged paragraph body is serialized normally.
     source_decimal_sense: bool = false,
+    // This source DT remains the semantic input even when its verified
+    // DIV/DL/DT layout is represented as ordinary nested containers.
+    semantic_term_source: ?*const Block = null,
 };
 
 // Quotes are resolved at build time before HTML repair. Internal labels have
@@ -9068,8 +9074,8 @@ pub const Renderer = struct {
     literal_wiki_table_operation: ?*LiteralWikiTableOperation = null,
     inline_box_root_table_opening: ?[]const u8 = null,
     literal_url_root: ?[]const u8 = null,
-    phonos_fragment: ?struct { original: []const u8, projected: []const u8 } = null,
-    phonos_quote_source: ?*const QuoteSourceMap = null,
+    selected_inline_fragment: ?struct { original: []const u8, projected: []const u8 } = null,
+    selected_inline_quote_source: ?*const QuoteSourceMap = null,
     wrapped_heading_source: ?[]const u8=null,
     heading_source: ?[]const u8 = null,
     page_root_wiki_table_openings: ?*std.ArrayList(usize) = null,
@@ -16181,18 +16187,23 @@ pub const Renderer = struct {
         }
         return pair.end;
     }
-    // A caption in the catalog remains plain. Only a source-identified inline
-    // occurrence acquires play and attribution actions in the body.
-    fn phonosOccurrence(self: *Renderer, token: []const u8, caption: []const Span, raw_file: []const u8, style: Style) Error!?[]const Span {
-        const fragment = self.phonos_fragment orelse return null;
-        const profile = self.context.table_styles orelse return null;
+    fn selectedInlineOriginal(self: *Renderer, token: []const u8) ?[]const u8 {
+        const fragment = self.selected_inline_fragment orelse return null;
         // The quote normalizer can copy an unchanged widget when the enclosing
         // list line carries a quote seed. Only its actual contiguous copy can
         // recover this physical occurrence, including repeated identical files.
-        const source = if (self.phonos_quote_source) |map| map.copiedOriginal(token) orelse token else token;
+        const source = if (self.selected_inline_quote_source) |map| map.copiedOriginal(token) orelse token else token;
         const projected = self.registeredOriginalInterval(source, fragment.projected) orelse return null;
         const start = @intFromPtr(projected.ptr) - @intFromPtr(fragment.projected.ptr);
         const original = fragment.original[start..][0..projected.len];
+        return if (std.mem.eql(u8, original, token)) original else null;
+    }
+
+    // A caption in the catalog remains plain. Only a source-identified inline
+    // occurrence acquires play and attribution actions in the body.
+    fn phonosOccurrence(self: *Renderer, token: []const u8, caption: []const Span, raw_file: []const u8, style: Style) Error!?[]const Span {
+        const profile = self.context.table_styles orelse return null;
+        const original = self.selectedInlineOriginal(token) orelse return null;
         const owner = table_style_profile.SelectedPhonos.lookup(profile.selected_phonos, original) orelse return null;
         if (!std.mem.eql(u8, token, original) or self.content_root != .parser_output or self.in_reference or self.parsed_pre or self.pre_block or
             style.provenance != .parsed or style.kind != .text or style.target.len != 0 or self.body_link_target.len != 0 or
@@ -16214,7 +16225,7 @@ pub const Renderer = struct {
         spans[0].tooltip_set = true;
         spans[0].audio_control = .{ .presentation = .phonos_button };
         if (!presentation_types.validSpanAudioControl(spans[0])) return error.UncompiledPresentation;
-        spans[1] = .{ .kind = .link, .text = owner.attribution_text, .target = owner.attribution_title,
+        spans[1] = .{ .kind = .external_link, .text = owner.attribution_text, .target = owner.attribution_target,
             .classes = "ext-phonos-attribution noexcerpt navigation-not-searchable", .tooltip = owner.attribution_title,
             .tooltip_set = true, .flags = .{ .superscript = true } };
         return spans;
@@ -33860,7 +33871,7 @@ pub const Renderer = struct {
         if (tag.is("span")) if ((try self.semanticAttribute(tag, "data-phonos-audio"))) |raw_file| {
             const capture: MediaCaptionCapture = .{ .mode = .inline_body, .style = s, .depth = depth + 1 };
             phonos_spans = try self.mediaFileKindWithSpans(raw_file, content, .audio, capture);
-            if (self.phonos_fragment != null and matched != null) {
+            if (self.selected_inline_fragment != null and matched != null) {
                 const caption = phonos_spans orelse try self.captureMediaCaption(content, capture);
                 phonos_spans = (try self.phonosOccurrence(tracked.bytes[at..pair.end], caption, raw_file, s)) orelse caption;
             }
@@ -39817,7 +39828,7 @@ pub const Renderer = struct {
             if (ordinary and figure_quote_input_live) root_language_quote_proof = self.rootLanguageQuoteInputProof(prepared.source);
             const selected_quote_source = ordinary and figure_quote_input_live and QuoteSourceMap.cleanLocal(prepared.source) and
                 self.registeredCaptionOriginal(prepared.source.bytes) != null;
-            if (self.phonos_fragment) |fragment| {
+            if (self.selected_inline_fragment) |fragment| {
                 phonos_quote_input = ordinary and figure_quote_input_live and QuoteSourceMap.cleanLocal(prepared.source) and
                     std.ascii.findIgnoreCase(prepared.source.bytes, "data-phonos-audio") != null and
                     self.registeredOriginalInterval(prepared.source.bytes, fragment.projected) != null;
@@ -39837,11 +39848,11 @@ pub const Renderer = struct {
             table_tails.release(self.a, unmatched, output);
             break :quoted output;
         };
-        const previous_phonos_quotes = self.phonos_quote_source;
-        self.phonos_quote_source = if (phonos_quote_input and QuoteSourceMap.cleanLocal(quoted) and
+        const previous_phonos_quotes = self.selected_inline_quote_source;
+        self.selected_inline_quote_source = if (phonos_quote_input and QuoteSourceMap.cleanLocal(quoted) and
             inlineOverlaySameSourceSlice(quote_map.original, unmatched.bytes) and
             inlineOverlaySameSourceSlice(quote_map.output, quoted.bytes)) &quote_map else null;
-        defer self.phonos_quote_source = previous_phonos_quotes;
+        defer self.selected_inline_quote_source = previous_phonos_quotes;
         const previous_paragraph_parent = self.paragraph_span_quotes;
         var paragraph_parent: InlineBoxQuotedParagraph = undefined;
         self.paragraph_span_quotes = null;
@@ -42384,7 +42395,175 @@ pub const Renderer = struct {
             self.fallbacks.literal_markup = true;
             return;
         }
+        const first = blocks.items.len;
         try self.block(blocks, kind, raw, path, number, level);
+        if (self.selected_inline_fragment != null and blocks.items.len == first + 1) {
+            if (kind == .definition) self.bindOrderedSense(&blocks.items[first], raw);
+            if (kind == .example) {
+                try self.projectDescriptionExample(&blocks.items[first], raw);
+                try self.projectOrderedSense(blocks,first);
+            }
+        }
+        if (kind == .indent and self.selected_inline_fragment != null and blocks.items.len == first + 1)
+            try self.projectDescriptionAudio(&blocks.items[first],raw);
+    }
+
+    fn descriptionTextEnd(spans: []const Span, start: usize, text_value: table_style_profile.DescriptionExample.Text,
+        language: []const u8, italic: bool) ?usize {
+        var at=start;
+        for ([_][]const u8{text_value.before,text_value.bold,text_value.after},[_]bool{false,true,false}) |part,bold| {
+            if (part.len == 0) continue;
+            if (at>=spans.len) return null;
+            const span=spans[at];
+            if (span.kind!=.text or span.target.len!=0 or span.provenance!=.parsed or span.flags.bold!=bold or span.flags.italic!=italic or
+                span.image!=null or span.ruby!=null or span.audio_control!=null or !std.mem.eql(u8,span.text,part) or !std.mem.eql(u8,span.language,language)) return null;
+            at+=1;
+        }
+        return at;
+    }
+    fn descriptionBreak(span: Span) bool {
+        return span.kind==.line_break and span.target.len==0 and std.mem.eql(u8,span.text,"\n") and span.audio_control==null and
+            span.image==null and span.ruby==null and span.inline_box_group==null and span.inline_padding_group==null and span.tooltip==null and span.inline_action_group==null;
+    }
+    fn descriptionOwner(metrics: table_style_profile.DescriptionBeforeMetrics, fill: presentation_types.ContainerColor,
+        children: []const Block) presentation_types.DescriptionBodyFor(Block) {
+        const zero = presentation_types.StyleEdges.all(.{.unit=.px,.value=0});
+        var padding=zero; padding.left=metrics.padding_left;
+        return .{.before=.{.top=metrics.top,.bottom=metrics.bottom,.left=metrics.left,.width=metrics.width,.fill=fill},
+            .box=.{.style=.{.margins=zero,.padding=padding,.positioning=.relative_auto,.owner_font_scale=metrics.owner_scale},.blocks=children}};
+    }
+    fn projectDescriptionAudio(self: *Renderer, item: *Block, raw: []const u8) Error!void {
+        if (self.content_root != .parser_output or self.in_reference or self.parsed_pre or self.pre_block or
+            !std.mem.eql(u8,item.list_path,":") or item.spans.len != 2 or item.description_body != null or
+            item.flow != null or item.figure != null or item.container != null) return;
+        const styles = self.context.table_styles orelse return;
+        if (styles.selected_phonos.len == 0) return;
+        const fragment = self.selected_inline_fragment orelse return;
+        const projected = self.registeredOriginalInterval(raw,fragment.projected) orelse return;
+        const offset = @intFromPtr(projected.ptr)-@intFromPtr(fragment.projected.ptr);
+        const original = fragment.original[offset..][0..projected.len];
+        const tag = syntax.tagAt(original,0) orelse return;
+        if (!tag.is("span")) return;
+        const pair = syntax.matchingTag(original,tag) orelse return;
+        const button = table_style_profile.SelectedPhonos.lookup(styles.selected_phonos,original[0..pair.end]) orelse return;
+        const owner = button.description orelse return;
+        if (!std.mem.eql(u8,original[pair.end..],owner.suffix) or !std.mem.eql(u8,original,raw)) return;
+        const play=item.spans[0]; const credit=item.spans[1];
+        if (play.kind!=.link or (play.audio_control orelse return).presentation!=.phonos_button or
+            !std.mem.eql(u8,play.text,button.caption) or credit.kind!=.external_link or credit.audio_control!=null or
+            !std.mem.eql(u8,credit.text,button.attribution_text) or !std.mem.eql(u8,credit.target,button.attribution_target) or
+            !std.mem.eql(u8,credit.tooltip orelse return,button.attribution_title)) return;
+        if (!self.spend()) return;
+        const children=try self.a.alloc(Block,1);
+        const lines = owner.lines;
+        var runs = item.spans;
+        if (lines) |measure| {
+            // The native SUP supplies its script font. The declaration of
+            // 1em belongs to that font, not to the surrounding DD strut.
+            if (!credit.flags.superscript or credit.flags.subscript or credit.flags.small or credit.flags.code or
+                credit.flags.italic or credit.flags.bold or credit.font_scale != null or credit.inline_style != null) return;
+            const styled = try self.a.dupe(Span,runs);
+            styled[1].inline_style=.{.line_height=.{.font_relative=.{.factor=measure.credit,
+                .font=.{.superscript=true,.classes=credit.classes,.language=credit.language}}}};
+            runs=styled;
+        }
+        children[0]=.{.kind=.paragraph,.spans=runs};
+        item.spans=&.{};
+        item.description_body=descriptionOwner(owner.before,owner.ink,children);
+        if (lines) |measure| item.description_body.?.box.style.line_height=.{.multiplier=measure.owner};
+        if (!presentation_types.validDescriptionOwner(item.*)) return error.UncompiledPresentation;
+    }
+
+    // Mark only definitions whose exact original bytes were independently
+    // joined to the source list and adjacent example, without content search.
+    fn bindOrderedSense(self: *Renderer, block_value: *Block, raw: []const u8) void {
+        const styles = self.context.table_styles orelse return;
+        if (styles.selected_descriptions.len == 0 or self.content_root != .parser_output or self.in_reference or self.pre_block or
+            self.parsed_pre or !std.mem.eql(u8,block_value.list_path,"#") or block_value.kind != .definition) return;
+        const fragment = self.selected_inline_fragment orelse return;
+        const projected = self.registeredOriginalInterval(raw,fragment.projected) orelse return;
+        const offset = @intFromPtr(projected.ptr)-@intFromPtr(fragment.projected.ptr);
+        const original = fragment.original[offset..][0..projected.len];
+        if (!std.mem.eql(u8,raw,original)) return;
+        // Source-ordered recipes already come from the same linear pass.
+        var left: usize = 0;
+        var right = styles.selected_descriptions.len;
+        while (left < right) {
+            const middle = left+(right-left)/2;
+            if (@intFromPtr(styles.selected_descriptions[middle].source.ptr) <= @intFromPtr(original.ptr))
+                left=middle+1 else right=middle;
+        }
+        if (left == styles.selected_descriptions.len) return;
+        const source = styles.selected_descriptions[left].definition_source orelse return;
+        if (inlineOverlaySameSourceSlice(source,original)) block_value.ordered_sense_source = source;
+    }
+
+    fn projectOrderedSense(self: *Renderer, blocks: *std.ArrayList(Block), example: usize) Error!void {
+        if (example == 0 or example+1 != blocks.items.len) return;
+        const child = blocks.items[example];
+        const issued = child.ordered_example_source orelse return;
+        const source = issued.definition_source orelse return;
+        const recipe = issued.recipe.ordered orelse return;
+        const sense = blocks.items[example-1];
+        if (!inlineOverlaySameSourceSlice(source,sense.ordered_sense_source orelse return) or
+            sense.kind != .definition or sense.depth != 1 or !std.mem.eql(u8,sense.number,"1") or sense.spans.len != 1 or
+            sense.spans[0].kind != .link or !std.mem.eql(u8,sense.spans[0].target,recipe.target) or
+            !std.mem.eql(u8,sense.spans[0].text,recipe.label) or child.description_body == null) return;
+        for (0..2) |_| if (!self.spend()) return;
+        const contents = try self.a.dupe(Block,blocks.items[example-1..]);
+        const items = try self.a.alloc(Block,1);
+        items[0] = .{.kind=.container,.container=.{.style=recipe.item,.blocks=contents}};
+        const ordered: Block = .{.kind=.container,.container=.{.style=recipe.root,.blocks=items}};
+        if (!presentation_types.validContainerHeader(ordered.container.?)) return error.UncompiledPresentation;
+        blocks.items[example-1] = ordered;
+        blocks.shrinkRetainingCapacity(example);
+    }
+
+    fn projectDescriptionExample(self: *Renderer, block_value: *Block, raw: []const u8) Error!void {
+        const fragment=self.selected_inline_fragment orelse return;
+        const styles=self.context.table_styles orelse return;
+        if (styles.selected_descriptions.len==0 or self.content_root!=.parser_output or self.in_reference or self.parsed_pre or self.pre_block or
+            !std.mem.eql(u8,block_value.list_path,"#:") or block_value.kind!=.example or block_value.figure!=null or block_value.flow!=null or block_value.container!=null) return;
+        const projected=self.registeredOriginalInterval(raw,fragment.projected) orelse return;
+        const offset=@intFromPtr(projected.ptr)-@intFromPtr(fragment.projected.ptr);
+        const original=fragment.original[offset..][0..projected.len];
+        var left:usize=0;var right:usize=styles.selected_descriptions.len;
+        while(left<right) {
+            const mid=left+(right-left)/2;
+            if (@intFromPtr(styles.selected_descriptions[mid].source.ptr)<@intFromPtr(original.ptr)) left=mid+1 else right=mid;
+        }
+        if(left==styles.selected_descriptions.len) return;
+        const issued=styles.selected_descriptions[left];
+        if (!inlineOverlaySameSourceSlice(issued.source,original) or !std.mem.eql(u8,raw,original)) return;
+        const r=issued.recipe; const spans=block_value.spans;
+        const end_source=descriptionTextEnd(spans,0,r.source_text,r.language,true) orelse return;
+        if (end_source>=spans.len or !descriptionBreak(spans[end_source])) return;
+        const begin_translation=end_source+1;
+        const end_translation=descriptionTextEnd(spans,begin_translation,r.translation_text,"",false) orelse return;
+        if (spans.len-end_translation!=3) return;
+        for (spans[end_translation..]) |span| if (!descriptionBreak(span)) return;
+        // Preserve the exact normal renderer runs and their physical source
+        // formatting. Only the three closed HTML boxes and list-line separator
+        // previously represented by synthetic breaks move into their real boxes.
+        for (0..6) |_| if (!self.spend()) return;
+        const translated=try self.a.alloc(Block,1);
+        translated[0]=.{.kind=.paragraph,.spans=spans[begin_translation..end_translation]};
+        const detail=try self.a.alloc(Block,1);
+        detail[0]=.{.kind=.indent,.depth=1,.list_path=":",.description_body=descriptionOwner(r.inner_before,r.inner_ink,translated)};
+        const usage=try self.a.alloc(Block,2);
+        usage[0]=.{.kind=.paragraph,.spans=spans[0..end_source]};
+        usage[1]=.{.kind=.container,.container=.{.style=.{.margins=presentation_types.StyleEdges.all(.{.unit=.px,.value=0})},.blocks=detail}};
+        const item=try self.a.alloc(Block,1);
+        item[0]=.{.kind=.container,.container=.{.style=.{.owner_font_scale=r.usage_scale},.blocks=usage}};
+        const outer=try self.a.alloc(Block,1);
+        outer[0]=.{.kind=.container,.container=.{.style=.{.overflow=.auto,.owner_font_scale=r.wrapper_scale,
+            .line_height=if (r.wrapper_line_height) |factor| .{.multiplier=factor} else null},.blocks=item}};
+        block_value.ordered_example_source=&styles.selected_descriptions[left];
+        block_value.spans=&.{};
+        block_value.description_body=descriptionOwner(r.outer_before,r.outer_ink,outer);
+        if (r.wrapper_line_height == null) self.fallbacks.unresolved_table_style = true;
+        if (!presentation_types.validDescriptionOwner(block_value.*) or !presentation_types.validDescriptionOwner(detail[0]))
+            return error.UncompiledPresentation;
     }
 
     // A single physical list line cannot close a wiki table at its end.
@@ -44005,7 +44184,9 @@ pub const Renderer = struct {
                         if (wrapper_blocks.len != self.container_child_positions.?.items.len) container_resolution.unresolved = true;
                         for (wrapper_blocks) |item| if (item.kind != .container or item.container == null) { container_resolution.unresolved = true; };
                     }
-                    if (try self.containerGeometry(tag, parent_language_direction orelse .{}, scoped_style, wrapper_source[tag.end..pair.inner_end], wrapper_blocks, container_resolution, force_container_owner)) |container| {
+                    if (try self.selectedTermOwner(wrapper_source[0..pair.end],wrapper_blocks)) |term_owner| {
+                        try self.appendBlockBudgeted(&blocks,term_owner);
+                    } else if (try self.containerGeometry(tag, parent_language_direction orelse .{}, scoped_style, wrapper_source[tag.end..pair.inner_end], wrapper_blocks, container_resolution, force_container_owner)) |container| {
                         const accepted_source = try self.retainAuthoredRuleContainerSource(scoped_style, container);
                         try self.appendBlockBudgeted(&blocks, .{ .kind = .container, .container = container, .authored_rule_container_source = accepted_source });
                     } else if (try self.blockGeometry(tag, parent_language_direction orelse .{}, scoped_style, wrapper_source[tag.end..pair.inner_end], wrapper_blocks)) |geometry| {
@@ -44566,6 +44747,47 @@ pub const Renderer = struct {
         defer self.body_language_direction = previous;
         return self.cellContentSpans(input, blocks);
     }
+    fn selectedTermOwner(self:*Renderer,source:[]const u8,children:[]const Block) Error!?Block {
+        if(self.content_root!=.parser_output or self.in_reference or self.pre_block or self.parsed_pre or
+            children.len!=1 or children[0].kind!=.term or !std.mem.eql(u8,children[0].list_path,";"))return null;
+        const styles=self.context.table_styles orelse return null;
+        if(styles.selected_terms.len==0)return null;
+        const fragment=self.selected_inline_fragment orelse return null;
+        const projected=self.registeredOriginalInterval(source,fragment.projected) orelse return null;
+        const offset=@intFromPtr(projected.ptr)-@intFromPtr(fragment.projected.ptr);
+        const original=fragment.original[offset..][0..projected.len];
+        for(styles.selected_terms)|issued|{
+            if(!inlineOverlaySameSourceSlice(issued.source,original) or !std.mem.eql(u8,source,original))continue;
+            const raw=children[0]; const r=issued.recipe; const p=r.paint;
+            if(raw.spans.len<2 or raw.spans.len>3 or raw.spans[0].image==null or
+                !std.mem.eql(u8,raw.spans[0].image.?.file,r.file) or raw.spans[0].image.?.width_px!=r.width or
+                !std.mem.eql(u8,raw.spans[1].text,r.label))return null;
+            const result=try self.a.dupe(Span,raw.spans);
+            for(result[1..],0..)|*span,i|{
+                if(span.kind!=.text or span.target.len!=0 or (i>0 and std.mem.trim(u8,span.text," ").len!=0))return null;
+                span.flags.bold=p.bold;
+                span.foreground=p.color;
+                if(p.dark_color)|dark|{var style:presentation_types.InlineTextStyle=span.inline_style orelse .{};style.dark_foreground=dark;span.inline_style=style;}
+            }
+            if(result[0].image.?.occurrence_layout)|layout|if(!std.meta.eql(layout,p.image))return null;
+            if(r.height)|height| {
+                if(result[0].image.?.height_px) |current| if(current!=height)return null;
+                result[0].image.?.height_px=height;
+            }
+            result[0].image.?.occurrence_layout=p.image;
+            const term=try self.a.dupe(Block,children);term[0].spans=result;
+            const dt=try self.a.alloc(Block,1);dt[0]=.{.kind=.container,.container=.{.style=p.term,.blocks=term}};
+            const dl=try self.a.alloc(Block,1);dl[0]=.{.kind=.container,.container=.{.style=p.list,.blocks=dt}};
+            var outer = p.outer;
+            if (p.responsive_flow) |screen| {
+                outer.layout = .flex_row;
+                outer.screen_max_width = screen;
+            }
+            return .{.kind=.container,.container=.{.style=outer,.blocks=dl},.semantic_term_source=&children[0]};
+        }
+        return null;
+    }
+
     fn selectedWrappedHeading(self:*Renderer, source:[]const u8) Error!?Block {
         if(self.body_depth!=1 or self.content_root!=.parser_output or self.in_reference or
             self.parsed_pre or self.pre_block or self.body_link_target.len!=0) return null;
@@ -44598,7 +44820,7 @@ pub const Renderer = struct {
                 .font_scale = run.font.font_scale, .font_scale_basis = run.font.font_scale_basis,
                 .font_scale_set = true, .font_family = run.font.font_family, .font_features = run.font.font_features,
                 .language = run.font.language, .foreground = run.ink, .foreground_set = true,
-                .inline_style = .{ .font_normalized = true, .line_height = .{ .computed = run.line_height } },
+                .inline_style = .{ .font_normalized = true, .line_height = .{ .computed = run.line_height }, .dark_foreground = run.dark_ink },
                 .flags = .{ .bold = run.font.bold, .italic = run.font.italic, .subscript = i >= 2 },
                 .tooltip = p.tooltip, .tooltip_set = true };
         }
@@ -52511,9 +52733,11 @@ test "repeated source Phonos controls keep both localized body actions and one r
     const source = try std.mem.concat(a, u8, &.{ token, " ", token });
     const detached = try a.dupe(u8, source);
     const first: table_style_profile.PhonosButton = .{ .file = "Recorded.wav", .language = "bug", .caption_html = caption,
-        .caption = "Suara", .accessible_name = "Putar audio", .attribution_title = "Berkas:Recorded.wav", .attribution_text = "ⓘ" };
+        .caption = "Suara", .accessible_name = "Putar audio", .attribution_title = "Berkas:Recorded.wav",
+        .attribution_target = "https://id.wiktionary.org/wiki/Berkas:Recorded.wav", .attribution_text = "ⓘ" };
     var second = first;
     second.accessible_name = "Putar rekaman kedua";
+    second.attribution_target = "https://id.wiktionary.org/wiki/Berkas:%52ecorded.wav";
     const selected = [_]table_style_profile.SelectedPhonos{
         .{ .source = source[0..token.len], .button = first }, .{ .source = source[token.len+1..], .button = second },
     };
@@ -52522,7 +52746,7 @@ test "repeated source Phonos controls keep both localized body actions and one r
     sheets.selected_phonos = &selected;
     for ([_][]const u8{ source, detached, source, detached }, 0..) |input, iteration| {
         var renderer: Renderer = .{ .a = a, .context = .{ .table_styles = &sheets, .external_links_prepared = true },
-            .content_root = .parser_output, .phonos_fragment = .{ .projected = source, .original = source } };
+            .content_root = .parser_output, .selected_inline_fragment = .{ .projected = source, .original = source } };
         if (iteration >= 2) renderer.next_quote_seed = .{ .state = .none, .correction = null,
             .boundaries = QuoteBoundaries.init(input), .line_end = input.len };
         const spans = try renderer.parseSpans(input, .{});
@@ -52534,8 +52758,10 @@ test "repeated source Phonos controls keep both localized body actions and one r
                 try std.testing.expectEqualStrings(selected[play_count].button.accessible_name, span.tooltip.?);
                 try std.testing.expectEqualStrings("Suara", span.text);
                 play_count += 1;
-            } else if (span.kind == .link) {
-                try std.testing.expect(span.flags.superscript and std.mem.eql(u8, "Berkas:Recorded.wav", span.target));
+            } else if (span.kind == .external_link) {
+                try std.testing.expect(credit_count < selected.len and span.flags.superscript);
+                try std.testing.expectEqualStrings(selected[credit_count].button.attribution_target, span.target);
+                try std.testing.expectEqualStrings("Berkas:Recorded.wav", span.tooltip.?);
                 credit_count += 1;
             }
         }

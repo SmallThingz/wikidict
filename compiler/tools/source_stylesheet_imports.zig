@@ -790,7 +790,7 @@ pub fn bindIndexedCustomRootFont(a: A, profile: *styles.Profile, root_css: []con
     };
     // The indexed oldid and ordered source set are already authenticated. The
     // presence of an inline control is independent of any computed font metric.
-    const buttons = @import("figure_page_observations.zig").selectedPhonosAlloc(sa, profile.arena.allocator(), namespaces, value.page_html)
+    const buttons = @import("figure_page_observations.zig").selectedPhonosAlloc(sa, profile.arena.allocator(), namespaces, value.page_html, value.page_url)
         catch |err| switch (err) { error.OutOfMemory => return err, else => null };
     if (buttons) |present| @constCast(custom).phonos_article = .{
         .page_id = row.page_id, .revision_id = row.revision_id, .buttons = present,
@@ -800,13 +800,31 @@ pub fn bindIndexedCustomRootFont(a: A, profile: *styles.Profile, root_css: []con
         error.OutOfMemory => return err, else => return,
     };
     defer full.deinit();
+    const descriptions = @import("figure_page_observations.zig").selectedDescriptionsAlloc(sa,profile.arena.allocator(),namespaces,value.page_html,nodes,&full,buttons orelse &.{})
+        catch |err| switch(err){error.OutOfMemory=>return err,else=>&.{}};
+    if (descriptions.len!=0) @constCast(custom).description_article=.{.page_id=row.page_id,.revision_id=row.revision_id,.examples=descriptions};
+    const terms=@import("figure_page_observations.zig").selectedTermsAlloc(sa,profile.arena.allocator(),namespaces,value.page_html,nodes,&full)
+        catch |err| switch (err) {
+            error.OutOfMemory => return err,
+            error.UnrepresentableTermThemeLayout => refused: {
+                @constCast(custom).term_article = .{ .page_id = row.page_id, .revision_id = row.revision_id,
+                    .terms = &.{}, .theme_layout_conflict = true };
+                break :refused &.{};
+            },
+            else => &.{},
+        };
+    if(terms.len!=0)@constCast(custom).term_article=.{.page_id=row.page_id,.revision_id=row.revision_id,.terms=terms};
     const ratio = styles.selectedPageRootPerBody(sa, &full, nodes) catch |err| switch (err) {
         error.OutOfMemory => return err, else => return,
     };
     const known = ratio orelse return;
     @constCast(custom).font_article = .{ .page_id = row.page_id, .revision_id = row.revision_id, .root_per_body = known };
     const heading = @import("figure_page_observations.zig").selectedWrappedHeadingAlloc(sa, namespaces, value.page_html, nodes, title) catch |err| switch(err){error.OutOfMemory=>return err,else=>return};
-    if(heading)|owned| @constCast(custom).font_article.?.heading=styles.selectedWrappedHeadingStyleAlloc(sa,profile.arena.allocator(), &full,owned,known) catch |err| switch(err){error.OutOfMemory=>return err,else=>null};
+    if (heading) |owned| {
+        const schemes = (try @import("figure_page_observations.zig").selectedArticleSchemeNodes(sa, value.page_html, namespaces.wiki, owned.nodes)) orelse return;
+        @constCast(custom).font_article.?.heading = styles.selectedWrappedHeadingSchemes(sa, profile.arena.allocator(), &full, owned, schemes, known)
+            catch |err| switch (err) { error.OutOfMemory => return err, else => null };
+    }
 }
 
 pub fn joinIndexedAbsentCustomAlloc(a: A, snapshot_bytes: []const u8, target: styles.ReadingTarget, namespaces: anytype, page_index: []const u8, titles: anytype) !Joined {

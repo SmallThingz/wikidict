@@ -17709,6 +17709,85 @@ pub fn selectedArticleFontAncestors(a: A, ns: *const namespaces.Registry, html: 
     return nodes;
 }
 
+pub fn selectedVectorSchemeClasses(a: A, html: []const u8, wiki: []const u8, nojs: []const u8) !?struct { day: []const u8, night: []const u8 } {
+    if (wiki.len == 0 or wiki.len > 128) return null;
+    for (wiki) |b| if (!std.ascii.isAlphanumeric(b) and b != '_') return null;
+    var at: usize = 0;
+    var head = false;
+    var js: ?[]const u8 = null;
+    while (std.mem.indexOfScalarPos(u8, html, at, '<')) |start| {
+        if (std.mem.startsWith(u8, html[start..], "<!--")) {
+            at = (std.mem.indexOfPos(u8, html, start + 4, "-->") orelse return null) + 3;
+            continue;
+        }
+        if (std.ascii.startsWithIgnoreCase(html[start..], "<!doctype ")) {
+            at = (std.mem.indexOfScalarPos(u8, html, start, '>') orelse return null) + 1;
+            continue;
+        }
+        const tag = currentLiteralHtmlTagAt(html, start) orelse return null;
+        at = tag.end;
+        if (tag.is("head")) { if (tag.closing or head) return null; head = true; continue; }
+        if (tag.is("html") or tag.is("meta") or tag.is("link") or tag.is("base")) continue;
+        if (!head or tag.closing) return null;
+        if (tag.is("title") or tag.is("style")) { at = try outerRawTextEnd(html, tag); continue; }
+        if (!tag.is("script") or tag.self_closing or std.mem.trim(u8, tag.attrs," \r\t\n").len != 0) return null;
+        const end = std.mem.indexOfPos(u8,html,at,"</script>") orelse return null;
+        js=html[at..end]; break;
+    }
+    const script = js orelse return null;
+    const start = "(function(){var className=\"";
+    const boundary = "\";var cookie=document.cookie.match(/(?:^|; )";
+    const operation = "mwclientpreferences=([^;]+)/);if(cookie){cookie[1].split('%2C').forEach(function(pref){className=className.replace(new RegExp('(^| )'+pref.replace(/-clientpref-\\w+$|[^\\w-]+/g,'')+'-clientpref-\\\\w+( |$)'),'$1'+pref+'$2');});}document.documentElement.className=className;}());";
+    if (!std.mem.startsWith(u8, script, start)) return null;
+    const end = std.mem.indexOfPos(u8, script, start.len, boundary) orelse return null;
+    const day = script[start.len..end];
+    if (day.len == 0 or day.len > 8192) return null;
+    for (day) |b| if (!std.ascii.isAlphanumeric(b) and b != '-' and b != ' ' and b != '_') return null;
+    var suffix = script[end + boundary.len..];
+    if (!std.mem.startsWith(u8, suffix, wiki)) return null;
+    suffix = suffix[wiki.len..];
+    if (!std.mem.startsWith(u8, suffix, operation)) return null;
+    var input = std.mem.tokenizeScalar(u8, nojs, ' ');
+    var output = std.mem.tokenizeScalar(u8, day, ' ');
+    var client: usize = 0; var theme_at: ?usize = null;
+    while (input.next()) |old| {
+        const new = output.next() orelse return null;
+        if (equal(old, "client-nojs")) {
+            if (!equal(new, "client-js")) return null;
+            client += 1;
+        } else if (!equal(old,new)) return null;
+        if (std.mem.startsWith(u8, new, "skin-theme-clientpref-")) {
+            if (!equal(new, "skin-theme-clientpref-day") or theme_at != null) return null;
+            theme_at = @intFromPtr(new.ptr)-@intFromPtr(day.ptr);
+        }
+    }
+    if (output.next() != null or client != 1) return null;
+    const theme = theme_at orelse return null;
+    const night = try std.mem.concat(a,u8,&.{day[0..theme],"skin-theme-clientpref-night",day[theme+"skin-theme-clientpref-day".len..]});
+    return .{ .day = day, .night = night };
+}
+
+pub fn selectedArticleSchemeNodes(a: A, html: []const u8, wiki: []const u8, nodes: []const profile.ObservedStyleNode) !?struct {
+    day: []const profile.ObservedStyleNode, night: []const profile.ObservedStyleNode,
+} {
+    if (nodes.len == 0 or nodes[0].parent != null or !equal(nodes[0].tag,"html")) return null;
+    var root_class: ?usize = null;
+    for (nodes[0].attributes, 0..) |attr, i| if (equal(attr.name,"class")) {
+        if (root_class != null) return null;
+        root_class = i;
+    };
+    const index = root_class orelse return null;
+    const classes = (try selectedVectorSchemeClasses(a, html, wiki, nodes[0].attributes[index].value)) orelse return null;
+    const day = try a.dupe(profile.ObservedStyleNode, nodes);
+    const night = try a.dupe(profile.ObservedStyleNode, nodes);
+    for ([_][]profile.ObservedStyleNode{ day, night }, [_][]const u8{ classes.day, classes.night }) |graph, class| {
+        const attrs = try a.dupe(profile.FigureObservedAttribute, nodes[0].attributes);
+        attrs[index].value = class;
+        graph[0].attributes = attrs;
+    }
+    return .{ .day = day, .night = night };
+}
+
 pub fn selectedArticleStyleNodes(a: A, ns: *const namespaces.Registry, html: []const u8,
     ancestors: []const profile.ObservedStyleNode) !?[]const profile.ObservedStyleNode {
     const envelope = try observedOuterPrefix(a, html, true);
@@ -17837,7 +17916,14 @@ fn phonosClass(node: ObservedSiblingNode, tag: []const u8, token: []const u8) bo
 // The old worker preserves the label and file, but omits the localized
 // accessible name and attribution action. Read them from the same served
 // extension, verifying both are owned by that file before retaining them.
-pub fn selectedPhonosAlloc(a: A, keep: A, ns: *const namespaces.Registry, html: []const u8) !?[]const profile.PhonosButton {
+pub fn selectedPhonosAlloc(a: A, keep: A, ns: *const namespaces.Registry, html: []const u8, page_url: []const u8) !?[]profile.PhonosButton {
+    // The caller binds this indexed oldid to the complete served article.
+    // Keep the observed origin and href; a localized File title is not a
+    // dictionary-entry destination.
+    const domain = try missingStyleOrigin(a, ns.wiki);
+    const prefix = try std.mem.concat(a, u8, &.{ domain.origin, "/w/index.php?" });
+    if (!std.mem.startsWith(u8, page_url, prefix)) return null;
+    const origin = page_url[0..domain.origin.len];
     if (std.mem.indexOf(u8, html, "mw:Extension/phonos") == null) return null;
     const envelope = try observedOuterPrefix(a, html, true);
     const base = envelope.root_start orelse return null;
@@ -17855,20 +17941,21 @@ pub fn selectedPhonosAlloc(a: A, keep: A, ns: *const namespaces.Registry, html: 
     for (nodes, 0..) |node, index| {
         if (!equal(node.attributes.get("typeof") orelse "", "mw:Extension/phonos")) continue;
         if (!phonosClass(node, "span", "ext-phonos")) return null;
-        const button = (try observedPhonosButton(a, ns, body, nodes, index)) orelse return null;
+        const button = (try observedPhonosButton(a, ns, body, nodes, index, origin)) orelse return null;
         try buttons.append(a, button);
     }
     if (buttons.items.len == 0) return null;
     const retained = try keep.alloc(profile.PhonosButton, buttons.items.len);
     for (buttons.items, retained) |button, *entry| {
-        inline for (@typeInfo(profile.PhonosButton).@"struct".field_names) |name|
+        entry.* = button;
+        inline for (.{"file", "language", "caption_html", "caption", "accessible_name", "attribution_title", "attribution_target", "attribution_text"}) |name|
             @field(entry, name) = try keep.dupe(u8, @field(button, name));
     }
     return retained;
 }
 
 fn observedPhonosButton(a: A, ns: *const namespaces.Registry, body: []const u8,
-    nodes: []const ObservedSiblingNode, owner: usize) !?profile.PhonosButton {
+    nodes: []const ObservedSiblingNode, owner: usize, origin: []const u8) !?profile.PhonosButton {
     const extension = try json(a, nodes[owner].attributes.get("data-mw") orelse return null);
     if (!equal(try string(extension, "name"), "phonos")) return null;
     const attrs = try field(extension, "attrs");
@@ -17922,11 +18009,16 @@ fn observedPhonosButton(a: A, ns: *const namespaces.Registry, body: []const u8,
     if (label.len == 0 or std.mem.indexOfAny(u8, label, "&<>\r\n") != null) return null;
     const attribution = nodes[(headingElementChildren(body, nodes, children[1], 1, false) orelse return null)[0]];
     const title = attribution.attributes.get("title") orelse return null;
-    const link_file = (try fileHref(a, ns, attribution.attributes.get("href") orelse return null)) orelse return null;
-    if (!attribution.tag.is("a") or ns.ofTitle(title).id != 6 or !equal(try canonicalFile(a, ns, title), expected) or
-        !equal(link_file, expected) or !headingLeafText(body, attribution, "ⓘ")) return null;
+    const attribution_href = attribution.attributes.get("href") orelse return null;
+    const link_file = (try fileHref(a, ns, attribution_href)) orelse return null;
+    if (!attribution.tag.is("a") or attribution.attributes.attributes.len != 2 or ns.ofTitle(title).id != 6 or !equal(try canonicalFile(a, ns, title), expected) or
+        !equal(link_file, expected) or !equal(ns.ofTitle(title).text, ns.ofTitle(expected).text) or
+        !headingLeafText(body, attribution, "ⓘ")) return null;
+    const attribution_target = try std.mem.concat(a, u8, &.{ origin, attribution_href });
+    if (!encoder.presentation_types.validPhonosCreditDestination(attribution_target, title)) return null;
     return .{ .file = ns.ofTitle(expected).text, .language = lang, .caption_html = caption_html,
-        .caption = label, .accessible_name = name, .attribution_title = title, .attribution_text = "ⓘ" };
+        .caption = label, .accessible_name = name, .attribution_title = title,
+        .attribution_target = attribution_target, .attribution_text = "ⓘ" };
 }
 
 pub fn bindPhonos(a: A, source: []const u8, buttons: []const profile.PhonosButton) ![]const profile.SelectedPhonos {
@@ -17949,6 +18041,423 @@ pub fn bindPhonos(a: A, source: []const u8, buttons: []const profile.PhonosButto
         pos = pair.end;
     }
     return if (result.items.len == buttons.len) try result.toOwnedSlice(a) else &.{};
+}
+
+fn exampleObservedText(body: []const u8, nodes: []const ObservedSiblingNode, index: usize, value: profile.DescriptionExample.Text) bool {
+    const parent = nodes[index];
+    const children = headingElementChildren(body,nodes,index,1,true) orelse return false;
+    const bold = nodes[children[0]];
+    if (!bold.tag.is("b") or bold.attributes.attributes.len != 0 or !headingLeafText(body, bold, value.bold)) return false;
+    const close = syntax.tagAt(body, bold.inner_end orelse return false) orelse return false;
+    return equal(body[parent.tag.end..bold.start], value.before) and equal(body[close.end..parent.inner_end orelse return false], value.after);
+}
+fn descriptionNodeAttributes(node: ObservedSiblingNode, allowed: []const []const u8) bool {
+    for (node.attributes.attributes) |attr| {
+        var known=false;
+        for(allowed) |name| if(equal(name,attr.name)) {known=true; break;};
+        if(!known) return false;
+    }
+    return true;
+}
+/// Bind the actual OL, LI and their owned DL to the same example subtree.
+/// The initial physical domain is a single decimal sense. Contiguous
+/// multi-item lists remain representable without borrowing this proof.
+fn originalOrderedDefinition(a: A, keep: A, ns: *const namespaces.Registry, html: []const u8,
+    nodes: []const ObservedSiblingNode, dd: usize, sheets: *const profile.Profile,
+    day: []const profile.ObservedStyleNode, night: []const profile.ObservedStyleNode, offset: u32) !?profile.OrderedDefinition {
+    const dl = nodes[dd].parent orelse return null;
+    const li = nodes[dl].parent orelse return null;
+    const ol = nodes[li].parent orelse return null;
+    const section = nodes[ol].parent orelse return null;
+    if (!nodes[section].tag.is("section") or nodes[section].parent != 0 or !nodes[0].tag.is("div")) return null;
+    if (!nodes[ol].tag.is("ol") or !nodes[li].tag.is("li") or !nodes[dl].tag.is("dl") or !nodes[dd].tag.is("dd")) return null;
+    // Reversed, start, type or individual LI value require separate marker
+    // policy. Do not manufacture a value from the parser's ordinary # index.
+    for ([_]usize{ol,li,dl,dd}) |index| if (!descriptionNodeAttributes(nodes[index], &.{"id"})) return null;
+    if ((headingElementChildren(html,nodes,ol,1,false) orelse return null)[0] != li or
+        (headingElementChildren(html,nodes,dl,1,false) orelse return null)[0] != dd) return null;
+    const children = headingElementChildren(html,nodes,li,2,false) orelse return null;
+    if (children[1] != dl) return null;
+    const link = nodes[children[0]];
+    if (!link.tag.is("a") or !descriptionNodeAttributes(link,&.{"id","rel","href","title"}) or link.first_child != null or
+        !equal(link.attributes.get("rel") orelse return null, "mw:WikiLink")) return null;
+    const title = link.attributes.get("title") orelse return null;
+    const href = link.attributes.get("href") orelse return null;
+    const label = html[link.tag.end..link.inner_end orelse return null];
+    if (title.len == 0 or title.len > 256 or label.len == 0 or label.len > 256 or ns.ofTitle(title).id != 0 or
+        std.mem.indexOfAny(u8,title,"_#?%[]{}<>|&\r\n") != null or std.mem.indexOfAny(u8,label,"[]{}<>|&\r\n") != null or
+        !equal(title,std.mem.trim(u8,title," \t")) or !equal(label,std.mem.trim(u8,label," \t"))) return null;
+    const path = try std.mem.replaceOwned(u8,a,title," ","_");
+    const base = (try missingStyleOrigin(a, ns.wiki)).origin;
+    const absolute = try std.mem.concat(a,u8,&.{base,"/wiki/",path});
+    const relative = try std.mem.concat(a,u8,&.{"./",path});
+    if (!equal(href,absolute) and !equal(href,relative)) return null;
+    return profile.selectedOrderedDefinition(a,keep,sheets,day,night,offset,
+        @intCast(@as(usize,offset)+ol),@intCast(@as(usize,offset)+li),title,label);
+}
+
+// A source range is retained even when another paragraph contains the same
+// dictionary link. Only the preceding physical line can own this example.
+fn orderedDefinitionSource(a:A, full:[]const u8, line:[]const u8, recipe:profile.OrderedDefinition) !?[]const u8 {
+    if (@intFromPtr(line.ptr)<@intFromPtr(full.ptr)) return null;
+    const at=@intFromPtr(line.ptr)-@intFromPtr(full.ptr);
+    if (at == 0 or at > full.len or full[at-1] != '\n') return null;
+    const end=at-1;
+    const start=if(std.mem.lastIndexOfScalar(u8,full[0..end],'\n')) |prior| prior+1 else 0;
+    const original=full[start..end];
+    const target_only=equal(recipe.target,recipe.label);
+    const simple=try std.fmt.allocPrint(a,"# [[{s}]]",.{recipe.target});
+    const labeled=try std.fmt.allocPrint(a,"# [[{s}|{s}]]",.{recipe.target,recipe.label});
+    if ((!target_only or !equal(original,simple)) and !equal(original,labeled)) return null;
+    return original[2..];
+}
+
+fn observedUsageExample(a: A, keep: A, ns: *const namespaces.Registry, body: []const u8, nodes: []const ObservedSiblingNode,
+    wrapper: usize, sheets: *const profile.Profile, day: []const profile.ObservedStyleNode,
+    night: []const profile.ObservedStyleNode, body_index: u32) !?profile.DescriptionExample {
+    const shell = nodes[wrapper];
+    const outer = shell.parent orelse return null;
+    if (!nodes[outer].tag.is("dd") or !nodes[nodes[outer].parent orelse return null].tag.is("dl") or
+        !equal(shell.attributes.get("typeof") orelse "", "mw:Transclusion")) return null;
+    if (!descriptionNodeAttributes(shell,&.{"class","about","typeof","id","data-mw"}) or
+        !equal(shell.attributes.get("class") orelse "", "usex-item") or
+        !descriptionNodeAttributes(nodes[outer],&.{"id"})) return null;
+    const only = headingElementChildren(body,nodes,outer,1,false) orelse return null;
+    if (only[0] != wrapper) return null;
+    const usage = shell.first_child orelse return null;
+    if (!phonosClass(nodes[usage],"div","h-usage-example") or nodes[usage].start != shell.tag.end) return null;
+    const parts = headingElementChildren(body,nodes,usage,2,false) orelse return null;
+    if (!phonosClass(nodes[parts[0]],"i","e-example") or !nodes[parts[1]].tag.is("dl")) return null;
+    const inner = (headingElementChildren(body,nodes,parts[1],1,false) orelse return null)[0];
+    const trans = (headingElementChildren(body,nodes,inner,1,false) orelse return null)[0];
+    if (!nodes[inner].tag.is("dd") or !phonosClass(nodes[trans],"span","e-translation")) return null;
+    if(!descriptionNodeAttributes(nodes[usage],&.{"class"}) or !equal(nodes[usage].attributes.get("class") orelse "","h-usage-example") or
+        !descriptionNodeAttributes(nodes[parts[0]],&.{"class","lang"}) or !descriptionNodeAttributes(nodes[parts[1]],&.{}) or
+        !descriptionNodeAttributes(nodes[inner],&.{}) or !descriptionNodeAttributes(nodes[trans],&.{"class"})) return null;
+    const meta = try json(a, shell.attributes.get("data-mw") orelse return null);
+    const templates = try field(meta,"parts");
+    if (templates != .array or templates.array.items.len != 1) return null;
+    const params = try field(try field(templates.array.items[0],"template"),"params");
+    const language = try string(try field(params,"1"),"wt");
+    const line = try string(try field(params,"2"),"wt");
+    const translation = try string(try field(params,"3"),"wt");
+    const source_text = profile.DescriptionExample.Text.fromSource(line) orelse return null;
+    const translation_text = profile.DescriptionExample.Text.fromSource(translation) orelse return null;
+    if (!equal(nodes[parts[0]].attributes.get("lang") orelse "",language) or !exampleObservedText(body,nodes,parts[0],source_text) or
+        !exampleObservedText(body,nodes,trans,translation_text)) return null;
+    const usage_close = syntax.tagAt(body,nodes[usage].inner_end orelse return null) orelse return null;
+    const cat = syntax.tagAt(body,usage_close.end) orelse return null;
+    if (!cat.is("link") or cat.closing or !cat.self_closing or cat.end != (shell.inner_end orelse return null)) return null;
+    const cat_attrs = try inventory(a,cat);
+    if (cat_attrs.attributes.len != 2 or !equal(cat_attrs.get("rel") orelse "","mw:PageProp/Category")) return null;
+    const href = cat_attrs.get("href") orelse return null;
+    if (!std.mem.startsWith(u8,href,"./") or std.mem.indexOfAny(u8,href[2..],"/?%&") != null) return null;
+    const hash = std.mem.indexOfScalar(u8,href,'#') orelse return null;
+    const category = ns.ofTitle(href[2..hash]);
+    if (category.id != 14 or category.text.len == 0 or hash + 1 == href.len) return null;
+    const src_class = nodes[parts[0]].attributes.get("class") orelse return null;
+    const trans_class = nodes[trans].attributes.get("class") orelse return null;
+    for ([_][]const u8{language,src_class,trans_class}) |attr| {
+        if (attr.len == 0 or attr.len > 256) return null;
+        for (attr) |b| if (!std.ascii.isAlphanumeric(b) and b != ' ' and b != '-' and b != '_') return null;
+    }
+    const original = try std.mem.concat(keep,u8,&.{ "<div class=\"usex-item\"><div class=\"h-usage-example\"><i class=\"",src_class,
+        "\" lang=\"",language,"\">",line,"</i><dl><dd><span class=\"",trans_class,"\">",translation,"</span></dd></dl></div>" });
+    const outer_id = std.math.cast(u32,@as(usize,body_index) + outer) orelse return null;
+    const inner_id = std.math.cast(u32,@as(usize,body_index) + inner) orelse return null;
+    const wd = (try profile.observedDescriptionWrappers(a,sheets,day,body_index,
+        @intCast(@as(usize,body_index)+wrapper),@intCast(@as(usize,body_index)+usage),@intCast(@as(usize,body_index)+parts[1]))) orelse return null;
+    const wn = (try profile.observedDescriptionWrappers(a,sheets,night,body_index,
+        @intCast(@as(usize,body_index)+wrapper),@intCast(@as(usize,body_index)+usage),@intCast(@as(usize,body_index)+parts[1]))) orelse return null;
+    if (!std.meta.eql(wd,wn)) return null;
+    const outer_day = (try profile.observedDescriptionBefore(a,sheets,day,body_index,outer_id)) orelse return null;
+    const inner_day = (try profile.observedDescriptionBefore(a,sheets,day,body_index,inner_id)) orelse return null;
+    const outer_night = (try profile.observedDescriptionBefore(a,sheets,night,body_index,outer_id)) orelse return null;
+    const inner_night = (try profile.observedDescriptionBefore(a,sheets,night,body_index,inner_id)) orelse return null;
+    for ([_]profile.DescriptionBeforeMetrics{ outer_day, inner_day }, [_]profile.DescriptionBeforeMetrics{ outer_night, inner_night }) |light,dark|
+        inline for (.{ "owner_scale", "padding_left", "top", "bottom", "left", "width" }) |key| {
+            if (!std.meta.eql(@field(light,key),@field(dark,key))) return null;
+        };
+    const wrapper_id: u32 = @intCast(@as(usize, body_index) + wrapper);
+    const light_line = try profile.observedSubtreeLineHeight(a, sheets, day, body_index, wrapper_id);
+    const dark_line = try profile.observedSubtreeLineHeight(a, sheets, night, body_index, wrapper_id);
+    const held_line = try keep.dupe(u8,line);
+    const held_translation = try keep.dupe(u8,translation);
+    var od=outer_day; var id=inner_day;
+    od.color.value = try keep.dupe(u8,outer_day.color.value.?);
+    id.color.value = try keep.dupe(u8,inner_day.color.value.?);
+    return .{ .start=original, .category=try std.mem.replaceOwned(u8,keep,category.text,"_"," "), .key=try keep.dupe(u8,href[hash+1..]),
+        .source_text=profile.DescriptionExample.Text.fromSource(held_line).?, .translation_text=profile.DescriptionExample.Text.fromSource(held_translation).?,
+        .language=try keep.dupe(u8,language), .outer_before=od, .inner_before=id, .usage_scale=wd.usage, .wrapper_scale=wd.wrapper,
+        .ordered=try originalOrderedDefinition(a,keep,ns,body,nodes,outer,sheets,day,night,body_index),
+        .wrapper_line_height=if (light_line == dark_line) light_line else null,
+        .outer_ink=.{.light_dark=.{.light=od.color.value.?,.dark=try keep.dupe(u8,outer_night.color.value.?)}},
+        .inner_ink=.{.light_dark=.{.light=id.color.value.?,.dark=try keep.dupe(u8,inner_night.color.value.?)}},
+    };
+}
+
+// The audio action and its independent attribution already have their own
+// source proof. Paint a list rail only when the very same two actions are the
+// whole visible content of an original DD. Preserve an empty adjacent DD.
+fn observePhonosDescriptions(a: A, keep: A, ns: *const namespaces.Registry, body: []const u8,
+    nodes: []const ObservedSiblingNode, sheets: *const profile.Profile, day: []const profile.ObservedStyleNode,
+    night: []const profile.ObservedStyleNode, root: u32, buttons: []profile.PhonosButton) !void {
+    if (buttons.len == 0) return;
+    var count: usize = 0;
+    for (nodes) |node| if (equal(node.attributes.get("typeof") orelse "", "mw:Extension/phonos")) { count += 1; };
+    if (count != buttons.len) return;
+    var index: usize = 0;
+    for (nodes, 0..) |node, i| {
+        if (!equal(node.attributes.get("typeof") orelse "", "mw:Extension/phonos")) continue;
+        const button = &buttons[index];
+        index += 1;
+        const owner = node.parent orelse continue;
+        const dd = nodes[owner];
+        if (!dd.tag.is("dd") or dd.attributes.attributes.len != 0 or dd.first_child != i or dd.tag.end != node.start or
+            !nodes[dd.parent orelse continue].tag.is("dl")) continue;
+        const close = syntax.tagAt(body, node.inner_end orelse continue) orelse continue;
+        const end = dd.inner_end orelse continue;
+        if (!close.closing or !close.is("span") or close.end > end) continue;
+        const suffix: []const u8 = if (close.end == end) "" else category: {
+            const tag = syntax.tagAt(body,close.end) orelse continue;
+            if (!tag.is("link") or tag.closing or tag.end != end) continue;
+            const attrs = try inventory(a,tag);
+            if (attrs.attributes.len != 2 or !equal(attrs.get("rel") orelse continue,"mw:PageProp/Category")) continue;
+            const href = attrs.get("href") orelse continue;
+            if (!std.mem.startsWith(u8,href,"./") or ns.ofTitle(href[2..]).id != 14 or
+                std.mem.indexOfAny(u8,href[2..],"%#[]|<>&\r\n") != null) continue;
+            const title = try std.mem.replaceOwned(u8,a,href[2..],"_"," ");
+            break :category try std.mem.concat(a,u8,&.{"[[",title,"]]"});
+        };
+        const physical: u32 = @intCast(@as(usize,root) + owner);
+        const light = (try profile.observedDescriptionBefore(a,sheets,day,root,physical)) orelse continue;
+        const dark = (try profile.observedDescriptionBefore(a,sheets,night,root,physical)) orelse continue;
+        var same = true;
+        inline for (.{"owner_scale","padding_left","top","bottom","left","width"}) |key|
+            same = same and std.meta.eql(@field(light,key),@field(dark,key));
+        if (same) {
+            const light_color = try keep.dupe(u8,light.color.value orelse continue);
+            const dark_color = try keep.dupe(u8,dark.color.value orelse continue);
+            var before = light;
+            before.color.value = light_color;
+            const parts = headingElementChildren(body,nodes,i,2,false) orelse continue;
+            const sup = parts[1];
+            const anchor = (headingElementChildren(body,nodes,sup,1,false) orelse continue)[0];
+            const lines = try profile.selectedPhonosLines(a,sheets,day,night,root,physical,
+                @intCast(@as(usize,root)+i),@intCast(@as(usize,root)+sup),@intCast(@as(usize,root)+anchor));
+            button.description = .{.suffix=try keep.dupe(u8,suffix),.before=before,.lines=lines,
+                .ink=.{.light_dark=.{.light=light_color,.dark=dark_color}}};
+        }
+    }
+}
+
+pub fn selectedDescriptionsAlloc(a: A, keep: A, ns: *const namespaces.Registry, html: []const u8,
+    ancestors: []const profile.ObservedStyleNode, sheets: *const profile.Profile, buttons: []profile.PhonosButton) ![]const profile.DescriptionExample {
+    if (ancestors.len == 0 or (buttons.len == 0 and std.mem.indexOf(u8,html,"usex-item") == null)) return &.{};
+    const envelope = try observedOuterPrefix(a,html,true);
+    const base = envelope.root_start orelse return &.{};
+    const opening = envelope.root_open_end orelse return &.{};
+    const limit = try sourceParentOwnedRootEnd(html, html[0..opening]);
+    const body = html[base..limit];
+    var original: std.ArrayList(ObservedSiblingNode) = .empty; defer original.deinit(a);
+    var end: usize = 0;
+    _ = try observedClassRootTokens(a,ns,body,&original,&end,false,envelope.root,true,true,true);
+    if (end != body.len) return &.{};
+    const physical = (try observedArticleStyleNodes(a,ancestors,original.items)) orelse return &.{};
+    const schemes = (try selectedArticleSchemeNodes(a,html,ns.wiki,physical)) orelse return &.{};
+    try observePhonosDescriptions(a,keep,ns,body,original.items,sheets,schemes.day,schemes.night,@intCast(ancestors.len-1),buttons);
+    var recipes: std.ArrayList(profile.DescriptionExample) = .empty;
+    for (original.items,0..) |node,index| {
+        if (!phonosClass(node,"div","usex-item")) continue;
+        const value = (try observedUsageExample(a,a,ns,body,original.items,index,sheets,schemes.day,schemes.night,@intCast(ancestors.len-1))) orelse return &.{};
+        try recipes.append(a,value);
+    }
+    const result=try keep.alloc(profile.DescriptionExample,recipes.items.len);
+    for (result,recipes.items) |*held,recipe| {
+        held.*=recipe;
+        if(recipe.ordered) |ordered| {
+            held.ordered.?.target=try keep.dupe(u8,ordered.target);
+            held.ordered.?.label=try keep.dupe(u8,ordered.label);
+        }
+        inline for (.{ "start","category","key","language" }) |key| @field(held,key)=try keep.dupe(u8,@field(recipe,key));
+        inline for (.{ "source_text","translation_text" }) |text_key| {
+            inline for (.{ "before","bold","after" }) |key| @field(@field(held,text_key),key)=try keep.dupe(u8,@field(@field(recipe,text_key),key));
+        }
+        inline for (.{ "outer_ink","inner_ink" },.{ "outer_before","inner_before" }) |ink,metric| {
+            @field(held,ink)=.{.light_dark=.{.light=try keep.dupe(u8,@field(recipe,ink).light_dark.light),
+                .dark=try keep.dupe(u8,@field(recipe,ink).light_dark.dark)}};
+            @field(held,metric).color.value=@field(held,ink).light_dark.light;
+        }
+    }
+    return result;
+}
+
+// The authored wrapper, the generated DL, the DT and the inline file are
+// distinct physical owners. Recover the worker's original list syntax only
+// after confirming every visible piece and every trailing Parsoid category.
+const IndexedTermShape = struct {
+    wrapper: u32, list: u32, term: u32, icon: u32, image: ?u32,
+    source: []const u8, label: []const u8, file: []const u8, width: u32,
+};
+fn indexedTermShape(a: A, ns: *const namespaces.Registry, body: []const u8,
+    nodes: []const ObservedSiblingNode, root: usize, offset: usize) !?IndexedTermShape {
+    const shell = nodes[root];
+    if (!shell.tag.is("div") or !descriptionNodeAttributes(shell, &.{"class", "id", "about"})) return null;
+    const classes = shell.attributes.get("class") orelse return null;
+    const dl = (headingElementChildren(body, nodes, root, 1, false) orelse return null)[0];
+    if (!nodes[dl].tag.is("dl") or nodes[dl].attributes.attributes.len != 0) return null;
+    const dt = (headingElementChildren(body, nodes, dl, 1, false) orelse return null)[0];
+    if (!nodes[dt].tag.is("dt") or nodes[dt].attributes.attributes.len != 0) return null;
+    const icon = nodes[dt].first_child orelse return null;
+    if (!nodes[icon].tag.is("span") or nodes[icon].start != nodes[dt].tag.end or nodes[icon].attributes.attributes.len != 1) return null;
+    const icon_class = nodes[icon].attributes.get("class") orelse return null;
+    for ([_][]const u8{classes,icon_class}) |value| {
+        if (value.len == 0 or value.len > 256) return null;
+        for (value) |c| if (!std.ascii.isAlphanumeric(c) and c != '-' and c != '_' and c != ' ') return null;
+    }
+    const file_span = (headingElementChildren(body, nodes, icon, 1, false) orelse return null)[0];
+    if (!nodes[file_span].tag.is("span") or nodes[file_span].attributes.attributes.len != 1 or
+        !equal(nodes[file_span].attributes.get("typeof") orelse return null, "mw:File")) return null;
+    const holder = (headingElementChildren(body, nodes, file_span, 1, false) orelse return null)[0];
+    if (!nodes[holder].tag.is("span") or nodes[holder].attributes.attributes.len != 0) return null;
+    const img = syntax.tagAt(body, nodes[holder].tag.end) orelse return null;
+    if (!img.is("img") or img.closing or !img.self_closing or img.end != (nodes[holder].inner_end orelse return null)) return null;
+    const attrs = try inventory(a,img);
+    const resource = attrs.get("resource") orelse return null;
+    const origin = (try missingStyleOrigin(a,ns.wiki)).origin;
+    if (!std.mem.startsWith(u8,resource,origin)) return null;
+    const file = (try fileHref(a,ns,resource[origin.len..])) orelse return null;
+    const width = std.fmt.parseInt(u32, attrs.get("width") orelse return null, 10) catch return null;
+    if (width == 0 or width > 1024 or !equal(attrs.get("width").?,attrs.get("height") orelse return null)) return null;
+    const intrinsic_w = std.fmt.parseInt(u32,attrs.get("data-file-width") orelse "",10) catch 0;
+    const intrinsic_h = std.fmt.parseInt(u32,attrs.get("data-file-height") orelse "",10) catch 0;
+    const image_index = nodes[holder].first_child;
+    const eligible_image: ?u32=if(image_index!=null and nodes[image_index.?].tag.is("img") and
+        nodes[image_index.?].parent==holder and nodes[image_index.?].start==nodes[holder].tag.end and
+        intrinsic_w>0 and intrinsic_w==intrinsic_h) @intCast(offset+image_index.?) else null;
+    const icon_end = (syntax.tagAt(body,nodes[icon].inner_end orelse return null) orelse return null).end;
+    const label_end = std.mem.indexOfScalarPos(u8,body,icon_end,'<') orelse return null;
+    const label = body[icon_end..label_end];
+    if (label.len == 0 or label.len > 256 or !equal(label,std.mem.trim(u8,label," \t\r\n")) or std.mem.indexOfAny(u8,label,"&[]{}<>\r\n'") != null) return null;
+    const entity = "<span typeof=\"mw:Entity\"> </span>";
+    if (!std.mem.startsWith(u8,body[label_end..],entity)) return null;
+    var at = label_end + entity.len;
+    var original: std.Io.Writer.Allocating = .init(a);
+    try original.writer.print("<div class=\"{s}\">\n; <span class=\"{s}\">[[File:{s}|{d}px|link=]]</span>{s}&#32;", .{classes,icon_class,ns.ofTitle(file).text,width,label});
+    const end = nodes[dt].inner_end orelse return null;
+    while (at < end) {
+        const cat = syntax.tagAt(body,at) orelse return null;
+        if (!cat.is("link") or cat.closing or !cat.self_closing or cat.end>end) return null;
+        const meta = try inventory(a,cat);
+        if (meta.attributes.len!=2 or !equal(meta.get("rel") orelse return null,"mw:PageProp/Category")) return null;
+        const href=meta.get("href") orelse return null;
+        if (!std.mem.startsWith(u8,href,"./") or std.mem.indexOfAny(u8,href[2..],"?%&[]{}\r\n|")!=null) return null;
+        const hash=std.mem.indexOfScalar(u8,href,'#') orelse return null;
+        if (hash<=2 or hash+1==href.len or ns.ofTitle(href[2..hash]).id!=14) return null;
+        const title=try std.mem.replaceOwned(u8,a,href[2..hash],"_"," ");
+        try original.writer.print("[[{s}|{s}]]",.{title,href[hash+1..]});
+        at=cat.end;
+    }
+    try original.writer.writeAll("</div>");
+    return .{.wrapper=@intCast(offset+root),.list=@intCast(offset+dl),.term=@intCast(offset+dt),.icon=@intCast(offset+icon),.image=eligible_image,
+        .source=try original.toOwnedSlice(),.label=label,.file=ns.ofTitle(file).text,.width=width};
+}
+
+// This one edge is proved by the closed source elements on both sides. A
+// STYLE in an otherwise empty SPAN has no parser-implied sibling elements.
+// Neither absence of a previous element nor any outer sibling is inferred.
+fn termPreviousStyleSibling(html: []const u8, nodes: []const ObservedSiblingNode, root: usize, offset: usize) ?u32 {
+    const owner = nodes[root];
+    const parent = owner.parent orelse return null;
+    if (!nodes[parent].tag.is("section") or nodes[parent].parent != 0 or !nodes[0].tag.is("div")) return null;
+    const index = owner.previous orelse return null;
+    const previous = nodes[index];
+    if (previous.parent != parent or !previous.tag.is("span") or previous.tag.self_closing) return null;
+    const style = previous.first_child orelse return null;
+    const child = nodes[style];
+    if (style != index + 1 or root != style + 1 or child.parent != index or child.previous != null or
+        !child.tag.is("style") or child.tag.self_closing or child.start < previous.tag.end or child.first_child != null or
+        !figureSiblingGap(html[previous.tag.end..child.start], false)) return null;
+    const style_end = child.tag.end;
+    var closing = style_end;
+    while (closing < html.len and !std.ascii.startsWithIgnoreCase(html[closing..], "</style")) : (closing += 1) {}
+    const close_style = syntax.tagAt(html, closing) orelse return null;
+    const close_span_at = previous.inner_end orelse return null;
+    if (!close_style.is("style") or !close_style.closing or close_style.self_closing or close_style.attrs.len != 0 or
+        close_style.end > close_span_at or !figureSiblingGap(html[close_style.end..close_span_at], false)) return null;
+    const close_span = syntax.tagAt(html, close_span_at) orelse return null;
+    if (!close_span.is("span") or !close_span.closing or close_span.self_closing or close_span.attrs.len != 0 or
+        close_span.end > owner.start or !figureSiblingGap(html[close_span.end..owner.start], false)) return null;
+    return @intCast(offset+index);
+}
+
+pub fn selectedTermsAlloc(a:A,keep:A,ns:*const namespaces.Registry,html:[]const u8,ancestors:[]const profile.ObservedStyleNode,sheets:*const profile.Profile) ![]const profile.SourceTerm {
+    if(ancestors.len==0 or std.mem.indexOf(u8,html,"</dt>")==null)return &.{};
+    const envelope=try observedOuterPrefix(a,html,true);
+    const base=envelope.root_start orelse return &.{};const opening=envelope.root_open_end orelse return &.{};
+    const limit=try sourceParentOwnedRootEnd(html,html[0..opening]);const body=html[base..limit];
+    var original:std.ArrayList(ObservedSiblingNode)=.empty;defer original.deinit(a);var end:usize=0;
+    _=try observedClassRootTokens(a,ns,body,&original,&end,false,envelope.root,true,true,true);
+    if(end!=body.len)return &.{};
+    const physical=(try observedArticleStyleNodes(a,ancestors,original.items)) orelse return &.{};
+    const schemes=(try selectedArticleSchemeNodes(a,html,ns.wiki,physical)) orelse return &.{};
+    var terms:std.ArrayList(profile.SourceTerm)=.empty;defer terms.deinit(a);
+    for(original.items)|node|{
+        if(!node.tag.is("dl"))continue;
+        const root=node.parent orelse continue;
+        const shape=(try indexedTermShape(a,ns,body,original.items,root,ancestors.len-1)) orelse continue;
+        const paint=(try profile.selectedTermPaint(a,keep,sheets,schemes.day,schemes.night,@intCast(ancestors.len-1),.{shape.wrapper,shape.list,shape.term,shape.icon},termPreviousStyleSibling(body,original.items,root,ancestors.len-1))) orelse continue;
+        const reserve=if(shape.image) |index| (try profile.termImageDimensionsUnchanged(a,sheets,schemes.day,@intCast(ancestors.len-1),index)) and
+            (try profile.termImageDimensionsUnchanged(a,sheets,schemes.night,@intCast(ancestors.len-1),index)) else false;
+        try terms.append(a,.{.height=if(reserve) shape.width else null,.source=try keep.dupe(u8,shape.source),.label=try keep.dupe(u8,shape.label),.file=try keep.dupe(u8,shape.file),.width=shape.width,.paint=paint});
+    }
+    return try keep.dupe(profile.SourceTerm,terms.items);
+}
+
+pub fn bindTerms(a:A,source:[]const u8,terms:[]const profile.SourceTerm)![]const profile.SelectedTerm {
+    if(terms.len==0 or source.len>max_response)return &.{};
+    var matches:std.ArrayList(profile.SelectedTerm)=.empty;
+    defer matches.deinit(a);
+    var pos:usize=0;
+    // Match only the source opening and bound body. A page with thousands of
+    // unrelated nested DIVs must not walk each entire subtree for this join.
+    while(std.mem.indexOfPos(u8,source,pos,"<div"))|start|{
+        pos=start+4;
+        const tag=syntax.tagAt(source,start) orelse continue;
+        if(!tag.is("div") or tag.closing)continue;
+        for(terms)|term|if(std.mem.startsWith(u8,source[start..],term.source)){
+            const candidate=source[start..][0..term.source.len];
+            if(matches.items.len>=terms.len or !equal(terms[matches.items.len].source,candidate))return &.{};
+            try matches.append(a,.{.source=candidate,.recipe=terms[matches.items.len]});
+            pos=start+candidate.len;break;
+        };
+    }
+    return if(matches.items.len==terms.len) try matches.toOwnedSlice(a) else &.{};
+}
+
+pub fn bindDescriptions(a: A, ns: *const namespaces.Registry, source: []const u8,
+    recipes: []const profile.DescriptionExample) ![]const profile.SelectedDescriptionExample {
+    if (recipes.len == 0 or source.len > max_response) return &.{};
+    var found: std.ArrayList(profile.SelectedDescriptionExample) = .empty;
+    defer found.deinit(a);
+    var lines=std.mem.splitScalar(u8,source,'\n');
+    while (lines.next()) |line| {
+        const prefix="#: ";
+        if (!std.mem.startsWith(u8,line,prefix)) continue;
+        const raw = line[prefix.len..];
+        if (!std.mem.startsWith(u8, raw,"<div class=\"usex-item\">")) continue;
+        if (found.items.len>=recipes.len) return &.{};
+        const r=recipes[found.items.len];
+        if (!std.mem.startsWith(u8,raw,r.start)) return &.{};
+        const tail=raw[r.start.len..];
+        if (!std.mem.startsWith(u8,tail,"[[") or !std.mem.endsWith(u8,tail,"]]</div>")) return &.{};
+        const category=tail[2..tail.len-"]]</div>".len];
+        const pipe=std.mem.indexOfScalar(u8,category,'|') orelse return &.{};
+        const title=ns.ofTitle(category[0..pipe]);
+        if (title.id!=14 or !equal(title.text,r.category) or !equal(category[pipe+1..],r.key)) return &.{};
+        try found.append(a,.{.source=raw,.recipe=r,.definition_source=if (r.ordered) |ordered| try orderedDefinitionSource(a,source,line,ordered) else null});
+    }
+    return if (found.items.len==recipes.len) try found.toOwnedSlice(a) else &.{};
 }
 
 pub fn selectedWrappedHeadingAlloc(a: A, ns: *const namespaces.Registry, html: []const u8,
