@@ -3317,6 +3317,17 @@ private slots:
             auto *accessible = QAccessible::queryAccessibleInterface(browser);
             QVERIFY(accessible && accessible->textInterface());
             QCOMPARE(accessible->textInterface()->text(first, first + expected.size()), expected);
+            // A responsive geometry transaction can advance the revision even
+            // when the native text and all Ruby source ranges stay identical.
+            const int previousRevision = document->revision();
+            QVERIFY(window.editDocumentFormats(browser, [&] {
+                auto cursor = QTextCursor(document);
+                auto format = cursor.blockFormat();
+                format.setRightMargin(format.rightMargin() + 1);
+                cursor.setBlockFormat(format);
+            }));
+            QVERIFY(document->revision() != previousRevision);
+            QCOMPARE(accessible->textInterface()->text(first, first + expected.size()), expected);
             const int inner = first + outerBase.size(), annotation = inner + 5;
             const auto glyph = [&](int offset) {
                 return LogicalFlow::position(document, offset).values.value("characterRect").toRectF();

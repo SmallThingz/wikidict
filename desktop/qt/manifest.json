@@ -5,8 +5,8 @@
   "patches": [
     {
       "file": "0001-logical-flow-renderer.patch",
-      "sha256": "518a79c0efbf49cc6711d8da751a71172b0e17281b61bdcecddf223098cf9d04",
-      "bytes": 1351881,
+      "sha256": "e1b503aeeb1baa07656b4505776265ba4cffe6b818a97407663e5fbe881abee1",
+      "bytes": 1352640,
       "files": [
         {
           "path": "src/gui/accessible/qaccessible.cpp",
@@ -187,8 +187,8 @@
           "path": "src/gui/text/qtextrubyrangemap_p.h",
           "new_file": true,
           "upstream_sha256": null,
-          "qualified_sha256": "131fd6b49a0254ae5c7e4568ff0a86b75c79ede42a028320d67d1db3de1aa734",
-          "bytes": 18316
+          "qualified_sha256": "28f3d47220c053f230290538d4250e8dfe48ddc36c94f52c817e824be2eb1e25",
+          "bytes": 19060
         },
         {
           "path": "src/gui/text/qtextrubyshaping_p.h",
@@ -243,8 +243,8 @@
     },
     {
       "file": "0002-layout-regressions.patch",
-      "sha256": "a60af46f2959acdde72eb607bd96ea14de7d2f53918d8ebda246147a4568e823",
-      "bytes": 1576913,
+      "sha256": "1e148f631441f79c3b3ae197af5fe7c3d21e0cb86ea9db69a60ca665b1fd45c7",
+      "bytes": 1577759,
       "files": [
         {
           "path": "tests/auto/gui/text/qtextdocumentlayout/CMakeLists.txt",
@@ -257,8 +257,8 @@
           "path": "tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp",
           "new_file": false,
           "upstream_sha256": "aeca9826b762034d580c7024cb22641c6f9eafc04501a0099ca57af8d0770d14",
-          "qualified_sha256": "61dfe30b9f8bf459fe8e144e517129361e8398680b6ad5f504075e40dcce83f2",
-          "bytes": 1577262
+          "qualified_sha256": "51cf136c36b0fb93ea6060b354d67772cefa445f191e65170a7db806cbb8fa99",
+          "bytes": 1578093
         }
       ]
     },

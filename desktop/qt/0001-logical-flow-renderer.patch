@@ -20501,7 +20501,7 @@
 +#endif
 --- /dev/null
 +++ b/src/gui/text/qtextrubyrangemap_p.h
-@@ -0,0 +1,377 @@
+@@ -0,0 +1,392 @@
 +// Copyright (C) 2026 wikidict contributors
 +// SPDX-License-Identifier: LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
 +#ifndef QTEXTRUBYRANGEMAP_P_H
@@ -20609,6 +20609,21 @@
 +    {
 +        return document && document->revision() == revision
 +            && document->characterCount() == characterCount;
++    }
++    // Called only after a source-preserving format transaction. Old projections
++    // stay bound to their original revision, including any pending callbacks.
++    std::unique_ptr<QTextRubyRangeMap> afterFormatEdit(QTextDocument *source, int priorRevision) const
++    {
++        if (!source || source != document || priorRevision != revision
++            || source->characterCount() != characterCount)
++            return {};
++        auto result = std::unique_ptr<QTextRubyRangeMap>(new QTextRubyRangeMap(source, logicalText, pieces));
++        result->roots = roots;
++        result->gaps = gaps;
++        qsizetype budget = pieces.size();
++        if (!result->validateProjection(budget, nullptr))
++            return {};
++        return result;
 +    }
 +    QTextDocument *sourceDocument() const { return current() ? document.data() : nullptr; }
 +    const Owner *owner(int index = 0) const

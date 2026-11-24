@@ -16244,7 +16244,7 @@
      void init();
      void cleanup();
      void cleanupTestCase();
-@@ -648,5 +16845,3682 @@
+@@ -648,5 +16845,3697 @@
      }
  }
  
@@ -16296,7 +16296,22 @@
 +    invalid.segments[0].annotations[0].level = -1;
 +    QVERIFY(!Map::create(&document, invalid, 100, &error));
 +    QVERIFY(!Map::create(&document, owner, 1, &error));
++    const int originalRevision = document.revision();
++    QTextDocument foreign;
++    foreign.setPlainText(document.toPlainText());
++    QVERIFY(!map->afterFormatEdit(&foreign, originalRevision));
++    QVERIFY(!map->afterFormatEdit(&document, originalRevision + 1));
 +    QTextCursor cursor(&document);
++    auto format = cursor.blockFormat();
++    format.setRightMargin(16);
++    cursor.setBlockFormat(format);
++    auto current = map->afterFormatEdit(&document, originalRevision);
++    QVERIFY(current && current->current() && !map->current());
++    QCOMPARE(current->text(0, 4), QStringLiteral("ABxy"));
++    const int formattedRevision = document.revision();
++    cursor.setPosition(1, QTextCursor::KeepAnchor);
++    cursor.insertText(QStringLiteral("Z")); // Equal-length replacement changes the source.
++    QVERIFY(!current->afterFormatEdit(&document, formattedRevision));
 +    cursor.insertText(QStringLiteral("!"));
 +    QVERIFY(!map->current());
 +    QVERIFY(map->columnSources(0, 0).isEmpty());

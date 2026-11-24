@@ -4666,6 +4666,9 @@ bool MainWindow::editDocumentFormats(QTextBrowser *browser, const std::function<
     const auto inventory = LogicalFlow::inventory(document);
     if (!current() || inventory == LogicalFlow::Status::Refused) return false;
     const QPointer<ReadingBrowser> scrollReader(dynamic_cast<ReadingBrowser *>(widget.data()));
+    const auto ruby = scrollReader ? scrollReader->rubyProjection : nullptr;
+    const int priorRevision = document->revision();
+    if (ruby && ruby->sourceDocument() != document) return false;
     const bool refreshAudioBindings = scrollReader && scrollReader->audioControls
         && !scrollReader->audioControls->empty() && scrollReader->audioControls->current();
     QPointer<InlineAudioControls> heldAudio;
@@ -4684,6 +4687,13 @@ bool MainWindow::editDocumentFormats(QTextBrowser *browser, const std::function<
     }
     const auto finishOwnedFormats = [&](int revision) {
         if (!current() || document->revision() != revision) return false;
+        if (ruby && priorRevision != revision) {
+            if (!scrollReader || scrollReader->rubyProjection != ruby) return false;
+            auto rebound = ruby->afterFormatEdit(document, priorRevision);
+            if (!rebound) return false;
+            scrollReader->rubyProjection = std::move(rebound);
+            scrollReader->accessibleLinkRevision = -1;
+        }
         if (refreshAudioBindings && (!scrollReader || !scrollReader->audioControls
             || !scrollReader->audioControls->refreshRevision())) return false;
         audioFormatsAccepted = true;
