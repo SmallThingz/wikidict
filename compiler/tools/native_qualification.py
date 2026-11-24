@@ -751,6 +751,60 @@ def qualification_input_file(path):
     return [str(path), _qualification_stat_fields(observed), digest]
 
 
+def qualification_pin_source(overlay, repo, branch, relative_file, revision, sha256):
+    """Create a fresh sparse branch before qualification_input_inventory.
+
+    Create the previously absent `branch` with one selected Git file and links
+    to its siblings. The caller exclusively owns the unstarted overlay.
+    Existing branch entries stay under their current owner's custody.
+    """
+    import hashlib, os, re, subprocess, tempfile
+    from pathlib import Path
+    repo, overlay = Path(repo).absolute(), Path(overlay).absolute()
+    branch, relative_file = Path(branch), Path(relative_file)
+    if (not branch.parts or not relative_file.parts or branch.is_absolute() or relative_file.is_absolute()
+            or '..' in branch.parts or '..' in relative_file.parts or not relative_file.is_relative_to(branch)
+            or not re.fullmatch('[0-9a-f]{40}', revision) or not re.fullmatch('[0-9a-f]{64}', sha256)):
+        raise ValueError('Invalid qualification source pin')
+    target = overlay / branch
+    source = repo / relative_file
+    if (repo.resolve(strict=True) != repo or overlay.resolve(strict=True) != overlay
+            or not overlay.is_relative_to(repo / '.tmp') or overlay == repo / '.tmp'
+            or target.parent.resolve(strict=True) != target.parent or os.path.lexists(target)
+            or source.resolve(strict=True) != source or target.parent.stat().st_uid != os.geteuid()):
+        raise ValueError('Qualification pin requires a fresh branch in an owned physical overlay')
+    git = ['git', '--no-replace-objects', '--literal-pathspecs']
+    if subprocess.check_output([*git,'cat-file','-t',revision],cwd=repo) != b'commit\n':
+        raise ValueError('Qualification source pin requires an exact commit')
+    entry = subprocess.check_output([*git,'ls-tree','-z',revision,'--',str(relative_file)],cwd=repo)
+    metadata, separator, name = entry.partition(b'\t')
+    fields = metadata.split()
+    if (not separator or name != os.fsencode(relative_file) + b'\0' or len(fields) != 3
+            or fields[0] not in (b'100644',b'100755') or fields[1] != b'blob'):
+        raise ValueError('Qualification pin is not a regular file in the selected revision')
+    raw = subprocess.check_output([*git,'cat-file','blob',fields[2]],cwd=repo)
+    if hashlib.sha256(raw).hexdigest() != sha256 or qualification_input_file(source)[2] != sha256:
+        raise ValueError('Qualification pin differs from the selected Git or checkout bytes')
+    with tempfile.TemporaryDirectory(prefix='.qualification-pin-', dir=target.parent) as temp:
+        staged = Path(temp) / 'branch'
+        destination, origin = staged, repo / branch
+        for part in relative_file.relative_to(branch).parts:
+            destination.mkdir()
+            for sibling in origin.iterdir():
+                if sibling.name != part:
+                    (destination / sibling.name).symlink_to(sibling)
+            destination = destination / part
+            origin = origin / part
+        with destination.open('xb') as out:
+            out.write(raw)
+        destination.chmod(int(fields[0],8) & 0o777)
+        if qualification_input_file(destination)[2] != sha256 or os.path.lexists(target):
+            raise ValueError('Qualification pin changed before publication')
+        from build_wiktionaries import _publish_prepared_metadata_no_replace
+        _publish_prepared_metadata_no_replace(staged, target)
+    return overlay / relative_file
+
+
 def qualification_input_inventory(overlay, allowed_root, roots, extras=()):
     """Snapshot the source projection actually used by a scoped native build.
 
@@ -795,7 +849,7 @@ def focused_prepared_names(group, selected, *, imported_discovery=(), source_occ
     if not selected or len(set(selected)) != len(selected):
         raise ValueError('Focused native tests must be nonempty and unique')
     discovery = {'encoder': 'root.test.encoder root imports bundle-time presentation modules',
-                 'lua': 'tests.test_0'}.get(group)
+                 'lua': 'tests.test_0', 'blob_query': 'main.test_0'}.get(group)
     required = [discovery] if discovery else []
     # Unnamed tests in reached dependency modules may be emitted independently
     # of Zig's root-name filters. Require source-bound inventory for such cases.

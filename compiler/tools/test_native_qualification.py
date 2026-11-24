@@ -14,6 +14,51 @@ import native_qualification_helpers as helpers
 
 
 class QualificationInputTests(unittest.TestCase):
+    def test_pin_only_selected_git_source_before_scoped_inventory(self):
+        import subprocess
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            def git(*args):
+                return subprocess.check_output(['git','-c','user.name=Fixture','-c','user.email=fixture@example.invalid',
+                    '-c','core.hooksPath=/dev/null',*args],cwd=repo,stderr=subprocess.DEVNULL).decode().strip()
+            git('init','-q')
+            selected = Path('renderer/src/format/types.zig')
+            target = repo / selected
+            target.parent.mkdir(parents=True)
+            target.write_bytes(b'original')
+            sibling = target.with_name('codec.zig')
+            sibling.write_bytes(b'kept')
+            git('add','renderer'); git('commit','-qm','fixture')
+            rev = git('rev-parse','HEAD')
+            sha = hashlib.sha256(b'original').hexdigest()
+            overlay = repo / '.tmp' / 'active'
+            overlay.mkdir(parents=True)
+            pin = qualification.qualification_pin_source
+            with self.assertRaisesRegex(ValueError,'Git or checkout bytes'):
+                pin(overlay,repo,'renderer',selected,rev,'0'*64)
+            self.assertEqual(list(overlay.iterdir()),[])
+            target.write_bytes(b'wrong working copy')
+            with self.assertRaisesRegex(ValueError,'Git or checkout bytes'):
+                pin(overlay,repo,'renderer',selected,rev,sha)
+            self.assertEqual(list(overlay.iterdir()),[])
+            target.write_bytes(b'original')
+            output = pin(overlay,repo,'renderer',selected,rev,sha)
+            self.assertFalse(output.is_symlink() or output.samefile(target))
+            self.assertEqual(output.stat().st_nlink,1)
+            self.assertTrue(output.with_name('codec.zig').is_symlink())
+            self.assertTrue(output.with_name('codec.zig').samefile(sibling))
+            snapshot = lambda: qualification.qualification_input_inventory(overlay,repo,['renderer'])
+            before = snapshot()
+            target.write_bytes(b'new canonical revision')
+            self.assertEqual(output.read_bytes(),b'original')
+            self.assertEqual(snapshot(),before)
+            sibling.write_bytes(b'changed borrowed dependency')
+            self.assertNotEqual(snapshot(),before)
+            with self.assertRaisesRegex(ValueError,'fresh branch'):
+                pin(overlay,repo,'renderer',selected,rev,sha)
+            with self.assertRaisesRegex(ValueError,'fresh branch'):
+                pin(repo,repo,'renderer',selected,rev,sha)
+
     def test_physical_scope_tracks_borrowed_files_and_excludes_unrelated_paths(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -179,6 +224,9 @@ class FocusedPreparedNamesTests(unittest.TestCase):
                                 ('tools', [focus]), ('encoder', [anchor])]:
             selected = expected if expected == [anchor] else [focus]
             self.assertEqual(qualification.focused_prepared_names(group, selected), expected)
+        frontend = 'main.test.empty dataset hint requires the complete header-only language catalog'
+        self.assertEqual(qualification.focused_prepared_names('blob_query', [frontend]), [frontend, 'main.test_0'])
+        self.assertEqual(qualification.focused_prepared_names('blob_query', ['main.test_0']), ['main.test_0'])
         dependency = 'ustring_pattern.test_0'
         imported = dict(imported_discovery=[dependency], source_occurrences={dependency: 1})
         self.assertEqual(qualification.focused_prepared_names('lua_wikitext', [focus], **imported),
