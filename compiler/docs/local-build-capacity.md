@@ -206,11 +206,47 @@ The latest six-case Android device run passed one case, retained five failures,
 verified the protected dictionary/preferences bytes and restored the prior
 foreground application. These findings keep application acceptance open.
 
-The next local candidate, R19, combines reviewed Malagasy/Thai source-custody
+The local candidate R19 combines reviewed Malagasy/Thai source-custody
 repairs, a responsive-layout format extension and the Babua mutation-test
 correction. Its 3,194-file manifest is
 `915c8c39ca3b9f73d5b95d1934409749ed7562389f240621217e865dfcd1ef44`.
-Qualification is in progress; it is not integrated production source. The new
+Its six Encoder and six codec checks passed. The separately compiled Tools
+methods passed the full indexed Babua case, its adjacent-sibling control and
+the original Hungarian Writer. Hungarian output remained byte-identical to
+R17. Three other methods failed with clean process closure: Malagasy reached
+an inline-box refusal in the deliberately withdrawn table-capability arm,
+before the authentic arm ran; Thai reached a later geometry predicate on its
+original nowrap element; Kurdish custody retained the ancestor-margin failure.
+Keep these distinct from whole-edition results. The next Malagasy test runs
+the authentic arm first while preserving both arms' assertions.
+
+The ordinary R17 Babua pipeline also completed on RD: one authentic indexed
+page, raw and compressed verification, and Buginese CLI readback. Its 1,244-byte
+compressed member has SHA-256
+`e9526f59d879ef4a5eb3268ca21f99b5ff7b70ff9706f6aa9ca8f0d91e8639e8`.
+The source and all 34 original input roles remained unchanged. This does not
+close rendering. The same original inputs are now staged locally for an R19
+ordinary Writer/Verify/Reader run after the current native job closes.
+
+The R20b cell-font scratch candidate compiled successfully. Its original
+allocator control returned typed `OutOfMemory` at the first positive phase
+under the 2 MiB fixture bound. The candidate completed 64 initial queries using
+1,154,698 backing bytes, then failed the next retained-owner comparison. The
+existing comparison uses pointer identity for non-byte slices, including
+independently cloned named-font lists; a narrow value-comparison repair is
+under review. Neither this failure nor compilation success qualifies the
+memory change. The unchanged complete Kurdish original method has its own
+4 GiB guard and result under `.tmp/r20b-local/`.
+
+Closed source snapshots share identical files only when path, content, size
+and mode agree. Their before/after manifests remain unchanged, and unique
+failures and artifacts remain available. Any later edit must replace the inode
+before writing or changing permissions. Clean-cache advice on closed files
+resolved local compile admission pressure without changing limits or deleting
+artifacts; admission-only refusals remain recorded separately from executed
+compiles.
+
+These candidates are not integrated production source. The new
 responsive capability uses DPRa global bit 24. The earlier bit-21 proposal was
 withdrawn because Android already uses bits 21 and 22 for bottom alignment.
 Reserved bit 23 remains rejected. Preserve the allocation and legacy-format
