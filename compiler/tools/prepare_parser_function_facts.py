@@ -2,6 +2,7 @@
 """Project retained, authenticated API facts for build-time filepath and PAGESIZE."""
 import argparse
 from datetime import datetime
+from email.utils import format_datetime, parsedate_to_datetime
 import hashlib
 import json
 import math
@@ -24,6 +25,15 @@ MAX_MANIFEST = 8 * 1024 * 1024
 MAX_RECORDS = 65536
 MAX_OBSERVATIONS = 1024
 CORE = 'f45897451256aa3799aecc5d7ee320ade22beaec'
+HU_OBSERVED_CORE = '87f311882d8c84ec21e288d0bde8aa289df8dc56'
+HU_CONFIGURATION = dict(wiki='huwiktionary', date='20261001', content_language='hu',
+    namespace_sha256='68c76ee3cf6c32dcbccccd6afa6be303d4066e78b08eb9fd96fc06bb82c2d3cf',
+    site_info_sha256='60661fb85446842ab46e689307488a4ea9c9b9246810da5eb59dbe8415c78ce8')
+LEGACY_PRODUCER = 'ef49e2fef666eafcaa45526d8250e58ce06267f89b3cbf6e42feaed4751ca263'
+HU_INTEGERS = (0, 9, 999, 1000, 9999, 10000, 23220, 1000000, 2147483648, 9007199254740991)
+HU_BEGIN = 'WIKIDICT_FORMATNUM_HU_V1_BEGIN'
+HU_END = 'WIKIDICT_FORMATNUM_HU_V1_END'
+HU_FORMAT_PROFILE = 'mw-87f-hu-latn-integer-v1'
 COMMON = dict(action='query', format='json', formatversion='2', curtimestamp='1',
               meta='siteinfo', siprop='general|extensions', maxlag='5')
 FILE_QUERY = dict(COMMON, prop='imageinfo', iiprop='url|sha1|timestamp|canonicaltitle|mime|size',
@@ -98,26 +108,38 @@ def observed(request_raw, receipt_raw, response_raw, response_name, cfg):
         raise ValueError('Invalid parser-function query')
     builtin = query.get('action') == 'expandtemplates'
     kind = 'filepath-values' if builtin else query.get('prop')
+    authority = request.get('core_authority')
+    if builtin and not isinstance(authority, dict):
+        raise ValueError('Missing separate builtin source authority')
+    core = authority.get('revision') if builtin else request.get('expected_core')
+    if core != CORE and not (core == HU_OBSERVED_CORE and cfg == HU_CONFIGURATION):
+        raise ValueError('Unreviewed parser-function source or selected site')
     variable = 'titles' if kind == 'imageinfo' else 'revids'
     expected = FILE_QUERY if kind == 'imageinfo' else PAGE_QUERY if kind == 'revisions' else None
     if builtin:
-        authority = request.get('core_authority', {})
         if (set(query) != set(VALUE_QUERY) | {'title', 'text'}
                 or any(query[k] != v for k, v in VALUE_QUERY.items())
                 or authority.get('kind') != 'separate-observation-and-primary-source'
-                or authority.get('revision') != CORE
+                or authority.get('revision') != core
                 or authority.get('same_response_core_observed') is not False):
             raise ValueError('Unsupported builtin-only function observation')
         text(query['title'])
-        names = filepath_names(query)
         frame = request.get('framing', {})
-        if (frame.get('begin') != BEGIN or frame.get('end') != END
+        if not isinstance(frame, dict):
+            raise ValueError('Missing builtin request framing')
+        if core == HU_OBSERVED_CORE and frame.get('begin') == HU_BEGIN:
+            kind = 'number-format'
+            if (frame != dict(begin=HU_BEGIN, end=HU_END, ordered_integers=list(HU_INTEGERS),
+                    field_separator='\t', separator='\n', trailing_newline=False) or
+                    query['text'] != '\n'.join([HU_BEGIN, *(f'{n}\t{{{{FORMATNUM:{n}}}}}' for n in HU_INTEGERS), HU_END])):
+                raise ValueError('Hungarian integer formatting request differs')
+        elif (frame.get('begin') != BEGIN or frame.get('end') != END
                 or frame.get('separator') != '\n' or frame.get('field_separator') != '\t'
-                or frame.get('ordered_files') != names or frame.get('trailing_newline') is not False
-                or type(frame.get('exact_lines')) is not int or frame['exact_lines'] != len(names) + 2):
+                or frame.get('ordered_files') != filepath_names(query) or frame.get('trailing_newline') is not False
+                or type(frame.get('exact_lines')) is not int or frame['exact_lines'] != len(frame['ordered_files']) + 2):
             raise ValueError('Builtin request framing differs')
     elif (expected is None or set(query) != set(expected) | {variable}
-          or any(query[k] != v for k, v in expected.items()) or request.get('expected_core') != CORE):
+          or any(query[k] != v for k, v in expected.items())):
         raise ValueError('Unsupported parser-function query profile')
     if (request.get('url') != evidence.wiktionary_api(cfg['wiki']) + '?' + urllib.parse.urlencode(query)
             or len(request['url'].encode()) > 7168):
@@ -126,7 +148,7 @@ def observed(request_raw, receipt_raw, response_raw, response_name, cfg):
             or type(receipt.get('status')) is not int or receipt['status'] != 200
             or receipt.get('url') != request['url']
             or type(receipt.get('request_count')) is not int or receipt['request_count'] != 1
-            or (receipt.get('core_revision') is not None if builtin else receipt.get('core_revision') != CORE)
+            or (receipt.get('core_revision') is not None if builtin else receipt.get('core_revision') != core)
             or receipt.get('response') != response_name
             or type(receipt.get('response_bytes')) is not int
             or receipt['response_bytes'] != len(response_raw)
@@ -135,6 +157,22 @@ def observed(request_raw, receipt_raw, response_raw, response_name, cfg):
         raise ValueError('Retained parser-function response receipt differs')
     if not isinstance(data, dict) or any(k in data for k in ('error', 'errors', 'warnings', 'continue')):
         raise ValueError('Parser-function response is incomplete or refused')
+    if core == HU_OBSERVED_CORE:
+        headers = receipt.get('headers')
+        if not isinstance(headers, dict) or not isinstance(headers.get('date'), str):
+            raise ValueError('Missing current HTTP date')
+        http_date = headers['date']
+        try:
+            stamp = parsedate_to_datetime(http_date)
+            served = datetime.strptime(data['curtimestamp'], '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=stamp.tzinfo)
+            observed_at = datetime.fromisoformat(receipt['observed_utc'])
+            if (format_datetime(stamp, usegmt=True) != http_date or
+                    observed_at.utcoffset() != stamp.utcoffset() or
+                    abs((served - stamp).total_seconds()) > 5 or abs((observed_at - stamp).total_seconds()) > 60 or
+                    receipt.get('request_sha256') != digest(request_raw)):
+                raise ValueError('Current parser-function receipt differs from the original HTTP date or request')
+        except (KeyError, TypeError, OverflowError) as error:
+            raise ValueError('Missing current parser-function transport facts') from error
     if builtin:
         if (set(data) - {'expandtemplates', 'curtimestamp'} or not isinstance(data.get('expandtemplates'), dict)
                 or set(data['expandtemplates']) != {'wikitext'}
@@ -142,11 +180,12 @@ def observed(request_raw, receipt_raw, response_raw, response_name, cfg):
                 or receipt.get('same_response_core_observed') is not False):
             raise ValueError('Unexpected builtin function response')
         return kind, query, data
-    if not isinstance(data.get('query'), dict):
+    if not isinstance(data.get('query'), dict) or (core == HU_OBSERVED_CORE and data.get('batchcomplete') is not True):
         raise ValueError('Missing API query facts')
     general = data['query'].get('general', {})
     if (not isinstance(general, dict) or general.get('wikiid') != cfg['wiki']
-            or general.get('lang') != cfg['content_language'] or general.get('git-hash') != CORE
+            or general.get('lang') != cfg['content_language'] or general.get('git-hash') != core
+            or (core == HU_OBSERVED_CORE and general.get('generator') != 'MediaWiki 1.48.0-wmf.5')
             or not isinstance(data['query'].get('extensions'), list)):
         raise ValueError('Parser-function response source identity differs')
     if any(data['query'].get(k) for k in ('interwiki', 'converted', 'badrevids')):
@@ -277,10 +316,17 @@ def project(namespace_raw, site_raw, observations, wiki, date):
     registry = evidence.Registry(namespace_raw, wiki, date)
     files, pages, function_values = {}, {}, {}
     canonical_files = {}
+    epochs, current_times = set(), []
+    format_title = None
     if not 1 <= len(observations) <= MAX_OBSERVATIONS:
         raise ValueError('Invalid parser-function observation inventory')
     for request_raw, receipt_raw, response_raw, response_name in observations:
         kind, query, data = observed(request_raw, receipt_raw, response_raw, response_name, cfg)
+        request = decode(request_raw)
+        epoch = request.get('expected_core') if kind in ('imageinfo', 'revisions') else request['core_authority']['revision']
+        epochs.add(epoch)
+        if epoch == HU_OBSERVED_CORE:
+            current_times.append(datetime.fromisoformat(data['curtimestamp']))
         if kind == 'imageinfo':
             for row in file_rows(query, data, registry):
                 key = (row['title'], row['size_argument'])
@@ -297,6 +343,11 @@ def project(namespace_raw, site_raw, observations, wiki, date):
                 if row['title'] in pages:
                     raise ValueError('Duplicate or ambiguous page-size fact')
                 pages[row['title']] = row
+        elif kind == 'number-format':
+            expected = '\n'.join([HU_BEGIN, *(f'{n}\t' + format(n, ',').replace(',', '\u00a0') for n in HU_INTEGERS), HU_END])
+            if format_title is not None or data['expandtemplates']['wikitext'] != expected:
+                raise ValueError('Formatting results differ from the source-bound HU integer profile')
+            format_title = query['title']
         else:
             for key, value in function_rows(query, data, registry):
                 if key in function_values:
@@ -323,6 +374,12 @@ def project(namespace_raw, site_raw, observations, wiki, date):
             raise ValueError('Function result conflicts with explicit file absence')
     result = dict(schema=SCHEMA, **cfg, files=sorted(files.values(), key=lambda x:(x['title'].encode(), x['size_argument'])),
                   pages=sorted(pages.values(), key=lambda x:x['title'].encode()), formats=[])
+    if len(epochs) != 1 or (current_times and (max(current_times) - min(current_times)).total_seconds() > 900):
+        raise ValueError('Parser-function observations cross source epochs or acquisition windows')
+    if format_title is not None:
+        if not pages or format_title not in pages or not any(row['exists'] for row in files.values()):
+            raise ValueError('Hungarian format witness lacks its separately observed page and file sources')
+        result.update(number_format_profile=HU_FORMAT_PROFILE, number_format_witness_title=format_title)
     if len(encoded(result)) > MAX_MANIFEST:
         raise ValueError('Parser-function facts exceed native byte bound')
     return result
@@ -365,9 +422,13 @@ def verify(root, complete=True):
             or type(manifest.get('network_requests')) is not int or manifest['network_requests'] != 0
             or manifest.get('artifacts') != artifacts(root)):
         raise ValueError('Parser-function artifact inventory differs')
+    historical_producer = False
     for name, path in producer_paths().items():
-        if evidence.small(root / name) != evidence.small(path):
-            raise ValueError('Parser-function projection producer changed')
+        recorded = evidence.small(root / name)
+        if recorded != evidence.small(path):
+            if name != 'parser-function-facts.producer.py' or digest(recorded) != LEGACY_PRODUCER:
+                raise ValueError('Parser-function projection producer changed')
+            historical_producer = True
     records = manifest.get('observations')
     if not isinstance(records, list) or not 1 <= len(records) <= MAX_OBSERVATIONS:
         raise ValueError('Invalid parser-function capture plan')
@@ -381,6 +442,17 @@ def verify(root, complete=True):
         observations.append(tuple(evidence.small(root / names[k], MAX_RESPONSE) for k in ('request', 'receipt', 'response')) + (row['response_name'],))
     if expected != set(manifest['artifacts']):
         raise ValueError('Unexpected parser-function evidence artifacts')
+    if historical_producer:
+        for request_raw, _, _, _ in observations:
+            request = decode(request_raw)
+            if not isinstance(request, dict) or not isinstance(request.get('query'), dict):
+                raise ValueError('Invalid historical parser-function request')
+            epoch = request.get('expected_core')
+            if request['query'].get('action') == 'expandtemplates':
+                authority = request.get('core_authority')
+                epoch = authority.get('revision') if isinstance(authority, dict) else None
+            if epoch != CORE:
+                raise ValueError('Historical parser-function producer did not support this epoch')
     value = project(evidence.small(root / NAMESPACE), evidence.small(root / SITE), observations, manifest.get('wiki'), manifest.get('date'))
     raw = encoded(value)
     if (evidence.small(root / OUTPUT, MAX_MANIFEST) != raw or manifest.get('output') != OUTPUT

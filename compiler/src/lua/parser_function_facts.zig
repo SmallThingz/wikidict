@@ -17,6 +17,10 @@ pub const Format = struct { raw: u64, formatted: []const u8 };
 // semantics only through 2^53-1; larger explicitly observed values still work.
 pub const integer_format_profile = "mw-714-hu-latn-integer-v1";
 pub const integer_format_core = "7140a34a88ee294f3b4d8cda0c4f43a880410e20";
+pub const hu_wmf5_integer_format_profile = "mw-87f-hu-latn-integer-v1";
+pub const hu_wmf5_integer_format_core = "87f311882d8c84ec21e288d0bde8aa289df8dc56";
+const hu_wmf5_namespace_sha256 = "68c76ee3cf6c32dcbccccd6afa6be303d4066e78b08eb9fd96fc06bb82c2d3cf";
+const hu_wmf5_site_info_sha256 = "60661fb85446842ab46e689307488a4ea9c9b9246810da5eb59dbe8415c78ce8";
 pub const max_exact_formatted_integer: u64 = 9_007_199_254_740_991;
 
 fn formatProvenInteger(output: *[32]u8, raw: u64) ![]const u8 {
@@ -107,6 +111,7 @@ pub const Snapshot = struct {
     files: std.StringHashMapUnmanaged(std.StringHashMapUnmanaged(usize)) = .empty,
     pages: std.StringHashMapUnmanaged(usize) = .empty,
     formats: std.AutoHashMapUnmanaged(u64, usize) = .empty,
+    number_format_core: ?[]const u8 = null,
 
     pub fn init(a: A, bytes: []const u8, site: []const u8, namespace_sha: [32]u8, wiki: []const u8, date: []const u8, language: []const u8) !Snapshot {
         if (bytes.len > max_bytes or !std.unicode.utf8ValidateSlice(bytes)) return error.InvalidParserFunctionFacts;
@@ -127,7 +132,15 @@ pub const Snapshot = struct {
             !std.mem.eql(u8, d.content_language, language) or !std.mem.eql(u8, d.namespace_sha256, &std.fmt.bytesToHex(namespace_sha, .lower)) or
             !digestMatches(site, d.site_info_sha256)) return error.ParserFunctionFactsIdentityMismatch;
         if (d.number_format_profile) |profile| {
-            if (!std.mem.eql(u8, profile, integer_format_profile) or !std.mem.eql(u8, language, "hu"))
+            if (!std.mem.eql(u8, language, "hu")) return error.InvalidParserFunctionFormatProfile;
+            result.number_format_core = if (std.mem.eql(u8, profile, integer_format_profile))
+                integer_format_core
+            else if (std.mem.eql(u8, profile, hu_wmf5_integer_format_profile) and
+                std.mem.eql(u8, wiki, "huwiktionary") and std.mem.eql(u8, date, "20261001") and
+                std.mem.eql(u8, d.namespace_sha256, hu_wmf5_namespace_sha256) and
+                std.mem.eql(u8, d.site_info_sha256, hu_wmf5_site_info_sha256))
+                hu_wmf5_integer_format_core
+            else
                 return error.InvalidParserFunctionFormatProfile;
             if (!clean(d.number_format_witness_title orelse return error.InvalidParserFunctionFormatProfile, 1024, false))
                 return error.InvalidParserFunctionFormatProfile;
@@ -187,7 +200,7 @@ pub const Snapshot = struct {
     // slice escapes, including when an observed value conflicts.
     pub fn formatPageSize(self: *const Snapshot, page_allocator: A, raw: u64, effective_host_language: ?[]const u8) ![]const u8 {
         const observed_value = self.format(raw);
-        if (self.document.number_format_profile != null and
+        if (self.number_format_core != null and
             std.mem.eql(u8, effective_host_language orelse "", "hu") and raw <= max_exact_formatted_integer) {
             var buffer: [32]u8 = undefined;
             const derived = try formatProvenInteger(&buffer, raw);
@@ -336,7 +349,7 @@ test "HU formatting preserves explicit authority and refuses conflicts unsupport
     defer legacy.deinit();
     try std.testing.expectEqualStrings("1\u{202f}234", try legacy.formatPageSize(a, 1234, "hu"));
     try std.testing.expectError(error.PageSizeFormatSnapshotMissing, legacy.formatPageSize(a, 23220, "hu"));
-    for ([_][]const u8{ "mw-other-hu-latn-integer-v1", "", "mw-f458-en-latn-integer-v1" }) |profile| {
+    for ([_][]const u8{ "mw-other-hu-latn-integer-v1", "", "mw-f458-en-latn-integer-v1", hu_wmf5_integer_format_profile }) |profile| {
         const bytes = try IntegerFormatTest.fixture(a, profile, "hu");
         try std.testing.expectError(error.InvalidParserFunctionFormatProfile, Snapshot.init(a, bytes, FactsTest.site, FactsTest.ns, "testwiktionary", "20261001", "hu"));
     }

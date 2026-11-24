@@ -1140,7 +1140,7 @@ pub const Provider = struct {
         }
         // Only the optional derived formatter needs host-language metadata.
         // The ordinary page-language role and its existing validator are reused.
-        if (facts.document.number_format_profile != null) {
+        if (facts.number_format_core != null) {
             var inputs: [3]?Mapped = .{ null, null, null };
             defer for (&inputs) |*item| if (item.*) |*mapped_input| mapped_input.deinit();
             inline for (.{ "page-language.json", "page-language.raw.json", "page-language.html" }, 0..) |name, i| {
@@ -1191,12 +1191,13 @@ pub const Provider = struct {
         const self: *Provider = @ptrCast(@alignCast(ctx orelse return error.MissingPageProvider));
         const facts = if (self.parser_function_facts_snapshot) |*value| value else return error.PageSizeFormatSnapshotMissing;
         const effective_language: ?[]const u8 = language: {
+            const format_core = facts.number_format_core orelse break :language null;
             const current = host.current orelse break :language null;
             if (!std.mem.eql(u8, current.metadata.content_model, "wikitext")) break :language null;
             const languages = if (self.page_language_registry) |*value| value else break :language null;
             const selected = languages.lookup(current.metadata.page_id, current.metadata.revision_id,
                 current.namespace, host.title, host.source, .{
-                    .source_core_revision = parser_function_facts.integer_format_core,
+                    .source_core_revision = format_core,
                     .normal_no_target = host.normal_no_target,
                     .interface_message = host.interface_message,
                     .target_language_override = host.target_language_override,
@@ -3346,6 +3347,87 @@ test "normal PAGESIZE index authority preserves exact page identity redirects an
     }
 }
 
+
+test "normal HU WMF5 formatter binds authenticated facts to the exact root host epoch" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    const fixture = page_language.HuWmf5Testing;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(root);
+    const dump = try std.fs.path.join(a, &.{ root, "dump.xml" });
+    defer a.free(dump);
+    var catalog = try lua_program.namespace_registry.Registry.init(a, @embedFile("testdata/parser-functions/hu-namespace.tsv"));
+    defer catalog.deinit();
+    const viz_raw = @embedFile("testdata/parser-functions/hu-viz.wikitext");
+    const fact_bytes = @embedFile("testdata/parser-functions/hu-facts-wmf5.json");
+    try tmp.dir.writeFile(io, .{ .sub_path = "dump.xml", .data = viz_raw });
+    try tmp.dir.writeFile(io, .{ .sub_path = "page-index.tsv", .data = @embedFile("testdata/parser-functions/hu-relocated-index.tsv") });
+    try tmp.dir.writeFile(io, .{ .sub_path = "namespace-siteinfo.raw.json", .data = @embedFile("testdata/parser-functions/hu-site.json") });
+    try tmp.dir.writeFile(io, .{ .sub_path = "file-metadata.tsv", .data = @embedFile("testdata/parser-functions/hu-file-metadata.tsv") });
+    try tmp.dir.writeFile(io, .{ .sub_path = "parser-function-facts.json", .data = fact_bytes });
+    try tmp.dir.writeFile(io, .{ .sub_path = "page-language.json", .data = fixture.packet });
+    try tmp.dir.writeFile(io, .{ .sub_path = "page-language.raw.json", .data = fixture.response });
+    var page_arena = std.heap.ArenaAllocator.init(a);
+    defer page_arena.deinit();
+    const page_a = page_arena.allocator();
+    const host: lua_program.WikitextProvider.PageSizeFormatContext = .{
+        .title = "Európa", .source = fixture.raw, .normal_no_target = true, .interface_message = false,
+        .current = .{ .namespace = 0, .metadata = .{ .page_id = 1153, .revision_id = 3369675,
+            .revision_timestamp = "", .revision_user = "", .content_model = "wikitext" } },
+    };
+    const viz: lua_program.WikitextProvider.PageSizeFormatContext = .{
+        .title = "víz", .source = viz_raw, .normal_no_target = true, .interface_message = false,
+        .current = .{ .namespace = 0, .metadata = .{ .page_id = 609, .revision_id = 3518053,
+            .revision_timestamp = "", .revision_user = "", .content_model = "wikitext" } },
+    };
+    {
+        var provider = try Provider.init(io, a, root, &catalog, dump);
+        defer provider.deinit();
+        const api = provider.api();
+        const size = try api.page_size.?(api.ctx, viz.title);
+        try std.testing.expectEqual(@as(u64, 23220), size);
+        try std.testing.expectEqualStrings(parser_function_facts.hu_wmf5_integer_format_core,
+            provider.parser_function_facts_snapshot.?.number_format_core.?);
+        try std.testing.expectEqualStrings("23\u{a0}220", try api.page_size_formatted.?(api.ctx, page_a, size, host));
+        try std.testing.expectError(error.PageSizeFormatSnapshotMissing, api.page_size_formatted.?(api.ctx, page_a, size, viz));
+        for (0..8) |mutation| {
+            var changed = host;
+            switch (mutation) {
+                0 => changed.source = fixture.raw[1..],
+                1 => changed.current.?.metadata.revision_id += 1,
+                2 => changed.current.?.metadata.page_id += 1,
+                3 => changed.current.?.namespace = 10,
+                4 => changed.title = "Other",
+                5 => changed.interface_message = true,
+                6 => changed.target_language_override = "hu",
+                7 => changed.variant_override = "hu",
+                else => unreachable,
+            }
+            try std.testing.expectError(error.PageSizeFormatSnapshotMissing, api.page_size_formatted.?(api.ctx, page_a, size, changed));
+        }
+    }
+    // Keep the authentic WMF5 host bytes while crossing only the fact profile.
+    var legacy = try std.json.parseFromSlice(std.json.Value, a, fact_bytes, .{});
+    defer legacy.deinit();
+    try legacy.value.object.put(legacy.arena.allocator(), "number_format_profile", .{ .string = parser_function_facts.integer_format_profile });
+    const legacy_bytes = try std.json.Stringify.valueAlloc(a, legacy.value, .{});
+    defer a.free(legacy_bytes);
+    try tmp.dir.writeFile(io, .{ .sub_path = "parser-function-facts.json", .data = legacy_bytes });
+    {
+        var provider = try Provider.init(io, a, root, &catalog, dump);
+        defer provider.deinit();
+        try std.testing.expectError(error.PageSizeFormatSnapshotMissing, Provider.pageSizeFormatted(&provider, page_a, 23220, host));
+    }
+    // The existing synthetic 714 host is a crossed-epoch negative only.
+    try tmp.dir.writeFile(io, .{ .sub_path = "parser-function-facts.json", .data = fact_bytes });
+    try tmp.dir.writeFile(io, .{ .sub_path = "page-language.json", .data = @embedFile("testdata/parser-functions/hu-language.synthetic.json") });
+    try tmp.dir.writeFile(io, .{ .sub_path = "page-language.raw.json", .data = @embedFile("testdata/parser-functions/hu-language-response.synthetic.json") });
+    var provider = try Provider.init(io, a, root, &catalog, dump);
+    defer provider.deinit();
+    try std.testing.expectError(error.PageSizeFormatSnapshotMissing, Provider.pageSizeFormatted(&provider, page_a, 23220, viz));
+}
 
 test "normal HU PAGESIZE formatter requires exact effective root host context" {
     const a = std.testing.allocator;

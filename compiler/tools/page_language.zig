@@ -252,6 +252,23 @@ const generic_profile_sources = [_][2][]const u8{
     .{ "LanguageCode.php", "17962f89468aa25369f126cc7a4edd8c074cb73497c8d4de77e8cbb04858d60d" },
     .{ "LanguageFactory.php", "2b91686fe7fcaaecb49da33316e407dd7409ce4e9d88f958272b912695ab7723" },
 };
+const hu_observed_core = "87f311882d8c84ec21e288d0bde8aa289df8dc56";
+const hu_observed_sources = [_][2][]const u8{
+    .{ "AddWrapperDivClass.php", "6854e9fc9378928ad5cc864ddbd4cc58c60354430060fa84828543d6afc96a27" },
+    .{ "ApiQueryInfo.php", "833251271905228b1176789599bc77e3e15dd496b9eeff363ad2bbef5b4efd84" },
+    .{ "ContentHandler.php", "86917604893732181432372cf3f1b1508daab28eb3784a27baff88914a6082e0" },
+    .{ "Language.php", "2da0127b227591c2a743693f166e42ce109a09d88e0f8283be393968611bddd2" },
+    .{ "LanguageCode.php", "17962f89468aa25369f126cc7a4edd8c074cb73497c8d4de77e8cbb04858d60d" },
+    .{ "LanguageConverterFactory.php", "f7761f728de977f7e8b96040b8c00430e4f1c0db4ff1e6f2cf8cfc4e0537d709" },
+    .{ "LanguageFactory.php", "feb3708096e3bb19f85ea01f227786bea11421012e625827fe70595818a642bc" },
+    .{ "Parser.php", "bcd2daba79ee1c716c5e2218e1917a99eab74ac759c8ffb24d0b6823f187346f" },
+    .{ "ParserOptions.php", "7ed534f071c223bd846695be5dc9360c4f913f5eac0c1157ce92387a0df9d40e" },
+    .{ "ParserOutput.current.php", "6910c9356296fc08d62d35fe8b91096c209d1d907c44d6538a3186f4f65c049a" },
+    .{ "TextContentHandler.php", "5a1de612d1370e2b1680b1072d4c24f6eeb1180487e8837ef54606c6abcc0117" },
+    .{ "Title.php", "58352bcb6fffd57e20366eb5ec82271dca072ee9dc613313f6c29d88d4b494cc" },
+    .{ "TrivialLanguageConverter.php", "918db7d24bb2fd54360a63f7a9ef5211fab9000d515de0e907a0f007f7ea39ff" },
+    .{ "WikitextContentHandler.php", "f27bfe84c7844b711ea14265d29b0a82e555abac28c7a0e8c5eadbbf2691cf05" },
+};
 const Profile = struct { core: []const u8, generic_trivial: bool };
 // Exact LanguageCode mappings. Deprecated internal codes cannot round-trip
 // through the ParserOutput BCP47 value to the same LanguageFactory object.
@@ -303,19 +320,25 @@ fn trivialLanguage(code: []const u8, html: []const u8, direction: []const u8) bo
 }
 
 fn profile(v: V, core: []const u8) !Profile {
-    // These exact revisions have byte-identical complete source chains.
-    // The newer revision is admitted only through the generic v2 profile.
+    // HU v3 has its own source pins. The earlier v1/v2 profiles keep their original chains.
     // Return static storage, not a slice into temporary JSON validation memory.
-    const selected_core = if (eq(core, accepted_core)) accepted_core else if (eq(core, current_core)) current_core else if (eq(core, metadata_core_714)) metadata_core_714 else return invalid;
+    const hu_pages = eq(core, hu_observed_core);
+    const selected_core = if (hu_pages) hu_observed_core else if (eq(core, accepted_core)) accepted_core else if (eq(core, current_core)) current_core else if (eq(core, metadata_core_714)) metadata_core_714 else return invalid;
     if (v != .object or v.object.count() != 6) return invalid;
     const kind = try str(v, "kind");
     const generic_trivial = eq(kind, "normal-wikitext-trivial-language-v2");
-    if ((!generic_trivial and !eq(kind, "normal-wikitext-trivial-language-v1")) or !eq(try str(v, "converter"), "TrivialLanguageConverter")) return invalid;
+    if (hu_pages != eq(kind, "normal-wikitext-hu-trivial-language-v3")) return invalid;
+    if ((!hu_pages and !generic_trivial and !eq(kind, "normal-wikitext-trivial-language-v1")) or !eq(try str(v, "converter"), "TrivialLanguageConverter")) return invalid;
     if (generic_trivial and !eq(selected_core, current_core) and !eq(selected_core, metadata_core_714)) return invalid;
     if (!generic_trivial and eq(selected_core, metadata_core_714)) return invalid;
     const interface = try field(v, "interface_message");
     if (interface != .bool or interface.bool or try field(v, "target_language_override") != .null or try field(v, "variant_override") != .null) return invalid;
     const sources = try field(v, "sources");
+    if (hu_pages) {
+        if (sources != .object or sources.object.count() != hu_observed_sources.len) return invalid;
+        for (hu_observed_sources) |pair| if (!eq(try str(sources, pair[0]), pair[1])) return invalid;
+        return .{ .core = hu_observed_core, .generic_trivial = false };
+    }
     if (sources != .object or sources.object.count() != profile_sources.len + @as(usize, if (generic_trivial) generic_profile_sources.len else 0)) return invalid;
     for (profile_sources) |pair| if (!eq(try str(sources, pair[0]), pair[1])) return invalid;
     if (generic_trivial) {
@@ -343,7 +366,7 @@ fn responsePages(a: A, raw: []const u8, source: ResponseRange, doc: Packet, ns: 
     const general = try field(query, "general");
     const response_core = try str(general, "git-hash");
     const generator = try str(general, "generator");
-    const exact_epoch = eq(response_core, (doc.core_revision orelse return invalid)) and eq(generator, "MediaWiki 1.48.0-wmf.3");
+    const exact_epoch = eq(response_core, (doc.core_revision orelse return invalid)) and eq(generator, if (eq(response_core, hu_observed_core)) "MediaWiki 1.48.0-wmf.5" else "MediaWiki 1.48.0-wmf.3");
     // All eleven complete v1 source bodies at this observed WMF4 revision
     // equal the selected f458 source profile. Preserve the response's actual
     // epoch; the generic v2 language-mapping chain has no such proof here.
@@ -369,7 +392,9 @@ fn observedPage(page: V, expected: Page, selected_profile: Profile) !ObservedLan
     const code = try str(page, "pagelanguage");
     const html = try str(page, "pagelanguagehtmlcode");
     const direction = try str(page, "pagelanguagedir");
-    if (selected_profile.generic_trivial) {
+    if (eq(selected_profile.core, hu_observed_core)) {
+        if (!eq(code, "hu") or !eq(html, "hu") or !eq(direction, "ltr")) return invalid;
+    } else if (selected_profile.generic_trivial) {
         if (!trivialLanguage(code, html, direction)) return invalid;
     } else if (!eq(code, "ru") or !eq(html, "ru") or !eq(direction, "ltr")) return invalid;
     return .{ .html = html, .direction = direction };
@@ -438,9 +463,14 @@ pub const Registry = struct {
                 doc.core_revision != null or doc.source_profile != .null))) return invalid;
         const selected_profile: Profile = if (has_api) try profile(doc.source_profile, doc.core_revision orelse return invalid)
             else .{ .core = "", .generic_trivial = false };
+        if (eq(selected_profile.core, hu_observed_core) and
+            (!eq(ns.wiki, "huwiktionary") or !eq(ns.dump_date, "20261001") or !eq(ns.content_language, "hu") or
+             !eq(doc.namespace_registry_sha256, "68c76ee3cf6c32dcbccccd6afa6be303d4066e78b08eb9fd96fc06bb82c2d3cf") or
+             has_direct or doc.revision_exteriors.len != 0 or prefix_bytes != null)) return invalid;
         var previous_id: u64 = 0;
         for (doc.records) |record| {
             const page = record.page;
+            if (eq(selected_profile.core, hu_observed_core) and (record.prefix != null or page.expanded_sha256 != null)) return invalid;
             if (page.id <= previous_id or page.revision == 0 or page.namespace != 0 or !eq(page.model, "wikitext") or
                 page.title.len == 0 or std.mem.indexOfAny(u8, page.title, "\x00\r\n\t") != null or
                 !lowerHash(page.raw_sha256) or (if (page.expanded_sha256) |hash| !lowerHash(hash) else false) or record.response_index >= doc.responses.len) return invalid;
@@ -1302,6 +1332,69 @@ test "generic trivial page language preserves rehashed profile identity capture 
     }
 }
 
+
+pub const HuWmf5Testing = if (@import("builtin").is_test) struct {
+    pub const packet = @embedFile("testdata/hu-wmf5-source/page-language.json");
+    pub const response = @embedFile("testdata/hu-wmf5-source/page-language.raw.json");
+    pub const raw = @embedFile("testdata/hu-direct-source-context01/1153-raw.wikitext");
+} else void;
+
+test "current Hungarian page language binds source, revisions and observed host" {
+    const a = std.testing.allocator;
+    var ns = try namespaces.Registry.init(a, @embedFile("testdata/hu-direct-source-context01/namespace-registry.tsv"));
+    defer ns.deinit();
+    const packet_bytes = HuWmf5Testing.packet;
+    const response_bytes = HuWmf5Testing.response;
+    const original = HuWmf5Testing.raw;
+    var registry = try Registry.init(a, packet_bytes, response_bytes, null, &ns);
+    defer registry.deinit();
+    try std.testing.expectEqual(50, registry.entries.len);
+    var normal: NormalContext = .{ .source_core_revision = hu_observed_core, .normal_no_target = true, .interface_message = false };
+    const ctx = registry.lookup(1153, 3369675, 0, "Európa", original, normal) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("hu", ctx.language);
+    try std.testing.expectEqualStrings("ltr", ctx.direction);
+    try std.testing.expect(ctx.outer_languages == null and ctx.prefix_observed_utc == null);
+    try std.testing.expect(registry.lookup(1153, 3369675, 0, "Európa", "changed", normal) == null);
+    normal.source_core_revision = metadata_core_714;
+    try std.testing.expect(registry.lookup(1153, 3369675, 0, "Európa", original, normal) == null);
+    var other_date = ns;
+    other_date.dump_date = "20260901";
+    try std.testing.expectError(invalid, Registry.init(a, packet_bytes, response_bytes, null, &other_date));
+    try std.testing.expectError(invalid, Registry.init(a, packet_bytes, response_bytes, "unowned prefix", &ns));
+    for (0..14) |mutation| {
+        var arena = std.heap.ArenaAllocator.init(a);
+        defer arena.deinit();
+        const t = arena.allocator();
+        var packet = try parse(t, packet_bytes);
+        var response = try parse(t, response_bytes);
+        const query = response.object.getPtr("query").?;
+        const general = query.object.getPtr("general").?;
+        const profile_value = packet.object.getPtr("source_profile").?;
+        switch (mutation) {
+            0 => try profile_value.object.put(t, "kind", .{ .string = "normal-wikitext-trivial-language-v2" }),
+            1 => try profile_value.object.getPtr("sources").?.object.put(t, "Title.php", .{ .string = "changed" }),
+            2 => try general.object.put(t, "git-hash", .{ .string = metadata_core_714 }),
+            3 => try general.object.put(t, "generator", .{ .string = "MediaWiki 1.48.0-wmf.4" }),
+            4 => try general.object.put(t, "wikiid", .{ .string = "elwiktionary" }),
+            5 => try query.object.getPtr("pages").?.array.items[0].object.put(t, "pagelanguagedir", .{ .string = "rtl" }),
+            6 => try response.object.put(t, "curtimestamp", .{ .string = "2026-11-10T12:00:00Z" }),
+            7 => try profile_value.object.put(t, "variant_override", .{ .string = "hu" }),
+            8 => try profile_value.object.put(t, "interface_message", .{ .bool = true }),
+            9 => try profile_value.object.put(t, "target_language_override", .{ .string = "hu" }),
+            10 => try query.object.getPtr("pages").?.array.items[0].object.put(t, "pagelanguage", .{ .string = "fr" }),
+            11 => try general.object.put(t, "generator", .{ .string = "MediaWiki 1.48.0-wmf.3" }),
+            12 => try packet.object.getPtr("records").?.array.items[0].object.getPtr("page").?.object.put(t, "expanded_sha256", .{ .string = try t.dupe(u8, &digest(original)) }),
+            13 => try packet.object.put(t, "core_revision", .{ .string = metadata_core_714 }),
+            else => unreachable,
+        }
+        const raw = try std.json.Stringify.valueAlloc(t, response, .{});
+        const range = &packet.object.getPtr("responses").?.array.items[0];
+        try range.object.put(t, "bytes", .{ .integer = @intCast(raw.len) });
+        try range.object.put(t, "sha256", .{ .string = try t.dupe(u8, &digest(raw)) });
+        const encoded = try std.json.Stringify.valueAlloc(t, packet, .{});
+        try std.testing.expectError(invalid, Registry.init(a, encoded, raw, null, &ns));
+    }
+}
 
 test "generic 714 page language keeps exact epoch host and source guards" {
     const a = std.testing.allocator;

@@ -360,3 +360,28 @@ Babua payload. The package receipt is `c0e75378280a7a052941d36615b2d07120a9315b9
 at RD `.tmp/completion-council-c19r3/titlemedia19r3-packages.json`.
 Physical rendering, interaction and user-state restoration remain separate
 requirements. No release or whole-project completion is asserted.
+
+The standalone Hungarian WMF5 provider change passed fresh Cloud qualification
+from source manifest
+`e6066bd99dbc3389c589712e57136d5c6831479d946268de01ad41cef58ce0af`.
+All four selected Provider methods and the separate page-language Tools method
+executed with zero exits, stable source/runtime/configuration/executable inputs
+and complete guardian cleanup. The Provider compilation took 41.164 seconds
+at 732,805,120 bytes peak PSS; the Tools compilation took 27.402 seconds at
+626,834,432 bytes. Their executables are respectively
+`e3e11a4cc7d8a498875d91caa9a9fc95c2f8bf2948f13cce2c24feacdb40f483`
+and `c525f8a76d19b6bf57a22faea2f71ed99b4ede1838c968109f60d94823a6f1f0`.
+The twelve Python producer controls also passed with the pinned Unicode
+libraries. An earlier unsourced-library attempt and a method preflight with a
+duplicate PATH setup are retained; neither dispatched a qualifying native
+method. Receipts and exact selectors are under `.tmp/r25-main-en-hu/`.
+
+This change binds derived Hungarian integer formatting to the authenticated
+WMF5 facts and exact effective host epoch. The original Európa host permits
+formatting the observed víz page size; víz itself is absent from that host
+packet and continues to refuse that derived call. Crossed epochs and changed
+host fields also refuse. The previous format profile and explicitly observed
+values retain their existing behavior. The whole víz Writer, action grouping
+and client rendering remain independent requirements. The common source seal
+also contains the still-unqualified English candidate; its failed initial
+Tools compile is preserved separately and is not credited by these HU tests.
