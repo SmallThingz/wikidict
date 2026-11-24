@@ -342,3 +342,25 @@ test('ordinary description bodies reject forged owner, zero rail, unknown tag an
   mutate(ink,(b,i)=>Buffer.from('#333333').copy(b,i));
   mutate(ink,(b,i)=>Buffer.from('#GGGGGG').copy(b,i));
 });
+
+test('DPRM table disclosure keeps physical header, row modes and old table bytes',()=>{
+  const body=(flags=0x41,modes=[0,1,2],collapsed=1,headerCell=0,label='more',version='M')=>{
+    const cells=[1,0,0].map(header=>cat([header,1,0,1,0,0],u(0),[0,0,0]));
+    const base=cat([flags,0],u(0),list(cells.map(c=>list([c]))),[0,0]);
+    const tail=flags===1?Buffer.alloc(0):cat(u(0),u(headerCell),[collapsed],s(label),s('less'),s('inflection'),modes);
+    return wire(version,[block(version,{table:cat(base,tail)})]);
+  };
+  const record=body();
+  const table=decode(record,{}).sections[0].blocks[0].table;
+  assert.deepEqual(table.disclosure,{header_row:0,header_cell:0,initially_collapsed:true,expand_label:'more',
+    collapse_label:'less',category:'inflection',row_modes:['always','collapsed','expanded']});
+  assert.equal(table.rows[0].cells[0].header,true);
+  const old=decode(body(1),{}).sections[0].blocks[0].table;
+  assert.equal(old.disclosure,undefined);
+  assert.deepEqual(old.rows,table.rows);
+  assert.equal(decode(body(0x41,[0,1,2],0),{}).sections[0].blocks[0].table.disclosure.initially_collapsed,false);
+  for(const flags of [0x40,0x43,0x61,0x81])assert.throws(()=>decode(body(flags),{}));
+  for(const modes of [[2,1,0],[0,0,0],[0,3,2],[0,1]])assert.throws(()=>decode(body(0x41,modes),{}));
+  for(const bad of [body(0x41,[0,1,2],2),body(0x41,[0,1,2],0,1),body(0x41,[0,1,2],0,0,''),
+    body(0x41,[0,1,2],0,0,'more\x00'),body(0x41,[0,1,2],0,0,'more','L')])assert.throws(()=>decode(bad,{}));
+});

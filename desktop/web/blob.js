@@ -1,6 +1,6 @@
 // WIKBLB08 contains compiled semantic pages or typed DAL1 redirect envelopes.
 // A leading U+FEFF belongs to a compiled title or field, not a file BOM.
-import {validateDescriptionBody,validateDarkForeground,validateContainerBlock,validateCellMetrics,validateRuby,validateRubyOwner,validateRubySpan,validateActionGroupSpan,validateInlineBoxSpan,validateFigureIntrinsicSize,validateAudioControl,validateWrappedHeading} from './validate.js';
+import {validateDescriptionBody,validateDarkForeground,validateContainerBlock,validateCellMetrics,validateRuby,validateRubyOwner,validateRubySpan,validateActionGroupSpan,validateInlineBoxSpan,validateFigureIntrinsicSize,validateAudioControl,validateWrappedHeading,validateTableDisclosure} from './validate.js';
 const utf8 = new TextDecoder('utf-8', {fatal:true,ignoreBOM:true});
 const kinds = ['language','thesaurus','citations','reconstruction','rhymes','sign_gloss','supplemental','alias'];
 const blocks = ['paragraph','blank','definition','example','quotation','list_item','list_detail','indent','term','heading','preformatted','rule','table','container'];
@@ -270,7 +270,9 @@ export function decode(bytes, metadata) {
     return style;
   };
   const tableValue=depth=>{
-    if(!presence())return null;
+    const flags=byte();
+    if(flags===0)return null;
+    require(flags===1||(containerFonts&&flags===0x41),'Unsupported table flags');
     require(!nested||depth<=16,'Nested table depth exceeds limit');
     let geometry;
     if(nested){
@@ -289,6 +291,16 @@ export function decode(bytes, metadata) {
     if(referenceBlocks){const style=typedStyle(true);if(style)result.style=style;}
     if(rich&&presence()){require(result.caption.length===0);result.caption_blocks=content(()=>list(blockMinimum(),()=>block(depth)));}
     if(result.style&&['inline_block','inline_table'].includes(result.style.display))require(result.caption.length===0&&result.caption_blocks===undefined&&result.rows.some(row=>row.cells.length>0),'Inline table requires cells and no caption');
+    if(flags===0x41){
+      const n=result.rows.length;
+      require(n<budget&&bytes.length-p>=21+n,'Truncated table disclosure');
+      budget-=1+n;
+      const header_row=u32(),header_cell=u32(),initially_collapsed=presence();
+      const expand_label=string(),collapse_label=string(),category=string();
+      result.disclosure={header_row,header_cell,initially_collapsed,expand_label,collapse_label,category,
+        row_modes:Array.from({length:n},()=>tag(['always','collapsed','expanded']))};
+      validateTableDisclosure(result);
+    }
     if(geometry)result.geometry=geometry;return result;
   };
   const figureColor=()=>{const kind=tag(['native_theme','transparent','rgb']);if(kind!=='rgb')return {kind};const value=string();require(/^#[0-9a-f]{6}$/.test(value));return {kind,value};};

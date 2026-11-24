@@ -17,7 +17,7 @@ function darkReadingInk(foreground,background){
   while(low<high){const mid=(low+high)>>1;if(luminance(mix(mid))>=minimum)high=mid;else low=mid+1;}
   return '#'+mix(low).map(channel=>channel.toString(16).padStart(2,'0')).join('');
 }
-import {safeURL,linkTargetParts,bookSourcesURL,validateDescriptionBody,validateDarkForeground,validateContainerBlock,validateCellMetrics,validateRuby,validateRubyOwner,validateRubySpan,validateActionGroupSpan,validateInlineBoxSpan,validateFigureIntrinsicSize,validateAudioControl,validateWrappedHeading} from './validate.js';
+import {safeURL,linkTargetParts,bookSourcesURL,validateDescriptionBody,validateDarkForeground,validateContainerBlock,validateCellMetrics,validateRuby,validateRubyOwner,validateRubySpan,validateActionGroupSpan,validateInlineBoxSpan,validateFigureIntrinsicSize,validateAudioControl,validateWrappedHeading,validateTableDisclosure} from './validate.js';
 import {previewBlocks,inlineText} from './preview.js';
 import {figureImageSize,audioControlView} from './media.js';
 const node = (tag, text, cls) => { const el = document.createElement(tag); if (text != null) el.textContent = text; if (cls) el.className = cls; return el; };
@@ -361,8 +361,10 @@ export function revealFragment(root, fragment) {
   if (!matches.length) matches = destinations.filter(el => el.id === fragment.replaceAll(' ','_'));
   if (matches.length !== 1) return false;
   const target = matches[0];
-  for (let el = target; el && el !== root; el = el.parentElement)
-    if (el.tagName === 'DETAILS') el.open = true;
+  for(let el=target;el&&el!==root;el=el.parentElement){
+    if(el.tagName==='DETAILS')el.open=true;
+    if(el.tagName==='TR'&&el.hidden)revealTableRow.get(el)?.();
+  }
   if (!target.hasAttribute('tabindex')) target.tabIndex = -1;
   target.scrollIntoView({block:'center'});
   target.focus({preventScroll:true});
@@ -488,7 +490,9 @@ function validateRichEntry(entry){
     return media.get(file)==='audio';
   };
   const table=(value,tableDepth,depth,inReference,owner)=>{
-    if(tableDepth>16)richError();const inline=['inline_block','inline_table'].includes(value.style?.display);
+    if(tableDepth>16)richError();
+    if(value.disclosure!=null){validateTableDisclosure(value);charge(1+value.rows.length);}
+    const inline=['inline_block','inline_table'].includes(value.style?.display);
     applyTableStyle(node('table'),value.style);
     if(inline&&(tableDepth!==1||depth!==0||inReference||!owner||!['table','list_item'].includes(owner.kind)||owner.spans?.length||owner.feature!=null||value.caption?.length||value.caption_blocks!=null||value.style?.float_side!=null))richError();
     caption(value,tableDepth,depth,inReference);let cells=0;
@@ -693,6 +697,47 @@ function applyCellStyle(el,value){
     el.style.lineHeight=height.length?metric(height.length.value,height.length.font_scale_basis):height.multiplier!=null?String(height.multiplier):'normal';
   }
 }
+const revealTableRow=new WeakMap();
+function installTableDisclosure(group,policy){
+  const rows=Array.from(group.rows),header=rows[policy.header_row].cells[policy.header_cell];
+  const control=node('span',null,'table-disclosure'),button=node('button');
+  button.type='button';
+  // The brackets belong to the source decoration, outside the accessible button name.
+  for(const part of ['[',button,']']){
+    if(typeof part!=='string'){control.append(part);continue;}
+    const bracket=node('span',part);
+    bracket.setAttribute('aria-hidden','true');
+    control.append(bracket);
+  }
+  header.prepend(control);
+  header.classList.add('table-disclosure-header');
+  const controlled=[];
+  let collapsed=policy.initially_collapsed;
+  function show(next){
+    collapsed=next;
+    button.textContent=next?policy.expand_label:policy.collapse_label;
+    button.setAttribute('aria-expanded',String(!next));
+    for(const [index,row] of rows.entries()){
+      const mode=policy.row_modes[index];
+      row.hidden=mode!=='always'&&(mode==='collapsed')!==next;
+    }
+  }
+  for(const [index,row] of rows.entries()){
+    const mode=policy.row_modes[index];
+    if(mode==='always')continue;
+    controlled.push(row);
+    revealTableRow.set(row,()=>show(mode==='collapsed'));
+  }
+  // Associate the existing physical rows without manufacturing public fragment IDs.
+  if('ariaControlsElements' in button)button.ariaControlsElements=controlled;
+  button.addEventListener('click',()=>show(!collapsed));
+  header.addEventListener('click',event=>{
+    if(event.target.closest('th,td')!==header||event.target.closest('a,button,input,select,textarea,summary,audio,[role="link"]'))return;
+    show(!collapsed);
+  });
+  show(collapsed);
+}
+
 function tableView(value,onLink,explanations,depth=1,inheritedBackground=null){
   if(depth>16)throw Error('Nested table depth exceeds limit');
   if(value.geometry!=null&&(typeof value.geometry!=='object'||Array.isArray(value.geometry)))throw Error('Invalid table geometry object');
@@ -707,6 +752,7 @@ function tableView(value,onLink,explanations,depth=1,inheritedBackground=null){
   const tableBackground=canonicalRGB(value.style?.background)?value.style.background:inheritedBackground;
   if(value.caption_blocks!=null){const caption=node('caption');appendBlocks(caption,value.caption_blocks,block=>blockView(block,onLink,explanations,'',{tableDepth:depth,background:tableBackground,caption:true}));table.append(caption);}
   else if(value.caption?.length){const caption=node('caption');caption.append(spans(value.caption,onLink,false,explanations,false,tableBackground));table.append(caption);}
+  const group=value.disclosure?table.createTBody():table;
   for(const row of value.rows){const tr=node('tr');for(const cell of row.cells){
     const td=node(cell.header?'th':'td');td.colSpan=cell.colspan||1;td.rowSpan=cell.rowspan||1;
     if(border!==null)td.style.border=border+'px solid currentColor';if(padding!==null)td.style.padding=padding+'px';
@@ -719,7 +765,8 @@ function tableView(value,onLink,explanations,depth=1,inheritedBackground=null){
     }else if(cell.nested_table!=null){if(typeof cell.nested_table!=='object'||Array.isArray(cell.nested_table)||cell.spans?.length)throw Error('Invalid nested table cell');td.append(cell.nested_table.style?.float_side!=null?blockView({kind:'table',table:cell.nested_table},onLink,explanations,'',{tableDepth:depth,background:effectiveBackground}):tableView(cell.nested_table,onLink,explanations,depth+1,effectiveBackground));}
     else td.append(spans(cell.spans,onLink,false,explanations,false,effectiveBackground));
     tr.append(td);
-  }table.append(tr);}
+  }group.append(tr);}
+  if(value.disclosure)installTableDisclosure(group,value.disclosure);
   if(value.style?.line_height!=null)for(const block of table.querySelectorAll('.block'))block.style.lineHeight='inherit';
   return table;
 }

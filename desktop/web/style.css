@@ -54,3 +54,9 @@ summary:has(>.compiled-heading-outer)::after {position:absolute;inset-inline-end
 :root[data-theme=dark] .phonos-control>button>img {color-scheme:light;filter:invert(1) hue-rotate(180deg)}
 .phonos-control>button:disabled {color:var(--muted);cursor:default}
 .phonos-control>button:disabled>img {opacity:.65}
+
+.table-disclosure-header {cursor:pointer}
+.table-disclosure {float:right;font-size:smaller;font-weight:normal;margin:1px 0 0 .5em}
+.table-disclosure>button {font:inherit;color:inherit;margin:0;padding:0;border:0;border-radius:0;vertical-align:baseline;cursor:pointer}
+.table-disclosure>button:hover {text-decoration:underline}
+.table-disclosure>button:focus-visible {outline:auto}
