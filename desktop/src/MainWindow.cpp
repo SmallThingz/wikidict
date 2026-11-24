@@ -190,7 +190,8 @@ private:
 };
 
 struct InlinePlaceholder { QImage pixels; QSize fallbackSize; };
-InlinePlaceholder inlinePlaceholder(QTextBrowser *widget, QTextDocument *document, const QJsonObject &image) {
+InlinePlaceholder inlinePlaceholder(QTextBrowser *widget, QTextDocument *document, const QJsonObject &image,
+                                    MediaPanel::InlineImageState state) {
     InlinePlaceholder result;
     auto &pixels = result.pixels;
     auto &fallbackSize = result.fallbackSize;
@@ -213,9 +214,9 @@ InlinePlaceholder inlinePlaceholder(QTextBrowser *widget, QTextDocument *documen
         pixels.fill(Qt::transparent);
         QPainter painter(&pixels); painter.setFont(document->defaultFont()); painter.setPen(widget->palette().color(QPalette::Text));
         painter.drawText(pixels.rect(), Qt::AlignCenter | Qt::TextSingleLine, visibleAlt);
-    } else if (!SemanticHtml::present(image.value(QStringLiteral("alt")))) {
-        // Missing alternatives need visible unavailable feedback;
-        // explicit empty alt remains decorative and transparent.
+    } else if (state == MediaPanel::InlineImageState::Error && !SemanticHtml::present(image.value(QStringLiteral("alt")))) {
+        // Only a failed resource gets a broken-image marker. The media notice
+        // reports permission and loading states while the slot keeps its size.
         const int side = qMin(18, qMin(pixels.width(), pixels.height()));
         const QRectF marker((pixels.width() - side) / 2.0 + 0.5,
             (pixels.height() - side) / 2.0 + 0.5, side - 1, side - 1);
@@ -4827,7 +4828,7 @@ void MainWindow::bindInlineImages() {
                             const QJsonObject &image = update->image;
                             const auto &asset = update->asset;
                             const bool ready = asset.state == MediaPanel::InlineImageState::Ready;
-                            auto placeholder = inlinePlaceholder(widget, document, image);
+                            auto placeholder = inlinePlaceholder(widget, document, image, asset.state);
                             QImage pixels = placeholder.pixels;
                             const QSize fallbackSize = placeholder.fallbackSize;
                             fallbackImages.insert(url, pixels);
@@ -5490,7 +5491,7 @@ bool MainWindow::refreshReading() {
                 if (url.scheme() == SemanticHtml::inlineImageScheme) figureResources.insert(url);
                 const auto image = SemanticHtml::inlineImageData(url);
                 format.setProperty(SemanticFigure::placeholderPixelsProperty,
-                    inlinePlaceholder(browser, document, image).pixels);
+                    inlinePlaceholder(browser, document, image, MediaPanel::InlineImageState::Loading).pixels);
                 imageEdits.append({fragment.position(), fragment.length(), format});
             }
         for (const auto &edit : imageEdits) {

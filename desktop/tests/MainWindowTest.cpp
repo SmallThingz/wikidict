@@ -25008,6 +25008,16 @@ private slots:
         QVERIFY(hasInk);
         QCOMPARE(unavailable[2].stringProperty(QTextFormat::ImageAltText), QStringLiteral("Plain <alt> & data"));
         QCOMPARE(unavailable[2].anchorHref(), formats[2].anchorHref());
+        auto fallbackHasInk = [&](const QTextImageFormat &format) {
+            const QImage pixels = window.reading_->document()->resource(QTextDocument::ImageResource, QUrl(format.name())).value<QImage>();
+            if (pixels.isNull()) return std::optional<bool>{};
+            for (int y = 0; y < pixels.height(); ++y)
+                for (int x = 0; x < pixels.width(); ++x)
+                    if (qAlpha(pixels.pixel(x, y))) return std::optional<bool>{true};
+            return std::optional<bool>{false};
+        };
+        QVERIFY(fallbackHasInk(unavailable[0]) == false);
+        QVERIFY(window.reading_->accessibleDescription().contains(QStringLiteral("Online images are disabled.")));
         QCOMPARE(unavailable[0].width(), 15.0); // Missing/empty alt never gains a filename label.
         QCOMPARE(unavailable[1].width(), 15.0);
         permission->setChecked(true); QTRY_VERIFY_WITH_TIMEOUT(ready(window.reading_->document()), 10000);
@@ -25053,12 +25063,23 @@ private slots:
         // An uncatalogued image produces the ordinary consumer Error without
         // network access; preserve the authored-alt fallback and recovery checks.
         QJsonObject errorImage{{"file", "Missing inline fixture.svg"}, {"height_px", 15}, {"alt", QString::fromUtf8("וי")}};
-        const QJsonObject errorParagraph{{"kind", "paragraph"}, {"spans", QJsonArray{occurrence(errorImage, "text", "")}}};
+        auto noAltError = errorImage;
+        noAltError.remove("alt");
+        const QJsonObject errorParagraph{{"kind", "paragraph"}, {"spans", QJsonArray{
+            occurrence(errorImage, "text", ""), occurrence(noAltError, "text", "")}}};
         const QJsonObject errorSection{{"level", 2}, {"title", "Unavailable image"}, {"blocks", QJsonArray{errorParagraph}}};
         QJsonObject errorEntry = entry;
         errorEntry.insert("sections", QJsonArray{errorSection});
         window.renderResponse(QJsonDocument(QJsonObject{{"entries", QJsonArray{errorEntry}}}).toJson(), false);
         QTRY_COMPARE(images(window.reading_->document()).first().intProperty(SemanticHtml::inlineImageStateProperty), int(MediaPanel::InlineImageState::Error));
+        const auto failedWithoutAlt = [&] {
+            for (const auto &format : images(window.reading_->document())) {
+                if (SemanticHtml::inlineImageData(QUrl(format.name())) == noAltError) return format;
+            }
+            return QTextImageFormat{};
+        };
+        QTRY_COMPARE(failedWithoutAlt().intProperty(SemanticHtml::inlineImageStateProperty), int(MediaPanel::InlineImageState::Error));
+        QVERIFY(fallbackHasInk(failedWithoutAlt()) == true);
         const auto errorFormat = images(window.reading_->document()).first();
         QCOMPARE(errorFormat.stringProperty(SemanticHtml::inlineImageStatusProperty), QStringLiteral("This image occurrence is not in the dictionary's media catalogue."));
         QCOMPARE(errorFormat.stringProperty(QTextFormat::ImageAltText), QString::fromUtf8("וי"));
