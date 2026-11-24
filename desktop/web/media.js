@@ -42,7 +42,7 @@ async function fetchMediaResource(media,settings,sourceEdition,canonicalIdentity
     const url=`https://${host}/w/api.php?action=query&format=json&formatversion=2&origin=*&prop=imageinfo&iiprop=url%7Csize%7Cmime%7Cextmetadata&iiurlwidth=960&titles=${encodeURIComponent('File:'+title)}`;
     const response=await fetch(url);if(!response.ok)throw Error('Media server unavailable');const data=await response.json();info=data.query?.pages?.[0]?.imageinfo?.[0];if(info){sourceHost=host;break;}
    }
-   if(!info)throw Error('Media unavailable');const url=info.thumburl||info.url;
+   if(!info)throw Error('Media unavailable');const url=media.kind==='audio'?info.url:info.thumburl||info.url;
    if(new URL(url).protocol!=='https:')throw Error('Invalid media URL');
    const cacheKey='https://'+sourceHost+'/.wikidict-media-cache?url='+encodeURIComponent(url);
    const cache=await caches.open(CACHE);let response=await cache.match(cacheKey);
@@ -146,4 +146,101 @@ export function loadInlineImage(el,image,settings,sourceEdition,occurrence={}){
   if(Number.isSafeInteger(info.width)&&info.width>0&&Number.isSafeInteger(info.height)&&info.height>0)sourceSize={width:info.width,height:info.height};
   el.src=object;
  }).catch(()=>{showStatus('error','Image could not be loaded.');release();});
+}
+
+export function audioControlView(span,label,settings,edition) {
+  const root=document.createElement('span'),audio=document.createElement('audio');
+  const compact=span.audio_control.presentation==='phonos_button',enabled=!!settings.allowAudio;
+  const control=compact?document.createElement('button'):audio;
+  const status=document.createElement('span');
+  status.className='audio-control-status';
+  status.setAttribute('role','status');
+  root.className=compact?'phonos-control':'inline-audio-control';
+  audio.preload='none';
+  if(compact){
+    control.type='button';
+    control.disabled=!enabled;
+    control.title=span.tooltip;
+    control.setAttribute('aria-label',span.tooltip);
+    if(span.language)control.lang=span.language;
+    const icon=document.createElement('img');
+    icon.src='assets/phonos/volumeUp.svg';
+    icon.alt='';
+    icon.setAttribute('aria-hidden','true');
+    label.classList.add('phonos-label');
+    control.append(icon,label);
+  }else{
+    audio.controls=true;
+    audio.setAttribute('aria-label',span.tooltip||span.text||span.target.slice(5));
+    audio.setAttribute('aria-disabled',String(!enabled));
+    for(const axis of ['width','height']){
+      const size=span.audio_control[axis];
+      if(size)audio.style[axis]=size.unit==='em'?'calc(var(--wikidict-normal-body-size) * '+size.value+')':size.value+(size.unit==='percent'?'%':'px');
+    }
+  }
+  const focus=span.audio_control.focus;
+  if(focus){
+    control.dataset.focus=focus.mode;
+    if(focus.color)control.style.setProperty('--audio-outline',focus.color.kind==='rgb'?focus.color.value:'transparent');
+  }
+  root.append(control,status);
+  let object=null,loading=false,observer=null,removed=false;
+  function state(name,message=''){
+    root.dataset.mediaState=name;
+    status.textContent=message;
+    if(compact){
+      control.setAttribute('aria-pressed',String(name==='playing'));
+      control.setAttribute('aria-busy',String(name==='loading'));
+    }
+  }
+  function release(){
+    if(!object)return;
+    const url=object;
+    object=null;
+    audio.pause();
+    audio.removeAttribute('src');
+    audio.load();
+    URL.revokeObjectURL(url);
+  }
+  function failed(){
+    release();
+    if(!removed)state('error','Audio unavailable. Activate to retry.');
+  }
+  async function activate(){
+    if(!enabled||loading||removed||!root.isConnected)return;
+    if(compact&&root.dataset.mediaState==='playing'){audio.pause();return;}
+    if(!observer){
+      observer=new MutationObserver(()=>{
+        if(!root.isConnected){removed=true;observer.disconnect();release();}
+      });
+      observer.observe(document.body,{childList:true,subtree:true});
+    }
+    loading=true;
+    try{
+      if(!object){
+        state('loading','Loading audio.');
+        const stillNeeded=()=>!removed&&root.isConnected;
+        const {blob}=await mediaResource({file:span.target.slice(5),kind:'audio'},settings,edition,true,stillNeeded);
+        if(!stillNeeded())return;
+        object=URL.createObjectURL(blob);
+        audio.src=object;
+      }
+      await audio.play();
+    }catch{failed();}
+    finally{loading=false;}
+  }
+  audio.addEventListener('playing',()=>{if(object)state('playing');});
+  audio.addEventListener('pause',()=>{if(object)state('paused');});
+  audio.addEventListener('ended',()=>{if(object)state('ready');});
+  audio.addEventListener('error',()=>{if(object)failed();});
+  if(compact)control.addEventListener('click',activate);
+  else{
+    // The browser owns transport after the first user-initiated acquisition.
+    control.addEventListener('click',()=>{if(!object)activate();});
+    control.addEventListener('keydown',event=>{
+      if(!object&&(event.key==='Enter'||event.key===' ')){event.preventDefault();activate();}
+    });
+  }
+  state(enabled?'ready':'disabled',enabled?'':'Enable online audio in Settings.');
+  return root;
 }

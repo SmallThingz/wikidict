@@ -2,12 +2,18 @@
 import {chromium} from 'playwright';
 import {build} from 'esbuild';
 import assert from 'node:assert/strict';
+import {verifyPhonos} from './phonos-controls.mjs';
 import {verifyIntrinsicRaster} from './intrinsic-raster-controls.mjs';
 const renderer=await build({entryPoints:[new URL('./renderer.js',import.meta.url).pathname],bundle:true,format:'iife',globalName:'Renderer',write:false});
 const media=await build({entryPoints:[new URL('./media.js',import.meta.url).pathname],bundle:true,format:'iife',globalName:'Media',write:false});
 const browser=await chromium.launch({executablePath:process.env.CHROMIUM||'/opt/brave-bin/brave',headless:true,args:['--no-sandbox']});
 try{
  const page=await browser.newPage();await page.route('**/*',r=>r.abort());await page.setContent('<main></main>');await page.addScriptTag({content:renderer.outputFiles[0].text});await page.addScriptTag({content:media.outputFiles[0].text});
+ if(process.argv.includes('--phonos-only')||process.argv.length===2){
+   const phonosPage=await browser.newPage();
+   try{await verifyPhonos(phonosPage,renderer.outputFiles[0].text,new URL('../../android/app/src/androidTest/assets/babua/phonos.wikblb.xz',import.meta.url));}
+   finally{await phonosPage.close();}
+ }
  if(process.argv.includes('--intrinsic-raster-only')||process.argv.length===2){
    const rasterPage=await browser.newPage();
    try{
@@ -18,7 +24,7 @@ try{
      await verifyIntrinsicRaster(rasterPage);
    }finally{await rasterPage.close();}
  }
- if(!process.argv.includes('--intrinsic-raster-only')){
+ if(!process.argv.includes('--intrinsic-raster-only')&&!process.argv.includes('--phonos-only')){
  const names = await page.evaluate(() => {
    const main = document.querySelector('main');
    const action = {kind:'link',target:'File:Sugar-485057.jpg',text:' ',trail:''};

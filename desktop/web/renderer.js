@@ -17,9 +17,9 @@ function darkReadingInk(foreground,background){
   while(low<high){const mid=(low+high)>>1;if(luminance(mix(mid))>=minimum)high=mid;else low=mid+1;}
   return '#'+mix(low).map(channel=>channel.toString(16).padStart(2,'0')).join('');
 }
-import {safeURL,linkTargetParts,bookSourcesURL,validateContainerBlock,validateCellMetrics,validateRuby,validateRubyOwner,validateRubySpan,validateActionGroupSpan,validateInlineBoxSpan,validateFigureIntrinsicSize} from './validate.js';
+import {safeURL,linkTargetParts,bookSourcesURL,validateContainerBlock,validateCellMetrics,validateRuby,validateRubyOwner,validateRubySpan,validateActionGroupSpan,validateInlineBoxSpan,validateFigureIntrinsicSize,validateAudioControl,validateWrappedHeading} from './validate.js';
 import {previewBlocks,inlineText} from './preview.js';
-import {figureImageSize} from './media.js';
+import {figureImageSize,audioControlView} from './media.js';
 const node = (tag, text, cls) => { const el = document.createElement(tag); if (text != null) el.textContent = text; if (cls) el.className = cls; return el; };
 let explanationSequence = 0;
 const poemTokens = span => (span.classes || '').split(/[ \t\r\n\v\f]+/).filter(Boolean);
@@ -283,6 +283,7 @@ export function spans(values = [], onLink = () => {}, preserve = false, explanat
       continue;
     }
     let el = node('span', span.text || '');
+    if(span.font_family!=null){if(span.font_family!=='sans_serif')throw Error('Unsupported span font family');el.style.fontFamily='sans-serif';}
     if(span.ruby!=null)el.append(rubySpans(span.ruby,onLink,explanations,withinSummary,cellBackground,span));
     if(span.inline_action_group!=null)el.append(spans(span.inline_action_group.spans,onLink,true,explanations,withinSummary,cellBackground,span));
     if(span.inline_box_group!=null){
@@ -312,7 +313,10 @@ export function spans(values = [], onLink = () => {}, preserve = false, explanat
     }
     const imageURL=span.image&&span.kind==='link'?safeURL(span.target_fragment==null?explanations?.imageActionURL?.(span.target):explanations?.imageActionURL?.(span.target,span.target_fragment)):null;
     const sourceURL=span.kind==='link'?safeURL(bookSourcesURL(span.target,explanations?.sourceEdition,span.target_fragment)):null;
-    if(!span.image?.map&&(sourceURL||imageURL)){
+    if(span.audio_control){
+      el=explanations.audioControl(span,el);
+      if(withinSummary)el.addEventListener('click',event=>event.stopPropagation());
+    }else if(!span.image?.map&&(sourceURL||imageURL)){
       const link=node('a');link.href=sourceURL||imageURL;link.rel='noopener noreferrer';link.target='_blank';if(withinSummary)link.addEventListener('click',event=>event.stopPropagation());link.append(el);el=link;
     } else if(span.image&&!span.image.map&&span.kind==='link'&&span.target?.startsWith('File:')){
       const unresolved=node('span');unresolved.setAttribute('role','link');unresolved.setAttribute('aria-disabled','true');unresolved.dataset.actionTarget=span.target;unresolved.append(el);el=unresolved;
@@ -373,7 +377,7 @@ function destination(el, value, legacy = '') {
 }
 function legacyDestinations(entry) {
   const candidates = [], counts = new Map();
-  if (['DPR5','DPR6','DPR7','DPR8','DPR9','DPRA','DPRB','DPRC','DPRD','DPRE','DPRF','DPRG','DPRH','DPRI','DPRJ','DPRK','DPRL','DPRM','DPRS','DPRV','DPRY'].includes(entry.presentation_version)) return new Map();
+  if (['DPR5','DPR6','DPR7','DPR8','DPR9','DPRA','DPRB','DPRC','DPRD','DPRE','DPRF','DPRG','DPRH','DPRI','DPRJ','DPRK','DPRL','DPRM','DPRS','DPRV','DPRY','DPRZ'].includes(entry.presentation_version)) return new Map();
   const add = (value, label) => {
     if (value.anchor || value.anchor_fallback) return;
     const id = label.replaceAll(' ','_');
@@ -420,6 +424,7 @@ function validateRichEntry(entry){
   const span=value=>{
     if(!value||typeof value!=='object')richError();
     if(value.tooltip!=null)string(value.tooltip);
+    if(value.audio_control!=null)validateAudioControl(value,media);
     if(value.ruby!=null){validateRubySpan(value);validateRuby(value.ruby);}
     if(value.inline_action_group!=null){validateActionGroupSpan(value);charge(value.inline_action_group.spans.length);}
     if(value.inline_box_group!=null){validateInlineBoxSpan(value);charge(value.inline_box_group.spans.length+value.inline_box_group.overlays.length);}
@@ -500,7 +505,7 @@ function validateRichEntry(entry){
     if(depth>16)richError();
     for(const block of array(values)){
       spanList(block.spans);const owner=richListKinds.has(block.kind)||(block.kind==='paragraph'&&!(block.depth||0)&&!block.list_path);
-      if(block.kind==='container'||block.container!=null){validateContainerBlock(block,{containerFonts:['DPRM','DPRS','DPRV','DPRY'].includes(entry.presentation_version)});blocks(block.container.blocks,tableDepth,depth+1,inReference);}
+      if(block.kind==='container'||block.container!=null){validateContainerBlock(block,{containerFonts:['DPRM','DPRS','DPRV','DPRY','DPRZ'].includes(entry.presentation_version)});blocks(block.container.blocks,tableDepth,depth+1,inReference);}
       if(block.flow!=null){if(!owner||block.spans?.length||block.table!=null||block.feature!=null||block.figure!=null)richError();flow(block.flow,tableDepth,depth+1,inReference);}
       if(block.figure!=null){if(!owner||block.spans?.length||block.table!=null||block.feature!=null||block.style!=null)richError();figure(block.figure,tableDepth,depth,inReference);}
       if(block.style!=null){if(block.kind!=='paragraph'||block.depth||block.list_path||block.table!=null||block.feature!=null)richError();richObject(block.style,['margins','padding']);if(block.style.margins==null&&block.style.padding==null)richError();for(const key of ['margins','padding'])if(block.style[key]!=null)richEdges(block.style[key]);}
@@ -876,6 +881,35 @@ function blockView(block, onLink, explanations, legacy = '', context = {}) {
   if(block.style?.padding)styleEdges(el,'padding',block.style.padding);
   el.append(body);return el;
 }
+function applyWrappedHeading(summary,style){
+  const label=summary.querySelector('.heading-label');
+  if(!label)throw Error('Missing styled heading title');
+  const {outer,inner,title_block_padding_right:pad}=style.wrappers;
+  const shell=node('span',null,'compiled-heading-outer'),content=node('span',null,'compiled-heading-inner');
+  const title=node('span',null,'compiled-heading-title');
+  const {width,color}=outer.border.edges.top.dashed;
+  shell.style.cssText=containerDeclarations({margins:outer.margins});
+  shell.style.display='block';
+  shell.style.overflowX='visible';
+  shell.style.overflowY='clip';
+  shell.style.borderTop=styleLength(width)+' dashed '+color.rgb;
+  content.style.cssText=containerDeclarations(inner);
+  content.style.display='block';
+  title.style.cssText=containerDeclarations(style.box);
+  title.style.position='relative';
+  title.style.display='block';
+  title.style.paddingRight=pad.value+'em';
+  title.style.fontFamily='sans-serif';
+  title.style.fontWeight=style.font.bold?'bold':'normal';
+  title.style.fontStyle=style.font.italic?'italic':'normal';
+  title.lang=style.font.language;
+  title.dir=style.direction;
+  label.replaceWith(shell);
+  shell.append(content);
+  content.append(title);
+  title.append(label);
+}
+
 function sectionHeadingCompanion(section){
   const first=section.blocks?.[0];
   if(!section.title||!first||first.kind!=='heading'||first.level!==section.level)return null;
@@ -924,7 +958,7 @@ export function renderEntry(entry, onLink, settings = {}, mediaView = () => null
     mediaOwners.set(mediaOwnerPrefix+hex,media.file);
   }
   const darkSurface=globalThis.getComputedStyle?.(document.documentElement).getPropertyValue('--wikidict-dark-reading-surface').trim();
-  const explanations={inlineImage,imageActionURL,sourceEdition:entry.source_edition,darkReadingSurface:canonicalRGB(darkSurface)?darkSurface:null,isMediaExplanation(span){
+  const explanations={inlineImage,imageActionURL,audioControl:(span,label)=>audioControlView(span,label,settings,entry.source_edition),sourceEdition:entry.source_edition,darkReadingSurface:canonicalRGB(darkSurface)?darkSurface:null,isMediaExplanation(span){
     if(span.kind!=='link'||span.image)return false;
     const tokens=poemTokens(span),owners=tokens.filter(token=>token.startsWith(mediaOwnerPrefix));
     // Match the compiled media catalog, not an ordinary File link or a legacy abbreviation.
@@ -971,6 +1005,10 @@ export function renderEntry(entry, onLink, settings = {}, mediaView = () => null
     const expanded=meaning || (section.title.startsWith('Pronunciation')?!settings.collapsePronunciation:section.title.startsWith('Etymology')?!settings.collapseEtymology:!settings.collapseOtherSections);
     const companion=sectionHeadingCompanion(section);
     const el=fold(section.title===entry.language?'Overview':section.title||'Notes',expanded,companion?.spans,companion?.depth);
+    if(section.heading_style){
+      validateWrappedHeading(section);
+      applyWrappedHeading(el.querySelector('summary'),section.heading_style);
+    }
     el.classList.toggle('meaning',meaning);destination(el,section,legacy.get(section)||'');
     const main=[],notes=[];
     for (const block of section.blocks.slice(companion?1:0)) {
