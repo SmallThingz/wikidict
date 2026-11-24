@@ -1173,6 +1173,14 @@ fn attachFigurePageObservation(a: std.mem.Allocator, codes: *encoder.blob_builde
     }
 }
 
+fn bindRevisionExterior(codes: *encoder.blob_builder.LanguageCodes, registry: *const page_language.Registry,
+    id: u64, revision: u64, namespace_id: i32, title: []const u8, raw: []const u8, expanded: []const u8) void {
+    codes.revision_exterior = null;
+    const namespaces = codes.namespace_catalog orelse return;
+    const tags = registry.revisionExterior(id, revision, namespace_id, title, raw, expanded) orelse return;
+    codes.revision_exterior = .{ .namespace_sha256 = namespaces.source_sha256, .title = title, .raw = raw, .expanded = expanded, .tags = tags };
+}
+
 fn selectedPageLanguage(value: page_language.Context) encoder.presentation_compile.FigurePageLanguageContext {
     return .{ .namespace_sha256 = value.namespace_sha256, .title = value.title, .language = value.language, .direction = value.direction, .outer_languages = value.outer_languages, .body_skin_responsive = value.body_skin_responsive };
 }
@@ -3361,6 +3369,9 @@ const ExpansionSlot = struct {
             self.compile_failure = err;
             return;
         };
+        codes.revision_exterior = null;
+        if (self.page_languages) |languages| bindRevisionExterior(&codes, &languages.metadata, self.job.page_id, self.job.revision_id,
+            observation_namespace, self.job.title, self.job.source, expanded.source);
         // Direct returned HTML provides source custody independently of API language metadata.
         if (self.page_languages) |languages| {
             if (std.math.cast(i32, self.job.ns.id)) |page_namespace| {
@@ -4889,6 +4900,7 @@ fn runBlobBuild(io: std.Io, a: std.mem.Allocator, args: []const []const u8, opti
     pool.page_observations = if (page_observations) |*value| value else null;
     pool.figure_defaults_sha256 = if (figure_site) |site| site.source_sha256 else null;
     codes.figure_sizing = if (sizing_authority) |*value| .{ .ctx = value, .resolve_fn = figure_sizing.Registry.resolve,
+        .resolve_intrinsic_size_fn = figure_sizing.Registry.resolveIntrinsicSize,
         .default_thumbnail_file_fn = if (value.defaultThumbnailPageIndex(page_index.bytes, if (figure_site) |site| site.source_sha256 else null)) figure_sizing.Registry.defaultThumbnailFile else null,
         .resolve_canonical_file_fn = figure_sizing.Registry.resolveCanonicalFile,
         .resolve_svg_explicit_box_fn = figure_sizing.Registry.resolveSvgExplicitBox,
@@ -14299,7 +14311,7 @@ test "normal Writer retained Vietnamese gazeta preserves all owners body diagnos
     std.crypto.hash.sha2.Sha256.hash(behavior_source, &behavior_sha, .{});
     var images = try namespace_registry.image_options.Registry.init(a, @embedFile("testdata/vi-gazeta/vi-image-options.tsv"), namespaces.wiki, namespaces.dump_date, namespaces.content_language, namespaces.source_sha256, behavior_sha);
     defer images.deinit();
-    var styles = try encoder.table_style_profile.parseAlloc(a, @embedFile("testdata/vi-gazeta/vi-common.css"));
+    var styles = try encoder.table_style_profile.parseForTargetAlloc(a, @embedFile("testdata/vi-gazeta/vi-common.css"), .screen);
     defer styles.deinit();
     var registry = language_registry.Registry.empty(a);
     defer registry.deinit();
@@ -18504,11 +18516,13 @@ const ElGeiosiRetainedFixture = struct {
         italic_origin: bool = false,
         japanese_scale: bool = false,
         persian_scale: bool = false,
+        dashed_labels: usize = 0,
         fn spans(self: *@This(), a: std.mem.Allocator, values: []const encoder.presentation_types.Span, in_table: bool) !void {
-            for (values) |span| {
+            for (values) |action_owner| {
+                const span = try GreekDashedLinkFixture.visible(a, action_owner, &self.dashed_labels);
                 try self.visible.appendSlice(a, span.text);
                 try self.visible.appendSlice(a, span.trail);
-                if (span.kind == .link or span.kind == .external_link) self.actions += 1;
+                if (action_owner.kind == .link or action_owner.kind == .external_link) self.actions += 1;
                 if (std.mem.indexOf(u8, span.text, "Lua error in Module:el-nouns-decl:") != null) {
                     self.lua_errors += 1;
                     try std.testing.expect(span.bold);
@@ -18527,8 +18541,8 @@ const ElGeiosiRetainedFixture = struct {
                     self.ipa_scale = true;
                 }
                 if (std.mem.eql(u8, span.text, "αγγλική")) {
-                    try std.testing.expect(span.kind == .link and span.italic);
-                    try std.testing.expectEqualStrings("αγγλικά", span.target);
+                    try std.testing.expect(action_owner.kind == .link and span.italic);
+                    try std.testing.expectEqualStrings("αγγλικά", action_owner.target);
                     self.italic_origin = true;
                 }
                 if (in_table and span.kind == .link) {
@@ -18614,7 +18628,10 @@ test "normal Writer retained EL geiosi keeps orphan references literal complete 
     const fragment_end = std.mem.indexOf(u8, F.banner, "<noinclude>") orelse return error.TestUnexpectedResult;
     const heading_end = std.mem.indexOfScalar(u8, F.source, '\n') orelse return error.TestUnexpectedResult;
     try std.testing.expectEqualStrings(try std.fmt.allocPrint(a, "=={s}==", .{F.banner[0..fragment_end]}), F.source[0..heading_end]);
-    var styles = try encoder.table_style_profile.parseAlloc(a, F.css); defer styles.deinit();
+    var styles = try GreekDashedLinkFixture.styles(a, &ns, F.css, "γείωση",
+        @embedFile("testdata/el-screen-observations/45848.json.gz"),
+        "286b9810f8ed7ada961894fa0e82a8657604ffd2bc56770c079ab7e84fb5ab04");
+    defer styles.deinit();
     // The captured NavFrame rule is the only 95% declaration. A third full
     // Writer moves only that declaration to its exact source element: this
     // independently checks stylesheet inheritance against inline inheritance.
@@ -18622,6 +18639,9 @@ test "normal Writer retained EL geiosi keeps orphan references literal complete 
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, F.css, frame_font));
     const inline_css = try std.mem.replaceOwned(u8, a, F.css, frame_font, "");
     var inline_styles = try encoder.table_style_profile.parseAlloc(a, inline_css); defer inline_styles.deinit();
+    // Only the non-custom font declaration moved. Keep the same independently
+    // observed custom-property cascade in both font inheritance comparisons.
+    inline_styles.custom_properties = styles.custom_properties;
     const frame_open = "<div class=\"NavFrame\" style=\"clear:both;\">";
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, reference, frame_open));
     const inline_reference = try std.mem.replaceOwned(u8, a, reference, frame_open, "<div class=\"NavFrame\" style=\"clear:both;font-size:95%;\">");
@@ -18632,6 +18652,15 @@ test "normal Writer retained EL geiosi keeps orphan references literal complete 
     try std.testing.expect(codes.resolveTrusted("Νέα ελληνικά") == null);
     try std.testing.expectEqualStrings(F.banner[0..fragment_end], expanded_section.heading);
     try std.testing.expect(std.mem.startsWith(u8, F.raw, "=={{-el-}}==\n"));
+    {
+        var unobserved = try encoder.table_style_profile.parseAlloc(a, F.css); defer unobserved.deinit();
+        const output = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/el-geiosi-unobserved", .{tmp.sub_path});
+        var writer = try encoder.blob_builder.Writer.init(io, a, output); defer writer.deinit();
+        writer.language_codes = codes;
+        writer.language_codes.table_styles = &unobserved;
+        try std.testing.expectError(error.UncompiledPresentation,
+            writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "γείωση", F.source, F.raw, null));
+    }
     var roots: [3][]const u8 = undefined;
     var manifests: [3][]const u8 = undefined;
     for ([_][]const u8{ F.source, reference, inline_reference }, 0..) |source, index| {
@@ -18689,6 +18718,7 @@ test "normal Writer retained EL geiosi keeps orphan references literal complete 
         try std.testing.expect(std.mem.indexOf(u8, scan.visible.items, text) != null);
     }
     try std.testing.expect(scan.ipa_scale and scan.italic_origin and scan.japanese_scale and scan.persian_scale);
+    try std.testing.expectEqual(@as(usize, 2), scan.dashed_labels);
     try std.testing.expectEqual(@as(usize, 7), scan.actions - actions_before_references);
     const report = try std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(a, &.{ roots[0], "fallback-pages.jsonl" }), a, .limited(64 * 1024));
     try std.testing.expect(std.mem.indexOf(u8, report, "rendered_lua_error") != null);
@@ -20767,6 +20797,7 @@ fn capturedWriterRun(io: std.Io, a: std.mem.Allocator, request: CapturedWriterRe
     codes.behavior_switches = if (behavior) |*value| value else null;
     codes.image_options = if (images) |*value| value else null;
     codes.figure_sizing = if (sizing_authority) |value| .{ .ctx = value, .resolve_fn = figure_sizing.Registry.resolve,
+        .resolve_intrinsic_size_fn = figure_sizing.Registry.resolveIntrinsicSize,
         .default_thumbnail_file_fn = if (value.defaultThumbnailPageIndex(page_index.bytes, if (figure_site) |site| site.source_sha256 else null)) figure_sizing.Registry.defaultThumbnailFile else null,
         .resolve_canonical_file_fn = figure_sizing.Registry.resolveCanonicalFile,
         .resolve_svg_explicit_box_fn = figure_sizing.Registry.resolveSvgExplicitBox,
@@ -20838,6 +20869,8 @@ fn capturedWriterRun(io: std.Io, a: std.mem.Allocator, request: CapturedWriterRe
     try attachFigurePageObservation(a, &codes, if (page_observations) |*value| value else null,
         if (figure_site) |site| site.source_sha256 else null, std.math.cast(i32, page.ns) orelse return error.InvalidNamespace,
         page.page_id, page.revision_id, page.title, raw, expanded.source);
+    bindRevisionExterior(&codes, &page_languages.metadata, page.page_id, page.revision_id,
+        std.math.cast(i32, page.ns) orelse return error.InvalidNamespace, page.title, raw, expanded.source);
     if (figure_inputs) |inputs| try inputs.verify();
     stage.* = "writer-init";
     const data_root = try std.fs.path.join(a, &.{ output_root, "data" });
@@ -23892,6 +23925,48 @@ test "normal Writer retained SR Serbia preserves colon translation labels comple
 }
 
 
+fn hyRevisionExteriorFixture(a: std.mem.Allocator, ns: *const namespace_registry.Registry, compressed: []const u8) !page_language.Registry {
+    var bytes: std.Io.Reader = .fixed(compressed);
+    var inflater: std.compress.flate.Decompress = .init(&bytes, .gzip, &.{});
+    const decoded = try inflater.reader.allocRemaining(a, .limited(page_language.max_index_bytes));
+    defer a.free(decoded);
+    try std.testing.expect(inflater.err == null and inflater.state == .end);
+    return page_language.Registry.init(a, decoded, "", null, ns);
+}
+
+// The source fixtures use one authored B child in each painted example span.
+// Compare every owner with its next exact source occurrence, including repeats.
+const HyPaintedExamples = struct {
+    const start = "<span class=\"example-select\" style=\"background-color:#EDF0FF\"><b>";
+    remaining: []const u8,
+    count: usize = 0,
+    ordinary_foreground: []const usize = &.{},
+    green: usize = 0,
+    fn observe(self: *@This(), span: encoder.presentation_types.Span) !bool {
+        if (!std.mem.eql(u8, span.background orelse return false, "#edf0ff")) return false;
+        const group = span.inline_box_group orelse return error.MissingExamplePaintOwner;
+        try std.testing.expect(span.text.len == 0 and group.spans.len == 1);
+        const leaf = group.spans[0];
+        try std.testing.expect(leaf.kind == .text and leaf.bold and leaf.background == null and leaf.inline_box_group == null);
+        if (std.mem.indexOfScalar(usize, self.ordinary_foreground, self.count) != null) {
+            try std.testing.expect(leaf.foreground == null);
+        } else {
+            try std.testing.expectEqualStrings("#006400", leaf.foreground orelse return error.MissingExampleForeground);
+            self.green += 1;
+        }
+        const at = std.mem.indexOf(u8, self.remaining, start) orelse return error.UnexpectedExampleHighlight;
+        const body = self.remaining[at + start.len ..];
+        const end = std.mem.indexOf(u8, body, "</b></span>") orelse return error.MalformedExampleSource;
+        try std.testing.expectEqualStrings(body[0..end], leaf.text);
+        self.remaining = body[end + "</b></span>".len ..];
+        self.count += 1;
+        return true;
+    }
+    fn finish(self: @This()) !void {
+        try std.testing.expect(self.count > 0 and std.mem.indexOf(u8, self.remaining, start) == null);
+    }
+};
+
 test "Writer retained HY kheght preserves empty fields whole body owner tables actions paint and codec" {
     const F = struct {
         const title = "խեղճ";
@@ -23913,6 +23988,7 @@ test "Writer retained HY kheght preserves empty fields whole body owner tables a
             cells: usize = 0,
             english_index: usize = 0,
             russian_index: usize = 0,
+            examples: HyPaintedExamples = .{ .remaining = source },
             highlighted: usize = 0,
             green: bool = false,
             italic: bool = false,
@@ -23921,12 +23997,9 @@ test "Writer retained HY kheght preserves empty fields whole body owner tables a
                 for (values) |span| {
                     errdefer std.debug.print("HY kheght failing span: kind={s} text={s} target={s} language={s} bold={} italic={} foreground={any} background={any} english={d} russian={d} sources={any}\n", .{ @tagName(span.kind), span.text, span.target, span.language, span.bold, span.italic, span.foreground, span.background, self.english_index, self.russian_index, self.sources });
                     try self.visible.appendSlice(a, span.text);
+                    if (span.inline_box_group) |box| try self.spans(a, box.spans, in_table);
                     try self.visible.appendSlice(a, span.trail);
-                    if (span.bold and (std.mem.indexOf(u8, span.text, "խեղճ") != null or std.mem.indexOf(u8, span.text, "Խեղճ") != null) and span.background != null) {
-                        try std.testing.expectEqualStrings("#edf0ff", span.background.?);
-                        try std.testing.expectEqualStrings("#006400", span.foreground orelse return error.TestUnexpectedResult);
-                        self.highlighted += 1;
-                    }
+                    if (try self.examples.observe(span)) self.highlighted += 1;
                     if (std.mem.indexOf(u8, span.text, "Տեսնելով յուր ազգակիցների ցավալի վիճակը") != null) {
                         try std.testing.expectEqualStrings("#006400", span.foreground orelse return error.TestUnexpectedResult);
                         self.green = true;
@@ -24015,7 +24088,7 @@ test "Writer retained HY kheght preserves empty fields whole body owner tables a
     var images = try namespace_registry.image_options.Registry.init(a, @embedFile("testdata/hy-kheght62/image-options.tsv"), ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256, behavior_sha); defer images.deinit();
     const css = @embedFile("testdata/hy-kheght62/common.css");
     try F.hash(css, "d7a62f92193c9d2b28912eef52f254d2945261f7266a6aeddf3cdc6bc0dcb649");
-    var styles = try encoder.table_style_profile.parseAlloc(a, css); defer styles.deinit();
+    var styles = try encoder.table_style_profile.parseForTargetAlloc(a, css, .screen); defer styles.deinit();
     // This saved-page control imports the actual full captured registry. It does
     // not inject an owner, fabricate a local alias, or validate an extraction
     // SourceReceipt. Full ordinary module/template-loader qualification is separate.
@@ -24026,12 +24099,23 @@ test "Writer retained HY kheght preserves empty fields whole body owner tables a
     const owner = registry.resolveTrusted("Հայերեն") orelse return error.TestUnexpectedResult;
     try std.testing.expectEqualStrings("hy", owner.code);
     try std.testing.expectEqualStrings("հայերեն", owner.heading);
+    var exterior = try hyRevisionExteriorFixture(a, &ns, @embedFile("testdata/hy-revision-exteriors/revision-exteriors.json.gz")); defer exterior.deinit();
     var codes = languageCodes(&registry, &ns); codes.behavior_switches = &behavior; codes.image_options = &images; codes.table_styles = &styles;
     var roots: [2][]const u8 = undefined;
     checkpoint = "ordinary Writer original and literal-only reference";
     for ([_][]const u8{ F.source, reference }, 0..) |source, i| {
         roots[i] = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/hy-kheght-{d}", .{ tmp.sub_path, i });
-        var writer = try encoder.blob_builder.Writer.init(io, a, roots[i]); defer writer.deinit(); writer.language_codes = codes;
+        bindRevisionExterior(&codes, &exterior, 76262, 1779291, 0, F.title, F.raw, source);
+            if (i == 0) {
+                try std.testing.expect(codes.revision_exterior != null);
+            } else {
+                // This deliberately transformed reference is a controlled
+                // comparison, never a Registry observation for changed bytes.
+                try std.testing.expect(codes.revision_exterior == null);
+                codes.revision_exterior = .{ .namespace_sha256 = ns.source_sha256, .title = F.title, .raw = F.raw, .expanded = source,
+                    .tags = &.{ "html", "body", "div", "div", "div", "main", "div", "div", "div" } };
+            }
+            var writer = try encoder.blob_builder.Writer.init(io, a, roots[i]); defer writer.deinit(); writer.language_codes = codes;
         try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, F.title, source, F.raw, null);
         const stats = try writer.finish(codes);
         try std.testing.expectEqual(@as(usize, 1), stats.language_records);
@@ -24056,6 +24140,7 @@ test "Writer retained HY kheght preserves empty fields whole body owner tables a
     var scan: F.Scan = .{};
     errdefer std.debug.print("HY kheght counters: definitions={d} synonyms={d} tables={d} cells={d} english={d} russian={d} highlighted={d} green={} italic={} sources={any} literal_count={d}\n", .{ scan.adjective_definitions, scan.synonym_definitions, scan.tables, scan.cells, scan.english_index, scan.russian_index, scan.highlighted, scan.green, scan.italic, scan.sources, std.mem.count(u8, scan.visible.items, F.literal) });
     try scan.entry(a, actual);
+    try scan.examples.finish();
     try std.testing.expectEqual(@as(usize, 11), scan.adjective_definitions);
     try std.testing.expectEqual(@as(usize, 20), scan.synonym_definitions);
     try std.testing.expectEqual(@as(usize, 2), scan.tables);
@@ -26711,11 +26796,14 @@ test "Writer retained three additional HY empty field pages preserves all homogr
             try std.testing.expectEqualStrings(expected, &std.fmt.bytesToHex(digest, .lower));
         }
         const Token = struct { text: []const u8, count: usize };
-        const Case = struct { title: []const u8, raw: []const u8, source: []const u8, raw_sha: []const u8, source_sha: []const u8, tokens: []const Token, targets: []const []const u8, text: []const []const u8, tables: usize, nouns: usize, adjectives: usize, etymology_definitions: usize = 0 };
+        const Case = struct { page_id: u64, revision_id: u64, title: []const u8, raw: []const u8, source: []const u8, raw_sha: []const u8, source_sha: []const u8, tokens: []const Token, targets: []const []const u8, text: []const []const u8, tables: usize, nouns: usize, adjectives: usize, etymology_definitions: usize = 0, ordinary_foreground: []const usize = &.{} };
         const cases = [_]Case{
-            .{ .title = "խեղեփ", .raw = @embedFile("testdata/hy-empty-audit/02.raw.wikitext"), .source = @embedFile("testdata/hy-empty-audit/02.expanded.wikitext"), .raw_sha = "ffe9f9984388b1a09ae4e504d21dfab4e9d61ac5c97b728989cb2a8c685589d2", .source_sha = "4049c6d4f46b9bd265a05644dd5a6b5cdbd1d666cdae5322deae08a149ba3899", .tokens = &.{ .{ .text = "{հնց|||}", .count = 1 }, .{ .text = "{գվռ|||}", .count = 1 } }, .targets = &.{ "խեցխեղեփ" }, .text = &.{ "ընկույզի միջուկի առանձին մասը կամ միջուկը", "ճաշի մեջ գցելու համար ծեծած ընկույզ", "ամբողջության մաս կազմող մասերից յուրաքանչյուրը", "երես առած, շփացած, լիրբ" }, .tables = 4, .nouns = 3, .adjectives = 1 },
-            .{ .title = "խոստուկ", .raw = @embedFile("testdata/hy-empty-audit/04.raw.wikitext"), .source = @embedFile("testdata/hy-empty-audit/04.expanded.wikitext"), .raw_sha = "44168c015a28539b0a64ad2609c6e53728340887daacfb58937c13405c1d8afb", .source_sha = "29f813fa7e56cda96af78f3b6fecf6ab5b6ed4ffd402570bae6e08e66ebcb0df", .tokens = &.{ .{ .text = "{ժղ|||}", .count = 1 } }, .targets = &.{ "քարաճիկ", "սև խոստուկ", "Острая боль#ռուսերեն", "колики#ռուսերեն" }, .text = &.{ "Սաստիկ ցավ, ծակոց", "Աչքի հիվանդություն, աչքացավ", "Ուռուցք, պալար", "Թռչունների ստամոքսի առաջին մասը", "Չար, նախանձ", "Խոսք տալը, խոստանալը, խոստում", "Ուխտ, երդում", "սուր ցավ՝ ծակոց, խիթ" }, .tables = 2, .nouns = 1, .adjectives = 0, .etymology_definitions = 7 },
-            .{ .title = "խորան", .raw = @embedFile("testdata/hy-empty-audit/05.raw.wikitext"), .source = @embedFile("testdata/hy-empty-audit/05.expanded.wikitext"), .raw_sha = "661430a597ec5a94513f3e145b91fdcbc4aefeafc403db9692790ffaa20b5ab3", .source_sha = "7b9c0a9d21e32e92deee7150592ab01f2581ce3280f669f8b13da814b4f96f34", .tokens = &.{ .{ .text = "{եկեղ|||}", .count = 2 }, .{ .text = "{հնց|||}", .count = 3 }, .{ .text = "{ճրտրպ|||}", .count = 1 }, .{ .text = "{փխբ|||}", .count = 1 }, .{ .text = "{հնստ|||}", .count = 1 } }, .targets = &.{ "եկեղեցի", "տաճար", "մատուռ", "խորան պատշգամբ", "խորան տապանակ", "խորանազարդ", "խորանալ", "խորանախշ", "խորանակապ", "խորանակերպ", "խորանաձև", "խորանանման", "խորանաշատ", "խորանավոր", "խորանարդ", "խորանարդակերպ", "խորանարդաձև", "խորանարդանման", "խորանարդային", "խորանարդապաշտ", "խորանարդապաշտական", "խորանարդապաշտություն", "խորանարդել", "խորանարդիկ", "խորանարդվել", "խորանդունդ", "խորանենգ", "խորանինջ", "խորանիստ", "խորանկար", "խորանցք", "ավագ խորան", "կողային խորան", "altar", "sanctuary", "vestry", "церковь#ռուսերեն", "ризница#ռուսերեն", "храм#ռուսերեն", "апсида#ռուսերեն" }, .text = &.{ "ժամ, եկեղեցի", "փոքրիկ սենյակ բեմի երկու կողմերում", "տաճար, եկեղեցի", "տաճարի բեմ, սեղան, պատարագ մատուցելու համար", "փոքրիկ վանք մատուռ", "սենյակ", "կամարակապ որմնախորշ", "խորանաձև մանրանկարչական զարդ", "մարդու հոգեկան աշխարհը, հոգու խորքը", "քրիստոնեական տաճարի արևելյան կողմը", "վրան" }, .tables = 2, .nouns = 11, .adjectives = 0, .etymology_definitions = 1 },
+            .{ .page_id = 80291, .revision_id = 1748802, .title = "խեղեփ", .raw = @embedFile("testdata/hy-empty-audit/02.raw.wikitext"), .source = @embedFile("testdata/hy-empty-audit/02.expanded.wikitext"), .raw_sha = "ffe9f9984388b1a09ae4e504d21dfab4e9d61ac5c97b728989cb2a8c685589d2", .source_sha = "4049c6d4f46b9bd265a05644dd5a6b5cdbd1d666cdae5322deae08a149ba3899", .tokens = &.{ .{ .text = "{հնց|||}", .count = 1 }, .{ .text = "{գվռ|||}", .count = 1 } }, .targets = &.{ "խեցխեղեփ" }, .text = &.{ "ընկույզի միջուկի առանձին մասը կամ միջուկը", "ճաշի մեջ գցելու համար ծեծած ընկույզ", "ամբողջության մաս կազմող մասերից յուրաքանչյուրը", "երես առած, շփացած, լիրբ" }, .tables = 4, .nouns = 3, .adjectives = 1 },
+            .{ .page_id = 100208, .revision_id = 1435079, // In the captured wikitext, only the third and fourth highlighted
+            // words are inside the green example-block. The other eight use
+            // the foreground of the containing ordinary paragraph or list.
+            .title = "խոստուկ", .ordinary_foreground = &.{ 0, 1, 4, 5, 6, 7, 8, 9 }, .raw = @embedFile("testdata/hy-empty-audit/04.raw.wikitext"), .source = @embedFile("testdata/hy-empty-audit/04.expanded.wikitext"), .raw_sha = "44168c015a28539b0a64ad2609c6e53728340887daacfb58937c13405c1d8afb", .source_sha = "29f813fa7e56cda96af78f3b6fecf6ab5b6ed4ffd402570bae6e08e66ebcb0df", .tokens = &.{ .{ .text = "{ժղ|||}", .count = 1 } }, .targets = &.{ "քարաճիկ", "սև խոստուկ", "Острая боль#ռուսերեն", "колики#ռուսերեն" }, .text = &.{ "Սաստիկ ցավ, ծակոց", "Աչքի հիվանդություն, աչքացավ", "Ուռուցք, պալար", "Թռչունների ստամոքսի առաջին մասը", "Չար, նախանձ", "Խոսք տալը, խոստանալը, խոստում", "Ուխտ, երդում", "սուր ցավ՝ ծակոց, խիթ" }, .tables = 2, .nouns = 1, .adjectives = 0, .etymology_definitions = 7 },
+            .{ .page_id = 108871, .revision_id = 1749658, .title = "խորան", .raw = @embedFile("testdata/hy-empty-audit/05.raw.wikitext"), .source = @embedFile("testdata/hy-empty-audit/05.expanded.wikitext"), .raw_sha = "661430a597ec5a94513f3e145b91fdcbc4aefeafc403db9692790ffaa20b5ab3", .source_sha = "7b9c0a9d21e32e92deee7150592ab01f2581ce3280f669f8b13da814b4f96f34", .tokens = &.{ .{ .text = "{եկեղ|||}", .count = 2 }, .{ .text = "{հնց|||}", .count = 3 }, .{ .text = "{ճրտրպ|||}", .count = 1 }, .{ .text = "{փխբ|||}", .count = 1 }, .{ .text = "{հնստ|||}", .count = 1 } }, .targets = &.{ "եկեղեցի", "տաճար", "մատուռ", "խորան պատշգամբ", "խորան տապանակ", "խորանազարդ", "խորանալ", "խորանախշ", "խորանակապ", "խորանակերպ", "խորանաձև", "խորանանման", "խորանաշատ", "խորանավոր", "խորանարդ", "խորանարդակերպ", "խորանարդաձև", "խորանարդանման", "խորանարդային", "խորանարդապաշտ", "խորանարդապաշտական", "խորանարդապաշտություն", "խորանարդել", "խորանարդիկ", "խորանարդվել", "խորանդունդ", "խորանենգ", "խորանինջ", "խորանիստ", "խորանկար", "խորանցք", "ավագ խորան", "կողային խորան", "altar", "sanctuary", "vestry", "церковь#ռուսերեն", "ризница#ռուսերեն", "храм#ռուսերեն", "апсида#ռուսերեն" }, .text = &.{ "ժամ, եկեղեցի", "փոքրիկ սենյակ բեմի երկու կողմերում", "տաճար, եկեղեցի", "տաճարի բեմ, սեղան, պատարագ մատուցելու համար", "փոքրիկ վանք մատուռ", "սենյակ", "կամարակապ որմնախորշ", "խորանաձև մանրանկարչական զարդ", "մարդու հոգեկան աշխարհը, հոգու խորքը", "քրիստոնեական տաճարի արևելյան կողմը", "վրան" }, .tables = 2, .nouns = 11, .adjectives = 0, .etymology_definitions = 1 },
         };
         const Scan = struct {
             visible: std.ArrayList(u8) = .empty,
@@ -26724,6 +26812,7 @@ test "Writer retained three additional HY empty field pages preserves all homogr
             targets: std.ArrayList([]const u8) = .empty,
             nouns: usize = 0,
             adjectives: usize = 0,
+            examples: HyPaintedExamples,
             highlighted: usize = 0,
             highlighted_green: bool = false,
             etymology_definitions: usize = 0,
@@ -26733,11 +26822,13 @@ test "Writer retained three additional HY empty field pages preserves all homogr
             pale: bool = false,
             fn spans(self: *@This(), a: std.mem.Allocator, values: []const encoder.presentation_types.Span) !void {
                 for (values) |span| {
-                    try self.visible.appendSlice(a, span.text); try self.visible.appendSlice(a, span.trail);
+                    try self.visible.appendSlice(a, span.text);
+                    if (span.inline_box_group) |group| try self.spans(a, group.spans);
+                    try self.visible.appendSlice(a, span.trail);
                     if (span.kind == .link or span.kind == .external_link) try self.targets.append(a, span.target);
                     if (span.foreground) |color| self.green = self.green or std.mem.eql(u8, color, "#006400");
-                    if (span.bold and span.background != null and std.mem.eql(u8, span.background.?, "#edf0ff")) {
-                        if (span.foreground) |color| self.highlighted_green = self.highlighted_green or std.mem.eql(u8, color, "#006400");
+                    if (try self.examples.observe(span)) {
+                        self.highlighted_green = self.examples.green != 0;
                         self.highlighted += 1;
                     }
                     if (span.kind == .external_link and std.mem.startsWith(u8, span.target, "http://www.nayiri.com/imagedDictionaryBrowser.jsp?")) self.source_actions += 1;
@@ -26786,13 +26877,15 @@ test "Writer retained three additional HY empty field pages preserves all homogr
     var images = try namespace_registry.image_options.Registry.init(a, @embedFile("testdata/hy-kheght62/image-options.tsv"), ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256, behavior_sha); defer images.deinit();
     const css = @embedFile("testdata/hy-kheght62/common.css");
     try F.hash(css, "d7a62f92193c9d2b28912eef52f254d2945261f7266a6aeddf3cdc6bc0dcb649");
-    var styles = try encoder.table_style_profile.parseAlloc(a, css); defer styles.deinit();
+    var styles = try encoder.table_style_profile.parseForTargetAlloc(a, css, .screen); defer styles.deinit();
     const registry_source = @embedFile("testdata/hy-kheght62/language-registry.tsv");
     try F.hash(registry_source, "cc296cc778f5b819f2e0691099f8407cbdf2e852679f07b10c2667ea856fddcf");
     var registry = language_registry.Registry.empty(a); defer registry.deinit(); try registry.addTsv(registry_source);
     const owner = registry.resolveTrusted("Հայերեն") orelse return error.TestUnexpectedResult;
     try std.testing.expectEqualStrings("hy", owner.code);
+    var exterior = try hyRevisionExteriorFixture(a, &ns, @embedFile("testdata/hy-revision-exteriors/revision-exteriors.json.gz")); defer exterior.deinit();
     var codes = languageCodes(&registry, &ns); codes.behavior_switches = &behavior; codes.image_options = &images; codes.table_styles = &styles;
+    var further = try hyRevisionExteriorFixture(a, &ns, @embedFile("testdata/hy-revision-exteriors/additional-sisters.json.gz")); defer further.deinit();
     for (F.cases, 0..) |case, case_index| {
         errdefer std.debug.print("HY empty field case={s}\n", .{case.title});
         try F.hash(case.raw, case.raw_sha); try F.hash(case.source, case.source_sha);
@@ -26805,6 +26898,17 @@ test "Writer retained three additional HY empty field pages preserves all homogr
         var roots: [2][]const u8 = undefined;
         for ([_][]const u8{ case.source, reference }, 0..) |source, i| {
             roots[i] = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/hy-empty-{d}-{d}", .{ tmp.sub_path, case_index, i });
+            const captured = if (case_index == 0) &exterior else &further;
+            bindRevisionExterior(&codes, captured, case.page_id, case.revision_id, 0, case.title, case.raw, source);
+            if (i == 0) {
+                try std.testing.expect(codes.revision_exterior != null);
+            } else {
+                // The transformed reference fails the ordinary source binding.
+                // Reuse only this page's verified exterior for its comparison.
+                try std.testing.expect(codes.revision_exterior == null);
+                const observed_tags = captured.revisionExterior(case.page_id, case.revision_id, 0, case.title, case.raw, case.source) orelse return error.MissingOriginalExterior;
+                codes.revision_exterior = .{ .namespace_sha256 = ns.source_sha256, .title = case.title, .raw = case.raw, .expanded = source, .tags = observed_tags };
+            }
             var writer = try encoder.blob_builder.Writer.init(io, a, roots[i]); defer writer.deinit(); writer.language_codes = codes;
             try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, case.title, source, case.raw, null);
             const stats = try writer.finish(codes);
@@ -26822,9 +26926,10 @@ test "Writer retained three additional HY empty field pages preserves all homogr
         try std.testing.expectEqualDeep(actual, decoded.entry);
         try std.testing.expectEqualSlices(u8, bytes, try encoder.presentation_codec.encodeAlloc(a, decoded));
         try std.testing.expectEqual(@as(usize, 0), actual.media.len); try std.testing.expectEqual(@as(usize, 0), actual.references.len);
-        var scan: F.Scan = .{};
+        var scan: F.Scan = .{ .examples = .{ .remaining = case.source, .ordinary_foreground = case.ordinary_foreground } };
         errdefer std.debug.print("HY empty field counters: case={s} tables={d}/{d} cells={d}/{d} nouns={d}/{d} adjectives={d}/{d} etymology_definitions={d}/{d} blue={} pale={} green={} highlighted={d} highlighted_green={} source_actions={d} target_count={d}\n", .{ case.title, scan.tables, case.tables, scan.cells, case.tables * 3, scan.nouns, case.nouns, scan.adjectives, case.adjectives, scan.etymology_definitions, case.etymology_definitions, scan.blue, scan.pale, scan.green, scan.highlighted, scan.highlighted_green, scan.source_actions, scan.targets.items.len });
         try scan.entry(a, actual);
+        try scan.examples.finish();
         try std.testing.expectEqual(case.tables, scan.tables);
         try std.testing.expectEqual(case.tables * 3, scan.cells);
         try std.testing.expectEqual(case.nouns, scan.nouns); try std.testing.expectEqual(case.adjectives, scan.adjectives);
@@ -32422,6 +32527,7 @@ const GreekDashedLinkFixture = struct {
     const Span = encoder.presentation_types.Span;
     const labels = [_]struct { target: []const u8, text: []const u8, italic: bool, tooltip: ?[]const u8, literal_colors: bool = false }{
         .{ .target = "αγγλικά", .text = "την αγγλική", .italic = true, .tooltip = null },
+        .{ .target = "αγγλικά", .text = "αγγλική", .italic = true, .tooltip = null },
         .{ .target = "έκθλιψη", .text = "έκθλιψη", .italic = false, .tooltip = null },
         .{ .target = "κυριολεκτώ", .text = "κυριολεκτικά", .italic = false, .tooltip = "κυριολεκτικά, κυριολεκτώντας" },
         .{ .target = "αρχαία ελληνικά", .text = "αρχαία ελληνική", .italic = true, .tooltip = null },
@@ -61971,9 +62077,9 @@ const ThPeiliDefaultPageSaved = struct {
             try std.testing.expectEqualStrings("", prefix_section.anchor);
             try std.testing.expectEqualStrings("", prefix_section.anchor_fallback);
             try std.testing.expectEqualDeep(@as([]const T.Block, &.{.{ .kind = .paragraph, .depth = 0, .spans = &.{
-                .{ .kind = .text, .text = "ดูเพิ่ม:", .italic = true },
-                .{ .kind = .text, .text = " " },
-                .{ .kind = .link, .text = "péilǐ", .target = "péilǐ", .classes = "Latn", .bold = true },
+                .{ .kind = .text, .text = "ดูเพิ่ม:", .classes = "disambig-see-also", .italic = true },
+                .{ .kind = .text, .text = " ", .classes = "disambig-see-also" },
+                .{ .kind = .link, .text = "péilǐ", .target = "péilǐ", .classes = "disambig-see-also Latn", .bold = true },
             } }}), prefix_section.blocks);
             try std.testing.expect(std.mem.startsWith(u8, source,
                 "<div class=\"disambig-see-also\">''ดูเพิ่ม:'' <b class=\"Latn\">[[:péilǐ|péilǐ]]</b></div>\n"));

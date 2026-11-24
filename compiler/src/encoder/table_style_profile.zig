@@ -48,7 +48,7 @@ pub const ElementContext = struct {
 };
 pub const TableResolution = struct { resolved_legacy_border: bool = false, float_viewport: ?types.TableFloatViewport = null, block_viewport: ?*const types.TableBlockViewport = null, style: ?types.TableStyle, scope: Scope, unresolved: bool, margin_basis_unresolved: bool = false, background_specified: bool = false, descendant_style_unresolved: bool = false, width_specified: bool = false, line_height_em: ?f32 = null };
 pub const CellSourceScopeHazards = struct { height: bool = false, font_context: bool = false };
-pub const CellResolution = struct { style: ?types.CellStyle, background: ?[]const u8, background_specified: bool, unresolved: bool, padding_basis_unresolved: bool = false, alignment_specified: bool = false, line_height: ?cell_font_metrics.CellLineHeightSpecified = null, line_height_refused: bool = false };
+pub const CellResolution = struct { style: ?types.CellStyle, background: ?[]const u8, background_specified: bool, unresolved: bool, padding_basis_unresolved: bool = false, own_font_basis_unresolved: bool = false, alignment_specified: bool = false, line_height: ?cell_font_metrics.CellLineHeightSpecified = null, line_height_refused: bool = false };
 const max_css_bytes = 1024 * 1024;
 const max_rules = 4096;
 const Target = enum { element, table, cell, th, td, other };
@@ -2098,7 +2098,12 @@ pub const TextElement = struct {
     source_fragment_target_absent: bool = false,
     source_nonlink_element: bool = false,
     // Immediate query only. These tokens can refute local source rules in inherited box checks.
+    // Only the ordinary static P or OL/LI issuer can combine its proved
+    // SPAN/I path with a returned page's revision-bound exterior.
+    source_static_exterior_tags: ?[]const []const u8 = null,
     source_inline_box_ancestor_classes: ?[]const u8 = null,
+    // Only the current ordinary source bullet's own inline-box selector query.
+    source_bullet_li_ancestor_classes: ?[]const u8 = null,
     // Query-local native constructor receipt; no root, classes or positive match.
     constructed_direct_parent: ?*const TextElement = null,
     source_literal_div: ?*const SourceLiteralDivProof = null,
@@ -7801,6 +7806,23 @@ const ContainerSelector = struct {
                 if (necessary[necessary.len - 2].compound.tag) |required|
                     if (std.ascii.eqlIgnoreCase(required, "li")) return .no;
         }
+        if (element.source_bullet_li_ancestor_classes) |classes| {
+            // Only positive ancestor classes on an exact chain ending LI > SPAN.
+            // Unparsed predicates, siblings and other ancestry stay unresolved.
+            if (self.fallback == null and !self.uncertain and self.adjacent_sibling == null and
+                element.alternative_ancestry == null and std.ascii.eqlIgnoreCase(element.tag, "span") and self.chain.len >= 3)
+            {
+                const leaf = self.chain[self.chain.len - 1];
+                const item = self.chain[self.chain.len - 2];
+                if (leaf.direct_parent and std.ascii.eqlIgnoreCase(leaf.compound.tag orelse "", "span") and
+                    std.ascii.eqlIgnoreCase(item.compound.tag orelse "", "li"))
+                {
+                    for (self.chain[0 .. self.chain.len - 2]) |ancestor| {
+                        for (ancestor.compound.classes) |required| if (!Profile.hasClass(classes, required)) return .no;
+                    }
+                }
+            }
+        }
         if (element.source_direct_parent_classes) |classes| {
             const necessary = if (self.fallback != null) self.necessary_chain else self.chain;
             if (necessary.len >= 2 and necessary[necessary.len - 1].direct_parent)
@@ -8114,7 +8136,7 @@ const BorderCascade = struct {
         if (uniform) switch (sides[0]) {
             .none => return .{ .value = .none },
             .solid => |solid| return .{ .value = .{ .solid = .{ .width = solid.width, .color = solid.color } } },
-            .hidden, .dotted => {},
+            .hidden, .dotted, .dashed => {},
         };
         return .{ .value = .{ .edges = .{ .top = sides[0], .right = sides[1], .bottom = sides[2], .left = sides[3] } } };
     }
@@ -8125,6 +8147,7 @@ fn containerBorderEdgeEqual(left: types.ContainerBorderEdge, right: types.Contai
         .none, .hidden => true,
         .solid => |line| std.meta.eql(line.width, right.solid.width) and containerColorEqual(line.color, right.solid.color),
         .dotted => |line| std.meta.eql(line.width, right.dotted.width) and containerColorEqual(line.color, right.dotted.color),
+        .dashed => |line| std.meta.eql(line.width, right.dashed.width) and containerColorEqual(line.color, right.dashed.color),
     };
 }
 fn containerBorderEdgesEqual(left: types.ContainerBorderEdges, right: types.ContainerBorderEdges) bool {
@@ -8141,6 +8164,7 @@ fn containerEdgeFromStyle(edge: types.StyleBorderEdge) types.ContainerBorderEdge
 }
 fn styleEdgeFromContainer(edge: types.ContainerBorderEdge) ?types.StyleBorderEdge {
     return switch (edge) {
+        .dashed => null,
         .none => .none, .hidden => .hidden,
         .solid => |line| if (line.color == .rgb) .{ .solid = .{ .width = line.width, .color = line.color.rgb } } else null,
         .dotted => |line| if (line.color == .rgb) .{ .dotted = .{ .width = line.width, .color = line.color.rgb } } else null,
@@ -10532,10 +10556,10 @@ pub const Profile = struct {
         };
         const corner_conflict = projectTableCorners(&style, winners);
         const flow_conflict = tableFlowFloatConflict(&style);
-        return .{ .style = if (types.validUnboundTableStyle(style)) style else null, .scope = inherited_scope | own_scope, .unresolved = winners.unresolvedWithFont(context.font_size_consumed) or flow_conflict or corner_conflict, .margin_basis_unresolved = winners.font_basis_unresolved or self.inheritedFontBasisUnresolved(inherited_scope, context.complete_table_ancestor_classes orelse ancestor_names, context.complete_font_ancestor_ids, context.complete_font_ancestor_tags, context.complete_table_ancestor_ids != null), .background_specified = winners.value(.background) != null, .width_specified = winners.value(.width) != null or unresolvedTableWidthBox(winners), .line_height_em = selectedLineHeight(winners) };
+        return .{ .style = if (types.validUnboundTableStyle(style)) style else null, .scope = inherited_scope | own_scope, .unresolved = winners.unresolvedWithFont(context.font_size_consumed) or flow_conflict or corner_conflict, .margin_basis_unresolved = winners.font_basis_unresolved or self.inheritedFontBasisUnresolved(inherited_scope, context.complete_table_ancestor_classes orelse ancestor_names, context.complete_font_ancestor_ids, context.complete_font_ancestor_tags, context.complete_table_ancestor_ids != null, null), .background_specified = winners.value(.background) != null, .width_specified = winners.value(.width) != null or unresolvedTableWidthBox(winners), .line_height_em = selectedLineHeight(winners) };
     }
 
-    fn inheritedFontBasisUnresolved(self: *const Profile, scope: Scope, ancestor_names: ?[]const u8, complete_ids: ?[]const []const u8, complete_tags: ?[]const []const u8, source_bound: bool) bool {
+    fn inheritedFontBasisUnresolved(self: *const Profile, scope: Scope, ancestor_names: ?[]const u8, complete_ids: ?[]const []const u8, complete_tags: ?[]const []const u8, source_bound: bool, cell_ids: ?[]const u8) bool {
         rules: for (self.rules) |rule| {
             const selected = rule.selector;
             if (selected.mask != 0 and selected.mask & scope == 0) continue;
@@ -10547,6 +10571,9 @@ pub const Profile = struct {
                     var found = false;
                     for (tags) |tag| if (std.ascii.eqlIgnoreCase(tag, required)) { found = true; break; };
                     if (!found) continue :rules;
+                };
+                if (cell_ids) |ids| if (!selected.unsupported) {
+                    for (selected.own_ids) |required| if (!hasClass(ids, required)) continue :rules;
                 };
                 if (complete_ids) |ids| {
                     const required_ids: []const []const u8 = if (!selected.unsupported) selected.own_ids else &.{};
@@ -10649,7 +10676,16 @@ pub const Profile = struct {
         style.width = selectedCellWidth(winners);
         if (winners.value(.vertical_align)) |value| if (value == .cell_vertical_align_value) { style.vertical_align = value.cell_vertical_align_value; };
         const background = winners.value(.background);
-        return .{ .style = if (types.validCellStyle(style)) style else null, .background = if (background) |value| (if (value == .color) value.color else null) else null, .background_specified = background != null, .unresolved = winners.unresolvedWithFont(context.font_size_consumed), .padding_basis_unresolved = winners.font_basis_unresolved or self.inheritedFontBasisUnresolved(scope, ancestor_names, null, null, false), .alignment_specified = winners.value(.text_align) != null, .line_height = selectedCellLineHeight(winners) };
+        return .{ .style = if (types.validCellStyle(style)) style else null, .background = if (background) |value| (if (value == .color) value.color else null) else null, .background_specified = background != null, .unresolved = winners.unresolvedWithFont(context.font_size_consumed), .padding_basis_unresolved = winners.font_basis_unresolved or self.inheritedFontBasisUnresolved(scope, ancestor_names, null, null, false, null), .own_font_basis_unresolved = winners.font_basis_unresolved, .alignment_specified = winners.value(.text_align) != null, .line_height = selectedCellLineHeight(winners) };
+    }
+
+    // Complete captured cell ancestry can refute inherited font subjects.
+    // The native cell's unresolved own cascade and every other winner stay put.
+    pub fn refineCellPaddingFontAncestry(self: *const Profile, cell: *CellResolution,
+        scope: Scope, ancestor_classes: ?[]const u8, complete_ids: []const u8) void
+    {
+        if (!cell.padding_basis_unresolved or cell.own_font_basis_unresolved or cell.style == null) return;
+        cell.padding_basis_unresolved = self.inheritedFontBasisUnresolved(scope, ancestor_classes, null, null, false, complete_ids);
     }
 
     pub fn inlineBoxIsolatedProfile(self: *const Profile) bool {
@@ -17978,6 +18014,40 @@ test "complete ancestor IDs only refute necessary inherited font IDs" {
     // This capability does not alter cell padding's existing conservative path.
     const cell = try profile.resolveCellWithContext(a, 0, 0, "", .{ .ancestor_classes = "", .own_id = "", .complete_font_ancestor_ids = &.{} }, false, null, "padding-left:0.5em");
     try std.testing.expect(cell.padding_basis_unresolved);
+}
+
+test "complete captured wiki cell IDs independently refute inherited font subjects" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const css = "padding:0 1em";
+    var profile = try parseAlloc(a, "#siteSub{font-size:95%}");
+    defer profile.deinit();
+
+    const unproved = try profile.resolveCellWithContext(a, 0, 0, "", .{
+        .own_id = "", .ancestor_classes = "", .complete_font_ancestor_ids = &.{},
+    }, false, null, css);
+    try std.testing.expect(unproved.padding_basis_unresolved);
+    var from_source = unproved;
+    profile.refineCellPaddingFontAncestry(&from_source, 0, "", "content bodyContent");
+    try std.testing.expect(!from_source.padding_basis_unresolved);
+    try std.testing.expectEqualDeep(unproved.style, from_source.style);
+    try std.testing.expectEqual(unproved.unresolved, from_source.unresolved);
+
+    var actual_ancestor = unproved;
+    profile.refineCellPaddingFontAncestry(&actual_ancestor, 0, "", "content siteSub");
+    try std.testing.expect(actual_ancestor.padding_basis_unresolved);
+    var own = try profile.resolveCellWithContext(a, 0, 0, "", .{ .own_id = "siteSub" }, false, null, css);
+    profile.refineCellPaddingFontAncestry(&own, 0, "", "siteSub");
+    try std.testing.expect(own.padding_basis_unresolved);
+
+    for ([_][]const u8{ "td{font-size:120%}", ":is(#siteSub, td){font-size:120%}" }) |rules| {
+        var uncertain = try parseAlloc(a, rules);
+        defer uncertain.deinit();
+        var cell = try uncertain.resolveCellWithContext(a, 0, 0, "", .{ .own_id = "" }, false, null, css);
+        uncertain.refineCellPaddingFontAncestry(&cell, 0, "", "");
+        try std.testing.expect(cell.padding_basis_unresolved);
+    }
 }
 
 test "complete original ancestor tags refute only absent exact font subjects" {
@@ -31681,8 +31751,14 @@ test "consumed own cell weight retains unsupported siblings unknown matches and 
         try std.testing.expect(!consumed.unresolved);
         try std.testing.expect(consumed.style != null and consumed.style.?.padding != null);
     }
+    for ([_][]const u8{ "td{font-weight:bold;opacity:.5}", "td{opacity:.5;font-weight:bold}" }) |css| {
+        var profile = try parseForTargetAlloc(a, css, .unknown); defer profile.deinit();
+        const result = try profile.resolveCellWithContextAndHints(a, 0, 0, "", .{ .font_weight_consumed = true }, false, null, null, "");
+        try std.testing.expect(!result.unresolved);
+        try std.testing.expectEqual(@as(?f32, 0.5), result.style.?.opacity);
+    }
     for ([_][]const u8{
-        "td{font-weight:bold;opacity:.5}", "td{opacity:.5;font-weight:bold}",
+        "td{font-weight:bold;transform:rotate(3deg)}", "td{transform:rotate(3deg);font-weight:bold}",
         "td{font-weight:600}", "td{font-weight:var(--weight)}", "td{font:bold 12px serif}",
         "td:hover{font-weight:bold}", "@media print{td{font-weight:bold}}",
     }) |css| {
@@ -33575,11 +33651,14 @@ test "complete captured DIV children refute only necessary terminal previous rel
     nodes[3].tag = "div"; nodes[3].attributes = &.{.{ .name = "class", .value = "NavFrame" }};
     try std.testing.expect(observedStyleRuleMatch(adjacent, &nodes, null, 4, null, .{}) == .unknown);
     nodes[3].tag = "style"; nodes[3].attributes = &.{};
+    var inline_parent = nodes;
+    inline_parent[2].tag = "span";
+    try std.testing.expect(observedStyleRuleMatch(adjacent, &inline_parent, null, 4, null, .{}) == .no);
     for (0..9) |mode| {
         var changed = nodes;
         switch (mode) {
             0 => changed[2].known_complete_child_elements = false,
-            1 => changed[2].tag = "span",
+            1 => changed[2].tag = "section",
             2 => changed[4].parent = 1,
             3 => changed[4].known_previous_element_sibling = null,
             4 => changed[4].known_previous_element_sibling = 5,
@@ -38862,6 +38941,20 @@ pub fn staticInlineOwnerRejection(profile: *const Profile, a: std.mem.Allocator,
     return .none;
 }
 
+fn staticAncestorTypeAbsent(rule: ContainerRule, outer: ?[]const []const u8) bool {
+    const tags = outer orelse return false;
+    const provenance = rule.provenance orelse return false;
+    var parts = std.mem.tokenizeAny(u8, provenance.selector, " \t\r\n\x0c");
+    const ancestor = parts.next() orelse return false;
+    if (!std.ascii.isAlphabetic(ancestor[0]) or !std.mem.eql(u8, parts.next() orelse return false, "*") or parts.next() != null) return false;
+    for (ancestor[1..]) |c| if (!std.ascii.isAlphanumeric(c) and c != '-') return false;
+    if (tags.len < 3) return false;
+    // A conservative union of every local authored and generated tag
+    // admitted by staticInlineAncestorClasses, including both dispatches.
+    for ([_][]const u8{ "p", "ul", "ol", "li", "span", "i", "b" }) |tag| if (std.ascii.eqlIgnoreCase(tag, ancestor)) return false;
+    for (tags) |tag| if (std.ascii.eqlIgnoreCase(tag, ancestor)) return false;
+    return true;
+}
 // Only a current property-local receipt can refute an otherwise unknown
 // selector. A known matching rule still belongs to this node's cascade.
 pub fn staticInlineOwnerRulesAbsent(profile: *const Profile, element: *const TextElement) bool {
@@ -38887,6 +38980,7 @@ fn staticInlineOwnerRulesWithFont(profile: *const Profile, element: *const TextE
 fn staticInlineLocalRuleAbsent(profile: *const Profile, rule: ContainerRule, element: *const TextElement) bool {
     const classes = element.source_inline_box_ancestor_classes orelse return false;
     if (element.alternative_ancestry != null) return false;
+    if (staticAncestorTypeAbsent(rule, element.source_static_exterior_tags)) return true;
     if (inlineBoxInheritedSelectorAbsent(profile, rule, .{ .classes = classes, .local_box = true })) return true;
     // This owned inline occurrence lives inside the article. A terminal root
     // condition cannot select it, even when the legacy matcher lacks a root edge.
@@ -38947,6 +39041,17 @@ test "classifier padding and paint are three independent source-owned inline ran
     parent_node.classes = "";
     italic_node.source_inline_box_ancestor_classes = "mw-parser-output";
     try std.testing.expect(staticInlineOwnerRulesAbsent(&class_sheet, &italic_node));
+    // A later sibling can put Arab in the broader page census. The exact
+    // current path still excludes it. A real ancestor or missing path refuses.
+    italic_node.complete_ancestor_classes = "mw-parser-output Arab";
+    try std.testing.expect(staticInlineOwnerRulesAbsent(&class_sheet, &italic_node));
+    italic_node.source_inline_box_ancestor_classes = null;
+    try std.testing.expect(!staticInlineOwnerRulesAbsent(&class_sheet, &italic_node));
+    italic_node.source_inline_box_ancestor_classes = "mw-parser-output Arab";
+    parent_node.classes = "Arab";
+    try std.testing.expect(!staticInlineOwnerRulesAbsent(&class_sheet, &italic_node));
+    parent_node.classes = "";
+    italic_node.source_inline_box_ancestor_classes = "mw-parser-output";
     var outer_sheet = try parseForTargetAlloc(a, "html.Arab i{transform:translateX(2px)}", .screen);
     defer outer_sheet.deinit();
     try std.testing.expect(!staticInlineOwnerRulesAbsent(&outer_sheet, &italic_node));
@@ -38995,5 +39100,57 @@ test "static dashed bottom links resolve CSS variable colors and refuse other sh
     for ([_][]const u8{ "background:#fff;border:1px dashed #ddd", "background:#fff;border-bottom:2px dashed #ddd", "background:#fff;border-bottom:1px dashed currentColor", "border-bottom:1px dashed #ddd" }) |bad| {
         const refused = try resolveStaticInlineDecorationWithAncestorsAlloc(a, bad, environment, false, &.{bad});
         try std.testing.expect(refused.unresolved);
+    }
+}
+
+test "static frame absent descendant type needs parser path and a complete exterior" {
+    const a = std.testing.allocator;
+    const tags = [_][]const u8{ "html", "body", "main", "div" };
+    const cases = [_]struct { css: []const u8, absent: bool }{
+        .{ .css = "Kthi * {font-style:normal}", .absent = true },
+        .{ .css = "MAIN * {font-style:normal}", .absent = false },
+        .{ .css = "ul * {font-style:normal}", .absent = false },
+        .{ .css = "i * {font-style:normal}", .absent = false },
+        .{ .css = "span * {font-style:normal}", .absent = false },
+        .{ .css = ".Kthi * {font-style:normal}", .absent = false },
+        .{ .css = "Kthi > * {font-style:normal}", .absent = false },
+    };
+    for (cases) |case| {
+        var styles = try parseAlloc(a, case.css); defer styles.deinit();
+        try std.testing.expect(styles.container_rules.len == 1);
+        try std.testing.expectEqual(case.absent, staticAncestorTypeAbsent(styles.container_rules[0], &tags));
+        try std.testing.expect(!staticAncestorTypeAbsent(styles.container_rules[0], null));
+    }
+}
+
+
+test "ordinary bullet class proof only excludes required positive classes outside a terminal LI child SPAN" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var node: TextElement = .{ .tag = "span", .classes = "ib-brac qualifier-brac" };
+    var sheet = try parseForTargetAlloc(a, ".etymology li > span { position:relative }", .screen);
+    defer sheet.deinit();
+    try std.testing.expect(try sheet.hasInlineBoxCandidateIn(a, &node, ""));
+    node.source_bullet_li_ancestor_classes = "mw-parser-output ib-brac qualifier-brac";
+    try std.testing.expect(!try sheet.hasInlineBoxCandidateIn(a, &node, ""));
+    node.source_bullet_li_ancestor_classes = "mw-parser-output etymology ib-brac qualifier-brac";
+    try std.testing.expect(try sheet.hasInlineBoxCandidateIn(a, &node, ""));
+    node.source_bullet_li_ancestor_classes = null;
+    var tree: TextElement = .{ .tag = "div", .classes = "etymology" };
+    var list: TextElement = .{ .tag = "ul", .parent = &tree };
+    var item: TextElement = .{ .tag = "li", .parent = &list };
+    node.parent = &item;
+    const matched = try sheet.containerRuleMatchesIn(a, &node);
+    defer a.free(matched.rules);
+    try std.testing.expect(matched.rules.len == 1 and matched.rules[0].match == .known);
+    node.parent = null;
+    node.source_bullet_li_ancestor_classes = "mw-parser-output ib-brac qualifier-brac";
+    for ([_][]const u8{ ".etymology li span", ".etymology li + span", ".etymology div > span",
+        ".etymology li > i, span", ":is(.etymology, .other) li > span", "li > span" }) |selector| {
+        const css = try std.mem.concat(a, u8, &.{ selector, "{position:relative}" });
+        var other = try parseForTargetAlloc(a, css, .screen);
+        defer other.deinit();
+        try std.testing.expect(try other.hasInlineBoxCandidateIn(a, &node, ""));
     }
 }

@@ -30,7 +30,7 @@ fn directDescriptor(value: V) !void {
     if (size <= 0 or size > max_payload_bytes or !lowerHash(try str(value, "sha256")) or
         path.len == 0 or path.len > 4096 or std.mem.indexOfAny(u8, path, "\x00\r\n") != null) return invalid;
 }
-fn directTimestamp(value: []const u8) bool {
+pub fn directTimestamp(value: []const u8) bool {
     if (value.len < 20 or value.len > 35) return false;
     const suffix: usize = if (std.mem.endsWith(u8, value, "+00:00")) 6 else if (std.mem.endsWith(u8, value, "Z")) 1 else return false;
     const end = value.len - suffix;

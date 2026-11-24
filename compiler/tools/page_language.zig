@@ -59,8 +59,75 @@ const Packet = struct {
     source_profile: V,
     responses: []const ResponseRange,
     records: []const Record,
+    revision_exteriors: []const RevisionExterior = &.{},
     direct_get_contexts: []const DirectGetContext = &.{},
 };
+const RevisionExterior = struct { page: Page, request: []const u8, receipt: []const u8, response: []const u8, prefix_bytes: u32 };
+const ExteriorEntry = struct { page: Page, tags: []const []const u8 };
+fn exteriorPageValid(page: Page) bool {
+    return page.id > 0 and page.revision > 0 and page.namespace == 0 and eq(page.model, "wikitext") and
+        page.title.len > 0 and std.mem.indexOfAny(u8, page.title, "\x00\r\n\t") == null and
+        lowerHash(page.raw_sha256) and lowerHash(page.expanded_sha256 orelse return false);
+}
+fn exteriorPageCompatible(left: Page, right: anytype) bool {
+    if (left.id != right.id and !eq(left.title, right.title)) return true;
+    return left.id == right.id and left.revision == right.revision and left.namespace == right.namespace and
+        eq(left.title, right.title) and eq(left.model, right.model) and eq(left.raw_sha256, right.raw_sha256) and
+        (right.expanded_sha256 == null or eq(left.expanded_sha256.?, right.expanded_sha256.?));
+}
+fn revisionUrl(a: A, wiki: []const u8, title: []const u8, revision: u64) ![]const u8 {
+    if (!std.mem.endsWith(u8, wiki, "wiktionary")) return invalid;
+    const host = try a.dupe(u8, wiki[0..wiki.len - "wiktionary".len]);
+    defer a.free(host);
+    if (host.len == 0) return invalid;
+    for (host) |*c| {
+        if (c.* == '_') c.* = '-' else if (!std.ascii.isLower(c.*) and !std.ascii.isDigit(c.*) and c.* != '-') return invalid;
+    }
+    var escaped: std.ArrayList(u8) = .empty;
+    defer escaped.deinit(a);
+    const hex = "0123456789ABCDEF";
+    for (title) |byte| {
+        if (std.ascii.isAlphanumeric(byte) or std.mem.indexOfScalar(u8, "-._~", byte) != null) {
+            try escaped.append(a, byte);
+        } else if (byte == ' ') {
+            try escaped.append(a, '+');
+        } else try escaped.appendSlice(a, &.{ '%', hex[byte >> 4], hex[byte & 15] });
+    }
+    return std.fmt.allocPrint(a, "https://{s}.wiktionary.org/w/index.php?title={s}&oldid={d}&useskin=vector-2022", .{ host, escaped.items, revision });
+}
+fn exteriorTags(a: A, wiki: []const u8, row: RevisionExterior) ![]const []const u8 {
+    if (!exteriorPageValid(row.page) or row.prefix_bytes == 0 or row.prefix_bytes >= row.response.len or row.response.len > 2*1024*1024 or
+        !std.unicode.utf8ValidateSlice(row.response) or std.mem.indexOfScalar(u8, row.response, 0) != null) return invalid;
+    const trimmed = std.mem.trimEnd(u8, row.response[row.prefix_bytes..], " \r\n\t");
+    if (!std.mem.endsWith(u8, trimmed, "</html>") or !std.mem.endsWith(u8, std.mem.trimEnd(u8, trimmed[0..trimmed.len-"</html>".len], " \r\n\t"), "</body>")) return invalid;
+    const request = try parseLimited(a, row.request, 32*1024);
+    const receipt = try parseLimited(a, row.receipt, 128*1024);
+    const url = try revisionUrl(a, wiki, row.page.title, row.page.revision);
+    const accepted = try field(receipt, "accepted");
+    const retry = try field(request, "retry");
+    const began = try str(receipt, "started_utc");
+    const ended = try str(receipt, "ended_utc");
+    if (receipt != .object or receipt.object.count() != 10 or
+        !direct_source_get.directTimestamp(began) or !direct_source_get.directTimestamp(ended)) return invalid;
+    const fields = try field(receipt, "headers");
+    if (request != .object or request.object.count() != 4 or !eq(try str(request, "method"), "GET") or
+        !eq(try str(request, "accept"), "text/html") or retry != .bool or retry.bool or !eq(try str(request, "url"), url) or
+        accepted != .bool or !accepted.bool or try integer(receipt, "status") != 200 or !eq(try str(receipt, "final_url"), url) or
+        !eq(try str(receipt, "request"), "request-02.json") or !eq(try str(receipt, "response"), "request-02.response") or
+        try integer(receipt, "response_bytes") != @as(i64, @intCast(row.response.len)) or !matches(row.response, try str(receipt, "response_sha256")) or fields != .object) return invalid;
+    var it = fields.object.iterator();
+    var html = false;
+    while (it.next()) |header| {
+        if (!std.ascii.eqlIgnoreCase(header.key_ptr.*, "content-type")) continue;
+        if (html or header.value_ptr.* != .string) return invalid;
+        const mime = header.value_ptr.string;
+        if (!std.ascii.eqlIgnoreCase(mime, "text/html") and !std.ascii.eqlIgnoreCase(mime, "text/html; charset=UTF-8")) return invalid;
+        html = true;
+    }
+    if (!html) return invalid;
+    return prefix_parser.revisionExteriorTagsAlloc(a, row.response[0..row.prefix_bytes], row.page.id, row.page.revision, row.page.title, wiki);
+}
+
 const DirectStyles = struct { responses: []const []const u8, receipt: []const u8 };
 pub const DirectGetContext = direct_source_get.Context(DirectStyles);
 const canonicalCurrentUrl = direct_source_get.canonicalCurrentUrl;
@@ -341,6 +408,7 @@ pub const Registry = struct {
     entries: []const Entry = &.{},
     core_revision: ?[]const u8 = null,
     direct_entries: []const DirectEntry = &.{},
+    exteriors: []const ExteriorEntry = &.{},
     const DirectEntry = struct { page: Page, capsule: *const SourceParentCapsule };
 
     pub fn init(backing: A, packet_bytes: ?[]const u8, response_bytes: ?[]const u8, prefix_bytes: ?[]const u8, ns: *const namespaces.Registry) !Registry {
@@ -363,7 +431,7 @@ pub const Registry = struct {
         if (raw.len > max_payload_bytes or (if (prefix_bytes) |p| p.len == 0 or p.len > max_payload_bytes else false) or
             !eq(doc.schema, "wikidict.page-language-index.v1") or !eq(doc.wiki, ns.wiki) or
             !eq(doc.namespace_registry_sha256, &std.fmt.bytesToHex(ns.source_sha256, .lower)) or doc.historical_page_language_proven or
-            (!has_api and !has_direct) or doc.records.len > max_records or doc.responses.len > max_responses or
+            (!has_api and !has_direct and doc.revision_exteriors.len == 0) or doc.revision_exteriors.len > 256 or doc.records.len > max_records or doc.responses.len > max_responses or
             doc.direct_get_contexts.len > 256 or
             (has_api and (raw.len == 0 or doc.responses.len == 0)) or
             (!has_api and (raw.len != 0 or doc.responses.len != 0 or prefix_bytes != null or
@@ -448,7 +516,23 @@ pub const Registry = struct {
                 .body_skin_responsive = transport.observation.body_skin_responsive };
             entry.* = .{ .page = owned, .capsule = capsule };
         }
-        return .{ .arena = arena, .entries = entries, .direct_entries = direct_entries,
+        const exteriors = try a.alloc(ExteriorEntry, doc.revision_exteriors.len);
+        for (doc.revision_exteriors, exteriors, 0..) |row, *entry, i| {
+            if (!exteriorPageValid(row.page) or (i > 0 and doc.revision_exteriors[i-1].page.id >= row.page.id)) return invalid;
+            for (doc.revision_exteriors[0..i]) |other| if (eq(other.page.title, row.page.title)) return invalid;
+            for (doc.records) |other| if (!exteriorPageCompatible(row.page, other.page)) return invalid;
+            for (doc.direct_get_contexts) |other| if (!exteriorPageCompatible(row.page, other.page)) return invalid;
+            const tags = try exteriorTags(index_allocator, ns.wiki, row);
+            var page = row.page;
+            page.model = "wikitext";
+            page.title = try a.dupe(u8, page.title);
+            page.raw_sha256 = try a.dupe(u8, page.raw_sha256);
+            page.expanded_sha256 = try a.dupe(u8, page.expanded_sha256.?);
+            const retained = try a.alloc([]const u8, tags.len);
+            for (tags, retained) |tag, *copy| copy.* = try a.dupe(u8, tag);
+            entry.* = .{ .page = page, .tags = retained };
+        }
+        return .{ .arena = arena, .entries = entries, .direct_entries = direct_entries, .exteriors = exteriors,
             .core_revision = if (has_api) selected_profile.core else null };
     }
     pub fn deinit(self: *Registry) void { self.arena.deinit(); self.* = undefined; }
@@ -489,6 +573,14 @@ pub const Registry = struct {
             !eq(entry.page.title, title) or !matches(raw, entry.page.raw_sha256) or
             !matches(expanded, entry.page.expanded_sha256.?)) return null;
         return entry.capsule;
+    }
+    pub fn revisionExterior(self: *const Registry, id: u64, revision: u64, ns: i32, title: []const u8, raw: []const u8, expanded: []const u8) ?[]const []const u8 {
+        for (self.exteriors) |item| {
+            if (item.page.id > id) break;
+            if (item.page.id == id and item.page.revision == revision and item.page.namespace == ns and eq(item.page.title, title) and
+                matches(raw, item.page.raw_sha256) and matches(expanded, item.page.expanded_sha256.?)) return item.tags;
+        }
+        return null;
     }
     pub fn capturedSourceMatches(self: *const Registry, page_id: u64, revision_id: u64, ns: i32, title: []const u8, raw: []const u8, expanded: []const u8) bool {
         const entry = self.selected(page_id, revision_id, ns, title, raw) orelse return false;
@@ -1383,3 +1475,43 @@ pub const SourceTesting = if (@import("builtin").is_test) struct {
     pub const data_only_encoder = !@hasDecl(@import("encoder"), "table_style_profile") and
         !@hasDecl(@import("encoder"), "presentation_compile");
 } else struct {};
+
+test "revision exterior replays original Armenian page, binds both sources and rejects malformed ancestry" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile("testdata/hy-kheght62/namespace-registry.tsv")); defer ns.deinit();
+    var input: std.Io.Reader = .fixed(@embedFile("testdata/hy-revision-exteriors/revision-exteriors.json.gz"));
+    var inflater: std.compress.flate.Decompress = .init(&input, .gzip, &.{});
+    const decoded = try inflater.reader.allocRemaining(a, .limited(max_index_bytes));
+    try std.testing.expect(inflater.err == null and inflater.state == .end);
+    var book = try Registry.init(a, decoded, "", null, &ns);
+    defer book.deinit();
+    const raw = @embedFile("testdata/hy-kheght62/raw.wikitext");
+    const source = @embedFile("testdata/hy-kheght62/expanded.wikitext");
+    const tags = book.revisionExterior(76262, 1779291, 0, "խեղճ", raw, source) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 9), tags.len);
+    for (tags, [_][]const u8{ "html","body","div","div","div","main","div","div","div" }) |actual, expected| try std.testing.expectEqualStrings(expected, actual);
+    try std.testing.expect(book.revisionExterior(76262, 1779292, 0, "խեղճ", raw, source) == null);
+    try std.testing.expect(book.revisionExterior(76262, 1779291, 0, "խեղճ", raw, source[1..]) == null);
+    try std.testing.expect(book.revisionExterior(76262, 1779291, 0, "խեղճ", raw[1..], source) == null);
+    try std.testing.expect(book.revisionExterior(76262, 1779291, 0, "խեղեփ", raw, source) == null);
+    const packet = try std.json.parseFromSlice(Packet, a, decoded, .{});
+    defer packet.deinit();
+    const original = packet.value.revision_exteriors[0];
+    var changed = original;
+    changed.prefix_bytes -= 1;
+    try std.testing.expectError(error.InvalidPageLanguagePrefix, exteriorTags(a, ns.wiki, changed));
+    changed = original;
+    changed.response = original.response[0..original.response.len-8];
+    try std.testing.expectError(invalid, exteriorTags(a, ns.wiki, changed));
+    const prefix = original.response[0..original.prefix_bytes];
+    const altered = try std.mem.replaceOwned(u8, a, prefix, "<main ", "<section ");
+    try std.testing.expect(!std.mem.eql(u8, prefix, altered));
+    const crossed = try std.mem.replaceOwned(u8, a, altered, "<div id=\"bodyContent\"", "</main><div id=\"bodyContent\"");
+    try std.testing.expect(!std.mem.eql(u8, altered, crossed));
+    try std.testing.expectError(error.InvalidPageLanguagePrefix,
+        prefix_parser.revisionExteriorTagsAlloc(a, crossed, original.page.id, original.page.revision, original.page.title, ns.wiki));
+    try std.testing.expectError(error.InvalidPageLanguagePrefix,
+        prefix_parser.revisionExteriorTagsAlloc(a, prefix, original.page.id, original.page.revision, original.page.title, "srwiktionary"));
+}

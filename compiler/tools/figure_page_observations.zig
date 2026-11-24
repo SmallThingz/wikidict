@@ -9352,6 +9352,36 @@ test "observed outer context binds the supplied body to only the captured Vector
     try std.testing.expectEqualStrings("", body.get("data-mw-ve-target-container") orelse return error.TestUnexpectedResult);
 }
 
+test "observed outer ID issuer preserves an exterior-only wiki cell font subject" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile("testdata/vi-dau100/namespace-registry.tsv")); defer ns.deinit();
+    const page = OuterContextTesting.page();
+    const body = try responseSource(a, &ns, page);
+    var nodes: std.ArrayList(ObservedSiblingNode) = .empty;
+    const scope = try observedTextClassScopeToEndIn(a, &ns, body.html, &nodes, null, false);
+    const raw = OuterContextTesting.outer();
+    const observed = try observedOuterContext(a, &ns, page, raw, scope);
+    const in_article = (try completeObservedTextIdSuperset(a, nodes.items, "", body.source)) orelse return error.TestUnexpectedResult;
+    const complete = (try completeObservedTextIdSuperset(a, nodes.items, observed.ids, body.source)) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(!profile.Profile.hasClass(in_article, "bodyContent"));
+    try std.testing.expect(profile.Profile.hasClass(complete, "bodyContent"));
+    try std.testing.expect((try completeObservedTextIdSuperset(a, nodes.items, null, body.source)) == null);
+
+    // Controlled exterior identity: the issuer also retains an ID absent from
+    // all authored and rendered ParserOutput descendants.
+    var ancestors = try a.dupe(OuterObservedNode, observed.ancestors);
+    ancestors[1].attributes = try outerInventory(a, syntax.tagAt("<body id='siteSub'>", 0).?);
+    const ids = try outerIdSuperset(a, ancestors, &.{}, observed.root_attributes orelse return error.TestUnexpectedResult);
+    const alternative = (try completeObservedTextIdSuperset(a, nodes.items, ids, body.source)) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(!profile.Profile.hasClass(in_article, "siteSub"));
+    try std.testing.expect(profile.Profile.hasClass(alternative, "siteSub"));
+    var styles = try profile.parseAlloc(a, "#siteSub{font-size:95%}");
+    defer styles.deinit();
+    var cell = try styles.resolveCellWithContext(a, 0, 0, "", .{ .own_id = "" }, false, null, "padding:0 1em");
+    styles.refineCellPaddingFontAncestry(&cell, 0, "", alternative);
+    try std.testing.expect(cell.padding_basis_unresolved);
+}
+
 test "observed outer context refuses missing mismatched and unrepresented ancestry without changing the supplied domain" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
     var ns = try namespaces.Registry.init(a, @embedFile("testdata/vi-dau100/namespace-registry.tsv")); defer ns.deinit();

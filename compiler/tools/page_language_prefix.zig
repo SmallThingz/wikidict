@@ -84,7 +84,8 @@ fn jsonEnd(text: []const u8, start: usize) !usize {
 fn configuration(a: A, text: []const u8, page_id: u64, revision_id: u64) !bool {
     return configurationForPage(a, text, page_id, revision_id, null);
 }
-const SelectedPage = struct { namespace_id: i32, title: []const u8, sr_wmf5_prelude: bool = false };
+const SelectedPage = struct { namespace_id: i32, title: []const u8, sr_wmf5_prelude: bool = false,
+    exterior: ?struct { wiki: []const u8, tags: *std.ArrayList([]const u8) } = null };
 fn configurationForPage(a: A, text: []const u8, page_id: u64, revision_id: u64, current_title: ?[]const u8) !bool {
     return configurationForSelectedPage(a, text, page_id, revision_id, current_title, null, "");
 }
@@ -93,9 +94,23 @@ fn configurationForSelectedPage(a: A, text: []const u8, page_id: u64, revision_i
 {
     const at = std.mem.indexOf(u8, text, "RLCONF=") orelse return false;
     const sr_wmf5 = if (selected) |value| value.sr_wmf5_prelude else false;
+    const exterior = if (selected) |record| record.exterior else null;
+    // For exterior evidence, compare the whole reviewed static program after
+    // binding its single site-cookie literal to the selected namespace registry.
+    const exterior_program = if (exterior) |record| program: {
+        const cookie = try std.mem.concat(a, u8, &.{ record.wiki, "mwclientpreferences" });
+        defer a.free(cookie);
+        if (at == 0 or at > 2048 or std.mem.count(u8, text[0..at], cookie) != 1) return invalid;
+        const normalized = try std.mem.replaceOwned(u8, a, text[0..at], cookie, "srwiktionarymwclientpreferences");
+        defer a.free(normalized);
+        var canonical: [32]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash(normalized, &canonical, .{});
+        if (!std.mem.eql(u8, &std.fmt.bytesToHex(canonical, .lower), "ff0406678d57587b7409bfba7f818a44a9ec8dd418eb27da4b32823b3e19ed0d")) return invalid;
+        break :program true;
+    } else false;
     if (sr_wmf5 and at != 952) return invalid;
     if (at != 0) {
-        if (at != 952 and at != 956 and !(selected != null and at == 960)) return invalid;
+        if (!exterior_program and at != 952 and at != 956 and !(selected != null and at == 960)) return invalid;
         var digest: [32]u8 = undefined;
         std.crypto.hash.sha2.Sha256.hash(text[0..at], &digest, .{});
         const hash = std.fmt.bytesToHex(digest, .lower);
@@ -103,7 +118,7 @@ fn configurationForSelectedPage(a: A, text: []const u8, page_id: u64, revision_i
         // Complete observed preludes differ only in the literal wiki cookie
         // name (ru/wo/el/sr) and TOC availability class. Each closes the IIFE
         // before RLCONF; unknown programs remain rejected.
-        if (!std.mem.eql(u8, &hash, "4596a0a448783bdf5cd823d3b017520464502eba17da6e0277049df0c171bf39") and
+        if (!exterior_program and !std.mem.eql(u8, &hash, "4596a0a448783bdf5cd823d3b017520464502eba17da6e0277049df0c171bf39") and
             !std.mem.eql(u8, &hash, "296e5797ae51141a36d124508c23b7e0aeb2cb5be620e060fc6eb5aceb39cc89") and
             !std.mem.eql(u8, &hash, "4883bdb1c585b9440aa445aacdea8bdb5df146ca42bde57bd25862fffb71ed0f") and
             !std.mem.eql(u8, &hash, "ff0406678d57587b7409bfba7f818a44a9ec8dd418eb27da4b32823b3e19ed0d") and
@@ -131,6 +146,12 @@ fn configurationForSelectedPage(a: A, text: []const u8, page_id: u64, revision_i
     const parsed = std.json.parseFromSlice(std.json.Value, a, text[start..end], .{}) catch |err| switch (err) { error.OutOfMemory => return err, else => return invalid };
     defer parsed.deinit();
     if (parsed.value != .object) return invalid;
+    if (exterior != null) {
+        const groups = parsed.value.object.get("wgUserGroups") orelse return invalid;
+        const user = parsed.value.object.get("wgUserName") orelse return invalid;
+        if (user != .null or groups != .array or groups.array.items.len != 1 or groups.array.items[0] != .string or
+            !std.mem.eql(u8, groups.array.items[0].string, "*")) return invalid;
+    }
     const article = parsed.value.object.get("wgArticleId") orelse return invalid;
     const revision = parsed.value.object.get("wgRevisionId") orelse return invalid;
     const ns = parsed.value.object.get("wgNamespaceNumber") orelse return invalid;
@@ -183,6 +204,19 @@ pub fn parseSrWmf5SelectedOldidAlloc(a: A, bytes: []const u8, page_id: u64, revi
     return parseForSelectedPage(a, bytes, page_id, revision_id, null,
         .{ .namespace_id = namespace_id, .title = title, .sr_wmf5_prelude = true });
 }
+pub fn revisionExteriorTagsAlloc(a: A, bytes: []const u8, id: u64, revision: u64, title: []const u8, wiki: []const u8) ![]const []const u8 {
+    var tags: std.ArrayList([]const u8) = .empty;
+    errdefer tags.deinit(a);
+    const observation = try parseForSelectedPage(a, bytes, id, revision, title, .{ .namespace_id = 0, .title = title,
+        .exterior = .{ .wiki = wiki, .tags = &tags } });
+    defer {
+        for (observation.outer_languages) |language_value| a.free(language_value);
+        a.free(observation.outer_languages);
+        a.free(observation.root_language);
+    }
+    return tags.toOwnedSlice(a);
+}
+
 fn parseForPage(a: A, bytes: []const u8, page_id: u64, revision_id: u64, current_title: ?[]const u8) !Observation {
     return parseForSelectedPage(a, bytes, page_id, revision_id, current_title, null);
 }
@@ -192,6 +226,7 @@ fn parseForSelectedPage(a: A, bytes: []const u8, page_id: u64, revision_id: u64,
     if (bytes.len == 0 or bytes.len > 512 * 1024 or !std.unicode.utf8ValidateSlice(bytes) or std.mem.indexOfScalar(u8, bytes, 0) != null) return invalid;
     const Node = struct { tag: syntax.Tag, attrs: Attributes };
     var stack: [128]Node = undefined; var depth: usize = 0;
+    var exterior_generator = false;
     var html_seen = false; var body_seen = false; var head_seen = false; var config_seen = false;
     var at: usize = 0;
     while (at < bytes.len) {
@@ -207,6 +242,11 @@ fn parseForSelectedPage(a: A, bytes: []const u8, page_id: u64, revision_id: u64,
         if (tag.is("html")) { if (html_seen or depth != 0) return invalid; html_seen = true; }
         if (tag.is("head")) { if (head_seen or depth != 1 or !stack[0].tag.is("html")) return invalid; head_seen = true; }
         if (tag.is("body")) { if (body_seen or !head_seen or depth != 1 or !stack[0].tag.is("html")) return invalid; body_seen = true; }
+        if (selected != null and selected.?.exterior != null and !tag.closing and tag.is("meta") and
+            depth == 2 and stack[1].tag.is("head") and same(tag.attr("name") orelse "", "generator")) {
+            if (exterior_generator or !same(tag.attr("content") orelse "", "MediaWiki 1.48.0-wmf.5")) return invalid;
+            exterior_generator = true;
+        }
         if (tag.is("noscript") or tag.is("template")) return invalid;
         if (tag.is("script") or tag.is("style") or tag.is("title")) {
             if (tag.self_closing) return invalid;
@@ -235,6 +275,10 @@ fn parseForSelectedPage(a: A, bytes: []const u8, page_id: u64, revision_id: u64,
         stack[depth] = .{ .tag = tag, .attrs = attrs }; depth += 1;
         if (tag.is("div") and hasClass(attrs.classes, "mw-parser-output")) {
             if (tag.end != bytes.len or !config_seen or !html_seen or !body_seen or depth < 3 or !stack[0].tag.is("html") or !stack[1].tag.is("body")) return invalid;
+            if (selected) |record| if (record.exterior) |exterior| {
+                if (!exterior_generator) return invalid;
+                for (stack[0..depth]) |node| try exterior.tags.append(a, node.tag.name);
+            };
             const langs = try a.alloc([]const u8, depth - 1);
             var owned: usize = 0;
             errdefer { for (langs[0..owned]) |value| a.free(value); a.free(langs); }

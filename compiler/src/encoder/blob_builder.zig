@@ -48,6 +48,7 @@ pub const ScreenStyleArticle = struct {
 
 pub const LanguageCodes = struct {
     local_link_targets: ?@import("presentation_compile.zig").LocalLinkTargetSource = null,
+    revision_exterior: ?struct { namespace_sha256: [32]u8, title: []const u8, raw: []const u8, expanded: []const u8, tags: []const []const u8 } = null,
     // A selected page borrows its Profile from the page arena. Retain the stable
     // global parent here so the next page resets without dereferencing that view.
     screen_style_article: ?ScreenStyleArticle = null,
@@ -5521,7 +5522,7 @@ fn bindOwnerContentRoot(source: []const u8, observed: presentation_document.Head
     if (prepared.len != fragment.source.len or !std.mem.eql(u8, prepared, fragment.source)) return;
     // missing is produced above by the ordinary tracked slice operation; this
     // token binds that exact view, not arbitrary future byte-identical copies.
-    fragment.parser_output_range = .{ .page = source, .start = start, .prepared = prepared, .root_wiki_table_openings = observed.page_root_wiki_table_openings, .top_level_wiki_table_openings = observed.page_top_level_wiki_table_openings, .quoted_paragraph_openings = observed.page_quoted_paragraph_openings, .static_example_openings = observed.page_static_example_openings };
+    fragment.parser_output_range = .{ .page = source, .start = start, .prepared = prepared, .root_wiki_table_openings = observed.page_root_wiki_table_openings, .top_level_wiki_table_openings = observed.page_top_level_wiki_table_openings, .static_paragraph_openings = observed.page_static_paragraph_openings, .static_example_openings = observed.page_static_example_openings };
 }
 
 fn observedOwnerContentRanges(source: []const u8, observed: presentation_document.HeadingObservation, fragments: []const PageSourceFragment, prefix: []const u8) bool {
@@ -6198,8 +6199,18 @@ fn processMain(
     defer if (source.ptr != body_source.source.ptr) page_allocator.free(source);
     // Only this complete final native page may issue a source class inventory.
     // Language-owner concatenation and Renderer fragment APIs cannot do so.
+    // The Registry selected exact revision and both full-source digests.
+    // Recheck the actual Writer input before exposing the outer chain to the
+    // complete-page proof; a reused LanguageCodes cannot bind another page.
+    const exterior_tags = if (codes.revision_exterior) |held| tags: {
+        const ns = codes.namespace_catalog orelse break :tags null;
+        const raw = raw_source orelse break :tags null;
+        if (!std.mem.eql(u8, &ns.source_sha256, &held.namespace_sha256) or !std.mem.eql(u8, title, held.title) or
+            !std.mem.eql(u8, raw, held.raw) or !std.mem.eql(u8, source_raw, held.expanded)) break :tags null;
+        break :tags held.tags;
+    } else null;
     const native_source_class_proof = if (codes.table_styles) |profile|
-        try presentation_document.nativeSourceClassProofAlloc(page_allocator, source_missing, profile) else null;
+        try presentation_document.nativeSourceClassProofWithExteriorAlloc(page_allocator, source_missing, profile, exterior_tags) else null;
     defer if (native_source_class_proof) |proof| proof.deinit(page_allocator);
     stats.main_pages += 1;
 
@@ -7015,7 +7026,7 @@ fn processMain(
         if (numbered.source_element_projection) |*proof| proof else if (direct_table_projection) |*proof| proof else null;
     const needs_source_fragments = native_source_class_proof != null or final_source_projection != null or pre_observation.scopes.len != 0 or
         (if (codes.figure_sizing) |sizing| sizing.text_class_scope != null or sizing.resolve_image_map_no_link_fn != null else false) or
-        (codes.table_styles != null and (heading_observation.page_root_wiki_table_openings.len != 0 or heading_observation.page_top_level_wiki_table_openings.len != 0 or heading_observation.page_quoted_paragraph_openings.len != 0 or heading_observation.page_static_example_openings.len != 0));
+        (codes.table_styles != null and (heading_observation.page_root_wiki_table_openings.len != 0 or heading_observation.page_top_level_wiki_table_openings.len != 0 or heading_observation.page_static_paragraph_openings.len != 0 or heading_observation.page_static_example_openings.len != 0));
     const quote_cuts: PageQuoteCuts = if (needs_source_fragments)
         try pageQuoteCutsAlloc(page_allocator, source, page_sections.items, pre_observation.scopes, .{
             .title = title,
@@ -7092,7 +7103,7 @@ fn processMain(
     }
     // A numbering or body edit later in the page cannot change the physical
     // enclosure of a paragraph in the unchanged prefix. Compute it once.
-    const paragraph_prefix = if (codes.table_styles != null and heading_observation.page_quoted_paragraph_openings.len != 0 and
+    const paragraph_prefix = if (codes.table_styles != null and heading_observation.page_static_paragraph_openings.len != 0 and
         !raw_missing.unknown and !raw_missing.lost_missing_range and raw_missing.ranges.len == 0 and
         raw_missing.literal_curly_ranges.len == 0 and raw_missing.generated_links.len == 0 and raw_missing.generated_source == null)
         source_raw[0 .. std.mem.findDiff(u8, source_raw, source) orelse source_raw.len] else "";
@@ -7128,7 +7139,7 @@ fn processMain(
         if (codes.figure_sizing != null or codes.table_styles != null or local_targets_selected) for (fragments) |*fragment| {
             bindOwnerRootTableSource(source, source_raw, heading_observation, fragment);
             if (fragment.parser_output_range) |*range| {
-                range.quoted_paragraph_original_prefix = paragraph_prefix;
+                range.static_paragraph_original_prefix = paragraph_prefix;
                 range.static_example_original_prefix = example_prefix;
                 // Only the whole-page renderer can witness a root wiki heading;
                 // opaque/nested headings never enter page_wiki_openings. The

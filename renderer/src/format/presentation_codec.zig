@@ -50,8 +50,9 @@ const owner_geometry_features: u8 = 7 | image_occurrence_feature | clipped_absol
 pub const positioned_containers_magic = "DPRZ";
 const positioned_containers_feature: u16 = 256;
 const table_min_width_feature: u16 = 512;
+const column_layout_feature: u16 = 4096;
 const audio_control_feature: u16 = 8192;
-const z_high_features: u16 = positioned_containers_feature | table_min_width_feature | audio_control_feature;
+const z_high_features: u16 = positioned_containers_feature | table_min_width_feature | column_layout_feature | audio_control_feature;
 const positioned_containers_features: u16 = owner_geometry_features | z_high_features;
 pub const resolved_style_borders_magic = "DPRa";
 const resolved_style_borders_feature: u32 = 0x100000;
@@ -63,6 +64,7 @@ const container_owner_snapshot_flag: u32 = 0x1000000;
 const container_owner_font_flag: u32 = 0x10000;
 const container_height_flag: u32 = 0x20000;
 const container_columns_flag: u32 = 0x40000;
+const preferred_column_width_flag: u32 = 0x02000000;
 const container_positioning_flag: u32 = 0x80000;
 const container_min_height_flag: u32 = 0x100000;
 const cell_opacity_flag: u8 = 0x10;
@@ -123,6 +125,7 @@ const Encoder = struct {
     capability_w: bool = false,
     positioned_containers_enabled: bool = false,
     table_min_width_enabled: bool = false,
+    column_layout_enabled: bool = false,
     resolved_style_borders_enabled: bool = false,
     ruby_annotation_margins_enabled: bool = false,
     body_typography_enabled: bool = false,
@@ -906,13 +909,16 @@ const Encoder = struct {
         const caption_layout: ?types.TableCaptionLayout = if (comptime @hasField(@TypeOf(value), "table_caption_layout")) value.table_caption_layout else null;
         const block_layout: ?types.FigureBlockMediaLayout = if (comptime @hasField(@TypeOf(value), "block_media_layout")) value.block_media_layout else null;
         if ((caption_layout != null or block_layout != null) and self.version != .container_fonts) return error.InvalidPresentation;
+        const intrinsic: ?types.FigureIntrinsicSize = if (comptime @hasField(@TypeOf(value), "intrinsic_size")) value.intrinsic_size else null;
         const missing = value.content == .missing;
+        if (intrinsic != null and (missing or caption_layout != null or block_layout != null)) return error.InvalidPresentation;
         const previous_paint = self.link_paint;
         defer self.link_paint = previous_paint;
         self.link_paint = if (caption_layout) |present_layout| present_layout.missing_link_paint else null;
         switch (value.content) {
             .image => |content| {
                 const image = spanImage(content.span) orelse return error.InvalidPresentation;
+                if (intrinsic) |size| if (!types.validFigureIntrinsicSize(size, value.format, content.sizing, image)) return error.InvalidPresentation;
                 if (caption_layout != null and image.static_poster != null) return error.InvalidPresentation;
                 if (!types.validFigureSizingContext(value.format, content.sizing, image.width_px, image.height_px)) return error.InvalidPresentation;
                 const trail: []const u8 = if (comptime @hasField(@TypeOf(content.span), "trail")) content.span.trail else "";
@@ -922,7 +928,7 @@ const Encoder = struct {
                 if (!hasKFields(self.version) or !types.validMissingFigureContent(content)) return error.InvalidPresentation;
             },
         }
-        try self.byte(if (block_layout != null) @as(u8, 7) else if (caption_layout != null) (if (missing) @as(u8, 6) else 5) else (if (missing) @as(u8, 2) else 1));
+        try self.byte(if (intrinsic != null) @as(u8, 8) else if (block_layout != null) @as(u8, 7) else if (caption_layout != null) (if (missing) @as(u8, 6) else 5) else (if (missing) @as(u8, 2) else 1));
         try self.enumByte(types.FigureFormat, value.format);
         try self.enumByte(types.FigurePlacement, value.placement);
         try self.enumByte(types.FigureClear, value.clear);
@@ -954,6 +960,10 @@ const Encoder = struct {
         if (value.frame_min_width) |minimum| try self.styleLength(minimum);
         if (caption_layout) |present| try self.tableCaptionLayout(present);
         if (block_layout) |present| try self.figureBlockMediaLayout(present);
+        if (intrinsic) |size| {
+            try self.writeU32(size.width_px);
+            try self.writeU32(size.height_px);
+        }
     }
     fn captionBlocks(self: *Encoder, optional: anytype) error{OutOfMemory, InvalidPresentation, PresentationTooLarge, UncompiledTemplate}!void {
         const blocks_value = optional orelse { try self.byte(0); return; };
@@ -1294,8 +1304,9 @@ const Encoder = struct {
         switch (value) {
             .none => try self.byte(0),
             .hidden => try self.byte(1),
-            .solid, .dotted => |line| {
-                try self.byte(if (value == .solid) 2 else 3);
+            .solid, .dotted, .dashed => |line| {
+                if (value == .dashed and !self.positioned_containers_enabled) return error.InvalidPresentation;
+                try self.byte(switch (value) { .solid => 2, .dotted => 3, .dashed => 4, else => unreachable });
                 try self.styleLength(line.width); try self.containerColor(line.color);
             },
         }
@@ -1379,11 +1390,18 @@ const Encoder = struct {
             if (!types.validSectionHeadingStyle(style) or !types.validSectionHeadingCompanion(section)) return error.InvalidPresentation;
             try self.index(index_value); try self.containerStyle(style.box);
             try self.inlineFontSnapshot(style.font); try self.enumByte(types.BidiResolvedDirection, style.direction);
-            if (style.title_wrap != null or style.anchor_reveal != null) if (!self.text_flow) return error.InvalidPresentation;
+            if (style.title_wrap != null or style.anchor_reveal != null or style.wrappers != null) if (!self.text_flow) return error.InvalidPresentation;
             if (self.text_flow) {
-                try self.byte(@as(u8, @intFromBool(style.title_wrap != null)) | (@as(u8, @intFromBool(style.anchor_reveal != null)) << 1));
+                try self.byte(@as(u8, @intFromBool(style.title_wrap != null)) | (@as(u8, @intFromBool(style.anchor_reveal != null)) << 1) |
+                    (@as(u8, @intFromBool(style.wrappers != null)) << 2));
                 if (style.title_wrap) |wrap| try self.enumByte(types.TextWrap, wrap);
                 if (style.anchor_reveal) |reveal| try self.headingAnchorReveal(reveal);
+                if (style.wrappers) |frames| {
+                    if (!self.positioned_containers_enabled) return error.InvalidPresentation;
+                    try self.containerStyle(frames.outer);
+                    try self.containerStyle(frames.inner);
+                    try self.styleLength(frames.title_block_padding_right);
+                }
             }
         };
     }
@@ -1429,6 +1447,7 @@ const Encoder = struct {
         if (value.collapse_run) |run| try self.containerDisclosureLabelRun(run);
     }
     fn containerStyle(self: *Encoder, value: types.ContainerStyle) !void {
+        if (value.flex_edge != null or value.layout == .flex_column or value.flex_column_gap != null or value.inline_atomic != null or value.translated_absolute != null or value.corner_radius_px != null) return error.InvalidPresentation;
         return self.containerStyleWithDisclosure(value, null);
     }
     fn containerStyleWithDisclosure(self: *Encoder, value: types.ContainerStyle, disclosure: ?types.ContainerDisclosure) !void {
@@ -1443,10 +1462,14 @@ const Encoder = struct {
             // Extension fields have no legacy mask bit. In particular, ordinal
             // 24 must not collide with the explicit owner-font snapshot bit.
             if (comptime std.mem.eql(u8, name, "absolute_position") or std.mem.eql(u8, name, "text_wrap") or
-                std.mem.eql(u8, name, "absolute_static")) continue;
+                std.mem.eql(u8, name, "absolute_static") or std.mem.eql(u8, name, "translated_absolute") or std.mem.eql(u8, name, "corner_radius_px") or std.mem.eql(u8, name, "inline_atomic") or std.mem.eql(u8, name, "flex_column_gap") or std.mem.eql(u8,name,"flex_edge")) continue;
             if (@field(value, name) != null)
                 flags |= if (comptime std.mem.eql(u8, name, "owner_font")) container_owner_snapshot_flag else @as(u32, 1) << bit;
         }
+        if (value.columns) |columns| if (columns.width != null) {
+            if (!self.column_layout_enabled) return error.InvalidPresentation;
+            flags |= preferred_column_width_flag;
+        };
         if (self.version == .container_fonts) try self.writeU32(flags) else try self.writeU16(@intCast(flags));
         if (value.margins) |edges| try self.containerMarginEdges(edges);
         if (value.padding) |edges| try self.styleEdges(edges);
@@ -1466,7 +1489,7 @@ const Encoder = struct {
         if (value.overflow) |overflow| try self.enumByte(types.ContainerOverflow, overflow);
         if (value.owner_font_scale) |scale| try self.writeU32(@bitCast(scale));
         if (value.height) |height| try self.styleLength(height);
-        if (value.columns) |columns| { try self.writeU16(columns.count); try self.styleLength(columns.gap); }
+        if (value.columns) |columns| { try self.writeU16(columns.count orelse 0); try self.styleLength(columns.gap); }
         if (value.positioning) |positioning| try self.enumByte(types.ContainerPositioning, positioning);
         if (value.min_height) |height| try self.styleLength(height);
         if (value.margin_values) |margins| try self.containerMargins(margins);
@@ -1480,7 +1503,8 @@ const Encoder = struct {
             const extension: u8 = @as(u8, @intFromBool(value.absolute_position != null)) |
                 (@as(u8, @intFromBool(value.text_wrap != null)) << 1) |
                 (@as(u8, @intFromBool(value.absolute_static != null)) << 2) |
-                (@as(u8, @intFromBool(disclosure != null)) << 3);
+                (@as(u8, @intFromBool(disclosure != null)) << 3) |
+                (@as(u8, @intFromBool(value.flex_edge != null or value.flex_column_gap != null or value.inline_atomic != null or value.translated_absolute != null or value.corner_radius_px != null)) << 4);
             try self.byte(extension);
             if (value.absolute_position) |position| {
                 try self.containerMarginLength(position.left);
@@ -1489,7 +1513,36 @@ const Encoder = struct {
             if (value.text_wrap) |wrap| try self.enumByte(types.ContainerTextWrap, wrap);
             if (value.absolute_static) |position| try self.enumByte(types.ContainerStaticDirection, position.direction);
             if (disclosure) |present| try self.containerDisclosure(present);
+            if (extension & 16 != 0) {
+                const shape: u8 = @intFromBool(value.translated_absolute != null);
+                try self.byte(shape | (@as(u8, @intFromBool(value.corner_radius_px != null)) << 1) |
+                    (@as(u8, @intFromBool(value.inline_atomic != null)) << 2) | (@as(u8, @intFromBool(value.flex_column_gap != null)) << 3) | (@as(u8,@intFromBool(value.flex_edge != null)) << 4));
+                if (value.translated_absolute) |translated| {
+                    inline for (.{ "left", "top", "translate_x", "translate_y" }) |axis| {
+                        const offset = @field(translated.placement, axis);
+                        try self.writeU32(@bitCast(offset.px));
+                        try self.writeU32(@bitCast(offset.percent));
+                    }
+                    try self.byte(@as(u8, @intFromBool(translated.z_index != null)) |
+                        (@as(u8, @intFromBool(translated.owns_abbreviation)) << 1));
+                    if (translated.z_index) |level| try self.writeU32(@bitCast(level));
+                    try self.writeU32(@bitCast(translated.background_alpha));
+                }
+                if (value.corner_radius_px) |radius| try self.writeU32(@bitCast(radius));
+                if (value.inline_atomic) |atom| try self.byte(@intFromEnum(atom));
+                if (value.flex_column_gap) |gap| try self.styleLength(gap);
+                if (value.flex_edge) |edge| {
+                    try self.enumByte(types.ContainerFlexEdge.Align,edge.align_self);
+                    try self.enumByte(types.ContainerFlexEdge.Side,edge.inset_side);
+                    try self.writeU32(@bitCast(edge.inset_percent)); try self.writeU32(@bitCast(edge.width_percent));
+                    try self.styleLength(edge.width_add); try self.writeU32(@bitCast(edge.bottom_radius_px));
+                }
+            }
         }
+        if (value.columns) |columns| if (columns.width) |width| {
+            try self.byte(1);
+            try self.styleLength(width);
+        };
     }
     fn container(self: *Encoder, value: anytype) error{ OutOfMemory, InvalidPresentation, PresentationTooLarge, UncompiledTemplate }!void {
         if (!hasLFields(self.version) or !types.validContainerHeader(value) or self.content_depth >= types.max_content_depth) return error.InvalidPresentation;
@@ -1576,6 +1629,10 @@ const Encoder = struct {
             try self.byte(if (rule_style) |style| if (style.clear != null) @as(u8, 2) else 1 else 0);
             if (rule_style) |style| try self.ruleStyle(style);
         }
+        const break_inside = if (comptime @hasField(@TypeOf(value), "column_break_inside")) value.column_break_inside else null;
+        if (break_inside != null and (!self.column_layout_enabled or !types.validColumnBreakContext(value)))
+            return error.InvalidPresentation;
+        if (self.column_layout_enabled) try self.byte(if (break_inside) |policy| @intFromEnum(policy) else 0);
     }
     fn blocks(self: *Encoder, values: anytype) !void {
         try self.count(values.len);
@@ -1885,6 +1942,7 @@ const Reader = struct {
     capability_w: bool = false,
     positioned_containers_enabled: bool = false,
     table_min_width_enabled: bool = false,
+    column_layout_enabled: bool = false,
     resolved_style_borders_enabled: bool = false,
     ruby_annotation_margins_enabled: bool = false,
     body_typography_enabled: bool = false,
@@ -2673,7 +2731,8 @@ const Reader = struct {
         if (tag == 0) return null;
         const table_caption = tag == 5 or tag == 6;
         const block_media = tag == 7;
-        if (tag != 1 and !(tag == 2 and hasKFields(self.version)) and
+        const intrinsic = tag == 8 and (self.version == .image_maps or hasKFields(self.version));
+        if (tag != 1 and !intrinsic and !(tag == 2 and hasKFields(self.version)) and
             !((table_caption or block_media) and self.version == .container_fonts)) return error.InvalidPresentation;
         const is_missing = tag == 2 or tag == 6;
         // The legacy image minimum remains unchanged. Missing has no image
@@ -2704,6 +2763,7 @@ const Reader = struct {
             .frame_min_width = if (try self.presence()) try self.styleLength() else null,
             .table_caption_layout = if (table_caption) try self.tableCaptionLayout() else null,
             .block_media_layout = if (block_media) try self.figureBlockMediaLayout() else null,
+            .intrinsic_size = if (intrinsic) .{ .width_px = try self.readU32(), .height_px = try self.readU32() } else null,
             .format = geometry.format, .placement = geometry.placement, .clear = geometry.clear,
             .margins = geometry.margins, .image_insets = geometry.image_insets, .caption_padding = geometry.caption_padding,
             .caption_font_scale = geometry.caption_font_scale, .caption_line_height = geometry.caption_line_height,
@@ -2972,6 +3032,7 @@ const Reader = struct {
             0 => .none, 1 => .hidden,
             2 => .{ .solid = .{ .width = try self.styleLength(), .color = try self.containerColor() } },
             3 => .{ .dotted = .{ .width = try self.styleLength(), .color = try self.containerColor() } },
+            4 => if (self.positioned_containers_enabled) .{ .dashed = .{ .width = try self.styleLength(), .color = try self.containerColor() } } else return error.InvalidPresentation,
             else => return error.InvalidPresentation,
         };
         if (!types.validContainerBorderEdge(value)) return error.InvalidPresentation;
@@ -3073,9 +3134,14 @@ const Reader = struct {
                 .direction = try self.enumValue(types.BidiResolvedDirection) };
             if (self.text_flow) {
                 const extension = try self.byte();
-                if (extension & 0xfc != 0) return error.InvalidPresentation;
+                if (extension & 0xf8 != 0) return error.InvalidPresentation;
                 if (extension & 1 != 0) style.title_wrap = try self.enumValue(types.TextWrap);
                 if (extension & 2 != 0) style.anchor_reveal = try self.headingAnchorReveal();
+                if (extension & 4 != 0) {
+                    if (!self.positioned_containers_enabled) return error.InvalidPresentation;
+                    style.wrappers = .{ .outer = try self.containerStyle(), .inner = try self.containerStyle(),
+                        .title_block_padding_right = try self.styleLength() };
+                }
             }
             var candidate = sections_value[index_value]; candidate.heading_style = style;
             if (!types.validSectionHeadingStyle(style) or !types.validSectionHeadingCompanion(candidate)) return error.InvalidPresentation;
@@ -3133,7 +3199,9 @@ const Reader = struct {
         if (disclosure) |slot| slot.* = null;
         if (!hasLFields(self.version)) return error.InvalidPresentation;
         const flags: u32 = if (self.version == .container_fonts) try self.readU32() else try self.readU16();
-        const known = container_style_known_flags | (if (self.capability_w) container_owner_snapshot_flag else @as(u32, 0));
+        const known = container_style_known_flags | (if (self.capability_w) container_owner_snapshot_flag else @as(u32, 0)) |
+            (if (self.column_layout_enabled) preferred_column_width_flag else @as(u32, 0));
+        if (flags & preferred_column_width_flag != 0 and flags & container_columns_flag == 0) return error.InvalidPresentation;
         if (flags & ~known != 0) return error.InvalidPresentation;
         var value: types.ContainerStyle = .{
             .margins = if (flags & 1 != 0) try self.containerMarginEdges() else null,
@@ -3164,13 +3232,44 @@ const Reader = struct {
         if (self.positioned_containers_enabled) {
             const extension = try self.byte();
             // A generic style/Figure wrapper cannot own a disclosure.
-            if (extension & ~@as(u8, if (disclosure != null) 15 else 7) != 0) return error.InvalidPresentation;
+            if (extension & ~@as(u8, if (disclosure != null) 31 else 7) != 0) return error.InvalidPresentation;
             if (extension & 1 != 0) value.absolute_position = .{
                 .left = try self.containerMarginLength(), .top = try self.containerMarginLength() };
             if (extension & 2 != 0) value.text_wrap = try self.enumValue(types.ContainerTextWrap);
             if (extension & 4 != 0) value.absolute_static = .{ .direction = try self.enumValue(types.ContainerStaticDirection) };
             if (extension & 8 != 0) disclosure.?.* = try self.containerDisclosure();
+            if (extension & 16 != 0) {
+                const shape = try self.byte();
+                if (shape == 0 or shape & ~@as(u8,31) != 0 or (shape & 24 != 0 and shape != 8 and shape != 16)) return error.InvalidPresentation;
+                if (shape & 1 != 0) {
+                    var placement: types.PositionedLabelPlacement = undefined;
+                    inline for (.{ "left", "top", "translate_x", "translate_y" }) |axis| {
+                        @field(placement, axis) = .{ .px = @bitCast(try self.readU32()), .percent = @bitCast(try self.readU32()) };
+                    }
+                    const flags_translated = try self.byte();
+                    if (flags_translated & ~@as(u8, 3) != 0) return error.InvalidPresentation;
+                    value.translated_absolute = .{ .placement = placement, .owns_abbreviation = flags_translated & 2 != 0,
+                        .z_index = if (flags_translated & 1 != 0) @as(i32, @bitCast(try self.readU32())) else null,
+                        .background_alpha = @bitCast(try self.readU32()) };
+                }
+                if (shape & 2 != 0) value.corner_radius_px = @bitCast(try self.readU32());
+                if (shape & 4 != 0) value.inline_atomic = switch (try self.byte()) {
+                    0 => .adjacent, 1 => .after_space, else => return error.InvalidPresentation,
+                };
+                if (shape & 8 != 0) value.flex_column_gap = try self.styleLength();
+                if (shape & 16 != 0) value.flex_edge = .{
+                    .align_self=try self.enumValue(types.ContainerFlexEdge.Align), .inset_side=try self.enumValue(types.ContainerFlexEdge.Side),
+                    .inset_percent=@bitCast(try self.readU32()), .width_percent=@bitCast(try self.readU32()),
+                    .width_add=try self.styleLength(), .bottom_radius_px=@bitCast(try self.readU32()),
+                };
+            }
         }
+        if (flags & preferred_column_width_flag != 0) {
+            if (try self.byte() != 1) return error.InvalidPresentation;
+            if (value.columns.?.count == 0) value.columns.?.count = null;
+            value.columns.?.width = try self.styleLength();
+        }
+        if (value.layout == .flex_column and disclosure == null) return error.InvalidPresentation;
         if (value.overflow == .hidden and self.version != .container_fonts) return error.InvalidPresentation;
         if (types.containerStyleRequiresPositionedCapability(value) and !self.positioned_containers_enabled) return error.InvalidPresentation;
         if (!types.validContainerStyle(value)) return error.InvalidPresentation;
@@ -3259,6 +3358,15 @@ const Reader = struct {
                 if (!types.validRuleStyleContext(value)) return error.InvalidPresentation;
             }
         }
+        if (self.column_layout_enabled) {
+            value.column_break_inside = switch (try self.byte()) {
+                0 => null,
+                1 => .auto,
+                2 => .avoid,
+                else => return error.InvalidPresentation,
+            };
+            if (value.column_break_inside != null and !types.validColumnBreakContext(value)) return error.InvalidPresentation;
+        }
         if (value.table) |table_value| if (types.tableStyleIsInline(table_value.style) and
             !types.validInlineTableOwner(value.kind, value.spans.len, value.feature != null)) return error.InvalidPresentation;
         if (value.style != null and !types.validBlockStyleContext(value.kind, value.depth, value.table != null, value.feature != null, value.list_path)) return error.InvalidPresentation;
@@ -3267,7 +3375,8 @@ const Reader = struct {
         return value;
     }
     fn blocks(self: *Reader) ![]const types.Block {
-        const len = try self.count(if ((self.version == .image_maps or hasKFields(self.version))) 29 else if ((self.version == .block_geometry or (self.version == .image_maps or hasKFields(self.version)))) 27 else if ((self.version == .block_layout or (self.version == .explicit_targets or (self.version == .dynamic_catalog or (self.version == .tooltips or (self.version == .block_geometry or (self.version == .image_maps or hasKFields(self.version)))))))) 26 else 25);
+        const minimum: usize = if ((self.version == .image_maps or hasKFields(self.version))) 29 else if ((self.version == .block_geometry or (self.version == .image_maps or hasKFields(self.version)))) 27 else if ((self.version == .block_layout or (self.version == .explicit_targets or (self.version == .dynamic_catalog or (self.version == .tooltips or (self.version == .block_geometry or (self.version == .image_maps or hasKFields(self.version)))))))) 26 else 25;
+        const len = try self.count(minimum + @intFromBool(self.column_layout_enabled));
         const out = try self.a.alloc(types.Block, len);
         for (out) |*value| value.* = try self.block();
         return out;
@@ -4228,7 +4337,7 @@ fn spansHaveTextFlow(values: anytype) bool {
 fn hasTextFlow(display: anytype, sections: anytype, preamble: anytype, references: anytype) bool {
     if (treeSpansHaveFeature(display, .text_flow) or treeSpansHaveFeature(preamble, .text_flow)) return true;
     for (sections) |section| {
-        if (sectionHeadingStyle(section)) |style| if (style.title_wrap != null or style.anchor_reveal != null) return true;
+        if (sectionHeadingStyle(section)) |style| if (style.title_wrap != null or style.anchor_reveal != null or style.wrappers != null) return true;
         if (blocksHaveFeature(section.blocks, .text_flow, 0)) return true;
     }
     for (references) |reference| if (treeSpansHaveFeature(reference.spans, .text_flow)) return true;
@@ -4292,11 +4401,13 @@ pub fn encodeAlloc(a: A, stored: types.Stored) ![]u8 {
     const clipped_required = DeepTableWork.hasClippedAbsolutes(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references);
     const occurrence_required = DeepTableWork.hasImageOccurrences(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references);
     const y_required = w_required or body_required or box_required or occurrence_required or clipped_required;
-    const positioned_required = DeepTableWork.hasPositionedContainers(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references);
+    const container_layouts = DeepTableWork.containerLayouts(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references);
+    const positioned_required = container_layouts.positioned;
+    const columns_required = container_layouts.column_layout;
     const table_min_width_required = DeepTableWork.hasTableMinWidths(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references);
     const audio_required = DeepTableWork.hasAudioControls(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references);
     const resolved_style_borders_required = DeepTableWork.hasResolvedStyleBorders(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references);
-    const z_required = resolved_style_borders_required or positioned_required or table_min_width_required or audio_required;
+    const z_required = resolved_style_borders_required or positioned_required or table_min_width_required or columns_required or audio_required;
     const v_required = z_required or y_required or DeepTableWork.hasInlineActionGroups(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references);
     const u_required = v_required or DeepTableWork.hasInlinePaddingOrRubyMargins(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references);
     const t_required = !u_required and hasDeepTables(stored.entry.sections, stored.entry.references);
@@ -4311,7 +4422,7 @@ pub fn encodeAlloc(a: A, stored: types.Stored) ![]u8 {
         (if (work.image_occurrence_found) image_occurrence_feature else @as(u8, 0)) |
         (if (work.clipped_absolute_found) clipped_absolute_feature else @as(u8, 0));
     if (y_required != (y_features != 0) or w_required != work.container_owner_font_found or box_required != work.inline_box_group_found or
-        positioned_required != work.positioned_container_found or
+        positioned_required != work.positioned_container_found or columns_required != work.column_layout_found or
         table_min_width_required != work.table_min_width_found or occurrence_required != work.image_occurrence_found or audio_required != work.audio_control_found or
         clipped_required != work.clipped_absolute_found or resolved_style_borders_required != work.resolved_style_border_found) return error.InvalidPresentation;
     if (layoutHasPaths(stored.entry.organization) and !buildLayoutPathsValid(stored.entry.organization, stored.entry.sections)) return error.InvalidPresentation;
@@ -4329,7 +4440,7 @@ pub fn encodeAlloc(a: A, stored: types.Stored) ![]u8 {
     var inline_catalog: ?types.ImageCatalogIndex = null;
     defer if (inline_catalog) |*catalog| catalog.deinit(a);
     if (audio_required or hasInlineTableMedia(stored.entry.sections, stored.entry.references)) inline_catalog = try types.ImageCatalogIndex.init(a, stored.entry.media);
-    var encoder: Encoder = .{ .a = a, .version = version, .rule_styles = rule_styles, .inline_styles = inline_styles, .capability_p = s_required or r_required or q_required or pending_features != 0, .capability_q = s_required or r_required or q_required, .capability_r = s_required or r_required, .capability_s = s_required, .capability_t = t_required, .capability_u = u_required, .capability_v = v_required or a_required, .capability_w = w_required, .positioned_containers_enabled = positioned_required, .table_min_width_enabled = table_min_width_required, .resolved_style_borders_enabled = resolved_style_borders_required, .ruby_annotation_margins_enabled = ruby_annotation_margins_required, .body_typography_enabled = body_required, .inline_box_groups = box_required, .clipped_absolute_enabled = clipped_required, .image_occurrences = occurrence_required, .audio_controls = audio_required, .text_flow = pending_features & 16 != 0, .inline_media_catalog = if (inline_catalog) |*catalog| catalog else null };
+    var encoder: Encoder = .{ .a = a, .version = version, .rule_styles = rule_styles, .inline_styles = inline_styles, .capability_p = s_required or r_required or q_required or pending_features != 0, .capability_q = s_required or r_required or q_required, .capability_r = s_required or r_required, .capability_s = s_required, .capability_t = t_required, .capability_u = u_required, .capability_v = v_required or a_required, .capability_w = w_required, .positioned_containers_enabled = positioned_required, .table_min_width_enabled = table_min_width_required, .column_layout_enabled = columns_required, .resolved_style_borders_enabled = resolved_style_borders_required, .ruby_annotation_margins_enabled = ruby_annotation_margins_required, .body_typography_enabled = body_required, .inline_box_groups = box_required, .clipped_absolute_enabled = clipped_required, .image_occurrences = occurrence_required, .audio_controls = audio_required, .text_flow = pending_features & 16 != 0, .inline_media_catalog = if (inline_catalog) |*catalog| catalog else null };
     defer encoder.deinit();
     try encoder.out.appendSlice(a, if (a_required) resolved_style_borders_magic else if (z_required) positioned_containers_magic else if (y_required) owner_geometry_magic else if (v_required) inline_action_groups_magic else if (u_required) inline_padding_groups_magic else if (t_required) deep_tables_magic else if (s_required) ruby_magic else if (r_required) intrinsic_table_magic else if (q_required) table_corners_magic else if (pending_features != 0) body_adjoining_magic else if (inline_styles) inline_styles_magic else if (rule_styles) rule_styles_magic else versionMagic(version));
     if (a_required) try encoder.writeU32(@as(u32, y_features) |
@@ -4337,10 +4448,12 @@ pub fn encodeAlloc(a: A, stored: types.Stored) ![]u8 {
         (if (ruby_annotation_margins_required) ruby_annotation_margins_feature else @as(u32, 0)) |
         (if (positioned_required) @as(u32, positioned_containers_feature) else 0) |
         (if (table_min_width_required) @as(u32, table_min_width_feature) else 0) |
+        (if (columns_required) @as(u32, column_layout_feature) else 0) |
         (if (audio_required) @as(u32, audio_control_feature) else 0))
     else if (z_required) try encoder.writeU16(@as(u16, y_features) |
         (if (positioned_required) positioned_containers_feature else @as(u16, 0)) |
         (if (table_min_width_required) table_min_width_feature else @as(u16, 0)) |
+        (if (columns_required) column_layout_feature else @as(u16, 0)) |
         (if (audio_required) audio_control_feature else @as(u16, 0)))
     else if (y_required) try encoder.byte(y_features);
     try encoder.spans(stored.entry.display_title);
@@ -4392,11 +4505,13 @@ pub fn encodeBuildWithBodyTypographyAlloc(
     const clipped_required = DeepTableWork.hasClippedAbsolutes(display_title, sections, @as([]const types.Span, &.{}), references_value);
     const occurrence_required = DeepTableWork.hasImageOccurrences(display_title, sections, @as([]const types.Span, &.{}), references_value);
     const y_required = w_required or body_required or box_required or occurrence_required or clipped_required;
-    const positioned_required = DeepTableWork.hasPositionedContainers(display_title, sections, @as([]const types.Span, &.{}), references_value);
+    const container_layouts = DeepTableWork.containerLayouts(display_title, sections, @as([]const types.Span, &.{}), references_value);
+    const positioned_required = container_layouts.positioned;
+    const columns_required = container_layouts.column_layout;
     const table_min_width_required = DeepTableWork.hasTableMinWidths(display_title, sections, @as([]const types.Span, &.{}), references_value);
     const audio_required = DeepTableWork.hasAudioControls(display_title, sections, @as([]const types.Span, &.{}), references_value);
     const resolved_style_borders_required = DeepTableWork.hasResolvedStyleBorders(display_title, sections, @as([]const types.Span, &.{}), references_value);
-    const z_required = resolved_style_borders_required or positioned_required or table_min_width_required or audio_required;
+    const z_required = resolved_style_borders_required or positioned_required or table_min_width_required or columns_required or audio_required;
     const v_required = z_required or y_required or DeepTableWork.hasInlineActionGroups(display_title, sections, @as([]const types.Span, &.{}), references_value);
     const u_required = v_required or DeepTableWork.hasInlinePaddingOrRubyMargins(display_title, sections, @as([]const types.Span, &.{}), references_value);
     const t_required = !u_required and hasDeepTables(sections, references_value);
@@ -4411,7 +4526,7 @@ pub fn encodeBuildWithBodyTypographyAlloc(
         (if (work.image_occurrence_found) image_occurrence_feature else @as(u8, 0)) |
         (if (work.clipped_absolute_found) clipped_absolute_feature else @as(u8, 0));
     if (y_required != (y_features != 0) or w_required != work.container_owner_font_found or box_required != work.inline_box_group_found or
-        positioned_required != work.positioned_container_found or
+        positioned_required != work.positioned_container_found or columns_required != work.column_layout_found or
         table_min_width_required != work.table_min_width_found or occurrence_required != work.image_occurrence_found or audio_required != work.audio_control_found or
         clipped_required != work.clipped_absolute_found or resolved_style_borders_required != work.resolved_style_border_found) return error.InvalidPresentation;
     if (layoutHasPaths(layout_value) and !buildLayoutPathsValid(layout_value, sections)) return error.InvalidPresentation;
@@ -4429,7 +4544,7 @@ pub fn encodeBuildWithBodyTypographyAlloc(
     var inline_catalog: ?types.ImageCatalogIndex = null;
     defer if (inline_catalog) |*catalog| catalog.deinit(a);
     if (audio_required or hasInlineTableMedia(sections, references_value)) inline_catalog = try types.ImageCatalogIndex.init(a, media_value);
-    var encoder: Encoder = .{ .a = a, .version = version, .rule_styles = rule_styles, .inline_styles = inline_styles, .capability_p = s_required or r_required or q_required or pending_features != 0, .capability_q = s_required or r_required or q_required, .capability_r = s_required or r_required, .capability_s = s_required, .capability_t = t_required, .capability_u = u_required, .capability_v = v_required or a_required, .capability_w = w_required, .positioned_containers_enabled = positioned_required, .table_min_width_enabled = table_min_width_required, .resolved_style_borders_enabled = resolved_style_borders_required, .ruby_annotation_margins_enabled = ruby_annotation_margins_required, .body_typography_enabled = body_required, .inline_box_groups = box_required, .clipped_absolute_enabled = clipped_required, .image_occurrences = occurrence_required, .audio_controls = audio_required, .text_flow = pending_features & 16 != 0, .inline_media_catalog = if (inline_catalog) |*catalog| catalog else null };
+    var encoder: Encoder = .{ .a = a, .version = version, .rule_styles = rule_styles, .inline_styles = inline_styles, .capability_p = s_required or r_required or q_required or pending_features != 0, .capability_q = s_required or r_required or q_required, .capability_r = s_required or r_required, .capability_s = s_required, .capability_t = t_required, .capability_u = u_required, .capability_v = v_required or a_required, .capability_w = w_required, .positioned_containers_enabled = positioned_required, .table_min_width_enabled = table_min_width_required, .column_layout_enabled = columns_required, .resolved_style_borders_enabled = resolved_style_borders_required, .ruby_annotation_margins_enabled = ruby_annotation_margins_required, .body_typography_enabled = body_required, .inline_box_groups = box_required, .clipped_absolute_enabled = clipped_required, .image_occurrences = occurrence_required, .audio_controls = audio_required, .text_flow = pending_features & 16 != 0, .inline_media_catalog = if (inline_catalog) |*catalog| catalog else null };
     defer encoder.deinit();
     try encoder.out.appendSlice(a, if (a_required) resolved_style_borders_magic else if (z_required) positioned_containers_magic else if (y_required) owner_geometry_magic else if (v_required) inline_action_groups_magic else if (u_required) inline_padding_groups_magic else if (t_required) deep_tables_magic else if (s_required) ruby_magic else if (r_required) intrinsic_table_magic else if (q_required) table_corners_magic else if (pending_features != 0) body_adjoining_magic else if (inline_styles) inline_styles_magic else if (rule_styles) rule_styles_magic else versionMagic(version));
     if (a_required) try encoder.writeU32(@as(u32, y_features) |
@@ -4437,10 +4552,12 @@ pub fn encodeBuildWithBodyTypographyAlloc(
         (if (ruby_annotation_margins_required) ruby_annotation_margins_feature else @as(u32, 0)) |
         (if (positioned_required) @as(u32, positioned_containers_feature) else 0) |
         (if (table_min_width_required) @as(u32, table_min_width_feature) else 0) |
+        (if (columns_required) @as(u32, column_layout_feature) else 0) |
         (if (audio_required) @as(u32, audio_control_feature) else 0))
     else if (z_required) try encoder.writeU16(@as(u16, y_features) |
         (if (positioned_required) positioned_containers_feature else @as(u16, 0)) |
         (if (table_min_width_required) table_min_width_feature else @as(u16, 0)) |
+        (if (columns_required) column_layout_feature else @as(u16, 0)) |
         (if (audio_required) audio_control_feature else @as(u16, 0)))
     else if (y_required) try encoder.byte(y_features);
     try encoder.spans(display_title);
@@ -4515,6 +4632,7 @@ fn decodeImpl(
     } else @truncate(z_features);
     const positioned_header = z_features & positioned_containers_feature != 0;
     const table_min_width_header = z_features & table_min_width_feature != 0;
+    const column_layout_header = z_features & column_layout_feature != 0;
     const audio_control_header = z_features & audio_control_feature != 0;
     const resolved_style_borders_enabled = a_header and z_features & resolved_style_borders_feature != 0;
     const ruby_annotation_margins_enabled = a_header and z_features & ruby_annotation_margins_feature != 0;
@@ -4538,7 +4656,7 @@ fn decodeImpl(
         if (std.mem.eql(u8, payload[0..3], "DPR")) return error.UnsupportedPresentationVersion;
         return error.InvalidPresentation;
     };
-    var reader: Reader = .{ .a = a, .version = version, .rule_styles = rule_styles, .inline_styles = inline_styles, .capability_p = body_adjoining_header, .capability_q = ruby_header or intrinsic_header or table_corners_header, .capability_r = ruby_header or intrinsic_header, .capability_s = ruby_header, .capability_t = deep_tables_header, .capability_u = inline_groups_header, .capability_v = action_groups_header, .capability_w = owner_fonts_header, .positioned_containers_enabled = positioned_header, .table_min_width_enabled = table_min_width_header, .resolved_style_borders_enabled = resolved_style_borders_enabled, .ruby_annotation_margins_enabled = ruby_annotation_margins_enabled, .body_typography_enabled = body_typography_header, .inline_box_groups = inline_box_header, .clipped_absolute_enabled = clipped_absolute_header, .image_occurrences = image_occurrence_header, .audio_controls = audio_control_header, .bytes = payload, .pos = magic.len + (if (a_header) @as(usize, 4) else if (z_header) @as(usize, 2) else @as(usize, @intFromBool(owner_geometry_header))), .metrics = metrics };
+    var reader: Reader = .{ .a = a, .version = version, .rule_styles = rule_styles, .inline_styles = inline_styles, .capability_p = body_adjoining_header, .capability_q = ruby_header or intrinsic_header or table_corners_header, .capability_r = ruby_header or intrinsic_header, .capability_s = ruby_header, .capability_t = deep_tables_header, .capability_u = inline_groups_header, .capability_v = action_groups_header, .capability_w = owner_fonts_header, .positioned_containers_enabled = positioned_header, .table_min_width_enabled = table_min_width_header, .column_layout_enabled = column_layout_header, .resolved_style_borders_enabled = resolved_style_borders_enabled, .ruby_annotation_margins_enabled = ruby_annotation_margins_enabled, .body_typography_enabled = body_typography_header, .inline_box_groups = inline_box_header, .clipped_absolute_enabled = clipped_absolute_header, .image_occurrences = image_occurrence_header, .audio_controls = audio_control_header, .bytes = payload, .pos = magic.len + (if (a_header) @as(usize, 4) else if (z_header) @as(usize, 2) else @as(usize, @intFromBool(owner_geometry_header))), .metrics = metrics };
     const display_title = try reader.spans();
     const sections = try reader.sections();
     const preamble = try reader.spans();
@@ -4557,7 +4675,7 @@ fn decodeImpl(
         inline_work.entry(display_title, sections, preamble, references) catch return error.InvalidPresentation;
         if (owner_geometry_header or z_header) {
             if (positioned_header != inline_work.positioned_container_found or
-                table_min_width_header != inline_work.table_min_width_found or
+                column_layout_header != inline_work.column_layout_found or table_min_width_header != inline_work.table_min_width_found or
                 owner_fonts_header != inline_work.container_owner_font_found or
                 inline_box_header != inline_work.inline_box_group_found or
                 clipped_absolute_header != inline_work.clipped_absolute_found or
@@ -9754,10 +9872,83 @@ test "M fixed height conditional recursive Stored build JSON retains complete bo
 }
 
 
+test "DPRZ preferred column widths retain native list actions and strict framing" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_]?u16{ null, 2 }) |cap| {
+        const style: types.ContainerStyle = .{ .columns = .{ .count = cap,
+            .width = .{ .unit = .em, .value = 25 }, .gap = .{ .unit = .px, .value = 20 } } };
+        var enc: Encoder = .{ .a = a, .version = .container_fonts, .column_layout_enabled = true };
+        defer enc.deinit();
+        try enc.containerStyle(style);
+        const scalar = enc.out.items;
+        try std.testing.expectEqual(@as(usize, 17), scalar.len);
+        try std.testing.expectEqual(container_columns_flag | preferred_column_width_flag, std.mem.readInt(u32, scalar[0..4], .little));
+        try std.testing.expectEqual(cap orelse 0, std.mem.readInt(u16, scalar[4..6], .little));
+        try std.testing.expectEqual(@as(u8, 1), scalar[11]);
+        for (0..scalar.len) |end| {
+            var short: Reader = .{ .a = a, .version = .container_fonts, .column_layout_enabled = true, .bytes = scalar[0..end] };
+            try std.testing.expectError(error.InvalidPresentation, short.containerStyle());
+        }
+        var old: Reader = .{ .a = a, .version = .container_fonts, .bytes = scalar };
+        try std.testing.expectError(error.InvalidPresentation, old.containerStyle());
+        const wrong = try a.dupe(u8, scalar);
+        wrong[11] = 0;
+        var malformed: Reader = .{ .a = a, .version = .container_fonts, .column_layout_enabled = true, .bytes = wrong };
+        try std.testing.expectError(error.InvalidPresentation, malformed.containerStyle());
+        const item: types.Block = .{ .kind = .list_item, .list_path = "*",
+            .spans = &.{.{ .kind = .link, .target = "word", .target_fragment = "section", .text = "translation" }} };
+        const box: types.Block = .{ .kind = .container, .container = .{ .style = style, .blocks = &.{item} } };
+        const table: types.Block = .{ .kind = .table, .table = .{ .rows = &.{.{ .cells = &.{.{ .blocks = &.{box} }} }} } };
+        const entry: types.Entry = .{ .title = "columns", .kind = .supplemental,
+            .sections = &.{.{ .level = 2, .title = "translations", .blocks = &.{table} }} };
+        const stored: types.Stored = .{ .entry = entry };
+        const bytes = try encodeAlloc(a, stored);
+        try std.testing.expectEqualStrings("DPRZ", bytes[0..4]);
+        try std.testing.expectEqualDeep(stored, try decodeAlloc(a, bytes, entry.title, .supplemental, null));
+        try std.testing.expectEqualSlices(u8, bytes, try encodeBuildAlloc(a, entry.display_title,
+            entry.sections, entry.organization, entry.references, entry.media));
+    }
+}
+
+test "DPRZ column break policy keeps LI and two detail source blocks ordered" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const first: types.Block = .{ .kind = .list_item, .list_path = "*", .column_break_inside = .avoid,
+        .spans = &.{.{ .text = "label" }} };
+    const detail: types.Block = .{ .kind = .list_detail, .list_path = "*:",
+        .spans = &.{.{ .kind = .link, .target = "word", .target_fragment = "sense", .text = "detail" }} };
+    const last: types.Block = .{ .kind = .list_item, .list_path = "*", .column_break_inside = .auto,
+        .spans = &.{.{ .text = "next" }} };
+    const entry: types.Entry = .{ .title = "ordered", .kind = .supplemental,
+        .sections = &.{.{ .level = 2, .title = "source", .blocks = &.{first, detail, detail, last} }} };
+    const original: types.Stored = .{ .entry = entry };
+    const bytes = try encodeAlloc(a, original);
+    try std.testing.expectEqualStrings("DPRZ", bytes[0..4]);
+    try std.testing.expectEqual(@as(u16, 4096), std.mem.readInt(u16, bytes[4..6], .little));
+    try std.testing.expectEqualDeep(original, try decodeAlloc(a, bytes, entry.title, .supplemental, null));
+    try std.testing.expectEqualSlices(u8, bytes, try encodeBuildAlloc(a, entry.display_title, entry.sections, entry.organization, entry.references, entry.media));
+    var encoder: Encoder = .{ .a = a, .version = .container_fonts, .column_layout_enabled = true };
+    defer encoder.deinit();
+    try encoder.block(first);
+    const raw = encoder.out.items;
+    try std.testing.expectEqual(@as(u8, 2), raw[raw.len - 1]);
+    raw[raw.len - 1] = 3;
+    var reader: Reader = .{ .a = a, .version = .container_fonts, .column_layout_enabled = true, .bytes = raw };
+    try std.testing.expectError(error.InvalidPresentation, reader.block());
+    var invalid = first;
+    invalid.kind = .heading;
+    try std.testing.expect(!types.validColumnBreakContext(invalid));
+}
+
 test "M count columns payload versions absent bytes and strict scalar framing" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
     for ([_]u16{ 1, 2, 65535 }) |count| for ([_]types.StyleLength{ .{ .unit = .px, .value = 0 }, .{ .unit = .em, .value = 0.95 } }) |gap| {
         const style: types.ContainerStyle = .{ .columns = .{ .count = count, .gap = gap } };
+        const old_json = try std.json.Stringify.valueAlloc(a, .{ .count = count, .gap = gap }, .{});
+        try std.testing.expectEqualStrings(old_json, try std.json.Stringify.valueAlloc(a, style.columns.?, .{}));
         var encoder: Encoder = .{ .a = a, .version = .container_fonts }; defer encoder.deinit(); try encoder.containerStyle(style);
         try std.testing.expectEqual(container_columns_flag, std.mem.readInt(u32, encoder.out.items[0..4], .little));
         try std.testing.expectEqual(@as(usize, 11), encoder.out.items.len);
@@ -10475,6 +10666,58 @@ const TableCaptionCodecTest = struct {
                 .float_side = .right, .margins = margin, .border = .none, .background = .transparent } };
     }
 };
+
+test "ordinary intrinsic raster Figure extends only its own tag and rejects forged or truncated axes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const base = FigureCodecFixture.make(.{ .kind = .link, .target = "File:Latin dictionary.jpg",
+        .image = .{ .file = "Latin dictionary.jpg", .width_px = 250 } });
+    var figure = base;
+    figure.intrinsic_size = .{ .width_px = 1408, .height_px = 1120 };
+    for ([_]Version{ .image_maps, .container_fonts }) |version| {
+        var old: Encoder = .{ .a = a, .version = version };
+        defer old.deinit();
+        try old.figure(@as(?types.Figure, base));
+        var current: Encoder = .{ .a = a, .version = version };
+        defer current.deinit();
+        try current.figure(@as(?types.Figure, figure));
+        const bytes = current.out.items;
+        const tail = old.out.items.len;
+        try std.testing.expectEqual(@as(u8, 1), old.out.items[0]);
+        try std.testing.expectEqual(@as(u8, 8), bytes[0]);
+        try std.testing.expectEqualSlices(u8, old.out.items[1..], bytes[1..tail]);
+        try std.testing.expectEqualSlices(u8, &.{ 128, 5, 0, 0, 96, 4, 0, 0 }, bytes[tail..]);
+        var decoded: Reader = .{ .a = a, .version = version, .bytes = bytes };
+        try std.testing.expectEqualDeep(figure, (try decoded.figure()).?);
+        try std.testing.expectEqual(@as(usize, 0), decoded.remaining());
+        for (tail..bytes.len) |end| {
+            var truncated: Reader = .{ .a = a, .version = version, .bytes = bytes[0..end] };
+            try std.testing.expectError(error.InvalidPresentation, truncated.figure());
+        }
+        for ([_]usize{ tail, tail + 4 }) |at| for ([_]u32{ 0, 2147483648 }) |invalid_axis| {
+            const forged = try a.dupe(u8, bytes);
+            std.mem.writeInt(u32, forged[at..][0..4], invalid_axis, .little);
+            var strict: Reader = .{ .a = a, .version = version, .bytes = forged };
+            try std.testing.expectError(error.InvalidPresentation, strict.figure());
+        };
+    }
+    const json = try std.json.Stringify.valueAlloc(a, figure, .{});
+    const parsed = try std.json.parseFromSliceLeaky(types.Figure, a, json, .{});
+    try std.testing.expectEqualDeep(figure, parsed);
+    var bad = figure;
+    bad.content.image.span.image.?.height_px = 199;
+    try std.testing.expect(!types.validFigure(bad));
+    bad = figure;
+    bad.content.image.span.image.?.width_px = 1409;
+    try std.testing.expect(!types.validFigure(bad));
+    bad = figure;
+    bad.content.image.span.image.?.file = "drawing.svg";
+    try std.testing.expect(!types.validFigure(bad));
+    bad = figure;
+    bad.content.image.sizing = .requested_fit_cap_original_width;
+    try std.testing.expect(!types.validFigure(bad));
+}
 
 test "M Figure table caption tags retain legacy image Missing bytes and close old capability tails" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
@@ -12060,6 +12303,57 @@ test "DPRO authored Help cursor roundtrips without creating actions or changing 
         var reader: Reader = .{ .a = a, .version = .container_fonts, .inline_styles = true, .bytes = bytes };
         try std.testing.expectError(error.InvalidPresentation, reader.inlineTextStyle());
     }
+}
+
+test "DPRZ styled heading wrappers own only the exact section heading companion" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const zero = StyledSectionCodecTest.zero;
+    const edges = StyledSectionCodecTest.edges;
+    var margins = edges; margins.top = .{ .unit = .em, .value = 0.4 };
+    var padding = edges; padding.top = .{ .unit = .em, .value = 1.25 };
+    var borders = types.ContainerBorderEdges.all(.none);
+    borders.top = .{ .dashed = .{ .width = .{ .unit = .px, .value = 1 }, .color = .{ .rgb = "#a2a9b1" } } };
+    var style = StyledSectionCodecTest.style;
+    style.box.margins = edges; style.box.padding = edges;
+    style.box.font_family = .sans_serif;
+    style.box.positioning = .relative_auto;
+    style.box.owner_font_scale = 1.2; style.font.font_scale = 1.2;
+    style.wrappers = .{ .outer = .{ .margins = margins, .border = .{ .edges = borders }, .overflow = .visible_x_clip_y },
+        .inner = .{ .padding = padding }, .title_block_padding_right = .{ .unit = .em, .value = 3.2 } };
+    const span: types.Span = .{ .text = "babua", .foreground = "#333333", .font_scale = 1.4 };
+    const sub: types.Span = .{ .text = "[bug]", .subscript = true, .foreground = "#888888", .font_scale = 0.7 };
+    const blocks = [_]types.Block{
+        .{ .kind = .heading, .level = 3, .anchor = "babua_[bug]", .anchor_fallback = "babua_.5Bbug.5D",
+            .spans = &.{ span, .{ .text = " " }, sub } },
+        .{ .kind = .paragraph, .spans = &.{.{ .text = "following body" }} },
+    };
+    var section: types.Section = .{ .level = 3, .title = "babua [bug]", .anchor = "babua_[bug]",
+        .anchor_fallback = "babua_.5Bbug.5D", .blocks = &blocks, .heading_style = style };
+    const entry: types.Entry = .{ .title = "babua", .kind = .supplemental, .sections = @as(*const [1]types.Section, @ptrCast(&section)),
+        .organization = .{ .other_sections = &.{0} } };
+    const payload = try encodeAlloc(a, .{ .entry = entry });
+    try std.testing.expectEqualStrings("DPRZ", payload[0..4]);
+    const decoded = try decodeAlloc(a, payload, entry.title, entry.kind, null);
+    try std.testing.expectEqualDeep(entry, decoded.entry);
+    try std.testing.expectEqualSlices(u8, payload, try encodeAlloc(a, decoded));
+    const wire = try std.json.Stringify.valueAlloc(a, entry.sections[0], .{});
+    const again = try std.json.parseFromSlice(types.Section, a, wire, .{}); defer again.deinit();
+    try std.testing.expectEqualDeep(entry.sections[0], again.value);
+    var malformed = style; malformed.wrappers.?.inner.padding.?.top = zero;
+    try std.testing.expect(!types.validSectionHeadingStyle(malformed));
+    malformed = style; malformed.wrappers.?.outer.overflow = .hidden;
+    try std.testing.expect(!types.validSectionHeadingStyle(malformed));
+    malformed = style; malformed.wrappers.?.inner.positioning = .relative_auto;
+    try std.testing.expect(!types.validSectionHeadingStyle(malformed));
+    malformed = style; malformed.wrappers = null;
+    try std.testing.expect(!types.validSectionHeadingStyle(malformed));
+    malformed = style; malformed.wrappers.?.title_block_padding_right = zero;
+    try std.testing.expect(!types.validSectionHeadingStyle(malformed));
+    section.anchor_fallback = "wrong";
+    try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, .{ .entry = entry }));
+    try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, payload[0..payload.len-1], entry.title, entry.kind, null));
 }
 
 const BodyAdjoiningCodecTest = struct {
@@ -15479,6 +15773,60 @@ const PositionedContainerZCodecTest = struct {
     fn reader(a: A, bytes: []const u8) Reader { var out = ContainerOwnerWTest.reader(a, bytes); out.positioned_containers_enabled = true; return out; }
 };
 
+test "DPRZ container visible x clip y keeps axis tag and complete child without scroll state" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const T = PositionedContainerZCodecTest;
+    const style: types.ContainerStyle = .{ .overflow = .visible_x_clip_y };
+    const child: types.Block = .{ .kind = .paragraph, .spans = &.{.{ .text = "babua" }} };
+    const shell: types.Block = .{ .kind = .container, .container = .{ .style = style, .blocks = &.{child} } };
+    const original = T.stored(&.{.{ .level = 2, .title = "body", .blocks = &.{shell} }});
+    const bytes = try encodeAlloc(a, original);
+    try std.testing.expectEqualStrings(positioned_containers_magic, bytes[0..4]);
+    try std.testing.expectEqualDeep(original, try decodeAlloc(a, bytes, "positioned", .supplemental, null));
+    var z = T.encoder(a); defer z.deinit();
+    try z.containerStyle(style);
+    try std.testing.expectEqualSlices(u8, &.{ 0, 128, 0, 0, 3, 0 }, z.out.items);
+    var old = ContainerOwnerWTest.encoder(a); defer old.deinit();
+    try std.testing.expectError(error.InvalidPresentation, old.containerStyle(style));
+    var old_reader = ContainerOwnerWTest.reader(a, z.out.items);
+    try std.testing.expectError(error.InvalidPresentation, old_reader.containerStyle());
+    const border: types.ContainerBorderEdge = .{ .dashed = .{ .width = .{ .unit = .px, .value = 1 }, .color = .{ .rgb = "#a2a9b1" } } };
+    var edge_writer = T.encoder(a); defer edge_writer.deinit();
+    try edge_writer.containerBorderEdge(border);
+    try std.testing.expectEqual(@as(u8, 4), edge_writer.out.items[0]);
+    var edge_reader = T.reader(a, edge_writer.out.items);
+    try std.testing.expectEqualDeep(border, try edge_reader.containerBorderEdge());
+    var old_edge = ContainerOwnerWTest.reader(a, edge_writer.out.items);
+    try std.testing.expectError(error.InvalidPresentation, old_edge.containerBorderEdge());
+    const edges: types.ContainerBorder = .{ .edges = .{ .top = border, .right = .none, .bottom = .none, .left = .none } };
+    const dashed_style: types.ContainerStyle = .{ .border = edges };
+    const dashed_shell: types.Block = .{ .kind = .container, .container = .{ .style = dashed_style, .blocks = &.{child} } };
+    const dashed_body = T.stored(&.{.{ .level = 2, .title = "body", .blocks = &.{dashed_shell} }});
+    const dashed_bytes = try encodeAlloc(a, dashed_body);
+    try std.testing.expectEqualStrings(positioned_containers_magic, dashed_bytes[0..4]);
+    try std.testing.expectEqualDeep(dashed_body, try decodeAlloc(a, dashed_bytes, "positioned", .supplemental, null));
+    var dashed_old = ContainerOwnerWTest.encoder(a); defer dashed_old.deinit();
+    try std.testing.expectError(error.InvalidPresentation, dashed_old.containerStyle(dashed_style));
+    var incomplete = T.reader(a, edge_writer.out.items[0 .. edge_writer.out.items.len - 1]);
+    try std.testing.expectError(error.InvalidPresentation, incomplete.containerBorderEdge());
+    var unknown_edge = T.reader(a, &.{5});
+    try std.testing.expectError(error.InvalidPresentation, unknown_edge.containerBorderEdge());
+    for ([_]types.ContainerStyle{ style, dashed_style }) |candidate| {
+        try std.testing.expect(!types.validFigureViewportWrapper(candidate));
+        var heading = StyledSectionCodecTest.style;
+        if (candidate.border != null) heading.box.border = candidate.border;
+        if (candidate.overflow != null) heading.box.overflow = candidate.overflow;
+        var section = StyledSectionCodecTest.sections[0];
+        section.heading_style = heading;
+        const body = T.stored(&.{section});
+        try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, body));
+    }
+    var invalid = T.reader(a, &.{ 0, 128, 0, 0, 4, 0 });
+    try std.testing.expectError(error.InvalidPresentation, invalid.containerStyle());
+}
+
 test "DPRZ definite absolute child retains nearest relative owner font line height wrap and complete data" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
     const T = PositionedContainerZCodecTest;
@@ -18213,4 +18561,222 @@ test "inline box dashed bottom retains its own wire tag and linked owner" {
     const record = T.stored(&.{owner});
     const bytes = try encodeAlloc(a, record);
     try std.testing.expectEqualDeep(record, try decodeAlloc(a, bytes, "rounded", .supplemental, null));
+}
+
+test "DPRZ centered auto-height column owns each measured child and rejects an unrepresented axis" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const T = PositionedContainerZCodecTest;
+    const item: types.Block = .{ .kind = .container, .container = .{ .blocks = &.{T.paragraph} } };
+    const column: types.ContainerStyle = .{ .layout = .flex_column, .align_items = .center, .width = .fit_content,
+        .margin_values = .{ .top = .auto, .right = .auto, .bottom = .auto, .left = .auto } };
+    const box: types.Block = .{ .kind = .container, .container = .{ .style = column, .blocks = &.{ item,item } } };
+    const sections = [_]types.Section{.{ .level = 2, .title = "body", .blocks = &.{box} }};
+    const original = T.stored(&sections);
+    const bytes = try encodeAlloc(a, original); try std.testing.expectEqualStrings(positioned_containers_magic,bytes[0..4]);
+    const restored = try decodeAlloc(a, bytes, "positioned", .supplemental, null);
+    try std.testing.expectEqualDeep(original, restored);
+    try std.testing.expectEqualSlices(u8, bytes, try encodeAlloc(a, restored));
+    var old = T.encoder(a); defer old.deinit(); old.positioned_containers_enabled = false;
+    try std.testing.expectError(error.InvalidPresentation, old.containerStyleWithDisclosure(column,null));
+    var bad = column; bad.height = .{ .unit = .px, .value = 32 }; try std.testing.expect(!types.validContainerStyle(bad));
+    bad = column; bad.align_items = .stretch; try std.testing.expect(!types.validContainerStyle(bad));
+    var loose = box; loose.container.?.blocks = &.{T.paragraph}; try std.testing.expect(!types.validContainerHeader(loose.container.?));
+}
+
+test "DPRZ row gap is local to flex Container styles and old profiles refuse it" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const T = PositionedContainerZCodecTest;
+    const row: types.ContainerStyle = .{ .layout = .flex_row, .align_items = .end, .flex_column_gap = .{ .unit = .em, .value = 0.5 } };
+    var out = T.encoder(a); defer out.deinit();
+    try out.containerStyleWithDisclosure(row, null);
+    var disclosure: ?types.ContainerDisclosure = null;
+    var reader = T.reader(a, out.out.items);
+    try std.testing.expectEqualDeep(row, try reader.containerStyleWithDisclosure(&disclosure));
+    var generic = T.encoder(a); defer generic.deinit();
+    try std.testing.expectError(error.InvalidPresentation, generic.containerStyle(row));
+    var old = T.encoder(a); defer old.deinit(); old.positioned_containers_enabled = false;
+    try std.testing.expectError(error.InvalidPresentation, old.containerStyleWithDisclosure(row, null));
+    var wrong = row; wrong.layout = null; try std.testing.expect(!types.validContainerStyle(wrong));
+    wrong = row; wrong.flex_column_gap.?.value = 0; try std.testing.expect(!types.validContainerStyle(wrong));
+    wrong = row; wrong.flex_column_gap.?.value = std.math.nan(f32); try std.testing.expect(!types.validContainerStyle(wrong));
+    const item: types.Block = .{ .kind = .container, .container = .{ .blocks = &.{T.paragraph} } };
+    const owner: types.Block = .{ .kind = .container, .container = .{ .style = row, .blocks = &.{item,item} } };
+    const sections = [_]types.Section{.{ .level = 2, .title = "body", .blocks = &.{owner} }};
+    const original = T.stored(&sections); const bytes = try encodeAlloc(a, original);
+    try std.testing.expectEqualStrings(positioned_containers_magic, bytes[0..4]);
+    const restored = try decodeAlloc(a, bytes, "positioned", .supplemental, null);
+    try std.testing.expectEqualDeep(original, restored);
+    try std.testing.expectEqualSlices(u8, bytes, try encodeAlloc(a, restored));
+}
+
+test "DPRZ retains translated glossary actions nested containing boxes and RGB layer alpha" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const T = PositionedContainerZCodecTest;
+    const outer_style: types.ContainerStyle = .{
+        .translated_absolute = .{ .placement = .{ .left = .{ .percent = 50 }, .top = .{ .percent = 100, .px = 5 },
+            .translate_x = .{ .percent = -50 }, .translate_y = .{} }, .z_index = 1, .background_alpha = 0.85 },
+        .corner_radius_px = 2, .background = .{ .rgb = "#eaffff" }, .width = .fit_content,
+        .owner_font = .{ .font_scale = 12, .font_scale_basis = .css_px, .font_normalized = true },
+        .height = .{ .unit = .px, .value = 10 }, .line_height = .{ .length = .{ .unit = .px, .value = 10 } },
+    };
+    var inner_style = outer_style;
+    inner_style.height = null;
+    inner_style.owner_font.?.font_scale = 10;
+    inner_style.owner_font.?.bold = true;
+    inner_style.background = .{ .rgb = "#ffe0f0" };
+    inner_style.translated_absolute.?.z_index = null;
+    inner_style.translated_absolute.?.owns_abbreviation = true;
+    inner_style.translated_absolute.?.placement = .{ .left = .{ .percent = 100, .px = 2 }, .top = .{ .percent = 50 },
+        .translate_x = .{}, .translate_y = .{ .percent = -48 } };
+    const small: types.StyleLength = .{ .unit = .px, .value = 1 };
+    const wide: types.StyleLength = .{ .unit = .px, .value = 2 };
+    inner_style.padding = .{ .top = small, .right = wide, .bottom = small, .left = wide };
+    const q: types.Block = .{ .kind = .paragraph, .spans = &.{.{ .text = "?", .explanation = "uncertain", .bold = true }} };
+    const label: types.Block = .{ .kind = .paragraph, .spans = &.{.{ .kind = .link, .text = "lbor.", .target = "Додатак:Речник",
+        .target_fragment = "learned_borrowing", .italic = true, .explanation = "learned borrowing" }} };
+    const nested: types.Block = .{ .kind = .container, .container = .{ .style = inner_style, .blocks = &.{q} } };
+    var wrong_owner = nested;
+    wrong_owner.container.?.blocks = &.{label};
+    try std.testing.expect(!types.validContainerHeader(wrong_owner.container.?));
+    var missing_explanation = q;
+    missing_explanation.spans = &.{.{ .text = "?", .bold = true }};
+    wrong_owner.container.?.blocks = &.{missing_explanation};
+    try std.testing.expect(!types.validContainerHeader(wrong_owner.container.?));
+    const outer: types.Block = .{ .kind = .container, .container = .{ .style = outer_style, .blocks = &.{ label, nested } } };
+    var root = T.root;
+    const horizontal: types.StyleLength = .{ .unit = .px, .value = 10 };
+    const vertical: types.StyleLength = .{ .unit = .px, .value = 5 };
+    root.container.?.style = .{ .positioning = .relative_auto, .owner_font = T.font, .text_align = .center,
+        .padding = .{ .left = horizontal, .right = horizontal, .top = vertical, .bottom = vertical },
+        .background = .{ .rgb = "#fffbf2" }, .border = .{ .solid = .{ .width = small, .color = .{ .rgb = "#cccccc" } } }, .corner_radius_px = 4 };
+    var foreign_card = root.container.?.style; foreign_card.height = vertical;
+    try std.testing.expect(!types.validContainerStyle(foreign_card));
+    foreign_card = root.container.?.style; foreign_card.border.?.solid.width.unit = .em;
+    try std.testing.expect(!types.validContainerStyle(foreign_card));
+    var foreign_label = outer_style; foreign_label.text_wrap = .nowrap;
+    try std.testing.expect(!types.validContainerStyle(foreign_label));
+    foreign_label = outer_style; foreign_label.translated_absolute.?.z_index = -1;
+    try std.testing.expect(!types.validContainerStyle(foreign_label));
+    const lead: types.Block = .{ .kind = .container, .container = .{ .style = .{ .owner_font = T.font, .inline_atomic = .adjacent }, .blocks = &.{T.paragraph} } };
+    root.container.?.blocks = &.{ lead, outer };
+    const sections = [_]types.Section{.{ .level = 2, .title = "body", .blocks = &.{root} }};
+    const expected = T.stored(&sections);
+    const bytes = try encodeAlloc(a, expected);
+    const decoded = try decodeAlloc(a, bytes, "positioned", .supplemental, null);
+    try std.testing.expectEqualDeep(expected, decoded);
+    for (0..bytes.len) |end| try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, bytes[0..end], "positioned", .supplemental, null));
+    const orphan = [_]types.Section{.{ .level = 2, .title = "body", .blocks = &.{outer} }};
+    try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, T.stored(&orphan)));
+    var unrounded = root; unrounded.container.?.style.corner_radius_px = null;
+    const no_card = [_]types.Section{.{ .level = 2, .title = "body", .blocks = &.{unrounded} }};
+    try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, T.stored(&no_card)));
+    var no_action = outer; no_action.container.?.blocks = &.{q};
+    try std.testing.expect(!types.validContainerHeader(no_action.container.?));
+    var foreign_action = label.spans[0]; foreign_action.target = "Other";
+    const unrelated: types.Block = .{ .kind = .paragraph, .spans = &.{ label.spans[0], foreign_action } };
+    no_action.container.?.blocks = &.{unrelated}; try std.testing.expect(!types.validContainerHeader(no_action.container.?));
+    var wrong_child = nested; wrong_child.container.?.style.translated_absolute.?.owns_abbreviation = false;
+    wrong_child.container.?.blocks = &.{label}; no_action.container.?.blocks = &.{ label, wrong_child };
+    try std.testing.expect(!types.validContainerHeader(no_action.container.?));
+    var rich = lead; const rich_leaf: types.Block = .{ .kind = .paragraph, .spans = &.{.{ .kind = .external_link, .text = "link", .target = "https://example.org" }} };
+    rich.container.?.blocks = &.{rich_leaf}; try std.testing.expect(!types.validContainerHeader(rich.container.?));
+    const atom: types.Block = .{ .kind = .container, .container = .{ .style = .{ .owner_font = T.font, .inline_atomic = .after_space }, .blocks = &.{T.paragraph} } };
+    const orphan_atom = [_]types.Section{.{ .level = 2, .title = "body", .blocks = &.{atom} }};
+    try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, T.stored(&orphan_atom)));
+    var misplaced = root;
+    misplaced.container.?.blocks = &.{ atom, outer };
+    try std.testing.expect(!types.validContainerHeader(misplaced.container.?));
+    var first = atom;
+    first.container.?.style.inline_atomic = .adjacent;
+    misplaced.container.?.blocks = &.{ first, outer, atom };
+    try std.testing.expect(!types.validContainerHeader(misplaced.container.?));
+    var invalid = outer_style;
+    invalid.translated_absolute.?.placement.top.percent = std.math.nan(f32);
+    try std.testing.expect(!types.validContainerStyle(invalid));
+    invalid = outer_style;
+    invalid.absolute_position = T.absolute_style.absolute_position;
+    try std.testing.expect(!types.validContainerStyle(invalid));
+    invalid = outer_style;
+    invalid.translated_absolute.?.background_alpha = 1.01;
+    try std.testing.expect(!types.validContainerStyle(invalid));
+
+    var style_wire = T.encoder(a); defer style_wire.deinit();
+    try style_wire.containerStyleWithDisclosure(outer_style, null);
+    // The source carries 8 affine coefficients, one explicit stack level,
+    // one background alpha, and a radius. Pin the local extension layout.
+    const tail: usize = 2 + 8 * 4 + 1 + 4 + 4 + 4;
+    const start = style_wire.out.items.len - tail;
+    try std.testing.expectEqualSlices(u8, &.{ 0x10, 3 }, style_wire.out.items[start..][0..2]);
+    var generic = T.reader(a, style_wire.out.items);
+    try std.testing.expectError(error.InvalidPresentation, generic.containerStyle());
+    var legacy = ContainerOwnerWTest.encoder(a); defer legacy.deinit();
+    try std.testing.expectError(error.InvalidPresentation, legacy.containerStyleWithDisclosure(outer_style, null));
+    var generic_out = T.encoder(a); defer generic_out.deinit();
+    try std.testing.expectError(error.InvalidPresentation, generic_out.containerStyle(outer_style));
+    var disclosure: ?types.ContainerDisclosure = null;
+    for (0..7) |mutation| {
+        const malformed = try a.dupe(u8, style_wire.out.items);
+        switch (mutation) {
+            0 => malformed[start] |= 0x20,
+            1 => malformed[start + 1] = 0,
+            2 => malformed[start + 1] |= 0x80,
+            3 => malformed[start + 34] |= 4,
+            4 => std.mem.writeInt(u32, malformed[start + 2 ..][0..4], @bitCast(std.math.nan(f32)), .little),
+            5 => std.mem.writeInt(u32, malformed[start + 39 ..][0..4], @bitCast(@as(f32, 1.125)), .little),
+            else => std.mem.writeInt(u32, malformed[start + 43 ..][0..4], @bitCast(std.math.inf(f32)), .little),
+        }
+        var bad = T.reader(a, malformed);
+        try std.testing.expectError(error.InvalidPresentation, bad.containerStyleWithDisclosure(&disclosure));
+    }
+}
+
+test "DPRZ flex edge refuses orphan frames and malformed style bytes" {
+    var arena=std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a=arena.allocator(); const T=PositionedContainerZCodecTest;
+    const stroke:types.ContainerBorderEdge=.{.solid=.{.width=.{.unit=.px,.value=2},.color=.{.rgb="#9e9e9e"}}};
+    var font=T.font; font.font_scale=1; font.font_scale_basis=.normal_body;
+    const style:types.ContainerStyle=.{.owner_font=font,.height=.{.unit=.px,.value=10},.border=.{.edges=.{.left=stroke,.bottom=stroke,.right=.none,.top=.none}},
+        .flex_edge=.{.align_self=.start,.inset_side=.left,.width_percent=50,.width_add=.{.unit=.em,.value=0.25},.inset_percent=50,.bottom_radius_px=4}};
+    var out=T.encoder(a); defer out.deinit();
+    try out.containerStyleWithDisclosure(style,null);
+    const data=out.out.items;
+    // The exclusive local shape follows the outer extension byte. It contains
+    // two enum bytes, two f32s, a unit + f32 and the final f32 corner radius.
+    try std.testing.expect(data[data.len-21]==16 and data[data.len-20]==16);
+    var disclosure:?types.ContainerDisclosure=null;
+    var ok=T.reader(a,data); try std.testing.expectEqualDeep(style,try ok.containerStyleWithDisclosure(&disclosure));
+    var generic=T.reader(a,data); try std.testing.expectError(error.InvalidPresentation,generic.containerStyle());
+    var old=T.encoder(a); defer old.deinit(); old.positioned_containers_enabled=false;
+    try std.testing.expectError(error.InvalidPresentation,old.containerStyleWithDisclosure(style,null));
+    for ([_]struct{ end:usize, value:u8 }{.{.end=20,.value=24},.{.end=19,.value=2},.{.end=18,.value=2},.{.end=9,.value=255}}) |bad| {
+        const mutated=try a.dupe(u8,data); mutated[mutated.len-bad.end]=bad.value;
+        var cursor=T.reader(a,mutated); try std.testing.expectError(error.InvalidPresentation,cursor.containerStyleWithDisclosure(&disclosure));
+    }
+    const nan=try a.dupe(u8,data); std.mem.writeInt(u32,nan[nan.len-4..][0..4],@bitCast(std.math.nan(f32)),.little);
+    var invalid=T.reader(a,nan); try std.testing.expectError(error.InvalidPresentation,invalid.containerStyleWithDisclosure(&disclosure));
+    const block:types.Block=.{.kind=.container,.container=.{.style=style,.blocks=&.{}}};
+    const orphan=[_]types.Section{.{.level=2,.title="body",.blocks=&.{block}}};
+    try std.testing.expectError(error.InvalidPresentation,encodeAlloc(a,T.stored(&orphan)));
+    var bad=style; bad.border.?.edges.bottom.solid.width.value=1; try std.testing.expect(!types.validContainerStyle(bad));
+    bad=style; bad.border.?.edges.bottom.solid.color.rgb="#000000"; try std.testing.expect(!types.validContainerStyle(bad));
+}
+
+test "DPRZ selected column gap and axis clipped dashed sibling retain distinct fields and actions" {
+    var arena=std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a=arena.allocator(); const T=PositionedContainerZCodecTest;
+    const dash:types.ContainerBorderEdge=.{.dashed=.{.width=.{.unit=.px,.value=1},.color=.{.rgb="#808080"}}};
+    const id:types.Block=.{.kind=.container,.container=.{.style=.{
+        .overflow=.visible_x_clip_y,.border=.{.edges=.{.top=.none,.left=.none,.right=.none,.bottom=dash}},
+    },.blocks=&.{T.paragraph}}};
+    const leaf:types.Block=.{.kind=.container,.container=.{.blocks=&.{T.paragraph}}};
+    const col:types.Block=.{.kind=.container,.container=.{.style=.{.layout=.flex_column,.align_items=.center},.blocks=&.{leaf}}};
+    const sr:types.Block=.{.kind=.container,.container=.{.style=.{.layout=.flex_row,.align_items=.end,.flex_column_gap=.{.unit=.em,.value=0.5}},.blocks=&.{col,col}}};
+    const stored=T.stored(&.{.{.level=2,.title="body",.blocks=&.{id,sr,id}}});
+    const raw=try encodeAlloc(a,stored);
+    try std.testing.expectEqualStrings(positioned_containers_magic,raw[0..4]);
+    const after=try decodeAlloc(a,raw,"positioned",.supplemental,null);
+    try std.testing.expectEqualDeep(stored,after);
+    try std.testing.expectEqualSlices(u8,raw,try encodeAlloc(a,after));
 }

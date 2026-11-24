@@ -2474,9 +2474,8 @@ pub const Registry = struct {
             equal(self.records[lo].canonical_file, canonical)) return self.records[lo].original_width;
         return null;
     }
-    pub fn resolveWidthLimit(raw: ?*const anyopaque, a: A, file: []const u8, format_value: types.FigureFormat) A.Error!?u32 {
-        const self: *const Registry = @ptrCast(@alignCast(raw orelse return null));
-        if (!self.file_authority or format_value != .thumbnail) return null;
+    fn rasterGeometryIndex(self: *const Registry, a: A, file: []const u8) A.Error!?usize {
+        if (!self.file_authority) return null;
         const canonical = canonicalFile(a, self.namespace_catalog, file) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory, else => return null,
         };
@@ -2487,8 +2486,27 @@ pub const Registry = struct {
             if (std.mem.order(u8, self.records[mid].canonical_file, canonical) == .lt) lo = mid + 1 else hi = mid;
         }
         if (lo < self.records.len and lo < self.height_bound_records.len and (self.height_bound_records[lo] == .png or self.height_bound_records[lo] == .gif or self.height_bound_records[lo] == .webp or self.height_bound_records[lo] == .jpeg_unrotated) and
-            equal(self.records[lo].canonical_file, canonical)) return self.records[lo].original_width;
+            equal(self.records[lo].canonical_file, canonical)) return lo;
         return null;
+    }
+
+    pub fn resolveWidthLimit(raw: ?*const anyopaque, a: A, file: []const u8, format_value: types.FigureFormat) A.Error!?u32 {
+        const self: *const Registry = @ptrCast(@alignCast(raw orelse return null));
+        if (format_value != .thumbnail) return null;
+        const i = try self.rasterGeometryIndex(a, file) orelse return null;
+        return self.records[i].original_width;
+    }
+
+    pub fn resolveIntrinsicSize(raw: ?*const anyopaque, a: A, file: []const u8) A.Error!?types.FigureIntrinsicSize {
+        const self: *const Registry = @ptrCast(@alignCast(raw orelse return null));
+        if (self.height_bound_records.len != self.records.len) return null;
+        const format = types.figureRasterFormat(file) orelse return null;
+        const i = try self.rasterGeometryIndex(a, file) orelse return null;
+        const evidence: HeightBound = switch (format) { .jpeg => .jpeg_unrotated, .png => .png, .gif => .gif, .webp => .webp };
+        if (self.height_bound_records[i] != evidence) return null;
+        const record = self.records[i];
+        const size: types.FigureIntrinsicSize = .{ .width_px = record.original_width, .height_px = record.original_height };
+        return if (size.valid()) size else null;
     }
     // The normal loader supplies an authenticated, already-resolved content-
     // language message. Null remains distinct from an intentionally empty V row.
@@ -3201,6 +3219,39 @@ test "figure sizing compound profile refuses legacy unknown and changed handler 
             else => unreachable,
         }
         try std.testing.expectError(error.InvalidFigureSizingSource, profile(value, JpegTestSource.raw, accepted_core, null));
+    }
+}
+
+test "intrinsic raster axes require the matching canonical record and independent file evidence" {
+    const a = std.testing.allocator;
+    var ns = try JpegTestSource.namespace(a);
+    defer ns.deinit();
+    const actual = JpegTestSource.records[0];
+    var record = actual;
+    var registry: Registry = .{ .arena = std.heap.ArenaAllocator.init(a), .namespace_catalog = &ns,
+        .records = (&record)[0..1], .file_authority = true, .height_bound_records = &.{.jpeg_unrotated} };
+    defer registry.deinit();
+    const size = (try Registry.resolveIntrinsicSize(&registry, a, actual.canonical_file)).?;
+    try std.testing.expectEqual(actual.original_width, size.width_px);
+    try std.testing.expectEqual(actual.original_height, size.height_px);
+    try std.testing.expect(try Registry.resolveIntrinsicSize(&registry, a, JpegTestSource.files[1]) == null);
+    for ([_]HeightBound{ .bitmap, .none, .png, .gif, .webp, .svg_redundant_height }) |classification| {
+        registry.height_bound_records = (&classification)[0..1];
+        try std.testing.expect(try Registry.resolveIntrinsicSize(&registry, a, actual.canonical_file) == null);
+    }
+    registry.height_bound_records = &.{};
+    try std.testing.expect(try Registry.resolveIntrinsicSize(&registry, a, actual.canonical_file) == null);
+    registry.height_bound_records = &.{.jpeg_unrotated};
+    registry.file_authority = false;
+    try std.testing.expect(try Registry.resolveIntrinsicSize(&registry, a, actual.canonical_file) == null);
+    registry.file_authority = true;
+    for ([_]u32{ 0, 2147483648 }) |invalid_axis| {
+        record.original_height = invalid_axis;
+        try std.testing.expect(try Registry.resolveIntrinsicSize(&registry, a, actual.canonical_file) == null);
+        record = actual;
+        record.original_width = invalid_axis;
+        try std.testing.expect(try Registry.resolveIntrinsicSize(&registry, a, actual.canonical_file) == null);
+        record = actual;
     }
 }
 

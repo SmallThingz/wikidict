@@ -1798,6 +1798,34 @@ pub const BlockStyle = struct {
 };
 pub const FigureFormat = enum { thumbnail, framed };
 pub const FigureSizingPolicy = enum { intrinsic, original_width_with_height_bound, requested_fit, requested_fit_cap_original_width };
+/// Original logical raster axes from the matching dated file authority.
+pub const FigureIntrinsicSize = struct {
+    width_px: u32,
+    height_px: u32,
+
+    pub fn valid(self: @This()) bool {
+        return self.width_px > 0 and self.width_px <= std.math.maxInt(i32) and
+            self.height_px > 0 and self.height_px <= std.math.maxInt(i32);
+    }
+};
+
+pub const FigureRasterFormat = enum { jpeg, png, gif, webp };
+pub fn figureRasterFormat(file: []const u8) ?FigureRasterFormat {
+    for ([_][]const u8{ ".jpg", ".jpeg", ".jpe" }) |suffix| {
+        if (std.ascii.endsWithIgnoreCase(file, suffix)) return .jpeg;
+    }
+    if (std.ascii.endsWithIgnoreCase(file, ".png")) return .png;
+    if (std.ascii.endsWithIgnoreCase(file, ".gif")) return .gif;
+    if (std.ascii.endsWithIgnoreCase(file, ".webp")) return .webp;
+    return null;
+}
+
+pub fn validFigureIntrinsicSize(size: FigureIntrinsicSize, figure_format: FigureFormat, sizing: FigureSizingPolicy, image: InlineImage) bool {
+    const width = image.width_px orelse return false;
+    return size.valid() and figure_format == .thumbnail and sizing == .requested_fit and width > 0 and width <= size.width_px and
+        image.height_px == null and image.map == null and image.static_poster == null and image.svg_language == null and
+        figureRasterFormat(image.file) != null;
+}
 pub const FigurePlacement = enum { none, center, float_left, float_right };
 pub const FigureClear = enum { none, left, right, both };
 pub const FigureColorKind = enum { native_theme, transparent, rgb };
@@ -2083,6 +2111,7 @@ fn validFigureBlockMediaContent(value: anytype, layout: FigureBlockMediaLayout) 
 
 pub const Figure = struct {
     content: FigureContent,
+    intrinsic_size: ?FigureIntrinsicSize = null,
     caption: []const Span = &.{},
     caption_text_align: ?CellTextAlign = null,
     /// Non-null is authoritative, including an explicitly empty caption.
@@ -2114,7 +2143,9 @@ pub const Figure = struct {
         }
         inline for (@typeInfo(Figure).@"struct".field_names) |name| {
             if (comptime std.mem.eql(u8, name, "content")) continue;
-            if (comptime std.mem.eql(u8, name, "frame_min_width")) {
+            if (comptime std.mem.eql(u8, name, "intrinsic_size")) {
+                if (self.intrinsic_size) |size| { try jw.objectField(name); try jw.write(size); }
+            } else if (comptime std.mem.eql(u8, name, "frame_min_width")) {
                 if (self.content == .image) {
                     try jw.objectField("sizing"); try jw.write(self.content.image.sizing);
                 }
@@ -2155,13 +2186,16 @@ pub const Figure = struct {
         var result: Figure = undefined;
         inline for (@typeInfo(Figure).@"struct".field_names) |name| {
             if (comptime std.mem.eql(u8, name, "content")) result.content = content
-            else @field(result, name) = @field(value, name);
+            else if (comptime std.mem.eql(u8, name, "intrinsic_size")) {
+                result.intrinsic_size = if (value.intrinsic_size.present) value.intrinsic_size.value orelse return error.UnexpectedToken else null;
+            } else @field(result, name) = @field(value, name);
         }
         if (!validFigure(result)) return error.UnexpectedToken;
         return result;
     }
 };
 const FigureJson = struct {
+    intrinsic_size: FigureJsonField(FigureIntrinsicSize) = .{},
     image_span: FigureJsonField(Span) = .{},
     missing_content: FigureJsonField(FigureContent.Missing) = .{},
     caption: []const Span = &.{},
@@ -2213,7 +2247,7 @@ pub const FlowPart = struct {
 pub const ContainerWidth = union(enum) { auto, length: StyleWidth, fit_content };
 pub const ContainerMaxWidth = union(enum) { none, length: StyleWidth };
 pub const ContainerBoxSizing = enum { content_box, border_box };
-pub const ContainerLayout = enum { flow, flex_row };
+pub const ContainerLayout = enum { flow, flex_row, flex_column };
 pub const ContainerAlignItems = enum { stretch, start, center, end };
 // Null keeps the CSS initial flex value 0 1 auto; none is 0 0 auto.
 pub const ContainerFlexItem = enum { none };
@@ -2222,7 +2256,10 @@ pub const ContainerColor = union(enum) {
     rgb: []const u8,
     light_dark: struct { light: []const u8, dark: []const u8 },
 };
-pub const ContainerBorderEdge = BorderEdgeFor(ContainerColor);
+pub const ContainerBorderEdge = union(enum) {
+    const Line = struct { width: StyleLength, color: ContainerColor };
+    none, hidden, solid: Line, dotted: Line, dashed: Line,
+};
 pub const ContainerBorderEdges = BorderEdgesFor(ContainerBorderEdge);
 pub const ContainerBorder = union(enum) {
     none,
@@ -2282,10 +2319,35 @@ pub const max_container_screen_rules = 16;
 /// and BFCs, not document scrolling. Hidden suppresses user scrolling/scrollbars
 /// while retaining programmatic scroll/reveal; it is not clip-only overflow.
 /// Native offsets/clips belong to the real owner; Stored contains no UI state.
-pub const ContainerOverflow = enum(u8) { visible = 0, auto = 1, hidden = 2 };
+// The fourth tag clips descendants at the vertical padding edges only. It creates
+// neither a scroll container nor a formatting context; horizontal overflow stays visible.
+pub const ContainerOverflow = enum(u8) { visible = 0, auto = 1, hidden = 2, visible_x_clip_y = 3 };
 /// Auto-height balanced fragmentation of one ordered child flow. Gap em is
 /// computed once at this owner into normal-body units, never from a child span.
-pub const ContainerColumns = struct { count: u16, gap: StyleLength };
+pub const ColumnBreakInside = enum(u8) { auto = 1, avoid = 2 };
+
+pub fn validColumnBreakContext(block: anytype) bool {
+    const kind = std.meta.stringToEnum(BlockKind, @tagName(block.kind)) orelse return false;
+    switch (kind) {
+        .paragraph, .definition, .example, .quotation, .list_item, .list_detail, .indent, .term => {},
+        else => return false,
+    }
+    inline for (.{ "table", "feature", "container", "figure", "flow", "rule_style" }) |field|
+        if (comptime @hasField(@TypeOf(block), field)) { if (@field(block, field) != null) return false; };
+    return true;
+}
+
+pub const ContainerColumns = struct {
+    count: ?u16 = null,
+    gap: StyleLength,
+    width: ?StyleLength = null,
+
+    pub fn jsonStringify(self: @This(), jw: anytype) !void {
+        if (self.width) |preferred|
+            return jw.write(.{ .count = self.count, .gap = self.gap, .width = preferred });
+        return jw.write(.{ .count = self.count, .gap = self.gap });
+    }
+};
 pub const ContainerPositioning = enum(u8) { relative_auto = 0 };
 /// DPRZ Container-only absolute offsets. Values locate the margin box from the
 /// nearest represented relative Container's padding edge. Em is already resolved
@@ -2405,12 +2467,49 @@ pub fn validContainerFontFamily(value: ContainerFontFamily) bool {
     }
 }
 
+/// Physical owners of one leading section heading, ordered outside to inside.
+/// The wrapped relative heading establishes its own flow-root. Its following
+/// definition and media blocks are siblings outside both frames.
+pub const SectionHeadingWrappers = struct {
+    outer: ContainerStyle,
+    inner: ContainerStyle,
+    /// The sole title child is a normal block with min-width:0,
+    /// white-space/word-break:normal and overflow-wrap:anywhere.
+    /// em is relative to the heading font, before its word/sub runs.
+    title_block_padding_right: StyleLength,
+
+    pub fn valid(self: @This()) bool {
+        if (!validStyleLength(self.title_block_padding_right) or self.title_block_padding_right.unit != .em or
+            self.title_block_padding_right.value <= 0) return false;
+        if (!validContainerStyle(self.outer) or !validContainerStyle(self.inner)) return false;
+        if (self.outer.overflow != .visible_x_clip_y or self.outer.border == null or
+            self.outer.border.? != .edges or self.outer.border.?.edges.top != .dashed or
+            self.outer.border.?.edges.right != .none or self.outer.border.?.edges.bottom != .none or
+            self.outer.border.?.edges.left != .none) return false;
+        const stroke = self.outer.border.?.edges.top.dashed;
+        if (stroke.width.unit != .px or stroke.width.value <= 0 or stroke.color != .rgb) return false;
+        const margins = self.outer.margins orelse return false;
+        const padding = self.inner.padding orelse return false;
+        if (margins.top.unit != .em or margins.top.value <= 0 or padding.top.unit != .em or padding.top.value <= 0) return false;
+        inline for (.{ "right", "bottom", "left" }) |side|
+            if (@field(margins, side).value != 0 or @field(padding, side).value != 0) return false;
+        inline for (@typeInfo(ContainerStyle).@"struct".field_names) |field| {
+            if (comptime !@hasField(@TypeOf(.{ .margins = {}, .overflow = {}, .border = {} }), field))
+                if (@field(self.outer, field) != null) return false;
+            if (comptime !std.mem.eql(u8, field, "padding"))
+                if (@field(self.inner, field) != null) return false;
+        }
+        return true;
+    }
+};
+
 pub const SectionHeadingStyle = struct {
     box: ContainerStyle,
     font: InlineFontSnapshot,
     direction: BidiResolvedDirection,
     title_wrap: ?TextWrap = null,
     anchor_reveal: ?HeadingAnchorReveal = null,
+    wrappers: ?SectionHeadingWrappers = null,
     pub fn jsonStringify(self: @This(), jw: anytype) !void {
         try jw.beginObject();
         try jw.objectField("box"); try jw.write(self.box);
@@ -2418,6 +2517,7 @@ pub const SectionHeadingStyle = struct {
         try jw.objectField("direction"); try jw.write(self.direction);
         if (self.title_wrap) |value| { try jw.objectField("title_wrap"); try jw.write(value); }
         if (self.anchor_reveal) |value| { try jw.objectField("anchor_reveal"); try jw.write(value); }
+        if (self.wrappers) |value| { try jw.objectField("wrappers"); try jw.write(value); }
         try jw.endObject();
     }
     pub fn jsonParse(a: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) std.json.ParseError(@TypeOf(source.*))!SectionHeadingStyle {
@@ -2425,17 +2525,17 @@ pub const SectionHeadingStyle = struct {
         return jsonParseFromValue(a, value, options);
     }
     pub fn jsonParseFromValue(a: std.mem.Allocator, value: std.json.Value, options: std.json.ParseOptions) std.json.ParseFromValueError!SectionHeadingStyle {
-        if (value != .object or value.object.count() < 3 or value.object.count() > 5) return error.UnexpectedToken;
+        if (value != .object or value.object.count() < 3 or value.object.count() > 6) return error.UnexpectedToken;
         for (value.object.keys()) |name| if (!std.mem.eql(u8, name, "box") and !std.mem.eql(u8, name, "font") and
             !std.mem.eql(u8, name, "direction") and !std.mem.eql(u8, name, "title_wrap") and
-            !std.mem.eql(u8, name, "anchor_reveal")) return error.UnexpectedToken;
+            !std.mem.eql(u8, name, "anchor_reveal") and !std.mem.eql(u8, name, "wrappers")) return error.UnexpectedToken;
         const direction = value.object.get("direction") orelse return error.MissingField;
         if (direction != .string or (!std.mem.eql(u8, direction.string, "ltr") and !std.mem.eql(u8, direction.string, "rtl"))) return error.InvalidEnumTag;
         const Raw = struct { box: ContainerStyle, font: InlineFontSnapshot, direction: BidiResolvedDirection,
-            title_wrap: ?TextWrap = null, anchor_reveal: ?HeadingAnchorReveal = null };
+            title_wrap: ?TextWrap = null, anchor_reveal: ?HeadingAnchorReveal = null, wrappers: ?SectionHeadingWrappers = null };
         const raw = try std.json.innerParseFromValue(Raw, a, value, options);
         const result: SectionHeadingStyle = .{ .box = raw.box, .font = raw.font, .direction = raw.direction,
-            .title_wrap = raw.title_wrap, .anchor_reveal = raw.anchor_reveal };
+            .title_wrap = raw.title_wrap, .anchor_reveal = raw.anchor_reveal, .wrappers = raw.wrappers };
         if (!validSectionHeadingStyle(result)) return error.UnexpectedToken;
         return result;
     }
@@ -2443,7 +2543,12 @@ pub const SectionHeadingStyle = struct {
 pub fn validSectionHeadingStyle(value: SectionHeadingStyle) bool {
     if (value.anchor_reveal) |reveal| if (!validHeadingAnchorReveal(reveal)) return false;
     const box = value.box;
-    if (!validContainerStyle(box) or box.owner_font != null or box.margins == null or box.padding == null or box.border == null or
+    if (value.wrappers) |frames| {
+        if (!frames.valid() or value.title_wrap != null or value.anchor_reveal != null or box.positioning != .relative_auto or box.margins == null or box.padding == null or box.border == null or box.border.? != .none) return false;
+        inline for (.{ "top", "right", "bottom", "left" }) |side|
+            if (@field(box.margins.?, side).value != 0 or @field(box.padding.?, side).value != 0) return false;
+    } else if (box.positioning != null) return false;
+    if (!validContainerStyle(box) or containerStyleRequiresPositionedCapability(box) or box.owner_font != null or box.margins == null or box.padding == null or box.border == null or
         box.owner_font_scale == null or box.line_height == null or box.clear == null or box.font_family == null) return false;
     const font = value.font;
     if (font.font_family != null and !sameFontFamilyRequest(font.font_family, box.font_family)) return false;
@@ -2454,7 +2559,7 @@ pub fn validSectionHeadingStyle(value: SectionHeadingStyle) bool {
     return (box.width == null or box.width.? == .auto) and (box.max_width == null or box.max_width.? == .none) and
         (box.layout == null or box.layout.? == .flow) and (box.overflow == null or box.overflow.? == .visible) and
         box.float_side == null and box.flex_item == null and box.align_items == null and box.columns == null and
-        box.positioning == null and box.absolute_position == null and box.absolute_static == null and box.text_wrap == null and
+        box.absolute_position == null and box.absolute_static == null and box.text_wrap == null and
         box.screen_max_width == null and box.height == null and box.min_height == null and box.margin_values == null;
 }
 pub fn validSectionHeadingCompanion(section: anytype) bool {
@@ -2513,6 +2618,39 @@ pub fn validSectionHeadingCompanion(section: anytype) bool {
     return offset == section.title.len;
 }
 
+pub const ContainerFlexEdge = struct {
+    pub const Align = enum { start, end };
+    pub const Side = enum { left, right };
+    align_self: Align,
+    inset_side: Side,
+    inset_percent: f32,
+    width_percent: f32,
+    width_add: StyleLength,
+    // Only the bottom corner on the inset side is rounded.
+    bottom_radius_px: f32,
+};
+
+fn validContainerFlexEdge(style: ContainerStyle, edge: ContainerFlexEdge) bool {
+    if (style.owner_font == null or style.height == null or style.height.?.unit != .px or style.height.?.value <= 0 or
+        style.border == null or style.border.? != .edges or !std.math.isFinite(edge.inset_percent) or edge.inset_percent < 0 or
+        !std.math.isFinite(edge.width_percent) or edge.width_percent <= 0 or !validStyleLength(edge.width_add) or
+        !std.math.isFinite(edge.bottom_radius_px) or edge.bottom_radius_px <= 0) return false;
+    const lines = style.border.?.edges;
+    const upright = if (edge.inset_side == .left) lines.left else lines.right;
+    const opposite = if (edge.inset_side == .left) lines.right else lines.left;
+    if (style.owner_font.?.font_scale_basis != .normal_body) return false;
+    if (lines.top != .none or opposite != .none or upright != .solid or lines.bottom != .solid or
+        upright.solid.width.unit != .px or upright.solid.width.value <= 0 or upright.solid.color != .rgb or
+        lines.bottom.solid.width.unit != .px or lines.bottom.solid.width.value <= 0 or lines.bottom.solid.color != .rgb) return false;
+    if (!std.meta.eql(upright.solid.width,lines.bottom.solid.width) or
+        !std.ascii.eqlIgnoreCase(upright.solid.color.rgb,lines.bottom.solid.color.rgb)) return false;
+    inline for (@typeInfo(ContainerStyle).@"struct".field_names) |field| {
+        if (comptime @hasField(@TypeOf(.{ .flex_edge = {}, .height = {}, .border = {}, .owner_font = {} }), field)) continue;
+        if (@field(style,field) != null) return false;
+    }
+    return true;
+}
+
 pub const ContainerStyle = struct {
     // Box em lengths are computed once at this box's font origin into
     // normal-body units. Width percentages use its containing block content box.
@@ -2562,6 +2700,18 @@ pub const ContainerStyle = struct {
     // validation requires a sole immediate relative parent and an ordinary
     // rich paragraph. Width fit_content/height null mean shrink-to-fit/auto.
     absolute_static: ?ContainerAbsoluteStaticPosition = null,
+    // An atomic inline-level child in its parent's inline formatting context.
+    // A single source ASCII space preceding it collapses/wraps in the parent
+    // font, outside its border box. Its own body has an independent line box.
+    // Main-axis gap, in computed normal-body em or CSS pixels. Null includes
+    // the row's initial normal gap and a zero used gap at its declaring font.
+    flex_column_gap: ?StyleLength = null,
+    flex_edge: ?ContainerFlexEdge = null,
+    inline_atomic: ?enum { adjacent, after_space } = null,
+    translated_absolute: ?ContainerTranslatedAbsolute = null,
+    // Uniform circular border-box radius. Background and border share the
+    // rounded edge; overflow:visible descendants are not clipped by it.
+    corner_radius_px: ?f32 = null,
     pub fn jsonStringify(self: ContainerStyle, jw: anytype) !void {
         try writeOptionalStyleFields(self, jw);
     }
@@ -2759,11 +2909,12 @@ pub const Block = struct {
     flow: ?[]const FlowPart = null,
     container: ?Container = null,
     rule_style: ?RuleStyle = null,
+    column_break_inside: ?ColumnBreakInside = null,
 
     pub fn jsonStringify(self: Block, jw: anytype) !void {
         try jw.beginObject();
         inline for (@typeInfo(Block).@"struct".field_names) |name| {
-            if (comptime std.mem.eql(u8, name, "text_align") or std.mem.eql(u8, name, "style") or std.mem.eql(u8, name, "figure") or std.mem.eql(u8, name, "flow") or std.mem.eql(u8, name, "container") or std.mem.eql(u8, name, "rule_style")) {
+            if (comptime std.mem.eql(u8, name, "text_align") or std.mem.eql(u8, name, "style") or std.mem.eql(u8, name, "figure") or std.mem.eql(u8, name, "flow") or std.mem.eql(u8, name, "container") or std.mem.eql(u8, name, "rule_style") or std.mem.eql(u8, name, "column_break_inside")) {
                 if (@field(self, name)) |present| {
                     try jw.objectField(name);
                     try jw.write(present);
@@ -3249,7 +3400,7 @@ pub const ImageCatalogIndex = struct {
 // The initial clipped carrier is anchored to the native article root. Any
 // represented nonstatic box in its ancestor chain needs a different contract.
 fn containerCreatesClippedContainingBlock(style: ContainerStyle) bool {
-    return style.positioning != null or style.absolute_position != null or style.absolute_static != null;
+    return style.positioning != null or style.absolute_position != null or style.absolute_static != null or style.translated_absolute != null;
 }
 fn figureStateCreatesClippedContainingBlock(value: anytype) bool {
     if (containerCreatesClippedContainingBlock(value.wrapper) or value.media.positioning != null) return true;
@@ -3279,6 +3430,7 @@ pub const DeepTableWork = struct {
     discover_container_owner_font: bool = false,
     // Existing header256 Container extension census, including disclosure.
     positioned_container_found: bool = false,
+    column_layout_found: bool = false,
     discover_positioned_container: bool = false,
     table_min_width_found: bool = false,
     discover_table_min_width: bool = false,
@@ -3291,6 +3443,9 @@ pub const DeepTableWork = struct {
     // Saved/restored at each Container. Absolute descendants may not borrow an
     // outer relative anchor across another absolute box; explicit relative resets.
     relative_container_anchor: bool = false,
+    translated_direct_parent: bool = false,
+    direct_flex_column: bool = false,
+    inline_atomic_parent: bool = false,
     static_inline_parent: bool = false,
     inline_group_font_family: bool = false,
     inline_group_text_flow: bool = false,
@@ -3434,6 +3589,11 @@ pub const DeepTableWork = struct {
             if (!validStyleWidth(minimum)) return error.InvalidPresentation;
         }
     }
+    pub fn containerLayouts(display: anytype, sections: anytype, preamble: anytype, references: anytype) struct { positioned: bool, column_layout: bool } {
+        var work: DeepTableWork = .{};
+        work.entry(display, sections, preamble, references) catch {};
+        return .{ .positioned = work.positioned_container_found, .column_layout = work.column_layout_found };
+    }
     pub fn hasPositionedContainers(display: anytype, sections: anytype, preamble: anytype, references: anytype) bool {
         var work: DeepTableWork = .{ .discover_positioned_container = true };
         work.entry(display, sections, preamble, references) catch {};
@@ -3497,6 +3657,15 @@ pub const DeepTableWork = struct {
         const old_static = self.static_inline_parent;
         self.static_inline_parent = false;
         defer self.static_inline_parent = old_static;
+        const prior_atomic = self.inline_atomic_parent;
+        self.inline_atomic_parent = false;
+        defer self.inline_atomic_parent = prior_atomic;
+        const prior_translated = self.translated_direct_parent;
+        self.translated_direct_parent = false;
+        defer self.translated_direct_parent = prior_translated;
+        const old_column = self.direct_flex_column;
+        self.direct_flex_column = false;
+        defer self.direct_flex_column = old_column;
         const old_anchor = self.relative_container_anchor;
         self.relative_container_anchor = false;
         defer self.relative_container_anchor = old_anchor;
@@ -3522,7 +3691,14 @@ pub const DeepTableWork = struct {
         try self.take(values.len);
         for (values) |value| {
             try self.spans(value.spans, content_depth, 0);
+            if (comptime @hasField(@TypeOf(value), "column_break_inside")) if (value.column_break_inside != null) {
+                if (!validColumnBreakContext(value)) return error.InvalidPresentation;
+                self.column_layout_found = true;
+            };
             if (comptime @hasField(@TypeOf(value), "container")) if (value.container) |box| {
+                if (box.style.columns) |columns| if (columns.width != null) {
+                    self.column_layout_found = true;
+                };
                 if (containerRequiresExtension(box)) {
                     self.positioned_container_found = true;
                     if (self.discover_positioned_container) return error.InvalidPresentation;
@@ -3532,6 +3708,19 @@ pub const DeepTableWork = struct {
                     if (!validContainerDisclosureOwner(box)) return error.InvalidPresentation;
                     try self.take(containerDisclosureItems(disclosure));
                 }
+                if (box.style.inline_atomic != null and (!self.inline_atomic_parent or box.blocks.len != 1 or box.blocks[0].kind != .paragraph)) return error.InvalidPresentation;
+                const prior_atomic = self.inline_atomic_parent;
+                self.inline_atomic_parent = box.style.positioning != null and box.style.corner_radius_px != null;
+                defer self.inline_atomic_parent = prior_atomic;
+                if (box.style.translated_absolute != null and !self.translated_direct_parent) return error.InvalidPresentation;
+                if (box.style.flex_edge != null and !self.direct_flex_column) return error.InvalidPresentation;
+                const prior_column = self.direct_flex_column;
+                self.direct_flex_column = box.style.layout == .flex_column;
+                defer self.direct_flex_column = prior_column;
+                const prior_translated_parent = self.translated_direct_parent;
+                self.translated_direct_parent = (box.style.positioning == .relative_auto and box.style.corner_radius_px != null) or
+                    (box.style.translated_absolute != null and !box.style.translated_absolute.?.owns_abbreviation);
+                defer self.translated_direct_parent = prior_translated_parent;
                 if (box.style.absolute_position != null and !self.relative_container_anchor) return error.InvalidPresentation;
                 if (box.style.absolute_static != null and
                     (!self.static_inline_parent or !validContainerAbsoluteStaticBody(box))) return error.InvalidPresentation;
@@ -3541,7 +3730,7 @@ pub const DeepTableWork = struct {
                 self.clipped_nonstatic_ancestor = old_clipped or containerCreatesClippedContainingBlock(box.style);
                 defer self.clipped_nonstatic_ancestor = old_clipped;
                 if (box.style.positioning != null) self.relative_container_anchor = true
-                else if (box.style.absolute_position != null or box.style.absolute_static != null) self.relative_container_anchor = false;
+                else if (box.style.absolute_position != null or box.style.absolute_static != null or box.style.translated_absolute != null) self.relative_container_anchor = false;
                 self.static_inline_parent = box.blocks.len == 1 and validContainerStaticParentStyle(box.style);
                 defer { self.relative_container_anchor = old_anchor; self.static_inline_parent = old_static; }
                 if (box.style.owner_font) |font| {
@@ -3563,6 +3752,15 @@ pub const DeepTableWork = struct {
         const old_static = self.static_inline_parent;
         self.static_inline_parent = false;
         defer self.static_inline_parent = old_static;
+        const prior_atomic = self.inline_atomic_parent;
+        self.inline_atomic_parent = false;
+        defer self.inline_atomic_parent = prior_atomic;
+        const prior_translated = self.translated_direct_parent;
+        self.translated_direct_parent = false;
+        defer self.translated_direct_parent = prior_translated;
+        const old_column = self.direct_flex_column;
+        self.direct_flex_column = false;
+        defer self.direct_flex_column = old_column;
         const old_anchor = self.relative_container_anchor;
         self.relative_container_anchor = false;
         defer self.relative_container_anchor = old_anchor;
@@ -3614,8 +3812,19 @@ pub const DeepTableWork = struct {
         try self.spans(display, 0, 0);
         try self.take(sections.len);
         for (sections) |section| {
+            if (comptime @hasField(@TypeOf(section), "heading_style")) if (section.heading_style) |heading| {
+                if (heading.wrappers) |frames| {
+                    self.positioned_container_found = true;
+                    if (self.discover_positioned_container) return error.InvalidPresentation;
+                    try self.take(2);
+                    if (!frames.valid()) return error.InvalidPresentation;
+                }
+            };
             self.static_inline_parent = false;
             self.relative_container_anchor = false;
+            self.translated_direct_parent = false;
+            self.inline_atomic_parent = false;
+            self.direct_flex_column = false;
             self.clipped_nonstatic_ancestor = false;
             try self.blocks(section.blocks, 0, 0);
         }
@@ -3624,6 +3833,9 @@ pub const DeepTableWork = struct {
         for (references) |reference| {
             self.static_inline_parent = false;
             self.relative_container_anchor = false;
+            self.translated_direct_parent = false;
+            self.inline_atomic_parent = false;
+            self.direct_flex_column = false;
             self.clipped_nonstatic_ancestor = false;
             try self.spans(reference.spans, 0, 0);
             if (comptime @hasField(@TypeOf(reference), "blocks")) if (reference.blocks) |children|
@@ -4359,6 +4571,11 @@ pub fn validMissingFigureContent(value: anytype) bool {
     return true;
 }
 pub fn validFigure(value: Figure) bool {
+    if (value.intrinsic_size) |size| {
+        if (value.content != .image or value.table_caption_layout != null or value.block_media_layout != null) return false;
+        const content = value.content.image;
+        if (!validFigureIntrinsicSize(size, value.format, content.sizing, content.span.image orelse return false)) return false;
+    }
     if (value.table_caption_layout != null and value.content == .image) {
         const image = value.content.image.span.image orelse return false;
         if (image.static_poster != null) return false;
@@ -4559,7 +4776,7 @@ pub fn validContainerColor(value: ContainerColor) bool {
 pub fn validContainerBorderEdge(value: ContainerBorderEdge) bool {
     return switch (value) {
         .none, .hidden => true,
-        .solid, .dotted => |line| validStyleLength(line.width) and validContainerColor(line.color),
+        .solid, .dotted, .dashed => |line| validStyleLength(line.width) and validContainerColor(line.color),
     };
 }
 pub fn validContainerBorderEdges(value: ContainerBorderEdges) bool {
@@ -4644,7 +4861,10 @@ pub fn validContainerAbsolutePosition(value: ContainerAbsolutePosition) bool {
     return std.math.isFinite(value.left.value) and std.math.isFinite(value.top.value);
 }
 pub fn containerStyleRequiresPositionedCapability(value: ContainerStyle) bool {
-    return value.absolute_position != null or value.absolute_static != null or value.text_wrap != null or
+    if (value.border) |border| if (border == .edges) {
+        inline for (.{ "top", "right", "bottom", "left" }) |side| if (@field(border.edges, side) == .dashed) return true;
+    };
+    return value.overflow == .visible_x_clip_y or value.flex_edge != null or value.layout == .flex_column or value.flex_column_gap != null or value.inline_atomic != null or value.translated_absolute != null or value.corner_radius_px != null or value.absolute_position != null or value.absolute_static != null or value.text_wrap != null or
         (value.owner_font != null and value.positioning != null);
 }
 // Both sides of the initial sole-inline static anchor have neutral physical
@@ -4717,6 +4937,60 @@ pub fn validSoleStaticInlineContainer(parent: anytype) bool {
     return validContainerStyle(box.style) and validContainerAbsoluteStaticBody(box);
 }
 pub fn validContainerStyle(value: ContainerStyle) bool {
+    if (value.flex_edge) |edge| if (!validContainerFlexEdge(value,edge)) return false;
+    // An indefinite main axis has no free-space distribution. Centered children
+    // retain their own measured widths and source order in this first domain.
+    if (value.layout == .flex_column) {
+        if (value.align_items != .center or (value.width != null and value.width.? != .fit_content)) return false;
+        if (value.margin_values) |edges| inline for (.{ "top", "right", "bottom", "left" }) |side| {
+            if (@field(edges, side) != .auto) return false;
+        };
+        inline for (@typeInfo(ContainerStyle).@"struct".field_names) |field| {
+            if (comptime @hasField(@TypeOf(.{ .layout = {}, .align_items = {}, .width = {}, .padding = {}, .margin_values = {}, .owner_font = {}, .owner_font_scale = {} }), field)) continue;
+            if (@field(value, field) != null) return false;
+        }
+    }
+    if (value.flex_column_gap) |gap| if (value.layout != .flex_row or value.columns != null or !validStyleLength(gap) or gap.value == 0) return false;
+    if (value.inline_atomic != null) {
+        if (value.owner_font == null or value.owner_font_scale != null) return false;
+        inline for (@typeInfo(ContainerStyle).@"struct".field_names) |field| {
+            if (comptime @hasField(@TypeOf(.{ .owner_font = {}, .inline_atomic = {} }), field)) continue;
+            if (@field(value, field) != null) return false;
+        }
+    }
+    if (value.corner_radius_px) |radius| {
+        if (!std.math.isFinite(radius) or radius < 0 or (value.translated_absolute == null and value.positioning == null)) return false;
+    }
+    if (value.corner_radius_px != null and value.translated_absolute == null) {
+        if (value.positioning != .relative_auto or value.text_align != .center or value.owner_font == null or
+            value.background == null or value.background.? != .rgb or value.padding == null or
+            value.border == null or value.border.? != .solid or value.border.?.solid.width.unit != .px or value.border.?.solid.color != .rgb) return false;
+        inline for (.{ "top", "right", "bottom", "left" }) |side| if (@field(value.padding.?, side).unit != .px) return false;
+        inline for (@typeInfo(ContainerStyle).@"struct".field_names) |field| {
+            if (comptime @hasField(@TypeOf(.{ .corner_radius_px = {}, .positioning = {}, .owner_font = {}, .text_align = {}, .padding = {}, .background = {}, .border = {} }), field)) continue;
+            if (@field(value, field) != null) return false;
+        }
+    }
+    if (value.translated_absolute) |translated| {
+        if (translated.z_index) |z| if (z < 0) return false;
+        inline for (@typeInfo(ContainerStyle).@"struct".field_names) |field| {
+            if (comptime @hasField(@TypeOf(.{ .translated_absolute = {}, .corner_radius_px = {}, .owner_font = {}, .width = {}, .height = {}, .line_height = {}, .background = {}, .padding = {} }), field)) continue;
+            if (@field(value, field) != null) return false;
+        }
+        if (value.absolute_position != null or value.absolute_static != null or value.positioning != null or
+            value.corner_radius_px == null or value.owner_font == null or value.line_height == null or value.line_height.? != .length or
+            value.line_height.?.length.unit != .px or value.width == null or value.width.? != .fit_content or
+            value.background == null or value.background.? != .rgb or !std.math.isFinite(translated.background_alpha) or
+            translated.background_alpha < 0 or translated.background_alpha > 1) return false;
+        inline for (.{ "left", "top", "translate_x", "translate_y" }) |axis| {
+            const offset = @field(translated.placement, axis);
+            if (!std.math.isFinite(offset.percent) or !std.math.isFinite(offset.px)) return false;
+        }
+        if (value.padding) |edges| inline for (.{ "top", "right", "bottom", "left" }) |side| {
+            if (@field(edges, side).unit != .px) return false;
+        };
+        if (value.height) |height| if (height.unit != .px) return false;
+    }
     if (value.absolute_static != null) {
         if (value.absolute_position != null or value.positioning != null or value.width == null or
             value.width.? != .fit_content or value.height != null or !containerStaticNeutralStyle(value)) return false;
@@ -4751,10 +5025,11 @@ pub fn validContainerStyle(value: ContainerStyle) bool {
     }
     if (value.font_family) |family| if (!validContainerFontFamily(family)) return false;
     if (value.columns) |columns| {
-        if (columns.count == 0 or !validStyleLength(columns.gap)) return false;
+        if ((columns.count == null and columns.width == null) or columns.count == 0 or !validStyleLength(columns.gap)) return false;
+        if (columns.width) |preferred| if (!validStyleLength(preferred)) return false;
         // Initial semantic domain has automatic balanced block extent. Do not
         // coerce definite-height, scroll or flex fragmentation into this policy.
-        if (value.height != null or value.min_height != null or value.layout == .flex_row or value.overflow == .auto or value.overflow == .hidden or value.positioning != null or value.absolute_position != null) return false;
+        if (value.height != null or value.min_height != null or value.layout == .flex_row or (value.overflow != null and value.overflow != .visible) or value.positioning != null or value.absolute_position != null) return false;
     }
     if (value.height) |height| if (!validStyleLength(height)) return false;
     if (value.min_height) |height| if (!validStyleLength(height) or value.layout == .flex_row) return false;
@@ -4767,7 +5042,7 @@ pub fn validContainerStyle(value: ContainerStyle) bool {
     if (value.background) |color| if (!validContainerColor(color)) return false;
     if (value.border) |border| if (!validContainerBorder(border)) return false;
     if (value.line_height) |height| if (!validContainerLineHeight(height)) return false;
-    if (value.align_items != null and value.layout != .flex_row) return false;
+    if (value.align_items != null and value.layout != .flex_row and value.layout != .flex_column) return false;
     if (value.screen_max_width) |screen| if (!validContainerScreenMaxWidth(screen)) return false;
     return true;
 }
@@ -4854,9 +5129,78 @@ pub fn containerRequiresMForMargins(value: anytype) bool {
         if (nonzeroVertical(style.margins)) return true;
     return false;
 }
+pub fn validTranslatedTextLeaf(span: anytype) bool {
+    if (span.kind != .text and span.kind != .link) return false;
+    if (span.text.len == 0 or (span.kind == .link) != (span.target.len > 0)) return false;
+    inline for (.{ "image", "ruby", "inline_padding_group", "inline_action_group", "inline_box_group", "clipped_absolute", "audio_control", "citation_marker" }) |name| {
+        if (comptime @hasField(@TypeOf(span), name)) if (@field(span, name) != null) return false;
+    }
+    return true;
+}
+
+fn translatedContainerBodySupported(value: anytype) bool {
+    if (value.style.inline_atomic != null or value.style.translated_absolute != null) {
+        if (containerDisclosure(value) != null or value.blocks.len == 0 or value.blocks.len > 2) return false;
+        const first = value.blocks[0];
+        if (!std.mem.eql(u8, @tagName(first.kind), "paragraph") or first.spans.len == 0) return false;
+        for (first.spans) |span| if (!validTranslatedTextLeaf(span)) return false;
+        if (value.style.inline_atomic != null) return value.blocks.len == 1;
+        if (value.style.translated_absolute.?.owns_abbreviation) {
+            if (value.blocks.len != 1 or first.spans.len != 1) return false;
+            const span = first.spans[0];
+            if (comptime !@hasField(@TypeOf(span), "explanation") or !@hasField(@TypeOf(span), "tooltip")) return false;
+            if (comptime @hasField(@TypeOf(span), "trail")) if (span.trail.len != 0) return false;
+            return span.kind == .text and span.explanation.len != 0 and span.tooltip == null;
+        }
+        const action = first.spans[0];
+        if (action.kind != .link) return false;
+        for (first.spans) |span| {
+            if (span.kind != .link or !std.mem.eql(u8, span.target, action.target)) return false;
+            if (comptime @hasField(@TypeOf(span), "trail")) if (span.trail.len != 0) return false;
+            if (comptime @hasField(@TypeOf(span), "target_fragment")) {
+                if ((span.target_fragment == null) != (action.target_fragment == null)) return false;
+                if (span.target_fragment) |fragment| if (!std.mem.eql(u8, fragment, action.target_fragment.?)) return false;
+            }
+        }
+        if (value.blocks.len == 2) {
+            const second = value.blocks[1];
+            if (comptime !@hasField(@TypeOf(second), "container")) return false;
+            if (!validContainerContext(second)) return false;
+            const child = second.container.?.style.translated_absolute orelse return false;
+            if (!child.owns_abbreviation) return false;
+        }
+    }
+    if (value.style.positioning != .relative_auto or value.style.corner_radius_px == null) return true;
+    if (containerDisclosure(value) != null or value.blocks.len == 0) return false;
+    for (value.blocks, 0..) |block, index| {
+        if (comptime !@hasField(@TypeOf(block), "container")) return false;
+        if (!validContainerContext(block)) return false;
+        const style = block.container.?.style;
+        if (style.inline_atomic) |leading| {
+            if (index == 0 and leading == .after_space) return false;
+        } else {
+            const absolute = style.translated_absolute orelse return false;
+            if (index == 0 or index + 1 != value.blocks.len or absolute.owns_abbreviation) return false;
+        }
+    }
+    return true;
+}
 fn containerStructureSupported(value: anytype, depth: usize) bool {
     if (depth > max_content_depth or value.blocks.len > max_presentation_items or !validContainerStyle(value.style)) return false;
-    if (!validContainerDisclosureOwner(value)) return false;
+    if (!validContainerDisclosureOwner(value) or !translatedContainerBodySupported(value)) return false;
+    if (value.style.flex_edge != null and (containerDisclosure(value) != null or value.blocks.len != 0)) return false;
+    if (value.style.layout == .flex_column) {
+        if (containerDisclosure(value) != null) return false;
+        for (value.blocks) |child| {
+            if (comptime !@hasField(@TypeOf(child), "container")) return false;
+            if (!validContainerContext(child)) return false;
+            const style = child.container.?.style;
+            if (style.float_side != null or style.clear != null or style.flex_item != null or style.columns != null or style.overflow != null or
+                style.absolute_position != null or style.translated_absolute != null or style.absolute_static != null or
+                style.screen_max_width != null or style.margin_values != null or style.margins != null or style.min_height != null or
+                style.max_width != null or (style.width != null and style.width.? != .auto and style.width.? != .fit_content)) return false;
+        }
+    }
     if (value.style.absolute_static != null and !validContainerAbsoluteStaticBody(value)) return false;
     for (value.blocks) |block| {
         // Margin support does not create nested organization/heading paths.
@@ -4906,6 +5250,7 @@ pub fn validBlockPaths(blocks: []const Block, roots: []const usize, paths: []con
 
 fn validateBlock(block: Block, table_depth: usize, media: *ImageValidation) ValidationError!void {
     if (block.rule_style) |style| if (!validRuleStyle(style) or !validRuleStyleContext(block)) return error.InvalidPresentation;
+    if (block.column_break_inside != null and !validColumnBreakContext(block)) return error.InvalidPresentation;
     if (block.kind == .container or block.container != null) {
         if (!validContainerContext(block) or !validContainerHeader(block.container.?) or media.content_depth >= max_content_depth) return error.InvalidPresentation;
         if (block.container.?.style.owner_font != null and !media.container_owner_work_checked) return error.InvalidPresentation;
@@ -11160,4 +11505,99 @@ test "Ruby annotation margin discovery reuses padding work and leaves item depth
     var bad_margin: DeepTableWork = .{};
     readings[0].margins.?.top.value = -1;
     try std.testing.expectError(error.InvalidPresentation, bad_margin.entry(&roots, @as([]const Section, &.{}), @as([]const Span, &.{}), @as([]const Reference, &.{})));
+}
+
+// Physical CSS-pixel rectangles from native, laid-out boxes. Font shaping and
+// the resulting min/max-content widths stay with the active text engine.
+pub const PositionedRect = struct {
+    x: f64, y: f64, width: f64, height: f64,
+
+    fn valid(self: @This()) bool {
+        return std.math.isFinite(self.x) and std.math.isFinite(self.y) and
+            std.math.isFinite(self.width) and self.width >= 0 and std.math.isFinite(self.height) and self.height >= 0 and
+            std.math.isFinite(self.x + self.width) and std.math.isFinite(self.y + self.height);
+    }
+};
+
+/// Two components of one CSS <length-percentage>. The caller supplies the
+/// correct reference dimension for the particular inset or translation axis.
+pub const PositionedOffset = struct {
+    px: f32 = 0,
+    percent: f32 = 0,
+
+    pub fn used(self: @This(), axis_css_px: f64) f64 {
+        return @as(f64, self.px) + axis_css_px * self.percent / 100;
+    }
+};
+
+pub const ContainerTranslatedAbsolute = struct {
+    placement: PositionedLabelPlacement,
+    z_index: ?i32 = null,
+    // Alpha of the declared background only. Children and link glyphs retain
+    // their own opacity. A non-none transform creates a local stacking context.
+    background_alpha: f32,
+    // Its own ABBR title is also the explanation of its sole text run. The
+    // title covers the padded box. Its text and link ownership remain separate.
+    owns_abbreviation: bool = false,
+};
+
+pub const PositionedLabelPlacement = struct {
+    left: PositionedOffset,
+    top: PositionedOffset,
+    translate_x: PositionedOffset,
+    translate_y: PositionedOffset,
+
+    /// Auto width, left specified, right auto, zero used margins, borderless
+    /// non-replaced boxes. This is the content width supplied to native line
+    /// layout; the out-of-flow descendants contribute no intrinsic advance.
+    pub fn contentWidth(self: @This(), parent_padding_box: PositionedRect, horizontal_padding_px: f64,
+        min_content: f64, max_content: f64) ?f64
+    {
+        if (!parent_padding_box.valid() or !std.math.isFinite(horizontal_padding_px) or horizontal_padding_px < 0 or
+            !std.math.isFinite(min_content) or !std.math.isFinite(max_content) or min_content < 0 or min_content > max_content) return null;
+        const available = parent_padding_box.width - self.left.used(parent_padding_box.width) - horizontal_padding_px;
+        if (!std.math.isFinite(available)) return null;
+        return std.math.clamp(available, min_content, max_content);
+    }
+
+    /// All four placement components survive until after this box's native
+    /// line layout. Translate percentages then resolve against its border box.
+    /// Pure translation makes the result suitable as the translated parent's
+    /// coordinate origin for the nested label; ancestor clips remain external.
+    pub fn borderBox(self: @This(), parent_padding_box: PositionedRect, border_width: f64, border_height: f64) ?PositionedRect {
+        if (!parent_padding_box.valid()) return null;
+        const result: PositionedRect = .{
+            .x = parent_padding_box.x + self.left.used(parent_padding_box.width) + self.translate_x.used(border_width),
+            .y = parent_padding_box.y + self.top.used(parent_padding_box.height) + self.translate_y.used(border_height),
+            .width = border_width, .height = border_height,
+        };
+        return if (result.valid()) result else null;
+    }
+};
+
+test "absolute shrink-to-fit and nested transformed labels keep their distinct native reference boxes" {
+    const centered: PositionedLabelPlacement = .{ .left = .{ .percent = 50 }, .top = .{ .percent = 100, .px = 5 },
+        .translate_x = .{ .percent = -50 }, .translate_y = .{} };
+    const side: PositionedLabelPlacement = .{ .left = .{ .percent = 100, .px = 2 }, .top = .{ .percent = 50 },
+        .translate_x = .{}, .translate_y = .{ .percent = -48 } };
+    // Measured-font inputs vary with the font and UI scale. The first width
+    // shrinks to fit, the second fits its whole max-content width.
+    const a: PositionedRect = .{ .x = 10, .y = 20, .width = 80, .height = 24 };
+    const b: PositionedRect = .{ .x = 10, .y = 20, .width = 200, .height = 40 };
+    const first = centered.contentWidth(a, 0, 18, 54) orelse return error.TestUnexpectedResult;
+    const second = centered.contentWidth(b, 0, 18, 54) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(f64, 40), first);
+    try std.testing.expectEqual(@as(f64, 54), second);
+    const first_rect = centered.borderBox(a, first, 10) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualDeep(PositionedRect{ .x = 30, .y = 49, .width = 40, .height = 10 }, first_rect);
+    const second_rect = centered.borderBox(b, second, 10) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualDeep(PositionedRect{ .x = 83, .y = 65, .width = 54, .height = 10 }, second_rect);
+    const q_width = side.contentWidth(first_rect, 4, 6, 6) orelse return error.TestUnexpectedResult;
+    const question = side.borderBox(first_rect, q_width + 4, 12) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(f64, 72), question.x);
+    try std.testing.expectApproxEqAbs(@as(f64, 48.24), question.y, 0.000001);
+    try std.testing.expectEqual(@as(f64, 10), question.width);
+    try std.testing.expect(centered.contentWidth(a, 0, 10, 9) == null);
+    try std.testing.expect(centered.borderBox(a, -1, 10) == null);
+    try std.testing.expect(centered.borderBox(a, 1, std.math.inf(f64)) == null);
 }
