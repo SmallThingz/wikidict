@@ -95,3 +95,21 @@ test('rendering retains one inline CSS box, 4 NBSP, cursor and following link ow
   anchors[0].listeners.click({preventDefault(){}});assert.deepEqual(calls,[['white','Енглески']]);
   value.inline_box_group.border.left.width.value=NaN;assert.throws(()=>validateInlineBoxSpan(value));
 }));
+
+test('zero-advance current-color top edge between Japanese text and a separately linked label',()=>{
+  const top=cat([2],length(1),[0,0,0,0]);
+  const mark=run({text:'',box:box([],{borders:top})});
+  const original=wire([run({text:'ひ'}),mark,run({text:'[hì]'}),run({kind:1,text:'Heiban',target:'平板型'})]);
+  const values=decodeSpans(original);
+  assert.equal(inlineText(values),'ひ[hì]Heiban');
+  assert.deepEqual(values[1].inline_box_group.border.top,{kind:'solid',width:{unit:'px',value:1},color:{kind:'current_color'}});
+  assert.equal(values[1].inline_box_group.spans.length,0);
+  assert.deepEqual(values.filter(s=>s.target).map(s=>[s.text,s.target]),[['Heiban','平板型']]);
+  for(const invalid of [
+    run({kind:1,target:'never',text:'',box:box([],{borders:top})}),
+    run({text:'',box:box([mark,run({text:'x'})])}),
+    run({text:'',box:box([],{borders:cat([2],length(2),[0,0,0,0])})}),
+    run({text:'',box:box([],{borders:cat([0,2],length(1),[0,0,0])})}),
+    run({text:'',box:box([],{borders:cleanBorder})}),
+  ])assert.throws(()=>decodeSpans(wire([invalid])));
+});

@@ -279,10 +279,18 @@ export function validateInlineBoxSpan(owner) {
       if(value.ruby!=null){check(!inAction);validateRubySpan(value);validateRuby(value.ruby);return true;}
       return value.text.length!==0||(value.trail??'').length!==0;
     }
-    check(depth<16&&!value.ruby&&value.text===''&&!value.trail&&Array.isArray(group.spans)&&group.spans.length>0&&Array.isArray(group.overlays));
+    check(depth<16&&!value.ruby&&value.text===''&&!value.trail&&Array.isArray(group.spans)&&Array.isArray(group.overlays));
     budget-=group.overlays.length;check(budget>=0);
     for(const side of inlineBoxSides)length(group.padding?.[side],['px','em']);
     borders(group.border);
+    if(group.spans.length===0){
+      const top=group.border.top;
+      check(depth===0&&!action&&!inAction&&value.tooltip==null&&value.inline_style==null&&!(value.explanation??'')&&
+        group.overlays.length===0&&group.radius==null&&inlineBoxSides.every(side=>group.padding[side].value===0)&&
+        top.kind==='solid'&&top.width.unit==='px'&&top.width.value===1&&top.color.kind==='current_color'&&
+        ['left','right','bottom'].every(side=>group.border[side].kind==='none'));
+      return false;
+    }
     if(group.radius!=null){
       length(group.radius,['px','percent']);
       const edge=group.border.top;
