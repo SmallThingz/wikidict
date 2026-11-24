@@ -1688,7 +1688,8 @@ private fun UnavailableAnonymousGrid(table: Table, onLink: (EntryLink) -> Unit, 
                 else Constraints.Infinity
             val body = measurables.last().measure(constraints.copy(minHeight = 0, maxHeight = bodyMaximum))
             val width = maxOf(warning.width, body.width)
-            val height = nativeFallbackHeight(constraints, warning.measuredHeight.toLong() + body.measuredHeight)
+            val height = nativeUnavailableGridHeight(constraints, width,
+                warning.measuredHeight.toLong() + body.measuredHeight)
             if (cells != null && sink != null) {
                 val exact = bodyGeometry[0]?.takeIf { it.width == body.measuredWidth && it.height == body.measuredHeight }
                 val status = NativeSemanticGroup(warning.measuredWidth, warning.measuredHeight, emptyList(),
@@ -3002,7 +3003,8 @@ internal fun NativeFloatBlockContext(blocks: List<Block>, onLink: (EntryLink) ->
             originalChildren[index] = leaf
             val table = block.table
             val tableFeature = if (table == null) block.feature else tableLayoutFeature(table, block.feature)
-            if (opacityRoot != null && table != null && leaf.rootIndex != null && !leaf.inContainer &&
+            if (opacityRoot != null && table != null && opacityRoot.source.owns(leaf.path, table) &&
+                leaf.rootIndex != null && !leaf.inContainer &&
                 block.style == null && blockIndentDp(block) == 0 && blockPrefix(block).isEmpty() && tableFeature == null)
                 opacityTables[index] = opacityRoot.table(index, table)
             val ownerLanguage = table?.blockViewport?.language ?: table?.floatViewport?.language

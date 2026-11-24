@@ -226,6 +226,15 @@ class NativeFallbackBoundsTest {
         }
     }
 
+    @Test fun horizontallyScrolledUnavailableGridPacksHeightAgainstItsMeasuredWidth() {
+        val parent = androidx.compose.ui.unit.Constraints(minHeight = 12)
+        assertFalse(parent.hasBoundedWidth)
+        assertEquals(12, nativeUnavailableGridHeight(parent, 20000, 4L))
+        val height = nativeUnavailableGridHeight(parent, 20000, 2L * Int.MAX_VALUE)
+        assertEquals(nativeFallbackHeight(androidx.compose.ui.unit.Constraints(maxWidth = 20000), Long.MAX_VALUE), height)
+        assertNotNull(androidx.compose.ui.unit.Constraints.fixed(20000, height))
+    }
+
     @Test fun finiteParentBoundsAndMinimumAreRespected() {
         val bounds = androidx.compose.ui.unit.Constraints(minWidth = 300, maxWidth = 300, minHeight = 12, maxHeight = 100)
         assertEquals(12, nativeFallbackHeight(bounds, 5L))

@@ -225,6 +225,16 @@ class TableStyleTest {
         val source = nativeCellOpacityEntrySource(entry, rows, rows.indices)!!
         assertSame(entry, source.entry)
         assertNull(nativeCellOpacityEntrySource(entry, rows, 1..rows.lastIndex))
+        assertTrue(source.owns("block-0-1", tableProjection.table!!))
+        assertFalse(source.owns("block-0-0", tableProjection.table!!))
+        assertFalse(source.owns("block-0-1", tableProjection.table!!.copy()))
+        val supplemented = entry.copy(references = listOf(Reference(1, 1, "", listOf(Span("text", "Reference")))),
+            media = listOf(Media("Outside.png", "image", "Separate media")))
+        val ownRows = supplemented.readingRows
+        val ownTable = ownRows.single { it.key == "block-0-1" }.block!!.table!!
+        assertTrue(nativeCellOpacityEntrySource(supplemented, ownRows, ownRows.indices)!!.owns("block-0-1", ownTable))
+        assertNull(nativeCellOpacityEntrySource(entry, rows.reversed(), rows.indices))
+        assertNull(nativeCellOpacityEntrySource(entry, rows + rows.last(), (rows + rows.last()).indices))
         val equalReplacement = entry.copy()
         assertEquals(entry, equalReplacement)
         assertNotEquals(NativeCellOpacitySourceIdentity(entry), NativeCellOpacitySourceIdentity(equalReplacement))

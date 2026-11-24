@@ -165,6 +165,14 @@ internal fun nativeFallbackHeight(constraints: Constraints, contentHeight: Long)
     return contentHeight.coerceIn(constraints.minHeight.toLong(), minOf(constraints.maxHeight, capacity).toLong()).toInt()
 }
 
+/** A retained grid inside horizontal scrolling has a measured width even when its parent has no maximum. */
+internal fun nativeUnavailableGridHeight(constraints: Constraints, measuredWidth: Int, contentHeight: Long): Int {
+    val bounded = if (constraints.hasBoundedWidth) constraints else Constraints.fitPrioritizingWidth(
+        minWidth = measuredWidth, maxWidth = measuredWidth,
+        minHeight = constraints.minHeight, maxHeight = constraints.maxHeight)
+    return nativeFallbackHeight(bounded, contentHeight)
+}
+
 /** Real child compositions are shared by intrinsic queries, normal placement and fallback. */
 @Composable
 internal fun NativeFloatContextLayout(

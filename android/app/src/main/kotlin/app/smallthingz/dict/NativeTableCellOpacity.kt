@@ -149,12 +149,28 @@ internal class NativeCellOpacitySourceIdentity(private val source: Any) {
     override fun equals(other: Any?): Boolean = other is NativeCellOpacitySourceIdentity && source === other.source
     override fun hashCode(): Int = System.identityHashCode(source)
 }
-internal class NativeCellOpacityEntrySource(val entry: Entry)
+internal class NativeCellOpacityEntrySource(val entry: Entry, private val tables: Map<String, Table>) {
+    fun owns(path: String, table: Table): Boolean = tables[path] === table
+}
 
-internal fun nativeCellOpacityEntrySource(entry: Entry, rows: List<ReadingRow>, run: IntRange): NativeCellOpacityEntrySource? =
-    if (entry.displayTitle.isEmpty() && entry.preamble.isEmpty() && entry.references.isEmpty() && entry.media.isEmpty() &&
-        run.first == 0 && run.last == rows.lastIndex &&
-        rows.none { it.reference != null || it.referenceBatch != null }) NativeCellOpacityEntrySource(entry) else null
+internal fun nativeCellOpacityEntrySource(entry: Entry, rows: List<ReadingRow>, run: IntRange): NativeCellOpacityEntrySource? {
+    if (run.isEmpty() || run.first !in rows.indices || run.last !in rows.indices) return null
+    // Only real reference rows partition the document formatting run. The title, preamble
+    // and catalog media are independent LazyColumn slots outside this body allocation.
+    if (run.first > 0 && rows[run.first - 1].reference == null ||
+        run.last < rows.lastIndex && rows[run.last + 1].reference == null) return null
+    val original = entry.readingRows.withIndex().associateBy { it.value.key }
+    var previous = -1
+    val tables = mutableMapOf<String, Table>()
+    for (index in run) {
+        val row = rows[index]
+        val occurrence = original[row.key] ?: return null
+        if (occurrence.value !== row || occurrence.index <= previous || row.reference != null || row.referenceBatch != null) return null
+        previous = occurrence.index
+        row.block?.table?.let { if (tables.put(row.key, it) != null) return null }
+    }
+    return if (tables.values.any { it.hasNativeCellOpacity() }) NativeCellOpacityEntrySource(entry, tables) else null
+}
 
 internal class NativeCellOpacityRoot(val source: NativeCellOpacityEntrySource) {
     private val tables = linkedMapOf<Int, NativeCellOpacityTable>()
