@@ -3173,7 +3173,7 @@ def materialize_snapshot_selection(workspace, view, selection, capture_root, jou
     return roles, destination(capture) if capture else None
 
 
-def resolve_edition_snapshot_options(manifest, groups, downloads, overrides=None, *, workspace=None, metadata_network='offline', figure_reuse_batches=(), _figure_raw_storage=None):
+def resolve_edition_snapshot_options(manifest, groups, downloads, overrides=None, *, workspace=None, metadata_network='offline', figure_reuse_batches=(), _figure_raw_storage=None, _staged_capture=None):
     """Resolve each edition independently; never reuse another edition's captures."""
     workspace=PROJECT if workspace is None else workspace
     if metadata_network not in ('offline', 'allow'):
@@ -3199,7 +3199,8 @@ def resolve_edition_snapshot_options(manifest, groups, downloads, overrides=None
     for edition,date in groups:
         with build_phase(edition,date,'selected_snapshot_resolution',scope='pre_edition'):
             snapshots={}
-            captured=captures.get(edition)
+            captured=(_staged_capture[1] if _staged_capture is not None and _staged_capture[0]==edition
+                      else captures.get(edition))
             if captured is not None:
                 if not isinstance(captured,str) or Path(captured).is_absolute() or '..' in Path(captured).parts:raise ValueError('Unsafe auxiliary capture root')
                 root=(workspace/captured).resolve(strict=True)
@@ -11257,6 +11258,7 @@ def run_main(p, a, resources):
     if a.snapshot_storage_journal and not a.snapshot_selection:
         p.error('--snapshot-storage-journal requires --snapshot-selection')
     figure_raw_storage = {}
+    staged_capture = None
     if a.snapshot_selection:
         if len(groups) != 1 or auxiliary or a.interwiki_map_snapshot:
             p.error('Stored snapshots require one edition and a single selection')
@@ -11281,11 +11283,14 @@ def run_main(p, a, resources):
                     exact_capture=a.exact_snapshot_selection, packed_categories=can_stream_figure)
             a.interwiki_map_snapshot = auxiliary.pop('interwiki-snapshot', None)
             if staged is not None:
-                manifest = dict(manifest, auxiliary_capture_roots={edition: str(staged.relative_to(workspace))})
+                # The staged path is runtime state. The original manifest is
+                # also the authenticated registry derivation document.
+                staged_capture = edition, str(staged.relative_to(workspace))
         except (ValueError, OSError, TypeError, KeyError) as error:
             p.error(str(error))
     captures = manifest.get('auxiliary_capture_roots', {})
-    discovers_inputs = isinstance(captures, dict) and any(edition in captures for edition, date in groups)
+    discovers_inputs = staged_capture is not None or (
+        isinstance(captures, dict) and any(edition in captures for edition, date in groups))
     if explicit_downloads is not None and (discovers_inputs or set(FIGURE_SNAPSHOT_FILES).intersection(auxiliary)):
         try:
             import prepare_figure_metadata as helper
@@ -11337,7 +11342,16 @@ def run_main(p, a, resources):
     if a.staged_input_root is not None: options['staged_input_root']=a.staged_input_root.absolute()
     if a.extraction_cache_root is not None: options['extraction_cache_root']=a.extraction_cache_root.absolute()
     if a.interwiki_map_snapshot: options['interwiki_snapshot']=a.interwiki_map_snapshot.resolve()
-    try: options['edition_options']=resolve_edition_snapshot_options(manifest,groups,a.downloads.resolve(),auxiliary,workspace=workspace,metadata_network=a.metadata_network,figure_reuse_batches=tuple(a.figure_reuse_batch), **({'_figure_raw_storage': figure_raw_storage} if figure_raw_storage else {}))
+    snapshot_options = {}
+    if figure_raw_storage:
+        snapshot_options['_figure_raw_storage'] = figure_raw_storage
+    if staged_capture is not None:
+        snapshot_options['_staged_capture'] = staged_capture
+    try:
+        options['edition_options'] = resolve_edition_snapshot_options(
+            manifest, groups, a.downloads.resolve(), auxiliary, workspace=workspace,
+            metadata_network=a.metadata_network, figure_reuse_batches=tuple(a.figure_reuse_batch),
+            **snapshot_options)
     except (ValueError,OSError) as error:p.error(str(error))
     # Retained tools and relocated Python producers keep their established
     # transport unless it was explicitly selected. The maintained normal

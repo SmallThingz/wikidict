@@ -6277,7 +6277,7 @@ class LoopMessageSelectionTests(unittest.TestCase):
         self.wiki,self.date='bnwiktionary','20261001'
         self.namespace=self.root/'namespace-registry.tsv'
         self.item=dict(wiki=self.wiki,date=self.date,name='bnwiktionary-20261001-pages-meta-current.xml.bz2',
-                       url='https://dumps.wikimedia.org/synthetic-local-fixture',size=1,sha1='0'*40)
+                       url='https://dumps.wikimedia.org/bnwiktionary/20261001/bnwiktionary-20261001-pages-meta-current.xml.bz2',size=1,sha1='0'*40)
         # Build one coherent synthetic dated XML/current siteinfo namespace
         # capture using the real projector; the resolver validates this whole
         # authority, including its discovered legacy site-info role.
@@ -6397,6 +6397,54 @@ class LoopMessageSelectionTests(unittest.TestCase):
                 manifest['auxiliary_capture_roots'][self.wiki]=selected
                 with self.subTest(selected=selected),patch.object(b,'PROJECT',source),self.assertRaises(ValueError):
                     b.resolve_edition_snapshot_options(manifest,self.groups,self.downloads,workspace=self.project)
+
+    def test_stored_snapshot_keeps_reviewed_registry_manifest_immutable(self):
+        import download_wiktionaries as downloader
+        import prepare_magic_words_lst as lst_magic
+
+        old = ('# wikidict-language-registry-v2\n# content-language\tbn\n# mediawiki\n'
+               'bn\tবাংলা\tbn\n# reviewed-alias\tbn\tOld spelling\told-policy\t' + '0'*64 + '\n')
+        row = downloader.write_language_registry(self.downloads, self.wiki, self.date, old, 'bn')
+        source = self.downloads/'manifest.json'
+        source.write_text(json.dumps(dict(self.manifest, files=[self.item], requested_editions=[self.wiki],
+                                         language_registries=[row], failures=[])))
+        derived = downloader.derive_reviewed_language_registries(
+            source, b.sha256_file(source), self.downloads, self.project/'derived', [self.wiki])
+        original = json.loads(derived.read_bytes())
+        key = (self.wiki, self.date)
+        registry = downloader.derived_registry_paths(original, self.downloads)[key]
+        def descriptor(path):
+            return dict(path=str(path.relative_to(self.project)), bytes=path.stat().st_size,
+                        sha256=b.sha256_file(path))
+
+        snapshots = {
+            'language-registry': descriptor(registry),
+            'namespace-registry': descriptor(self.namespace),
+            'magic-words': descriptor(self.root/lst_magic.DERIVED_DIRECTORY/'magic-words.tsv'),
+        }
+        selection = self.project/'selection.json'
+        selection.write_text(json.dumps({self.wiki: {
+            'capture_root': self.manifest['auxiliary_capture_roots'][self.wiki], 'snapshots': snapshots,
+        }}))
+        argv = ['build_wiktionaries.py', '--downloads', str(self.downloads), '--output', str(self.project/'out'),
+                '--input-manifest', str(derived), '--input-manifest-sha256', b.sha256_file(derived),
+                '--wikis', self.wiki, '--threads', '1', '--jobs', '1',
+                '--snapshot-selection', str(selection)]
+
+        def dispatch(*args, edition_options, **kwargs):
+            selected = edition_options[key]['auxiliary_snapshots']
+            self.assertEqual(selected['language-registry'].read_bytes(), registry.read_bytes())
+            self.assertEqual(selected['namespace-registry'].read_bytes(), self.namespace.read_bytes())
+            self.assertTrue(selected['namespace-registry'].is_relative_to(self.project/'.tmp'))
+            return []
+
+        with contextlib.chdir(self.project), patch.object(sys, 'argv', argv), \
+             patch.object(b, 'workspace_root', return_value=self.project), \
+             patch.object(b, 'safe_worker_budget', return_value=1), patch.object(b, 'build_groups', side_effect=dispatch) as build:
+            b.main()
+        build.assert_called_once()
+        self.assertEqual(downloader.derived_registry_paths(json.loads(derived.read_bytes()), self.downloads)[key], registry)
+        self.assertEqual(json.loads(derived.read_bytes()), original)
 
     def test_explicit_valid_pair_ignores_invalid_unused_default(self):
         old=self.collect('language-messages-loop-v1')
