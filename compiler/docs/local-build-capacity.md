@@ -233,10 +233,20 @@ allocator control returned typed `OutOfMemory` at the first positive phase
 under the 2 MiB fixture bound. The candidate completed 64 initial queries using
 1,154,698 backing bytes, then failed the next retained-owner comparison. The
 existing comparison uses pointer identity for non-byte slices, including
-independently cloned named-font lists; a narrow value-comparison repair is
-under review. Neither this failure nor compilation success qualifies the
-memory change. The unchanged complete Kurdish original method has its own
-4 GiB guard and result under `.tmp/r20b-local/`.
+independently cloned named-font lists. The complete Kurdish method subsequently
+reached its own 4 GiB PSS limit after 752.998 seconds, with cleanup confirmed.
+That full-case memory failure remains open under `.tmp/r20b-local/`.
+
+R21 narrowly compares the three retained font-family lists by value and keeps
+the existing comparison for all other fields. Its focused equality controls
+and the unchanged 2 MiB scratch fixture both passed; the latter finished both
+widths, reset/overwrite, changed-source and restored-source checks with
+2,069,194 backing bytes. These are scoped checks, not a complete Kurdish pass.
+The independent comparison repair and its controls were also extracted onto
+Cloud main, peer-reviewed and passed a fresh canonical native test. That guard
+closed in 26.202 seconds at 663,140,352 bytes peak PSS, with all 4,359 tracked
+source files unchanged. Receipts are in `.tmp/font-owner-main-integration/`.
+The scratch allocator change remains private.
 
 Closed source snapshots share identical files only when path, content, size
 and mode agree. Their before/after manifests remain unchanged, and unique
@@ -246,7 +256,7 @@ resolved local compile admission pressure without changing limits or deleting
 artifacts; admission-only refusals remain recorded separately from executed
 compiles.
 
-These candidates are not integrated production source. The new
+The broader compiler and client candidates remain private. The new
 responsive capability uses DPRa global bit 24. The earlier bit-21 proposal was
 withdrawn because Android already uses bits 21 and 22 for bottom alignment.
 Reserved bit 23 remains rejected. Preserve the allocation and legacy-format

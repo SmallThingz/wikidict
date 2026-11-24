@@ -23210,7 +23210,18 @@ pub const Renderer = struct {
             .owner_metric = metric, .parent_metric = parent_metric.?, .body_font = body_snapshot };
     }
     fn tableNestedFontOwnersAgree(left: ?TableNestedFontOwner, right: ?TableNestedFontOwner) bool {
-        return sameFigurePreparationValue(left, right);
+        var one = left orelse return right == null;
+        var two = right orelse return false;
+        // These snapshots own independently cloned family-name arrays. Compare
+        // their values before retaining the strict comparison for every other
+        // field. The generic preparation comparator still owns pointer custody.
+        inline for (.{ "font", "parent_font", "body_font" }) |name| {
+            if (!presentation_types.sameFontFamilyRequest(@field(one, name).font_family,
+                @field(two, name).font_family)) return false;
+            @field(one, name).font_family = null;
+            @field(two, name).font_family = null;
+        }
+        return sameFigurePreparationValue(one, two);
     }
     fn tableNestedFontMetricsAtViewport(self: *Renderer, source: *TableLinkSource, viewport: f64) Error!bool {
         if (source.source_constructed) return source.literal_grids.len == 0 and
@@ -134483,4 +134494,93 @@ test "ordinary paragraph SPAN parent requires a closed inline source and complet
         "<span>{{missing}}</span>", "<span>''open</span>", "<span>[[x|<li>Y</li>]]</span>",
         "<span>[[Tập tin:a.jpg|thumb]]</span>", "<span>x</span>\n* [[b]]", "<ref><span>x</span></ref>",
     }) |bad| try std.testing.expect(!Renderer.ordinaryParagraphInlineLine(&catalog, bad));
+}
+
+pub fn verifyTableNestedFontOwnerEqualityForTesting() !void {
+    if (!@import("builtin").is_test) @compileError("test-only font owner equality inspection");
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const F = struct {
+        fn copy(alloc: A, value: Renderer.TableNestedFontOwner) !Renderer.TableNestedFontOwner {
+            var result = value;
+            inline for (.{ "font", "parent_font", "body_font" }) |name| {
+                const original = @field(value, name);
+                @field(result, name).language = try alloc.dupe(u8, original.language);
+                @field(result, name).classes = try alloc.dupe(u8, original.classes);
+                if (original.font_family) |family|
+                    @field(result, name).font_family = try table_style_profile.cloneFontFamilyRequestAlloc(alloc, family);
+            }
+            return result;
+        }
+        fn disagree(left: Renderer.TableNestedFontOwner, right: Renderer.TableNestedFontOwner) !void {
+            try std.testing.expect(!Renderer.tableNestedFontOwnersAgree(left, right));
+            try std.testing.expect(!Renderer.tableNestedFontOwnersAgree(right, left));
+        }
+    };
+    const font: presentation_types.InlineFontSnapshot = .{ .font_scale = 1.1, .font_scale_basis = .normal_body,
+        .bold = true, .italic = true, .language = "ku", .classes = "retained",
+        .font_features = .normal, .font_family = .{ .stack = .{ .names = &.{ "Retained First", "Retained Second" }, .fallback = .serif } } };
+    const template: Renderer.TableNestedFontOwner = .{ .font = font, .parent_font = font, .body_font = font,
+        .height = .{ .multiplier = 1.5 }, .html_metric = .{ .value = 1, .basis = .normal_body },
+        .body_metric = .{ .value = 1, .basis = .normal_body }, .owner_metric = .{ .value = 1.1, .basis = .normal_body },
+        .parent_metric = .{ .value = 1, .basis = .normal_body } };
+    const original = try F.copy(a, template);
+    const equal = try F.copy(a, original);
+    inline for (.{ "font", "parent_font", "body_font" }) |name| {
+        const one = @field(original, name); const two = @field(equal, name);
+        try std.testing.expect(one.language.ptr != two.language.ptr and one.classes.ptr != two.classes.ptr);
+        const first = one.font_family.?.stack; const second = two.font_family.?.stack;
+        try std.testing.expect(first.names.ptr != second.names.ptr);
+        for (first.names, second.names) |x, y| try std.testing.expect(x.ptr != y.ptr);
+    }
+    // Independent equality proves the values before the changed comparator is
+    // used; the generic custody comparison must keep its original semantics.
+    try std.testing.expectEqualDeep(original, equal);
+    try std.testing.expect(!Renderer.sameFigurePreparationValue(original, equal));
+    std.debug.print("KU_FONT_OWNER_EQUALITY stage=distinct_allocations_equal_values\n", .{});
+    try std.testing.expect(Renderer.tableNestedFontOwnersAgree(original, equal));
+    try std.testing.expect(Renderer.tableNestedFontOwnersAgree(equal, original));
+    try std.testing.expect(Renderer.tableNestedFontOwnersAgree(null, null));
+    try std.testing.expect(!Renderer.tableNestedFontOwnersAgree(original, null));
+    try std.testing.expect(!Renderer.tableNestedFontOwnersAgree(null, original));
+    inline for (.{ "font", "parent_font", "body_font" }) |name| {
+        const family = @field(equal, name).font_family.?.stack;
+        var changed = equal;
+        @field(changed, name).font_family = .{ .stack = .{ .names = &.{ "Different First", family.names[1] }, .fallback = family.fallback } };
+        try F.disagree(original, changed);
+        changed = equal;
+        @field(changed, name).font_family = .{ .stack = .{ .names = family.names, .fallback = .sans_serif } };
+        try F.disagree(original, changed);
+        changed = equal;
+        @field(changed, name).font_family = .{ .stack = .{ .names = &.{ family.names[1], family.names[0] }, .fallback = family.fallback } };
+        try F.disagree(original, changed);
+        changed = equal;
+        @field(changed, name).font_family = .{ .stack = .{ .names = family.names[0..1], .fallback = family.fallback } };
+        try F.disagree(original, changed);
+        changed = equal; @field(changed, name).font_family = .sans_serif; try F.disagree(original, changed);
+        changed = equal; @field(changed, name).font_family = null; try F.disagree(original, changed);
+        inline for (.{ "small", "superscript", "subscript", "font_normalized", "bold", "italic", "code" }) |flag| {
+            changed = equal; @field(@field(changed, name), flag) = !@field(@field(equal, name), flag);
+            try F.disagree(original, changed);
+        }
+        changed = equal; @field(changed, name).font_scale = 1.25; try F.disagree(original, changed);
+        changed = equal; @field(changed, name).font_scale = null; try F.disagree(original, changed);
+        changed = equal; @field(changed, name).font_scale_basis = .css_px; try F.disagree(original, changed);
+        changed = equal; @field(changed, name).language = "tr"; try F.disagree(original, changed);
+        changed = equal; @field(changed, name).classes = "different"; try F.disagree(original, changed);
+        changed = equal; @field(changed, name).role = .label; try F.disagree(original, changed);
+        changed = equal; @field(changed, name).font_features = .seven_on; try F.disagree(original, changed);
+        changed = equal; @field(changed, name).font_features = null; try F.disagree(original, changed);
+    }
+    inline for (.{ "html_metric", "body_metric", "owner_metric", "parent_metric" }) |name| {
+        var changed = equal; @field(changed, name).value = 2; try F.disagree(original, changed);
+        changed = equal; @field(changed, name).value = null; try F.disagree(original, changed);
+        changed = equal; @field(changed, name).basis = .css_px; try F.disagree(original, changed);
+        changed = equal; @field(changed, name).unknown = true; try F.disagree(original, changed);
+    }
+    var changed = equal; changed.height = .{ .multiplier = 1.75 }; try F.disagree(original, changed);
+    changed = equal; changed.height = .normal; try F.disagree(original, changed);
+    changed = equal; changed.height = .{ .length = .{ .value = 1.5, .font_scale_basis = .normal_body } }; try F.disagree(original, changed);
+    try std.testing.expectEqualDeep(original, equal);
+    std.debug.print("KU_FONT_OWNER_EQUALITY stage=complete snapshots=3\n", .{});
 }

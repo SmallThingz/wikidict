@@ -28355,3 +28355,7 @@ test "page stylesheet join bounds emitted parent and authored selector groups se
     try std.testing.expectError(error.StyleProfileLimit, profile.joinPageSourcesAlloc(a, &parent, &oversized, &.{}));
     try std.testing.expectError(error.StyleProfileLimit, profile.joinPageSourcesAlloc(a, &parent, &.{}, &oversized));
 }
+
+test "nested Table font owners compare independently cloned names and retain all other distinctions" {
+    try compiler.verifyTableNestedFontOwnerEqualityForTesting();
+}
