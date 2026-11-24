@@ -163,9 +163,9 @@ class AuxiliaryCaptureReplayTests(unittest.TestCase):
             name,path=next(iter(snapshots.items()))
             manifest=path.with_name(b.auxiliary_manifest_filename(name,path))
             original=helper.capture_artifacts
-            def changed_after_preread(snapshot,record):
+            def changed_after_preread(snapshot,record,**kwargs):
                 manifest.write_bytes(manifest.read_bytes()+b' ')
-                return original(snapshot,record)
+                return original(snapshot,record,**kwargs)
             with patch.object(helper,'capture_artifacts',side_effect=changed_after_preread):
                 with self.assertRaisesRegex(ValueError,'manifest changed during validation'):
                     b.validated_auxiliary_capture(name,path,wiki,'20261001')

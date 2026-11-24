@@ -5566,7 +5566,8 @@ class FigureOutputDigestTests(unittest.TestCase):
             def read(self, count):
                 nonlocal changed
                 raw = self.stream.read(count)
-                if raw and not changed:
+                # The codec probe reads two bytes before opening the hash reader.
+                if count > 2 and raw and not changed:
                     with original_open(target, 'ab') as output: output.write(b'changed')
                     changed = True
                 return raw

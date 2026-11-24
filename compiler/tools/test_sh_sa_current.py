@@ -4,7 +4,7 @@ import unittest
 from unittest.mock import patch
 
 import prepare_figure_metadata as figure
-from test_prepare_figure_files import FigureFileTests
+import test_prepare_figure_files as figure_fixtures
 
 
 class CurrentSqlImageInfoTests(unittest.TestCase):
@@ -16,7 +16,7 @@ class CurrentSqlImageInfoTests(unittest.TestCase):
     def test_ordinary_current_capture_materialization_and_relocation(self):
         for wiki, case in self.cases.items():
             with self.subTest(wiki=wiki):
-                inputs = FigureFileTests()
+                inputs = figure_fixtures.FigureFileTests()
                 inputs.setUp()
                 self.addCleanup(inputs.doCleanups)
                 inputs.wiki, inputs.date = wiki, '20261001'

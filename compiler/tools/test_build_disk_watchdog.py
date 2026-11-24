@@ -166,11 +166,15 @@ class DiskWatchdogTest(unittest.TestCase):
             )
             def free(_path):
                 return SimpleNamespace(f_bavail=1 if ready.exists() else 16, f_frsize=4096)
+            # The supervisor is the unittest process, including previously collected fixtures.
+            pid = os.getpid()
+            own_start = limits._process_table()[pid]['start']
+            supervisor_pss = limits._monitor_usage(pid, own_start)['pss_bytes']
             try:
                 with patch.object(limits.os, 'statvfs', side_effect=free):
                     with self.assertRaisesRegex(limits.ContainmentUnavailable, 'disk_free_floor'):
                         limits.supervise_watchdog(argv=['-B', '-c', child_code], report_path=report_path,
-                            wall_seconds=5, memory_limit_bytes=128 * 1024**2, max_tasks=8,
+                            wall_seconds=5, memory_limit_bytes=supervisor_pss + 128 * 1024**2, max_tasks=8,
                             max_cpus=1, disk_paths=(tmp,), disk_floor_bytes=8192)
                 report = json.loads(report_path.read_text())
                 self.assertEqual(report['termination_reason'], 'disk_free_floor')

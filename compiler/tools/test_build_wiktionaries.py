@@ -7375,7 +7375,7 @@ class BorrowedStagedInputTests(PreparedToolsFixture):
             before = self.identities(borrowed)
             argv = ['build_wiktionaries.py', '--downloads', str(root), '--output', str(root/'output'),
                     '--wikis', item['wiki'], '--threads', '1', '--jobs', '1',
-                    '--staged-input-root', str(borrowed), '--extraction-cache-root', str(borrowed/'cache')]
+                    '--staged-input-root', str(borrowed), '--extraction-cache-root', str(borrowed.parent)]
             with (patch.object(sys, 'argv', argv), patch.object(b, 'safe_worker_budget', return_value=4),
                   patch.object(b, 'resolve_edition_snapshot_options') as resolve, patch.object(b, 'build_groups') as build,
                   contextlib.redirect_stderr(io.StringIO()) as stderr, self.assertRaises(SystemExit) as error):
@@ -8343,7 +8343,10 @@ class MaintainedFigureCompatibilityTests(unittest.TestCase):
                     for name in b.BLOB_TOOL_NAMES:
                         path=prefix/'bin'/name;path.write_bytes(name.encode());path.chmod(0o555)
                 refusal=subprocess.CalledProcessError(9,['selected Writer compatibility refusal'])
-                def dispatch(command,*args,**fields):
+                def dispatch(command,edition,date,phase,**fields):
+                    if phase == 'zig_prepare_blob_tools':
+                        self.assertEqual(mode, 'new')
+                        return install(command, env=fields['env'])
                     checks.append(command)
                     self.assertEqual(command[1:],["--check-figure-compatibility",*map(str,b.figure_compatibility_paths(snapshots))])
                     self.assertTrue(fields['compatibility_only']);self.assertFalse(fields['full_input_validation'])
@@ -8384,22 +8387,29 @@ class MaintainedFigureCompatibilityTests(unittest.TestCase):
                     for name in b.BLOB_TOOL_NAMES:
                         self.assertEqual((destination/name).read_bytes(),name.encode())
             error=subprocess.CalledProcessError(2,['bound Writer rejects profile'])
+            def dispatch(command,edition,date,phase,**fields):
+                if phase in ('zig_prepare_blob_tools', 'zig_build_dictionary'):
+                    return compile_tools(command, env=fields['env'])
+                self.assertEqual(command[1:], ['--check-figure-compatibility', *map(str, paths)])
+                self.assertTrue(fields['compatibility_only'])
+                self.assertFalse(fields['full_input_validation'])
+                events.append('compatibility')
+                if refuse:
+                    raise error
+            refuse=True
             with patch.object(b,'source_fingerprint',return_value='same-source'), \
                  patch.object(b,'run_checked',side_effect=compile_tools), \
-                 patch.object(b,'timed_run',side_effect=error):
+                 patch.object(b,'timed_run',side_effect=dispatch):
                 with self.assertRaises(subprocess.CalledProcessError) as caught:
                     b.prepare_blob_tools(workspace,str(compiler),'testwiktionary','20261001',
                         expander_args=['dump','output','--expander-only'],figure_inputs=paths)
             self.assertIs(caught.exception,error);self.assertEqual(len(calls),1)
             self.assertIn('prepare-blob-tools',calls[0]);self.assertNotIn('build-dictionary',calls[0])
             workspace=root/'success';workspace.mkdir();calls.clear();events.clear()
-            def checked(command,*a,**kw):
-                self.assertEqual(command[1], '--check-figure-compatibility')
-                self.assertTrue(kw['compatibility_only']);self.assertFalse(kw['full_input_validation'])
-                events.append('compatibility')
+            refuse=False
             with patch.object(b,'source_fingerprint',return_value='same-source'), \
                  patch.object(b,'run_checked',side_effect=compile_tools), \
-                 patch.object(b,'timed_run',side_effect=checked):
+                 patch.object(b,'timed_run',side_effect=dispatch):
                 tools=b.prepare_blob_tools(workspace,str(compiler),'testwiktionary','20261001',
                     expander_args=['dump','output','--expander-only'],figure_inputs=paths)
             self.assertEqual(events,['prepare','compatibility','expander'])

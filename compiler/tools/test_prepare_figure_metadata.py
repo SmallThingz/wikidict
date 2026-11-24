@@ -15,8 +15,27 @@ from test_prepare_file_metadata import registry_bytes, present_page
 import test_prepare_site_info as site_tests
 
 
+class FigureFixtureIsolationTests(unittest.TestCase):
+    def test_failed_borrowed_setup_restores_primary_source_pins(self):
+        original = site.SOURCE_PINS
+        borrowed = FigureInputTests()
+        with patch.object(site, 'capture', side_effect=ValueError('injected capture failure')):
+            with self.assertRaisesRegex(ValueError, 'injected capture failure'):
+                borrowed.setUp()
+        self.assertIs(site.SOURCE_PINS, original)
+        self.assertFalse(borrowed.root.exists())
+
+
 class FigureInputTests(unittest.TestCase):
     def setUp(self):
+        # Borrowers can only register teardown after this fixture returns.
+        try:
+            FigureInputTests._prepare_inputs(self)
+        except BaseException:
+            self.doCleanups()
+            raise
+
+    def _prepare_inputs(self):
         site_tests.SiteInfoCaptureTests.setUp(self)
         self.wiki, self.date = 'arwiktionary', '20261001'
         self.namespace = self.root / 'namespace-registry.tsv'
@@ -29,7 +48,10 @@ class FigureInputTests(unittest.TestCase):
         args = argparse.Namespace(wiki=self.wiki, date=self.date,
             namespace_registry=self.namespace, primary_sources=self.primary,
             output=self.root/'defaults', delay=0, wall_seconds=30, figure_defaults=True)
-        site.capture(args, transport=lambda *_: (200, {}, figure.encoded(self.data)), sleep=lambda _: None)
+        # The seed transport and sleep are synchronous test doubles.
+        with patch.object(site, 'time', wraps=site.time) as clock:
+            clock.monotonic.return_value = 0.0
+            site.capture(args, transport=lambda *_: (200, {}, figure.encoded(self.data)), sleep=lambda _: None)
         self.projection = self.root / 'projection'
         self.projection.mkdir()
         page = present_page('ملف:Example.svg')
