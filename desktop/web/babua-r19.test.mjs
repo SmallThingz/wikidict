@@ -68,7 +68,7 @@ test('the genuine Babua payload retains the responsive owner, icon, ordered list
 });
 
 test('index and decode both refuse bad feature headers, and decode enforces the responsive band census', async () => {
-  for (const mask of [0x2120, 0x01202120, 0x01402120, 0x01802120, 0x09002120, 0x01002121]) {
+  for (const mask of [0x2120, 0x01202120, 0x01402120, 0x01802120, 0x11002120, 0x01002121]) {
     const changed = Buffer.from(original.raw);
     changed.writeUInt32LE(mask, original.offset + 4);
     await assert.rejects(indexRaw(changed), /Unsupported responsive presentation features/);

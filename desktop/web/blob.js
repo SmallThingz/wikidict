@@ -1,6 +1,7 @@
 // WIKBLB08 contains compiled semantic pages or typed DAL1 redirect envelopes.
 // A leading U+FEFF belongs to a compiled title or field, not a file BOM.
 import {validateDescriptionBody,validateDarkForeground,validateContainerBlock,validateCellMetrics,validateRuby,validateRubyOwner,validateRubySpan,validateActionGroupSpan,validateInlineBoxSpan,validateFigureIntrinsicSize,validateClippedSpan,validateAudioControl,validateWrappedHeading,validateTableDisclosure} from './validate.js';
+import {validateSourceAnchor,validateSourceAnchorDestinations} from './validate.js';
 const utf8 = new TextDecoder('utf-8', {fatal:true,ignoreBOM:true});
 const kinds = ['language','thesaurus','citations','reconstruction','rhymes','sign_gloss','supplemental','alias'];
 const blocks = ['paragraph','blank','definition','example','quotation','list_item','list_detail','indent','term','heading','preformatted','rule','table','container'];
@@ -8,10 +9,14 @@ const validInlineImageFile=value=>typeof value==='string'&&value.length>0&&new T
 const roles = ['normal','label','pronunciation','headword','example','quotation','citation','reference'];
 // DPRZ owns a two-byte mask. Each accepted feature must have a real occurrence.
 const imageOccurrenceFeature=0x20;
+const containerOwnerFontFeature=1;
 const responsiveFlowFeature=0x01000000;
-const supportedExtendedFeatures=features=>(features&~(0x2184|imageOccurrenceFeature))===0&&(features&0x2100)!==0;
-const supportedResponsiveFeatures=features=>(features&responsiveFlowFeature)!==0&&
-  (features&~(0x2184|imageOccurrenceFeature|responsiveFlowFeature))===0;
+const sourceAnchorFeature=0x08000000;
+const supportedExtendedFeatures=features=>(features&~(0x2184|imageOccurrenceFeature|containerOwnerFontFeature))===0&&
+  (features&0x2100)!==0&&(!(features&containerOwnerFontFeature)||!!(features&0x100));
+const supportedWideFeatures=features=>(features&(responsiveFlowFeature|sourceAnchorFeature))!==0&&
+  (features&~(0x2184|imageOccurrenceFeature|containerOwnerFontFeature|responsiveFlowFeature|sourceAnchorFeature))===0&&
+  (!(features&containerOwnerFontFeature)||!!(features&sourceAnchorFeature)&&!!(features&0x100));
 const magicStrings = new Set('23456789ABCDEFGHIJKLMSVYZa'.split('').map(version=>'DPR'+version));
 const require = (ok, message='Invalid compiled dictionary') => { if (!ok) throw Error(message); };
 function presentationHeaderSize(magic) {
@@ -35,7 +40,8 @@ function presentationFeatures(magic, header) {
     return flags;
   }
   const flags = view.getUint32(4, true);
-  require(magic === 'DPRa' && supportedResponsiveFeatures(flags), 'Unsupported responsive presentation features');
+  const unsupported = flags&sourceAnchorFeature?'Unsupported wide presentation features':'Unsupported responsive presentation features';
+  require(magic === 'DPRa' && supportedWideFeatures(flags), unsupported);
   return flags;
 }
 
@@ -84,7 +90,8 @@ export function decode(bytes, metadata) {
   const audioSpans=[];
   let clippedEnabled=false,insideClipped=false,clipCount=0;
   let imageOccurrences=false,imageOccurrenceCount=0,responsiveFlowEnabled=false,responsiveFlowCount=0;
-  let audioEnabled=false,positionedHeadings=false,positionedBody=false;
+  let audioEnabled=false,positionedHeadings=false,positionedBody=false,containerOwnerFonts=false,containerOwnerFontCount=0;
+  let sourceAnchorsEnabled=false,sourceAnchorCount=0;
   function audioControl() {
     charge();
     const flags=byte(), control={};
@@ -254,7 +261,11 @@ export function decode(bytes, metadata) {
   };
   const edges=(length=styleLength)=>({top:length(),right:length(),bottom:length(),left:length()});
   const containerMarginLength=()=>containerFonts?signedLength():styleLength();
-  const containerWidth=()=>{const kind=tag(['auto','length','fit_content']);return {[kind]:kind==='length'?{unit:tag(['px','em','percent']),value:f32()}: {}};};
+  const containerWidth=(intrinsic=false)=>{
+    const kind=tag(intrinsic&&positionedHeadings?['auto','length','fit_content','max_content']:['auto','length','fit_content']);
+    if(kind==='max_content')positionedBody=true;
+    return {[kind]:kind==='length'?{unit:tag(['px','em','percent']),value:f32()}: {}};
+  };
   const containerMaxWidth=()=>presence()?{length:{unit:tag(['px','em','percent']),value:f32()}}:{none:{}};
   const containerColor=()=>{const kind=tag(['transparent','rgb','light_dark']);return {[kind]:kind==='rgb'?string():kind==='light_dark'?{light:string(),dark:string()}: {}};};
   const containerBorderLine=()=>({width:styleLength(),color:containerColor()});
@@ -282,19 +293,40 @@ export function decode(bytes, metadata) {
     if(flags&128){const n=count(6);require(n>0&&n<16);value.following_rules=Array.from({length:n},()=>containerScreen(true));}
     return value;
   };
-  const containerStyle=(description=false)=>{
+  const containerStyle=(description=false,ordinary=false)=>{
     const flags=containerFonts?u32():u16(),style={};
     const layout=()=>{
-      const value=tag(positionedHeadings&&!description?['flow','flex_row',null,'ordered_list']:['flow','flex_row']);
+      const value=tag(positionedHeadings&&!description?['flow','flex_row',ordinary?'flex_column':null,'ordered_list']:['flow','flex_row']);
       require(value!==null,'Unsupported container layout policy');
       if(value==='ordered_list'){style.ordered_marker_weight=tag(['normal','bold']);positionedBody=true;}
+      if(value==='flex_column')positionedBody=true;
       return value;
     };
-    const fields=[['margins',()=>edges(containerMarginLength)],['padding',edges],['width',containerWidth],['float_side',()=>tag(['left','right'])],['clear',()=>tag(['none','left','right','both'])],['max_width',containerMaxWidth],['box_sizing',()=>tag(['content_box','border_box'])],['layout',layout],['align_items',()=>tag(['stretch','start','center','end'])],['flex_item',()=>tag(['none'])],['background',containerColor],['border',containerBorder],['line_height',containerLineHeight],['text_align',()=>tag(['left','center','right'])],['screen_max_width',containerScreen],['overflow',()=>tag(['visible','auto'])],['owner_font_scale',f32],['height',styleLength],['columns',()=>({count:u16(),gap:styleLength()})]];
-    require((flags&~(description?0x80000|0x7ffff:0x7ffff))===0,'Unsupported container layout policy');
+    const authored=ordinary&&positionedHeadings;
+    const fields=[['margins',()=>edges(containerMarginLength)],['padding',edges],['width',()=>containerWidth(ordinary)],['float_side',()=>tag(['left','right'])],['clear',()=>tag(['none','left','right','both'])],['max_width',containerMaxWidth],['box_sizing',()=>tag(['content_box','border_box'])],['layout',layout],['align_items',()=>tag(['stretch','start','center','end'])],['flex_item',()=>tag(['none'])],['background',containerColor],['border',containerBorder],['line_height',containerLineHeight],['text_align',()=>tag(['left','center','right'])],['screen_max_width',containerScreen],['overflow',()=>tag(authored?['visible','auto','hidden']:['visible','auto'])],['owner_font_scale',f32],['height',styleLength],['columns',()=>({count:u16(),gap:styleLength()})]];
+    const ordinaryFields=authored?(0x380000|(containerOwnerFonts?0x1000000:0)):0;
+    require((flags&~(0x7ffff|ordinaryFields|(description?0x80000:0)))===0,'Unsupported container layout policy');
     fields.forEach(([key,read],bit)=>{if(flags&(1<<bit))style[key]=read();});
-    if(description&&(flags&0x80000))style.positioning=tag(['relative_auto']);
-    if(positionedHeadings)require(byte()===0,'Unsupported positioned container extension');
+    if(flags&0x80000){style.positioning=tag(['relative_auto']);positionedBody=true;}
+    if(flags&0x100000)style.min_height=styleLength();
+    if(flags&0x200000)style.margin_values=containerMargins();
+    if(flags&0x1000000){charge();style.owner_font=rubyFontSnapshot(true);containerOwnerFontCount++;}
+    if(positionedHeadings){
+      const extension=byte();
+      require(extension===0||(authored&&extension===16),'Unsupported positioned container extension');
+      if(extension){
+        positionedBody=true;
+        const shape=byte();require(shape!==0&&(shape&~7)===0,'Unsupported positioned container shape');
+        if(shape&1){
+          const placement={};
+          for(const axis of ['left','top','translate_x','translate_y'])placement[axis]={px:f32(),percent:f32()};
+          const policy=byte();require((policy&~3)===0,'Unsupported translated container policy');
+          style.translated_absolute={placement,owns_abbreviation:!!(policy&2),z_index:policy&1?view.getInt32(advance(4),true):null,background_alpha:f32()};
+        }
+        if(shape&2)style.corner_radius_px=f32();
+        if(shape&4)style.inline_atomic=tag(['adjacent','after_space']);
+      }
+    }
     return style;
   };
   const borderLine = kind => {
@@ -441,7 +473,7 @@ export function decode(bytes, metadata) {
     }
   }
 
-  const block=(tableDepth=0)=>{
+  const block=(tableDepth=0,parentStyle=null,sectionRoot=false)=>{
     const kind=tag(containers?blocks:blocks.slice(0,-1)),depth=byte(),level=byte();const value={kind,depth,level,spans:spans()};
     if(presence()) value.feature={kind:string(),language:string(),data:string(),tail_kind:string(),tail:string()};
     value.path=string();value.number=string();
@@ -464,10 +496,19 @@ export function decode(bytes, metadata) {
       }else require(flowTag===0,'Invalid flow tag');
     }
     if(kind==='container'){
-      value.container=content(()=>({style:containerStyle(),blocks:list(blockMinimum(),()=>block(tableDepth))}));
-      validateContainerBlock(value,{containerFonts,positioned:positionedHeadings});
+      value.container=content(()=>{
+        const style=containerStyle(false,true);
+        return {style,blocks:list(blockMinimum(),()=>block(tableDepth,style))};
+      });
+      validateContainerBlock(value,{containerFonts,positioned:positionedHeadings,parentStyle});
     }
     if(rubyEnabled&&kind==='rule')require(byte()===0,'Unsupported ruby-record rule style');
+    // Historical blocks can carry inert anchor metadata. The extended writers
+    // require an advertised, validated source owner for a nonheading destination.
+    if((magic==='DPRY'||magic==='DPRZ'||magic==='DPRa')&&kind!=='heading'&&(value.anchor||value.anchor_fallback)){
+      require(sourceAnchorsEnabled,'Nonheading anchor without source anchor feature');
+      validateSourceAnchor(value,sectionRoot);sourceAnchorCount++;
+    }
     return value;
   };
   const contentContext=value=>['list_item','definition','example','quotation','term','list_detail','indent'].includes(value.kind)||(value.kind==='paragraph'&&value.depth===0&&value.path==='');
@@ -481,15 +522,17 @@ export function decode(bytes, metadata) {
     imageOccurrences=!!(features&imageOccurrenceFeature);
   }
   if(magic==='DPRZ'||magic==='DPRa'){
-    responsiveFlowEnabled=magic==='DPRa';
+    responsiveFlowEnabled=!!(features&responsiveFlowFeature);
+    sourceAnchorsEnabled=!!(features&sourceAnchorFeature);
     imageOccurrences=!!(features&imageOccurrenceFeature);
     audioEnabled=!!(features&0x2000);
     clippedEnabled=!!(features&128);
     positionedHeadings=!!(features&0x100);
     inlineBoxGroups=!!(features&4);
+    containerOwnerFonts=!!(features&containerOwnerFontFeature);
   }
   actionGroupsEnabled=['DPRV','DPRY','DPRZ','DPRa'].includes(magic);rubyEnabled=magic==='DPRS'||actionGroupsEnabled;containerFonts=magic==='DPRM'||rubyEnabled;containers=magic==='DPRL'||containerFonts;inlineTableStyles=magic==='DPRK'||containers;rich=magic==='DPRJ'||inlineTableStyles;blockGeometry=magic==='DPRI'||rich;tooltips=magic==='DPRH'||blockGeometry;dynamicCatalogue=magic==='DPRG'||tooltips;componentTargets=magic==='DPRF'||dynamicCatalogue;aligned=magic==='DPRE'||componentTargets;imageBorder=magic==='DPRD'||aligned;referenceBlocks=magic==='DPRC'||imageBorder;based=magic==='DPRB'||referenceBlocks;scaled=magic==='DPRA'||based;referenceItems=magic==='DPR9'||scaled;ordered=magic==='DPR8'||referenceItems;nested=magic==='DPR7'||ordered;if(nested)budget=1<<20;painted=magic==='DPR6'||nested;anchored=magic==='DPR5'||painted;colored=magic==='DPR4'||anchored;explained=magic!=='DPR2';
-  const entry={...metadata,presentation_version:magic,display_title:spans(),sections:list(anchored?17:9,()=>({level:byte(),title:string(),anchor:anchored?string():'',anchor_fallback:anchored?string():'',blocks:list(blockMinimum(),()=>block())})),preamble_spans:spans()};
+  const entry={...metadata,presentation_version:magic,display_title:spans(),sections:list(anchored?17:9,()=>({level:byte(),title:string(),anchor:anchored?string():'',anchor_fallback:anchored?string():'',blocks:list(blockMinimum(),()=>block(0,null,true))})),preamble_spans:spans()};
   const childPath=(values,root)=>{
     const n=count(4);require(n<=16);let value=values[root];
     for(let i=0;i<n;i++){const box=value.description_body?.box??value.container;require(box);value=box.blocks[index(box.blocks.length)];}
@@ -528,6 +571,9 @@ export function decode(bytes, metadata) {
       else require(pending===0&&positionedBody,'Unsupported positioned body or heading fields');
     }else require(pending===0,'Unsupported extended-record body feature');
     if(responsiveFlowEnabled)require(responsiveFlowCount>0,'Missing responsive flow band');
+    require(sourceAnchorsEnabled===(sourceAnchorCount>0),'Invalid source anchor feature census');
+    if(sourceAnchorsEnabled)validateSourceAnchorDestinations(entry);
+    require(containerOwnerFonts===(containerOwnerFontCount>0),'Invalid container owner font census');
     if(imageOccurrences)require(imageOccurrenceCount>0,'Missing inline image occurrence');
     if(audioEnabled){
       require(audioSpans.length>0,'DPRZ audio feature requires an audio control');
@@ -537,7 +583,7 @@ export function decode(bytes, metadata) {
     }
     if(clippedEnabled)require(clipCount>0,'Missing clipped absolute payload');
     if(inlineBoxGroups)require(boxCount>0,'Missing inline box payload');
-    else if(!clippedEnabled&&!audioEnabled&&!positionedHeadings&&!imageOccurrences&&!responsiveFlowEnabled)require(actionGroupsEnabled?actionGroupCount>0:rubyCount>0,actionGroupsEnabled?'DPRV requires inline action payload':'DPRS requires ruby payload');
+    else if(!clippedEnabled&&!audioEnabled&&!positionedHeadings&&!imageOccurrences&&!responsiveFlowEnabled&&!sourceAnchorsEnabled)require(actionGroupsEnabled?actionGroupCount>0:rubyCount>0,actionGroupsEnabled?'DPRV requires inline action payload':'DPRS requires ruby payload');
   }
   const images=[];
   const inspect=values=>{for(const span of values||[])if(span.image)images.push(span.image);};

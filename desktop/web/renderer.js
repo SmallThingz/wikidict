@@ -18,6 +18,7 @@ function darkReadingInk(foreground,background){
   return '#'+mix(low).map(channel=>channel.toString(16).padStart(2,'0')).join('');
 }
 import {safeURL,linkTargetParts,bookSourcesURL,validateDescriptionBody,validateDarkForeground,validateContainerBlock,validateCellMetrics,validateRuby,validateRubyOwner,validateRubySpan,validateActionGroupSpan,validateInlineBoxSpan,validateFigureIntrinsicSize,validateClippedSpan,validateAudioControl,validateWrappedHeading,validateTableDisclosure} from './validate.js';
+import {validateSourceAnchor,validateSourceAnchorDestinations} from './validate.js';
 import {previewBlocks,inlineText} from './preview.js';
 import {figureImageSize,audioControlView} from './media.js';
 const node = (tag, text, cls) => { const el = document.createElement(tag); if (text != null) el.textContent = text; if (cls) el.className = cls; return el; };
@@ -489,7 +490,9 @@ export function revealFragment(root, fragment) {
   }
   if (!target.hasAttribute('tabindex')) target.tabIndex = -1;
   const clipped=target.closest('.compiled-clipped-body');
-  (exteriorBoxes.get(clipped)??target).scrollIntoView({block:'center'});
+  // A sense owns the list item, but its examples and quotations can extend beyond the viewport.
+  const lead=target.tagName==='LI'?target.querySelector(':scope > .definition')??target:target;
+  (exteriorBoxes.get(clipped)??lead).scrollIntoView({block:'center'});
   target.focus({preventScroll:true});
   return true;
 }
@@ -538,6 +541,7 @@ function figureColor(value,fallback){return value.kind==='native_theme'?fallback
 function figureBorder(value){return value.kind==='none'?'none':styleLength(value.width)+' solid '+figureColor(value.color,'var(--muted)');}
 function validateRichEntry(entry){
   let remaining=1<<20,mapStrings=32*1024*1024;
+  let sourceAnchors=false;
   const charge=(n=1)=>{if(!Number.isInteger(n)||n<0||(remaining-=n)<0)richError();};
   const string=value=>{if(typeof value!=='string'||/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(value)||new TextEncoder().encode(value).length>32*1024*1024)richError();};
   const array=value=>{if(!Array.isArray(value))richError();charge(value.length);return value;};
@@ -635,16 +639,19 @@ function validateRichEntry(entry){
     }
     if(inline&&!cells)richError();
   };
-  const blocks=(values,tableDepth=0,depth=0,inReference=false)=>{
+  const blocks=(values,tableDepth=0,depth=0,inReference=false,parentStyle=null,sectionRoot=false)=>{
     if(depth>16)richError();
     for(const block of array(values)){
       spanList(block.spans);const owner=richListKinds.has(block.kind)||(block.kind==='paragraph'&&!(block.depth||0)&&!block.list_path);
+      if(entry.presentation_version==='DPRa'&&block.kind!=='heading'&&(block.anchor||block.anchor_fallback)){
+        validateSourceAnchor(block,sectionRoot);sourceAnchors=true;
+      }
       if(block.description_body!=null){validateDescriptionBody(block);blocks(block.description_body.box.blocks,tableDepth,depth+1,inReference);}
       if(block.kind==='container'||block.container!=null){
         const version=entry.presentation_version;
         const positioned=version==='DPRZ'||version==='DPRa';
-        validateContainerBlock(block,{containerFonts:positioned||['DPRM','DPRS','DPRV','DPRY'].includes(version),positioned});
-        blocks(block.container.blocks,tableDepth,depth+1,inReference);
+        validateContainerBlock(block,{containerFonts:positioned||['DPRM','DPRS','DPRV','DPRY'].includes(version),positioned,parentStyle});
+        blocks(block.container.blocks,tableDepth,depth+1,inReference,block.container.style);
       }
       if(block.flow!=null){if(!owner||block.spans?.length||block.table!=null||block.feature!=null||block.figure!=null)richError();flow(block.flow,tableDepth,depth+1,inReference);}
       if(block.figure!=null){if(!owner||block.spans?.length||block.table!=null||block.feature!=null||block.style!=null)richError();figure(block.figure,tableDepth,depth,inReference);}
@@ -653,8 +660,10 @@ function validateRichEntry(entry){
     }
   };
   spanList(entry.display_title);spanList(entry.preamble_spans);
-  for(const section of array(entry.sections))blocks(section.blocks);
+  for(const section of array(entry.sections))blocks(section.blocks,0,0,false,null,true);
   for(const ref of entry.references||[]){spanList(ref.spans);if(ref.blocks!=null)blocks(ref.blocks,0,0,true);}
+  if(sourceAnchors)validateSourceAnchorDestinations(entry);
+  return sourceAnchors;
 }
 function richAction(action,onLink,explanations,label=action.label){
   const el=node('a',label);let href=null;
@@ -738,7 +747,7 @@ function figureView(value,onLink,explanations,context={}){
     const surface=value.caption_background.kind==='rgb'?value.caption_background.value:value.caption_background.kind==='transparent'?(value.frame_background.kind==='rgb'?value.frame_background.value:value.frame_background.kind==='transparent'?context.background:null):null;
     const captionInk=value.caption_foreground.kind==='native_theme'?(canonicalRGB(surface)?contrastInk(surface):null):figureColor(value.caption_foreground,null);
     const captionExplanations={...explanations,captionInk};
-    if(value.caption_blocks!=null)appendBlocks(caption,value.caption_blocks,block=>blockView(block,onLink,captionExplanations,'',{...context,background:null,caption:true}));else caption.append(spans(value.caption,onLink,false,captionExplanations));
+    if(value.caption_blocks!=null)appendBlocks(caption,value.caption_blocks,block=>blockView(block,onLink,captionExplanations,'',{...context,background:null,caption:true}),explanations?.sourceAnchors);else caption.append(spans(value.caption,onLink,false,captionExplanations));
     for(const block of caption.querySelectorAll('.block')){block.style.fontSize='inherit';block.style.lineHeight='inherit';}frame.append(caption);
   }
   if(value.placement==='center'){
@@ -910,7 +919,7 @@ function tableView(value,onLink,explanations,depth=1,inheritedBackground=null){
   if(g.width!=null){const {unit,value:n}=g.width;if(!['px','percent'].includes(unit)||!Number.isInteger(n)||n<0||n>4294967295||(unit==='percent'&&n>100))throw Error('Invalid table width');table.style.width=n+(unit==='percent'?'%':'px');}
   applyTableStyle(table,value.style);
   const tableBackground=canonicalRGB(value.style?.background)?value.style.background:inheritedBackground;
-  if(value.caption_blocks!=null){const caption=node('caption');appendBlocks(caption,value.caption_blocks,block=>blockView(block,onLink,explanations,'',{tableDepth:depth,background:tableBackground,caption:true}));table.append(caption);}
+  if(value.caption_blocks!=null){const caption=node('caption');appendBlocks(caption,value.caption_blocks,block=>blockView(block,onLink,explanations,'',{tableDepth:depth,background:tableBackground,caption:true}),explanations?.sourceAnchors);table.append(caption);}
   else if(value.caption?.length){const caption=node('caption');caption.append(spans(value.caption,onLink,false,explanations,false,tableBackground));table.append(caption);}
   const group=value.disclosure?table.createTBody():table;
   for(const row of value.rows){const tr=node('tr');for(const cell of row.cells){
@@ -921,7 +930,7 @@ function tableView(value,onLink,explanations,depth=1,inheritedBackground=null){
     if(canonicalRGB(effectiveBackground))td.style.backgroundColor=effectiveBackground;
     if(cell.blocks!=null){
       if(!Array.isArray(cell.blocks)||cell.spans?.length||cell.nested_table!=null)throw Error('Invalid ordered table cell');
-      appendBlocks(td,cell.blocks,block=>blockView(block,onLink,explanations,'',{tableDepth:depth,background:effectiveBackground,header:!!cell.header}));
+      appendBlocks(td,cell.blocks,block=>blockView(block,onLink,explanations,'',{tableDepth:depth,background:effectiveBackground,header:!!cell.header}),explanations?.sourceAnchors);
     }else if(cell.nested_table!=null){if(typeof cell.nested_table!=='object'||Array.isArray(cell.nested_table)||cell.spans?.length)throw Error('Invalid nested table cell');td.append(cell.nested_table.style?.float_side!=null?blockView({kind:'table',table:cell.nested_table},onLink,explanations,'',{tableDepth:depth,background:effectiveBackground}):tableView(cell.nested_table,onLink,explanations,depth+1,effectiveBackground));}
     else td.append(spans(cell.spans,onLink,false,explanations,false,effectiveBackground));
     tr.append(td);
@@ -930,14 +939,14 @@ function tableView(value,onLink,explanations,depth=1,inheritedBackground=null){
   if(value.style?.line_height!=null)for(const block of table.querySelectorAll('.block'))block.style.lineHeight='inherit';
   return table;
 }
-function visibleBlock(block){
-  return block.kind!=='blank'&&(block.description_body||block.container||block.figure||block.flow!=null||block.style||block.table||block.kind==='rule'||block.spans?.some(s=>s.image||s.inline_action_group||s.inline_box_group||s.clipped_absolute||s.text?.trim()||s.trail?.trim())||block.spans?.some(isPoem)||(block.kind==='heading'&&(block.anchor||block.anchor_fallback)));
+function visibleBlock(block,sourceAnchors){
+  return block.kind!=='blank'&&(((sourceAnchors||block.kind==='heading')&&(block.anchor||block.anchor_fallback))||block.description_body||block.container||block.figure||block.flow!=null||block.style||block.table||block.kind==='rule'||block.spans?.some(s=>s.image||s.inline_action_group||s.inline_box_group||s.clipped_absolute||s.text?.trim()||s.trail?.trim())||block.spans?.some(isPoem));
 }
-function appendBlocks(parent,values,render){
+function appendBlocks(parent,values,render,sourceAnchors){
   const created=[];
   let lists=[];
   for(const block of values){
-    const visible=visibleBlock(block);
+    const visible=visibleBlock(block,sourceAnchors);
     const path=block.list_path??block.path??'';
     const sense=block.kind==='definition'&&/^[*#:;]*#$/.test(path);
     const quotationItem=block.kind==='quotation'&&/^[*#:;]+\*$/.test(path)&&lists.some(list=>list.sense&&path.startsWith(list.path));
@@ -953,6 +962,7 @@ function appendBlocks(parent,values,render){
       }
       lists.length=at+1;
       const current=lists[at],item=node('li',null,'compiled-list-item');
+      if(sourceAnchors&&sense&&block.anchor)destination(item,block);
       if(key.endsWith('#')&&/^-?\d+$/.test(block.number||'')){
         const number=Number(block.number);
         if(Number.isInteger(number)&&number>=-2147483648&&number<=2147483647)item.value=number;
@@ -980,7 +990,7 @@ function appendBlocks(parent,values,render){
           if(lists[at].sense&&(block.description_body||block.kind==='example'||block.kind==='quotation'))appendSenseDetail(item,view);
           else item.append(view);
         }
-      }else{lists=[];if(visible)parent.append(render(block));}
+      }else{lists=[];if(visible){if(block.container?.style.inline_atomic==='after_space')parent.append(' ');parent.append(render(block));}}
     }
   }
   // An empty item can own a later continuation or child list. Remove a list only after all its children are known.
@@ -998,23 +1008,29 @@ function visitBlocks(values,visit){
   for(const block of values||[]){visit(block);if(block.table)table(block.table);if(block.figure)figure(block.figure);if(block.flow)flow(block.flow);const box=block.description_body?.box??block.container;if(box)visitBlocks(box.blocks,visit);}
 }
 let containerSequence=0;
-const containerWidthCSS=value=>value.length?(value.length.unit==='percent'?value.length.value+'%':styleLength(value.length)):Object.hasOwn(value,'fit_content')?'fit-content':Object.hasOwn(value,'none')?'none':'auto';
+const containerWidthCSS=value=>value.length?(value.length.unit==='percent'?value.length.value+'%':styleLength(value.length)):Object.hasOwn(value,'fit_content')?'fit-content':Object.hasOwn(value,'max_content')?'max-content':Object.hasOwn(value,'none')?'none':'auto';
 const containerColorCSS=(value,dark)=>Object.hasOwn(value,'rgb')?value.rgb:value.light_dark?value.light_dark[dark?'dark':'light']:'transparent';
 const containerHeightCSS=value=>Object.hasOwn(value,'multiplier')?String(value.multiplier):value.length?styleLength(value.length):'normal';
+const positionedLength=({px,percent})=>`calc(${percent}% + ${px}px)`;
 function containerDeclarations(style,dark=false){
   const css=[];
   const set=(key,value)=>css.push(key+':'+value);
-  if(style.margins)for(const side of ['top','right','bottom','left']){
-    const value=style.margins[side];set('margin-'+side,value.unit?styleLength(value,true):value.length?styleLength(value.length,true):'auto');
+  const margins=style.margin_values??style.margins;
+  if(margins)for(const side of ['top','right','bottom','left']){
+    const value=margins[side];set('margin-'+side,value.unit?styleLength(value,true):value.length?styleLength(value.length,true):'auto');
   }
   if(style.padding)for(const side of ['top','right','bottom','left'])set('padding-'+side,styleLength(style.padding[side]));
   if(style.width)set('width',containerWidthCSS(style.width));if(style.max_width)set('max-width',containerWidthCSS(style.max_width));
   if(style.float_side!=null)set('float',style.float_side);if(style.clear!=null)set('clear',style.clear);
   if(style.box_sizing!=null)set('box-sizing',style.box_sizing.replace('_','-'));
-  if(style.layout!=null)set('display',style.layout==='flex_row'?'flex':'block');
+  if(style.layout!=null)set('display',['flex_row','flex_column'].includes(style.layout)?'flex':'block');
+  if(style.layout==='flex_column')set('flex-direction','column');
   if(style.align_items!=null)set('align-items',({start:'flex-start',end:'flex-end'})[style.align_items]??style.align_items);
   if(style.flex_item!=null)set('flex','none');
-  if(style.background)set('background-color',containerColorCSS(style.background,dark));
+  if(style.background){
+    const color=containerColorCSS(style.background,dark);
+    set('background-color',style.translated_absolute?`color-mix(in srgb, ${color} ${style.translated_absolute.background_alpha*100}%, transparent)`:color);
+  }
   if(style.border){
     const paint=edge=>{
       const [kind,line]=Object.entries(edge)[0];
@@ -1027,7 +1043,23 @@ function containerDeclarations(style,dark=false){
   if(style.text_align!=null)set('text-align',style.text_align);
   if(style.overflow!=null)set('overflow',style.overflow);
   if(style.owner_font_scale!=null)set('font-size',`calc(var(--wikidict-normal-body-size) * ${style.owner_font_scale})`);
+  if(style.owner_font){
+    const font=style.owner_font,size=semanticFontSize(font);
+    if(size!=null)set('font-size',size);
+    set('font-weight',font.bold?'bold':'normal');set('font-style',font.italic?'italic':'normal');
+    if(font.code)set('font-family','monospace');
+  }
   if(style.height!=null)set('height',styleLength(style.height));
+  if(style.min_height!=null)set('min-height',styleLength(style.min_height));
+  if(style.positioning==='relative_auto')set('position','relative');
+  if(style.corner_radius_px!=null)set('border-radius',style.corner_radius_px+'px');
+  if(style.inline_atomic)set('display','inline-block');
+  if(style.translated_absolute){
+    const {placement,z_index}=style.translated_absolute;
+    set('position','absolute');set('left',positionedLength(placement.left));set('top',positionedLength(placement.top));
+    set('transform',`translate(${positionedLength(placement.translate_x)}, ${positionedLength(placement.translate_y)})`);
+    if(z_index!=null)set('z-index',String(z_index));
+  }
   if(style.columns){set('column-count',String(style.columns.count));set('column-gap',styleLength(style.columns.gap));set('column-fill','balance');}
   return css.join(';');
 }
@@ -1042,6 +1074,7 @@ function orderedContainerView(value,onLink,explanations,context){
     const {style,blocks:[head,...details]}=block.container;
     const item=node('li',null,'compiled-ordered-item');
     item.style.cssText=containerDeclarations(style);
+    if(explanations?.sourceAnchors&&head.kind==='definition'&&head.anchor)destination(item,head);
     const view=blockView(head,onLink,explanations,'',childContext);
     view.querySelector(':scope > .prefix')?.remove();
     if(!head.style?.margins)view.style.removeProperty('margin-inline-start');
@@ -1058,6 +1091,7 @@ function orderedContainerView(value,onLink,explanations,context){
 function containerView(value,onLink,explanations,context,before=null){
   if(value.style.layout==='ordered_list')return orderedContainerView(value,onLink,explanations,context);
   const cls='compiled-container-'+(++containerSequence),el=node('div',null,'compiled-container '+cls),style=node('style');
+  if(value.style.owner_font?.language)el.lang=value.style.owner_font.language;
   if(!context.container&&!context.tableDepth&&!context.caption)el.classList.add('compiled-container-root');
   // Only validated typed values enter this stylesheet. Rules remain scoped to
   // this owner and react to the viewport/theme without a second layout engine.
@@ -1076,7 +1110,7 @@ function containerView(value,onLink,explanations,context,before=null){
   }
   el.append(style);
   if(value.style.overflow==='auto'){el.tabIndex=0;el.setAttribute('aria-label','Scrollable content');}
-  appendBlocks(el,value.blocks,block=>blockView(block,onLink,explanations,'',{...context,container:true}));return el;
+  appendBlocks(el,value.blocks,block=>blockView(block,onLink,explanations,'',{...context,container:true}),explanations?.sourceAnchors);return el;
 }
 function blockView(block, onLink, explanations, legacy = '', context = {}) {
   if(block.text_align!=null&&!['left','center','right'].includes(block.text_align))throw Error('Invalid block text alignment');
@@ -1137,6 +1171,7 @@ function blockView(block, onLink, explanations, legacy = '', context = {}) {
   if(block.text_align!=null)el.style.textAlign=block.text_align;
   if(context.header)el.style.fontWeight='inherit';
   if (kind === 'heading') destination(el, block, legacy);
+  if (explanations?.sourceAnchors && kind === 'paragraph' && block.anchor) destination(el, block);
   const prefix = kind==='definition'?(block.number?`${block.number}.`:'•'):['example','quotation'].includes(kind)?'│':kind==='list_item'?(block.number?`${block.number}.`:'•'):kind==='list_detail'?'↳':'';
   if (prefix) el.append(node('span',prefix,'prefix'));
   const rich=block.figure!=null||block.flow!=null;
@@ -1202,7 +1237,7 @@ function sectionHeadingCompanion(section){
   return (navigable||explained||styledText||visual||first.depth>0)&&trimmed===section.title?first:null;
 }
 export function renderEntry(entry, onLink, settings = {}, mediaView = () => null, inlineImage = () => {}, imageActionURL = () => null) {
-  validateRichEntry(entry);
+  const sourceAnchors=validateRichEntry(entry);
   const fragment = document.createDocumentFragment(), references = new Map(), legacy = legacyDestinations(entry);
   let hasTableFloat=false;
   const inspectTableFloat=table=>{
@@ -1215,13 +1250,14 @@ export function renderEntry(entry, onLink, settings = {}, mediaView = () => null
   for(const ref of entry.references||[])if(Array.isArray(ref.blocks))visitBlocks(ref.blocks,inspectFloat);
   const root=hasTableFloat?node('div',null,'compiled-table-flow'):fragment;
   if(hasTableFloat)fragment.append(root);
-  const headingDestinations = new Set();
-  const observeHeading=value=>{for(const id of [value.anchor,value.anchor_fallback,legacy.get(value)])if(id)headingDestinations.add(id);};
-  for(const section of entry.sections){observeHeading(section);visitBlocks(section.blocks,block=>{if(block.kind==='heading')observeHeading(block);});}
+  const authoredDestinations = new Set();
+  const observeDestination=value=>{for(const id of [value.anchor,value.anchor_fallback,legacy.get(value)])if(id)authoredDestinations.add(id);};
+  const observeBlock=block=>{if(sourceAnchors||block.kind==='heading')observeDestination(block);};
+  for(const section of entry.sections){observeDestination(section);visitBlocks(section.blocks,observeBlock);}
   for(const ref of entry.references||[]){
     if(ref.blocks!=null){
       if(!Array.isArray(ref.blocks)||!Array.isArray(ref.spans)||ref.spans.length)throw Error('Invalid structured reference');
-      visitBlocks(ref.blocks,block=>{if(block.kind==='heading')observeHeading(block);});
+      visitBlocks(ref.blocks,observeBlock);
     }
   }
   const explanationRows=[], explanationKeys=new Map();
@@ -1231,7 +1267,7 @@ export function renderEntry(entry, onLink, settings = {}, mediaView = () => null
     mediaOwners.set(mediaOwnerPrefix+hex,media.file);
   }
   const darkSurface=globalThis.getComputedStyle?.(document.documentElement).getPropertyValue('--wikidict-dark-reading-surface').trim();
-  const explanations={tableCategories:new Map(),exteriorBoxes:[],inlineImage,imageActionURL,audioControl:(span,label)=>audioControlView(span,label,settings,entry.source_edition),sourceEdition:entry.source_edition,darkReadingSurface:canonicalRGB(darkSurface)?darkSurface:null,isMediaExplanation(span){
+  const explanations={sourceAnchors,tableCategories:new Map(),exteriorBoxes:[],inlineImage,imageActionURL,audioControl:(span,label)=>audioControlView(span,label,settings,entry.source_edition),sourceEdition:entry.source_edition,darkReadingSurface:canonicalRGB(darkSurface)?darkSurface:null,isMediaExplanation(span){
     if(span.kind!=='link'||span.image)return false;
     const tokens=poemTokens(span),owners=tokens.filter(token=>token.startsWith(mediaOwnerPrefix));
     // Match the compiled media catalog, not an ordinary File link or a legacy abbreviation.
@@ -1240,14 +1276,14 @@ export function renderEntry(entry, onLink, settings = {}, mediaView = () => null
   },add(label,explanation){
     const key=JSON.stringify([label,explanation]);
     if(explanationKeys.has(key))return explanationKeys.get(key);
-    let id;do{id='abbreviation-explanation-'+(++explanationSequence);}while(headingDestinations.has(id));
+    let id;do{id='abbreviation-explanation-'+(++explanationSequence);}while(authoredDestinations.has(id));
     explanationKeys.set(key,id);explanationRows.push({id,label,explanation});return id;
   }};
   const followLink = (target,targetFragment) => {
     const parts=linkTargetParts(target,targetFragment),fragment=parts.title===''?parts.fragment:null;
     const dispatch=()=>targetFragment==null?onLink(target):onLink(target,targetFragment);
-    // Authored heading identities take precedence over generated citation IDs.
-    if (fragment && (headingDestinations.has(fragment)||headingDestinations.has(fragment.replaceAll(' ','_')))) { dispatch(); return; }
+    // Authored destinations take precedence over generated citation IDs.
+    if (fragment && (authoredDestinations.has(fragment)||authoredDestinations.has(fragment.replaceAll(' ','_')))) { dispatch(); return; }
     const reference = fragment?references.get('#'+fragment):null;
     if (!reference) { dispatch(); return; }
     for (let parent = reference.parentElement; parent; parent = parent.parentElement)
@@ -1288,12 +1324,12 @@ export function renderEntry(entry, onLink, settings = {}, mediaView = () => null
     }
     el.classList.toggle('meaning',meaning);destination(el,section,legacy.get(section)||'');
     const body=companion?section.blocks.slice(1):section.blocks;
-    appendBlocks(el,body,block=>blockView(block,followLink,explanations,legacy.get(block)||''));
-    if(section.blocks.some(visibleBlock)||companion||section.anchor||section.anchor_fallback)root.append(el);
+    appendBlocks(el,body,block=>blockView(block,followLink,explanations,legacy.get(block)||''),sourceAnchors);
+    if(section.blocks.some(block=>visibleBlock(block,sourceAnchors))||companion||section.anchor||section.anchor_fallback)root.append(el);
   }
   if (entry.references?.length) {
     const section=fold('References',!settings.collapseOtherSections);
-    const referenceIDs=new Set(headingDestinations);
+    const referenceIDs=new Set(authoredDestinations);
     for (const ref of entry.references) {
       const p=node(ref.blocks!=null?'div':'p',null,'reference'),kind=ref.kind??'note';
       if(kind==='note'){
@@ -1302,7 +1338,7 @@ export function renderEntry(entry, onLink, settings = {}, mediaView = () => null
         referenceIDs.add(id);p.id=id;p.tabIndex=-1;references.set(`#${target}`,p);
         p.append(node('span',`[${ref.group?ref.group+' ':''}${ref.group_number}]`));
       }else if(kind!=='fragment')throw Error('Invalid compiled reference kind');
-      if(ref.blocks!=null)appendBlocks(p,ref.blocks,block=>blockView(block,followLink,explanations));
+      if(ref.blocks!=null)appendBlocks(p,ref.blocks,block=>blockView(block,followLink,explanations),sourceAnchors);
       else {const body=node('span');body.append(spans(ref.spans,followLink,false,explanations));p.append(body);}
       section.append(p);
     }

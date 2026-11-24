@@ -1,0 +1,78 @@
+{
+  "title": "America",
+  "page_id": 11827,
+  "revision_id": 711271,
+  "archive_sha256": "3c0e5dfe8117718f137af9a779d6b15ba21a367c02511ea8701000709e91180b",
+  "source": {
+    "head": "eeec90d449d5d07d0c04924a5389b2cd971b5b86c370f8845e749224a1ee7f3d",
+    "physical_manifest_sha256": "9db5c29d8ff06d50923b6f22d2640f3dd4f685a236ee5e10ac2d49b61c22277c",
+    "source_inventory_sha256": "b9de8584c2d46fd5c221ddbceb027cb0156f39f8fda15efbbbf3c4f52856686c"
+  },
+  "all_actions_sha256": "a487eb5966b15863bb0842625fed4e388e0805457e7f33f739acc765e052b809",
+  "owners": {
+    "Translations-Q30": {
+      "kind": "paragraph",
+      "outgoing": "United States of America#Translations-Q30",
+      "path": [
+        "sections",
+        10,
+        "blocks",
+        0
+      ],
+      "visible": "United States of America — see United States of America"
+    },
+    "Translations-Q828": {
+      "kind": "paragraph",
+      "outgoing": "Americas#Translations-Q828",
+      "path": [
+        "sections",
+        10,
+        "blocks",
+        1
+      ],
+      "visible": "Americas — see Americas"
+    },
+    "Енглески:_Q30": {
+      "kind": "definition",
+      "outgoing": "United States of America",
+      "path": [
+        "sections",
+        5,
+        "blocks",
+        7
+      ],
+      "visible": "The United States of America."
+    },
+    "Енглески:_Q828": {
+      "kind": "definition",
+      "outgoing": "Americas",
+      "path": [
+        "sections",
+        5,
+        "blocks",
+        1
+      ],
+      "visible": "The Americas."
+    }
+  },
+  "baseline": {
+    "file": "america-dprz.wikblb",
+    "filename": "srwiktionary-20261001-b18fb069f22b28de0f394efd81dc92585f44c62fa77c0dbbc569cf8e09f984ec.wikblb",
+    "file_sha256": "63655d201cb8b7bb8e20e6fa5c7f3c54350d6f7a5e5cfed310bb3a8522d376a1",
+    "payload_sha256": "222d80edfc308bdc412cbe3503654fb582474c16f01b27c2185ee2b839d615f1",
+    "payload_offset": 40,
+    "payload_length": 46245,
+    "root_width_tag_offset": 2609,
+    "magic": "DPRZ"
+  },
+  "candidate": {
+    "file": "america-dpra.wikblb",
+    "filename": "srwiktionary-20261001-b18fb069f22b28de0f394efd81dc92585f44c62fa77c0dbbc569cf8e09f984ec.wikblb",
+    "file_sha256": "3f1c03f33455bb6f7258aa061de5533f3b41cd86f948f9b017ee2f9f68e56c68",
+    "payload_sha256": "74113fd797a856deea9c8da0b6ba1dfc5be33902ee76f4cb92a7eb9449a2d610",
+    "payload_offset": 40,
+    "payload_length": 46323,
+    "root_width_tag_offset": 2611,
+    "magic": "DPRa"
+  }
+}
