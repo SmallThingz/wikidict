@@ -523,7 +523,7 @@ private fun AudioPlaybackControls(control: AudioControl, direction: String, cont
 }
 
 @Composable
-fun MediaView(media:Media,settings:AppSettings,showFileName:Boolean=true,edition:String="",showCaption:Boolean=true,cache:MediaCache=LocalInlineImageCache.current ?: MediaCache.get(LocalContext.current),showImage:Boolean=true,audioControl:AudioControl?=null,audioDirection:String="",audioContainingWidthPixels:(()->Float)?=null,audioContainingWidthModifier:Modifier=Modifier,audioOverflowOwned:Boolean=false) {
+fun MediaView(media:Media,settings:AppSettings,showFileName:Boolean=true,edition:String="",showCaption:Boolean=true,cache:MediaCache=LocalInlineImageCache.current ?: MediaCache.get(LocalContext.current),showImage:Boolean=true,audioControl:AudioControl?=null,audioDirection:String="",audioContainingWidthPixels:(()->Float)?=null,audioContainingWidthModifier:Modifier=Modifier,audioOverflowOwned:Boolean=false,recordingLabel:String?=null) {
     require(audioControl==null||media.kind=="audio")
     val scope=rememberCoroutineScope();val uri=LocalUriHandler.current
     val key=remember(media.kind,media.file,edition){mediaKey(media,edition)}
@@ -617,8 +617,20 @@ fun MediaView(media:Media,settings:AppSettings,showFileName:Boolean=true,edition
                 shownSource?.let{source->IconButton(onClick={uri.openUri(source)}){Icon(Icons.Outlined.OpenInNew,"Source and licence",Modifier.size(17.dp))}}
             }
         }else Row(verticalAlignment=Alignment.CenterVertically) {
-            if(media.kind!="image" || (showImage&&!allowed&&!showImageRetry)) IconButton(modifier=if(shownBusy)Modifier.semantics{contentDescription=if(media.kind=="image")"Loading image" else "Loading pronunciation"}else Modifier,enabled=allowed&&!shownBusy,onClick=onMediaClick
-            ) { if(shownBusy) CircularProgressIndicator(Modifier.size(18.dp),strokeWidth=2.dp) else Icon(if(media.kind=="image")Icons.Outlined.Image else if(MediaPlayback.isPlaying(key,playbackOccurrence))Icons.Outlined.Stop else Icons.Outlined.PlayArrow,if(media.kind=="image"){if(shownError!=null) "Retry image" else "Image source"} else if(MediaPlayback.isPlaying(key,playbackOccurrence)) "Stop pronunciation" else "Play pronunciation") }
+            val audioSubject = recordingLabel?.let { "recording: $it" } ?: "pronunciation"
+            if (media.kind != "image" || (showImage && !allowed && !showImageRetry)) {
+                val label = if (media.kind == "image") {
+                    if (shownBusy) "Loading image" else if (shownError != null) "Retry image" else "Image source"
+                } else {
+                    if (shownBusy) "Loading $audioSubject" else if (playbackActive) "Stop $audioSubject" else "Play $audioSubject"
+                }
+                IconButton(onClick = onMediaClick, enabled = allowed && !shownBusy,
+                    modifier = Modifier.semantics { contentDescription = label }) {
+                    if (shownBusy) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                    else Icon(if (media.kind == "image") Icons.Outlined.Image else if (playbackActive) Icons.Outlined.Stop
+                        else Icons.Outlined.PlayArrow, contentDescription = null)
+                }
+            }
             Column(Modifier.weight(1f)) {
                 val caption=media.caption.takeUnless{it==media.file}.orEmpty()
                 if(showCaption && (caption.isNotBlank() || showFileName)) Text(caption.ifBlank{media.file.substringBeforeLast('.').replace('_',' ')},style=MaterialTheme.typography.bodyMedium)

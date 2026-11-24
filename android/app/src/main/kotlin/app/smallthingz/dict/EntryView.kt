@@ -788,7 +788,8 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
             if (remainingMedia.isNotEmpty()) item("media-heading") { FoldHeading("Media", folded["media"] == true) { folded["media"] = folded["media"] != true } }
             (if (folded["media"] == true) emptyList() else remainingMedia).forEachIndexed { index, media -> item("media-$index", contentType = "media") {
                 MediaView(media, settings, edition=entry.edition, showFileName = media.file !in entry.separateImageCaptionFiles,
-                    showImage = media.file !in entry.separateImageCaptionFiles)
+                    showImage = media.file !in entry.separateImageCaptionFiles,
+                    recordingLabel = media.caption.takeIf { media.kind == "audio" && it.isNotBlank() && it.trim() != media.file })
             } }
             item("attribution") {
                 FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
