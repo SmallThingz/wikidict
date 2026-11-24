@@ -305,6 +305,7 @@ private slots:
         }
         QCOMPARE(focusedSeek, nativeReference); // No whole-control palette recoloring of the filled groove.
         QVERIFY(network.urls.isEmpty()); // Focus policy and binding never request media.
+        QVERIFY(panel.findChildren<QMediaPlayer *>().isEmpty());
         panel.setEntry({});
         QVERIFY(!panel.audioOccurrenceCurrent(a)); QVERIFY(!panel.audioOccurrenceCurrent(b));
         QVERIFY(!playA->isEnabled()); QVERIFY(!playB->isEnabled()); QVERIFY(!seekA->isEnabled());
@@ -323,7 +324,7 @@ private slots:
         auto *action = QAccessible::queryAccessibleInterface(playA)->actionInterface(); QVERIFY(action);
         action->doAction(QAccessibleActionInterface::pressAction());
         QTRY_COMPARE(network.urls.size(), 1);
-        QCOMPARE(panel.findChildren<QMediaPlayer *>().size(), 1);
+        QVERIFY(panel.findChildren<QMediaPlayer *>().isEmpty()); // Loading has not supplied playable audio.
         QVERIFY(!playA->isEnabled()); QVERIFY(!playB->isEnabled());
         QCOMPARE(playA->text(), QStringLiteral("Loading..."));
         QCOMPARE(playB->text(), playA->text());

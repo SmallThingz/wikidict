@@ -652,8 +652,7 @@ struct MediaPanel::Impl {
     QList<MediaCard *> cards;
     QList<QPair<QString, QPushButton *>> pronunciations;
     QHash<QNetworkReply *, QPointer<MediaCard>> requests;
-    QMediaPlayer *player;
-    QAudioOutput *output;
+    QMediaPlayer *player = nullptr;
     std::unique_ptr<QBuffer> audioBuffer;
     QPointer<MediaCard> playing;
     QPointer<QProcess> speech;
@@ -1033,40 +1032,6 @@ struct MediaPanel::Impl {
         cardsLayout->setAlignment(Qt::AlignTop);
         layout->addWidget(cardsBody, 1);
 
-        player = new QMediaPlayer(q);
-        output = new QAudioOutput(q);
-        player->setAudioOutput(output);
-        QObject::connect(player, &QMediaPlayer::playbackStateChanged, q, [this] {
-            for (auto *card : cards) updateButton(card);
-        });
-        QObject::connect(player, &QMediaPlayer::positionChanged, q, [this](qint64 position) {
-            if (!playing) return;
-            if (!playing->position->isSliderDown()) {
-                const QSignalBlocker blocker(playing->position);
-                playing->position->setValue(int(position));
-            }
-            playing->time->setText(durationText(position) + QStringLiteral(" / ") + durationText(player->duration()));
-            syncAudioViews();
-        });
-        QObject::connect(player, &QMediaPlayer::durationChanged, q, [this](qint64 duration) {
-            if (!playing) return;
-            const QSignalBlocker blocker(playing->position);
-            playing->position->setRange(0, int(std::min<qint64>(duration, 2147483647)));
-            playing->position->setEnabled(duration > 0 && player->isSeekable());
-            syncAudioViews();
-        });
-        QObject::connect(player, &QMediaPlayer::seekableChanged, q, [this](bool seekable) {
-            if (playing) playing->position->setEnabled(seekable && player->duration() > 0);
-            syncAudioViews();
-        });
-        QObject::connect(player, &QMediaPlayer::errorOccurred, q, [this](QMediaPlayer::Error, const QString &message) {
-            if (!playing) return;
-            auto *card = playing.data();
-            stopAudio();
-            card->data.clear();
-            removeCached(card);
-            fail(card, QStringLiteral("Could not play this recording. %1").arg(message));
-        });
         QObject::connect(listen, &QPushButton::clicked, q, [this] {
             if (speech) stopSpeech(); else say(title, language);
         });
@@ -1165,8 +1130,10 @@ struct MediaPanel::Impl {
 
     void stopAudio() {
         playing = nullptr;
-        player->stop();
-        player->setSource({});
+        if (player) {
+            player->stop();
+            player->setSource({});
+        }
         audioBuffer.reset();
         for (auto *card : cards) {
             card->position->setEnabled(false);
@@ -1804,12 +1771,50 @@ struct MediaPanel::Impl {
         });
     }
 
+    void ensurePlayer() {
+        if (player) return;
+        player = new QMediaPlayer(q);
+        player->setAudioOutput(new QAudioOutput(player));
+        QObject::connect(player, &QMediaPlayer::playbackStateChanged, q, [this] {
+            for (auto *card : cards) updateButton(card);
+        });
+        QObject::connect(player, &QMediaPlayer::positionChanged, q, [this](qint64 position) {
+            if (!playing) return;
+            if (!playing->position->isSliderDown()) {
+                const QSignalBlocker blocker(playing->position);
+                playing->position->setValue(int(position));
+            }
+            playing->time->setText(durationText(position) + QStringLiteral(" / ") + durationText(player->duration()));
+            syncAudioViews();
+        });
+        QObject::connect(player, &QMediaPlayer::durationChanged, q, [this](qint64 duration) {
+            if (!playing) return;
+            const QSignalBlocker blocker(playing->position);
+            playing->position->setRange(0, int(std::min<qint64>(duration, 2147483647)));
+            playing->position->setEnabled(duration > 0 && player->isSeekable());
+            syncAudioViews();
+        });
+        QObject::connect(player, &QMediaPlayer::seekableChanged, q, [this](bool seekable) {
+            if (playing) playing->position->setEnabled(seekable && player->duration() > 0);
+            syncAudioViews();
+        });
+        QObject::connect(player, &QMediaPlayer::errorOccurred, q, [this](QMediaPlayer::Error, const QString &message) {
+            if (!playing) return;
+            auto *card = playing.data();
+            stopAudio();
+            card->data.clear();
+            removeCached(card);
+            fail(card, QStringLiteral("Could not play this recording. %1").arg(message));
+        });
+    }
+
     void play(MediaCard *card) {
         stopSpeech();
         if (QMediaDevices::audioOutputs().isEmpty()) {
             fail(card, QStringLiteral("No sound output is available. Connect or enable a speaker in system settings."));
             return;
         }
+        ensurePlayer();
         if (playing == card) {
             if (player->playbackState() == QMediaPlayer::PlayingState) player->pause();
             else {
