@@ -333,3 +333,30 @@ selector-custody repair; it does not establish a compiled record. Both logs,
 guards and source manifests remain under `.tmp/r22-mg-th/`, with the joined
 source and runtime account in
 `.tmp/completion-council/MG-TH/r19-followup/r22-runtime-evidence.json`.
+
+The subsequent Kurdish allocation diagnostic preserves the original test and
+adds separate counters for allocation requests and arena backing storage.
+R23b stopped at a Zig 0.17 reflection API mismatch before executing a method.
+The corrected helper passed both isolated accounting controls. R23c then
+compiled its exact three-method Tools artifact in 245.944 seconds at
+2,856,285,184 bytes peak PSS; both accounting methods passed independently on
+that artifact with unchanged inputs and clean closure. The complete original
+Kurdish case remains a separate 4 GiB admission. These controls are diagnostic
+qualification, not a completed dictionary or rendering result.
+
+To sustain local work, two closed R10 native cache buckets were losslessly
+archived and independently verified in Cloud and on RD before retiring their
+uncompressed Cloud copies. Each archive preserves the exact executable and
+object bytes, paths within the bucket, modes and member roster. Historical
+source and failure receipts remain in place. Cloud retains the compressed
+copies and the rehydration mapping under
+`.tmp/completion-council/s5-packed/closed-native-cache/v1/`. Later source and
+hot cache artifacts remain outside this retirement.
+
+Android C19r3 passed all 11 host checks with stable source and clean guards.
+Independent package inspection verified the signed validation APK pair,
+declared native ABIs, required executable test methods and the exact R19
+Babua payload. The package receipt is `c0e75378280a7a052941d36615b2d07120a9315b99172a4b852f28cfe403eadc`
+at RD `.tmp/completion-council-c19r3/titlemedia19r3-packages.json`.
+Physical rendering, interaction and user-state restoration remain separate
+requirements. No release or whole-project completion is asserted.
