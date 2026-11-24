@@ -43,6 +43,7 @@ internal sealed interface NativeFloatContextPart {
         val buildAtWidth: ((Float, List<NativeFloatExclusion>) -> NativeFloatGeometry)? = null,
         val buildInColumns: ((Float) -> NativeFloatGeometry)? = null,
         val columnBreakInside: ColumnBreakInside? = null,
+        val headingFramePaddingAbove: Float? = null,
     ) : NativeFloatContextPart
     data class Rule(val id: Int, val metrics: NativeRuleMetrics,
         val containingWidth: Float? = null) : NativeFloatContextPart
@@ -226,6 +227,7 @@ internal class NativeFloatContextGeometry private constructor(
             val child = when (val geometry = p.geometry) {
                 is NativeFloatContextGeometry -> geometry.scrollableBounds
                 is NativeFloatGeometry -> geometry.scrollableBounds
+                is NativeHeadingFrameText -> geometry.scrollableBounds
                 is NativeAnonymousFlowGeometry -> geometry.scrollableBounds
                 is NativeRuleGeometry -> NativeFloatBounds(0f, 0f, geometry.contentWidth, geometry.extents.usedHeight)
                 is NativeTableViewportGeometry -> geometry.focusBounds.let { NativeFloatBounds(it.left, it.top, it.right, it.bottom) }
@@ -886,7 +888,8 @@ internal class NativeFloatContextGeometry private constructor(
                                 exactAvailable, carried)
                         }
                         check(geometry.text.toString() == part.text.toString()) { "Native paragraph changed its logical source" }
-                        paragraphs += Paragraph(prepared?.sourceIndex(part) ?: partIndex, text.length, x, y, geometry, geometry.textBottom)
+                        val visible = part.headingFramePaddingAbove?.let { NativeHeadingFrameText(geometry, it) } ?: geometry
+                        paragraphs += Paragraph(prepared?.sourceIndex(part) ?: partIndex, text.length, x, y, visible, geometry.textBottom)
                         text.append(part.text)
                         geometry.floats.forEach { placed -> exclusions += NativeFloatExclusion(placed.occurrence.side,
                             NativeFloatBounds(placed.outer.left + x, placed.outer.top + y, placed.outer.right + x, placed.outer.bottom + y)) }

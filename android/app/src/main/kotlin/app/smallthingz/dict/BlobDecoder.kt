@@ -1002,11 +1002,31 @@ object BlobDecoder {
             val box = containerStyle()
             val font = inlineFontSnapshot()
             val direction = BidiResolvedDirection.entries.getOrNull(byte()) ?: error("Unknown heading direction")
-            val flags = if (extensions) byte().also { require(it and 0xfc == 0) { "Unknown heading text flow flags" } } else 0
+            val flags = if (extensions) byte().also { require(it and 0xf8 == 0) { "Unknown heading text flow flags" } } else 0
             val wrap = if (flags and 1 != 0) textWrap() else null
             val reveal = if (flags and 2 != 0) HeadingAnchorReveal(styleLength(), if (presence()) styleLength() else null) else null
             if (flags != 0) hasTextFlowFeature = true
-            return SectionHeadingStyle(box, font, direction, wrap, reveal)
+            val wrappers = if (flags and 4 == 0) null else sectionHeadingWrappers()
+            return SectionHeadingStyle(box, font, direction, wrap, reveal, wrappers)
+        }
+        private fun sectionHeadingWrappers(): SectionHeadingWrappers {
+            require(positionedContainers && remainingItems >= 2) { "Heading frames require positioned Container capability" }
+            remainingItems -= 2
+            // These are two ordinary Container wire bodies with a closed field/edge profile.
+            require(u32() == 0x8801L) { "Invalid outer heading frame fields" }
+            val margins = containerMarginEdges()
+            require(listOf(margins.right, margins.bottom, margins.left).all { it.value == 0f })
+            require(byte() == 2 && byte() == 4) { "Expected a dashed top border on the heading frame" }
+            val stroke = styleLength()
+            val color = containerColor() as? ContainerColor.Rgb ?: error("Heading frame requires an RGB stroke")
+            require(byte() == 0 && byte() == 0 && byte() == 0 && byte() == 3 && byte() == 0) {
+                "Heading frame requires only a top border, visible X and clipped Y"
+            }
+            require(u32() == 2L) { "Invalid inner heading frame fields" }
+            val padding = styleEdges()
+            require(listOf(padding.right, padding.bottom, padding.left).all { it.value == 0f } && byte() == 0)
+            hasPositionedContainers = true
+            return SectionHeadingWrappers(margins.top, stroke, color, padding.top, styleLength())
         }
         private fun inlineFontFamily(): ContainerFontFamily {
             require(extendedFontFamilies) { "Inline font families require P" }

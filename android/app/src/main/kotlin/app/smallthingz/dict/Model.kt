@@ -1860,21 +1860,39 @@ data class HeadingAnchorReveal(val primaryTop: StyleLength, val fallbackTop: Sty
         (fallbackTop == null || fallbackTop.unit == StyleLengthUnit.Px)) { "Heading reveal offsets require CSS pixels" } }
 }
 
+/** Closed outer, inner and title-block boxes of the relative section heading. Outer clips Y only. */
+data class SectionHeadingWrappers(val outerMarginTop: ContainerMarginLength, val outerTopWidth: StyleLength,
+    val outerTopColor: ContainerColor.Rgb, val innerPaddingTop: StyleLength, val titlePaddingRight: StyleLength) {
+    init {
+        require(outerMarginTop.unit == StyleLengthUnit.Em && outerMarginTop.value > 0f &&
+            outerTopWidth.unit == StyleLengthUnit.Px && outerTopWidth.value > 0f &&
+            listOf(innerPaddingTop, titlePaddingRight).all { it.unit == StyleLengthUnit.Em && it.value > 0f }) {
+            "Invalid relative heading frame edges"
+        }
+    }
+}
+
 data class SectionHeadingStyle(val box: ContainerStyle, val font: InlineFontSnapshot,
     val direction: BidiResolvedDirection, val titleWrap: TextWrap? = null,
-    val anchorReveal: HeadingAnchorReveal? = null) {
+    val anchorReveal: HeadingAnchorReveal? = null, val wrappers: SectionHeadingWrappers? = null) {
     init {
         require(titleWrap != TextWrap.NoWrap) { "Heading no-wrap is unsupported" }
         require(box.margins != null && box.padding != null && box.border != null &&
             box.ownerFontScale != null && box.lineHeight != null && box.fontFamily != null && box.clear != null) {
             "Heading box requires computed margins, padding, border, font, line height and clear"
         }
+        if (wrappers == null) require(box.positioning == null) else {
+            require(box.positioning == ContainerPositioning.RelativeAuto && titleWrap == null && anchorReveal == null &&
+                box.border == ContainerBorder.None && listOf(box.margins.top, box.margins.right, box.margins.bottom,
+                    box.margins.left).all { it.value == 0f } && listOf(box.padding.top, box.padding.right,
+                    box.padding.bottom, box.padding.left).all { it.value == 0f }) { "Invalid relative section heading" }
+        }
         require((box.width == null || box.width == ContainerWidth.Auto) &&
             (box.maxWidth == null || box.maxWidth == ContainerMaxWidth.None) &&
             (box.layout == null || box.layout == ContainerLayout.Flow) &&
             (box.overflow == null || box.overflow == ContainerOverflow.Visible) &&
             box.floatSide == null && box.flexItem == null && box.alignItems == null && box.columns == null &&
-            box.positioning == null && box.screenMaxWidth == null && box.height == null &&
+            box.screenMaxWidth == null && box.height == null &&
             box.minHeight == null && box.marginValues == null && box.ownerFont == null &&
             box.absolutePosition == null && box.absoluteStatic == null && box.textWrap == null) { "Unsupported heading box" }
         require(font.fontScale != null && font.fontScaleBasis == FontScaleBasis.NormalBody &&

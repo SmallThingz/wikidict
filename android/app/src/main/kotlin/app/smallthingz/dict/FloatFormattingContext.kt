@@ -35,6 +35,14 @@ internal fun floatBodyRuns(rows: List<ReadingRow>, bodyAdjoining: BodyAdjoiningP
     val prefix = rows.firstOrNull()?.takeIf { it.heading?.isAuthoredBodyPrefix() == true }
     val headingPrefixStart = if (prefix != null && rows.any { it.heading?.headingStyle != null })
         rows.indexOfFirst { it.sectionKey == prefix.key && it.block != null } else -1
+    // A framed H3 owns its title and two ancestors. With ordinary legacy siblings there is
+    // no common CSS margin or float context: enrolling the suffix would reinterpret the
+    // reader's 2/6dp gaps as authored adjoining margins and refuse the entire title.
+    if (bodyAdjoining == null && headingPrefixStart < 0 && rows.any { it.heading?.headingStyle?.wrappers != null } &&
+        rows.none { row -> row.referenceBatch != null || row.heading?.headingStyle?.let { it.wrappers == null } == true ||
+            row.block?.let { block -> block.style != null || block.needsNativeBlockContext() } == true }) {
+        return rows.mapIndexedNotNull { index, row -> if (row.heading?.headingStyle?.wrappers == null) null else index..index }
+    }
     val first = when (bodyAdjoining) {
         null -> if (headingPrefixStart >= 0) headingPrefixStart else
             rows.indexOfFirst { it.referenceBatch != null || it.heading?.headingStyle != null || it.block?.needsNativeBlockContext() == true }

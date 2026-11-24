@@ -95,7 +95,7 @@ internal data class NativeExactChildMeasure(val block: NativeBlockMeasure, val i
 internal sealed interface NativeFloatContextSpec {
     data class Text(val prepared: PreparedNativeFloatText, val gapAfter: Float, val path: String? = null,
         val box: ParagraphBox? = null,
-        val columnBreakInside: ColumnBreakInside? = null) : NativeFloatContextSpec
+        val columnBreakInside: ColumnBreakInside? = null, val headingFramePaddingAbove: Float? = null) : NativeFloatContextSpec
     data class Rule(val id: Int, val metrics: NativeRuleMetrics) : NativeFloatContextSpec
     data class Flow(val id: Int, val gapAfter: Float, val path: String?, val box: ParagraphBox?,
         val empty: Boolean,
@@ -626,7 +626,7 @@ internal fun NativeFloatContextLayout(
                                     { available, carried -> part.prepared.geometry!!(available, carried, false) },
                                     part.gapAfter, part.box, part.prepared.emptyInlineOwner,
                                     part.prepared.geometryAtWidth?.let { exact -> { available, carried -> exact(available, carried, false) } },
-                                    part.prepared.geometryForColumns, part.columnBreakInside)
+                                    part.prepared.geometryForColumns, part.columnBreakInside, part.headingFramePaddingAbove)
                             }
                             is NativeFloatContextSpec.Rule -> NativeFloatContextPart.Rule(part.id, part.metrics, available)
                             is NativeFloatContextSpec.Flow -> NativeFloatContextPart.Flow(part.id, { available, carried ->

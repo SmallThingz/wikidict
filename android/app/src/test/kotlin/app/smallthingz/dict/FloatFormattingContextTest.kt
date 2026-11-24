@@ -30,6 +30,29 @@ class FloatFormattingContextTest {
         assertEquals(listOf(nativeBlock until legacy.size), floatBodyRuns(legacy))
     }
 
+    @Test fun wrappedHeadingOwnsItsThreeBoxesWhileLegacyFollowingRowsKeepTheirOwnSpacing() {
+        val zero = StyleLength(StyleLengthUnit.Px, 0f)
+        val edges = StyleEdges(zero, zero, zero, zero)
+        val frame = SectionHeadingWrappers(StyleLength(StyleLengthUnit.Em, .4f), StyleLength(StyleLengthUnit.Px, 1f),
+            ContainerColor.Rgb("#a2a9b1"), StyleLength(StyleLengthUnit.Em, 1.25f), StyleLength(StyleLengthUnit.Em, 3.2f))
+        val style = SectionHeadingStyle(ContainerStyle(margins = edges, padding = edges, border = ContainerBorder.None,
+            clear = FigureClear.None, positioning = ContainerPositioning.RelativeAuto, ownerFontScale = 1.2f,
+            lineHeight = ContainerLineHeight.Multiplier(1.6f), fontFamily = ContainerFontFamily.SansSerif),
+            InlineFontSnapshot(fontScale = 1.2f, fontScaleBasis = FontScaleBasis.NormalBody, language = "id"),
+            BidiResolvedDirection.Ltr, wrappers = frame)
+        val title = Block("heading", 0, listOf(Span("text", "Original")), level = 3)
+        val body = Block("definition", 0, listOf(Span("link", "body", "body")))
+        val section = Section(3, "Original", listOf(title, body), headingStyle = style)
+        val rows = readingRows(listOf(section))
+        assertEquals(listOf(0..0), floatBodyRuns(rows))
+        assertSame(title, rows.first().headingBlock)
+        assertEquals(listOf(rows.indices), floatBodyRuns(rows, BodyAdjoiningPolicy.Ordinary))
+        val following = Block("container", 0, emptyList(), container = Container(emptyList()))
+        val structural = readingRows(listOf(section.copy(blocks = section.blocks + following)))
+        assertEquals(listOf(structural.indices), floatBodyRuns(structural))
+        assertEquals(listOf(0..0), floatBodyRuns(visibleReadingRows(rows, setOf("heading-0"))))
+    }
+
     @Test fun whitespaceTypedHeadingOwnsItsRealBoxAndNullHasNoNativeTrigger() {
         val edge = StyleLength(StyleLengthUnit.Px, 0f)
         val zero = StyleEdges(edge, edge, edge, edge)

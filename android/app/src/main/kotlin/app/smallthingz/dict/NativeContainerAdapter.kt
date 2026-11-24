@@ -17,7 +17,8 @@ import kotlin.math.floor
 internal val LocalNativeContainerTextWrap = staticCompositionLocalOf<TextWrap?> { null }
 
 /** Paint belongs to the solved border box, not to its margin allocation or descendant ink. */
-internal data class NativeContainerPaintEdge(val width: Float, val color: Int?, val dotted: Boolean = false)
+internal data class NativeContainerPaintEdge(val width: Float, val color: Int?, val dotted: Boolean = false,
+    val dashed: Boolean = false)
 internal data class NativeContainerDecoration(val background: Int?, val borderColor: Int?, val borderWidth: Float,
     val edges: List<NativeContainerPaintEdge>? = null,
     val nativeCorners: NativeCornerRadii? = null) {
@@ -25,7 +26,7 @@ internal data class NativeContainerDecoration(val background: Int?, val borderCo
     private val roundedBorder = if (nativeCorners == null) null else {
         val sides = edges ?: List(4) { NativeContainerPaintEdge(borderWidth, borderColor) }
         val first = sides.first()
-        if (sides.any { !it.width.isFinite() || it.width < 0f || it.dotted ||
+        if (sides.any { !it.width.isFinite() || it.width < 0f || it.dotted || it.dashed ||
                 it.width != first.width || it.color != first.color })
             throw UnsupportedFloatLayout("Rounded table borders require one uniform solid edge")
         first
@@ -54,7 +55,17 @@ internal data class NativeContainerDecoration(val background: Int?, val borderCo
             val band = bands[index]
             if (side.color != null && side.width > 0f && !band.isEmpty) {
                 paint.color = side.color
-                if (!side.dotted) canvas.drawRect(band, paint) else {
+                if (side.dashed) {
+                    val save = canvas.save()
+                    canvas.clipRect(band)
+                    paint.style = Paint.Style.STROKE
+                    paint.strokeWidth = side.width
+                    paint.pathEffect = android.graphics.DashPathEffect(floatArrayOf(3f * side.width, 3f * side.width), 0f)
+                    canvas.drawLine(band.left, band.centerY(), band.right, band.centerY(), paint)
+                    paint.pathEffect = null
+                    paint.style = Paint.Style.FILL
+                    canvas.restoreToCount(save)
+                } else if (!side.dotted) canvas.drawRect(band, paint) else {
                     val horizontal = index % 2 == 0
                     val checkpoint = canvas.save()
                     canvas.clipRect(band)

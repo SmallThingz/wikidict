@@ -2872,7 +2872,9 @@ internal fun NativeFloatBlockContext(blocks: List<Block>, onLink: (EntryLink) ->
                 val child = NativeFloatContextSpec.Text(prepared, 0f, leaf.path,
                     ParagraphBox(ParagraphEdges(), ParagraphEdges(), 0f, 0f))
                 val owner = nativeSectionHeadingSpec(sourceId(leaf.path + "/section-heading"),
-                    authoredHeading, child, density.density, normalBodyPixels, LocalReaderDarkTheme.current)
+                    authoredHeading, child, density.density, normalBodyPixels, LocalReaderDarkTheme.current) { frame ->
+                    sourceId(leaf.path + "/section-heading/" + frame)
+                }
                 val failure = result.exceptionOrNull()?.message
                 headingParts += if (failure == null) owner else owner.copy(unavailableReason = failure)
             }
