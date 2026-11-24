@@ -1,0 +1,15 @@
+{
+  "accepted": false,
+  "ended_utc": "2026-11-24T11:01:01.509115+00:00",
+  "error": "Site-info edition/language/source mismatch",
+  "headers": {
+    "content-type": "application/json; charset=utf-8",
+    "date": "Tue, 24 Nov 2026 11:01:01 GMT"
+  },
+  "request": "site-info.request.json",
+  "response": "site-info.01.raw.json",
+  "response_bytes": 3547,
+  "response_sha256": "83fcd31286d6be77e11d199c5e1615078a1b4c0b2bf3b08b11508c55e103f976",
+  "started_utc": "2026-11-24T11:01:01.293275+00:00",
+  "status": 200
+}

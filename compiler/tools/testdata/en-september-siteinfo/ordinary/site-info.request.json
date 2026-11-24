@@ -1,0 +1,16 @@
+{
+  "content_language": "en",
+  "date": "20260901",
+  "namespace_registry_sha256": "bff9939b438271d6e193c0a43a97a499aec4ba64ffb064a753cd7f7667457609",
+  "profile": "general-and-seven-scribunto-statistics",
+  "query": {
+    "action": "query",
+    "format": "json",
+    "formatversion": "2",
+    "maxlag": "5",
+    "meta": "siteinfo",
+    "siprop": "general|statistics"
+  },
+  "url": "https://en.wiktionary.org/w/api.php?action=query&format=json&formatversion=2&maxlag=5&meta=siteinfo&siprop=general%7Cstatistics",
+  "wiki": "enwiktionary"
+}

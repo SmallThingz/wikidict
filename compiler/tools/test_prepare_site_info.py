@@ -460,6 +460,71 @@ class SiteInfoCaptureTests(unittest.TestCase):
 
 
 
+class RetainedSeptemberEnglishTests(unittest.TestCase):
+    def fixtures(self):
+        root = Path(__file__).parent/'testdata/en-september-siteinfo'
+        return ((root/'ordinary', s.PROFILE,
+                 '83fcd31286d6be77e11d199c5e1615078a1b4c0b2bf3b08b11508c55e103f976'),
+                (root/'figure', s.FIGURE_PROFILE,
+                 'bdfe398945abd372cdb7d12df74c586c4843f1711786949bc1478889967693d5'))
+
+    def test_retained_observations_require_exact_date_body_profile_and_edition(self):
+        for root, profile, expected_sha in self.fixtures():
+            with self.subTest(profile=profile):
+                raw = (root/'site-info.01.raw.json').read_bytes()
+                self.assertEqual(s.evidence.digest(raw), expected_sha)
+                data = s.evidence.decode(raw)
+                options = dict(date='20260901', raw_sha=expected_sha)
+                result = s.response(data, 'enwiktionary', 'en', profile, **options)
+                self.assertEqual(result, data['query'])
+                self.assertEqual(result['general']['git-hash'], s.SEPTEMBER_EN_CORE)
+                self.assertEqual(s.scribunto_reference(s.SEPTEMBER_EN_CORE), s.FIGURE_WMF5_SCRIBUNTO)
+                if profile == s.FIGURE_PROFILE:
+                    self.assertEqual(s.figure_thumbnail_width(result), 250)
+                for changed in (dict(date=None), dict(date='20261001'),
+                                dict(raw_sha=s.evidence.digest(raw+b'\n'))):
+                    with self.subTest(changed=changed), self.assertRaises(ValueError):
+                        s.response(data, 'enwiktionary', 'en', profile, **(options | changed))
+                other = s.PROFILE if profile == s.FIGURE_PROFILE else s.FIGURE_PROFILE
+                with self.assertRaises(ValueError):
+                    s.response(data, 'enwiktionary', 'en', other, **options)
+                with self.assertRaises(ValueError):
+                    s.response(data, 'dewiktionary', 'de', profile, **options)
+
+    def test_offline_revalidation_preserves_originals_and_current_observation_scope(self):
+        work = Path(os.environ.get('WIKIDICT_SITE_INFO_TEST_ROOT', '.tmp/site-info-v2-tests'))
+        work.mkdir(parents=True, exist_ok=True)
+        for fixture, profile, _ in self.fixtures():
+            with self.subTest(profile=profile), tempfile.TemporaryDirectory(prefix='en-september-', dir=work) as temporary:
+                root = Path(temporary)
+                original = {p.name:p.read_bytes() for p in fixture.iterdir()}
+                self.assertEqual(len(original), 8)
+                for name, raw in original.items():
+                    (root/name).write_bytes(raw)
+                with patch.object(s.evidence, 'get_response', side_effect=AssertionError('offline means no HTTP')):
+                    manifest = s.revalidate(root, s.evidence.digest(original['site-info.failure.json']))
+                    self.assertEqual(s.verify(root), manifest)
+                    snapshot = s.validate_snapshot(root/s.SNAPSHOT, 'enwiktionary', '20260901',
+                                                   file_defaults=profile == s.FIGURE_PROFILE)
+                    self.assertEqual(snapshot, manifest)
+                self.assertEqual({name:(root/name).read_bytes() for name in original}, original)
+                self.assertIs(s.evidence.decode(original['site-info.01.receipt.json'])['accepted'], False)
+                projected = s.evidence.decode((root/s.SNAPSHOT).read_bytes())
+                self.assertEqual(projected['query'], s.evidence.decode(original['site-info.01.raw.json'])['query'])
+                self.assertEqual(projected['temporal_scope'], 'current-api-observation')
+                self.assertEqual(projected['date'], '20260901')
+                self.assertNotIn('dump_date', projected)
+                self.assertTrue(projected['retrieved_utc'].startswith('2026-11-24T11:01:01.'))
+                with self.assertRaises(ValueError):
+                    s.validate_snapshot(root/s.SNAPSHOT, 'enwiktionary', '20261001',
+                                        file_defaults=profile == s.FIGURE_PROFILE)
+                if profile == s.FIGURE_PROFILE:
+                    with self.assertRaisesRegex(ValueError, 'scoped to the ImageInfo'):
+                        s.validate_snapshot(root/s.SNAPSHOT, 'enwiktionary', '20260901')
+                self.assertEqual(set(p.name for p in root.iterdir())-set(original),
+                                 {s.SNAPSHOT, s.MANIFEST, s.COMPLETE})
+
+
 class RetainedKwBfe249Tests(unittest.TestCase):
     def fixture(self):
         return Path(__file__).parent/'testdata/kw-figure-defaults-bfe249'
