@@ -1932,7 +1932,7 @@ pub const Registry = struct {
         };
         const gif = gifProfile(doc.source_profile);
         const webp = webpProfile(doc.source_profile);
-        const italian_poster_document = batches.streamed_v6 and gif and !webp and equal(doc.core_revision, wmf5_imageinfo_core) and
+        const italian_wmf5_document = batches.streamed_v6 and gif and !webp and equal(doc.core_revision, wmf5_imageinfo_core) and
             equal(ns.wiki, "itwiktionary") and equal(ns.content_language, "it") and equal(ns.dump_date, "20261001");
         const sr_jpeg_document = batches.streamed_v6 and gif and !webp and equal(doc.core_revision, wmf5_imageinfo_core) and
             equal(ns.wiki, "srwiktionary") and equal(ns.content_language, "sr") and equal(ns.dump_date, "20261001");
@@ -2242,7 +2242,7 @@ pub const Registry = struct {
                     // thumbnail wrapper, badge and parser style hook as f458 +
                     // ThreeD59f. This covers only the selected static poster.
                     const poster_epoch = equal(batch_core, current_core) or
-                        (italian_poster_document and equal(batch_core, wmf5_imageinfo_core));
+                        (italian_wmf5_document and equal(batch_core, wmf5_imageinfo_core));
                     const proven = gif and poster_epoch and
                         fact.state == .unsupported and width == 5120 and height == 2880 and
                         std.ascii.endsWithIgnoreCase(fact.canonical_file, ".stl");
@@ -2260,8 +2260,12 @@ pub const Registry = struct {
                     proof.value_ptr.* = if (proof.found_existing) proof.value_ptr.* and proven else proven;
                 }
                 if (!eligible and !default_page) continue;
-                if ((sr_jpeg_epoch or equal(batch_core, current_core) or (epochs and responseEpoch(batch_core))) and equal(fact.mime, "image/jpeg")) {
-                    const proven = try jpegUnrotatedMetadata(temp, image);
+                const jpeg_epoch = sr_jpeg_epoch or equal(batch_core, current_core) or (epochs and responseEpoch(batch_core)) or
+                    (italian_wmf5_document and equal(batch_core, wmf5_imageinfo_core) and scope == .ordinary);
+                if ((jpeg_epoch or italian_wmf5_document) and equal(fact.mime, "image/jpeg")) {
+                    // Keep every IT alias in the existing AND proof, even if
+                    // a future admitted base epoch cannot supply JPEG authority.
+                    const proven = jpeg_epoch and try jpegUnrotatedMetadata(temp, image);
                     const evidence = try jpeg_evidence.getOrPut(a, fact.canonical_file);
                     const size = (try field(image, "size")).integer;
                     if (evidence.found_existing) {
