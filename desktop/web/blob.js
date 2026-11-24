@@ -7,9 +7,38 @@ const blocks = ['paragraph','blank','definition','example','quotation','list_ite
 const validInlineImageFile=value=>typeof value==='string'&&value.length>0&&new TextEncoder().encode(value).length<=32*1024*1024&&!value.startsWith(' ')&&!value.endsWith(' ')&&!/[_\[\]{}<>|#\x00-\x1f\x7f-\x9f]/u.test(value);
 const roles = ['normal','label','pronunciation','headword','example','quotation','citation','reference'];
 // DPRZ owns a two-byte mask. Each accepted feature must have a real occurrence.
-const supportedExtendedFeatures=features=>(features&~0x2184)===0&&(features&0x2100)!==0;
-const magicStrings = new Set('23456789ABCDEFGHIJKLMSVYZ'.split('').map(version=>'DPR'+version));
+const imageOccurrenceFeature=0x20;
+const responsiveFlowFeature=0x01000000;
+const supportedExtendedFeatures=features=>(features&~(0x2184|imageOccurrenceFeature))===0&&(features&0x2100)!==0;
+const supportedResponsiveFeatures=features=>(features&responsiveFlowFeature)!==0&&
+  (features&~(0x2184|imageOccurrenceFeature|responsiveFlowFeature))===0;
+const magicStrings = new Set('23456789ABCDEFGHIJKLMSVYZa'.split('').map(version=>'DPR'+version));
 const require = (ok, message='Invalid compiled dictionary') => { if (!ok) throw Error(message); };
+function presentationHeaderSize(magic) {
+  if (magic === 'DPRY') return 5;
+  if (magic === 'DPRZ') return 6;
+  if (magic === 'DPRa') return 8;
+  return 4;
+}
+
+function presentationFeatures(magic, header) {
+  require(header.length >= presentationHeaderSize(magic), 'Truncated presentation header');
+  if (magic === 'DPRY') {
+    const flags = header[4];
+    require(flags !== 0 && (flags & ~(132 | imageOccurrenceFeature)) === 0, 'Unsupported owner geometry features');
+    return flags;
+  }
+  const view = new DataView(header.buffer, header.byteOffset, header.byteLength);
+  if (magic === 'DPRZ') {
+    const flags = view.getUint16(4, true);
+    require(supportedExtendedFeatures(flags), 'Unsupported extended audio features');
+    return flags;
+  }
+  const flags = view.getUint32(4, true);
+  require(magic === 'DPRa' && supportedResponsiveFeatures(flags), 'Unsupported responsive presentation features');
+  return flags;
+}
+
 export function decode(bytes, metadata) {
   let p=0, budget=1000000, explained=false, colored=false, anchored=false, painted=false, nested=false, ordered=false, scaled=false, based=false, referenceItems=false, referenceBlocks=false, imageBorder=false, aligned=false, componentTargets=false, dynamicCatalogue=false, tooltips=false, blockGeometry=false, rich=false, inlineTableStyles=false, containers=false, containerFonts=false, contentDepth=0, rubyDepth=0, rubyCount=0, rubyEnabled=false, actionGroupsEnabled=false, actionGroupCount=0, actionGroupDepth=0, inlineBoxGroups=false, boxCount=0, boxDepth=0, boxActionDepth=0, mapStringBudget=32*1024*1024;
   const view=new DataView(bytes.buffer,bytes.byteOffset,bytes.byteLength);
@@ -54,6 +83,7 @@ export function decode(bytes, metadata) {
   const rgb=()=>{if(!presence())return null;const value=string();require(value.length===7&&/^#[0-9a-f]{6}$/.test(value));return value;};
   const audioSpans=[];
   let clippedEnabled=false,insideClipped=false,clipCount=0;
+  let imageOccurrences=false,imageOccurrenceCount=0,responsiveFlowEnabled=false,responsiveFlowCount=0;
   let audioEnabled=false,positionedHeadings=false,positionedBody=false;
   function audioControl() {
     charge();
@@ -73,7 +103,7 @@ export function decode(bytes, metadata) {
     const s={kind,role,text:string(),target:string(),trail:string(),language:string(),classes:string(),direction:string(),explanation:explained?string():'',foreground:colored?rgb():null,background:painted?rgb():null};
     if(actionGroupDepth||boxActionDepth)require(kind==='text'&&s.target==='','An inline action child cannot own an action');
     const fontFields=scaled?(containerFonts?byte():(presence()?1:0)):0;
-    require((fontFields&~(inlineBoxGroups?0x2b:positionedHeadings?0x1b:(audioEnabled||clippedEnabled)?0x0b:1))===0,'Unsupported span font policy');
+    require((fontFields&~(inlineBoxGroups?0x2b:positionedHeadings?0x1b:(audioEnabled||clippedEnabled||imageOccurrences)?0x0b:1))===0,'Unsupported span font policy');
     if(fontFields&1){const value=f32();require(Number.isFinite(value)&&value>=0,'Invalid semantic font scale');s.font_scale=value;if(based){const basis=tag(containerFonts?['context','normal_body','css_px']:['context','normal_body']);if(basis!=='context')s.font_scale_basis=basis;if(tooltips&&value===1&&basis==='context')delete s.font_scale;}}
     if(fontFields&2)s.font_features=tag(['normal','seven_on']);
     if(fontFields&8)s.inline_style=inlineTextStyle();
@@ -81,7 +111,13 @@ export function decode(bytes, metadata) {
     if(referenceBlocks&&presence()){
       require(kind!=='line_break'&&s.text===''&&s.trail===''&&(kind==='text'?s.target==='':s.target.length>0));const image={file:string()},flags=byte();require((flags&~(inlineTableStyles?127:rich?63:imageBorder?31:15))===0&&validInlineImageFile(image.file));
       for(const [bit,key] of [[1,'width_px'],[2,'height_px']])if(flags&bit){image[key]=u32();require(image[key]>0);}
-      if(flags&4)image.alt=string();if(flags&8)image.tooltip=string();if(imageBorder&&(flags&16))image.border=true;if(flags&32)image.map=imageMap();if(flags&64)image.dark_mode_filter=tag(['invert_hue_rotate_180']);s.image=image;
+      if(flags&4)image.alt=string();if(flags&8)image.tooltip=string();if(imageBorder&&(flags&16))image.border=true;if(flags&32)image.map=imageMap();if(flags&64)image.dark_mode_filter=tag(['invert_hue_rotate_180']);
+      if(imageOccurrences&&presence()){
+        charge();require(!image.map,'Mapped image cannot use occurrence geometry');
+        image.occurrence_layout={x:signedLength(),y:signedLength(),padding_left:styleLength(),padding_right:styleLength()};
+        imageOccurrenceCount++;
+      }
+      s.image=image;
     }
     if(componentTargets&&presence()){require(kind==='link','Invalid target fragment kind');s.target_fragment=string();}
     if(tooltips)s.tooltip=presence()?string():null;
@@ -120,6 +156,7 @@ export function decode(bytes, metadata) {
   };
   const spans=()=>list((clippedEnabled?1:0)+(audioEnabled?1:0)+(inlineBoxGroups?41:actionGroupsEnabled?40:rubyEnabled?38:tooltips?37:componentTargets?36:referenceBlocks?35:scaled?34:painted?33:colored?32:explained?31:27),spanValue);
   const styleLength=()=>{const unit=tag(['px','em']),value=f32();require(Number.isFinite(value)&&value>=0,'Invalid style length');return {unit,value};};
+  const signedLength=()=>{const unit=tag(['px','em']),value=f32();require(Number.isFinite(value),'Invalid signed length');return {unit,value};};
   const clippedAbsolute=()=>{
     const flags=byte();
     require([1,2,5,6].includes(flags),'Invalid clipped static direction or containing block');
@@ -219,11 +256,24 @@ export function decode(bytes, metadata) {
   const containerWidth=()=>{const kind=tag(['auto','length','fit_content']);return {[kind]:kind==='length'?{unit:tag(['px','em','percent']),value:f32()}: {}};};
   const containerMaxWidth=()=>presence()?{length:{unit:tag(['px','em','percent']),value:f32()}}:{none:{}};
   const containerColor=()=>{const kind=tag(['transparent','rgb','light_dark']);return {[kind]:kind==='rgb'?string():kind==='light_dark'?{light:string(),dark:string()}: {}};};
-  const containerBorder=()=>presence()?{solid:{width:styleLength(),color:containerColor()}}:{none:{}};
+  const containerBorderLine=()=>({width:styleLength(),color:containerColor()});
+  const containerBorder=()=>{
+    const kind=tag(containerFonts?['none','solid','edges']:['none','solid']);
+    if(kind==='none')return {none:{}};
+    if(kind==='solid')return {solid:containerBorderLine()};
+    return {edges:Object.fromEntries(boxEdges.map(side=>{
+      const edge=tag(['none','hidden','solid','dotted']);
+      return [side,{[edge]:edge==='none'||edge==='hidden'?{}:containerBorderLine()}];
+    }))};
+  };
   const containerLineHeight=()=>{const kind=tag(['normal','multiplier','length']);return {[kind]:kind==='multiplier'?f32():kind==='length'?styleLength(): {}};};
   const containerMargins=()=>Object.fromEntries(['top','right','bottom','left'].map(side=>[side,presence()?{length:styleLength()}:{auto:{}}]));
   const containerScreen=(following=false)=>{
-    const value={max_width_px:u32()},flags=byte();require(flags&127);require(!following||!(flags&128));
+    const value={max_width_px:u32()},flags=byte();
+    const extension=responsiveFlowEnabled?byte():0;
+    require(extension===0||extension===1);
+    require((flags&127)||extension);require(!following||!(flags&128));
+    if(extension){value.layout='flow';responsiveFlowCount++;}
     if(flags&1)value.width=containerWidth();if(flags&2)value.max_width=containerMaxWidth();
     if(flags&4)value.box_sizing=tag(['content_box','border_box']);if(flags&8)value.line_height=containerLineHeight();
     if(flags&16)value.float_side=tag(['none','left','right']);if(flags&32)value.margins=containerMargins();
@@ -232,7 +282,14 @@ export function decode(bytes, metadata) {
     return value;
   };
   const containerStyle=(description=false)=>{
-    const flags=containerFonts?u32():u16(),style={},fields=[['margins',edges],['padding',edges],['width',containerWidth],['float_side',()=>tag(['left','right'])],['clear',()=>tag(['none','left','right','both'])],['max_width',containerMaxWidth],['box_sizing',()=>tag(['content_box','border_box'])],['layout',()=>tag(['flow','flex_row'])],['align_items',()=>tag(['stretch','start','center','end'])],['flex_item',()=>tag(['none'])],['background',containerColor],['border',containerBorder],['line_height',containerLineHeight],['text_align',()=>tag(['left','center','right'])],['screen_max_width',containerScreen],['overflow',()=>tag(['visible','auto'])],['owner_font_scale',f32],['height',styleLength],['columns',()=>({count:u16(),gap:styleLength()})]];
+    const flags=containerFonts?u32():u16(),style={};
+    const layout=()=>{
+      const value=tag(positionedHeadings&&!description?['flow','flex_row',null,'ordered_list']:['flow','flex_row']);
+      require(value!==null,'Unsupported container layout policy');
+      if(value==='ordered_list'){style.ordered_marker_weight=tag(['normal','bold']);positionedBody=true;}
+      return value;
+    };
+    const fields=[['margins',edges],['padding',edges],['width',containerWidth],['float_side',()=>tag(['left','right'])],['clear',()=>tag(['none','left','right','both'])],['max_width',containerMaxWidth],['box_sizing',()=>tag(['content_box','border_box'])],['layout',layout],['align_items',()=>tag(['stretch','start','center','end'])],['flex_item',()=>tag(['none'])],['background',containerColor],['border',containerBorder],['line_height',containerLineHeight],['text_align',()=>tag(['left','center','right'])],['screen_max_width',containerScreen],['overflow',()=>tag(['visible','auto'])],['owner_font_scale',f32],['height',styleLength],['columns',()=>({count:u16(),gap:styleLength()})]];
     require((flags&~(description?0x80000|0x7ffff:0x7ffff))===0,'Unsupported container layout policy');
     fields.forEach(([key,read],bit)=>{if(flags&(1<<bit))style[key]=read();});
     if(description&&(flags&0x80000))style.positioning=tag(['relative_auto']);
@@ -407,7 +464,7 @@ export function decode(bytes, metadata) {
     }
     if(kind==='container'){
       value.container=content(()=>({style:containerStyle(),blocks:list(blockMinimum(),()=>block(tableDepth))}));
-      validateContainerBlock(value,{containerFonts});
+      validateContainerBlock(value,{containerFonts,positioned:positionedHeadings});
     }
     if(rubyEnabled&&kind==='rule')require(byte()===0,'Unsupported ruby-record rule style');
     return value;
@@ -415,20 +472,22 @@ export function decode(bytes, metadata) {
   const contentContext=value=>['list_item','definition','example','quotation','term','list_detail','indent'].includes(value.kind)||(value.kind==='paragraph'&&value.depth===0&&value.path==='');
   const magic=text(4);
   require(magicStrings.has(magic),'Dictionary contains uncompiled records');
+  const headerSize = presentationHeaderSize(magic);
+  const features = headerSize > 4 ? presentationFeatures(magic, bytes) : 0;
+  advance(headerSize - 4);
   if(magic==='DPRY'){
-    const flags=byte();
-    require([4,128,132].includes(flags),'Unsupported owner geometry features');
-    inlineBoxGroups=!!(flags&4);clippedEnabled=!!(flags&128);
+    inlineBoxGroups=!!(features&4);clippedEnabled=!!(features&128);
+    imageOccurrences=!!(features&imageOccurrenceFeature);
   }
-  if(magic==='DPRZ'){
-    const features=u16();
-    require(supportedExtendedFeatures(features),'Unsupported extended audio features');
+  if(magic==='DPRZ'||magic==='DPRa'){
+    responsiveFlowEnabled=magic==='DPRa';
+    imageOccurrences=!!(features&imageOccurrenceFeature);
     audioEnabled=!!(features&0x2000);
     clippedEnabled=!!(features&128);
     positionedHeadings=!!(features&0x100);
     inlineBoxGroups=!!(features&4);
   }
-  actionGroupsEnabled=magic==='DPRV'||inlineBoxGroups||clippedEnabled||magic==='DPRZ';rubyEnabled=magic==='DPRS'||actionGroupsEnabled;containerFonts=magic==='DPRM'||rubyEnabled;containers=magic==='DPRL'||containerFonts;inlineTableStyles=magic==='DPRK'||containers;rich=magic==='DPRJ'||inlineTableStyles;blockGeometry=magic==='DPRI'||rich;tooltips=magic==='DPRH'||blockGeometry;dynamicCatalogue=magic==='DPRG'||tooltips;componentTargets=magic==='DPRF'||dynamicCatalogue;aligned=magic==='DPRE'||componentTargets;imageBorder=magic==='DPRD'||aligned;referenceBlocks=magic==='DPRC'||imageBorder;based=magic==='DPRB'||referenceBlocks;scaled=magic==='DPRA'||based;referenceItems=magic==='DPR9'||scaled;ordered=magic==='DPR8'||referenceItems;nested=magic==='DPR7'||ordered;if(nested)budget=1<<20;painted=magic==='DPR6'||nested;anchored=magic==='DPR5'||painted;colored=magic==='DPR4'||anchored;explained=magic!=='DPR2';
+  actionGroupsEnabled=['DPRV','DPRY','DPRZ','DPRa'].includes(magic);rubyEnabled=magic==='DPRS'||actionGroupsEnabled;containerFonts=magic==='DPRM'||rubyEnabled;containers=magic==='DPRL'||containerFonts;inlineTableStyles=magic==='DPRK'||containers;rich=magic==='DPRJ'||inlineTableStyles;blockGeometry=magic==='DPRI'||rich;tooltips=magic==='DPRH'||blockGeometry;dynamicCatalogue=magic==='DPRG'||tooltips;componentTargets=magic==='DPRF'||dynamicCatalogue;aligned=magic==='DPRE'||componentTargets;imageBorder=magic==='DPRD'||aligned;referenceBlocks=magic==='DPRC'||imageBorder;based=magic==='DPRB'||referenceBlocks;scaled=magic==='DPRA'||based;referenceItems=magic==='DPR9'||scaled;ordered=magic==='DPR8'||referenceItems;nested=magic==='DPR7'||ordered;if(nested)budget=1<<20;painted=magic==='DPR6'||nested;anchored=magic==='DPR5'||painted;colored=magic==='DPR4'||anchored;explained=magic!=='DPR2';
   const entry={...metadata,presentation_version:magic,display_title:spans(),sections:list(anchored?17:9,()=>({level:byte(),title:string(),anchor:anchored?string():'',anchor_fallback:anchored?string():'',blocks:list(blockMinimum(),()=>block())})),preamble_spans:spans()};
   const childPath=(values,root)=>{
     const n=count(4);require(n<=16);let value=values[root];
@@ -467,6 +526,8 @@ export function decode(bytes, metadata) {
       if(pending===0x16)readWrappedHeadings(entry.sections);
       else require(pending===0&&positionedBody,'Unsupported positioned body or heading fields');
     }else require(pending===0,'Unsupported extended-record body feature');
+    if(responsiveFlowEnabled)require(responsiveFlowCount>0,'Missing responsive flow band');
+    if(imageOccurrences)require(imageOccurrenceCount>0,'Missing inline image occurrence');
     if(audioEnabled){
       require(audioSpans.length>0,'DPRZ audio feature requires an audio control');
       const kinds=new Map();
@@ -475,7 +536,7 @@ export function decode(bytes, metadata) {
     }
     if(clippedEnabled)require(clipCount>0,'Missing clipped absolute payload');
     if(inlineBoxGroups)require(boxCount>0,'Missing inline box payload');
-    else if(!clippedEnabled&&!audioEnabled&&!positionedHeadings)require(actionGroupsEnabled?actionGroupCount>0:rubyCount>0,actionGroupsEnabled?'DPRV requires inline action payload':'DPRS requires ruby payload');
+    else if(!clippedEnabled&&!audioEnabled&&!positionedHeadings&&!imageOccurrences&&!responsiveFlowEnabled)require(actionGroupsEnabled?actionGroupCount>0:rubyCount>0,actionGroupsEnabled?'DPRV requires inline action payload':'DPRS requires ruby payload');
   }
   const images=[];
   const inspect=values=>{for(const span of values||[])if(span.image)images.push(span.image);};
@@ -588,12 +649,11 @@ export async function buildIndex(source) {
     }else{
       const magic=utf8.decode(await recordBytes(4));
       require(magicStrings.has(magic));
-      if(magic==='DPRZ'){
-        require(length>=6);
-        const header=await recordBytes(6);
-        require(supportedExtendedFeatures(header[4]|(header[5]<<8)),'Unsupported extended audio features');
+      const headerSize = presentationHeaderSize(magic);
+      if (headerSize > 4) {
+        require(length >= headerSize, 'Truncated presentation header');
+        presentationFeatures(magic, await recordBytes(headerSize));
       }
-      if(magic==='DPRY')require(length>=5&&[4,128,132].includes((await recordBytes(5))[4]),'Unsupported owner geometry features');
       rows.push({title,offset:p,length});
     }
     require(rows.length<=10000000);p+=length;

@@ -85,17 +85,18 @@ export function figureImageSize(image,policy,original){
 }
 export function loadInlineImage(el,image,settings,sourceEdition,occurrence={}){
  const readyDisplay=el.style.display;let status=null;
+ const reserve=occurrence.intrinsic_size||(image.occurrence_layout&&image.width_px!=null&&image.height_px!=null);
  const showStatus=(state,message)=>{
   el.dataset.mediaState=state;el.hidden=true;el.style.display='none';if(!el.isConnected)return;
   if(!status){
    status=document.createElement('span');status.className='compiled-image-status';status.setAttribute('role','img');status.style.display='inline-block';status.style.boxSizing='border-box';status.style.verticalAlign='middle';status.dir='auto';
    if(image.alt){status.textContent=image.alt;status.style.fontSize='var(--wikidict-normal-body-size, 1rem)';}
    else {
-    const icon=occurrence.intrinsic_size?document.createElement('span'):status;
+    const icon=reserve?document.createElement('span'):status;
     icon.style.cssText+=';display:inline-block;box-sizing:border-box;width:15px;height:15px;border:1px dotted currentColor';
     if(icon!==status){icon.setAttribute('aria-hidden','true');status.append(icon);}
    }
-   if(occurrence.intrinsic_size){
+   if(reserve){
     status.style.width=el.style.width;
     status.style.height=el.style.height;
     status.style.overflow='hidden';
