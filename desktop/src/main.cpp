@@ -1,3 +1,4 @@
+#include "AudioPlaybackStartup.hpp"
 #include "MainWindow.hpp"
 
 #include <QApplication>
@@ -10,6 +11,7 @@
 
 namespace {
 int runGui(int argc, char **argv) {
+    WikiDict::configureAudioOnlyPlayback();
     QApplication app(argc, argv);
     QCoreApplication::setOrganizationName(QStringLiteral("SmallThingz"));
     QCoreApplication::setApplicationName(QStringLiteral("Dict"));

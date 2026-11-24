@@ -1,3 +1,4 @@
+#include "AudioPlaybackStartup.hpp"
 #include "MediaPanel.hpp"
 #include "SvgRasterIdentity.hpp"
 
@@ -187,7 +188,55 @@ bool settingsPathsAreIsolated(const QString &root) {
 
 class MediaPanelTest : public QObject {
     Q_OBJECT
+
+public:
+    explicit MediaPanelTest(bool defaultHardwarePolicy)
+        : defaultHardwarePolicy(defaultHardwarePolicy) {}
+
+private:
+    const bool defaultHardwarePolicy;
+
 private slots:
+    void audioOnlyStartupDefaultsOnlyUnsetHardwarePolicies()
+    {
+#if defined(Q_OS_LINUX)
+        const char *decode = "QT_FFMPEG_DECODING_HW_DEVICE_TYPES";
+        const char *encode = "QT_FFMPEG_ENCODING_HW_DEVICE_TYPES";
+        const auto priorDecode = qgetenv(decode);
+        const auto priorEncode = qgetenv(encode);
+        const auto restore = qScopeGuard([&] {
+            if (priorDecode.isNull()) qunsetenv(decode);
+            else qputenv(decode, priorDecode);
+            if (priorEncode.isNull()) qunsetenv(encode);
+            else qputenv(encode, priorEncode);
+        });
+
+        QVERIFY(qunsetenv(decode));
+        QVERIFY(qunsetenv(encode));
+        WikiDict::configureAudioOnlyPlayback();
+        QVERIFY(qEnvironmentVariableIsSet(decode));
+        QVERIFY(qEnvironmentVariableIsSet(encode));
+        QVERIFY(qgetenv(decode).isEmpty());
+        QVERIFY(qgetenv(encode).isEmpty());
+
+        QVERIFY(qputenv(decode, "vaapi"));
+        QVERIFY(qunsetenv(encode));
+        WikiDict::configureAudioOnlyPlayback();
+        QCOMPARE(qgetenv(decode), QByteArray("vaapi"));
+        QVERIFY(qEnvironmentVariableIsSet(encode));
+        QVERIFY(qgetenv(encode).isEmpty());
+
+        QVERIFY(qunsetenv(decode));
+        QVERIFY(qputenv(encode, "vdpau,cuda"));
+        WikiDict::configureAudioOnlyPlayback();
+        QVERIFY(qEnvironmentVariableIsSet(decode));
+        QVERIFY(qgetenv(decode).isEmpty());
+        QCOMPARE(qgetenv(encode), QByteArray("vdpau,cuda"));
+#else
+        QSKIP("Linux FFmpeg startup policy.");
+#endif
+    }
+
     void audioOccurrenceControlsKeepSourceIdentityAndRetireOnNavigation()
     {
         QSettings().setValue(QStringLiteral("media/allowAudio"), false);
@@ -1725,6 +1774,9 @@ private slots:
     void privateNullOutputDecodesAndUpdatesPlaybackAccessibleNames() {
         if (qEnvironmentVariable("WIKIDICT_PRIVATE_MEDIA_BACKEND") != QStringLiteral("1"))
             QSKIP("Opt-in private null-output backend check; never use a user's audio session.");
+#if defined(Q_OS_LINUX)
+        QVERIFY2(defaultHardwarePolicy, "Leave both Qt FFmpeg hardware variables unset at launch.");
+#endif
         QCOMPARE(qApp->arguments().value(1), QStringLiteral("privateNullOutputDecodesAndUpdatesPlaybackAccessibleNames"));
         const QString ownedTmp = qEnvironmentVariable("WIKIDICT_OWNED_MEDIA_TMP");
         QVERIFY(!ownedTmp.isEmpty());
@@ -2073,6 +2125,10 @@ stream.properties = { adapter.auto-port-config = { mode = dsp monitor = false co
 };
 
 int main(int argc, char **argv) {
+    const bool defaultHardwarePolicy =
+        !qEnvironmentVariableIsSet("QT_FFMPEG_DECODING_HW_DEVICE_TYPES")
+        && !qEnvironmentVariableIsSet("QT_FFMPEG_ENCODING_HW_DEVICE_TYPES");
+    WikiDict::configureAudioOnlyPlayback();
     QDir().mkpath(QStringLiteral(".tmp"));
     QTemporaryDir directory(QStringLiteral(".tmp/media-tests-XXXXXX"));
     if (!directory.isValid()) return 2;
@@ -2086,7 +2142,7 @@ int main(int argc, char **argv) {
         std::fputs("Settings paths escaped the temporary media test directory.\n", stderr);
         return 2;
     }
-    MediaPanelTest test;
+    MediaPanelTest test(defaultHardwarePolicy);
     return QTest::qExec(&test, argc, argv);
 }
 
