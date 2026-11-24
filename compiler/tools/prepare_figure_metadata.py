@@ -59,6 +59,15 @@ def _physical_role(path):
     return stored
 
 
+def _packed_projection_or_provider(path, logical):
+    if path != logical:
+        return True
+    if logical.name not in (ROLES['figure-sizing'], PROVIDER):
+        return False
+    with path.open('rb') as source:
+        return source.read(2) == b'\x1f\x8b'
+
+
 def small(path, limit=MAX_METADATA):
     physical = _physical_role(path)
     if physical.name == Path(path).name:
@@ -1070,7 +1079,8 @@ def stream_values(path, schema, *, allow_encoded=True, identity_out=None, record
     """Yield the header and exact declared records with bounded transient input."""
     logical = Path(path)
     path = _physical_role(logical)
-    if path != logical and _gzip_size is None:
+    if (_gzip_size is None and (path != logical or
+            (schema == FILES_STREAM_SCHEMA and _packed_projection_or_provider(path, logical)))):
         manifest = decode(small(logical.parent / MANIFEST))
         _gzip_size = manifest['artifacts'][logical.name]['bytes']
         if type(_gzip_size) is not int or _gzip_size <= 0:
@@ -1148,7 +1158,7 @@ def stream_values(path, schema, *, allow_encoded=True, identity_out=None, record
         # Publish only after complete iteration, exact EOF and both identities.
         # Closing or failing this generator cannot leave a success identity.
         identity_out.update(size=size, sha256=sha.hexdigest())
-        if _verified_projection is not None and path != logical and schema == FILES_STREAM_SCHEMA:
+        if _verified_projection is not None and stored is not None and schema == FILES_STREAM_SCHEMA:
             _verified_projection[logical.name] = (path.resolve(strict=True), before,
                 {'bytes': size, 'sha256': identity_out['sha256']})
         if _storage_out is not None:
@@ -1943,26 +1953,85 @@ def provider_tsv(projection):
     return metadata.render(records)
 
 
+def provider_line(row):
+    present = row['state'] != 'missing'
+    line = metadata.render_row(row['requested_file'], present, row['original_width'],
+                               row['original_height'], row['mediatype'] if present else '-',
+                               row['canonical_file'] if present else '-')
+    raw = (line + '\n').encode('utf-8')
+    if len(metadata.HEADER.encode()) + 1 + len(raw) > metadata.MAX_METADATA:
+        raise ValueError('File metadata exceeds bounded snapshot capacity')
+    return raw
+
+
 def provider_chunks(projection):
-    header = (metadata.HEADER+'\n').encode()
-    yield header
-    for row in projection['records']:
-        present = row['state'] != 'missing'
-        line = metadata.render_row(row['requested_file'], present, row['original_width'],
-                                   row['original_height'], row['mediatype'] if present else '-',
-                                   row['canonical_file'] if present else '-')
-        raw = (line + '\n').encode('utf-8')
-        if len(header) + len(raw) > metadata.MAX_METADATA:
-            raise ValueError('File metadata exceeds bounded snapshot capacity')
-        yield raw
+    yield (metadata.HEADER+'\n').encode()
+    yield from map(provider_line, projection['records'])
+
+
+class _StreamCoverage:
+    def __init__(self, records):
+        self.names = bytearray()
+        self.size = len(records)
+        self.counts = dict(eligible=0, missing=0, unsupported=0, tiff_default_page=0)
+        self.observed = self.heights = 0
+        self.provider = []
+        self.error = None
+        block = bytearray((metadata.HEADER+'\n').encode())
+        for index, row in enumerate(records):
+            name = row['requested_file'].encode('utf-8')
+            self.names.extend(len(name).to_bytes(4, 'little'))
+            self.names.extend(name)
+            state = row['state']
+            if state in self.counts:
+                self.counts[state] += 1
+            self.observed += 'observed_svg_width_px' in row
+            self.heights += len(row.get('observed_svg_heights', ()))
+            if self.error is None:
+                try:
+                    block.extend(provider_line(row))
+                except ValueError as exc:
+                    self.error = (type(exc), exc.args)
+                if len(block) >= 64 * 1024:
+                    self.provider.append(bytes(block))
+                    block.clear()
+            # This list belongs exclusively to the completed stream reducer.
+            records[index] = None
+        if block:
+            self.provider.append(bytes(block))
+
+    def matches_names(self, ordered):
+        offset = 0
+        for name in ordered:
+            value = name.encode('utf-8')
+            end = offset + 4
+            if (int.from_bytes(self.names[offset:end], 'little') != len(value) or
+                    not self.names.startswith(value, end)):
+                return False
+            offset = end + len(value)
+        return offset == len(self.names)
+
+    def provider_chunks(self):
+        # Each block ends at a complete TSV row; render_row forbids embedded LF.
+        # Match the original read sizes so a later gzip error cannot mask an
+        # earlier mismatching header or row.
+        for block in self.provider:
+            start = 0
+            while start < len(block):
+                end = block.index(b'\n', start) + 1
+                yield block[start:end]
+                start = end
+        if self.error is not None:
+            kind, args = self.error
+            raise kind(*args)
 
 
 def verify_provider_stream(path, projection):
     logical = Path(path)
     path = _physical_role(logical)
     before = evidence.stamp(path)
-    with (path.open('rb') if path == logical else gzip.open(path, 'rb')) as source:
-        for expected in provider_chunks(projection):
+    with (gzip.open(path, 'rb') if _packed_projection_or_provider(path, logical) else path.open('rb')) as source:
+        for expected in (projection.provider_chunks() if isinstance(projection, _StreamCoverage) else provider_chunks(projection)):
             if source.read(len(expected)) != expected:
                 raise ValueError('Provider TSV differs from the authenticated file batches')
         if source.read(1):
@@ -2267,20 +2336,24 @@ def file_coverage(projection, inventory, query_titles=None):
     page_selected = inventory.get('schema') == SELECTED_PAGE_INVENTORY_SCHEMA
     if page_selected and query_titles:
         raise ValueError('Selected page cannot acquire unrelated provider query names')
-    names = [row['requested_file'] for row in projection['records']]
-    selected = set(inventory['titles']) | set(query_titles or ())
-    if names != sorted(selected, key=lambda name: name.encode('utf-8')):
+    compact = isinstance(projection, _StreamCoverage)
+    ordered = sorted(set(inventory['titles']) | set(query_titles or ()), key=lambda name: name.encode('utf-8'))
+    if compact:
+        matches = projection.size == len(ordered) and projection.matches_names(ordered)
+    else:
+        matches = [row['requested_file'] for row in projection['records']] == ordered
+    if not matches:
         raise ValueError('Figure batches do not cover the authenticated file inventory exactly')
-    counts = {state: sum(row['state'] == state for row in projection['records'])
+    counts = {state: projection.counts[state] if compact else sum(row['state'] == state for row in projection['records'])
               for state in ('eligible', 'missing', 'unsupported')}
-    default_pages = sum(row['state'] == 'tiff_default_page' for row in projection['records'])
+    default_pages = projection.counts['tiff_default_page'] if compact else sum(row['state'] == 'tiff_default_page' for row in projection['records'])
     result = {'kind': 'file-logical-axes', 'file_inventory_complete': True,
-            'whole_edition_occurrence_coverage': False, 'files': len(names), **counts,
+            'whole_edition_occurrence_coverage': False, 'files': len(ordered), **counts,
             'eligible_occurrences': 'thumbnail with actual positive width <= source logical width and no height',
             'unsupported_occurrences': ['width-above-original', 'height-bound', 'framed', 'intrinsic',
                                         'unobserved-default-or-upright', 'missing-or-unsupported-file'],
             'inventory_sha256': digest(encoded(inventory))}
-    observed = sum('observed_svg_width_px' in row for row in projection['records'])
+    observed = projection.observed if compact else sum('observed_svg_width_px' in row for row in projection['records'])
     if default_pages:
         result['tiff_default_page_files'] = default_pages
         result['eligible_occurrences'] += '; or a separately proved TIFF default-first-page thumbnail without page/lossy options'
@@ -2288,14 +2361,14 @@ def file_coverage(projection, inventory, query_titles=None):
         result['observed_svg_files'] = observed
         result['eligible_occurrences'] += '; or the exact corroborated rasterized SVG width, without height'
         result['unsupported_occurrences'][0] = 'unobserved-width-above-original'
-    heights = sum(len(row.get('observed_svg_heights', [])) for row in projection['records'])
+    heights = projection.heights if compact else sum(len(row.get('observed_svg_heights', [])) for row in projection['records'])
     if heights:
         result['observed_svg_height_occurrences'] = heights
         result['parse_core_binding_proven'] = False
         result['eligible_occurrences'] += '; or the exact observed canonical SVG wiki/page/options/height context'
         result['unsupported_occurrences'][1] = 'unobserved-height-context'
     if query_titles is not None:
-        result['provider'] = {'header_version': 2, 'rows': len(names),
+        result['provider'] = {'header_version': 2, 'rows': len(ordered),
             'positive_rows': counts['eligible'] + counts['unsupported'] + default_pages, 'negative_rows': counts['missing'],
             'sql_files': len(inventory['titles']), 'observed_query_files': len(query_titles),
             'observed_only_files': len(set(query_titles) - set(inventory['titles'])),
@@ -2429,7 +2502,8 @@ def payload(root, *, _verified_raw=None, _expected=None, _written=None):
             result[name] = dict(identity)
             if evidence.stamp(path) != stamp:
                 raise ValueError('Figure verified raw changed during content authentication')
-        elif path.name != name and path.name == name + '.gz':
+        elif (path.name == name + '.gz' or
+                (name in (ROLES['figure-sizing'], PROVIDER) and _packed_projection_or_provider(path, path))):
             expected = None if _expected is None else _expected.get(name)
             if not isinstance(expected, dict) or type(expected.get('bytes')) is not int or expected['bytes'] <= 0:
                 raise ValueError('Missing decoded Figure member identity')
@@ -2467,7 +2541,8 @@ def replay(root, wiki, date, *, retained_cache=None, inventory_cache=None, regen
             _raw_index_out=_raw_index_out, _inventory_sources_out=_inventory_sources_out, _raw_payload_out=_raw_payload_out)
     logical_projection = root / ROLES['figure-sizing']
     projection_path = _physical_role(logical_projection)
-    with (projection_path.open('rb') if projection_path == logical_projection else gzip.open(projection_path, 'rb')) as source:
+    with (gzip.open(projection_path, 'rb') if _packed_projection_or_provider(projection_path, logical_projection)
+          else projection_path.open('rb')) as source:
         first = source.readline(STREAM_HEADER_LIMIT + 1)
     try:
         stream_header = stream_decode(first) if len(first) <= STREAM_HEADER_LIMIT else None
@@ -2550,7 +2625,7 @@ def replay(root, wiki, date, *, retained_cache=None, inventory_cache=None, regen
 def _figure_capture_manifest(root, require_complete=True):
     manifest_raw = small(root / MANIFEST)
     manifest = decode(manifest_raw)
-    if (not isinstance(manifest, dict) or manifest.get('schema') != SCHEMA or '_raw_storage' in manifest or
+    if (not isinstance(manifest, dict) or manifest.get('schema') != SCHEMA or {'_raw_storage', '_packed_storage'} & manifest.keys() or
             not isinstance(manifest.get('generator_sha256'), str) or
             re.fullmatch('[0-9a-f]{64}', manifest['generator_sha256']) is None):
         raise ValueError('Invalid Figure capture manifest')
@@ -2781,6 +2856,13 @@ def verify_tuple(paths, wiki=None, date=None, *, retained_cache=None, inventory_
     with _physical_role(root / ROLES['figure-sizing-raw']).open('rb') as raw:
         options = {'_raw_storage_out': storage} if raw.read(2) == b'\x1f\x8b' else {}
     manifest = verify(root, retained_cache=retained_cache, inventory_cache=inventory_cache, **options)
+    packed = {}
+    for name in (ROLES['figure-sizing'], PROVIDER):
+        path = root / name
+        if path.is_file() and _packed_projection_or_provider(path, path):
+            size = evidence.stamp(path)[2]
+            with path.open('rb') as source:
+                packed[name] = {'size': size, 'sha256': hashlib.file_digest(source, 'sha256').hexdigest()}
     coverage = manifest.get('coverage', {})
     if coverage.get('selected_page_only') is True:
         if selected_page is None or encoded(selected_page) != encoded(coverage['selected_page']):
@@ -2805,6 +2887,8 @@ def verify_tuple(paths, wiki=None, date=None, *, retained_cache=None, inventory_
                  MANIFEST: digest(manifest_raw), COMPLETE: digest(marker_raw)}
     if storage:
         manifest = {**manifest, '_raw_storage': storage}
+    if packed:
+        manifest = {**manifest, '_packed_storage': packed}
     return {role: ({**manifest, 'output_sha256': manifest['outputs'][role]}, dict(inventory))
             for role in paths}
 
@@ -3509,6 +3593,7 @@ def replay_stream_capture(root, wiki, date, defaults, namespace, general, *, ret
         raise ValueError('Current Mon Figure facts require their own verified defaults')
     if not bound_file_core(projection['core_revision'], general.get('git-hash'), observed, wiki=wiki):
         raise ValueError('Figure defaults and streamed facts use different source versions')
+    records = _StreamCoverage(projection.pop('records'))
     inventory_path = _physical_role(root / INVENTORY)
     inventory_before = ((inventory_path.resolve(), evidence.stamp(inventory_path))
                         if _inventory_sources_out is not None else None)
@@ -3518,11 +3603,9 @@ def replay_stream_capture(root, wiki, date, defaults, namespace, general, *, ret
         raise ValueError('Current Mon Figure facts require a selected original page')
     query_inputs = decode(small(root / QUERY_INPUTS))
     query_titles = provider_query_titles(root, query_inputs, namespace, wiki, date)
-    coverage = file_coverage(projection, inventory, query_titles)
-    verify_provider_stream(root / PROVIDER, projection)
-    # All record consumers have finished. Keep only header/scalar authority
-    # while replaying nested parents; their records must not overlap this graph.
-    del projection['records']
+    coverage = file_coverage(records, inventory, query_titles)
+    verify_provider_stream(root / PROVIDER, records)
+    del records
     if early_plan_error is not None:
         error, traceback = early_plan_error
         raise error.with_traceback(traceback)

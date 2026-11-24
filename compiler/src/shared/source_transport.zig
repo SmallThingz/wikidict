@@ -4,6 +4,10 @@ pub const FileIdentity = struct { device_major: u32, device_minor: u32, inode: u
 pub fn pathIdentity(io: std.Io, path: []const u8) !FileIdentity {
     var file = try std.Io.Dir.cwd().openFile(io, path, .{});
     defer file.close(io);
+    return fileIdentity(file);
+}
+
+pub fn fileIdentity(file: std.Io.File) !FileIdentity {
     const linux = std.os.linux;
     var stat: linux.Statx = undefined;
     if (linux.statx(file.handle, "", linux.AT.EMPTY_PATH, linux.STATX.BASIC_STATS, &stat) != 0 or !stat.mask.INO or !stat.mask.SIZE or !stat.mask.MTIME or !stat.mask.CTIME or !stat.mask.TYPE or (stat.mode & linux.S.IFMT) != linux.S.IFREG) return error.SourceStatFailed;

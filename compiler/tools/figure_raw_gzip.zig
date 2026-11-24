@@ -10,10 +10,16 @@ crc: std.hash.Crc32 = .init(),
 member_bytes: u32 = 0,
 offset: u64 = 0,
 size: u64,
+exact: bool = true,
 done: bool = false,
 
 pub fn init(input: *std.Io.Reader, window: []u8, logical_size: u64) Gzip {
     return .{ .inflater = .init(input, .gzip, window), .size = logical_size };
+}
+
+/// Validate complete gzip members through physical EOF with an absolute decoded ceiling.
+pub fn initBounded(input: *std.Io.Reader, window: []u8, ceiling: u64) Gzip {
+    return .{ .inflater = .init(input, .gzip, window), .size = ceiling, .exact = false };
 }
 
 pub fn readAt(context: *anyopaque, bytes: []u8, offset: u64) !usize {
@@ -39,7 +45,7 @@ pub fn readAt(context: *anyopaque, bytes: []u8, offset: u64) !usize {
         const input = self.inflater.input;
         while (input.peekByte() catch |err| switch (err) {
             error.EndOfStream => {
-                if (self.offset != self.size) return error.InvalidFigureGzip;
+                if (self.exact and self.offset != self.size) return error.InvalidFigureGzip;
                 self.done = true;
                 return used;
             },
@@ -84,4 +90,20 @@ test "Figure gzip validates exact decoded size and footer and rejects a trailing
     bad = gzip_abc;
     bad[19] ^= 1;
     try std.testing.expectError(error.InvalidFigureGzip, testRead(&bad, 3));
+}
+
+test "bounded Figure gzip checks the ceiling independently of physical EOF" {
+    for ([_]u64{ 2, 3, 4 }) |ceiling| {
+        var input: std.Io.Reader = .fixed(&gzip_abc);
+        var window: [flate.max_window_len]u8 = undefined;
+        var decoder = Gzip.initBounded(&input, &window, ceiling);
+        var output: [8]u8 = undefined;
+        if (ceiling < 3) {
+            try std.testing.expectError(error.InvalidFigureGzip, Gzip.readAt(&decoder, &output, 0));
+        } else {
+            const n = try Gzip.readAt(&decoder, &output, 0);
+            try std.testing.expectEqualStrings("abc", output[0..n]);
+            try std.testing.expect(decoder.done);
+        }
+    }
 }

@@ -143,6 +143,8 @@ pub const Provider = struct {
     page_size: ?*const fn (?*anyopaque, []const u8) anyerror!u64 = null,
     page_size_formatted: ?*const fn (?*anyopaque, std.mem.Allocator, u64, PageSizeFormatContext) anyerror![]const u8 = null,
     category_tree: ?*const fn (?*anyopaque, std.mem.Allocator, []const u8, CategoryTreeScope) anyerror![]const []const u8 = null,
+    /// Optional scoped variant. All returned data belongs to the supplied call arena.
+    category_tree_scoped: ?*const fn (?*anyopaque, std.mem.Allocator, []const u8, CategoryTreeScope) anyerror![]const []const u8 = null,
     site_server: ?[]const u8 = null,
     // pages, articles, files, edits, users, activeUsers, admins; exact Lua integers.
     site_statistics: ?[7]u53 = null,
@@ -4810,9 +4812,12 @@ pub const Expander = struct {
         if (data_pages_in_cat) |value| _ = std.fmt.parseInt(u64, value, 10) catch return error.UnsupportedCategoryTreeOptions;
         if (data_pages_left_over) |value| _ = std.fmt.parseInt(u64, value, 10) catch return error.UnsupportedCategoryTreeOptions;
 
-        const get = self.provider.category_tree orelse return error.NotImplemented;
-        const members = try get(self.provider.ctx, self.runtime.allocator, category, if (main_only) .main else .pages);
-        defer self.runtime.allocator.free(members);
+        const get = self.provider.category_tree_scoped orelse self.provider.category_tree orelse return error.NotImplemented;
+        var member_arena = std.heap.ArenaAllocator.init(self.runtime.allocator);
+        defer member_arena.deinit();
+        const scoped = self.provider.category_tree_scoped != null;
+        const members = try get(self.provider.ctx, if (scoped) member_arena.allocator() else self.runtime.allocator, category, if (main_only) .main else .pages);
+        defer if (!scoped) self.runtime.allocator.free(members);
 
         var page_count: usize = members.len;
         var complete_members = members.len < 200;

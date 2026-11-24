@@ -374,7 +374,7 @@ pub const CategoryFormattedStatistics = struct {
         return result.string;
     }
 
-    fn decimal(raw: []const u8) !u32 {
+    pub fn decimal(raw: []const u8) !u32 {
         if (raw.len == 0 or raw.len > 10 or (raw.len > 1 and raw[0] == '0'))
             return error.InvalidCategoryStatisticsFormatSnapshot;
         for (raw) |c| if (!std.ascii.isDigit(c)) return error.InvalidCategoryStatisticsFormatSnapshot;
@@ -384,16 +384,6 @@ pub const CategoryFormattedStatistics = struct {
     pub fn init(a: A, bytes: []const u8, site_bytes: []const u8, category_bytes: []const u8, namespace_sha256: [32]u8, wiki: []const u8, date: []const u8, language: []const u8) !CategoryFormattedStatistics {
         if (bytes.len > 4 * 1024 * 1024 or category_bytes.len > 64 * 1024 * 1024 or !std.unicode.utf8ValidateSlice(bytes) or !std.unicode.utf8ValidateSlice(category_bytes))
             return error.InvalidCategoryStatisticsFormatSnapshot;
-        var site = try Snapshot.init(a, site_bytes, wiki, date, language);
-        defer site.deinit();
-        const parsed_site = try std.json.parseFromSlice(std.json.Value, a, site_bytes, .{ .duplicate_field_behavior = .@"error" });
-        defer parsed_site.deinit();
-        const namespace_hex = std.fmt.bytesToHex(namespace_sha256, .lower);
-        if (!std.mem.eql(u8, try text(parsed_site.value, "namespace_registry_sha256"), &namespace_hex))
-            return error.CategoryStatisticsFormatIdentityMismatch;
-        var arena = std.heap.ArenaAllocator.init(a);
-        errdefer arena.deinit();
-        const owned = arena.allocator();
         var scratch_arena = std.heap.ArenaAllocator.init(a);
         defer scratch_arena.deinit();
         const scratch = scratch_arena.allocator();
@@ -416,6 +406,27 @@ pub const CategoryFormattedStatistics = struct {
                 try domain.put(scratch, count, {});
             if (domain.count() > max_category_formatted_values) return error.CategoryStatisticsFormatDomainTooLarge;
         }
+        var category_digest: [32]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash(category_bytes, &category_digest, .{});
+        return initFromVerifiedDomain(a, bytes, site_bytes, category_digest, domain, namespace_sha256, wiki, date, language);
+    }
+
+    pub fn initFromVerifiedDomain(a: A, bytes: []const u8, site_bytes: []const u8, category_digest: [32]u8, domain: std.AutoHashMapUnmanaged(u32, void), namespace_sha256: [32]u8, wiki: []const u8, date: []const u8, language: []const u8) !CategoryFormattedStatistics {
+        if (bytes.len > 4 * 1024 * 1024 or !std.unicode.utf8ValidateSlice(bytes))
+            return error.InvalidCategoryStatisticsFormatSnapshot;
+        var site = try Snapshot.init(a, site_bytes, wiki, date, language);
+        defer site.deinit();
+        const parsed_site = try std.json.parseFromSlice(std.json.Value, a, site_bytes, .{ .duplicate_field_behavior = .@"error" });
+        defer parsed_site.deinit();
+        const namespace_hex = std.fmt.bytesToHex(namespace_sha256, .lower);
+        if (!std.mem.eql(u8, try text(parsed_site.value, "namespace_registry_sha256"), &namespace_hex))
+            return error.CategoryStatisticsFormatIdentityMismatch;
+        var arena = std.heap.ArenaAllocator.init(a);
+        errdefer arena.deinit();
+        const owned = arena.allocator();
+        var scratch_arena = std.heap.ArenaAllocator.init(a);
+        defer scratch_arena.deinit();
+        const scratch = scratch_arena.allocator();
         const parsed = std.json.parseFromSlice(std.json.Value, scratch, bytes, .{ .duplicate_field_behavior = .@"error" }) catch |err| switch (err) {
             error.OutOfMemory => return err,
             else => return error.InvalidCategoryStatisticsFormatSnapshot,
@@ -430,9 +441,7 @@ pub const CategoryFormattedStatistics = struct {
             !std.mem.eql(u8, try text(value, "content_language"), language))
             return error.CategoryStatisticsFormatIdentityMismatch;
         var site_digest: [32]u8 = undefined;
-        var category_digest: [32]u8 = undefined;
         std.crypto.hash.sha2.Sha256.hash(site_bytes, &site_digest, .{});
-        std.crypto.hash.sha2.Sha256.hash(category_bytes, &category_digest, .{});
         if (!std.mem.eql(u8, try text(value, "namespace_registry_sha256"), &namespace_hex) or
             !std.mem.eql(u8, try text(value, "site_info_sha256"), &std.fmt.bytesToHex(site_digest, .lower)) or
             !std.mem.eql(u8, try text(value, "category_stats_sha256"), &std.fmt.bytesToHex(category_digest, .lower)))

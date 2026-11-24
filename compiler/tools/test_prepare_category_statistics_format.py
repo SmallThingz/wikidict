@@ -1,3 +1,4 @@
+import gzip
 import copy
 import json
 from pathlib import Path
@@ -89,6 +90,99 @@ class CategoryFormattingTests(unittest.TestCase):
             value=dict(query=dict(general=self.site()['query']['general']))if query['action']=='query'else self.response(cfg,int(query['text'].split('\n')[0].rsplit('-',1)[1]))
             return 200,{},json.dumps(value).encode()
         out=root/'capture';capture.capture(site,stats,out,delay=0,transport=transport,sleep=lambda _:None);return out
+    def test_packed_category_roles_stage_pin_and_replay_without_plain_copies(self):
+        import build_wiktionaries as builder
+        with tempfile.TemporaryDirectory() as temp:
+            workspace = Path(temp)
+            evidence = self.captured(workspace)
+            data = workspace/'inputs'
+            data.mkdir()
+            logical = self.stats()
+            identity = dict(bytes=len(logical), sha256=capture.digest(logical))
+            compressed = gzip.compress(logical[:5], mtime=0) + gzip.compress(logical[5:], mtime=0)
+            stored = data/'category-stats.tsv.gz'
+            stored.write_bytes(compressed)
+            (data/'category-stats.manifest.json').write_text(json.dumps(dict(
+                wiki='arwiktionary', date='20261001', output='category-stats.tsv',
+                output_bytes=len(logical), output_sha256=identity['sha256'])))
+            embedded = evidence/'original-category-stats.tsv'
+            embedded.rename(embedded.with_suffix('.tsv.gz'))
+            embedded.with_suffix('.tsv.gz').write_bytes(compressed)
+            formatted = evidence/capture.OUTPUT
+            selection = {
+                'category-stats':dict(path=str(stored.relative_to(workspace)), codec='gzip', **identity),
+                'category-statistics-format':dict(path=str(formatted.relative_to(workspace)),
+                    bytes=formatted.stat().st_size, sha256=capture.digest(formatted.read_bytes()))}
+            roles, _ = builder.materialize_snapshot_selection(workspace, workspace/'view', selection, None,
+                                                              packed_categories=True)
+            capture_root = roles['category-statistics-format'].parent
+            self.assertEqual(roles['category-stats'].read_bytes(), compressed)
+            self.assertEqual((capture_root/embedded.name).read_bytes(), compressed)
+            self.assertEqual(capture.verify(capture_root)['configuration']['category_stats_sha256'],identity['sha256'])
+            self.assertEqual(builder.verified_auxiliary_hashes({'category-stats':roles['category-stats']}),
+                             {'category-stats':identity['sha256']})
+            builder.validate_capture_artifacts(roles['category-stats'].parent, {'artifacts':{'category-stats.tsv':identity['sha256']}})
+            pinned = builder.pinned_auxiliary_snapshots(roles, {k:v['sha256'] for k,v in selection.items()}, workspace/'pinned')
+            self.assertEqual(pinned['category-stats'].read_bytes(), compressed)
+            self.assertEqual((pinned['category-statistics-format'].parent/embedded.name).read_bytes(), compressed)
+            for bad in (compressed[:-1], compressed+b'bad', gzip.compress(b'A\t9\t2\t3\n',mtime=0)):
+                roles['category-stats'].write_bytes(bad)
+                with self.assertRaises((ValueError,OSError,EOFError)):
+                    builder.verified_auxiliary_hashes({'category-stats':roles['category-stats']})
+                (capture_root/embedded.name).write_bytes(bad)
+                with self.assertRaises((ValueError,OSError,EOFError)):
+                    capture.verify(capture_root)
+
+    def test_packed_category_tree_matches_selected_marker_before_and_after_pinning(self):
+        import build_wiktionaries as builder
+        with tempfile.TemporaryDirectory() as temp:
+            workspace = Path(temp)
+            folder = workspace/'inputs'
+            folder.mkdir()
+            logical = b'Z\tpages\ttwo\tone\nZ\tmain\n'
+            digest = capture.digest(logical)
+            data = gzip.compress(logical[:3],mtime=0) + gzip.compress(logical[3:],mtime=0)
+            source = folder/'category-tree.tsv.gz'
+            source.write_bytes(data)
+            (folder/'category-tree.manifest.json').write_text(json.dumps(dict(
+                output_bytes=len(logical), output_sha256=digest, wiki='enwiktionary', date='20261001')))
+            record = dict(path=str(source.relative_to(workspace)), codec='gzip', bytes=len(logical), sha256=digest)
+            roles, _ = builder.materialize_snapshot_selection(workspace, workspace/'view', {'category-tree':record}, None,
+                                                              packed_categories=True)
+            path = roles['category-tree']
+            self.assertEqual(builder.verified_auxiliary_hashes(roles), {'category-tree':digest})
+            self.assertEqual(builder.packed_category_member(path)[1]['sha256'], capture.digest(data))
+            builder.validate_capture_artifacts(path.parent, {'artifacts':{path.name:digest}})
+            pinned = builder.pinned_auxiliary_snapshots(roles,{'category-tree':digest},workspace/'pinned')
+            self.assertEqual(pinned['category-tree'].read_bytes(),data)
+            bad = bytearray(data)
+            bad[-8] ^= 1
+            path.write_bytes(bad)
+            with self.assertRaises((ValueError,OSError,EOFError)):
+                builder.verified_auxiliary_hashes(roles)
+
+    def test_empty_packed_categories_and_independent_format_evidence_bounds(self):
+        import build_wiktionaries as builder
+        with tempfile.TemporaryDirectory() as temp:
+            workspace = Path(temp)
+            folder = workspace/'inputs'
+            folder.mkdir()
+            selection = {}
+            digest = capture.digest(b'')
+            for name in ('category-stats','category-tree'):
+                path = folder/(name+'.tsv.gz')
+                path.write_bytes(gzip.compress(b'',mtime=0))
+                (folder/(name+'.manifest.json')).write_text(json.dumps(dict(
+                    output=name+'.tsv',output_bytes=0,output_sha256=digest)))
+                selection[name] = dict(path=str(path.relative_to(workspace)),codec='gzip',bytes=0,sha256=digest)
+            roles, _ = builder.materialize_snapshot_selection(workspace,workspace/'view',selection,None,
+                                                              packed_categories=True)
+            self.assertEqual(builder.verified_auxiliary_hashes(roles),{name:digest for name in roles})
+            builder.require_packed_category_size('category-stats.tsv',64*1024**2+1)
+            for value in (0,64*1024**2+1):
+                with self.assertRaises(ValueError):
+                    builder.require_packed_category_size('original-category-stats.tsv',value)
+
     def reseal(self,root,change=None):
         manifest=json.loads((root/capture.MANIFEST).read_bytes())
         if change:change(manifest)

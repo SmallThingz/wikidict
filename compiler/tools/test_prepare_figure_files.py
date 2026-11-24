@@ -9549,22 +9549,58 @@ class IncompleteCaptureCompletionTests(unittest.TestCase):
             manifest_sha256=figure.digest((args.output / figure.MANIFEST).read_bytes()),
             wiki=args.wiki, date=args.date)
 
+    def test_stream_provider_preserves_early_mismatch_before_late_gzip_corruption(self):
+        from tempfile import TemporaryDirectory
+        row = dict(requested_file='File:Missing', state='missing', original_width=0, original_height=0)
+        records = [row] * 4096
+        projection = dict(records=records)
+        compact = figure._StreamCoverage(records.copy())
+        expected = list(figure.provider_chunks(projection))
+        self.assertEqual(list(compact.provider_chunks()), expected)
+        first = b''.join(expected[:512])
+        self.assertGreater(len(first), 8192)
+        last = bytearray(gzip.compress(b''.join(expected[512:]), mtime=0))
+        last[-8] ^= 1
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / figure.PROVIDER
+            for header, error, message in ((b'!', ValueError, 'Provider TSV differs'),
+                                          (first[:1], gzip.BadGzipFile, 'CRC check failed')):
+                path.write_bytes(gzip.compress(header + first[1:], mtime=0) + last)
+                for view in (projection, compact):
+                    with self.subTest(header=header, compact=view is compact):
+                        with self.assertRaisesRegex(error, message):
+                            figure.verify_provider_stream(path, view)
+
+    def test_stream_provider_still_reads_modified_bytes_after_inventory(self):
+        args, parent = self.successor('late-provider-change')
+        path = parent / figure.PROVIDER
+        unmodified = path.read_bytes()
+        original = figure.verify_inventory
+        def change_after_inventory(*values, **options):
+            result = original(*values, **options)
+            path.write_bytes(unmodified + b'trailing')
+            return result
+        with patch.object(figure,'verify_inventory',new=change_after_inventory):
+            with self.assertRaisesRegex(ValueError,'Trailing Provider TSV data'):
+                figure.replay(parent,args.wiki,args.date)
+
     def test_capture_releases_generated_and_parent_graphs_before_final_replay(self):
         import sys
         import weakref
         args, parent = self.successor('early-release')
         original_verify = figure.verify
-        original_provider = figure.verify_provider_stream
+        original_document = figure.verify_stream_document
         original_source = figure.replay_source
         original_inventory = figure.inventory_document
         records = {}
         seen = []
         class Records(list):
             pass
-        def provider(path, projection):
+        def document(path, *values, **options):
+            projection = original_document(path, *values, **options)
             projection['records'] = Records(projection['records'])
             records[Path(path).parent] = weakref.ref(projection['records'])
-            return original_provider(path, projection)
+            return projection
         def source(root, *values, **options):
             if Path(root) in records:
                 self.assertIsNone(records[Path(root)]())
@@ -9573,7 +9609,7 @@ class IncompleteCaptureCompletionTests(unittest.TestCase):
             # Both fused HTTP and nested-parent replay read the plan after
             # verifying the provider and releasing its projection records.
             root = Path(path).parent
-            if Path(path).name == figure.PLAN and root in records:
+            if Path(path).name in (figure.INVENTORY, figure.PLAN) and root in records:
                 self.assertIsNone(records[root]())
                 seen.append(root)
             return original_inventory(path)
@@ -9587,7 +9623,7 @@ class IncompleteCaptureCompletionTests(unittest.TestCase):
                     self.assertNotIn('document', value)
                     self.assertTrue(value['offsets'] and value['stamps'])
             return original_verify(root, *values, **options)
-        with patch.object(figure, 'verify_provider_stream', new=provider), \
+        with patch.object(figure, 'verify_stream_document', new=document), \
                 patch.object(figure, 'replay_source', new=source), \
                 patch.object(figure, 'inventory_document', new=inventory), \
                 patch.object(figure, 'verify', new=verify):

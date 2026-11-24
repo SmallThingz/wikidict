@@ -380,6 +380,82 @@ class EnglishMaterializedWidthTests(unittest.TestCase):
             for name in (figure.ROLES['figure-sizing-raw'], figure.ROLES['figure-sizing'], figure.PROVIDER):
                 self.assertFalse((materialized/name).exists())
                 self.assertTrue((materialized/(name+'.gz')).is_file())
+            _, verified = figure._figure_capture_manifest(materialized)
+            raw_name = figure.ROLES['figure-sizing-raw']
+            descriptors = {}
+            for role, name in {**figure.ROLES, 'file-metadata':figure.PROVIDER}.items():
+                source = materialized/name
+                compressed = not source.exists()
+                if compressed:
+                    source = source.with_name(name+'.gz')
+                descriptors[role] = dict(verified['artifacts'][name], path=str(source.relative_to(root)))
+                if compressed:
+                    descriptors[role]['codec'] = 'gzip'
+            materialized.rename(root/'relocated')
+            descriptors = {k: dict(v, path=v['path'].replace('materialized/', 'relocated/', 1))
+                           for k,v in descriptors.items()}
+            materialized = root/'relocated'
+            member = materialized / (raw_name + '.gz')
+            storage = {}
+            paths, capture = builder.materialize_snapshot_selection(root, root/'view', descriptors, None,
+                                                                       figure_raw_storage=storage)
+            self.assertIsNone(capture)
+            selected = paths['figure-sizing-raw']
+            self.assertTrue(selected.samefile(member))
+            self.assertEqual(storage['stamp'], builder._figure_replay_identity(selected))
+            with figure.bind_inventory_downloads(root):
+                resolved = builder.verified_figure_tuple(figure, paths, 'enwiktionary', '20261001')
+            self.assertEqual(resolved['figure-sizing-raw'][0]['coverage']['files'], 850)
+            self.assertEqual(resolved['figure-sizing-raw'][0]['_raw_storage'],
+                             {'size':member.stat().st_size, 'sha256':figure.digest(member.read_bytes())})
+            self.assertEqual(resolved['figure-sizing-raw'][0]['output_sha256'],
+                             verified['artifacts'][raw_name]['sha256'])
+            packed_names = ('figure-sizing', 'file-metadata')
+            packed = resolved['figure-sizing-raw'][0]['_packed_storage']
+            hashes = {}
+            for role, (declaration, _) in resolved.items():
+                hashes[role] = declaration['output_sha256']
+            for role in packed_names:
+                self.assertTrue(paths[role].samefile(materialized/(paths[role].name+'.gz')))
+                self.assertEqual(packed[paths[role].name], {
+                    'size': paths[role].stat().st_size, 'sha256': figure.digest(paths[role].read_bytes())})
+                self.assertEqual(hashes[role], verified['artifacts'][paths[role].name]['sha256'])
+            (root/'pin').mkdir()
+            with figure.bind_inventory_downloads(root):
+                pinned = builder.pinned_auxiliary_snapshots(paths, hashes, root/'pin')
+            for role in ('figure-sizing-raw', *packed_names):
+                self.assertEqual(pinned[role].read_bytes(), paths[role].read_bytes())
+            for role in packed_names:
+                path = paths[role]
+                original_member = path.read_bytes()
+                damaged = bytearray(original_member)
+                damaged[-8] ^= 1
+                path.write_bytes(damaged)
+                builder._FIGURE_TUPLE_REPLAYS.clear()
+                with figure.bind_inventory_downloads(root):
+                    with self.assertRaises((ValueError, OSError)):
+                        builder.verified_figure_tuple(figure, paths, 'enwiktionary', '20261001')
+                path.write_bytes(original_member)
+            forged = dict(descriptors, **{'file-metadata': dict(descriptors['file-metadata'], sha256='0'*64)})
+            with self.assertRaisesRegex(ValueError, 'Conflicting snapshot providers'):
+                builder.materialize_snapshot_selection(root, root/'forged', forged, None, figure_raw_storage={})
+            original = member.read_bytes()
+            with figure.bind_inventory_downloads(root):
+                builder.verified_figure_tuple(figure, paths, 'enwiktionary', '20261001')
+            corrupted = bytearray(original)
+            corrupted[-8] ^= 1
+            member.write_bytes(corrupted)
+            with self.assertRaises((ValueError, OSError)):
+                with figure.bind_inventory_downloads(root):
+                    builder.verified_figure_tuple(figure, paths, 'enwiktionary', '20261001')
+            builder._FIGURE_TUPLE_REPLAYS.clear()
+            with self.assertRaises((EOFError, ValueError, OSError)):
+                with figure.bind_inventory_downloads(root):
+                    builder.verified_figure_tuple(figure, paths, 'enwiktionary', '20261001')
+            member.write_bytes(gzip.decompress(original))
+            with self.assertRaisesRegex(ValueError, 'not gzip'):
+                builder.materialize_snapshot_selection(root, root/'plain', descriptors, None, figure_raw_storage={})
+            member.write_bytes(original)
             plan = figure.inventory_document(materialized/figure.PLAN)
             self.assertEqual((plan['figure_profile'], plan['replay_contract'], plan['base_batches'], plan['observed_batches']),
                              (figure.FIGURE_PROFILE_V5, figure.REPLAY_CONTRACT, 17, 1))

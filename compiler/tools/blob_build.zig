@@ -760,6 +760,29 @@ const FigureGzipFile = struct {
     }
 };
 
+const FigureProjectionInput = struct {
+    encoded: FigureGzipFile = undefined,
+    decoder: FigureRawGzip = undefined,
+    buffer: [64 * 1024]u8 = undefined,
+    window: [std.compress.flate.max_window_len]u8 = undefined,
+
+    fn input(self: *FigureProjectionInput, source: *FigureStreamFile, compressed: bool) !figure_sizing.StreamInput {
+        if (!compressed) return source.input();
+        self.encoded = .init(source, &self.buffer);
+        self.decoder = .initBounded(&self.encoded.reader, &self.window, figure_sizing.packed_projection_limit);
+        return .{ .context = &self.decoder, .read_at = FigureRawGzip.readAt,
+            .size = figure_sizing.packed_projection_limit, .size_is_bound = true };
+    }
+
+    fn accept(self: *FigureProjectionInput, source: *FigureStreamFile, projection: *figure_sizing.StreamInput, compressed: bool) !void {
+        if (projection.digest == null) return error.InvalidFigureSizingSource;
+        if (compressed) {
+            if (!self.decoder.done) return error.InvalidFigureSizingSource;
+            try self.encoded.accept();
+        } else try source.accept(projection.offset, projection.digest.?);
+    }
+};
+
 const FigureProjectionProbe = struct { schema: []const u8, raw_bytes: ?u64 = null };
 
 // Legacy documents retain their existing bounded mapping route. A versioned
@@ -775,22 +798,25 @@ fn loadStreamFigureSizingLocated(io: std.Io, a: std.mem.Allocator, paths: [3][]c
     const projection_path = paths[0];
     var projection_file = (try FigureStreamFile.open(io, projection_path)) orelse return null;
     defer projection_file.close();
-    var projection = projection_file.input();
+    const projection_compressed = try projection_file.compressed();
+    var projection_input: FigureProjectionInput = .{};
+    var projection = try projection_input.input(&projection_file, projection_compressed);
     const first = projection.line(a, figure_sizing.stream_header_limit) catch |err| switch (err) {
-        error.InvalidFigureSizingSource => return null,
+        error.InvalidFigureSizingSource => if (projection_compressed) return err else return null,
         else => return err,
     };
-    const first_line = first orelse return null;
+    const first_line = first orelse return if (projection_compressed) error.InvalidFigureSizingSource else null;
     defer a.free(first_line);
     const header = std.json.parseFromSlice(FigureProjectionProbe, a, first_line, .{ .ignore_unknown_fields = true }) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
-        else => return null,
+        else => if (projection_compressed) return err else return null,
     };
     defer header.deinit();
-    if (!std.mem.eql(u8, header.value.schema, figure_sizing.stream_schema)) return null;
+    if (!std.mem.eql(u8, header.value.schema, figure_sizing.stream_schema))
+        return if (projection_compressed) error.InvalidFigureSizingSource else null;
     // Restart the bounded reader on the same held descriptor, not a reopened
     // path. Registry validation hashes the complete stream from byte zero.
-    projection = projection_file.input();
+    projection = try projection_input.input(&projection_file, projection_compressed);
     const raw_path = paths[1];
     var raw_file = (try FigureStreamFile.open(io, raw_path)) orelse return error.InvalidFigureSizingSource;
     defer raw_file.close();
@@ -819,7 +845,7 @@ fn loadStreamFigureSizingLocated(io: std.Io, a: std.mem.Allocator, paths: [3][]c
     if (!std.mem.eql(u8, &source.source_context.namespace_sha256, &namespaces.source_sha256)) return error.InvalidFigureSizingSource;
     var result = try figure_sizing.Registry.initStreamWithDefaults(a, &projection, &raw, site_bytes, namespaces, .{ .core = source.core_revision, .sha256 = source.source_sha256 });
     errdefer result.deinit();
-    try projection_file.accept(projection.offset, projection.digest orelse return error.InvalidFigureSizingSource);
+    try projection_input.accept(&projection_file, &projection, projection_compressed);
     if (compressed) {
         if (!decoder.done or raw.digest == null) return error.InvalidFigureSizingSource;
         try encoded.accept();
@@ -923,23 +949,26 @@ fn checkFigureCompatibility(io: std.Io, a: std.mem.Allocator, arguments: []const
     if (full) return checkLegacyFigureCompatibility(io, a, paths, &namespaces, source);
     var projection_file = (try FigureStreamFile.open(io, paths[2])) orelse return error.InvalidFigureSizingSource;
     defer projection_file.close();
-    var projection = projection_file.input();
+    const projection_compressed = try projection_file.compressed();
+    var projection_input: FigureProjectionInput = .{};
+    var projection = try projection_input.input(&projection_file, projection_compressed);
     const first_line = (projection.line(a, figure_sizing.stream_header_limit) catch |err| switch (err) {
-        error.InvalidFigureSizingSource => return checkLegacyFigureCompatibility(io, a, paths, &namespaces, source),
+        error.InvalidFigureSizingSource => if (projection_compressed) return err else return checkLegacyFigureCompatibility(io, a, paths, &namespaces, source),
         else => return err,
     }) orelse return error.InvalidFigureSizingSource;
     defer a.free(first_line);
     const header = std.json.parseFromSlice(FigureProjectionProbe, a, first_line, .{ .ignore_unknown_fields = true }) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
-        else => return checkLegacyFigureCompatibility(io, a, paths, &namespaces, source),
+        else => if (projection_compressed) return err else return checkLegacyFigureCompatibility(io, a, paths, &namespaces, source),
     };
     defer header.deinit();
     if (!std.mem.eql(u8, header.value.schema, figure_sizing.stream_schema)) {
         // Legacy inputs retain their existing finite loader limits. This is
         // still only a preparation check; normal Writer validation remains.
+        if (projection_compressed) return error.InvalidFigureSizingSource;
         return checkLegacyFigureCompatibility(io, a, paths, &namespaces, source);
     }
-    projection = projection_file.input();
+    projection = try projection_input.input(&projection_file, projection_compressed);
     var raw_file = (try FigureStreamFile.open(io, paths[3])) orelse return error.InvalidFigureSizingSource;
     defer raw_file.close();
     var raw = raw_file.input();
@@ -45000,7 +45029,12 @@ fn testNormalStreamedFigureLoader(compressed: bool) !void {
     const streamed_projection = try std.mem.concat(a, u8, &.{ projection_header, "\n", fact, "\n" });
     const names = .{ "figure-sizing.json", "figure-sizing.raw.json", "figure-sizing.site.json" };
     const raw_payload = if (compressed) try storedFigureGzipFixture(a, streamed_raw) else streamed_raw;
-    const values = .{ streamed_projection, raw_payload, site_bytes };
+    const split = projection_header.len + 1;
+    const projection_payload = if (compressed) try std.mem.concat(a, u8, &.{
+        try storedFigureGzipFixture(a, streamed_projection[0..split]),
+        try storedFigureGzipFixture(a, streamed_projection[split..]),
+    }) else streamed_projection;
+    const values = .{ projection_payload, raw_payload, site_bytes };
     inline for (names, values) |name, value| try std.Io.Dir.cwd().writeFile(io, .{
         .sub_path = try std.fs.path.join(a, &.{ parent, name }), .data = value });
     var inputs: CapturedWriterInputs = .{ .io = io, .a = a }; defer inputs.deinit();
@@ -45028,6 +45062,44 @@ fn testNormalStreamedFigureLoader(compressed: bool) !void {
     if (compressed) {
         captured_writer_inputs = previous;
         const projection_path = try std.fs.path.join(a, &.{ parent, "figure-sizing.json" });
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = raw_path, .data = raw_payload });
+        const damaged = try a.dupe(u8, projection_payload);
+        for ([_]usize{ 4, 8 }) |footer_offset| {
+            damaged[damaged.len - footer_offset] ^= 1;
+            try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = projection_path, .data = damaged });
+            try std.testing.expectError(error.InvalidFigureGzip, loadFigureSizing(io, a, parent, &ns, site));
+            damaged[damaged.len - footer_offset] ^= 1;
+        }
+        const tails = [_][]const u8{ damaged[0 .. damaged.len - 1],
+            try std.mem.concat(a, u8, &.{projection_payload, "nonmember"}) };
+        for (tails) |tail| {
+            try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = projection_path, .data = tail });
+            try std.testing.expectError(error.InvalidFigureGzip, loadFigureSizing(io, a, parent, &ns, site));
+        }
+        const extra_row = try std.mem.concat(a, u8, &.{projection_payload, try storedFigureGzipFixture(a, "{}\n")});
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = projection_path, .data = extra_row });
+        try std.testing.expectError(error.InvalidFigureSizingSource, loadFigureSizing(io, a, parent, &ns, site));
+        var oversized_raw = try std.json.parseFromSliceLeaky(V, a, raw_header, .{ .allocate = .alloc_always });
+        try oversized_raw.object.put(a, "records_count", .{ .integer = 250_000 });
+        try oversized_raw.object.put(a, "base_batches", .{ .integer = 5_000 });
+        const matching_raw_header = try std.json.Stringify.valueAlloc(a, oversized_raw, .{});
+        const matching_raw = try std.mem.concat(a, u8, &.{ matching_raw_header, "\n", raw_record, "\n" });
+        try projection.object.put(a, "records_count", .{ .integer = 250_000 });
+        try projection.object.put(a, "base_batches", .{ .integer = 5_000 });
+        try projection.object.put(a, "raw_bytes", .{ .integer = @intCast(matching_raw.len) });
+        try projection.object.put(a, "raw_sha256", .{ .string = try auditHash(a, matching_raw) });
+        const oversized_header = try std.json.Stringify.valueAlloc(a, projection, .{});
+        const too_few_rows = try std.mem.concat(a, u8, &.{ oversized_header, "\n", fact, "\n" });
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = raw_path, .data = matching_raw });
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = projection_path,
+            .data = try storedFigureGzipFixture(a, too_few_rows) });
+        const memory = try a.alloc(u8, 1024 * 1024);
+        var bounded_memory = std.heap.FixedBufferAllocator.init(memory);
+        try std.testing.expectError(error.InvalidFigureSizingSource,
+            loadFigureSizing(io, bounded_memory.allocator(), parent, &ns, site));
+        try projection.object.put(a, "records_count", .{ .integer = 1 });
+        try projection.object.put(a, "base_batches", .{ .integer = 1 });
+        try projection.object.put(a, "raw_bytes", .{ .integer = @intCast(streamed_raw.len) });
         try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = raw_path, .data = raw_payload });
         try projection.object.put(a, "raw_sha256", .{ .string = "0000000000000000000000000000000000000000000000000000000000000000" });
         const wrong_hash_header = try std.json.Stringify.valueAlloc(a, projection, .{});

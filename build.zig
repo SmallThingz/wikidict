@@ -813,6 +813,7 @@ pub fn build(b: *std.Build) void {
         .optimize = test_optimize,
         .link_libc = true,
         .imports = &.{
+            .{ .name = "figure_raw_gzip", .module = b.createModule(.{ .root_source_file = b.path("compiler/tools/figure_raw_gzip.zig"), .target = target, .optimize = test_optimize }) },
             .{ .name = "lua_program", .module = program_provider_test_mod },
             .{ .name = "page_language", .module = page_language_provider_mod },
             .{ .name = "shared_xml_decode", .module = shared_xml_decode_mod_test },
@@ -1180,6 +1181,7 @@ fn bundleWorkerObject(b: *std.Build) *std.Build.Step.Compile {
     root.addImport("page_language", page_language_provider);
     root.link_libc = true;
     root.addImport("lua_program", program);
+    root.addImport("figure_raw_gzip", workerModule(b, "compiler/tools/figure_raw_gzip.zig"));
     root.addImport("lua_llvm_abi", abi);
     root.addImport("shared_xml_decode", xml);
     root.addImport("lua_wikitext_preprocess", preprocess);

@@ -1506,7 +1506,13 @@ def validated_auxiliary_capture(name, path, edition=None, date=None):
                 (edition is not None and record.get('wiki')!=edition) or
                 (date is not None and record.get('date')!=date)):
             raise ValueError('Auxiliary capture edition/date mismatch: '+name)
-        artifacts=helper.capture_artifacts(path,record)
+        if helper.__name__=='prepare_wikibase_entities':
+            storage={}
+            artifacts=helper.capture_artifacts(path,record,_storage_out=storage)
+            if storage:
+                record={**record, '_wikibase_storage':storage}
+        else:
+            artifacts=helper.capture_artifacts(path,record)
         if artifacts.get(manifest_name)!=hashlib.sha256(manifest_raw).hexdigest():
             raise ValueError('Auxiliary manifest changed during validation: '+name)
     else:
@@ -2036,7 +2042,9 @@ def verified_figure_tuple(helper, paths, edition=None, date=None, *, parent_path
                 stamp, _ = guard[1][path]
                 size = stamp[1][6]
                 digest = inventory[name]
-                if (stored := manifest.get('_raw_storage')) and name == helper.ROLES['figure-sizing-raw']:
+                stored = (manifest.get('_raw_storage') if name == helper.ROLES['figure-sizing-raw']
+                          else manifest.get('_packed_storage', {}).get(name))
+                if stored:
                     if (stored['size'] != size or re.fullmatch('[0-9a-f]{64}', stored['sha256']) is None or
                             manifest['artifacts'].get(name, {}).get('sha256') != digest):
                         raise ValueError('Figure raw storage proof differs from the capture readset')
@@ -2462,6 +2470,13 @@ def _validated_auxiliary_state(snapshots, edition=None, date=None, *, captured_s
                 sha=capture[0]['output_sha256']
                 if (capture[0]['outputs'][name]!=sha or capture[1].get(path.name)!=sha):
                     raise ValueError('Figure output proof differs from selected role')
+            elif (name in WIKIBASE_PROVIDER_ROLES and capture is not None and
+                    path.name in capture[0].get('_wikibase_storage', {})):
+                sha=capture[0]['output_sha256']
+                if capture[1].get(path.name)!=sha:
+                    raise ValueError('Packed Wikibase output proof differs from selected role')
+            elif name in ('category-stats', 'category-tree') and (packed_stats := packed_category_member(path)):
+                sha = packed_stats[0]['sha256']
             else:
                 sha=sha256_file(path)
             manifest=path.with_name(auxiliary_manifest_filename(name,path))
@@ -2555,7 +2570,11 @@ def validate_capture_artifacts(root, record, required=()):
     for name,digest in artifacts.items():
         if not isinstance(name,str) or Path(name).name!=name or name in ('.','..'):raise ValueError('Unsafe capture artifact name')
         path=root/name
-        if not path.is_file() or not path.resolve().is_relative_to(root) or sha256_file(path)!=digest:raise ValueError('Missing or changed capture artifact: '+name)
+        if not path.is_file() or not path.resolve().is_relative_to(root):
+            raise ValueError('Missing or changed capture artifact: '+name)
+        packed_stats = packed_category_member(path) if name in ('category-stats.tsv','category-tree.tsv') else None
+        if (packed_stats[0]['sha256'] if packed_stats else sha256_file(path)) != digest:
+            raise ValueError('Missing or changed capture artifact: '+name)
 
 
 def validate_captured_snapshot(name,path,capture,selected,capture_root=None):
@@ -2644,14 +2663,14 @@ def _validate_captured_snapshot_context(name,path,capture,selected,capture_root,
     elif name=='category-stats':
         source=selected_source(dict(wiki=record.get('wiki'),date=record.get('date'),name=record.get('source'),url=record.get('source_url'),size=record.get('source_bytes'),sha1=record.get('source_sha1')),selected)
         if not source['name'].endswith('-category.sql.gz'):raise ValueError('Invalid category statistics source')
-        if record.get('output')!=path.name or record.get('output_bytes')!=path.stat().st_size:raise ValueError('Category statistics output mismatch')
+        if record.get('output')!=path.name or record.get('output_bytes')!=(packed_stats[0]['bytes'] if (packed_stats := packed_category_member(path)) else path.stat().st_size):raise ValueError('Category statistics output mismatch')
     elif name=='category-tree':
         sources=record.get('sources',{})
         if set(sources)!=set(('page','linktarget','categorylinks')):raise ValueError('Invalid category tree source inventory')
         for kind,source in sources.items():
             source=selected_source(source,selected)
             if not source['name'].endswith('-'+kind+'.sql.gz'):raise ValueError('Invalid category tree source table')
-        if record.get('dump_siteinfo_sha256')!=capture['artifacts']['dump-siteinfo.xml'] or record.get('output_bytes')!=path.stat().st_size:raise ValueError('Category tree capture mismatch')
+        if record.get('dump_siteinfo_sha256')!=capture['artifacts']['dump-siteinfo.xml'] or record.get('output_bytes')!=(packed_tree[0]['bytes'] if (packed_tree := packed_category_member(path)) else path.stat().st_size):raise ValueError('Category tree capture mismatch')
 
 
 def discover_auxiliary_generation(root,directory,names,edition,date):
@@ -2725,7 +2744,137 @@ def resolve_figure_snapshot_options(root, manifest, selected, downloads, namespa
         return {name:Path(path) for name,path in paths.items()}
 
 
-def materialize_snapshot_selection(workspace, view, selection, capture_root, journal=(), *, figure_raw_storage=None):
+def exact_snapshot_capture_members(root, workspace, selection, journal):
+    """Find ordinary capture-root references while leaving archived sibling packages alone."""
+    import io
+
+    sealed_gzip = {}
+    for row in journal:
+        stored = workspace / row['path']
+        logical = workspace / row['original']
+        if logical.parent == root and stored == logical.with_name(logical.name + '.gz'):
+            if sealed_gzip.setdefault(logical.name, row) != row:
+                raise ValueError(f'Conflicting stored capture references: {logical}')
+
+    declared = {'interwiki-map.tsv' if role == 'interwiki-snapshot' else auxiliary_snapshot_filename(role)
+                for role, row in selection.items() if (workspace / row['path']).parent == root}
+
+    def available(name):
+        logical = root / name
+        return os.path.lexists(logical) or name in sealed_gzip or name in declared
+
+    def metadata(name, limit=64 * 1024 * 1024):
+        path = root / name
+        if name not in sealed_gzip:
+            if path.is_symlink():
+                raise ValueError(f'Unsafe snapshot capture reference: {path}')
+            return read_small_json(path, limit)
+        row = sealed_gzip[name]
+        archive = path.with_name(path.name + '.gz')
+        length = row['raw_bytes']
+        if (type(length) is not int or not 0 <= length <= limit or
+                archive.is_symlink() or not archive.is_file()):
+            raise ValueError(f'Invalid stored snapshot capture reference: {archive}')
+        output = io.BytesIO()
+        copy_decoded_snapshot(archive, output, length, row['raw_sha256'])
+        return json.loads(output.getvalue())
+
+    pending = {'capture.complete.json'}
+    pending.update(name for name in ('auxiliary-basic.complete.json','auxiliary-all.complete.json',
+        'interwiki-map.tsv','interwiki-map.raw.json','interwiki-map.provenance.json') if available(name))
+    for role in AUXILIARY_SNAPSHOT_NAMES:
+        override = selection.get(role)
+        if override and (workspace / override['path']).parent != root:
+            continue
+        logical = root / auxiliary_snapshot_filename(role)
+        sidecar = auxiliary_manifest_filename(role, logical)
+        if role == 'site-info' and available('site-info.manifest.json'):
+            sidecar = 'site-info.manifest.json'
+        for name in (logical.name, sidecar):
+            if available(name):
+                pending.add(name)
+        if role == 'page-language':
+            pending.update(name for name in ('page-language.raw.json','page-language.html') if available(name))
+    if pending & {'behavior-switches.tsv', 'image-options.tsv'}:
+        from prepare_magic_words import capture_profile
+        behavior_manifest = 'behavior-source-magic-words.manifest.json'
+        _, sources = capture_profile(metadata(behavior_manifest, 1024 * 1024))
+        pending.update({'behavior-switches.tsv','behavior-switches.manifest.json',behavior_manifest,
+                        'behavior-source-namespace-registry.tsv','behavior-source-namespace-registry.manifest.json'})
+        pending.update('behavior-source-'+name for name in sources)
+
+    result = set()
+    while pending:
+        name = pending.pop()
+        if not isinstance(name,str) or name in ('','.','..') or Path(name).name != name:
+            raise ValueError(f'Unsafe snapshot capture reference: {name}')
+        if name in result:
+            continue
+        if not available(name):
+            raise ValueError(f'Missing snapshot capture reference: {root / name}')
+        result.add(name)
+        if name.startswith('behavior-source-'):
+            continue  # The embedded source uses its unprefixed original names.
+        if name.endswith(('.manifest.json','.complete.json')):
+            record = metadata(name)
+            if not isinstance(record, dict) or not isinstance(record.get('artifacts', {}), dict):
+                raise ValueError(f'Invalid snapshot capture reference: {root / name}')
+            pending.update(record.get('artifacts', {}))
+    return result
+
+
+def require_packed_category_size(name, size):
+    # The historical format evidence has its own nonempty domain and 64 MiB bound.
+    # Direct category payloads can represent an empty map.
+    bounds = {'category-stats.tsv': (0, 8 * 1024**3),
+              'category-tree.tsv': (0, 2**32-1),
+              'original-category-stats.tsv': (1, 64 * 1024**2)}
+    minimum, maximum = bounds[name]
+    if type(size) is not int or not minimum <= size <= maximum:
+        raise ValueError('Invalid packed category member size')
+
+
+def packed_category_member(path, expected=None):
+    """Return both measured identities only for a complete bounded category gzip."""
+    path = Path(path)
+    with path.open('rb') as source:
+        if source.read(2) != b'\x1f\x8b':
+            return None
+    stamp = _figure_replay_identity(path)
+    if path.name in ('category-stats.tsv', 'category-tree.tsv'):
+        manifest = read_small_json(path.with_suffix('.manifest.json'))
+        if path.name == 'category-stats.tsv' and manifest.get('output') != path.name:
+            raise ValueError('Category statistics output name differs')
+        logical = dict(bytes=manifest.get('output_bytes'), sha256=manifest.get('output_sha256'))
+    elif path.name == 'original-category-stats.tsv' and expected is not None:
+        logical = expected
+    else:
+        raise ValueError('Unbound packed category member')
+    if expected is not None and expected != logical:
+        raise ValueError('Packed category member differs from selected identity')
+    require_packed_category_size(path.name, logical['bytes'])
+    stored_size, stored_digest = _measure_packed_category(path, stamp, logical['bytes'], logical['sha256'])
+    if _figure_replay_identity(path) != stamp:
+        raise ValueError('Packed category member changed after verification')
+    return logical, dict(codec='gzip', bytes=stored_size, sha256=stored_digest)
+
+
+@lru_cache(maxsize=16)
+def _measure_packed_category(path, stamp, size, digest):
+    # This process-local proof identifies the exact regular object and its expected
+    # logical bytes. Validate the stamps again even on a caller-side cache hit.
+    if _figure_replay_identity(path) != stamp:
+        raise ValueError('Packed category member changed before verification')
+    copy_decoded_snapshot(path, None, size, digest, 'gzip')
+    stored = path.stat().st_size, sha256_file(path)
+    if _figure_replay_identity(path) != stamp:
+        raise ValueError('Packed category member changed during verification')
+    return stored
+
+
+
+def materialize_snapshot_selection(workspace, view, selection, capture_root, journal=(), *,
+                                   figure_raw_storage=None, exact_capture=False, packed_categories=False):
     """Create a private package view before ordinary edition resolution and validation."""
     workspace = workspace.resolve(strict=True)
 
@@ -2775,6 +2924,11 @@ def materialize_snapshot_selection(workspace, view, selection, capture_root, jou
         if role != 'language-registry':
             directories.add(source.parent)
 
+    required_capture = set()
+    if exact_capture and capture:
+        journal = tuple(journal)
+        required_capture = {capture / name for name in exact_snapshot_capture_members(capture, workspace, selection, journal)}
+
     def fail_walk(error):
         raise error
 
@@ -2791,6 +2945,9 @@ def materialize_snapshot_selection(workspace, view, selection, capture_root, jou
                 raise ValueError(f'Unsafe snapshot package directory: {folder}')
             for name in names:
                 source = folder / name
+                if folder == capture and exact_capture and source not in required_capture and not (
+                        name.endswith('.gz') and source.with_name(name[:-3]) in required_capture):
+                    continue
                 if source.is_symlink() or not source.is_file():
                     raise ValueError(f'Unsafe snapshot package member: {source}')
                 files.add(source)
@@ -2822,16 +2979,70 @@ def materialize_snapshot_selection(workspace, view, selection, capture_root, jou
     # a previous run must never take precedence over a selected encoded source.
     for source in files - stored_names.keys():
         providers.setdefault(source, (source, 'identity', None, None))
+    if missing := sorted(required_capture - providers.keys()):
+        raise ValueError(f'Missing stored snapshot capture reference: {missing[0]}')
     figure_raw = auxiliary_snapshot_filename('figure-sizing-raw')
+    figure_packable = {figure_raw, auxiliary_snapshot_filename('figure-sizing'),
+                       auxiliary_snapshot_filename('file-metadata')}
+    wikibase_packable = {}
+    if figure_raw_storage is not None and WIKIBASE_PROVIDER_ROLES <= roles.keys():
+        entity_roots = {workspace / Path(selection[role]['path']).parent for role in WIKIBASE_PROVIDER_ROLES}
+        if len(entity_roots) == 1:
+            entity_root = entity_roots.pop()
+            import prepare_wikibase_entities as wikibase
+            values = [wikibase.parse_json(wikibase.regular(
+                source_path(entity_root / (role + '.manifest.json')), wikibase.MAX_PROOF_BYTES))
+                for role in sorted(WIKIBASE_PROVIDER_ROLES)]
+            first, second = values
+            if (isinstance(first, dict) and isinstance(second, dict) and
+                    first.get('schema') == second.get('schema') == 'wikidict-wikibase-capture-v1' and
+                    isinstance(first.get('artifacts'),dict) and first['artifacts']==second.get('artifacts')):
+                outputs = {role + '.tsv' for role in WIKIBASE_PROVIDER_ROLES}
+                for record in values:
+                    name = record['name'] + '.tsv'
+                    logical = entity_root / name
+                    if logical in providers and providers[logical][1] == 'gzip':
+                        if providers[logical][2:] != (record['output_bytes'], record['output_sha256']):
+                            raise ValueError(f'Stored Wikibase role identity differs from capture: {logical}')
+                for name, digest in first['artifacts'].items():
+                    if isinstance(name,str) and Path(name).name == name and name.startswith('wikibase-'):
+                        logical = entity_root / name
+                        if logical in providers and providers[logical][1] == 'gzip':
+                            if providers[logical][3] != digest:
+                                raise ValueError(f'Stored Wikibase identity differs from capture: {logical}')
+                            wikibase_packable[logical] = name in outputs
     delayed = []
     for logical, provider in providers.items():
         source, codec, size, digest = provider
-        if figure_raw_storage is not None and codec == 'gzip' and logical.name == figure_raw:
+        if packed_categories and codec == 'gzip' and (
+                destination(logical) in (roles.get('category-stats'), roles.get('category-tree')) or
+                (roles.get('category-statistics-format') == destination(logical.with_name('category-statistics-format.json'))
+                 and logical.name == 'original-category-stats.tsv')):
+            target = destination(logical)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            require_packed_category_size(logical.name, size)
+            with source.open('rb') as stream:
+                if stream.read(2) != b'\x1f\x8b':
+                    raise ValueError('Stored category statistics member is not gzip')
+            os.link(source, target)
+            _measure_packed_category(target, _figure_replay_identity(target), size, digest)
+            continue
+        if figure_raw_storage is not None and codec == 'gzip' and logical.name in figure_packable:
             delayed.append((logical, provider))
             continue
         target = destination(logical)
         target.parent.mkdir(parents=True, exist_ok=True)
-        if codec == 'identity':
+        if logical in wikibase_packable:
+            physical = target if wikibase_packable[logical] else target.with_name(target.name + '.gz')
+            os.link(source, physical)
+            stamp = _figure_replay_identity(physical)
+            with physical.open('rb') as held:
+                if held.read(2) != b'\x1f\x8b':
+                    raise ValueError(f'Stored Wikibase capture artifact is not gzip: {logical}')
+            if _figure_replay_identity(physical) != stamp:
+                raise ValueError(f'Stored Wikibase capture artifact changed: {logical}')
+            figure_raw_storage.setdefault('wikibase', {})[logical.name] = (physical,stamp,size,digest)
+        elif codec == 'identity':
             os.link(source, target)
             if size is not None and (target.stat().st_size != size or sha256_file(target) != digest):
                 raise ValueError(f'Selected snapshot differs: {source}')
@@ -2848,13 +3059,18 @@ def materialize_snapshot_selection(workspace, view, selection, capture_root, jou
             declaration = figure.decode(figure.small(manifest))
             if declaration.get('capture_format') == figure.FILES_STREAM_SCHEMA:
                 plan_record = figure.inventory_document(plan)
-                if (plan_record.get('metadata_mode', 'full') == 'full' and
-                        not any(plan_record.get(key) for key in ('closed_prefixes', 'complete_captures', 'metadata_light_titles', 'retained', 'observed'))):
-                    if declaration.get('artifacts', {}).get(figure_raw) != {'bytes': size, 'sha256': digest}:
-                        raise ValueError('Stored Figure raw identity differs from complete capture manifest')
-                    if figure_raw_storage:
-                        raise ValueError('Multiple compressed Figure raw selections')
-                    # The normal forward replay authenticates both byte identities.
+                mode = plan_record.get('metadata_mode', 'full')
+                ordinary = mode == 'full' and not any(plan_record.get(key) for key in (
+                    'closed_prefixes', 'complete_captures', 'metadata_light_titles', 'retained', 'observed'))
+                materialized = mode == figure.MATERIALIZED_HTTP_MODE and not any(plan_record.get(key) for key in (
+                    'closed_prefixes', 'complete_captures', 'metadata_light_titles', 'retained'))
+                if materialized or (ordinary and logical.name == figure_raw):
+                    if declaration.get('artifacts', {}).get(logical.name) != {'bytes': size, 'sha256': digest}:
+                        raise ValueError('Stored Figure role identity differs from complete capture manifest')
+                    selected = figure_raw_storage if logical.name == figure_raw else figure_raw_storage.setdefault('packed', {})
+                    if ('path' if logical.name == figure_raw else logical.name) in selected:
+                        raise ValueError('Multiple compressed Figure role selections')
+                    # The normal replay authenticates both byte identities.
                     os.link(source, target)
                     stamp = _figure_replay_identity(target)
                     with target.open('rb') as selected_archive:
@@ -2862,7 +3078,10 @@ def materialize_snapshot_selection(workspace, view, selection, capture_root, jou
                             raise ValueError('Stored Figure raw member is not gzip')
                     if _figure_replay_identity(target) != stamp:
                         raise ValueError('Stored Figure raw member changed at selection')
-                    figure_raw_storage.update(path=target, stamp=stamp)
+                    if logical.name == figure_raw:
+                        selected.update(path=target, stamp=stamp)
+                    else:
+                        selected[logical.name] = (target, stamp)
                     continue
         with target.open('xb') as output:
             copy_decoded_snapshot(source, output, size, digest, codec)
@@ -2985,10 +3204,32 @@ def resolve_edition_snapshot_options(manifest, groups, downloads, overrides=None
             if _figure_raw_storage:
                 _, captures = _validated_auxiliary_state(snapshots, edition, date, captured_selection=selection)
                 raw = captures.get('figure-sizing-raw')
-                path = _figure_raw_storage['path']
-                if (snapshots.get('figure-sizing-raw') != path or raw is None or
-                        not raw[0].get('_raw_storage') or _figure_replay_identity(path) != _figure_raw_storage['stamp']):
-                    raise ValueError('Stored Figure gzip selection changed during validation')
+                if 'path' in _figure_raw_storage:
+                    path = _figure_raw_storage['path']
+                    if (snapshots.get('figure-sizing-raw') != path or raw is None or
+                            not raw[0].get('_raw_storage') or _figure_replay_identity(path) != _figure_raw_storage['stamp']):
+                        raise ValueError('Stored Figure gzip selection changed during validation')
+                for role in WIKIBASE_PROVIDER_ROLES:
+                    source = snapshots.get(role)
+                    if source is None:
+                        continue
+                    value = captures.get(role)
+                    storage = value[0].get('_wikibase_storage', {}) if value else {}
+                    for name, (path, stamp, length, digest) in _figure_raw_storage.get('wikibase', {}).items():
+                        if (Path(source).parent != path.parent or name not in storage or
+                                path.name != storage[name]['name'] or storage[name]['logical_size'] != length or
+                                storage[name]['logical_sha256'] != digest or _figure_replay_identity(path) != stamp):
+                            raise ValueError('Stored Wikibase selection changed during validation')
+                for role in ('figure-sizing', 'file-metadata'):
+                    name = auxiliary_snapshot_filename(role)
+                    selected = _figure_raw_storage.get('packed', {}).get(name)
+                    if selected is None:
+                        continue
+                    path, stamp = selected
+                    verified = captures.get(role)
+                    if (snapshots.get(role) != path or verified is None or
+                            name not in verified[0].get('_packed_storage', {}) or _figure_replay_identity(path) != stamp):
+                        raise ValueError('Stored Figure gzip selection changed during validation')
             else:
                 verified_auxiliary_hashes(snapshots, edition, date, captured_selection=selection)
             result[(edition,date)]={'auxiliary_snapshots':snapshots}
@@ -3072,11 +3313,26 @@ def pinned_auxiliary_snapshots(snapshots, hashes, destination, capture_hashes=No
         figures=validated_figure_tuple(snapshots)
         raw_figure = figures.get('figure-sizing-raw')
         raw_storage = raw_figure[0].get('_raw_storage') if raw_figure is not None else None
-        raw_source = Path(snapshots['figure-sizing-raw']) if raw_storage is not None else None
+        stored_sources = {Path(snapshots['figure-sizing-raw']): raw_storage} if raw_storage is not None else {}
+        for role in ('figure-sizing', 'file-metadata'):
+            if role in figures:
+                stored = figures[role][0].get('_packed_storage', {}).get(auxiliary_snapshot_filename(role))
+                if stored is not None:
+                    stored_sources[Path(snapshots[role])] = stored
+        packed_categories = set()
+        for name in ('category-stats', 'category-tree'):
+            if name not in (snapshots or {}):
+                continue
+            path = Path(snapshots[name])
+            if measured := packed_category_member(path):
+                if measured[0]['sha256'] != hashes[name]:
+                    raise ValueError('Packed category source changed before pinning')
+                stored_sources[path] = measured[1]
+                packed_categories.add(name)
         def add_copy(source,folder,filename,digest):
             key=(folder,filename)
-            if source == raw_source:
-                digest = raw_storage['sha256']
+            if source in stored_sources:
+                digest = stored_sources[source]['sha256']
             if key in copies and copies[key][1]!=digest:
                 raise ValueError('Conflicting auxiliary capture artifact: '+filename)
             copies.setdefault(key,(source,digest))
@@ -3092,9 +3348,16 @@ def pinned_auxiliary_snapshots(snapshots, hashes, destination, capture_hashes=No
                 destination/'site-info' if name=='site-info' and
                 auxiliary_manifest_filename(name,source)=='site-info.manifest.json' else destination)
             if folder.is_symlink():raise ValueError('Unsafe auxiliary capture directory: '+str(folder))
+            wikibase_storage = capture[0].get('_wikibase_storage', {}) if capture and name in WIKIBASE_PROVIDER_ROLES else {}
+            if wikibase_storage:
+                stored_sources.update((source.with_name(row['name']),row) for row in wikibase_storage.values())
             pinned[name]=folder/(auxiliary_snapshot_filename(name))
             role_copies[name]={(folder,auxiliary_snapshot_filename(name))}
             add_copy(source,folder,auxiliary_snapshot_filename(name),hashes[name])
+            if name in packed_categories:
+                manifest = source.with_suffix('.manifest.json')
+                add_copy(manifest, folder, manifest.name, sha256_file(manifest))
+                role_copies[name].add((folder, manifest.name))
             if capture is None:
                 if name in (capture_hashes or {}) or name in (capture_artifact_hashes or {}):
                     raise ValueError('Auxiliary capture disappeared before pinning: '+name)
@@ -3106,7 +3369,8 @@ def pinned_auxiliary_snapshots(snapshots, hashes, destination, capture_hashes=No
                 raise ValueError('Auxiliary capture artifacts changed before pinning: '+name)
             captures[name]=inventory
             for filename,digest in inventory.items():
-                member=source.with_name(filename) if '/' not in filename else None
+                physical_name = wikibase_storage.get(filename, {}).get('name', filename)
+                member=source.with_name(physical_name) if '/' not in physical_name else None
                 if member is None:
                     if name not in figures:
                         raise ValueError('Contained artifacts require a verified Figure capture')
@@ -3118,8 +3382,12 @@ def pinned_auxiliary_snapshots(snapshots, hashes, destination, capture_hashes=No
                             raise ValueError('Contained Figure members differ from validated inventory')
                         figure_members[root]=members
                     member=figure_members[root][filename]
-                add_copy(member,folder,filename,digest)
-                role_copies[name].add((folder,filename))
+                if name == 'category-statistics-format' and filename == 'original-category-stats.tsv':
+                    packed_member = packed_category_member(member, capture[0]['artifacts'][filename])
+                    if packed_member:
+                        stored_sources[member] = packed_member[1]
+                add_copy(member,folder,physical_name,digest)
+                role_copies[name].add((folder,physical_name))
         # Resolve all logical destination conflicts before borrowing anything.
         # Unknown, shared, overlapping and unguarded captures retain copying.
         timing_boundary('borrow_binding_seconds')
@@ -3137,7 +3405,7 @@ def pinned_auxiliary_snapshots(snapshots, hashes, destination, capture_hashes=No
             capture_bindings=0;reused_capture_bindings=0
             for name,source in (snapshots or {}).items():
                 if name in captures or name not in ('category-tree','category-stats'):continue
-                if borrower.bind_plain_category(name,Path(source),hashes[name],owned_roots=owned):
+                if name not in packed_categories and borrower.bind_plain_category(name,Path(source),hashes[name],owned_roots=owned):
                     pinned[name]=Path(source);borrowed.add(name)
             for name,inventory in captures.items():
                 source=Path(snapshots[name]);root=source.parent
@@ -3389,6 +3657,26 @@ def build_input_identity(items, zig, auxiliary_hashes, interwiki_sha, expansion_
         raw = captures.get('figure-sizing-raw')
         if raw is not None and (stored := raw[0].get('_raw_storage')):
             identity['figure_raw_storage'] = stored
+        packed_roles = {}
+        for role in ('figure-sizing', 'file-metadata'):
+            if role in captures:
+                stored = captures[role][0].get('_packed_storage', {}).get(auxiliary_snapshot_filename(role))
+                if stored is not None:
+                    packed_roles[role] = stored
+        for role in ('category-stats', 'category-tree'):
+            if (path := (auxiliary_snapshots or {}).get(role)) is not None and (measured := packed_category_member(path)):
+                if measured[0]['sha256'] != hashes[role]:
+                    raise ValueError('Category logical identity changed during build binding')
+                identity.setdefault('category_storage', {})[role] = measured[1]
+        if packed_roles:
+            identity['figure_packed_storage'] = packed_roles
+        wikibase_packed = {}
+        for role in WIKIBASE_PROVIDER_ROLES & captures.keys():
+            name = auxiliary_snapshot_filename(role)
+            if (stored := captures[role][0].get('_wikibase_storage', {}).get(name)):
+                wikibase_packed[role] = {key: stored[key] for key in ('size','sha256')}
+        if wikibase_packed:
+            identity['wikibase_packed_storage'] = wikibase_packed
         manifests,artifacts=_project_auxiliary_capture_identities(captures)
     else:
         manifests,artifacts=auxiliary_capture_identities(auxiliary_snapshots,
@@ -9192,6 +9480,10 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
     worker_auxiliary_hashes=auxiliary_hashes
     if (stored := (build_identity or {}).get('figure_raw_storage')):
         worker_auxiliary_hashes = {**auxiliary_hashes, 'figure-sizing-raw': stored['sha256']}
+    for key in ('category_storage','figure_packed_storage','wikibase_packed_storage'):
+        if (stored_roles := (build_identity or {}).get(key)):
+            worker_auxiliary_hashes = {**worker_auxiliary_hashes,
+                                       **{role: stored['sha256'] for role, stored in stored_roles.items()}}
     if initial_reference is not None:
         worker_auxiliary_hashes=initial_sealed_worker_hashes(auxiliary_hashes,retained_roles.closed_native_origin['identity']['providers'])
     if closed_whole is not None:
@@ -10804,7 +11096,8 @@ def run_main(p, a, resources):
                 can_stream_figure = (_PYTHON_TOOLING is None and a.retained_native_roles_json is None and
                     a.retained_native_roles_ref is None and a.metadata_network == 'offline' and not a.figure_reuse_batch)
                 auxiliary, staged = materialize_snapshot_selection(workspace, Path(temporary),
-                    selection['snapshots'], capture, rows, figure_raw_storage=figure_raw_storage if can_stream_figure else None)
+                    selection['snapshots'], capture, rows, figure_raw_storage=figure_raw_storage if can_stream_figure else None,
+                    exact_capture=a.exact_snapshot_selection, packed_categories=can_stream_figure)
             a.interwiki_map_snapshot = auxiliary.pop('interwiki-snapshot', None)
             if staged is not None:
                 manifest = dict(manifest, auxiliary_capture_roots={edition: str(staged.relative_to(workspace))})

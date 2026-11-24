@@ -1,5 +1,6 @@
 """Bounded formatting of literal dated category counts; never query live categories."""
 import argparse
+import gzip
 import hashlib
 import io
 import json
@@ -31,14 +32,23 @@ def document(path, value): e.document(Path(path), value)
 def encoded(value): return (json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'))+'\n').encode()
 
 def configuration(site_raw, stats_raw):
+    return stream_configuration(site_raw, io.BytesIO(stats_raw))[0]
+
+
+def stream_configuration(site_raw, stream, *, row_limit=MAX_STATS_BYTES):
     site = e.decode(site_raw)
     cfg = prior.profile.configuration(site, digest(site_raw))
     domain = {0}
     # Each accepted count belongs to the bounded formatting domain below.
     parsed_counts = {}
     seen = set()
-    if not stats_raw or not stats_raw.endswith(b'\n'): raise ValueError('Incomplete category statistics')
-    for raw_line in io.BytesIO(stats_raw):
+    total_bytes = 0
+    logical = hashlib.sha256()
+    while raw_line := stream.readline(row_limit + 1):
+        total_bytes += len(raw_line)
+        if total_bytes > MAX_STATS_BYTES or len(raw_line) > row_limit or not raw_line.endswith(b'\n'):
+            raise ValueError('Incomplete or excessive category statistics')
+        logical.update(raw_line)
         try: fields = raw_line.decode('utf-8').rstrip('\n').split('\t')
         except UnicodeDecodeError as error: raise ValueError('Invalid category statistics UTF-8') from error
         title = hashlib.blake2b(fields[0].encode(),digest_size=16).digest()
@@ -60,9 +70,11 @@ def configuration(site_raw, stats_raw):
         if subcats + files > total: raise ValueError('Inconsistent category counts')
         domain.update((total, total-subcats-files, subcats, files))
         if len(domain) > MAX_VALUES: raise ValueError('Category count domain exceeds selected bound')
+    if not total_bytes:
+        raise ValueError('Incomplete category statistics')
     return {**{k: cfg[k] for k in ('wiki','date','content_language','namespace_registry_sha256','site_info_sha256')},
             'source_server_identity': {k: site['query']['general'][k] for k in ('wikiid','lang','generator')},
-            'category_stats_sha256': digest(stats_raw), 'raw_values': [str(n) for n in sorted(domain)]}
+            'category_stats_sha256': logical.hexdigest(), 'raw_values': [str(n) for n in sorted(domain)]}, total_bytes
 
 def queries(cfg):
     result = []
@@ -110,12 +122,26 @@ def producer_paths():
         'statistics-profile-helper.py':Path(prior.profile.__file__),
         'date-numbering-helper.py':Path(prior.date.__file__), 'capture-evidence-helper.py':Path(e.__file__)}
 
-def artifacts(root):
+def artifacts(root, *, stats_configuration=None):
     result = {}
     for path in root.iterdir():
         if path.name in (MANIFEST, COMPLETE): continue
         if path.is_symlink() or not path.is_file() or len(result)>=MAX_ARTIFACTS:
             raise ValueError('Unsafe or excessive category capture artifacts')
+        if path.name == 'original-category-stats.tsv' and stats_configuration is not None:
+            before = e.stamp(path)
+            with path.open('rb') as source:
+                encoded = source.peek(2)[:2] == b'\x1f\x8b'
+                if encoded:
+                    with gzip.GzipFile(fileobj=source) as decoded:
+                        config, size = stream_configuration(read(root/'original-site-info.json'), decoded, row_limit=64*1024)
+                else:
+                    config, size = stream_configuration(read(root/'original-site-info.json'), source)
+            if before != e.stamp(path):
+                raise ValueError('Category statistics changed during replay')
+            result[path.name] = dict(bytes=size, sha256=config['category_stats_sha256'])
+            stats_configuration.append(config)
+            continue
         raw = read(path, MAX_STATS_BYTES if path.name=='original-category-stats.tsv' else MAX_JSON_BYTES)
         result[path.name] = dict(bytes=len(raw),sha256=digest(raw))
     return result
@@ -169,10 +195,11 @@ def capture(site_path, stats_path, root, *, delay=1.0, wall_seconds=900, transpo
 
 def verify(root, complete=True):
     root=Path(root);manifest=e.decode(read(root/MANIFEST))
-    if manifest.get('schema')!=CAPTURE_SCHEMA or artifacts(root)!=manifest.get('artifacts'):
+    configs = []
+    if manifest.get('schema')!=CAPTURE_SCHEMA or artifacts(root, stats_configuration=configs)!=manifest.get('artifacts') or len(configs) != 1:
         raise ValueError('Category capture artifact inventory differs')
     prior.validate_provenance(manifest['artifacts'], producer_paths())
-    cfg=configuration(read(root/'original-site-info.json'),read(root/'original-category-stats.tsv',MAX_STATS_BYTES))
+    cfg = configs[0]
     if cfg!=manifest.get('configuration') or cfg!=e.decode(read(root/'requested.json')):
         raise ValueError('Category capture configuration differs')
     if any(manifest.get(k)!=cfg[k] for k in ('wiki','date','content_language','namespace_registry_sha256')):

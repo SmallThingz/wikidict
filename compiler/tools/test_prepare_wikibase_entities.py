@@ -1,5 +1,6 @@
 import contextlib
 import copy
+import gzip
 import io
 import json
 from pathlib import Path
@@ -108,6 +109,81 @@ class WikibaseCaptureTests(unittest.TestCase):
                 manifest.update(output_sha256=entities.digest(raw), output_bytes=len(raw))
             p.chmod(0o644)
             p.write_bytes(entities.document(manifest))
+
+    def test_both_packed_role_outputs_and_packed_companion_are_replayed(self):
+        import build_wiktionaries as build
+        with tempfile.TemporaryDirectory() as temp:
+            workspace=Path(temp)
+            (manifest,_),_ = self.capture(workspace/'source')
+            capture=workspace/'source'/entities.DIRECTORY
+            for role in entities.NAMES:
+                sidecar=capture/(role+'.manifest.json')
+                sidecar.write_bytes(sidecar.read_bytes()+b' '*(64*1024))
+                self.assertGreater(sidecar.stat().st_size,64*1024)
+            declarations={}
+            journal=[]
+            for name, digest in manifest['artifacts'].items():
+                plain=capture/name
+                raw=plain.read_bytes()
+                self.assertEqual(digest,entities.digest(raw))
+                packed=plain.with_name(plain.name+'.gz')
+                # Concatenated members form one exact role/evidence byte stream.
+                split=len(raw)//2
+                packed.write_bytes(gzip.compress(raw[:split],mtime=0)+gzip.compress(raw[split:],mtime=0))
+                plain.unlink()
+                if name.endswith('.tsv'):
+                    declarations[plain.stem]=dict(path=str(packed.relative_to(workspace)),codec='gzip',
+                                                   bytes=len(raw),sha256=digest)
+                else:
+                    journal.append(dict(path=str(packed.relative_to(workspace)),original=str(plain.relative_to(workspace)),
+                                        raw_bytes=len(raw),raw_sha256=digest))
+            storage={}
+            snapshots,_=build.materialize_snapshot_selection(workspace,workspace/'stage',declarations,None,
+                iter(journal),figure_raw_storage=storage)
+            self.assertEqual(set(storage['wikibase']),set(manifest['artifacts']))
+            for role, path in snapshots.items():
+                self.assertTrue(path.samefile(workspace/declarations[role]['path']))
+            evidence=snapshots['wikibase-entities'].parent/'wikibase-request-000001.raw.json.gz'
+            self.assertTrue(evidence.is_file())
+            self.assertFalse(evidence.with_suffix('').exists())
+            entities._VALIDATED_REPLAY_KEYS.clear()
+            logical,captures=build._validated_auxiliary_state(snapshots,self.wiki,self.date)
+            self.assertEqual(logical,{role:rec['sha256'] for role,rec in declarations.items()})
+            for role, (record, inventory, _) in captures.items():
+                self.assertEqual(inventory[snapshots[role].name],logical[role])
+                for name, (physical, stamp, wanted_size, wanted_sha) in storage['wikibase'].items():
+                    proof=record['_wikibase_storage'][name]
+                    self.assertEqual(proof['name'],physical.name)
+                    self.assertEqual(proof['size'],physical.stat().st_size)
+                    self.assertEqual(proof['logical_size'],wanted_size)
+                    self.assertEqual(proof['logical_sha256'],wanted_sha)
+                    self.assertEqual(proof['sha256'],entities.digest(physical.read_bytes()))
+                    self.assertEqual(stamp,build._figure_replay_identity(physical))
+            (workspace/'pin').mkdir()
+            pinned=build.pinned_auxiliary_snapshots(snapshots,logical,workspace/'pin')
+            for role, path in pinned.items():
+                self.assertEqual(path.read_bytes(),snapshots[role].read_bytes())
+            self.assertEqual(pinned['wikibase-entities'].with_name(evidence.name).read_bytes(),evidence.read_bytes())
+            self.assertFalse((workspace/'pin'/evidence.stem).exists())
+
+            primary=snapshots['wikibase-entities']
+            for path in (primary,evidence):
+                old=path.read_bytes()
+                for data in (old[:-1],old[:-8]+bytes([old[-8]^1])+old[-7:],old+b'trail'):
+                    path.write_bytes(data)
+                    entities._VALIDATED_REPLAY_KEYS.clear()
+                    with self.assertRaises((ValueError,OSError,EOFError)):
+                        build._validated_auxiliary_state(snapshots,self.wiki,self.date)
+                path.write_bytes(old)
+            duplicate=evidence.with_suffix('')
+            duplicate.write_bytes(gzip.decompress(evidence.read_bytes()))
+            with self.assertRaisesRegex(ValueError,'Multiple Wikibase capture artifact providers'):
+                build._validated_auxiliary_state(snapshots,self.wiki,self.date)
+            duplicate.unlink()
+            forged={**declarations,'wikibase-entities':{**declarations['wikibase-entities'],'bytes':1}}
+            with self.assertRaisesRegex(ValueError,'Stored Wikibase role identity differs'):
+                build.materialize_snapshot_selection(workspace,workspace/'forged',forged,None,
+                    iter(journal),figure_raw_storage={})
 
     def test_complete_lexeme_payload_and_only_proven_one_hop_dependencies(self):
         with tempfile.TemporaryDirectory() as tmp:

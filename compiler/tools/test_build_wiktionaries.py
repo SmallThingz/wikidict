@@ -46,6 +46,70 @@ def tool_arguments(command):
 
 
 class StoredSnapshotTests(unittest.TestCase):
+    def test_closed_reference_inventory_and_unselected_corrupt_archive(self):
+        def sha(raw):
+            return hashlib.sha256(raw).hexdigest()
+
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            root = workspace/'capture'
+            root.mkdir()
+            journal = []
+            def stored(name, raw):
+                path = root/(name+'.gz')
+                path.write_bytes(gzip.compress(raw,mtime=0))
+                journal.append(dict(path=str(path.relative_to(workspace)),
+                    original='capture/'+name,raw_bytes=len(raw),raw_sha256=sha(raw)))
+                return path
+            def write(path, value):
+                path.write_bytes(json.dumps(value).encode())
+            xml = b'<siteinfo/>'
+            dump = stored('dump-siteinfo.xml',xml)
+            api = b'{"query":{}}'
+            (root/'namespace-siteinfo.raw.json').write_bytes(api)
+            (root/'pagetable-dumpstatus.raw.json').write_bytes(api)
+            write(root/'capture.complete.json',dict(artifacts={
+                'dump-siteinfo.xml':sha(xml),'namespace-siteinfo.raw.json':sha(api),
+                'pagetable-dumpstatus.raw.json':sha(api)}))
+            category_raw = b'Category\t4\n'
+            category = stored('category-stats.tsv',category_raw)
+            category_digest = sha(category_raw)
+            dependency_raw = b'{"statement":"fixture category provenance"}'
+            dependency = stored('category-stats.request.json',dependency_raw)
+            category_manifest = root/'category-stats.manifest.json'
+            write(category_manifest,dict(artifacts={'category-stats.request.json':sha(dependency_raw)}))
+            category_marker = {'artifacts':{'category-stats.tsv': category_digest,
+                                           category_manifest.name:sha(category_manifest.read_bytes())}}
+            stored('auxiliary-basic.complete.json', json.dumps(category_marker).encode())
+            obsolete = stored('file-metadata.capture-0199.tar',b'Not part of the selected package')
+            obsolete.write_bytes(b'corrupt unrelated archive')
+            obsolete_before = obsolete.stat()
+            selection = {'category-stats':dict(path='capture/'+category.name,
+                        codec='gzip',bytes=len(category_raw),sha256=category_digest)}
+            self.assertTrue(dump.is_file() and dependency.is_file())
+            roles,capture=b.materialize_snapshot_selection(workspace,workspace/'selected',selection,
+                'capture',iter(journal),exact_capture=True)
+            self.assertEqual(len(list(capture.iterdir())),8)
+            self.assertEqual(roles['category-stats'].read_bytes(),category_raw)
+            self.assertEqual((capture/dependency.name[:-3]).read_bytes(),dependency_raw)
+            for marker in ('capture.complete.json','auxiliary-basic.complete.json'):
+                b.validate_capture_artifacts(capture,b.read_small_json(capture/marker))
+            self.assertFalse((capture/obsolete.name).exists())
+            self.assertEqual(obsolete.stat(),obsolete_before)
+            with self.assertRaisesRegex(ValueError,'Invalid gzip snapshot'):
+                b.materialize_snapshot_selection(workspace,workspace/'legacy',selection,
+                    'capture',iter(journal))
+            dependency.unlink()
+            with self.assertRaisesRegex(ValueError,'Missing stored snapshot capture reference'):
+                b.materialize_snapshot_selection(workspace,workspace/'missing',selection,
+                    'capture',iter(journal),exact_capture=True)
+            self.assertFalse((workspace/'missing').exists())
+            write(category_manifest,dict(artifacts={'../outside':sha(dependency_raw)}))
+            with self.assertRaisesRegex(ValueError,'Unsafe snapshot capture reference'):
+                b.materialize_snapshot_selection(workspace,workspace/'escaped',selection,
+                    'capture',iter(journal),exact_capture=True)
+            self.assertFalse((workspace/'escaped').exists())
+
     def test_verified_package_and_nested_siblings_in_private_view(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

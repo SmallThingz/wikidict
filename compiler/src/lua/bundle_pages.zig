@@ -24,6 +24,7 @@ const WikibaseEntityCache = lua_program.WikibaseEntityCache;
 const WikibaseTerm = lua_program.WikitextProvider.WikibaseTerm;
 const WikibaseEntityTerms = lua_program.WikitextProvider.WikibaseEntityTerms;
 const TransclusionBody = lua_program.WikitextProvider.TransclusionBody;
+const PackedCategoryTree = @import("packed_category_tree.zig");
 const CategoryTreeScope = lua_program.WikitextProvider.CategoryTreeScope;
 
 const InterfaceMessageEntry = lua_program.namespace_registry.interface_messages.Entry;
@@ -61,11 +62,6 @@ fn parseWikibasePageLinks(a: A, source: []const u8) !WikibasePageLinks {
         previous = page_id;
     }
     return error.InvalidWikibasePageLinkSnapshot;
-}
-
-fn expectSnapshotHeader(lines: *std.mem.SplitIterator(u8, .scalar), prefix: []const u8, expected: []const u8) !void {
-    const line = lines.next() orelse return error.InvalidSnapshotIdentity;
-    if (!std.mem.startsWith(u8, line, prefix) or !std.mem.eql(u8, line[prefix.len..], expected)) return error.InvalidSnapshotIdentity;
 }
 
 fn validLanguageCode(code: []const u8) bool {
@@ -226,10 +222,12 @@ pub const Provider = struct {
     category_stats: std.StringHashMapUnmanaged(CategoryStats) = .empty,
     category_stats_storage: ?Mapped = null,
     category_stats_available: bool = false,
+    packed_category_keys: ?std.heap.ArenaAllocator = null,
     category_statistics_format: ?site_info_lib.CategoryFormattedStatistics = null,
     interface_messages: std.StringHashMapUnmanaged(InterfaceMessageEntry) = .empty,
     interface_messages_storage: ?Mapped = null,
     interface_messages_available: bool = false,
+    packed_tree: ?PackedCategoryTree = null,
     category_tree_ranges: std.StringHashMapUnmanaged([]const u8) = .empty,
     category_tree_storage: ?Mapped = null,
     category_tree_available: bool = false,
@@ -247,6 +245,7 @@ pub const Provider = struct {
     wikibase_page_links_storage: ?Mapped = null,
     wikibase_entities: std.StringHashMapUnmanaged(StructuredEntityRow) = .empty,
     wikibase_entities_storage: ?Mapped = null,
+    wikibase_entities_arena: ?std.heap.ArenaAllocator = null,
     wikibase_entity_cache: ?*WikibaseEntityCache = null,
     wikibase_entity_cache_disabled: bool = false,
     wikibase_entity_terms: std.StringHashMapUnmanaged(WikibaseEntityTerms) = .empty,
@@ -324,11 +323,13 @@ pub const Provider = struct {
         if (self.site_statistics_format) |*snapshot| snapshot.deinit();
         if (self.category_statistics_format) |*snapshot| snapshot.deinit();
         self.category_stats.deinit(self.a);
+        if (self.packed_category_keys) |*arena| arena.deinit();
         if (self.category_stats_storage) |*mapped| mapped.deinit();
         var message_keys = self.interface_messages.keyIterator();
         while (message_keys.next()) |key| self.a.free(key.*);
         self.interface_messages.deinit(self.a);
         if (self.interface_messages_storage) |*mapped| mapped.deinit();
+        if (self.packed_tree) |*tree| tree.deinit();
         self.category_tree_ranges.deinit(self.a);
         if (self.category_tree_storage) |*mapped| mapped.deinit();
         var files = self.file_metadata.iterator();
@@ -360,6 +361,7 @@ pub const Provider = struct {
         }
         self.wikibase_entities.deinit(self.a);
         if (self.wikibase_entities_storage) |*mapped| mapped.deinit();
+        if (self.wikibase_entities_arena) |*arena| arena.deinit();
         self.wikibase_entity_terms.deinit(self.a);
         if (self.wikibase_entity_terms_storage) |*mapped| mapped.deinit();
         if (self.wikibase_entity_terms_arena) |*arena| arena.deinit();
@@ -400,6 +402,7 @@ pub const Provider = struct {
             .category_statistics_formatted = if (self.category_statistics_format != null) categoryStatisticsFormatted else null,
             .interface_message = if (self.interface_messages_available) interfaceMessage else null,
             .category_tree = if (self.category_tree_available) categoryTree else null,
+            .category_tree_scoped = if (self.packed_tree != null) categoryTreeScoped else null,
             .file_metadata = if (self.file_metadata_available) fileMetadata else null,
             .file_path = if (self.parser_function_facts_snapshot != null) filePath else null,
             .page_size = pageSize,
@@ -434,6 +437,10 @@ pub const Provider = struct {
     }
 
     fn mapOptional(self: *Provider, name: []const u8) !?Mapped {
+        return self.mapOptionalHoldingFile(name, null);
+    }
+
+    fn mapOptionalHoldingFile(self: *Provider, name: []const u8, held: ?*?std.Io.File) !?Mapped {
         const path = try std.fs.path.join(self.a, &.{ self.root, name });
         defer self.a.free(path);
         const fd = std.posix.openat(std.posix.AT.FDCWD, path, .{ .ACCMODE = .RDONLY, .CLOEXEC = true }, 0) catch |err| switch (err) {
@@ -441,10 +448,12 @@ pub const Provider = struct {
             else => return err,
         };
         var file: std.Io.File = .{ .handle = fd, .flags = .{ .nonblocking = false } };
-        defer file.close(self.io);
+        defer if (held == null or held.?.* == null) file.close(self.io);
         const len = std.math.cast(usize, (try file.stat(self.io)).size) orelse return error.FileTooBig;
         if (len == 0) return .{ .bytes = &.{} };
-        return .{ .bytes = try std.posix.mmap(null, len, .{ .READ = true }, .{ .TYPE = .PRIVATE }, fd, 0) };
+        const bytes = try std.posix.mmap(null, len, .{ .READ = true }, .{ .TYPE = .PRIVATE }, fd, 0);
+        if (held) |slot| slot.* = file;
+        return .{ .bytes = bytes };
     }
 
     fn unescapeFieldAlloc(a: A, raw: []const u8) ![]u8 {
@@ -550,6 +559,11 @@ pub const Provider = struct {
     fn loadCategoryStats(self: *Provider) !void {
         var mapped = (try self.mapOptional("category-stats.tsv")) orelse return;
         errdefer mapped.deinit();
+        if (std.mem.startsWith(u8, mapped.bytes, "\x1f\x8b")) {
+            try self.loadPackedCategoryStats(mapped.bytes);
+            mapped.deinit();
+            return;
+        }
         var entries: std.StringHashMapUnmanaged(CategoryStats) = .empty;
         errdefer entries.deinit(self.a);
         const capacity = std.math.cast(u32, std.mem.count(u8, mapped.bytes, "\n") + 1) orelse return error.CategoryStatsSnapshotTooLarge;
@@ -574,7 +588,67 @@ pub const Provider = struct {
         self.category_stats_available = true;
     }
 
+    const PackedCategoryStats = struct {
+        provider: *Provider,
+        keys: std.heap.ArenaAllocator,
+        strict: bool,
+        domain: std.AutoHashMapUnmanaged(u32, void) = .empty,
+        hash: std.crypto.hash.sha2.Sha256 = .init(.{}),
+
+        fn row(ctx: *PackedCategoryStats, line: []const u8, terminated: bool) !void {
+            const provider = ctx.provider;
+            if (ctx.strict) {
+                ctx.hash.update(line);
+                if (terminated) ctx.hash.update("\n");
+                if (!std.unicode.utf8ValidateSlice(line)) return error.InvalidCategoryStatisticsFormatSnapshot;
+            }
+            if (line.len == 0 or line[0] == '#') return;
+            var fields = std.mem.splitScalar(u8, line, '\t');
+            const key = fields.next().?;
+            var counts: [3]u32 = undefined;
+            for (&counts) |*count| {
+                const text = fields.next() orelse return error.InvalidCategoryStatsSnapshot;
+                count.* = try std.fmt.parseInt(u32, text, 10);
+                if (ctx.strict) _ = try site_info_lib.CategoryFormattedStatistics.decimal(text);
+            }
+            const all, const subcats, const files = counts;
+            if (key.len == 0 or fields.next() != null or subcats > all or files > all - subcats)
+                return error.InvalidCategoryStatsSnapshot;
+            const entry = try provider.category_stats.getOrPut(provider.a, key);
+            if (entry.found_existing) return error.DuplicateCategoryStats;
+            entry.key_ptr.* = try ctx.keys.allocator().dupe(u8, key);
+            entry.value_ptr.* = .{ .all = all, .subcats = subcats, .files = files };
+            if (ctx.strict) {
+                for ([_]u32{ all, all - subcats - files, subcats, files }) |count|
+                    try ctx.domain.put(provider.a, count, {});
+                if (ctx.domain.count() > site_info_lib.max_category_formatted_values)
+                    return error.CategoryStatisticsFormatDomainTooLarge;
+            }
+        }
+    };
+
+    fn loadPackedCategoryStats(self: *Provider, bytes: []const u8) !void {
+        var formatted = try self.mapOptional("category-statistics-format.json");
+        defer if (formatted) |*m| m.deinit();
+        var ctx: PackedCategoryStats = .{ .provider = self, .keys = .init(self.a), .strict = formatted != null };
+        errdefer ctx.keys.deinit();
+        defer ctx.domain.deinit(self.a);
+        if (ctx.strict) try ctx.domain.put(self.a, 0, {});
+        try self.readPackedRows(bytes, if (ctx.strict) 64 * 1024 * 1024 else 8 * 1024 * 1024 * 1024, 64 * 1024, &ctx);
+        if (formatted) |format| {
+            var site = (try self.mapOptional("namespace-siteinfo.raw.json")) orelse return error.CategoryStatisticsFormatInputsMissing;
+            defer site.deinit();
+            self.category_statistics_format = try site_info_lib.CategoryFormattedStatistics.initFromVerifiedDomain(
+                self.a, format.bytes, site.bytes, ctx.hash.finalResult(), ctx.domain, self.namespace_catalog.source_sha256,
+                self.namespace_catalog.wiki, self.namespace_catalog.dump_date, self.namespace_catalog.content_language,
+            );
+        }
+        self.packed_category_keys = ctx.keys;
+        self.category_stats_available = true;
+    }
+
     fn loadCategoryStatisticsFormat(self: *Provider) !void {
+        if (self.packed_category_keys != null) return;
         var formatted = (try self.mapOptional("category-statistics-format.json")) orelse return;
         defer formatted.deinit();
         const categories = self.category_stats_storage orelse return error.CategoryStatisticsFormatInputsMissing;
@@ -596,8 +670,19 @@ pub const Provider = struct {
     }
 
     fn loadCategoryTree(self: *Provider) !void {
-        var mapped = (try self.mapOptional("category-tree.tsv")) orelse return;
+        var held: ?std.Io.File = null;
+        var mapped = (try self.mapOptionalHoldingFile("category-tree.tsv", &held)) orelse return;
+        defer if (held) |file| file.close(self.io);
         errdefer mapped.deinit();
+        if (std.mem.startsWith(u8, mapped.bytes, "\x1f\x8b")) {
+            const path = try std.fs.path.join(self.a, &.{ self.root, "category-tree.tsv" });
+            errdefer self.a.free(path);
+            self.packed_tree = try PackedCategoryTree.init(self.a, self.io, held.?, path, mapped.bytes);
+            held = null;
+            self.category_tree_storage = mapped;
+            self.category_tree_available = true;
+            return;
+        }
         var ranges: std.StringHashMapUnmanaged([]const u8) = .empty;
         errdefer ranges.deinit(self.a);
         const capacity = std.math.cast(u32, std.mem.count(u8, mapped.bytes, "\n") + 1) orelse
@@ -607,20 +692,10 @@ pub const Provider = struct {
         var lines = std.mem.splitScalar(u8, mapped.bytes, '\n');
         while (lines.next()) |line| {
             if (line.len == 0 or line[0] == '#') continue;
-            var fields = std.mem.splitScalar(u8, line, '\t');
-            const category = fields.next() orelse return error.InvalidCategoryTreeSnapshot;
-            const scope = fields.next() orelse return error.InvalidCategoryTreeSnapshot;
-            if (category.len == 0 or std.meta.stringToEnum(CategoryTreeScope, scope) == null)
-                return error.InvalidCategoryTreeSnapshot;
-            const key_len = category.len + 1 + scope.len;
-            var count: usize = 0;
-            while (fields.next()) |title| {
-                if (title.len == 0 or count >= 200) return error.InvalidCategoryTreeSnapshot;
-                count += 1;
-            }
-            const result = try ranges.getOrPut(self.a, line[0..key_len]);
+            const row = try PackedCategoryTree.Row.parse(line);
+            const result = try ranges.getOrPut(self.a, row.key);
             if (result.found_existing) return error.DuplicateCategoryTree;
-            result.value_ptr.* = if (key_len == line.len) "" else line[key_len + 1 ..];
+            result.value_ptr.* = row.members;
         }
         self.category_tree_ranges = ranges;
         self.category_tree_storage = mapped;
@@ -639,58 +714,109 @@ pub const Provider = struct {
             }
             entries.deinit(self.a);
         }
-        const capacity = std.math.cast(u32, std.mem.count(u8, mapped.bytes, "\n") + 1) orelse
-            return error.FileMetadataSnapshotTooLarge;
-        try entries.ensureTotalCapacity(self.a, capacity);
-        const v2 = std.mem.startsWith(u8, mapped.bytes, "# wikidict-file-metadata-v2\n");
-        var lines = std.mem.splitScalar(u8, mapped.bytes, '\n');
-        while (lines.next()) |line| {
-            if (line.len == 0 or line[0] == '#') continue;
-            var fields = std.mem.splitScalar(u8, line, '\t');
-            const title = fields.next() orelse return error.InvalidFileMetadataSnapshot;
-            const exists_raw = fields.next() orelse return error.InvalidFileMetadataSnapshot;
-            const width = try std.fmt.parseInt(u32, fields.next() orelse return error.InvalidFileMetadataSnapshot, 10);
-            const height = try std.fmt.parseInt(u32, fields.next() orelse return error.InvalidFileMetadataSnapshot, 10);
-            if (title.len == 0) return error.InvalidFileMetadataSnapshot;
-            const exists_flag = if (std.mem.eql(u8, exists_raw, "1"))
-                true
-            else if (std.mem.eql(u8, exists_raw, "0"))
-                false
-            else
-                return error.InvalidFileMetadataSnapshot;
-            if (!exists_flag and (width != 0 or height != 0)) return error.InvalidFileMetadataSnapshot;
-            var media_type: ?FileMetadata.MediaType = null;
-            var canonical_title: ?[]const u8 = null;
-            errdefer if (canonical_title) |owned| self.a.free(owned);
-            if (v2) {
-                const media_raw = fields.next() orelse return error.InvalidFileMetadataSnapshot;
-                const canonical_raw = fields.next() orelse return error.InvalidFileMetadataSnapshot;
-                if (exists_flag) {
-                    media_type = std.meta.stringToEnum(FileMetadata.MediaType, media_raw) orelse
-                        return error.InvalidFileMetadataSnapshot;
-                    if (canonical_raw.len == 0 or std.mem.eql(u8, canonical_raw, "-"))
-                        return error.InvalidFileMetadataSnapshot;
-                    canonical_title = try self.normalizeFileTitle(self.a, canonical_raw);
-                    if (!std.mem.eql(u8, canonical_title.?, canonical_raw))
-                        return error.InvalidFileMetadataSnapshot;
-                } else if (!std.mem.eql(u8, media_raw, "-") or !std.mem.eql(u8, canonical_raw, "-"))
-                    return error.InvalidFileMetadataSnapshot;
-            }
-            if (fields.next() != null) return error.InvalidFileMetadataSnapshot;
-            const canonical = try self.normalizeFileTitle(self.a, title);
-            errdefer self.a.free(canonical);
-            const result = try entries.getOrPut(self.a, canonical);
-            if (result.found_existing) return error.DuplicateFileMetadata;
-            result.value_ptr.* = .{
-                .exists = exists_flag,
-                .width = width,
-                .height = height,
-                .media_type = media_type,
-                .canonical_title = canonical_title,
-            };
+        if (std.mem.startsWith(u8, mapped.bytes, "\x1f\x8b")) {
+            try self.loadPackedFileMetadata(mapped.bytes, &entries);
+        } else {
+            const capacity = std.math.cast(u32, std.mem.count(u8, mapped.bytes, "\n") + 1) orelse
+                return error.FileMetadataSnapshotTooLarge;
+            try entries.ensureTotalCapacity(self.a, capacity);
+            const v2 = std.mem.startsWith(u8, mapped.bytes, "# wikidict-file-metadata-v2\n");
+            var lines = std.mem.splitScalar(u8, mapped.bytes, '\n');
+            while (lines.next()) |line| try self.parseFileMetadataRow(&entries, line, v2);
         }
         self.file_metadata = entries;
         self.file_metadata_available = true;
+    }
+
+    fn loadPackedFileMetadata(self: *Provider, bytes: []const u8, entries: *std.StringHashMapUnmanaged(FileMetadata)) !void {
+        var ctx: PackedFileMetadata = .{ .provider = self, .entries = entries };
+        try self.readPackedRows(bytes, 8 * 1024 * 1024 * 1024, 64 * 1024, &ctx);
+    }
+
+    const PackedFileMetadata = struct {
+        provider: *Provider,
+        entries: *std.StringHashMapUnmanaged(FileMetadata),
+        first: bool = true,
+        v2: bool = false,
+
+        fn row(ctx: *PackedFileMetadata, line: []const u8, terminated: bool) !void {
+            if (ctx.first and terminated) ctx.v2 = std.mem.eql(u8, line, "# wikidict-file-metadata-v2");
+            ctx.first = false;
+            try ctx.provider.parseFileMetadataRow(ctx.entries, line, ctx.v2);
+        }
+    };
+
+    fn readPackedRows(self: *Provider, bytes: []const u8, ceiling: u64, row_limit: usize, ctx: anytype) !void {
+        const Gzip = @import("figure_raw_gzip");
+        var input: std.Io.Reader = .fixed(bytes);
+        var window: [std.compress.flate.max_window_len]u8 = undefined;
+        var decoder = Gzip.initBounded(&input, &window, ceiling);
+        var buffer: [32 * 1024]u8 = undefined;
+        var pending: std.ArrayList(u8) = .empty;
+        defer pending.deinit(self.a);
+        while (!decoder.done) {
+            const n = try Gzip.readAt(&decoder, &buffer, decoder.offset);
+            var rest = buffer[0..n];
+            while (rest.len != 0) {
+                const newline = std.mem.indexOfScalar(u8, rest, '\n');
+                const fragment = rest[0 .. newline orelse rest.len];
+                // Packed Figure facts are bounded, including the transient unfinished row.
+                if (pending.items.len + fragment.len > row_limit) return error.FileMetadataSnapshotTooLarge;
+                if (newline == null or pending.items.len != 0) try pending.appendSlice(self.a, fragment);
+                if (newline == null) break;
+                const line = if (pending.items.len == 0) fragment else pending.items;
+                try ctx.row(line, true);
+                pending.clearRetainingCapacity();
+                rest = rest[fragment.len + 1 ..];
+            }
+        }
+        if (pending.items.len != 0) try ctx.row(pending.items, false);
+    }
+
+    fn parseFileMetadataRow(self: *Provider, entries: *std.StringHashMapUnmanaged(FileMetadata), line: []const u8, v2: bool) !void {
+        if (line.len == 0 or line[0] == '#') return;
+        var fields = std.mem.splitScalar(u8, line, '\t');
+        const title = fields.next() orelse return error.InvalidFileMetadataSnapshot;
+        const exists_raw = fields.next() orelse return error.InvalidFileMetadataSnapshot;
+        const width = try std.fmt.parseInt(u32, fields.next() orelse return error.InvalidFileMetadataSnapshot, 10);
+        const height = try std.fmt.parseInt(u32, fields.next() orelse return error.InvalidFileMetadataSnapshot, 10);
+        if (title.len == 0) return error.InvalidFileMetadataSnapshot;
+        const exists_flag = if (std.mem.eql(u8, exists_raw, "1"))
+            true
+        else if (std.mem.eql(u8, exists_raw, "0"))
+            false
+        else
+            return error.InvalidFileMetadataSnapshot;
+        if (!exists_flag and (width != 0 or height != 0)) return error.InvalidFileMetadataSnapshot;
+        var media_type: ?FileMetadata.MediaType = null;
+        var canonical_title: ?[]const u8 = null;
+        errdefer if (canonical_title) |owned| self.a.free(owned);
+        if (v2) {
+            const media_raw = fields.next() orelse return error.InvalidFileMetadataSnapshot;
+            const canonical_raw = fields.next() orelse return error.InvalidFileMetadataSnapshot;
+            if (exists_flag) {
+                media_type = std.meta.stringToEnum(FileMetadata.MediaType, media_raw) orelse
+                    return error.InvalidFileMetadataSnapshot;
+                if (canonical_raw.len == 0 or std.mem.eql(u8, canonical_raw, "-"))
+                    return error.InvalidFileMetadataSnapshot;
+                canonical_title = try self.normalizeFileTitle(self.a, canonical_raw);
+                if (!std.mem.eql(u8, canonical_title.?, canonical_raw))
+                    return error.InvalidFileMetadataSnapshot;
+            } else if (!std.mem.eql(u8, media_raw, "-") or !std.mem.eql(u8, canonical_raw, "-"))
+                return error.InvalidFileMetadataSnapshot;
+        }
+        if (fields.next() != null) return error.InvalidFileMetadataSnapshot;
+        const canonical = try self.normalizeFileTitle(self.a, title);
+        errdefer self.a.free(canonical);
+        const result = try entries.getOrPut(self.a, canonical);
+        if (result.found_existing) return error.DuplicateFileMetadata;
+        result.value_ptr.* = .{
+            .exists = exists_flag,
+            .width = width,
+            .height = height,
+            .media_type = media_type,
+            .canonical_title = canonical_title,
+        };
     }
 
     fn loadInterwikiMap(self: *Provider) !void {
@@ -798,14 +924,100 @@ pub const Provider = struct {
         self.wikibase_entity_text_available = true;
     }
 
-    fn structuredHeaders(self: *const Provider, lines: *std.mem.SplitIterator(u8, .scalar), terms: bool) !void {
-        try expectSnapshotHeader(lines, "", if (terms) "# wikidict-wikibase-entity-terms-v1" else "# wikidict-wikibase-entities-v1");
-        try expectSnapshotHeader(lines, "# wiki=", self.namespace_catalog.wiki);
-        try expectSnapshotHeader(lines, "# date=", self.namespace_catalog.dump_date);
-        try expectSnapshotHeader(lines, "# content-language=", self.namespace_catalog.content_language);
-        try expectSnapshotHeader(lines, "# repository=", "https://www.wikidata.org");
-        try expectSnapshotHeader(lines, "# profile=", if (terms) "resolved-default-terms-v1" else "complete-entities-v1");
+    const structured_snapshot_records = 32_768;
+    const structured_snapshot_bytes = 512 * 1024 * 1024;
+    const structured_snapshot_row_bytes = 16 * 1024 * 1024 + 256;
+
+    fn structuredHeader(self: *const Provider, index: usize, line: []const u8, terms: bool) !void {
+        const prefix = [_][]const u8{ "", "# wiki=", "# date=", "# content-language=", "# repository=", "# profile=" };
+        const expected = [_][]const u8{
+            if (terms) "# wikidict-wikibase-entity-terms-v1" else "# wikidict-wikibase-entities-v1",
+            self.namespace_catalog.wiki,
+            self.namespace_catalog.dump_date,
+            self.namespace_catalog.content_language,
+            "https://www.wikidata.org",
+            if (terms) "resolved-default-terms-v1" else "complete-entities-v1",
+        };
+        if (!std.mem.startsWith(u8, line, prefix[index]) or
+            !std.mem.eql(u8, line[prefix[index].len..], expected[index]))
+            return error.InvalidSnapshotIdentity;
     }
+
+    fn loadStructuredRows(self: *Provider, bytes: []const u8, is_packed: bool, ctx: anytype) !void {
+        if (is_packed) {
+            try self.readPackedRows(bytes, structured_snapshot_bytes, structured_snapshot_row_bytes, ctx);
+        } else {
+            var lines = std.mem.splitScalar(u8, bytes, '\n');
+            while (lines.next()) |line| {
+                if (line.len == 0 and lines.peek() == null) break;
+                try ctx.row(line, lines.peek() != null);
+            }
+        }
+        if (ctx.header != 6) return error.InvalidSnapshotIdentity;
+    }
+
+    const EntityRows = struct {
+        provider: *Provider,
+        entries: *std.StringHashMapUnmanaged(StructuredEntityRow),
+        owned: ?A,
+        header: usize = 0,
+
+        fn row(ctx: *EntityRows, line: []const u8, _: bool) !void {
+            if (ctx.header < 6) {
+                try ctx.provider.structuredHeader(ctx.header, line, false);
+                ctx.header += 1;
+                return;
+            }
+            if (ctx.owned != null and (ctx.entries.count() == structured_snapshot_records or
+                !std.unicode.utf8ValidateSlice(line))) return error.InvalidWikibaseEntitySnapshot;
+            var data = try structuredEntityRow(line);
+            if (data.source) |source| {
+                var parsed = try std.json.parseFromSlice(std.json.Value, ctx.provider.a, source, .{});
+                defer parsed.deinit();
+                try validateEntityPayload(parsed.value, data.canonical_id);
+            }
+            if (ctx.entries.contains(data.requested_id)) return error.DuplicateWikibaseEntity;
+            if (ctx.owned) |allocator| {
+                // Packed input has transient line storage. Retain just this
+                // validated row's strings for exact, lazy JSON lookups.
+                data = try structuredEntityRow(try allocator.dupe(u8, line));
+            }
+            try ctx.entries.put(ctx.provider.a, data.requested_id, data);
+        }
+    };
+
+    const EntityTermRows = struct {
+        provider: *Provider,
+        entries: *std.StringHashMapUnmanaged(WikibaseEntityTerms),
+        arena: A,
+        is_packed: bool,
+        header: usize = 0,
+
+        fn row(ctx: *EntityTermRows, line: []const u8, _: bool) !void {
+            if (ctx.header < 6) {
+                try ctx.provider.structuredHeader(ctx.header, line, true);
+                ctx.header += 1;
+                return;
+            }
+            if (ctx.is_packed and (ctx.entries.count() == structured_snapshot_records or
+                !std.unicode.utf8ValidateSlice(line))) return error.InvalidWikibaseEntityTermSnapshot;
+            const data = try structuredEntityRow(line);
+            const entity = ctx.provider.wikibase_entities.get(data.requested_id) orelse return error.InvalidWikibaseEntityTermSnapshot;
+            if ((data.source == null) != (entity.source == null) or !std.mem.eql(u8, data.canonical_id, entity.canonical_id))
+                return error.InvalidWikibaseEntityTermSnapshot;
+            if (ctx.entries.contains(data.requested_id)) return error.DuplicateWikibaseEntityTerm;
+            var value: WikibaseEntityTerms = .{ .label = null, .description = null };
+            if (data.source) |source| {
+                var parsed = try std.json.parseFromSlice(std.json.Value, ctx.provider.a, source, .{});
+                defer parsed.deinit();
+                if (parsed.value != .object or parsed.value.object.count() != 2) return error.InvalidWikibaseEntityTermSnapshot;
+                value.label = try capturedTerm(ctx.arena, parsed.value.object.get("label") orelse return error.InvalidWikibaseEntityTermSnapshot);
+                value.description = try capturedTerm(ctx.arena, parsed.value.object.get("description") orelse return error.InvalidWikibaseEntityTermSnapshot);
+            }
+            const key = if (ctx.is_packed) try ctx.arena.dupe(u8, data.requested_id) else data.requested_id;
+            try ctx.entries.put(ctx.provider.a, key, value);
+        }
+    };
 
     fn loadWikibasePageLinks(self: *Provider) !void {
         var mapped = (try self.mapOptional("wikibase-page-links.tsv")) orelse return;
@@ -817,54 +1029,31 @@ pub const Provider = struct {
     fn loadWikibaseEntities(self: *Provider) !void {
         var mapped = (try self.mapOptional("wikibase-entities.tsv")) orelse return;
         errdefer mapped.deinit();
-        if (!std.unicode.utf8ValidateSlice(mapped.bytes)) return error.InvalidWikibaseEntitySnapshot;
+        const is_packed = std.mem.startsWith(u8, mapped.bytes, "\x1f\x8b");
+        if (!is_packed and !std.unicode.utf8ValidateSlice(mapped.bytes)) return error.InvalidWikibaseEntitySnapshot;
         var entries: std.StringHashMapUnmanaged(StructuredEntityRow) = .empty;
         errdefer entries.deinit(self.a);
-        var lines = std.mem.splitScalar(u8, mapped.bytes, '\n');
-        try self.structuredHeaders(&lines, false);
-        while (lines.next()) |line| {
-            if (line.len == 0 and lines.peek() == null) break;
-            const row = try structuredEntityRow(line);
-            if (row.source) |source| {
-                var parsed = try std.json.parseFromSlice(std.json.Value, self.a, source, .{});
-                defer parsed.deinit();
-                try validateEntityPayload(parsed.value, row.canonical_id);
-            }
-            const entry = try entries.getOrPut(self.a, row.requested_id);
-            if (entry.found_existing) return error.DuplicateWikibaseEntity;
-            entry.value_ptr.* = row;
-        }
+        var arena = std.heap.ArenaAllocator.init(self.a);
+        errdefer arena.deinit();
+        var ctx: EntityRows = .{ .provider = self, .entries = &entries, .owned = if (is_packed) arena.allocator() else null };
+        try self.loadStructuredRows(mapped.bytes, is_packed, &ctx);
         self.wikibase_entities = entries;
         self.wikibase_entities_storage = mapped;
+        if (is_packed) self.wikibase_entities_arena = arena;
     }
 
     fn loadWikibaseEntityTerms(self: *Provider) !void {
         var mapped = (try self.mapOptional("wikibase-entity-terms.tsv")) orelse return;
         errdefer mapped.deinit();
-        if (self.wikibase_entities_storage == null or !std.unicode.utf8ValidateSlice(mapped.bytes)) return error.InvalidWikibaseEntityTermSnapshot;
+        const is_packed = std.mem.startsWith(u8, mapped.bytes, "\x1f\x8b");
+        if (self.wikibase_entities_storage == null or (!is_packed and !std.unicode.utf8ValidateSlice(mapped.bytes)))
+            return error.InvalidWikibaseEntityTermSnapshot;
         var entries: std.StringHashMapUnmanaged(WikibaseEntityTerms) = .empty;
         errdefer entries.deinit(self.a);
         var arena = std.heap.ArenaAllocator.init(self.a);
         errdefer arena.deinit();
-        var lines = std.mem.splitScalar(u8, mapped.bytes, '\n');
-        try self.structuredHeaders(&lines, true);
-        while (lines.next()) |line| {
-            if (line.len == 0 and lines.peek() == null) break;
-            const row = try structuredEntityRow(line);
-            const entity = self.wikibase_entities.get(row.requested_id) orelse return error.InvalidWikibaseEntityTermSnapshot;
-            if ((row.source == null) != (entity.source == null) or !std.mem.eql(u8, row.canonical_id, entity.canonical_id)) return error.InvalidWikibaseEntityTermSnapshot;
-            var value: WikibaseEntityTerms = .{ .label = null, .description = null };
-            if (row.source) |source| {
-                var parsed = try std.json.parseFromSlice(std.json.Value, self.a, source, .{});
-                defer parsed.deinit();
-                if (parsed.value != .object or parsed.value.object.count() != 2) return error.InvalidWikibaseEntityTermSnapshot;
-                value.label = try capturedTerm(arena.allocator(), parsed.value.object.get("label") orelse return error.InvalidWikibaseEntityTermSnapshot);
-                value.description = try capturedTerm(arena.allocator(), parsed.value.object.get("description") orelse return error.InvalidWikibaseEntityTermSnapshot);
-            }
-            const entry = try entries.getOrPut(self.a, row.requested_id);
-            if (entry.found_existing) return error.DuplicateWikibaseEntityTerm;
-            entry.value_ptr.* = value;
-        }
+        var ctx: EntityTermRows = .{ .provider = self, .entries = &entries, .arena = arena.allocator(), .is_packed = is_packed };
+        try self.loadStructuredRows(mapped.bytes, is_packed, &ctx);
         self.wikibase_entity_terms = entries;
         self.wikibase_entity_terms_storage = mapped;
         self.wikibase_entity_terms_arena = arena;
@@ -1455,10 +1644,18 @@ pub const Provider = struct {
     }
 
     fn categoryTree(ctx: ?*anyopaque, a: A, db_key: []const u8, scope: CategoryTreeScope) anyerror![]const []const u8 {
+        return categoryTreeMembers(ctx, a, db_key, scope, null);
+    }
+
+    fn categoryTreeScoped(ctx: ?*anyopaque, a: A, db_key: []const u8, scope: CategoryTreeScope) anyerror![]const []const u8 {
+        return categoryTreeMembers(ctx, a, db_key, scope, a);
+    }
+
+    fn categoryTreeMembers(ctx: ?*anyopaque, a: A, db_key: []const u8, scope: CategoryTreeScope, scoped: ?A) anyerror![]const []const u8 {
         const self: *Provider = @ptrCast(@alignCast(ctx orelse return error.MissingPageProvider));
         const key = try std.fmt.allocPrint(a, "{s}\t{s}", .{ db_key, @tagName(scope) });
         defer a.free(key);
-        const raw = self.category_tree_ranges.get(key) orelse return error.CategoryTreeSnapshotMissing;
+        const raw = if (self.packed_tree) |*tree| try tree.lookup(key, scoped) else self.category_tree_ranges.get(key) orelse return error.CategoryTreeSnapshotMissing;
         if (raw.len == 0) return &.{};
         const members = try a.alloc([]const u8, std.mem.count(u8, raw, "\t") + 1);
         var fields = std.mem.splitScalar(u8, raw, '\t');
@@ -1852,6 +2049,64 @@ const terms_test_headers = "# wikidict-wikibase-entity-terms-v1\n# wiki=enwiktio
 const fallback_test_headers = "# wikidict-language-fallbacks-v1\n# wiki\tenwiktionary\n# dump-date\t20261001\n# content-language\ten\n# mode\tstrict\n";
 const message_test_headers = "# wikidict-interface-messages-v1\n# wiki\tenwiktionary\n# dump-date\t20261001\n# content-language\ten\n";
 
+
+test "packed structured Wikibase rows preserve redirects terms UTF8 and complete gzip framing" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(root);
+    const ns = try lua_program.namespace_registry.englishTestRegistry();
+    const entity_a = "\x1f\x8b\x08\x00\x00\x00\x00\x00\x02\xff\xed\xce\x3b\x4e\x03\x31\x10\x00\xd0\x3a\x9c\x02\x99\x96\xfc\xb6\xa0\x88\x94\x82\x82\x03\xa4\xa1\x37\x89\x09\x16\x9b\xdd\xd5\xae\x21\x8a\x72\x79\x1c\x3a\x0e\x40\xf7\x5e\x61\xcf\x8c\x67\x34\x7e\xb8\x3f\xe7\xcf\x7c\xc8\xfb\x32\xbf\x05\x6f\x71\x4a\xf3\xd4\x95\x5c\x72\x9a\xe6\xdf\xeb\xbb\x87\xdf\xf7\x6d\xea\xea\x55\x72\xdf\xc5\xf1\x52\x6b\x87\x58\xd2\xb6\x59\x35\x4f\xeb\xd5\xea\xd6\xb3\xef\xbb\x52\xa7\xe6\x6d\xec\x8e\x5f\xf1\x98\x6a\x7f\xad\x8e\x69\xe8\xa7\x5c\xfa\xf1\xb2\xfd\x28\x65\x98\x36\xcb\xe5\xf9\x7c\x5e\xfc\x2e\x8c\x25\x2e\xfa\xf1\x58\xbb\x86\xb1\x7f\xcf\x6d\xda\xee\xfb\xd3\xd0\xa6\xf2\x77\xfd\x6e\x3d\x7b\x99\xed\x9a\xd9\x35\xe4\x43\xd8\x84\x5d\x13\x1e\x43\xb9\x0c\xa9\xc6\xb9\xa4\x53\xcd\xa6\xfd\x47\x3a\xc5\xd7\x34\x4e\xf5\x77\x61\xd3\x3c\x86\x36\xbe\xa5\x76\x0a\x9b\x6b\x48\xdd\xed\xfc\x8e\xed\xd7\x6d\xe0\x19\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xf8\x57\x3f\xc8\x76\x6d\xc2\x57\x89\x00\x00";
+    const entity_b = "\x1f\x8b\x08\x00\x00\x00\x00\x00\x02\xff\xed\xc1\x31\x01\x00\x20\x0c\x03\xb0\x7b\x93\x81\x0b\xce\x09\xe0\x40\x50\xbd\x23\x84\x24\x33\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xc0\x8f\x56\x92\xbe\xbb\x4e\x55\x3f\x2a\x8e\x76\xcd\x10\x89\x00\x00";
+    const terms = "\x1f\x8b\x08\x00\x00\x00\x00\x00\x02\xff\x55\x8f\xc1\x6a\xc3\x30\x0c\x86\xcf\xce\x53\x0c\xf7\x5a\xb7\x49\x0e\x83\x05\x72\xdc\x71\x87\x3c\x82\x6a\x2b\x99\x99\x66\x07\x59\x4e\x08\xa5\x0f\xd4\xe7\xe8\x8b\xcd\x29\x8c\xb1\x93\xa4\x8f\x4f\xfc\xd2\xe1\x65\xf5\x5f\xde\x79\x2b\x66\x6f\x2e\x90\xd0\x60\x10\x2f\x9b\x11\xe4\xef\x64\x96\xa6\x3a\x3c\x9d\x1e\x43\x29\xe2\x63\x00\xde\x0a\x73\x20\xd8\xb7\x75\xfb\xda\xd4\xf5\xee\xd8\x18\xa4\x6c\x1a\x82\x30\x65\x98\xb0\xf8\x85\x32\xce\x31\x79\x89\xbc\xf5\x9f\x22\x73\xea\xce\xe7\x75\x5d\x4f\xcf\x50\x10\x38\x45\x9e\x8a\x35\x73\x1c\x3d\x61\xcf\x98\x22\x2d\xe8\x8c\xc3\x11\x32\xc9\xdf\x0d\x43\xa3\xde\xd5\xd0\xaa\xab\x26\xb8\x20\xe9\xee\xaa\x17\xa0\x8c\xba\xd3\x16\xc6\xc7\x5d\x1f\xf5\x6f\x70\x41\x23\x97\x39\xc5\xcc\x16\xcd\x7f\x7c\x3b\x6a\x87\xc9\xb2\x9f\xf7\x4f\x74\x17\x32\xd1\xad\x1a\xde\xd4\x87\x52\xd5\x0f\x38\xc2\x12\x1d\x0d\x01\x00\x00";
+    const wrong_terms = "\x1f\x8b\x08\x00\x00\x00\x00\x00\x02\xff\x55\x8f\xc1\x6a\xc3\x30\x0c\x86\xcf\xce\x53\x0c\xf5\x5a\xb7\x49\x07\x83\x05\x72\xdc\x71\x87\x3c\x82\x6a\x2b\x99\x99\x6b\x07\x59\x4e\x08\xa5\x0f\xd4\xe7\xe8\x8b\xcd\x29\x8c\xb1\x93\xa4\x8f\x4f\xfc\xd2\xee\x65\x71\xdf\xce\x3a\x23\x7a\x6b\xce\x98\x48\x53\x10\x27\xab\x16\xe2\x4b\xd2\x73\x53\xed\x9e\x4e\x47\xa1\x14\x71\x31\x20\xaf\x85\x59\x14\xea\x4e\xf5\xe9\xad\xa9\xeb\xcd\x31\x31\x48\xd9\xd4\x1e\xc3\x98\x71\xa4\xe2\x17\xca\x34\xc5\xe4\x24\xf2\xda\x7d\x89\x4c\xa9\x3d\x1e\x97\x65\x39\x3c\x43\x51\xf0\x10\x79\x2c\xd6\xc4\x71\x70\x9e\x3a\xa6\x14\xfd\x4c\x56\x5b\x1a\x30\x7b\xf9\xbb\xa1\x6f\xd4\x87\xea\x5f\xd5\x15\x3c\x9e\xc9\x43\x7b\x85\x19\x7d\x26\x68\xc1\xe0\xf0\xb8\xc3\x1e\x7e\x83\x0b\x1a\xb8\xcc\x29\x66\x36\xa4\xff\xe3\xdb\x1e\x2c\x25\xc3\x6e\xda\x3e\x81\x36\x64\xef\x6f\x55\xff\xae\x3e\x95\xaa\x7e\x00\x94\xc3\x70\x7b\x0d\x01\x00\x00";
+    const invalid_utf8 = "\x1f\x8b\x08\x00\x00\x00\x00\x00\x02\xff\x55\x8f\xc1\x6a\xc3\x30\x0c\x86\xcf\xce\x53\x0c\xf7\x5a\xb7\x49\x0e\x83\x05\x72\xec\x71\x87\x3c\x82\x6a\x2b\x99\x99\x66\x07\x59\x4e\x08\xa5\xcf\xbe\x3a\x85\x32\x76\x92\xf4\xf1\x89\x5f\x3a\xbc\xad\xfe\xdb\x3b\x6f\xc5\xec\xcd\x15\x12\x1a\x0c\xe2\x65\x33\x82\xfc\x93\xcc\xd2\x54\x87\xa7\xd3\x63\x28\x45\x7c\x0c\xc0\x5b\x61\x0e\x04\xfb\xb6\x6e\xdf\x9b\xba\xde\x1d\x1b\x83\x94\x4d\x43\x10\xa6\x0c\x13\x16\xbf\x50\xc6\x39\x26\x2f\x91\xb7\xfe\x4b\x64\x4e\xdd\xf9\xbc\xae\xeb\xe9\x19\x0a\x02\xa7\xc8\x53\xb1\x66\x8e\xa3\x27\xec\x19\x53\xa4\x05\x9d\x71\x38\x42\x26\xf9\xbb\x61\x68\xd4\x45\x0d\xad\xba\x69\x82\x2b\x92\xee\x6e\x7a\x01\xca\xa8\x3b\x6d\x61\xfc\xd5\x47\xfd\xca\x2d\x64\xe4\x32\xa7\x98\xd9\xa2\xf9\x8f\xef\x47\xed\x30\x59\xf6\xf3\xfe\x88\xee\x42\x26\xba\x57\xc3\x87\xfa\x54\xaa\x7a\x00\x34\xd6\x80\x9a\x0c\x01\x00\x00";
+    const duplicate_entities = "\x1f\x8b\x08\x00\x00\x00\x00\x00\x02\xff\xed\xd0\xb1\x6e\xdb\x30\x10\x00\xd0\x59\xfe\x8a\x82\x59\xed\x24\xd6\x50\x20\x02\x3c\x64\xc8\x98\x41\x4b\x76\xc6\x66\x13\xa2\xb2\x64\x48\x74\x0c\xc3\xf0\xbf\x57\xce\xd6\x3d\xe3\x7b\x03\x79\x3c\xde\xe1\x08\xde\xfd\x3a\xe5\xbf\x79\x97\xb7\x65\x75\x0b\xde\xe3\x94\x56\xa9\x2f\xb9\xe4\x34\xad\xbe\xd6\x8b\xbb\xef\xfb\x4d\xea\xe7\xad\xe4\xa1\x8f\xe3\x79\xce\xed\x62\x49\x9b\xfa\xb1\xfe\xbd\x7e\x7c\xbc\xd5\x6c\x87\xbe\xcc\x5d\xab\x2e\xf6\x1f\xc7\xf8\x91\xe6\xfa\x39\x3b\xa6\xc3\x30\xe5\x32\x8c\xe7\xcd\x67\x29\x87\xa9\x79\x78\x38\x9d\x4e\xf7\xdf\x03\x63\x89\xf7\xc3\xf8\x31\x57\x1d\xc6\xe1\x4f\xee\xd2\x66\x3b\xec\x0f\x5d\x2a\xff\x8f\x6f\xd7\xd5\x4b\xd5\xd6\xd5\x25\xe4\x5d\x68\x42\x5b\x87\x65\x28\xe7\x43\x9a\xe3\x5c\xd2\x7e\x3e\x4d\xdb\xcf\xb4\x8f\x6f\x69\x9c\xe6\xd7\x85\xa6\x5e\x86\x2e\xbe\xa7\x6e\x0a\xcd\x25\xa4\xfe\xb6\x7e\xc5\xee\x78\x6b\x78\x06\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x7e\x5c\xb8\x5e\xaf\x8b\xf6\xa9\x7a\xad\xaa\x45\xbb\xae\x5e\xaa\xb6\xae\x2e\x21\xef\x42\x13\xda\x3a\x2c\x43\x39\x1f\xd2\x1c\xe7\x92\xf6\xf3\x69\xda\x7e\xa6\x7d\x7c\x4b\xe3\x94\x87\x3e\x34\xf5\x32\x74\xf1\x3d\x75\x53\x68\x2e\x21\xf5\xb7\xf5\x2b\x76\xc7\x5b\x83\x9f\x05\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x80\x9f\x17\xae\xd7\xeb\xa2\x7d\xaa\x5e\xab\x6a\xf1\x0f\xb9\xba\xe2\x14\x2f\x24\x02\x00";
+
+    const entities = entity_a ++ entity_b;
+    try tmp.dir.writeFile(io, .{ .sub_path = "wikibase-entities.tsv", .data = entities });
+    try tmp.dir.writeFile(io, .{ .sub_path = "wikibase-entity-terms.tsv", .data = terms });
+    {
+        var provider = try Provider.init(io, a, root, ns, "unused-dump.xml");
+        defer provider.deinit();
+        const api = provider.api();
+        const redirected = try api.wikibase_entity.?(&provider, "Q1");
+        const prefix = "{\"id\":\"Q2\",\"type\":\"item\",\"schemaVersion\":2,\"labels\":{\"en\":{\"value\":\"";
+        const suffix = "\"}}}";
+        const source = redirected.source.?;
+        try std.testing.expectEqual(prefix.len + 70000 + suffix.len, source.len);
+        try std.testing.expect(std.mem.startsWith(u8, source, prefix));
+        try std.testing.expect(std.mem.endsWith(u8, source, suffix));
+        for (source[prefix.len .. source.len - suffix.len]) |value| try std.testing.expectEqual(@as(u8, 'A'), value);
+        try std.testing.expect((try api.wikibase_entity.?(&provider, "Q9")).source == null);
+        try std.testing.expectError(error.WikibaseEntitySnapshotMissing, api.wikibase_entity.?(&provider, "Q404"));
+        const label = (try api.wikibase_entity_terms.?(&provider, "Q1")).label.?;
+        try std.testing.expectEqualStrings("café", label.value);
+        try std.testing.expectEqualStrings("fr", label.source_language.?);
+        try std.testing.expect((try api.wikibase_entity_terms.?(&provider, "Q9")).label == null);
+    }
+    for ([_][]const u8{ wrong_terms, invalid_utf8 }) |bad| {
+        try tmp.dir.writeFile(io, .{ .sub_path = "wikibase-entity-terms.tsv", .data = bad });
+        try std.testing.expectError(error.InvalidWikibaseEntityTermSnapshot, Provider.init(io, a, root, ns, "unused-dump.xml"));
+    }
+    try tmp.dir.writeFile(io, .{ .sub_path = "wikibase-entity-terms.tsv", .data = terms });
+    try tmp.dir.writeFile(io, .{ .sub_path = "wikibase-entities.tsv", .data = duplicate_entities });
+    try std.testing.expectError(error.DuplicateWikibaseEntity, Provider.init(io, a, root, ns, "unused-dump.xml"));
+    var corrupted = entities.*;
+    for ([_]usize{ 4, 8 }) |trailer_offset| {
+        corrupted[corrupted.len - trailer_offset] ^= 1;
+        try tmp.dir.writeFile(io, .{ .sub_path = "wikibase-entities.tsv", .data = &corrupted });
+        try std.testing.expectError(error.InvalidFigureGzip, Provider.init(io, a, root, ns, "unused-dump.xml"));
+        corrupted[corrupted.len - trailer_offset] ^= 1;
+    }
+    for ([_][]const u8{ entities[0 .. entities.len - 1], entities ++ "nonmember" }) |bad| {
+        try tmp.dir.writeFile(io, .{ .sub_path = "wikibase-entities.tsv", .data = bad });
+        try std.testing.expectError(error.InvalidFigureGzip, Provider.init(io, a, root, ns, "unused-dump.xml"));
+    }
+}
+
 test "provider structured entities preserve redirects missing records resolved terms and strict fallbacks" {
     const a = std.testing.allocator;
     const io = std.testing.io;
@@ -2083,6 +2338,59 @@ test "provider loads pinned category tree members and fails closed on unknown ca
     const empty = try get(&provider, a, "Empty_category", .main);
     try std.testing.expectEqual(@as(usize, 0), empty.len);
     try std.testing.expectError(error.CategoryTreeSnapshotMissing, get(&provider, a, "Missing_category", .pages));
+}
+
+test "packed category tree checkpoints retain borrowed answers and release scoped answers" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(root);
+    const archive = "\x1f\x8b\x08\x00\x00\x00\x00\x00\x02\xff\xed\xc1\xb1\x0d\x83\x30\x10\x00\xc0\xfa\xbd\x06\x5b\xa4\x03\x26\xb1\x82\x43\x2c\x25\x80\xb0\x8b\xb0\x7d\xd6\xa0\xb8\xbb\xe1\x07\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xc0\x2d\xa5\x31\xbe\xb9\x6e\xf1\xaa\x67\xeb\xd1\xca\x73\xdf\x96\x34\x5c\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xdc\x52\x9a\xe2\xc8\x6b\x69\x31\xe7\x5e\xd6\xfd\xbc\x1e\xf3\xbb\x7e\x96\x98\x4a\xcf\xe9\x0f\x02\xf2\xba\x2b\xb4\x4f\x12\x00" ++ "\x1f\x8b\x08\x00\x00\x00\x00\x00\x02\xff\x73\xe6\xcc\x4d\xcc\xcc\xe3\x02\x00\x50\x9d\x15\x71\x07\x00\x00\x00";
+    try tmp.dir.writeFile(io, .{ .sub_path="category-tree.tsv", .data=archive });
+    const registry = try lua_program.namespace_registry.englishTestRegistry();
+    {
+        var provider = try Provider.init(io, a, root, registry, "unused-dump.xml");
+        defer provider.deinit();
+        const api = provider.api();
+        const borrowed = try api.category_tree.?(api.ctx, a, "A", .main);
+        defer a.free(borrowed);
+        try std.testing.expectEqual(@as(usize,2), provider.packed_tree.?.checkpoints.items.len);
+        for (0..2) |_| {
+            var arena = std.heap.ArenaAllocator.init(a);
+            defer arena.deinit();
+            const items = try api.category_tree_scoped.?(api.ctx, arena.allocator(), "B", .pages);
+            try std.testing.expectEqualStrings("Category:Child", items[0]);
+            try std.testing.expectEqualStrings("Beta", items[1]);
+            try std.testing.expectEqual(@as(usize,0),(try api.category_tree_scoped.?(api.ctx, arena.allocator(), "C", .main)).len);
+            try std.testing.expectError(error.CategoryTreeSnapshotMissing, api.category_tree_scoped.?(api.ctx, arena.allocator(), "C", .pages));
+            try std.testing.expectEqual(@as(usize,1),provider.packed_tree.?.queried.count());
+        }
+        try std.testing.expectEqualStrings("first",borrowed[0]);
+        try std.testing.expectEqualStrings("second",borrowed[1]);
+        // Deliberately collapse the fingerprint bucket. Exact decoded keys must
+        // still distinguish cached, uncached, and absent scopes.
+        const entries = provider.packed_tree.?.rows.items;
+        for (entries) |*entry| entry.hash = std.hash.Wyhash.hash(0,"B\tpages");
+        var scoped = std.heap.ArenaAllocator.init(a);
+        defer scoped.deinit();
+        const collision = try api.category_tree_scoped.?(api.ctx, scoped.allocator(), "B", .pages);
+        try std.testing.expectEqualStrings("Category:Child",collision[0]);
+        try std.testing.expectEqualStrings("Beta",collision[1]);
+        for (entries) |*entry| entry.hash = std.hash.Wyhash.hash(0,"missing\tmain");
+        try std.testing.expectError(error.CategoryTreeSnapshotMissing,
+            api.category_tree_scoped.?(api.ctx, scoped.allocator(), "missing", .main));
+        try tmp.dir.writeFile(io,.{ .sub_path="replacement", .data=archive });
+        try tmp.dir.rename("replacement", tmp.dir, "category-tree.tsv", io);
+        try std.testing.expectError(error.CategoryTreeSourceChanged,api.category_tree.?(api.ctx,a,"A",.main));
+    }
+    try tmp.dir.writeFile(io, .{ .sub_path="category-tree.tsv", .data=archive ++ "\x1f\x8b\x08\x00\x00\x00\x00\x00\x02\xff\x73\xe6\xcc\x4d\xcc\xcc\xe3\x02\x00\x50\x9d\x15\x71\x07\x00\x00\x00" });
+    try std.testing.expectError(error.DuplicateCategoryTree, Provider.init(io,a,root,registry,"unused-dump.xml"));
+    for ([_][]const u8{ archive[0..archive.len-1],archive ++ "tail" }) |bad| {
+        try tmp.dir.writeFile(io,.{ .sub_path="category-tree.tsv",.data=bad });
+        try std.testing.expectError(error.InvalidFigureGzip,Provider.init(io,a,root,registry,"unused-dump.xml"));
+    }
 }
 
 test "provider loads complete known-language registry" {
@@ -2492,6 +2800,38 @@ test "provider exposes exact site server and rejects a different captured editio
     try std.testing.expectError(error.SiteInfoIdentityMismatch, Provider.init(io, a, root, catalog, "unused-dump.xml"));
 }
 
+test "packed file metadata validates member boundaries, typed rows and final trailer before publication" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(root);
+    const registry = try lua_program.namespace_registry.englishTestRegistry();
+    const first = "\x1f\x8b\x08\x00\x00\x00\x00\x00\x02\xff\xed\xc1\x31\x0a\xc2\x30\x14\x00\xd0\x39\x3d\x85\xd0\x39\x62\x3b\xba\xb9\x78\x8f\x60\xd3\xf2\x31\xa5\x83\x41\x3d\xbe\xf7\x90\xf7\xde\x78\xfa\xc4\x33\x96\x78\xf4\xbc\x46\xab\x79\xaf\xbd\x2c\xa5\x97\xfc\x9e\x87\xf1\x0b\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x7f\x6d\xb8\x47\xab\xd7\x5b\x8b\xf2\x3a\x1f\xdb\x96\xa6\x74\x49\x3f\x17\x29\x72\x65\x0b\x80\x00\x00";
+    const last = "\x1f\x8b\x08\x00\x00\x00\x00\x00\x02\xff\x33\xe0\x74\x0c\x75\xf1\xf4\xe7\x74\xcb\xcc\x49\xb5\x72\x4c\x2e\x29\x4d\xcc\xd1\xcb\x4f\x4f\xe7\x02\xf3\xdd\xf3\xf3\x52\x41\x3c\x4e\x03\x30\xd4\xe5\xd4\x05\x00\xd7\x44\x03\xed\x2f\x00\x00\x00";
+    const archive = first ++ last;
+    try tmp.dir.writeFile(io, .{ .sub_path = "file-metadata.tsv", .data = archive });
+    {
+        var provider = try Provider.init(io, a, root, registry, "unused-dump.xml");
+        defer provider.deinit();
+        const alias = try Provider.fileMetadata(&provider, "File:Alias.ogg");
+        try std.testing.expectEqual(FileMetadata.MediaType.AUDIO, alias.media_type.?);
+        try std.testing.expectEqualStrings("File:Actual.ogg", alias.canonical_title.?);
+        try std.testing.expect(!(try Provider.fileMetadata(&provider, "File:Gone.ogg")).exists);
+    }
+    for ([_][]const u8{ archive[0 .. archive.len - 1], archive ++ "suffix" }) |bad| {
+        try tmp.dir.writeFile(io, .{ .sub_path = "file-metadata.tsv", .data = bad });
+        try std.testing.expectError(error.InvalidFigureGzip, Provider.init(io, a, root, registry, "unused-dump.xml"));
+    }
+    var corrupt = archive.*;
+    corrupt[corrupt.len - 8] ^= 1;
+    try tmp.dir.writeFile(io, .{ .sub_path = "file-metadata.tsv", .data = &corrupt });
+    try std.testing.expectError(error.InvalidFigureGzip, Provider.init(io, a, root, registry, "unused-dump.xml"));
+    try tmp.dir.writeFile(io, .{ .sub_path = "file-metadata.tsv", .data = "\x1f\x8b\x08\x00\x00\x00\x00\x00\x02\xff\x53\x56\x28\xcf\xcc\xce\x4c\xc9\x4c\x2e\xd1\x4d\xcb\xcc\x49\xd5\xcd\x4d\x2d\x49\x4c\x49\x2c\x49\xd4\x2d\x33\xe2\x72\x03\x0a\x58\x39\xe6\x64\x26\x16\xeb\xe5\xa7\xa7\x73\x1a\x72\x1a\x00\x61\x52\x62\x0a\xa7\x2e\x17\x00\x8a\x59\xb6\x73\x37\x00\x00\x00" });
+    try std.testing.expectError(error.InvalidFileMetadataSnapshot, Provider.init(io, a, root, registry, "unused-dump.xml"));
+}
+
 test "file metadata v2 owns canonical AUDIO identity and rejects malformed rows" {
     const a = std.testing.allocator;
     const io = std.testing.io;
@@ -2628,6 +2968,20 @@ test "provider category formatting binds loaded counts and preserves owned strin
         try std.testing.expectEqualStrings("0", (try callback(api.ctx, 0)).?);
         try std.testing.expectError(error.CategoryStatisticsFormatValueMissing, callback(api.ctx, 7));
     }
+    const packed_stats = "\x1f\x8b\x08\x00\x00\x00\x00\x00\x02\xff\xf3\xcf\x4b\xe5\x34\x34\xe2\x04\x00\x01\x60\x0e\x80\x07\x00\x00\x00" ++ "\x1f\x8b\x08\x00\x00\x00\x00\x00\x02\xff\x33\xe2\x34\xe4\x02\x00\x15\x3a\x3f\x52\x04\x00\x00\x00";
+    try tmp.dir.writeFile(io, .{ .sub_path = "category-stats.tsv", .data = packed_stats });
+    {
+        var provider = try Provider.init(io, a, root, catalog, "unused-dump.xml");
+        defer provider.deinit();
+        try std.testing.expectEqual(@as(u32, 12), provider.category_stats.get("One").?.all);
+        try std.testing.expectEqualStrings("9", provider.category_statistics_format.?.get(9).?);
+    }
+    try tmp.dir.writeFile(io, .{ .sub_path = "category-stats.tsv", .data = packed_stats ++ "bad" });
+    try std.testing.expectError(error.InvalidFigureGzip, Provider.init(io, a, root, catalog, "unused-dump.xml"));
+    try tmp.dir.writeFile(io, .{ .sub_path = "category-stats.tsv", .data = "\x1f\x8b\x08\x00\x00\x00\x00\x00\x02\xff\xf3\xcf\x4b\xe5\x34\x30\x34\xe2\x34\xe2\x34\xe4\x02\x00\xfa\xf6\xed\x1c\x0c\x00\x00\x00" });
+    try std.testing.expectError(error.InvalidCategoryStatisticsFormatSnapshot, Provider.init(io, a, root, catalog, "unused-dump.xml"));
+    try tmp.dir.writeFile(io, .{ .sub_path = "category-stats.tsv", .data = "\x1f\x8b\x08\x00\x00\x00\x00\x00\x02\xff\xf3\xcf\x4b\xe5\x34\x34\xe6\x34\xe2\x34\xe4\x02\x00\x5b\xeb\x33\x1a\x0b\x00\x00\x00" });
+    try std.testing.expectError(error.CategoryStatisticsFormatIdentityMismatch, Provider.init(io, a, root, catalog, "unused-dump.xml"));
     // Same wiki/site identity but changed loaded counts must reject the old map.
     try tmp.dir.writeFile(io, .{ .sub_path = "category-stats.tsv", .data = "One\t13\t2\t1\n" });
     try std.testing.expectError(error.CategoryStatisticsFormatIdentityMismatch, Provider.init(io, a, root, catalog, "unused-dump.xml"));

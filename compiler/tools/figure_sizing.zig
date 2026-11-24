@@ -1156,6 +1156,7 @@ fn tiffDefaultPageAxes(a: A, image: Value, width: u32, height: u32) !void {
 pub const stream_schema = "wikidict.figure-sizing-files.stream.v1";
 const raw_stream_schema = "wikidict.figure-sizing-raw.stream.v1";
 pub const stream_header_limit = 2 * 1024 * 1024;
+pub const packed_projection_limit: u64 = 8 * 1024 * 1024 * 1024;
 const stream_fact_limit = 64 * 1024;
 const stream_batch_limit = 16 * 1024 * 1024;
 const raw_batch_retained_limit = 4 * 1024 * 1024;
@@ -1292,6 +1293,7 @@ pub const StreamInput = struct {
     context: *anyopaque,
     read_at: *const fn (*anyopaque, []u8, u64) anyerror!usize,
     size: u64,
+    size_is_bound: bool = false,
     offset: u64 = 0,
     buffer: [65536]u8 = undefined,
     start: usize = 0,
@@ -1313,7 +1315,7 @@ pub const StreamInput = struct {
                 const n = try self.read_at(self.context, &self.buffer, self.offset);
                 if (n > self.buffer.len) return invalid;
                 if (n == 0) {
-                    if (self.offset != self.size or out.items.len != 0) return invalid;
+                    if ((!self.size_is_bound and self.offset != self.size) or out.items.len != 0) return invalid;
                     var digest: [32]u8 = undefined;
                     self.hash.final(&digest);
                     self.digest = digest;
@@ -1840,19 +1842,29 @@ pub const Registry = struct {
         const header = parsed_header.header;
         const count = std.math.cast(usize, header.base_batches + header.observed_batches) orelse return invalid;
         const fact_count = std.math.cast(usize, header.records_count) orelse return invalid;
-        const records = try a.alloc(FileFact, fact_count);
+        // A packed projection's size is only a decoder ceiling. Grow its fact
+        // index from complete rows instead of allocating from the count alone.
+        const fact_allocator = if (projection.size_is_bound) backing else a;
+        var facts: std.ArrayList(FileFact) = .empty;
+        defer facts.deinit(fact_allocator);
+        if (!projection.size_is_bound) try facts.ensureTotalCapacityPrecise(a, fact_count);
         location.stage = "projection_records";
-        for (records, 0..) |*record, index| {
+        for (0..fact_count) |index| {
             location.record = index;
             location.record_offset = projection.diagnosticPosition();
 
             const bytes = (try projection.line(temp, stream_fact_limit)) orelse return invalid;
             try preflight(bytes, false);
-            record.* = try std.json.parseFromSliceLeaky(FileFact, a, bytes, .{ .allocate = .alloc_always });
+            const fact = try std.json.parseFromSliceLeaky(FileFact, a, bytes, .{ .allocate = .alloc_always });
+            try facts.append(fact_allocator, fact);
             _ = scratch.reset(reset_mode);
         }
         location.* = .{ .stage = "projection_finish" };
         try projection.finish(temp);
+        const records = if (projection.size_is_bound)
+            try a.dupe(FileFact, facts.items)
+        else
+            try facts.toOwnedSlice(a);
         location.stage = "fact_batch_replay";
         var batches: StreamBatches = .{ .input = raw, .backing = backing, .count = count,
             .base_count = std.math.cast(usize, header.base_batches) orelse return invalid, .raw_sha256 = header.raw_sha256,

@@ -5,6 +5,9 @@ A dump date selects the consumer corpus; entity data is a current API observatio
 Raw responses are retained verbatim. Verification and reuse never access the API.
 """
 import argparse
+from contextlib import contextmanager
+import gzip
+import stat
 import datetime as dt
 import hashlib
 import json
@@ -93,6 +96,46 @@ def regular(path, limit=MAX_RESPONSE_BYTES):
     return b''.join(regular_chunks(path, limit))
 
 
+def _artifact_stamp(value):
+    if not stat.S_ISREG(value.st_mode):
+        raise ValueError('Unsafe Wikibase capture artifact')
+    return (value.st_dev,value.st_ino,value.st_size,value.st_mtime_ns,value.st_ctime_ns)
+
+
+def _artifact_storage(path):
+    sibling = path.with_name(path.name + '.gz')
+    if os.path.lexists(sibling):
+        if os.path.lexists(path):
+            raise ValueError('Multiple Wikibase capture artifact providers: '+str(path))
+        return sibling, True
+    if path.name not in tuple(role + '.tsv' for role in NAMES):
+        return path, False
+    if path.is_symlink() or not path.is_file():
+        raise ValueError('Missing or unsafe Wikibase capture artifact: '+str(path))
+    with path.open('rb') as source:
+        return path, source.read(2) == b'\x1f\x8b'
+
+
+@contextmanager
+def _artifact_stream(path):
+    physical, compressed = _artifact_storage(path)
+    if physical.is_symlink() or not physical.is_file():
+        raise ValueError('Missing or unsafe Wikibase capture artifact: '+str(physical))
+    before = _artifact_stamp(physical.lstat())
+    with physical.open('rb') as held:
+        if _artifact_stamp(os.fstat(held.fileno())) != before:
+            raise ValueError('Wikibase capture artifact changed before opening')
+        if compressed:
+            with gzip.GzipFile(fileobj=held, mode='rb') as stream:
+                yield stream
+        else:
+            yield held
+        if (_artifact_stamp(os.fstat(held.fileno())) != before or
+                _artifact_storage(path) != (physical, compressed) or
+                _artifact_stamp(physical.lstat()) != before):
+            raise ValueError('Wikibase capture artifact changed during replay')
+
+
 class _ReplayArtifacts:
     """Authenticate every artifact; retain identities, not the full byte inventory.
 
@@ -103,12 +146,20 @@ class _ReplayArtifacts:
     def __init__(self, root, artifacts):
         self.root = root
         self.artifacts = dict(artifacts)
+        self.packed = {}
         for name, expected in self.artifacts.items():
             if not isinstance(name, str) or Path(name).name != name or not name.startswith('wikibase-'):
                 raise ValueError('Unsafe entity artifact name')
             hasher = hashlib.sha256()
-            for chunk in regular_chunks(root / name, self.limit(name)):
+            path = root / name
+            physical, compressed = _artifact_storage(path)
+            stamp = _artifact_stamp(physical.lstat()) if compressed else None
+            total = 0
+            for chunk in (self.chunks(name) if compressed else regular_chunks(path, self.limit(name))):
+                total += len(chunk)
                 hasher.update(chunk)
+            if compressed:
+                self.packed[name] = (physical, stamp, total)
             if not isinstance(expected, str) or hasher.hexdigest() != expected:
                 raise ValueError('Changed entity capture artifact: ' + name)
 
@@ -116,22 +167,45 @@ class _ReplayArtifacts:
     def limit(name):
         return MAX_OUTPUT_BYTES if name.endswith('.tsv') else MAX_PROOF_BYTES if name in BASE_ARTIFACTS else MAX_RESPONSE_BYTES
 
+    def chunks(self, name):
+        total = 0
+        limit = self.limit(name)
+        with _artifact_stream(self.root / name) as stream:
+            while block := stream.read(min(1024 * 1024, limit - total + 1)):
+                total += len(block)
+                if total > limit:
+                    raise ValueError('Oversized Wikibase capture artifact: '+name)
+                yield block
+
+    def storage(self):
+        result = {}
+        for name, (physical, stamp, logical_size) in self.packed.items():
+            if _artifact_storage(self.root/name) != (physical, True) or _artifact_stamp(physical.lstat()) != stamp:
+                raise ValueError('Packed Wikibase artifact changed after replay')
+            with physical.open('rb') as held:
+                sha = hashlib.file_digest(held, 'sha256').hexdigest()
+                if _artifact_stamp(os.fstat(held.fileno())) != stamp:
+                    raise ValueError('Packed Wikibase artifact changed during hashing')
+            if _artifact_stamp(physical.lstat()) != stamp:
+                raise ValueError('Packed Wikibase artifact changed after hashing')
+            result[name] = {'name':physical.name, 'size':stamp[2], 'sha256':sha,
+                            'logical_size':logical_size, 'logical_sha256':self.artifacts[name]}
+        return result
+
     def __iter__(self):
         return iter(self.artifacts)
 
     def __getitem__(self, name):
         expected = self.artifacts[name]  # Unknown names must fail before any I/O.
-        raw = regular(self.root / name, self.limit(name))
+        raw = (b''.join(self.chunks(name)) if name in self.packed else
+               regular(self.root / name, self.limit(name)))
         if digest(raw) != expected:
             raise ValueError('Changed entity capture artifact: ' + name)
         return raw
 
     def projection(self, name, rows):
         expected = self.artifacts[name]
-        path = self.root / name
-        if path.is_symlink() or not path.is_file() or path.stat().st_size > MAX_OUTPUT_BYTES:
-            raise ValueError('Missing, unsafe or oversized capture artifact: ' + str(path))
-        with path.open('rb') as stream:
+        with _artifact_stream(self.root / name) as stream:
             result = projection_identity(stream, rows)
         if result[0] != expected:
             raise ValueError('Changed entity capture artifact: ' + name)
@@ -481,7 +555,7 @@ def manifest_common(record):
             if key not in ('name', 'profile', 'output_sha256', 'output_bytes')}
 
 
-def validate_snapshot(path, wiki=None, date=None):
+def validate_snapshot(path, wiki=None, date=None, *, _storage_out=None):
     path = Path(path)
     selected = path.stem if path.name in (name + '.tsv' for name in NAMES) else NAMES[0]
     root = path.parent if path.name.endswith('.tsv') else path
@@ -490,7 +564,7 @@ def validate_snapshot(path, wiki=None, date=None):
     manifest_bytes = {name: regular(root / (name + '.manifest.json'), MAX_PROOF_BYTES) for name in NAMES}
     manifests = {name: parse_json(raw) for name, raw in manifest_bytes.items()}
     manifest = manifests[selected]
-    if not isinstance(manifest, dict):
+    if not isinstance(manifest, dict) or '_wikibase_storage' in manifest:
         raise ValueError('Invalid entity manifest')
     actual_wiki, actual_date = manifest.get('wiki'), manifest.get('date')
     identity(actual_wiki, actual_date)
@@ -511,6 +585,8 @@ def validate_snapshot(path, wiki=None, date=None):
                   MAX_ENTITIES, MAX_RESPONSE_BYTES, MAX_TOTAL_RAW_BYTES,
                   MAX_OUTPUT_BYTES, MAX_PROOF_BYTES, MAX_ENTITY_BYTES)
     if replay_key in _VALIDATED_REPLAY_KEYS:
+        if _storage_out is not None:
+            _storage_out.update(blobs.storage())
         return manifest
     content_language = namespace_input(blobs['wikibase-namespace-siteinfo.raw.json'],
         blobs['wikibase-namespace-capture.complete.json'], actual_wiki, actual_date)
@@ -541,19 +617,24 @@ def validate_snapshot(path, wiki=None, date=None):
     if len(_VALIDATED_REPLAY_KEYS) >= _MAX_VALIDATED_REPLAY_KEYS:
         _VALIDATED_REPLAY_KEYS.clear()
     _VALIDATED_REPLAY_KEYS.add(replay_key)
+    if _storage_out is not None:
+        _storage_out.update(blobs.storage())
     return manifest
 
 
-def capture_artifacts(path, manifest=None):
+def capture_artifacts(path, manifest=None, *, _storage_out=None):
     path = Path(path)
     root = path.parent if path.name.endswith('.tsv') else path
-    verified = validate_snapshot(path)
+    storage = {}
+    verified = validate_snapshot(path, **({'_storage_out':storage} if _storage_out is not None else {}))
     if manifest is not None and verified != manifest:
         raise ValueError('Entity capture changed during validation')
     result = dict(verified['artifacts'])
     for name in NAMES:
         filename = name + '.manifest.json'
         result[filename] = digest(regular(root / filename, MAX_PROOF_BYTES))
+    if _storage_out is not None:
+        _storage_out.update(storage)
     return result
 
 
