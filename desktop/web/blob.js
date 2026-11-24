@@ -1,6 +1,6 @@
 // WIKBLB08 contains compiled semantic pages or typed DAL1 redirect envelopes.
 // A leading U+FEFF belongs to a compiled title or field, not a file BOM.
-import {validateContainerBlock,validateCellMetrics,validateRuby,validateRubyOwner,validateRubySpan,validateActionGroupSpan,validateInlineBoxSpan} from './validate.js';
+import {validateContainerBlock,validateCellMetrics,validateRuby,validateRubyOwner,validateRubySpan,validateActionGroupSpan,validateInlineBoxSpan,validateFigureIntrinsicSize} from './validate.js';
 const utf8 = new TextDecoder('utf-8', {fatal:true,ignoreBOM:true});
 const kinds = ['language','thesaurus','citations','reconstruction','rhymes','sign_gloss','supplemental','alias'];
 const blocks = ['paragraph','blank','definition','example','quotation','list_item','list_detail','indent','term','heading','preformatted','rule','table','container'];
@@ -264,7 +264,9 @@ export function decode(bytes, metadata) {
   const figureColor=()=>{const kind=tag(['native_theme','transparent','rgb']);if(kind!=='rgb')return {kind};const value=string();require(/^#[0-9a-f]{6}$/.test(value));return {kind,value};};
   const figureBorder=()=>{const kind=tag(['none','solid']);return kind==='none'?{kind}:{kind,width:styleLength(),color:figureColor()};};
   const figure=tableDepth=>{
-    if(!presence())return null;
+    const figureTag=byte();
+    if(figureTag===0)return null;
+    require(figureTag===1||figureTag===8);
     require(bytes.length-p>=123);
     const value={format:tag(['thumbnail','framed']),placement:tag(['none','center','float_left','float_right']),clear:tag(['none','left','right','both']),margins:edges(),image_insets:edges(),caption_padding:edges(),caption_font_scale:f32(),caption_line_height:styleLength(),frame_background:figureColor(),frame_border:figureBorder(),image_background:figureColor(),image_border:figureBorder(),caption_foreground:figureColor(),caption_background:figureColor()};
     require(Number.isFinite(value.caption_font_scale)&&value.caption_font_scale>=0);charge();value.image_span=spanValue();value.caption=spans();
@@ -272,6 +274,10 @@ export function decode(bytes, metadata) {
     if(presence())value.caption_text_align=tag(['left','center','right']);
     value.sizing=tag(['intrinsic','original_width_with_height_bound','requested_fit','requested_fit_cap_original_width']);
     if(presence()){value.frame_min_width=styleLength();require(value.frame_min_width.unit==='px');}
+    if(figureTag===8){
+      value.intrinsic_size={width_px:u32(),height_px:u32()};
+      validateFigureIntrinsicSize(value);
+    }
     const image=value.image_span.image;require(image);
     require(value.sizing==='intrinsic'?value.format==='framed':value.sizing==='original_width_with_height_bound'?value.format==='framed'&&image.height_px!=null:value.format==='thumbnail'&&image.width_px!=null);
     return value;

@@ -2,11 +2,23 @@
 import {chromium} from 'playwright';
 import {build} from 'esbuild';
 import assert from 'node:assert/strict';
+import {verifyIntrinsicRaster} from './intrinsic-raster-controls.mjs';
 const renderer=await build({entryPoints:[new URL('./renderer.js',import.meta.url).pathname],bundle:true,format:'iife',globalName:'Renderer',write:false});
 const media=await build({entryPoints:[new URL('./media.js',import.meta.url).pathname],bundle:true,format:'iife',globalName:'Media',write:false});
 const browser=await chromium.launch({executablePath:process.env.CHROMIUM||'/opt/brave-bin/brave',headless:true,args:['--no-sandbox']});
 try{
  const page=await browser.newPage();await page.route('**/*',r=>r.abort());await page.setContent('<main></main>');await page.addScriptTag({content:renderer.outputFiles[0].text});await page.addScriptTag({content:media.outputFiles[0].text});
+ if(process.argv.includes('--intrinsic-raster-only')||process.argv.length===2){
+   const rasterPage=await browser.newPage();
+   try{
+     await rasterPage.route('**/*',request=>request.abort());
+     await rasterPage.setContent('<main></main>');
+     await rasterPage.addScriptTag({content:renderer.outputFiles[0].text});
+     await rasterPage.addScriptTag({content:media.outputFiles[0].text});
+     await verifyIntrinsicRaster(rasterPage);
+   }finally{await rasterPage.close();}
+ }
+ if(!process.argv.includes('--intrinsic-raster-only')){
  const names = await page.evaluate(() => {
    const main = document.querySelector('main');
    const action = {kind:'link',target:'File:Sugar-485057.jpg',text:' ',trail:''};
@@ -416,4 +428,5 @@ try{
  assert.equal(await page.evaluate(()=>JSON.stringify(captionEntry)===captionBefore),true);assert.equal(await page.evaluate(()=>captionCalls),2);
  await (await import('node:fs/promises')).writeFile(new URL('../artifacts/web/caption10-observations.json',import.meta.url),JSON.stringify({captionObservations,sourceUnchanged:true,metadataAndBlobRequests:2,explicitLowContrastColorPreserved:true},null,2)+'\n');
  }
+}
 }finally{await browser.close();}

@@ -1,5 +1,15 @@
 const forbidden = new Set(['source','source_base64','payload_base64','unexpanded_templates','rendered_templates','expansion','deferred','content']);
 const kinds = new Set(['text','link','external_link','line_break']);
+export function validateFigureIntrinsicSize(figure) {
+  const size=figure.intrinsic_size;
+  const image=figure.image_span?.image;
+  const axis=n=>Number.isInteger(n)&&n>0&&n<=0x7fffffff;
+  if(!size||typeof size!=='object'||Array.isArray(size)||Object.keys(size).length!==2||
+     !axis(size.width_px)||!axis(size.height_px)||figure.format!=='thumbnail'||figure.sizing!=='requested_fit'||
+     !image||!axis(image.width_px)||image.width_px>size.width_px||image.height_px!=null||
+     image.map!=null||image.static_poster!=null||image.svg_language!=null||!(/\.(?:jpe?g|jpe|png|gif|webp)$/i).test(image.file)||
+     figure.table_caption_layout!=null||figure.block_media_layout!=null) throw Error('Invalid intrinsic raster figure');
+}
 export function validate(value) {
   if (!value || value.schema !== 'dict.results.v1' || !Array.isArray(value.entries)) throw Error('Unsupported dictionary package.');
   let objects = 0;

@@ -90,7 +90,16 @@ export function loadInlineImage(el,image,settings,sourceEdition,occurrence={}){
   if(!status){
    status=document.createElement('span');status.className='compiled-image-status';status.setAttribute('role','img');status.style.display='inline-block';status.style.boxSizing='border-box';status.style.verticalAlign='middle';status.dir='auto';
    if(image.alt){status.textContent=image.alt;status.style.fontSize='var(--wikidict-normal-body-size, 1rem)';}
-   else {status.style.width='15px';status.style.height='15px';status.style.border='1px dotted currentColor';}
+   else {
+    const icon=occurrence.intrinsic_size?document.createElement('span'):status;
+    icon.style.cssText+=';display:inline-block;box-sizing:border-box;width:15px;height:15px;border:1px dotted currentColor';
+    if(icon!==status){icon.setAttribute('aria-hidden','true');status.append(icon);}
+   }
+   if(occurrence.intrinsic_size){
+    status.style.width=el.style.width;
+    status.style.height=el.style.height;
+    status.style.overflow='hidden';
+   }
    el.insertAdjacentElement('afterend',status);
   }
   status.dataset.mediaState=state;status.setAttribute('aria-label',(image.alt?image.alt+': ':'')+message);status.title=image.tooltip??message;
@@ -106,6 +115,10 @@ export function loadInlineImage(el,image,settings,sourceEdition,occurrence={}){
  el.addEventListener('load',()=>{
   if(sourceSize===null){showStatus('intrinsic-unresolved','Image size is unavailable.');return;}
   const {width,height}=sourceSize;
+  const axes=occurrence.intrinsic_size;
+  if(axes&&(width!==axes.width_px||height!==axes.height_px)){
+   showStatus('geometry-unresolved','Image dimensions differ from the dictionary.');return;
+  }
   if(!(width>0&&height>0)){showStatus('intrinsic-unresolved','Image size is unavailable.');return;}
   // A height-only vector starts with source-site SVGMaxSize, not intrinsic width.
   // Classify the ORIGINAL file: a downloaded PNG may itself be an SVG thumbnail.

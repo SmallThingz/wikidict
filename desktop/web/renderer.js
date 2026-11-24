@@ -17,8 +17,9 @@ function darkReadingInk(foreground,background){
   while(low<high){const mid=(low+high)>>1;if(luminance(mix(mid))>=minimum)high=mid;else low=mid+1;}
   return '#'+mix(low).map(channel=>channel.toString(16).padStart(2,'0')).join('');
 }
-import {safeURL,linkTargetParts,bookSourcesURL,validateContainerBlock,validateCellMetrics,validateRuby,validateRubyOwner,validateRubySpan,validateActionGroupSpan,validateInlineBoxSpan} from './validate.js';
+import {safeURL,linkTargetParts,bookSourcesURL,validateContainerBlock,validateCellMetrics,validateRuby,validateRubyOwner,validateRubySpan,validateActionGroupSpan,validateInlineBoxSpan,validateFigureIntrinsicSize} from './validate.js';
 import {previewBlocks,inlineText} from './preview.js';
+import {figureImageSize} from './media.js';
 const node = (tag, text, cls) => { const el = document.createElement(tag); if (text != null) el.textContent = text; if (cls) el.className = cls; return el; };
 let explanationSequence = 0;
 const poemTokens = span => (span.classes || '').split(/[ \t\r\n\v\f]+/).filter(Boolean);
@@ -117,7 +118,14 @@ function inlineImageElement(image,load,options={}){
   if(image.width_px!=null&&image.height_px==null)el.style.height='auto';if(image.height_px!=null&&image.width_px==null)el.style.width='auto';
   for(const [key,attr] of [['alt','alt'],['tooltip','title']])if(image[key]!=null){if(typeof image[key]!=='string')throw Error('Invalid image description');el.setAttribute(attr,image[key]);}
   if(options.figureImage)el.style.border='0';
-  el.dataset.mediaState='pending';load?.(el,image,options.sizing==null?{}:{sizing:options.sizing});return el;
+  if(options.intrinsic_size){
+    const axes=options.intrinsic_size;
+    const size=figureImageSize(image,options.sizing,{width:axes.width_px,height:axes.height_px});
+    const scale=Math.min(1,10000/size.width,10000/size.height);
+    el.style.width=size.width*scale+'px';
+    el.style.height=size.height*scale+'px';
+  }
+  el.dataset.mediaState='pending';load?.(el,image,options.intrinsic_size?{sizing:options.sizing,intrinsic_size:options.intrinsic_size}:options.sizing==null?{}:{sizing:options.sizing});return el;
 }
 function rubyOwnerStyle(el,owner,contextFont){
   validateRubyOwner(owner);const font=owner.font;
@@ -283,7 +291,7 @@ export function spans(values = [], onLink = () => {}, preserve = false, explanat
     }
     applyInlineTextStyle(el,span);
     if(rubyFontContext){el.style.fontWeight=span.bold?'bold':'normal';el.style.fontStyle=span.italic?'italic':'normal';}
-    if(span.image){const image=inlineImageElement(span.image,explanations?.inlineImage,{sizing:explanations?.figureSizing,figureImage:explanations?.figureImage});el.append(span.image.map?mappedImage(image,span.image,onLink,explanations):image);}
+    if(span.image){const image=inlineImageElement(span.image,explanations?.inlineImage,{sizing:explanations?.figureSizing,figureImage:explanations?.figureImage,intrinsic_size:explanations?.figureIntrinsicSize});el.append(span.image.map?mappedImage(image,span.image,onLink,explanations):image);}
     colorSpan(el,span);
     if(!canonicalRGB(span.foreground)&&inkFor(span)&&((span.kind==='link'&&(span.target||span.target_fragment))||(span.kind==='external_link'&&safeURL(span.target))))el.style.textDecoration='underline';
     if(canonicalRGB(span.background)){
@@ -439,7 +447,8 @@ function validateRichEntry(entry){
   const caption=(value,tableDepth,depth,inReference)=>{if(value.caption_blocks!=null){if(value.caption?.length)richError();blocks(value.caption_blocks,tableDepth,depth+1,inReference);}else spanList(value.caption);};
   const figure=(value,tableDepth,depth,inReference)=>{
     const required=['image_span','format','sizing','placement','clear','margins','image_insets','caption_padding','caption_font_scale','caption_line_height','frame_background','frame_border','image_background','image_border','caption_foreground','caption_background'];
-    richObject(value,[...required,'caption','caption_blocks','caption_text_align','frame_min_width'],required);span(value.image_span);if(!value.image_span.image)richError();
+    richObject(value,[...required,'caption','caption_blocks','caption_text_align','frame_min_width','intrinsic_size'],required);span(value.image_span);if(!value.image_span.image)richError();
+    if(Object.hasOwn(value,'intrinsic_size'))validateFigureIntrinsicSize(value);
     if(!['thumbnail','framed'].includes(value.format)||!['none','center','float_left','float_right'].includes(value.placement)||!['none','left','right','both'].includes(value.clear))richError();
     const image=value.image_span.image;
     if(!(value.sizing==='intrinsic'?value.format==='framed':value.sizing==='original_width_with_height_bound'?value.format==='framed'&&image.height_px!=null:['requested_fit','requested_fit_cap_original_width'].includes(value.sizing)&&value.format==='thumbnail'&&image.width_px!=null))richError();
@@ -561,7 +570,7 @@ function figureView(value,onLink,explanations,context={}){
   if(value.frame_min_width!=null)frame.style.minWidth=styleLength(value.frame_min_width);
   if(value.placement.startsWith('float_'))frame.style.cssFloat=value.placement.slice(6);
   const imageBox=node('div',null,'compiled-figure-image');imageBox.style.cssText='box-sizing:content-box;width:max-content;line-height:0;';styleEdges(imageBox,'margin',value.image_insets);imageBox.style.background=figureColor(value.image_background,'var(--bg)');imageBox.style.border=figureBorder(value.image_border);
-  const imageExplanations={...explanations,figureSizing:value.sizing,figureImage:true};imageBox.append(spans([value.image_span],onLink,false,imageExplanations,false,context.background));frame.append(imageBox);
+  const imageExplanations={...explanations,figureSizing:value.sizing,figureIntrinsicSize:value.intrinsic_size,figureImage:true};imageBox.append(spans([value.image_span],onLink,false,imageExplanations,false,context.background));frame.append(imageBox);
   const image=imageBox.querySelector('img');
   // The image, not an unbreakable caption, owns the frame width. The authored
   // physical minimum remains a separate content-box floor.
