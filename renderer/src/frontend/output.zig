@@ -8777,10 +8777,21 @@ test "staged table geometry refusal reports retain parent offsets complete body 
             try blocksTextProjected(&frame.writer, &.{block}, color, &projection);
             try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, frame.written(), terminal_geometry_notice));
             var reports: usize = 0;
-            for (floats.events.items) |event| if (event.kind == .projection_fallback) {
-                reports += 1;
-                try std.testing.expectEqual(start, event.start); try std.testing.expectEqual(start, event.end);
-            };
+            for (floats.events.items) |event| {
+                if (event.kind == .projection_fallback) {
+                    try std.testing.expect(!captured);
+                    try std.testing.expectEqual(start, event.start);
+                    try std.testing.expectEqual(start, event.end);
+                    reports += 1;
+                } else if (event.projection_fallbacks != 0) {
+                    try std.testing.expect(captured);
+                    try std.testing.expectEqual(.grid, event.kind);
+                    try std.testing.expectEqual(start, event.start);
+                    try std.testing.expectEqual(frame.written().len, event.end);
+                    try std.testing.expectEqual(alignment, event.alignment);
+                    reports += event.projection_fallbacks;
+                }
+            }
             try std.testing.expectEqual(@as(usize, 1), reports);
             const layout = try floatLayoutAlloc(a, frame.written(), 80, lines.items, floats.events.items, color); defer layout.deinit(a);
             try std.testing.expectEqual(@as(usize, 1), layout.unsupported);
