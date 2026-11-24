@@ -35,6 +35,11 @@ inline void requireCapability(QTextDocument *document) {
 inline void requireExtendedCapability(QTextDocument *document, const QJsonObject &span) {
     requireCapability(document);
     const auto group = CompiledContent::inlineBoxGroup(span);
+    if (group.value("spans").toArray().isEmpty()) {
+        require(document->documentLayout()->property("_wikidictEmptyTopEdgeCapability").toString()
+            == QStringLiteral("wikidict.empty-top-edge/1"));
+        return;
+    }
     if (CompiledContent::nonbreakingSwatch(span, group))
         require(document->documentLayout()->property("_wikidictNonbreakingSwatchCapability").toString()
             == QString::fromLatin1(QCompiledInlineBox::NonbreakingSwatchCapability));
@@ -103,6 +108,8 @@ struct Expansion {
     QPointer<QTextDocument> document;
     QPointer<QAbstractTextDocumentLayout> layout;
     QList<Owner> owners;
+    struct EmptyEdge { QTextCursor boundary; QFont font; };
+    QList<EmptyEdge> emptyEdges;
 };
 inline QColor borderColor(const QJsonValue &value, const QJsonObject &owner, const QTextCharFormat &declaring, bool sourceBound = false) {
     const auto color = CompiledContent::object(value); require(color.size() == 1);
@@ -200,6 +207,13 @@ inline Expansion expand(QTextDocument *document) {
         require(declaring.verticalAlignment() == QTextCharFormat::AlignNormal
             && (!declaring.hasProperty(QCompiledInline::Property)
                 || QCompiledInlineBox::helpOnly(declaring.property(QCompiledInline::Property))));
+        if (leaves.isEmpty()) {
+            require(item.range.selectedText() == QString(QChar::ObjectReplacementCharacter) && !declaring.isAnchor());
+            item.range.removeSelectedText();
+            item.range.setKeepPositionOnInsert(true);
+            result.emptyEdges.append({item.range, declaring.font().resolve(base)});
+            continue;
+        }
         QTextDocument child;
         child.setDefaultFont(base); child.setDefaultStyleSheet(document->defaultStyleSheet());
         child.setDefaultTextOption(document->defaultTextOption());
@@ -369,12 +383,25 @@ inline Expansion expand(QTextDocument *document) {
     return result;
 }
 inline void finalize(const Expansion &result) {
-    if (result.owners.isEmpty()) return;
+    if (result.owners.isEmpty() && result.emptyEdges.isEmpty()) return;
     auto current = [&] {
         require(result.document && result.layout && result.document->documentLayout() == result.layout
             && !result.document->isLayoutEnabled());
     };
     current(); requireCapability(result.document);
+    if (!result.emptyEdges.isEmpty()) result.document->setProperty("_wikidictHasEmptyTopEdges", true);
+    for (const auto &edge : result.emptyEdges) {
+        current();
+        auto cursor = edge.boundary;
+        const int offset = cursor.positionInBlock();
+        require(!cursor.hasSelection() && offset >= 0 && offset < cursor.block().length());
+        constexpr auto key = QTextFormat::UserProperty + 0x5874;
+        auto format = cursor.blockFormat();
+        auto edges = format.property(key).toList();
+        edges.append(QVariantMap{{QStringLiteral("offset"), offset}, {QStringLiteral("font"), edge.font}});
+        format.setProperty(key, edges);
+        cursor.setBlockFormat(format);
+    }
     for (const auto &owner : result.owners) {
         current();
         QTextCursor range(result.document); range.setPosition(owner.first.position());

@@ -82,6 +82,41 @@ QString installedEditionGroup(const QString &root) {
         fail(QStringLiteral("This dictionary folder has an invalid edition marker."));
     return group;
 }
+// Canonical local publication members use content-kind names, while release
+// downloads carry their edition in the asset name. Bind a local date only to
+// the precise bytes listed for the validated member in the adjacent manifest.
+QString localPublicationEdition(const QString &source, const Dictionary &dictionary, bool compressed,
+                                const QByteArray &digest, qint64 bytes) {
+    const QFileInfo member(source);
+    if (member.isSymLink()) return {};
+    QDir publication = member.absoluteDir();
+    if (dictionary.kind == QStringLiteral("language")) {
+        if (publication.dirName() != QStringLiteral("languages") || !publication.cdUp()) return {};
+    }
+    const QString expected = dictionaryPath(publication.absolutePath(), dictionary)
+        + (compressed ? QStringLiteral(".xz") : QString());
+    if (member.absoluteFilePath() != expected) return {};
+    const QFileInfo manifest(publication.filePath(QStringLiteral("complete.json")));
+    if (!manifest.isFile() || manifest.isSymLink() || manifest.size() > 4 * 1024 * 1024) return {};
+    QFile metadataFile(manifest.filePath());
+    if (!metadataFile.open(QIODevice::ReadOnly)) return {};
+    const auto manifestBytes = metadataFile.read(4 * 1024 * 1024 + 1);
+    if (!metadataFile.atEnd() || metadataFile.error() != QFileDevice::NoError || manifestBytes.size() > 4 * 1024 * 1024) return {};
+    const auto complete = QJsonDocument::fromJson(manifestBytes).object();
+    if (complete.value(QStringLiteral("status")) != QStringLiteral("built")) return {};
+    const auto files = complete.value(QStringLiteral("publication_files")).toObject();
+    const auto metadata = files.value(publication.relativeFilePath(expected)).toObject();
+    if (metadata.isEmpty()) return {};
+    if (metadata.value(QStringLiteral("size")).toInteger(-1) != bytes
+        || metadata.value(QStringLiteral("sha256")).toString().toLatin1() != digest)
+        return {};
+    const auto identity = complete.value(QStringLiteral("edition")).toString() + QChar('-')
+        + complete.value(QStringLiteral("date")).toString();
+    const QString date = complete.value(QStringLiteral("date")).toString();
+    if (date.size() != 8 || QDate::fromString(date, QStringLiteral("yyyyMMdd")).toString(QStringLiteral("yyyyMMdd")) != date) return {};
+    static const QRegularExpression validIdentity(QStringLiteral("^[a-z][a-z0-9_-]*wiktionary-[0-9]{8}$"));
+    return validIdentity.match(identity).hasMatch() ? identity : QString();
+}
 void checkEditionGroup(const QString &root, const QString &incoming) {
     const QString current = installedEditionGroup(root);
     if (!current.isEmpty() && current != incoming)
@@ -597,6 +632,8 @@ std::shared_ptr<PreparedImport> prepareImport(const QString &root, const QString
     if (!prepared->editionGroup.isEmpty() && originalName != prepared->editionGroup + QChar('-') +
             QFileInfo(dictionaryPath(root, prepared->dictionary)).fileName() + (compressed ? QStringLiteral(".xz") : QString()))
         fail(QStringLiteral("The release filename does not match the dictionary it contains."));
+    if (prepared->editionGroup.isEmpty() && sourceName.isEmpty())
+        prepared->editionGroup = localPublicationEdition(source, prepared->dictionary, compressed, actualHash, total);
     checkEditionGroup(root, prepared->editionGroup);
     if (compressed) QFile::remove(validationPath);
     prepared->dictionary.sha256 = actualHash;

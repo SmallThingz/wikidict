@@ -5,20 +5,65 @@
 
 namespace SectionHeading {
 inline constexpr int property = QTextFormat::UserProperty + 0x5807;
+// The body remains a sibling of the outer frame. Only the real heading
+// companion can acquire the two source-declared ancestors.
+inline QJsonObject companionContainer(const QJsonObject &style, const QJsonObject &child) {
+    return {{"kind", "container"}, {"depth", 0}, {"spans", QJsonArray{}},
+        {"container", QJsonObject{{"style", style}, {"blocks", QJsonArray{child}}}}};
+}
+inline QJsonObject companionWrappers(const QJsonValue &value) {
+    using namespace CompiledContent;
+    const QStringList keys{"outer", "inner", "title_block_padding_right"};
+    const auto wrappers = containerObject(value, keys, keys);
+    const auto outer = containerStyle(wrappers.value("outer"));
+    const auto inner = containerStyle(wrappers.value("inner"));
+    for (auto it = outer.begin(); it != outer.end(); ++it)
+        require(!present(it.value()) || it.key() == "margins" || it.key() == "border" || it.key() == "overflow");
+    for (auto it = inner.begin(); it != inner.end(); ++it)
+        require(!present(it.value()) || it.key() == "padding");
+    require(outer.value("overflow") == QStringLiteral("visible_x_clip_y"));
+    const auto edges = outer.value("border").toObject().value("edges").toObject();
+    const auto dash = edges.value("top").toObject().value("dashed").toObject();
+    require(dash.value("width").toObject().value("unit") == QStringLiteral("px")
+        && dash.value("width").toObject().value("value").toDouble() > 0
+        && dash.value("color").toObject().value("rgb").isString());
+    const auto positiveEm = [](const QJsonValue &v) {
+        containerLength(v);
+        require(v.toObject().value("unit") == QStringLiteral("em") && v.toObject().value("value").toDouble() > 0);
+    };
+    positiveEm(wrappers.value("title_block_padding_right"));
+    for (const auto &sides : {outer.value("margins").toObject(), inner.value("padding").toObject()}) {
+        positiveEm(sides.value("top"));
+        for (const auto key : {"right", "bottom", "left"})
+            require(sides.value(QLatin1String(key)).toObject().value("value").toDouble(-1) == 0);
+    }
+    for (const auto key : {"right", "bottom", "left"})
+        require(edges.value(QLatin1String(key)).toObject() == QJsonObject{{"none", QJsonObject{}}});
+    return wrappers;
+}
 inline QJsonObject validate(const QJsonObject &section) {
     using namespace CompiledContent;
     const auto style = containerObject(section.value(QStringLiteral("heading_style")),
-        {QStringLiteral("box"), QStringLiteral("font"), QStringLiteral("direction")},
+        {QStringLiteral("box"), QStringLiteral("font"), QStringLiteral("direction"), QStringLiteral("wrappers")},
         {QStringLiteral("box"), QStringLiteral("font"), QStringLiteral("direction")});
     const auto box = containerStyle(style.value(QStringLiteral("box")));
     for (const auto &key : {"margins", "padding", "border", "owner_font_scale", "line_height", "font_family", "clear"})
         require(present(box.value(QLatin1String(key))));
-    for (const auto &key : {"float_side", "flex_item", "align_items", "columns", "positioning", "screen_max_width", "height", "min_height", "margin_values", "owner_font"})
+    for (const auto &key : {"float_side", "flex_item", "align_items", "columns", "screen_max_width", "height", "min_height", "margin_values", "owner_font"})
         require(!present(box.value(QLatin1String(key))));
     require(!present(box.value("width")) || box.value("width").toObject() == QJsonObject{{"auto", QJsonObject{}}});
     require(!present(box.value("max_width")) || box.value("max_width").toObject() == QJsonObject{{"none", QJsonObject{}}});
     require(!present(box.value("layout")) || box.value("layout") == QStringLiteral("flow"));
     require(!present(box.value("overflow")) || box.value("overflow") == QStringLiteral("visible"));
+    if (present(style.value("wrappers"))) {
+        companionWrappers(style.value("wrappers"));
+        require(box.value("positioning") == QStringLiteral("relative_auto") && section.value("level").toInt() == 3
+            && box.value("border").toObject() == QJsonObject{{"none", QJsonObject{}}});
+        for (const auto key : {"margins", "padding"}) {
+            const auto sides = box.value(QLatin1StringView(key)).toObject();
+            for (auto it = sides.begin(); it != sides.end(); ++it) require(it.value().toObject().value("value").toDouble(-1) == 0);
+        }
+    } else require(!present(box.value("positioning")));
     const auto font = SemanticHtml::inlineFontSnapshot(style.value("font"));
     require(!present(font.value("font_family")) || font.value("font_family") == box.value("font_family"));
     require(font.value("font_scale_basis") == QStringLiteral("normal_body") && font.value("font_scale").isDouble()

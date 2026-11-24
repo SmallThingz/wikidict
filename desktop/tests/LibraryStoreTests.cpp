@@ -392,6 +392,39 @@ int main(int argc, char **argv) {
         require(installed.size() == 1 && installed[0].words == 2, "installed metadata");
         require(installed[0].sha256 == QCryptographicHash::hash(original, QCryptographicHash::Sha256).toHex(), "installed hash");
         require(events > 0, "progress");
+        const QDir publication(temporary.filePath(QStringLiteral("published")));
+        require(publication.mkpath(QStringLiteral("languages")), "create local publication");
+        const auto publishedPath = LibraryStorage::dictionaryPath(publication.path(), prepared->dictionary);
+        write(publishedPath, original);
+        const auto memberKey = publication.relativeFilePath(publishedPath);
+        const QJsonObject publishedMember{{"sha256", QString::fromLatin1(installed[0].sha256)}, {"size", original.size()}};
+        QJsonObject metadata{{"status", "built"}, {"edition", "enwiktionary"}, {"date", "20261001"},
+            {"publication_files", QJsonObject{{memberKey, publishedMember}}}};
+        const auto metadataPath = publication.filePath(QStringLiteral("complete.json"));
+        write(metadataPath, QJsonDocument(metadata).toJson());
+        const auto destination = temporary.filePath(QStringLiteral("publication-import"));
+        auto dated = LibraryStorage::prepareImport(destination, publishedPath, {}, -1, cancelled, progress);
+        LibraryStorage::commitImport(destination, *dated);
+        require(LibraryStorage::editionIdentity(destination) == QStringLiteral("enwiktionary-20261001"), "retain sealed local edition on import");
+        require(LibraryStorage::editionIdentity(root).isEmpty(), "standalone copy stays unlabelled");
+        const auto anonymous = [&](const QJsonObject &invalid) {
+            write(metadataPath, QJsonDocument(invalid).toJson());
+            auto candidate = LibraryStorage::prepareImport(temporary.filePath(QStringLiteral("anonymous-import")), publishedPath, {}, -1, cancelled, progress);
+            return candidate->editionGroup.isEmpty();
+        };
+        auto invalid = metadata; invalid.insert("edition", "prefix/enwiktionary");
+        require(anonymous(invalid), "edition identity must match in full");
+        invalid = metadata; invalid.insert("date", "20260230");
+        require(anonymous(invalid), "impossible snapshot dates stay anonymous");
+        invalid = metadata; invalid.insert("publication_files", QJsonObject{{"other/" + memberKey, publishedMember}});
+        require(anonymous(invalid), "same hash under another member path stays anonymous");
+        auto wrongHash = publishedMember; wrongHash.insert("sha256", QString(64, QChar('0')));
+        invalid.insert("publication_files", QJsonObject{{memberKey, wrongHash}});
+        require(anonymous(invalid), "wrong checksum cannot label an import");
+        write(metadataPath, QJsonDocument(metadata).toJson());
+        write(publishedPath, blob("English", {"changed"}));
+        auto stale = LibraryStorage::prepareImport(temporary.filePath(QStringLiteral("stale-import")), publishedPath, {}, -1, cancelled, progress);
+        require(stale->editionGroup.isEmpty(), "stale manifest leaves import anonymous");
         const QByteArray manifestBefore = read(QDir(root).filePath(QStringLiteral("languages.tsv")));
         // Well-framed later records with incomplete/trailing semantic bodies must fail
         // during prepare, before commitImport is ever called on the candidate.

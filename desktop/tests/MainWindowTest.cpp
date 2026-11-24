@@ -13297,6 +13297,31 @@ private slots:
         QCOMPARE(document->documentLayout()->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
     }
 
+    void emptyPitchEdgePreservesOriginalBoundaryAndHeibanAction() {
+        const auto text = [](QString s) { return QJsonObject{{"kind", "text"}, {"text", s}, {"target", ""}, {"trail", ""}}; };
+        const QJsonObject zero{{"unit", "px"}, {"value", 0}}, none{{"none", QJsonObject{}}};
+        const QJsonObject top{{"solid", QJsonObject{{"width", QJsonObject{{"unit", "px"}, {"value", 1}}},
+            {"color", QJsonObject{{"current_color", QJsonObject{}}}}}}};
+        QJsonObject shape{{"padding", QJsonObject{{"top", zero}, {"right", zero}, {"bottom", zero}, {"left", zero}}},
+            {"border", QJsonObject{{"top", top}, {"right", none}, {"bottom", none}, {"left", none}}},
+            {"overlays", QJsonArray{}}, {"spans", QJsonArray{}}};
+        auto edge = text({}); edge.insert("inline_box_group", shape); edge.insert("language", "ja");
+        auto action = text("Heiban"); action.insert("kind", "link"); action.insert("target", QStringLiteral("平板型"));
+        MainWindow window{QString()}; window.show(); QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 30000);
+        const auto source = QStringLiteral("ひ [hì] (Heiban – [0])");
+        QVERIFY(composeReadingBlocks(window, {QJsonObject{{"kind", "paragraph"}, {"spans", QJsonArray{
+            text(QStringLiteral("ひ")), edge, text(QStringLiteral(" [hì] (")), action, text(QStringLiteral(" – [0])"))}}}}));
+        auto *doc = window.reading_->document(); doc->documentLayout()->documentSize();
+        const auto range = doc->find(source); QVERIFY(!range.isNull()); QCOMPARE(range.selectedText(), source);
+        const auto entries = range.block().blockFormat().property(QTextFormat::UserProperty + 0x5874).toList();
+        QCOMPARE(entries.size(), 1); QCOMPARE(entries.first().toMap().value("offset").toInt(), range.selectionStart() - range.block().position() + 1);
+        QCOMPARE(doc->documentLayout()->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+        QCOMPARE(doc->find("Heiban").charFormat().anchorHref(), QStringLiteral("dict:%E5%B9%B3%E6%9D%BF%E5%9E%8B"));
+        auto bad = edge; bad.insert("tooltip", "inactive"); QVERIFY_EXCEPTION_THROWN(CompiledContent::inlineBoxGroup(bad), std::exception);
+        auto borders = shape.value("border").toObject(); borders.insert("left", top); shape.insert("border", borders);
+        bad = edge; bad.insert("inline_box_group", shape); QVERIFY_EXCEPTION_THROWN(CompiledContent::inlineBoxGroup(bad), std::exception);
+    }
+
     void ordinarySourceTreeInstallsMeasuredOwnersAndOriginalLeafActions() {
         const auto text = [](const QString &value) {
             return QJsonObject{{"kind", "text"}, {"text", value}, {"trail", ""}, {"target", ""}, {"font_scale", .8}};
@@ -23621,6 +23646,37 @@ private slots:
             {"body_adjoining", "ordinary"}, {"preamble_spans", QJsonArray{text("PREFIX OUTSIDE BODY")}},
             {"sections", QJsonArray{QJsonObject{{"title", ""}, {"level", 0}, {"anchor", ""}, {"anchor_fallback", ""}, {"blocks", prefix}}, heading}},
             {"references", QJsonArray{QJsonObject{{"kind", "fragment"}, {"spans", QJsonArray{text("METADATA NOTE")}}}}}, {"media", QJsonArray{}}};
+    }
+
+    void wrappedHeadingKeepsBothAnchorsAndFollowingDefinitionOutside() {
+        MainWindow window(fixture_, QStringLiteral("cat")); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        auto entry = styledHeadingEntry(Qt::LeftToRight, false);
+        auto sections = entry.value("sections").toArray(); auto heading = sections[1].toObject();
+        auto style = heading.value("heading_style").toObject(); auto box = style.value("box").toObject();
+        const QJsonObject zero{{"unit", "px"}, {"value", 0}}, none{{"none", QJsonObject{}}};
+        const auto em = [](double value) { return QJsonObject{{"unit", "em"}, {"value", value}}; };
+        const auto sides = [&](QJsonObject top) { return QJsonObject{{"top", top}, {"right", zero}, {"bottom", zero}, {"left", zero}}; };
+        box.insert("margins", sides(zero)); box.insert("padding", sides(zero)); box.insert("border", none); box.insert("positioning", "relative_auto");
+        const QJsonObject dash{{"dashed", QJsonObject{{"width", QJsonObject{{"unit", "px"}, {"value", 1}}}, {"color", QJsonObject{{"rgb", "#a2a9b1"}}}}}};
+        const QJsonObject outer{{"margins", sides(em(.4))}, {"overflow", "visible_x_clip_y"},
+            {"border", QJsonObject{{"edges", QJsonObject{{"top", dash}, {"right", none}, {"bottom", none}, {"left", none}}}}}};
+        style.insert("wrappers", QJsonObject{{"outer", outer}, {"inner", QJsonObject{{"padding", sides(em(1.25))}}}, {"title_block_padding_right", em(3.2)}});
+        style.insert("box", box); heading.insert("heading_style", style); heading.insert("level", 3);
+        auto blocks = heading.value("blocks").toArray(); auto companion = blocks[0].toObject(); companion.insert("level", 3);
+        blocks[0] = companion; heading.insert("blocks", blocks); sections[1] = heading; entry.insert("sections", sections);
+        QVERIFY(window.renderResponse(QJsonDocument(QJsonObject{{"entries", QJsonArray{entry}}}).toJson()));
+        auto *doc = window.reading_->document(); doc->documentLayout()->documentSize();
+        QCOMPARE(doc->documentLayout()->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+        const auto title = heading.value("title").toString(); QCOMPARE(doc->toRawText().count(title), 1);
+        QTextCursor cursor(doc);
+        cursor.setPosition(doc->toRawText().indexOf(title)); auto *frame = cursor.currentFrame();
+        QCOMPARE(cursor.block().text(), title);
+        QVERIFY(frame->frameFormat().hasProperty(SectionHeading::property)); QCOMPARE(cursor.blockFormat().headingLevel(), 3);
+        QVERIFY(cursor.blockFormat().rightMargin() > 0); QVERIFY(frame->parentFrame() && frame->parentFrame()->parentFrame());
+        QCOMPARE(frame->parentFrame()->parentFrame()->parentFrame(), doc->rootFrame());
+        auto body = doc->find("AFTER HEADING"); QVERIFY(!body.isNull()); QVERIFY(body.position() > frame->parentFrame()->parentFrame()->lastPosition());
+        QVERIFY(hasAnchor(doc, "section-1") && hasAnchor(doc, "block-1-0")); QCOMPARE(window.sections_->findText(title), -1);
     }
 
     void styledHeadingPrefixTableKeepsFixedWidthAndResponsiveClear()

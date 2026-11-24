@@ -22,7 +22,7 @@
 +endif()
 --- a/tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp
 +++ b/tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp
-@@ -3,24 +3,16191 @@
+@@ -3,24 +3,16221 @@
  
  
  #include <QTest>
@@ -8455,6 +8455,36 @@
 +        }
 +    }
 +
++    void emptyPitchEdgeUsesDeclaringStrutWithoutGlyphOrAction() {
++        for (const auto size : {16, 24}) {
++            QImage image(300, 160, QImage::Format_ARGB32_Premultiplied);
++            QTextDocument doc; doc.setLayoutEnabled(false); doc.setDocumentMargin(0); doc.setTextWidth(280);
++            QFont font; font.setPixelSize(size); doc.setDefaultFont(font); doc.documentLayout()->setPaintDevice(&image);
++            QTextCursor cur(&doc); cur.insertText(QStringLiteral("ひ [hì] ("));
++            QTextCharFormat link; link.setAnchor(true); link.setAnchorHref("dict:Heiban"); cur.insertText("Heiban",link);
++            cur.insertText(QStringLiteral(" – [0])"), QTextCharFormat());
++            auto following = cur; following.insertBlock(); following.insertText("following");
++            cur.setPosition(1); doc.setLayoutEnabled(true);
++            const auto paint = [&] { image.fill(Qt::white); QPainter p(&image); doc.drawContents(&p); p.end(); return image.copy(); };
++            const auto original = paint(); const auto text = doc.toRawText(); const auto block = doc.begin();
++            const auto baseline = doc.documentLayout()->blockBoundingRect(block); const auto line = block.layout()->lineAt(0);
++            const auto nextTop = doc.documentLayout()->blockBoundingRect(following.block()).top();
++            const qreal boundary = line.cursorToX(1), actionX = (line.cursorToX(8) + line.cursorToX(9)) / 2;
++            const auto setEdge = [&](QFont owner) {
++                auto fmt = cur.blockFormat(); fmt.setProperty(QTextFormat::UserProperty + 0x5874,
++                    QVariantList{QVariantMap{{"offset", 1}, {"font", owner}}}); cur.setBlockFormat(fmt);
++            };
++            setEdge(font); QCOMPARE(paint(), original); QCOMPARE(doc.toRawText(), text);
++            QCOMPARE(block.layout()->lineAt(0).cursorToX(1), boundary);
++            QCOMPARE(doc.documentLayout()->anchorAt(QPointF(actionX,baseline.center().y())), QStringLiteral("dict:Heiban"));
++            font.setPixelSize(3 * size); setEdge(font); paint();
++            const auto after = doc.documentLayout()->blockBoundingRect(following.block()).top();
++            const QFontMetricsF ownerMetrics(font, &image);
++            qInfo() << "EMPTY_EDGE_ADVANCE" << size << nextTop << after << ownerMetrics.height();
++            QVERIFY(after > nextTop); QVERIFY(after >= ownerMetrics.ascent() + ownerMetrics.descent() - 1); QCOMPARE(block.layout()->lineAt(0).cursorToX(1), boundary);
++        }
++    }
++
 +    void containerVerticalClipKeepsHorizontalActionsAndPhysicalDashes()
 +    {
 +        constexpr int plain = QTextFormat::UserProperty + 0x57e0, onlyY = QTextFormat::UserProperty + 0x5863;
@@ -16214,7 +16244,7 @@
      void init();
      void cleanup();
      void cleanupTestCase();
-@@ -648,5 +16815,3682 @@
+@@ -648,5 +16845,3682 @@
      }
  }
  

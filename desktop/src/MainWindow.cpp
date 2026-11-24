@@ -2296,7 +2296,15 @@ void ReadingBrowser::updateDisclosures(const QJsonArray &sections, const QSet<in
             disclosures.append(item);
         }
     }
-    for (auto *frame : document()->rootFrame()->childFrames()) {
+    auto headings = document()->rootFrame()->childFrames();
+    for (auto *outer : document()->rootFrame()->childFrames()) {
+        if (outer->childFrames().size() != 1) continue;
+        auto *inner = outer->childFrames().first();
+        if (inner->childFrames().size() != 1) continue;
+        auto *candidate = inner->childFrames().first();
+        if (candidate->frameFormat().hasProperty(SectionHeading::property)) headings.append(candidate);
+    }
+    for (auto *frame : headings) {
         const auto marker = frame->frameFormat().property(SectionHeading::property).toMap();
         if (marker.value(QStringLiteral("capability")).toString() != QStringLiteral("wikidict.section-heading/1")) continue;
         if (marker.value(QStringLiteral("index")).metaType().id() != QMetaType::Int) continue;
@@ -4953,6 +4961,7 @@ bool MainWindow::renderDocument(const QJsonDocument &document, bool addVisit, co
         const QJsonObject section = sections[heading.section].toObject();
         const bool ownerLanguage = heading.block < 0 && kind == QStringLiteral("language") &&
             section.value(QStringLiteral("level")).toInt() == 2 && heading.title == language;
+        if (heading.block < 0 && section.value("heading_style").toObject().value("wrappers").isObject()) continue;
         if (ownerLanguage && ownerLanguageListed) continue;
         sections_->addItem(heading.title, heading.section);
         sections_->setItemData(sections_->count() - 1, heading.block, Qt::UserRole + 1);
@@ -7450,7 +7459,20 @@ QString MainWindow::entryHtml(const QJsonObject &entry, bool bodyBoundary) const
             rendered.html = QStringLiteral("<p style='margin:0;white-space:pre-wrap'><a name='section-%1'></a><a name='block-%1-0'></a>%2</p>")
                 .arg(index).arg(spansHtml(richHeading, 0, {}, {}, context.pointSize, {}, -1,
                     context.zeroFontContext, true, {}, true, context.fontFamily));
-            out += QStringLiteral("<p style='margin:0'>%1</p>").arg(FlowConstruction::placeholder(projected, rendered, context));
+            auto sourceFrame = projected;
+            QString frameHtml = FlowConstruction::placeholder(projected, rendered, context);
+            if (SemanticHtml::present(heading.value("wrappers"))) {
+                const auto wrappers = SectionHeading::companionWrappers(heading.value("wrappers"));
+                CompiledContent::require(reading_->document()->documentLayout()->property("_wikidictWrappedHeadingCapability")
+                    == QVariant(QStringLiteral("wikidict.wrapped-heading/1")));
+                for (const auto key : {"inner", "outer"}) {
+                    sourceFrame = SectionHeading::companionContainer(wrappers.value(QLatin1StringView(key)).toObject(), sourceFrame);
+                    FlowConstruction::Rendered body;
+                    body.html = QStringLiteral("<p style='margin:0'>%1</p>").arg(frameHtml);
+                    frameHtml = FlowConstruction::placeholder(sourceFrame, body, rootContext);
+                }
+            }
+            out += QStringLiteral("<p style='margin:0'>%1</p>").arg(frameHtml);
         } else if (renderRichHeading) {
             // The fold control and lexical links are siblings, never nested anchors.
             collectEmbeddedMedia(richHeading);

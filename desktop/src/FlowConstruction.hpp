@@ -1294,6 +1294,13 @@ inline QVector<Owner> expand(QTextDocument *document, QVector<QPointer<QTextFram
             const auto alignment = headingStyle.value(QStringLiteral("box")).toObject().value(QStringLiteral("text_align")).toString();
             if (!alignment.isEmpty()) format.setAlignment(alignment == QStringLiteral("center") ? Qt::AlignHCenter
                 : (alignment == QStringLiteral("right") ? Qt::AlignRight : Qt::AlignLeft) | Qt::AlignAbsolute);
+            if (headingStyle.value("wrappers").isObject()) {
+                const auto padding = headingStyle.value("wrappers").toObject().value("title_block_padding_right").toObject();
+                const qreal width = padding.value("value").toDouble() * headingStyle.value("box").toObject().value("owner_font_scale").toDouble()
+                    * item.metadata.value("normal_body_em").toDouble() / item.metadata.value("legacy_vertical_scale").toDouble();
+                CompiledContent::require(std::isfinite(width) && width > 0);
+                format.setRightMargin(width);
+            }
             heading.setBlockFormat(format);
         }
         const auto restoreTypography = item.metadata.value(QStringLiteral("responsive_typography"));
@@ -1609,7 +1616,16 @@ inline QVector<Owner> expand(QTextDocument *document, QVector<QPointer<QTextFram
                 format.setLayoutDirection(direction == Qt::LayoutDirectionAuto ? document->defaultTextOption().textDirection() : direction);
             }
             if (headingOwner) {
-                CompiledContent::require(parent == document->rootFrame());
+                if (headingStyle.value("wrappers").isObject()) {
+                    const auto styles = headingStyle.value("wrappers").toObject();
+                    const auto inner = SectionHeading::companionContainer(styles.value("inner").toObject(), sourceBlock);
+                    const auto outer = SectionHeading::companionContainer(styles.value("outer").toObject(), inner);
+                    const auto owns = [](const QTextFrame *f, const QJsonObject &source) {
+                        return f && QJsonDocument::fromJson(f->frameFormat().property(containerSourceProperty).toByteArray()).object() == source;
+                    };
+                    CompiledContent::require(owns(parent, inner) && owns(parent->parentFrame(), outer)
+                        && parent->parentFrame()->parentFrame() == document->rootFrame());
+                } else CompiledContent::require(parent == document->rootFrame());
                 format.setLayoutDirection(headingStyle.value(QStringLiteral("direction")) == QStringLiteral("rtl") ? Qt::RightToLeft : Qt::LeftToRight);
             }
             const QPointer<QTextFrame> frame(insertion.insertFrame(format));

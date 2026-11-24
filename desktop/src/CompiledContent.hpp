@@ -321,6 +321,20 @@ inline QJsonObject inlineBoxGroup(const QJsonObject &span) {
     }
     const auto group = containerObject(span.value("inline_box_group"),
         {"padding", "border", "overlays", "spans", "radius"}, {"padding", "border", "overlays", "spans"});
+    if (group.value("spans").isArray() && group.value("spans").toArray().isEmpty()) {
+        require(!wholeLink && group.value("overlays").isArray() && group.value("overlays").toArray().isEmpty()
+            && !present(group.value("radius")) && span.value("explanation").toString().isEmpty());
+        for (const auto key : {"tooltip", "inline_style", "clipped_absolute", "inline_box", "audio"})
+            require(!present(span.value(QLatin1StringView(key))));
+        const auto padding = group.value("padding").toObject();
+        containerEdges(padding);
+        for (auto it = padding.begin(); it != padding.end(); ++it) require(it.value().toObject().value("value").toDouble() == 0);
+        const QJsonObject none{{"none", QJsonObject{}}};
+        const QJsonObject top{{"solid", QJsonObject{{"width", QJsonObject{{"unit", "px"}, {"value", 1}}},
+            {"color", QJsonObject{{"current_color", QJsonObject{}}}}}}};
+        require(group.value("border").toObject() == QJsonObject{{"top", top}, {"right", none}, {"bottom", none}, {"left", none}});
+        return group;
+    }
     const bool rounded = present(group.value("radius"));
     const bool sourceBound = inlineBoxUsesBorderSource(span);
     // Help is metric-free on an ordinary actionless label too. It does not
