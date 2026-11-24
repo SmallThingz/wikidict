@@ -16,13 +16,19 @@ add_library(wikidict-product STATIC
     InlineVectorImages.hpp
     InlineAudioControls.hpp
 )
+add_library(wikidict-phonos STATIC)
+set_target_properties(wikidict-phonos PROPERTIES POSITION_INDEPENDENT_CODE ON AUTOMOC OFF AUTOUIC OFF)
+target_link_libraries(wikidict-phonos PRIVATE Qt6::Core)
+qt_add_resources(wikidict-phonos phonos_source_icons PREFIX "/phonos"
+    BASE "${CMAKE_CURRENT_SOURCE_DIR}/../../renderer/assets/phonos"
+    FILES "${CMAKE_CURRENT_SOURCE_DIR}/../../renderer/assets/phonos/volumeUp.svg")
 add_library(wikidict-gui SHARED main.cpp)
 # Qt propagates the resource initializers to each consumer of this library.
 add_library(wikidict-fonts STATIC)
 set_target_properties(wikidict-fonts PROPERTIES POSITION_INDEPENDENT_CODE ON
     CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN YES AUTOMOC OFF AUTOUIC OFF)
 target_link_libraries(wikidict-fonts PRIVATE Qt6::Core)
-target_link_libraries(wikidict-gui PRIVATE wikidict-fonts)
+target_link_libraries(wikidict-gui PRIVATE wikidict-fonts wikidict-phonos)
 set(WIKIDICT_SHARED_FONT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../renderer/fonts")
 function(wikidict_add_large_font name)
     # Embed the payload after compilation. The temporary object also needs to
@@ -102,6 +108,8 @@ install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/fonts/NotoSerifHentaigana-OFL.txt"
     "${WIKIDICT_SHARED_FONT_DIR}/NotoSansThaana-OFL.txt"
     "${WIKIDICT_SHARED_FONT_DIR}/HanaMinB-LICENSE.txt"
     DESTINATION share/licenses/wikidict)
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/../../renderer/assets/phonos/NOTICE.txt"
+    DESTINATION share/licenses/wikidict RENAME OOUI-volumeUp-NOTICE.txt)
 install(FILES "${wikidict_install_ffi}" DESTINATION lib)
 install(PROGRAMS "${wikidict_install_executable}" DESTINATION bin RENAME wikidict)
 if(NOT wikidict_install_header STREQUAL "")
@@ -170,7 +178,7 @@ if(BUILD_TESTING)
         set_property(SOURCE ../tests/MainWindowTest.cpp ../tests/MainWindowInlineActionTest.cpp APPEND PROPERTY
             COMPILE_OPTIONS "$<$<CONFIG:Release>:-O0>")
     endif()
-    target_link_libraries(dict-qt-tests PRIVATE wikidict-fonts)
+    target_link_libraries(dict-qt-tests PRIVATE wikidict-fonts wikidict-phonos)
 
     target_compile_features(dict-qt-tests PRIVATE cxx_std_20)
     target_compile_options(dict-qt-tests PRIVATE -Wall -Wextra -Wpedantic)
@@ -188,7 +196,7 @@ if(BUILD_TESTING)
     target_compile_definitions(dict-media-tests PRIVATE DICT_FAKE_VOICE_PATH="$<TARGET_FILE:dict-fake-voice>")
     target_compile_features(dict-media-tests PRIVATE cxx_std_20)
     target_include_directories(dict-media-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
-    target_link_libraries(dict-media-tests PRIVATE Qt6::Widgets Qt6::GuiPrivate Qt6::Network Qt6::Multimedia Qt6::Svg Qt6::Test)
+    target_link_libraries(dict-media-tests PRIVATE wikidict-phonos Qt6::Widgets Qt6::GuiPrivate Qt6::Network Qt6::Multimedia Qt6::Svg Qt6::Test)
     add_test(NAME native-media-ux COMMAND dict-media-tests)
     set_tests_properties(native-media-ux PROPERTIES WORKING_DIRECTORY "${CMAKE_BINARY_DIR}" ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
     add_executable(dict-library-tests ../tests/LibraryStoreTests.cpp)

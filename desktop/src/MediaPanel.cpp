@@ -19,6 +19,7 @@
 #include <QHash>
 #include <QImageReader>
 #include <QJsonArray>
+#include <QKeyEvent>
 #include <QJsonDocument>
 #include <QLabel>
 #include <QLocale>
@@ -480,8 +481,18 @@ QJsonObject audioControl(const QJsonObject &span) {
     if (!value.isObject()) throw std::runtime_error("missing audio control owner");
     const auto control = value.toObject();
     for (auto it = control.begin(); it != control.end(); ++it)
-        if (it.key() != QStringLiteral("width") && it.key() != QStringLiteral("height") && it.key() != QStringLiteral("focus"))
+        if (it.key() != QStringLiteral("width") && it.key() != QStringLiteral("height") && it.key() != QStringLiteral("focus")
+            && it.key() != QStringLiteral("presentation"))
             throw std::runtime_error("invalid audio control field");
+    const auto presentation = control.value(QStringLiteral("presentation"));
+    if (!presentation.isUndefined() && presentation != QStringLiteral("transport") && presentation != QStringLiteral("phonos_button"))
+        throw std::runtime_error("unknown audio presentation");
+    if (presentation == QStringLiteral("phonos_button")
+        && (CompiledContent::present(control.value(QStringLiteral("width")))
+            || CompiledContent::present(control.value(QStringLiteral("height")))
+            || span.value(QStringLiteral("text")).toString().isEmpty()
+            || span.value(QStringLiteral("tooltip")).toString().isEmpty()))
+        throw std::runtime_error("invalid compact audio presentation");
     for (const auto &axis : {"width", "height"}) {
         const auto dimension = control.value(QLatin1String(axis));
         if (!CompiledContent::present(dimension)) continue;
@@ -529,7 +540,7 @@ QString audioFile(const QJsonObject &span) {
             throw std::runtime_error("competing audio source owner");
     const QString file = target.mid(5);
     const auto direction = span.value(QStringLiteral("direction"));
-    if (CompiledContent::present(direction)
+    if (CompiledContent::present(direction) && direction != QStringLiteral("")
         && direction != QStringLiteral("ltr") && direction != QStringLiteral("rtl"))
         throw std::runtime_error("unresolved audio source direction");
     const QString prefix = QStringLiteral("wikidict-media-file-");
@@ -571,7 +582,6 @@ public:
         QProxyStyle::drawComplexControl(element, &ordinary, painter, widget);
         drawSourceFocus(*slider, subElementRect(SE_SliderFocusRect, slider, widget), painter, widget);
     }
-private:
     void drawSourceFocus(const QStyleOption &source, const QRect &rectangle,
                          QPainter *painter, const QWidget *widget) const {
         if (!(source.state & State_HasFocus) || policy_.value(QStringLiteral("mode")) != QStringLiteral("ua_auto")) return;
@@ -594,7 +604,71 @@ private:
         // the ordinary button/seek groove was already painted unchanged.
         QProxyStyle::drawPrimitive(PE_FrameFocusRect, &focus, painter, widget);
     }
+private:
     QJsonObject policy_;
+};
+
+// A Phonos occurrence is one inline button. Its source caption remains visible
+// while the catalogue resource handles fetching, playback and subsequent retries.
+class PhonosButton final : public QPushButton {
+public:
+    PhonosButton(const QString &caption, const QString &name, QWidget *parent)
+        : QPushButton(caption, parent), caption_(caption) {
+        if (!speaker_.isValid()) throw std::runtime_error("missing packaged Phonos source icon");
+        setFlat(true);
+        setFocusPolicy(Qt::StrongFocus);
+        setAccessibleName(name);
+        setToolTip(name);
+    }
+    QSize sizeHint() const override {
+        const auto fm = fontMetrics();
+        return QSize(em() + cssPixels(2) + fm.horizontalAdvance(caption_), qMax(cssPixels(22), fm.height()));
+    }
+protected:
+    void paintEvent(QPaintEvent *) override {
+        QPainter painter(this);
+        const bool dark = palette().color(QPalette::Window).lightness() < palette().color(QPalette::WindowText).lightness();
+        const QColor progressive = dark ? QColor("#1b223d") : QColor("#e8eeff");
+        if (property("wikidict.audio.failed").toBool()) painter.fillRect(rect(), dark ? QColor("#27292d") : QColor("#eaecf0"));
+        else if (underMouse() && isEnabled()) painter.fillRect(rect(), progressive);
+        else {
+            const qreal played = property("wikidict.audio.progress").toReal();
+            if (played > 0) painter.fillRect(QRectF(0, 0, width() * played, height()), progressive);
+        }
+        const int side = em();
+        const int baseline = (height() - fontMetrics().height()) / 2 + fontMetrics().ascent();
+        const QRect icon = style()->visualRect(layoutDirection(), rect(),
+            QRect(0, baseline - side + qRound(side * 0.1), side, side));
+        speaker_.render(&painter, QRectF(icon));
+        const auto textRect = style()->visualRect(layoutDirection(), rect(), rect().adjusted(side + cssPixels(2), 0, 0, 0));
+        style()->drawItemText(&painter, textRect, int(QStyle::visualAlignment(layoutDirection(), Qt::AlignLeading)) | Qt::AlignVCenter | Qt::TextSingleLine,
+            palette(), isEnabled(), caption_, QPalette::ButtonText);
+        if (hasFocus()) {
+            QStyleOptionFocusRect focus;
+            focus.initFrom(this);
+            focus.rect = rect();
+            if (const auto *sourceFocus = dynamic_cast<const AudioFocusStyle *>(style()))
+                sourceFocus->drawSourceFocus(focus, rect(), &painter, this);
+            else style()->drawPrimitive(QStyle::PE_FrameFocusRect, &focus, &painter, this);
+        }
+    }
+    void keyPressEvent(QKeyEvent *event) override {
+        if ((event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter)
+            && event->modifiers() == Qt::NoModifier) {
+            event->accept();
+            if (!event->isAutoRepeat()) click();
+            return;
+        }
+        QPushButton::keyPressEvent(event);
+    }
+private:
+    int em() const {
+        const auto f = font();
+        return qMax(1, f.pixelSize() > 0 ? f.pixelSize() : qRound(f.pointSizeF() * logicalDpiY() / 72));
+    }
+    int cssPixels(int value) const { return qRound(value * logicalDpiY() / 96.0); }
+    QSvgRenderer speaker_{QStringLiteral(":/phonos/volumeUp.svg")};
+    QString caption_;
 };
 
 class AudioOccurrenceView final : public QWidget {
@@ -608,24 +682,33 @@ public:
         setObjectName(QStringLiteral("readingAudioOccurrence"));
         setProperty("wikidict.audio.source", QVariant::fromValue(source));
         auto *row = new QHBoxLayout(this); row->setContentsMargins(0, 0, 0, 0);
-        button = new QPushButton(QStringLiteral("Play recording"), this);
+        if (control.value(QStringLiteral("presentation")) == QStringLiteral("phonos_button")) {
+            button = new PhonosButton(source.value(QStringLiteral("text")).toString(),
+                source.value(QStringLiteral("tooltip")).toString(), this);
+            row->addWidget(button);
+        } else {
+            button = new QPushButton(QStringLiteral("Play recording"), this);
+            button->setAccessibleName(QStringLiteral("Play recording: ") + file);
+            position = new QSlider(Qt::Horizontal, this);
+            position->setObjectName(QStringLiteral("audioOccurrencePosition"));
+            position->setAccessibleName(QStringLiteral("Recording position: ") + file);
+            position->setRange(0, 0);
+            row->addWidget(button);
+            row->addWidget(position, 1);
+        }
         button->setObjectName(QStringLiteral("audioOccurrencePlay"));
-        button->setAccessibleName(QStringLiteral("Play recording: ") + file);
-        position = new QSlider(Qt::Horizontal, this);
-        position->setObjectName(QStringLiteral("audioOccurrencePosition"));
-        position->setAccessibleName(QStringLiteral("Recording position: ") + file);
-        position->setRange(0, 0);
-        row->addWidget(button); row->addWidget(position, 1);
         if (CompiledContent::present(control.value(QStringLiteral("focus")))) {
             auto *paint = new AudioFocusStyle(control.value(QStringLiteral("focus")).toObject(), this);
-            button->setStyle(paint); position->setStyle(paint);
+            button->setStyle(paint);
+            if (position) position->setStyle(paint);
         }
         setFocusProxy(button);
         retire();
     }
     void retire() {
         card.clear(); epoch = 0; activate = {}; seek = {};
-        button->setEnabled(false); position->setEnabled(false);
+        button->setEnabled(false);
+        if (position) position->setEnabled(false);
         setProperty("wikidict.audio.bound", false);
     }
     QJsonObject source;
@@ -633,7 +716,7 @@ public:
     QPointer<MediaCard> card;
     quint64 epoch = 0;
     QPushButton *button;
-    QSlider *position;
+    QSlider *position = nullptr;
     std::function<void()> activate;
     std::function<void(int)> seek;
 };
@@ -709,10 +792,20 @@ struct MediaPanel::Impl {
             auto *view = guard.data();
             if (!audioCurrent(view)) { if (view) view->retire(); continue; }
             const auto *card = view->card.data();
+            view->button->setEnabled(card->button->isEnabled());
+            if (!view->position) {
+                view->button->setAccessibleDescription(card->button->text() + QStringLiteral(". ") + card->status->text());
+                const qreal played = playing == card && player && player->duration() > 0
+                    && player->playbackState() == QMediaPlayer::PlayingState
+                    ? qBound(0.0, qreal(player->position()) / qreal(player->duration()), 1.0) : 0;
+                view->button->setProperty("wikidict.audio.progress", played);
+                view->button->setProperty("wikidict.audio.failed", !card->inlineFailure.isEmpty());
+                view->button->update();
+                continue;
+            }
             view->button->setText(card->button->text());
             const auto label = view->source.value(QStringLiteral("text")).toString();
             view->button->setAccessibleName(card->button->text() + QStringLiteral(": ") + (label.isEmpty() ? card->file : label));
-            view->button->setEnabled(card->button->isEnabled());
             view->setToolTip(card->status->text());
             const QSignalBlocker block(view->position);
             view->position->setRange(card->position->minimum(), card->position->maximum());
@@ -725,7 +818,7 @@ struct MediaPanel::Impl {
         QObject::connect(view->button, &QPushButton::clicked, view, [view] {
             const auto activate = view->activate; if (activate) activate();
         });
-        QObject::connect(view->position, &QSlider::valueChanged, view, [view](int position) {
+        if (view->position) QObject::connect(view->position, &QSlider::valueChanged, view, [view](int position) {
             const auto seek = view->seek; if (seek) seek(position);
         });
         return view;
@@ -1367,8 +1460,8 @@ struct MediaPanel::Impl {
         card->status->setText(message + QStringLiteral(" Try again."));
         updateButton(card);
         card->setAction(QStringLiteral("Retry"));
-        syncAudioViews();
         card->inlineFailure = message;
+        syncAudioViews();
         const QPointer<MediaPanel> panel(q); const QPointer<MediaCard> current(card);
         notifyInline(card);
         if (panel && current) pumpInline();

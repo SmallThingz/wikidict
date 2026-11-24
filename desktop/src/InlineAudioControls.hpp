@@ -209,13 +209,16 @@ public:
             // focus policy. Preserve the native Play policy and native child order.
             row.widget->setFocusPolicy(proxy->focusPolicy());
             if (!same() || !row.widget || !proxy) throw DictApiError("stale audio focus policy");
-            // The source label's font is not playback-chrome typography. Keep
-            // the native widget font; the inline object still has its real host strut.
+            if (row.span.value("audio_control").toObject().value("presentation") == QStringLiteral("phonos_button")) {
+                auto labelFont = marker.format.font().resolve(document_->defaultFont());
+                labelFont.setWeight(QFont::Normal);
+                row.widget->setFont(labelFont);
+            }
             if (!row.widget->layout()) throw DictApiError("audio control has no native layout");
             row.widget->layout()->setSizeConstraint(QLayout::SetNoConstraint);
             row.widget->setMinimumSize(0, 0);
             if (!same() || !row.widget) throw DictApiError("stale audio allocation");
-            if (!SemanticHtml::present(row.span.value("direction"))) {
+            if (row.span.value("direction").toString().isEmpty()) {
                 auto direction = marker.format.layoutDirection();
                 if (direction == Qt::LayoutDirectionAuto) direction = document_->findBlock(marker.position).blockFormat().layoutDirection();
                 if (direction == Qt::LayoutDirectionAuto) direction = document_->defaultTextOption().textDirection();

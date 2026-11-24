@@ -386,6 +386,66 @@ private slots:
         playA->click(); QCOMPARE(network.urls.size(), 1);
     }
 
+    void phonosButtonPreservesCaptionActionAndIndependentDescriptionLink()
+    {
+        QFile icon(QStringLiteral(":/phonos/volumeUp.svg"));
+        QVERIFY(icon.open(QIODevice::ReadOnly));
+        QCOMPARE(QCryptographicHash::hash(icon.readAll(), QCryptographicHash::Sha256).toHex(),
+            QByteArray("66052ea76d7a8af33585fd70ac00949b9dd0a4b42f06489044a7005a99dd45f7"));
+        const QString file = QStringLiteral("LL-Q33190 (bug)-Iripseudocorus-Babbua.wav");
+        const QString title = QStringLiteral("Putar audio");
+        const QString caption = QStringLiteral("Suara");
+        const QString classes = QStringLiteral("wikidict-media wikidict-media-file-") + QString::fromLatin1(file.toUtf8().toHex());
+        QJsonObject buttonSpan{{"kind", "link"}, {"text", caption}, {"target", "File:" + file},
+            {"trail", ""}, {"direction", ""}, {"tooltip", title}, {"classes", classes},
+            {"audio_control", QJsonObject{{"presentation", "phonos_button"}}}};
+        const QJsonObject description{{"kind", "link"}, {"text", "ⓘ"}, {"target", "Berkas:" + file},
+            {"trail", ""}, {"superscript", true}};
+        auto transport = buttonSpan;
+        transport["audio_control"] = QJsonObject{};
+        const QJsonObject entry{{"title", "babua"}, {"language_code", "bug"},
+            {"media", QJsonArray{QJsonObject{{"kind", "audio"}, {"file", file}}}},
+            {"sections", QJsonArray{QJsonObject{{"blocks", QJsonArray{QJsonObject{
+                {"kind", "paragraph"}, {"spans", QJsonArray{buttonSpan, description, transport}}}}}}}}};
+        QSettings().setValue(QStringLiteral("media/allowAudio"), false);
+        Network network;
+        MediaPanel panel(nullptr, &network);
+        QWidget reading;
+        panel.setEntry(entry, QStringLiteral("id.wiktionary.org"));
+        auto *view = panel.createAudioOccurrence(buttonSpan, &reading);
+        QVERIFY(panel.bindAudioOccurrence(view, buttonSpan));
+        auto *play = view->findChild<QPushButton *>(QStringLiteral("audioOccurrencePlay"));
+        QVERIFY(play && view->focusProxy() == play && play->isFlat());
+        QCOMPARE(play->text(), caption);
+        QCOMPARE(play->toolTip(), title);
+        QVERIFY(!view->findChild<QSlider *>());
+        auto *other = panel.createAudioOccurrence(transport, &reading);
+        QVERIFY(panel.bindAudioOccurrence(other, transport));
+        QVERIFY(other->findChild<QSlider *>());
+        QVERIFY(!play->isEnabled());
+        QVERIFY(network.urls.isEmpty());
+        panel.findChild<QCheckBox *>(QStringLiteral("mediaAllowAudio"))->setChecked(true);
+        auto *ax = QAccessible::queryAccessibleInterface(play);
+        QVERIFY(ax && ax->actionInterface());
+        QCOMPARE(ax->text(QAccessible::Name), title);
+        QCOMPARE(ax->role(), QAccessible::Button);
+        network.responses.append(Response{});
+        QTest::keyClick(play, Qt::Key_Return);
+        QTRY_COMPARE(network.urls.size(), 1);
+        QTRY_VERIFY(ax->text(QAccessible::Description).contains(QStringLiteral("Retry")));
+        QCOMPARE(play->text(), caption);
+        QCOMPARE(ax->text(QAccessible::Name), title);
+        network.responses.append(Response{{}, -1, 0, true});
+        QTest::keyClick(play, Qt::Key_Space);
+        QTRY_COMPARE(network.urls.size(), 2);
+        QVERIFY(!play->isEnabled());
+        panel.setEntry({});
+        QVERIFY(!panel.audioOccurrenceCurrent(view));
+        play->click();
+        QCOMPARE(network.urls.size(), 2);
+        QVERIFY_EXCEPTION_THROWN(panel.createAudioOccurrence(description, &reading), std::runtime_error);
+    }
+
     void audioOccurrenceRejectsWrongOwnerAndMalformedPolicy()
     {
         Network network; MediaPanel panel(nullptr, &network); QWidget parent;
