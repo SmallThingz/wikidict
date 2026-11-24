@@ -589,6 +589,30 @@ inline QJsonObject blockMediaSelectedRendition(const BlockMediaInput &input, qre
     return rendition;
 }
 
+// The source member can reserve the original raster ratio before any media request.
+inline std::optional<QSizeF> sourceRasterFit(const QJsonObject &figure) {
+    const auto value = figure.value(QStringLiteral("intrinsic_size"));
+    if (value.isUndefined()) return std::nullopt;
+    require(value.isObject() && value.toObject().size() == 2 && !missing(figure));
+    const auto axes = value.toObject();
+    const auto w = FigureSizing::axis(axes.value("width_px"));
+    const auto h = FigureSizing::axis(axes.value("height_px"));
+    require(w && h && *w <= INT_MAX && *h <= INT_MAX);
+    const auto request = FigureSizing::request(figure);
+    require(request.policy == FigureSizing::Policy::RequestedFit && request.width
+        && *request.width <= *w && !request.height);
+    const auto image = figure.value("image_span").toObject().value("image").toObject();
+    const auto suffix = image.value("file").toString().section('.', -1).toLower();
+    require(image.value("file").toString().contains('.')
+        && QStringList{"jpg", "jpeg", "jpe", "png", "gif", "webp"}.contains(suffix)
+        && !SemanticHtml::present(image.value("map")) && !SemanticHtml::present(image.value("svg_language"))
+        && !SemanticHtml::present(image.value("static_poster"))
+        && !SemanticHtml::present(figure.value("block_media_layout"))
+        && !SemanticHtml::present(figure.value("table_caption_layout")));
+    const auto size = FigureSizing::resolveOriginal(request, QSizeF(*w, *h));
+    require(size && size->width() < 8388607 && size->height() < 8388607);
+    return size;
+}
 inline QJsonObject validate(const QJsonValue &value, qreal em, const QPalette &palette) {
     require(value.isObject());
     const auto object = value.toObject();
@@ -599,10 +623,11 @@ inline QJsonObject validate(const QJsonValue &value, qreal em, const QPalette &p
     else required.append({QStringLiteral("image_span"), QStringLiteral("sizing")});
     for (const auto &key : required) require(object.contains(key));
     for (auto it = object.begin(); it != object.end(); ++it)
-        require(required.contains(it.key()) || it.key() == "caption_blocks" || it.key() == "caption_text_align" || it.key() == "frame_min_width" || it.key() == "table_caption_layout" || it.key() == "block_media_layout");
+        require(required.contains(it.key()) || it.key() == "caption_blocks" || it.key() == "caption_text_align" || it.key() == "frame_min_width" || it.key() == "table_caption_layout" || it.key() == "block_media_layout" || it.key() == "intrinsic_size");
     require(QStringList{"thumbnail", "framed"}.contains(object.value("format").toString())
         && QStringList{"none", "center", "float_left", "float_right"}.contains(object.value("placement").toString())
         && QStringList{"none", "left", "right", "both"}.contains(object.value("clear").toString()));
+    sourceRasterFit(object);
     if (missing(object)) missingContent(object, em);
     else {
         const auto spanValue = object.value("image_span");
@@ -1129,7 +1154,7 @@ inline bool applyAsset(QTextImageFormat &format, const QJsonObject &figure, cons
     const bool ready = resolved && std::isfinite(resolved->width()) && resolved->width() > 0 && resolved->width() < 8388607.0
         && std::isfinite(resolved->height()) && resolved->height() >= 0 && resolved->height() < 8388607.0;
     format.setProperty(sizingReadyProperty, ready);
-    const auto size = ready ? *resolved : fallback;
+    const auto size = sourceRasterFit(figure).value_or(ready ? *resolved : fallback);
     format.setWidth(size.width()); format.setHeight(size.height());
     if (ready) {
         format.setProperty(SemanticHtml::imageOriginalSizeProperty, asset.intrinsic);
@@ -1263,6 +1288,10 @@ inline QVector<QPointer<QTextFrame>> materialize(QTextDocument *document,
                 auto format = image.charFormat().toImageFormat();
                 require(SemanticHtml::inlineImageData(QUrl(format.name())) == figure.value("image_span").toObject().value("image").toObject());
                 format.setProperty(SemanticHtml::figureImageProperty, QJsonDocument(figure).toJson(QJsonDocument::Compact));
+                if (const auto fit = sourceRasterFit(figure)) {
+                    format.setWidth(fit->width());
+                    format.setHeight(fit->height());
+                }
                 format.setProperty(placeholderSizeProperty, QSizeF(metric(format.width()), metric(format.height())));
                 require(format.width() > 0);
                 format.setProperty(sizingReadyProperty, false);
@@ -1462,7 +1491,7 @@ inline void reflow(QTextDocument *document, qreal rootViewportWidth) {
             document->markContentsDirty(frame->firstPosition(), frame->lastPosition() - frame->firstPosition() + 1);
         }
         if (missing(figure)) continue;
-        if (!tableCaption && height == 0 && imageSizingReady) {
+        if (!tableCaption && height == 0 && (imageSizingReady || sourceRasterFit(figure).has_value())) {
             auto block = document->findBlock(imagePosition); auto blockFormat = block.blockFormat();
             blockFormat.setLineHeight(0, QTextBlockFormat::FixedHeight);
             QTextCursor change(block); change.setBlockFormat(blockFormat);

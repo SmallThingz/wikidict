@@ -21602,6 +21602,41 @@ private slots:
         QCOMPARE(document.rootFrame()->childFrames().size(), 0);
     }
 
+    void sourceRasterFitKeepsOriginalRatioAcrossResourceStates() {
+        const QJsonObject image{{"file", "Latin dictionary.jpg"}, {"width_px", 250}};
+        QJsonObject figure{{"format", "thumbnail"}, {"sizing", "requested_fit"},
+            {"image_span", QJsonObject{{"image", image}}}};
+        QVERIFY(!SemanticFigure::sourceRasterFit(figure));
+        figure.insert("intrinsic_size", QJsonValue::Null);
+        QVERIFY_EXCEPTION_THROWN(SemanticFigure::sourceRasterFit(figure), std::runtime_error);
+        figure.insert("intrinsic_size", QJsonObject{{"width_px", 1408}, {"height_px", 1120}});
+        QCOMPARE(*SemanticFigure::sourceRasterFit(figure), QSizeF(250, 199));
+        QTextImageFormat format;
+        format.setProperty(SemanticHtml::figureImageProperty, QJsonDocument(figure).toJson(QJsonDocument::Compact));
+        format.setProperty(SemanticFigure::placeholderSizeProperty, QSizeF(250, 199));
+        using State = MediaPanel::InlineImageState;
+        for (const auto state : {State::Disabled, State::Loading, State::Error, State::Ready, State::Disabled}) {
+            MediaPanel::InlineImageAsset asset{};
+            asset.state = state;
+            if (state == State::Ready) asset.intrinsic = QSizeF(1408, 1120);
+            QCOMPARE(SemanticFigure::applyAsset(format, figure, asset), state == State::Ready);
+            QCOMPARE(QSizeF(format.width(), format.height()), QSizeF(250, 199));
+        }
+        auto flat = figure;
+        flat.insert("intrinsic_size", QJsonObject{{"width_px", 4000}, {"height_px", 1}});
+        QCOMPARE(*SemanticFigure::sourceRasterFit(flat), QSizeF(250, 0));
+        auto wrongKind = figure;
+        wrongKind.insert("image_span", QJsonObject{{"image", QJsonObject{{"file", "Poster.svg"}, {"width_px", 250}}}});
+        QVERIFY_EXCEPTION_THROWN(SemanticFigure::sourceRasterFit(wrongKind), std::runtime_error);
+        for (const auto key : {"width_px", "height_px"}) {
+            auto broken = figure;
+            auto axes = broken.value("intrinsic_size").toObject();
+            axes.insert(key, 0);
+            broken.insert("intrinsic_size", axes);
+            QVERIFY_EXCEPTION_THROWN(SemanticFigure::sourceRasterFit(broken), std::runtime_error);
+        }
+    }
+
     void compiledFigureSizingUsesReadyOriginalLogicalAxes() {
         using Policy = FigureSizing::Policy;
         using State = MediaPanel::InlineImageState;
