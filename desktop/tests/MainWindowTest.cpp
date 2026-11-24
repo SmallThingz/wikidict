@@ -818,6 +818,99 @@ private:
     }
 
 private slots:
+    // A single live reader consumes ordinary CLI Reader exports from the audit driver.
+    // Qt Test routes its own messages separately from the per-record response descriptor.
+    void auditExportedEntryLayouts() {
+        if (qEnvironmentVariableIsEmpty("WIKIDICT_LAYOUT_AUDIT_FD")) QSKIP("No native layout audit stream");
+        bool validFd = false;
+        const int fd = qEnvironmentVariableIntValue("WIKIDICT_LAYOUT_AUDIT_FD", &validFd);
+        QFile input, output;
+        QVERIFY(validFd && fd >= 3 && input.open(stdin, QIODevice::ReadOnly) && output.open(fd, QIODevice::WriteOnly));
+        QSettings().setValue("media/allowImages", false);
+        QSettings().setValue("media/allowAudio", false);
+        MainWindow window{QString()};
+        window.resize(640, 650);
+        window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 30000);
+        window.readingPaneAction_->trigger();
+        QTRY_VERIFY(window.reading_->isVisible());
+        auto *reader = window.reading_;
+        auto writeResponse = [&](const QJsonObject &result) {
+            const auto bytes = QJsonDocument(result).toJson(QJsonDocument::Compact) + '\n';
+            return output.write(bytes) == bytes.size() && output.flush();
+        };
+        QVERIFY(writeResponse(QJsonObject{{"ready", true}, {"viewport", reader->viewport()->width()}}));
+        qint64 ordinal = 0;
+        for (;;) {
+            const QByteArray bytes = input.readLine();
+            if (bytes.isEmpty()) break;
+            QJsonParseError parseError;
+            const auto parsed = QJsonDocument::fromJson(bytes, &parseError);
+            QVERIFY2(parseError.error == QJsonParseError::NoError && parsed.isObject(), qPrintable(parseError.errorString()));
+            const auto entry = parsed.object();
+            const auto sourceTitle = entry.value("title").toString();
+            QVERIFY(!sourceTitle.isEmpty());
+            QString failure;
+            int linkCount = 0;
+            int tableCount = 0, tallestTable = 0;
+            QSizeF size;
+            try {
+                if (!composeReadingEntry(window, entry)) failure = QStringLiteral("composition refused");
+                if (failure.isEmpty()) {
+                    QTRY_VERIFY_WITH_TIMEOUT(!window.readingFloatLayoutScheduled_, 30000);
+                    const auto *document = reader->document();
+                    const auto *layout = document->documentLayout();
+                    size = layout->documentSize();
+                    if (!document->isLayoutEnabled() || !qIsFinite(size.width()) || !qIsFinite(size.height()) ||
+                        size.width() <= 0 || size.height() <= 0 ||
+                        layout->property("_wikidictParagraphBoxLayoutError").toInt() != 0)
+                        failure = QStringLiteral("invalid native layout");
+                    QList<QTextFrame *> frames{document->rootFrame()};
+                    while (failure.isEmpty() && !frames.isEmpty()) {
+                        auto *frame = frames.takeLast();
+                        frames.append(frame->childFrames());
+                        auto *table = qobject_cast<QTextTable *>(frame);
+                        if (!table) continue;
+                        ++tableCount;
+                        tallestTable = qMax(tallestTable, table->rows());
+                        const auto bounds = layout->frameBoundingRect(table);
+                        if (!qIsFinite(bounds.x()) || !qIsFinite(bounds.y()) || !qIsFinite(bounds.width()) ||
+                            !qIsFinite(bounds.height()) || bounds.width() < 0 || bounds.height() < 0)
+                            failure = QStringLiteral("invalid native table geometry");
+                    }
+                }
+                if (failure.isEmpty()) {
+                    auto *access = QAccessible::queryAccessibleInterface(reader);
+                    auto *text = access ? access->textInterface() : nullptr;
+                    if (!text) failure = QStringLiteral("missing native reader text interface");
+                    const int characters = text ? text->characterCount() : 0;
+                    const int children = access ? access->childCount() : 0;
+                    for (int i = 0; i < children && failure.isEmpty(); ++i) {
+                        auto *child = access->child(i);
+                        if (!child || !child->isValid()) {
+                            failure = QStringLiteral("invalid accessible child %1").arg(i);
+                            break;
+                        }
+                        if (child->role() != QAccessible::Link) continue;
+                        auto *link = child->hyperlinkInterface();
+                        auto *action = child->actionInterface();
+                        if (!link || !action || link->anchorTarget().isEmpty() ||
+                            link->startIndex() < 0 || link->endIndex() < link->startIndex() ||
+                            link->endIndex() > characters || !action->actionNames().contains(QAccessibleActionInterface::pressAction()))
+                            failure = QStringLiteral("invalid exposed link %1").arg(i);
+                        ++linkCount;
+                    }
+                }
+            } catch (const std::exception &error) {
+                failure = QString::fromUtf8(error.what());
+            }
+            QVERIFY(writeResponse(QJsonObject{{"ordinal", ordinal++}, {"title", sourceTitle},
+                {"viewport", reader->viewport()->width()}, {"width", size.width()}, {"height", size.height()},
+                {"links", linkCount}, {"tables", tableCount}, {"tallest_table_rows", tallestTable}, {"error", failure}}));
+        }
+        QVERIFY(writeResponse(QJsonObject{{"finished", ordinal}}));
+    }
+
     void retainedEnglishLastNavigationAndProseObservation() {
         QSettings().setValue("media/allowImages", false);
         QSettings().setValue("media/allowAudio", false);
