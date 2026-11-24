@@ -3422,6 +3422,77 @@ class IndependentExecutionRootTests(unittest.TestCase):
             changed = copy.deepcopy(cfg); changed.pop('execution_root')
             self.assertNotEqual(controller.production_context(cfg), controller.production_context(changed))
 
+    def stored_snapshot_inputs(self, root):
+        selection = root / 'stored-snapshots.json'
+        journal = root / 'stored-snapshots.jsonl'
+        write_json(selection, {'enwiktionary': {'snapshots': {}}})
+        journal.write_text('')
+        for path in (selection, journal):
+            path.chmod(0o400)
+        return {'snapshot_selection': controller.descriptor(selection),
+                'snapshot_storage_journal': controller.descriptor(journal),
+                'exact_snapshot_selection': True}
+
+    def test_existing_command_forwards_owned_stored_snapshot_inputs(self):
+        with self.fixture() as (cfg, source, workspace, root):
+            original = controller.command(cfg, 'enwiktionary', 1)
+            self.assertNotIn('--snapshot-selection', original)
+            self.assertNotIn('--snapshot-storage-journal', original)
+            self.assertNotIn('--exact-snapshot-selection', original)
+            before = controller.production_context(cfg)
+            options = self.stored_snapshot_inputs(root)
+            cfg['edition_options']['enwiktionary'].update(options)
+            argv = controller.command(cfg, 'enwiktionary', 1)
+            self.assertNotEqual(controller.production_context(cfg), before)
+            for flag, path in (('--snapshot-selection', options['snapshot_selection']['path']),
+                               ('--snapshot-storage-journal', options['snapshot_storage_journal']['path'])):
+                self.assertEqual(argv[argv.index(flag) + 1], path)
+            self.assertEqual(argv.count('--exact-snapshot-selection'), 1)
+            self.assertEqual(argv[argv.index('--expansion-workers') + 1], '1')
+            self.assertEqual(argv[argv.index('--watchdog-memory-limit-mib') + 1], '8192')
+
+    def test_stored_snapshot_inputs_reject_conflicting_plain_options(self):
+        with self.fixture() as (cfg, source, workspace, root):
+            inputs = self.stored_snapshot_inputs(root)
+            file = inputs['snapshot_selection']
+            for options, expected in (
+                ({'snapshot_storage_journal': inputs['snapshot_storage_journal']}, 'requires a stored'),
+                ({**inputs, 'auxiliary_snapshots': {'file-metadata': file}}, 'conflicts with explicit'),
+                ({**inputs, 'interwiki_snapshot': file}, 'conflicts with explicit'),
+                ({**inputs, 'exact_snapshot_selection': 'true'}, 'must be a boolean'),
+            ):
+                with self.subTest(options=options), self.assertRaisesRegex(ValueError, expected):
+                    cfg['edition_options']['enwiktionary'] = options
+                    controller.edition_cli_options(cfg, 'enwiktionary')
+
+    def test_stored_snapshot_inputs_bind_each_owned_file_and_reject_path_aliases(self):
+        with self.fixture() as (cfg, source, workspace, root):
+            inputs = self.stored_snapshot_inputs(root)
+            original = Path(inputs['snapshot_selection']['path'])
+            outside = workspace.parent / 'other-selection.json'
+            outside.write_bytes(original.read_bytes())
+            outside.chmod(0o400)
+            alias = root / 'alias.json'
+            alias.symlink_to(original)
+            alias_ref = dict(inputs['snapshot_selection'], path=str(alias))
+            for role in ('snapshot_selection', 'snapshot_storage_journal'):
+                for reference, expected in (
+                    (controller.descriptor(outside), 'canonical checkout path'),
+                    (alias_ref, 'canonical checkout path'),
+                    (dict(inputs[role], sha256='0' * 64), 'identity differs'),
+                ):
+                    with self.subTest(role=role, reference=reference), self.assertRaisesRegex(ValueError, expected):
+                        cfg['edition_options']['enwiktionary'] = dict(inputs, **{role: reference})
+                        controller.edition_cli_options(cfg, 'enwiktionary')
+            cfg['edition_options']['enwiktionary'] = inputs
+            original.chmod(0o600)
+            with self.assertRaisesRegex(ValueError, 'owned read-only'):
+                controller.edition_cli_options(cfg, 'enwiktionary')
+            original.chmod(0o400)
+            os.link(original, root / 'extra-name.json')
+            with self.assertRaisesRegex(ValueError, 'owned read-only'):
+                controller.edition_cli_options(cfg, 'enwiktionary')
+
     def test_real_scope_locks_conflict_for_same_owner_and_coexist_with_global_and_disjoint_scope(self):
         with self.fixture() as (cfg, source, workspace, root):
             own, build = controller.resource_lock_paths(cfg)

@@ -1999,6 +1999,24 @@ def _original_archive_protected_paths(cfg):
     return list(dict.fromkeys(paths))
 
 
+def _snapshot_storage_path(reference, workspace):
+    """Bind stored snapshot inputs before passing them to the normal builder."""
+    require(isinstance(reference, dict) and set(reference) == {'path', 'bytes', 'sha256'}
+            and isinstance(reference['path'], str)
+            and type(reference['bytes']) is int and reference['bytes'] >= 0,
+            'Invalid stored snapshot input reference')
+    path = Path(reference['path'])
+    require(path.is_absolute() and str(path) == reference['path']
+            and path.is_relative_to(workspace) and path.resolve() == path
+            and not any(node.is_symlink() for node in (path, *path.parents)),
+            'Stored snapshot input must be a canonical checkout path')
+    info = _receipt_stat(path)
+    require(info.st_uid == os.geteuid() and info.st_nlink == 1 and not info.st_mode & 0o222,
+            'Stored snapshot input must be an owned read-only file')
+    require(_checked_descriptor(path, info, digest(path)) == reference, 'Stored snapshot input identity differs')
+    return str(path)
+
+
 def edition_cli_options(cfg, edition):
     """Forward existing canonical options, authenticating each selected input."""
     from build_wiktionaries import AUXILIARY_SNAPSHOT_NAMES
@@ -2010,8 +2028,11 @@ def edition_cli_options(cfg, edition):
                             or (root/(cfg['date']+'.shards')/name).is_symlink() for name in RETIRED_PROVIDER_MARKERS),
                     'Retired provider-copy workspace requires a fresh whole-attempt output; retained captures unchanged')
     options = cfg.get('edition_options', {}).get(edition, {})
-    require(isinstance(options, dict) and set(options) <= {'extraction_cache_root', 'staged_input_root', 'auxiliary_snapshots', 'interwiki_snapshot', 'presentation_audit_pages', 'continue_failed_shards', 'shard_pages', 'original_archives'},
-            'Unknown edition option')
+    require(isinstance(options, dict) and set(options) <= {
+        'extraction_cache_root', 'staged_input_root', 'auxiliary_snapshots', 'interwiki_snapshot',
+        'presentation_audit_pages', 'continue_failed_shards', 'shard_pages', 'original_archives',
+        'snapshot_selection', 'snapshot_storage_journal', 'exact_snapshot_selection',
+    }, 'Unknown edition option')
     enabled=_original_archive_option(options, builder)
     default=getattr(builder,'ORIGINAL_ARCHIVES_CLI_DEFAULT',False)
     require(type(default) is bool, 'Selected producer original archive default must be a boolean')
@@ -2041,6 +2062,20 @@ def edition_cli_options(cfg, edition):
         argv += ['--llvm-workers', str(value)]
     snapshots = options.get('auxiliary_snapshots', {})
     require(isinstance(snapshots, dict) and set(snapshots) <= set(AUXILIARY_SNAPSHOT_NAMES), 'Unknown auxiliary snapshot')
+    stored = 'snapshot_selection' in options
+    journal = 'snapshot_storage_journal' in options
+    require(not journal or stored, 'Snapshot storage journal requires a stored snapshot selection')
+    if stored:
+        require(not snapshots and 'interwiki_snapshot' not in options,
+                'Stored snapshot selection conflicts with explicit snapshots')
+        _, workspace = source_roots(cfg)
+        argv += ['--snapshot-selection', _snapshot_storage_path(options['snapshot_selection'], workspace)]
+        if journal:
+            argv += ['--snapshot-storage-journal', _snapshot_storage_path(options['snapshot_storage_journal'], workspace)]
+    exact = options.get('exact_snapshot_selection', False)
+    require(type(exact) is bool, 'Exact snapshot selection must be a boolean')
+    if exact:
+        argv += ['--exact-snapshot-selection']
     for name, reference in sorted(snapshots.items()):
         require(descriptor(reference['path']) == reference and not any(p.is_symlink() for p in Path(reference['path']).parents),
                 'Edition snapshot identity differs')
@@ -2134,9 +2169,10 @@ def command(cfg, edition, workers, memory_limit_bytes=MEMORY, *, prepared_byteco
         require(edition == execution['edition'], 'Command edition differs from execution manifest')
         argv += ['--execution-root-spec', json.dumps(cfg['execution_root'], sort_keys=True, separators=(',', ':')),
                  '--input-manifest', cfg['manifest']['path'], '--input-manifest-sha256', cfg['manifest']['sha256']]
-    if selected is not None and execution is not None:
+    edition_args = edition_cli_options(cfg, edition)
+    if selected is not None and execution is not None and '--exact-snapshot-selection' not in edition_args:
         argv += ['--exact-snapshot-selection']
-    argv += edition_cli_options(cfg, edition)
+    argv += edition_args
     return argv
 
 
