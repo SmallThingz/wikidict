@@ -1330,6 +1330,15 @@ test "page worker override accepts bounded positive integers only" {
 pub fn main(init: std.process.Init) !void {
     const a = init.arena.allocator();
     const argv = try init.minimal.args.toSlice(a);
+    if (argv.len == 2 and std.mem.eql(u8, argv[1], "--prepared-build-inputs")) {
+        const record = try std.json.Stringify.valueAlloc(a, .{
+            .project_root = paths.project_root, .extractor = paths.modules, .llvm = paths.llvm,
+            .runtime = paths.worker_object, .leaf = paths.value_leaf_bc, .main_c = paths.worker_main_c,
+            .zig = paths.zig, .clang = paths.clang, .writer = paths.blobs,
+        }, .{});
+        try std.Io.File.stdout().writeStreamingAll(init.io, record);
+        return;
+    }
     const options = parseOptions(argv[1..]) catch {
         std.debug.print("usage: dict-bundle-build DUMP NEW_OUTPUT_DIRECTORY --namespace-registry-snapshot FILE [--site-info-snapshot FILE] [--page-language-snapshot FILE] [--site-statistics-format-snapshot FILE] [--commons-data-snapshot FILE] [--category-stats-snapshot FILE] [--category-statistics-format-snapshot FILE] [--interface-messages-snapshot FILE] [--category-tree-snapshot FILE] [--interwiki-map-snapshot FILE] [--wikibase-sitelinks-snapshot FILE] [--wikibase-entity-text-snapshot FILE] [--wikibase-entities-snapshot FILE] [--wikibase-entity-terms-snapshot FILE] [--wikibase-page-links-snapshot FILE] [--page-redirects-snapshot FILE] [--language-registry-snapshot FILE] [--language-fallbacks-snapshot FILE] [--language-names-snapshot FILE] [--date-numbering-snapshot FILE] [--magic-words-snapshot FILE] [--behavior-switches-snapshot FILE] [--image-options-snapshot FILE] [--file-metadata-snapshot FILE] [--transclusion-redirects-snapshot FILE] [--llvm-workers N] [--parse-workers N] [--page-workers N] [--expansion-timeout-ms N] [--expander-only] [--extraction-cache-root DIR --verified-dump-sha256 HEX --verified-index-sha256 HEX]\n", .{});
         std.debug.print("optional final blob stage input: --reviewed-nonlexical PATH (incompatible with --expander-only)\n", .{});
