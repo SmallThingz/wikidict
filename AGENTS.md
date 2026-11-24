@@ -2,6 +2,7 @@
 
 ## Repository rules
 
+- The active completion goal is all original 198 editions compiled and verified for faithful content and working rendering across the supported clients. Do not stop at environment setup, partial generations or scoped tests. Use RD/DC's `review-council` skill and keep working until the user pauses/stops the task or the complete evidence earns unanimous whole-task STOP votes. Use GPT-6.2 Astra/Sol only, with Daybreak off; current council seats and evidence are in `.tmp/completion-council/`.
 - Prefer the current connected Cloud environment for compilation, translation and qualification. Use RD/DC for editions whose measured peak disk or memory needs exceed that environment; reconcile and adopt existing RD jobs before starting replacements. This supersedes the machine-only restriction in the 2026-11-24 handoff.
 - Prioritize end-to-end speed over minimum disk usage while keeping the working set within capacity. Stage selected compressed inputs one edition at a time, reuse compatible caches, and preserve original sources and unique failure evidence on RD. See `compiler/docs/local-build-capacity.md` for capacity checks and existing pipeline commands.
 - `main` is the only local branch. Work directly on it; do not create branches/worktrees unless the user explicitly asks.

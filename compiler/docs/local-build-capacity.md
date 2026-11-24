@@ -123,6 +123,15 @@ environment. It also sets `C_INCLUDE_PATH` for the user-installed XZ headers;
 `--search-prefix` alone does not reach the existing translate-C step. No
 producer source change was needed for that header lookup.
 
+The compiler's title mapper also loads `libunistring.so.5` and
+`libutf8proc.so.3` at runtime. The Cloud base image lacked the latter. The
+matching dc-box libraries (libunistring 1.4.2 and libutf8proc 2.12.0) were
+copied into the same dependency prefix, verified by byte count and SHA-256,
+and loaded successfully on the local glibc. Their origins, hashes and local
+paths are recorded in `.tmp/toolchain-packages/rd-unicode.json`. Keep these
+runtime identities with Writer and namespace qualification receipts. A
+successful native compilation alone does not exercise this dynamic load.
+
 Local setup validation passed all six CLI build steps, all 20 compiler-tool
 build steps, and 104 disk/memory-control tests. The CLI searched and exported
 all three records of the retained Abkhaz output. The cold Writer compilation
