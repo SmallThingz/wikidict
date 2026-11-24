@@ -309,3 +309,27 @@ flow transition, base flex row and 12×12 icon. Its DPRa bits are `0x01002120`;
 the retained R17 member uses legacy DPRZ `0x2120` without the new capability.
 Actual client rendering remains separately gated. Receipts are under
 `.tmp/completion-council/s5-packed/babua-r19-ordinary-02/`.
+
+R22 compiled the two original Malagasy and Thai Writer checks in Cloud in
+362.910 seconds at 4,192,188,416 bytes peak PSS. Both methods subsequently
+exited with errors and clean closure; neither is an overall pass. Source,
+runtime inputs, executable and method configurations remained unchanged.
+
+The authentic Malagasy arm completed its ordinary Writer, four language
+records, four Stored decodes and exact re-encodes, including its captured
+styled table. The following arm deliberately withdrew the table capability
+and failed with `UncompiledPresentation` in a 265-byte cell. The cross-arm
+complete-body comparison and independent table-overlay oracle were not
+reached. Review of the negative control must preserve those independent
+positive requirements; a successful authentic arm does not make the combined
+test pass.
+
+The Thai full-page Writer still refuses the original 115-byte nowrap wrapper
+at source offset 5450. Instrumentation identifies an uncertain `position:
+absolute !important` declaration from
+`.cdx-button.cdx-button--icon-only span + span`. The declaration is joined to
+the retained stylesheet and exact original occurrence. This narrows the
+selector-custody repair; it does not establish a compiled record. Both logs,
+guards and source manifests remain under `.tmp/r22-mg-th/`, with the joined
+source and runtime account in
+`.tmp/completion-council/MG-TH/r19-followup/r22-runtime-evidence.json`.
