@@ -1975,7 +1975,50 @@ pub const PageStaticMotionProof = struct {
     root: *const TextElement,
 };
 
+pub const HelpCirclePhysicalBox = struct {
+    parent: *const Profile,
+    box: InlineBoxResolution,
+    // A source table chain must have a counterpart in each independent capture.
+    table_chains: [2][]const [32]u8,
+};
+
+pub fn helpCircleChainDigest(tags: []const []const u8, chain: []const []const u8) ?[32]u8 {
+    if (chain.len < 4 or chain.len > 65 or tags.len != chain.len) return null;
+    const cell = tags[tags.len - 3];
+    if (!std.ascii.eqlIgnoreCase(tags[0], "span") or
+        !(std.ascii.eqlIgnoreCase(cell, "td") or std.ascii.eqlIgnoreCase(cell, "th")) or
+        !std.ascii.eqlIgnoreCase(tags[tags.len - 2], "tr") or
+        !std.ascii.eqlIgnoreCase(tags[tags.len - 1], "table")) return null;
+    var hash = std.crypto.hash.sha2.Sha256.init(.{});
+    for (tags, chain) |tag, css| {
+        var encoded_len: [8]u8 = undefined;
+        std.mem.writeInt(u64, &encoded_len, @intCast(tag.len), .little);
+        hash.update(&encoded_len);
+        for (tag) |byte| hash.update(&.{std.ascii.toLower(byte)});
+        std.mem.writeInt(u64, &encoded_len, @intCast(css.len), .little);
+        hash.update(&encoded_len);
+        hash.update(css);
+    }
+    return hash.finalResult();
+}
+
+pub fn helpCircleProfileBound(styles: *const Profile) bool {
+    // joinPageSourcesAlloc reparses the parent's retained inputs into this
+    // complete ordered profile. Bound each inventory actually examined.
+    return styles.reading_target == .screen and !styles.globally_unresolved and
+        styles.container_rules.len + styles.figure_rules.len + styles.observed_figure_rules.len <= max_rules * 3;
+}
+
+pub const SourceHelpCirclePaint = struct {
+    source: []const u8,
+    styles: *const Profile,
+    opening: []const u8,
+    owner_snapshot: []const u8,
+    physical: HelpCirclePhysicalBox,
+};
+
 pub const BoundedTextClassScope = struct {
+    help_circle_paints: []const SourceHelpCirclePaint = &.{},
     page_source_image: ?*const PageSourceImage = null,
     page_source_focus: ?*const PageSourceFocusProof = null,
     page_source_inline_owner: ?*const PageSourceInlineOwnerProof = null,
@@ -3499,6 +3542,8 @@ fn observedFigureOtherPseudoEffectsWithWitness(context: FigureObservedContext, o
 }
 const ObservedFigureEvaluation = struct {
     selected_heading_language: bool = false,
+    // The paired advisory circle query sets this only for the OS-theme arms.
+    prefers_dark: ?bool = null,
     viewport_width: ?f64 = null,
     reduced_motion: ?bool = null,
     // Only the normal source-qualified mediawiki.page.media operation may set
@@ -3515,6 +3560,8 @@ const ObservedFigureEvaluation = struct {
     focus_visible_supported: bool = false,
     // Issued only for a validated empty HR with complete nonediting ancestry.
     authored_rule_focus_absent: ?struct { nodes: []const ObservedStyleNode, subject: u32 } = null,
+    // Nonfocusable physical SPAN leaf with complete nonediting ancestry.
+    source_leaf_focus_absent: ?struct { nodes: []const ObservedStyleNode, subject: u32 } = null,
     // Query-local closed rich-child census; never a page or ancestor grant.
     rich_inline_focus_absent: ?*const ObservedRichInlineFocusAbsent = null,
     // Operation-local source proof; only exact generated SECTION ancestors.
@@ -3660,6 +3707,11 @@ fn observedFigureCondition(prelude: []const u8, evaluation: ObservedFigureEvalua
     if (std.ascii.eqlIgnoreCase(text, "print")) return .no;
     const atom = observedFigureMediaAtom(prelude) orelse return .unknown;
     const name = atom.name; const value = atom.value;
+    if (std.ascii.eqlIgnoreCase(name, "prefers-color-scheme")) {
+        const dark = evaluation.prefers_dark orelse return .unknown;
+        if (!std.ascii.eqlIgnoreCase(value, "dark") and !std.ascii.eqlIgnoreCase(value, "light")) return .unknown;
+        return if (dark == std.ascii.eqlIgnoreCase(value, "dark")) .known else .no;
+    }
     if (std.ascii.eqlIgnoreCase(name, "prefers-reduced-motion")) {
         const reduce = evaluation.reduced_motion orelse return .unknown;
         if (!std.ascii.eqlIgnoreCase(value, "reduce") and !std.ascii.eqlIgnoreCase(value, "no-preference")) return .unknown;
@@ -10988,6 +11040,31 @@ pub const Profile = struct {
         return self.resolveStaticInlineDecorationModeIn(a, element, css, environment, rtl, source_declarations, true, null, null);
     }
 
+    pub fn resolveSourceHelpCircleIn(self: *const Profile, a: std.mem.Allocator, element: *const TextElement,
+        css: []const u8, rtl: bool, chain: []const []const u8, tags: []const []const u8, paint: SourceHelpCirclePaint,
+        diagnostic: ?*InlineBoxSourceDiagnostic, direction_detail: ?*StaticInlineDirectionDiagnostic) !InlineBoxResolution
+    {
+        if (self != paint.styles or rtl or !std.ascii.eqlIgnoreCase(element.tag, "span") or
+            !rubySourceDeclarationChainValid(element, css, chain)) return .{ .unresolved = true };
+        const physical = paint.physical;
+        if (self.page_style_parent != physical.parent or physical.parent.page_style_parent != null or
+            !helpCircleProfileBound(self) or !helpCircleProfileBound(physical.parent)) return .{ .unresolved = true };
+        const digest = helpCircleChainDigest(tags, chain) orelse return .{ .unresolved = true };
+        for (physical.table_chains) |arm| {
+            for (arm) |observed| {
+                if (std.mem.eql(u8, &observed, &digest)) break;
+            } else {
+                if (@import("builtin").is_test) std.debug.print("HELP_CIRCLE missing observed table chain entries={d}\n", .{chain.len});
+                return .{ .unresolved = true };
+            }
+        }
+        if (!try staticInlineDirectionDefaultsDiagnosedAlloc(a, null, chain, null, direction_detail)) {
+            inlineBoxSourceRejected(diagnostic, .static_direction_defaults_rejected);
+            return .{ .unresolved = true };
+        }
+        return physical.box;
+    }
+
     pub fn resolveStaticInlineDecorationWithDirectionDiagnosticIn(self: *const Profile, a: std.mem.Allocator,
         element: *const TextElement, css: []const u8, environment: CustomEnvironment, rtl: bool,
         source_declarations: ?[]const []const u8, diagnostic: ?*InlineBoxSourceDiagnostic,
@@ -11062,7 +11139,7 @@ pub const Profile = struct {
         if (image_relative and !try observedInlineBoxPropertiesComplete(a, declarations.items, environment)) {
             inlineBoxSourceRejected(diagnostic, .own_geometry_unresolved); return .{ .unresolved = true };
         }
-        const result = try inlineBoxDeclarationsIn(a, declarations.items, environment, rtl, within_box, image_relative, static_decoration, rounded_decoration);
+        const result = try inlineBoxDeclarationsIn(a, declarations.items, environment, rtl, within_box, image_relative, static_decoration, rounded_decoration, false);
         if (result.unresolved) {
             inlineBoxSourceRejected(diagnostic, .own_geometry_unresolved); return result;
         }
@@ -11634,6 +11711,10 @@ fn observedFigureStateAt(nodes: []const ObservedStyleNode, index: u32,
         }
     }
     if (evaluation.authored_rule_focus_absent) |rule| {
+        if (rule.nodes.ptr == nodes.ptr and rule.nodes.len == nodes.len and rule.subject == index)
+            return .{ .focus = false, .focus_visible = false, .focus_within = false };
+    }
+    if (evaluation.source_leaf_focus_absent) |rule| {
         if (rule.nodes.ptr == nodes.ptr and rule.nodes.len == nodes.len and rule.subject == index)
             return .{ .focus = false, .focus_visible = false, .focus_within = false };
     }
@@ -13569,10 +13650,22 @@ const Builder = struct {
         if (result.uncertain) result.specificity = std.math.maxInt(u32);
         result.classes = try classes.toOwnedSlice(self.a);
         if (start != 0) {
-            // Reuse the refusal-only parser shared by text paint. It refuses
-            // sibling, escaped, negated and alternative-class assumptions.
             if (try self.uncertainPaintSelector(text)) |necessary|
                 result.necessary_ancestor_classes = necessary.necessary_classes;
+            // For A B + C or A B ~ C, A is necessary on the common ancestor
+            // path. B itself remains a sibling and lends no ancestor classes.
+            if (result.necessary_ancestor_classes.len == 0 and
+                std.mem.indexOfAny(u8, text, "+~") != null and
+                std.mem.indexOfAny(u8, text, "\\/[:()|&\x00") == null)
+            {
+                if (try self.observedSiblingSubjectSelector(text)) |sibling| {
+                    var common_classes: std.ArrayList([]const u8) = .empty;
+                    defer common_classes.deinit(self.a);
+                    for (sibling.necessary_sibling_ancestors) |ancestor|
+                        try common_classes.appendSlice(self.a, ancestor.positive.classes);
+                    result.necessary_ancestor_classes = try common_classes.toOwnedSlice(self.a);
+                }
+            }
         }
         return result;
     }
@@ -13745,13 +13838,25 @@ const Builder = struct {
                 if (pos > start) if (try self.paintCompound(trim(text[start..pos]), false)) |prefix| {
                     try ancestors.appendSlice(self.a, prefix.classes);
                 };
-                // A class on a sibling is not necessarily on this element or
-                // its ancestors. Retain the old uncertainty for that whole chain.
+                // A sibling class is not an ancestor fact. Only a separately
+                // parsed common ancestor may survive this combinator.
                 if (byte == '+' or byte == '~') safe_ancestors = false;
                 start = pos + 1;
             } else if (depth == 0 and (byte == '|' or byte == '&')) safe_ancestors = false;
         }
-        const necessary: []const []const u8 = if (safe_ancestors and depth == 0 and quote == 0) try ancestors.toOwnedSlice(self.a) else &.{};
+        var necessary: []const []const u8 = &.{};
+        if (safe_ancestors and depth == 0 and quote == 0) {
+            necessary = try ancestors.toOwnedSlice(self.a);
+        } else if (std.mem.indexOfAny(u8, text, "+~") != null and std.mem.indexOfAny(u8, text, "\\/[:()|&\x00") == null) {
+            // For A B + C (or A B ~ C), A is an ancestor of both siblings.
+            // Discard B and any other candidates from the provisional scan.
+            if (try self.observedSiblingSubjectSelector(text)) |sibling| {
+                ancestors.clearRetainingCapacity();
+                for (sibling.necessary_sibling_ancestors) |ancestor|
+                    try ancestors.appendSlice(self.a, ancestor.positive.classes);
+                necessary = try ancestors.toOwnedSlice(self.a);
+            }
+        }
         if (try self.paintCompound(trim(text[start..]), false)) |last| {
             return .{ .target = paintTarget(last.tag), .mask = 0, .own_classes = last.classes, .own_ids = last.ids, .own_tag = last.tag, .necessary_classes = necessary, .specificity = std.math.maxInt(u64), .unsupported = true };
         }
@@ -19007,6 +19112,74 @@ test "display ancestor absence never borrows sibling negated escaped or alternat
     try std.testing.expect(display.next() == null);
     var possible = boundary.displayRules("span", "biota", ""); possible.complete_ancestor_classes = "absent";
     try std.testing.expect((possible.next() orelse return error.TestUnexpectedResult).uncertain);
+}
+
+test "original English interproject display uses only proved common sibling ancestry" {
+    const a = std.testing.allocator;
+    // Authenticated ordered GET CSS from English p10500003/r87816728.
+    const css = ".cdx-button.cdx-button--icon-only span + span{display:block;position:absolute !important;clip:rect(1px,1px,1px,1px);width:1px;height:1px;margin:-1px;border:0;padding:0;overflow:hidden;-webkit-user-select:none;-moz-user-select:none;user-select:none}" ++
+        ".interProject{display:none;clear:both;border-top:2px dotted var(--border-color-base,#AAAAAA);margin-top:2em}";
+    var profile = try parseForTargetAlloc(a, css, .screen);
+    defer profile.deinit();
+
+    for ([_][]const u8{
+        "mw-parser-output interproject-box sister-wikipedia sister-project noprint floatright",
+        "interproject-box cdx-button",
+        "interproject-box cdx-button--icon-only",
+    }) |complete| {
+        var rules = profile.displayRules("span", "interProject", "");
+        rules.complete_ancestor_classes = complete;
+        const exact = rules.next() orelse return error.TestUnexpectedResult;
+        try std.testing.expect(!exact.uncertain and std.mem.startsWith(u8, exact.css, "display:none"));
+        try std.testing.expect(rules.next() == null);
+    }
+
+    for ([_]?[]const u8{ null, "interproject-box cdx-button cdx-button--icon-only" }) |classes| {
+        var rules = profile.displayRules("span", "interProject", "");
+        rules.complete_ancestor_classes = classes;
+        const possible = rules.next() orelse return error.TestUnexpectedResult;
+        try std.testing.expect(possible.uncertain and std.mem.startsWith(u8, possible.css, "display:block"));
+        const exact = rules.next() orelse return error.TestUnexpectedResult;
+        try std.testing.expect(!exact.uncertain and std.mem.startsWith(u8, exact.css, "display:none"));
+        try std.testing.expect(rules.next() == null);
+    }
+
+    var sibling_only = try parseForTargetAlloc(a, ".cdx-button.cdx-button--icon-only + span{display:block}", .screen);
+    defer sibling_only.deinit();
+    var incomplete = sibling_only.displayRules("span", "interProject", "");
+    incomplete.complete_ancestor_classes = "interproject-box";
+    try std.testing.expect((incomplete.next() orelse return error.TestUnexpectedResult).uncertain);
+}
+
+test "ordinary geometry and text keep only common ancestor classes across adjacent spans" {
+    const F = struct {
+        fn check(css: []const u8, ancestry: ?[]const u8, expected: ContainerSelectorMatch) !void {
+            var sheet = try parseForTargetAlloc(std.testing.allocator, css, .screen); defer sheet.deinit();
+            const subject: TextElement = .{ .tag = "span", .classes = "headword-line", .complete_ancestor_classes = ancestry };
+            try std.testing.expectEqual(@as(usize, 1), sheet.container_rules.len);
+            try std.testing.expectEqual(expected, sheet.container_rules[0].selector.matchIn(&subject, false));
+            try std.testing.expectEqual(expected, sheet.container_rules[0].selector.matchIn(&subject, true));
+            try std.testing.expectEqual(expected != .no, try sheet.hasInlineBoxCandidateIn(std.testing.allocator, &subject, ""));
+            try std.testing.expectEqual(@as(usize, 1), sheet.text_rules.len);
+            // The ordinary text resolver combines subject matching with the
+            // selector's independent uncertainty flag before assigning color.
+            const paint = try sheet.resolveTextPaint(std.testing.allocator, &subject, "");
+            if (expected == .no) {
+                try std.testing.expect(paint.color == null);
+            } else {
+                try std.testing.expect(paint.color != null and paint.color.? == .unknown);
+            }
+        }
+    };
+    const css = "{display:block;position:absolute !important;clip:rect(1px,1px,1px,1px);width:1px;height:1px;margin:-1px;border:0;padding:0;overflow:hidden;color:red}";
+    const button = ".cdx-button.cdx-button--icon-only span + span" ++ css;
+    try F.check(button, "mw-parser-output headword-line", .no);
+    try F.check(button, "cdx-button", .no);
+    try F.check(button, "cdx-button cdx-button--icon-only", .unknown);
+    try F.check(button, null, .unknown);
+    try F.check(".sibling + span" ++ css, "", .unknown);
+    try F.check(".outer span.sibling ~ span" ++ css, "outer", .unknown);
+    try F.check(":is(.outer,.alternative) span + span" ++ css, "", .unknown);
 }
 
 test "display selector groups retain possible arms and exact winners after ancestor filtering" {
@@ -36817,7 +36990,7 @@ fn positionedContainerGeometry(a: std.mem.Allocator, node: PositionedContainerPa
     if (padding.unresolved or margins.unresolved) return positionedContainerQueryRefusal(types.ContainerStyle, diagnostic, if (padding.unresolved) .geometry_padding else .geometry_margin, node.tag, if (padding.unresolved) "padding" else "margin", null);
     if (padding.value) |edge_values| { const fixed = observedFigureFixedEdges(edge_values) orelse return positionedContainerQueryRefusal(types.ContainerStyle, diagnostic, .geometry_padding, node.tag, "padding", null); if (!observedFigureEdgesZero(fixed)) return positionedContainerQueryRefusal(types.ContainerStyle, diagnostic, .geometry_padding, node.tag, "padding", null); }
     if (margins.value) |edge_values| { const fixed = observedFigureFixedEdges(edge_values) orelse return positionedContainerQueryRefusal(types.ContainerStyle, diagnostic, .geometry_margin, node.tag, "margin", null); if (!observedFigureEdgesZero(fixed)) return positionedContainerQueryRefusal(types.ContainerStyle, diagnostic, .geometry_margin, node.tag, "margin", null); }
-    const borders = (try inlineBoxBorders(a, node.declarations, node.environment, false)) orelse return positionedContainerQueryRefusal(types.ContainerStyle, diagnostic, .geometry_border, node.tag, "border", null);
+    const borders = (try inlineBoxBorders(a, node.declarations, node.environment, false, false)) orelse return positionedContainerQueryRefusal(types.ContainerStyle, diagnostic, .geometry_border, node.tag, "border", null);
     inline for (.{ "top", "right", "bottom", "left" }) |side| if (@field(borders, side) != .none) return positionedContainerQueryRefusal(types.ContainerStyle, diagnostic, .geometry_border, node.tag, "border", null);
     used.boxEdges(true); used.boxEdges(false); used.borderEdges();
     var lengths: [6]ObservedFigureLength = undefined;
@@ -37023,19 +37196,21 @@ fn resolvePositionedContainerFromText(a: std.mem.Allocator, profile: *const Prof
 // that list only when the other tokens independently specify its line/width.
 // Its assignment keeps the declaration's original cascade rank.
 fn inlineBoxBorderValue(a: std.mem.Allocator, environment: CustomEnvironment, name: []const u8,
-    raw: []const u8, allow_dashed: bool) !CustomValue
+    raw: []const u8, allow_dashed: bool, observed_help: bool) !CustomValue
 {
     const whole = try customColorValue(a, environment, raw);
-    if (whole != .unknown or !allow_dashed or !std.ascii.eqlIgnoreCase(name, "border-bottom")) return whole;
+    if (whole != .unknown) return whole;
+    const expected_line = if (allow_dashed and std.ascii.eqlIgnoreCase(name, "border-bottom")) "dashed"
+        else if (observed_help and std.ascii.eqlIgnoreCase(name, "border")) "dotted" else return whole;
     var tokens: [4][]const u8 = undefined;
     if ((borderTokens(raw, &tokens) orelse return whole) != 3) return whole;
     var width: ?[]const u8 = null;
     var color: ?[]const u8 = null;
-    var dashed = false;
+    var has_line = false;
     for (tokens[0..3]) |token| {
-        if (std.ascii.eqlIgnoreCase(token, "dashed")) {
-            if (dashed) return whole;
-            dashed = true;
+        if (std.ascii.eqlIgnoreCase(token, expected_line)) {
+            if (has_line) return whole;
+            has_line = true;
         } else if (customCall(token) == null and borderWidthAtom(token) != null) {
             if (width != null) return whole;
             width = token;
@@ -37047,11 +37222,13 @@ fn inlineBoxBorderValue(a: std.mem.Allocator, environment: CustomEnvironment, na
             color = trim(value.known);
         } else return whole;
     }
-    if (!dashed or width == null or color == null) return whole;
-    return .{ .known = try std.fmt.allocPrint(a, "{s} dashed {s}", .{ width.?, color.? }) };
+    if (!has_line or width == null or color == null) return whole;
+    return .{ .known = try std.fmt.allocPrint(a, "{s} {s} {s}", .{ width.?, expected_line, color.? }) };
 }
 
-fn inlineBoxBorders(a: std.mem.Allocator, declarations: []const ObservedFigureDeclaration, environment: CustomEnvironment, allow_dashed: bool) !?types.InlineBoxBorderEdges {
+fn inlineBoxBorders(a: std.mem.Allocator, declarations: []const ObservedFigureDeclaration, environment: CustomEnvironment,
+    allow_dashed: bool, observed_help: bool) !?types.InlineBoxBorderEdges
+{
     var assignments: std.ArrayList(InlineBoxBorderAssignment) = .empty;
     defer assignments.deinit(a);
     for (declarations) |declaration| {
@@ -37060,7 +37237,7 @@ fn inlineBoxBorders(a: std.mem.Allocator, declarations: []const ObservedFigureDe
         if (!declaration.syntax_unknown and (std.ascii.eqlIgnoreCase(declaration.name, "border-collapse") or std.ascii.eqlIgnoreCase(declaration.name, "border-spacing"))) continue;
         // Radius has its own cascade: the border shorthand does not reset it.
         if (!declaration.syntax_unknown and std.ascii.endsWithIgnoreCase(declaration.name, "radius")) continue;
-        const computed = try inlineBoxBorderValue(a, environment, declaration.name, declaration.raw, allow_dashed);
+        const computed = try inlineBoxBorderValue(a, environment, declaration.name, declaration.raw, allow_dashed, observed_help);
         const update = if (declaration.syntax_unknown) inlineBoxBorderUnknown(null, null)
             else switch (computed) {
                 .known => |raw| try inlineBoxBorderUpdate(a, if (all) "border" else declaration.name, trim(raw)),
@@ -37124,13 +37301,14 @@ fn inlineBoxStaticBackgroundImageAbsent(a: std.mem.Allocator, declarations: []co
 fn inlineBoxDeclarations(a: std.mem.Allocator, declarations: []const ObservedFigureDeclaration, environment: CustomEnvironment,
     rtl: bool, within_box: bool) !InlineBoxResolution
 {
-    return inlineBoxDeclarationsIn(a, declarations, environment, rtl, within_box, false, false, false);
+    return inlineBoxDeclarationsIn(a, declarations, environment, rtl, within_box, false, false, false, false);
 }
 
 fn roundedInlineBoxRadius(a: std.mem.Allocator, declarations: []const ObservedFigureDeclaration,
-    environment: CustomEnvironment) !?types.StyleLength
+    environment: CustomEnvironment, comptime help_circle: bool) !?if (help_circle) types.StyleWidth else types.StyleLength
 {
-    var selected: ?types.StyleLength = null;
+    const Radius = if (help_circle) types.StyleWidth else types.StyleLength;
+    var selected: ?Radius = null;
     inline for (.{
         .{ "border-top-left-radius", "border-start-start-radius" },
         .{ "border-top-right-radius", "border-start-end-radius" },
@@ -37145,13 +37323,21 @@ fn roundedInlineBoxRadius(a: std.mem.Allocator, declarations: []const ObservedFi
             if (std.ascii.eqlIgnoreCase(candidate.name, "border-radius") or std.ascii.eqlIgnoreCase(candidate.name, corner[1]))
                 candidate.name = corner[0];
         }
-        const value = try observedFigureComputedLength(a, rewritten, corner[0], &.{}, environment, 1, "",
-            .{ .known = .{ .unit = .px, .value = 0 } }, .unknown, false, false);
-        if (value != .known or value.known.unit != .px or !std.math.isFinite(value.known.value) or value.known.value < 0)
-            return null;
+        const radius: Radius = if (help_circle) value: {
+            const candidate = try observedFigureKeyword(a, rewritten, corner[0], &.{}, environment,
+                &.{"50%"}, "0", null, false, "0");
+            if (candidate.unresolved or !std.mem.eql(u8, candidate.value orelse return null, "50%")) return null;
+            break :value .{ .unit = .percent, .value = 50 };
+        } else value: {
+            const candidate = try observedFigureComputedLength(a, rewritten, corner[0], &.{}, environment, 1, "",
+                .{ .known = .{ .unit = .px, .value = 0 } }, .unknown, false, false);
+            if (candidate != .known or candidate.known.unit != .px or !std.math.isFinite(candidate.known.value) or candidate.known.value < 0)
+                return null;
+            break :value candidate.known;
+        };
         if (selected) |prior| {
-            if (!std.meta.eql(prior, value.known)) return null;
-        } else selected = value.known;
+            if (!std.meta.eql(prior, radius)) return null;
+        } else selected = radius;
     }
     return selected;
 }
@@ -37166,8 +37352,144 @@ fn roundedInlineBoxEdgesEqual(border_edges: types.InlineBoxBorderEdges) bool {
     return true;
 }
 
+pub fn inlineHelpVariable(a: std.mem.Allocator, css: []const u8) !?[]const u8 {
+    if (css.len > 2048 or std.mem.indexOf(u8, css, "border-radius") == null or
+        std.mem.indexOf(u8, css, "cursor") == null) return null;
+    var at: usize = 0;
+    var name: ?[]const u8 = null;
+    while (try nextDeclarationAlloc(a, css, &at)) |declaration| {
+        defer a.free(declaration);
+        const colon = std.mem.indexOfScalar(u8, declaration, ':') orelse continue;
+        if (!std.ascii.eqlIgnoreCase(trim(declaration[0..colon]), "border")) continue;
+        const raw = declaration[colon + 1..];
+        const start = std.mem.indexOf(u8, raw, "var(") orelse continue;
+        const tail = raw[start + 4..];
+        const end = std.mem.indexOfAny(u8, tail, ",)") orelse return null;
+        const property = trim(tail[0..end]);
+        if (!customName(property) or name != null) return null;
+        name = try a.dupe(u8, property);
+    }
+    return name;
+}
+
+pub const ObservedHelpCircleBox = struct {
+    ink: []const u8,
+    // Only the four already-checked border colors vary with the preference.
+    geometry: InlineBoxResolution,
+    table_chain: [32]u8,
+    pub fn agrees(self: @This(), other: InlineBoxResolution) bool {
+        return observedFigureDataEqual(InlineBoxResolution, self.geometry, other, 0);
+    }
+};
+
+pub fn observedHelpCircleBox(a: std.mem.Allocator, styles: *const Profile, nodes: []const ObservedStyleNode,
+    root: u32, subject: u32, variable: []const u8, prefers_dark: ?bool) !?ObservedHelpCircleBox
+{
+    if (!helpCircleProfileBound(styles) or !observedStyleGraphValid(styles, nodes, root) or subject <= root or
+        subject >= nodes.len or !std.ascii.eqlIgnoreCase(nodes[subject].tag, "span") or !customName(variable)) return null;
+    var path: [65]u32 = undefined;
+    var count: usize = 0;
+    var cursor: ?u32 = subject;
+    var under_root = false;
+    while (cursor) |next| : (cursor = nodes[next].parent) {
+        if (count == path.len) return null;
+        path[count] = next;
+        count += 1;
+        under_root = under_root or next == root;
+    }
+    if (!under_root) return null;
+    const leaf = nodes[subject];
+    if (leaf.attributes.len != 2 or observedFigureAttribute(leaf, "title") == null or observedFigureAttribute(leaf, "style") == null) return null;
+    for (nodes) |node| if (node.parent == subject) return null;
+    var source_css: [65][]const u8 = undefined;
+    var source_count: usize = 0;
+    var source_tags: [65][]const u8 = undefined;
+    var table_chain: ?[32]u8 = null;
+    for (path[0..count]) |index| {
+        if (index == root) break;
+        const node = nodes[index];
+        // HTML inserts an unstyled TBODY between TABLE and TR. Its own
+        // cascade still participates in every physical check below.
+        if (std.ascii.eqlIgnoreCase(node.tag, "tbody") and node.attributes.len == 0) continue;
+        source_tags[source_count] = node.tag;
+        source_css[source_count] = observedFigureAttribute(node, "style") orelse "";
+        source_count += 1;
+        if (std.ascii.eqlIgnoreCase(node.tag, "table")) {
+            table_chain = helpCircleChainDigest(source_tags[0..source_count], source_css[0..source_count]);
+            break;
+        }
+    }
+    var nonediting_path = true;
+    var environment: CustomEnvironment = .{ .complete = true };
+    while (count != 0) {
+        count -= 1;
+        const next = path[count];
+        var declarations = (try observedStyleNodeDeclarationsWithLanguage(a, styles, nodes, next, null, null,
+            .{ .prefers_dark = prefers_dark }, true)) orelse return null;
+        defer declarations.deinit(a);
+        // Check the complete path without granting its subject any interaction facts.
+        // An editable ancestor or a CSS focus/behavior hook keeps focus uncertain.
+        nonediting_path = nonediting_path and observedFigureAttribute(nodes[next], "contenteditable") == null and
+            tableSourceStaticFocusDeclarations(declarations.items);
+        var unfocused: ?std.ArrayList(ObservedFigureDeclaration) = null;
+        defer if (unfocused) |*set| set.deinit(a);
+        if (next == subject and nonediting_path) {
+            unfocused = (try observedStyleNodeDeclarationsWithLanguage(a, styles, nodes, next, null, null,
+                .{ .prefers_dark = prefers_dark, .source_leaf_focus_absent = .{ .nodes = nodes, .subject = subject } }, true)) orelse return null;
+        }
+        const applicable = if (unfocused) |set| set.items else declarations.items;
+        // Recompute each inherited custom value after the verified root class
+        // substitution. A cached environment belongs to its original day shell.
+        environment = try observedFigureCustomEnvironment(a, applicable, environment, true);
+        if (std.ascii.eqlIgnoreCase(nodes[next].tag, "bdi") or std.ascii.eqlIgnoreCase(nodes[next].tag, "bdo")) return null;
+        if (observedFigureAttribute(nodes[next], "dir")) |dir| {
+            if ((next != 0 and next != root) or !std.ascii.eqlIgnoreCase(dir, "ltr")) return null;
+        }
+        // Validate each actual ancestor, including exterior and implicit nodes.
+        // A declaration on a different selector or in the other head cannot
+        // override a direction, decoration or motion on this path.
+        if (!staticInlineDirectionDeclarationsValid(applicable, "", null) or
+            !try observedFigureStaticMotion(a, applicable, environment) or
+            !try inlineBoxDecorationsAbsent(a, applicable, environment)) {
+            if (@import("builtin").is_test) std.debug.print("HELP_CIRCLE inherited defaults node={d} tag={s} subject={d}\n", .{next, nodes[next].tag, subject});
+            return null;
+        }
+        inline for (.{ .{ "visibility", "visible" }, .{ "writing-mode", "horizontal-tb" } }) |item| {
+            const value = try observedFigureKeyword(a, applicable, item[0], &.{}, environment,
+                &.{item[1]}, item[1], item[1], true, item[1]);
+            if (value.unresolved or value.value == null or !std.ascii.eqlIgnoreCase(value.value.?, item[1])) {
+                if (@import("builtin").is_test) std.debug.print("HELP_CIRCLE node={d} tag={s} property={s} subject={d}\n", .{next, nodes[next].tag, item[0], subject});
+                return null;
+            }
+        }
+        if (next != subject) continue;
+        const raw_color = switch (environment.get(variable)) { .known => |value| value, else => return null };
+        const color = (try inlineBoxColor(a, raw_color)) orelse return null;
+        if (color != .rgb) return null;
+        const resolved = try inlineBoxDeclarationsIn(a, applicable, environment, false, false, false, true, false, true);
+        if (resolved.unresolved or resolved.cursor != .help or resolved.radius == null or resolved.radius.?.unit != .percent or
+            resolved.radius.?.value != 50 or !std.mem.eql(u8, dottedHelpBorderColor(resolved.border) orelse return null, color.rgb)) return null;
+        var geometry = resolved;
+        inline for (.{ "top", "right", "bottom", "left" }) |side|
+            @field(geometry.border, side).dotted.color = .{ .rgb = "" };
+        return .{ .ink = color.rgb, .geometry = geometry, .table_chain = table_chain orelse return null };
+    }
+    return null;
+}
+
+fn dottedHelpBorderColor(border_edges: types.InlineBoxBorderEdges) ?[]const u8 {
+    const first = switch (border_edges.top) { .dotted => |line| line, else => return null };
+    if (first.width.unit != .px or first.width.value != 1 or first.color != .rgb) return null;
+    inline for (.{ "right", "bottom", "left" }) |side| {
+        const line = switch (@field(border_edges, side)) { .dotted => |value| value, else => return null };
+        if (!std.meta.eql(line.width, first.width) or line.color != .rgb or
+            !std.mem.eql(u8, first.color.rgb, line.color.rgb)) return null;
+    }
+    return first.color.rgb;
+}
+
 fn inlineBoxDeclarationsIn(a: std.mem.Allocator, declarations: []const ObservedFigureDeclaration, environment: CustomEnvironment,
-    rtl: bool, within_box: bool, comptime image_relative: bool, comptime static_decoration: bool, comptime rounded_decoration: bool) !InlineBoxResolution
+    rtl: bool, within_box: bool, comptime image_relative: bool, comptime static_decoration: bool, comptime rounded_decoration: bool, comptime observed_help: bool) !InlineBoxResolution
 {
     const position = try observedFigureKeyword(a, declarations, "position", &.{}, environment, &.{ "static", "relative", "absolute" }, "static", null, false, "static");
     if (position.unresolved) return .{ .unresolved = true };
@@ -37203,7 +37525,7 @@ fn inlineBoxDeclarationsIn(a: std.mem.Allocator, declarations: []const ObservedF
         if (edge != .length) return .{ .unresolved = true };
         @field(result.padding, side) = edge.length;
     }
-    result.border = (try inlineBoxBorders(a, declarations, environment, static_decoration and !rounded_decoration)) orelse return .{ .unresolved = true };
+    result.border = (try inlineBoxBorders(a, declarations, environment, static_decoration and !rounded_decoration, observed_help)) orelse return .{ .unresolved = true };
     if (static_decoration) {
         inline for (.{ "top", "right", "bottom", "left" }) |side|
             if ((!rounded_decoration or std.mem.eql(u8, side, "top") or std.mem.eql(u8, side, "bottom")) and
@@ -37222,12 +37544,18 @@ fn inlineBoxDeclarationsIn(a: std.mem.Allocator, declarations: []const ObservedF
     }
     if (rounded_decoration) {
         if (!static_decoration or rtl or !roundedInlineBoxEdgesEqual(result.border)) return .{ .unresolved = true };
-        const radius = (try roundedInlineBoxRadius(a, declarations, environment)) orelse return .{ .unresolved = true };
+        const radius = (try roundedInlineBoxRadius(a, declarations, environment, false)) orelse return .{ .unresolved = true };
         result.radius = .{ .unit = .px, .value = radius.value };
         const background = try observedFigureColor(a, declarations, "background-color", environment, null, null);
         if (background.unresolved or background.value == null or background.value.?.kind != .rgb)
             return .{ .unresolved = true };
         result.rounded_background = background.value.?.value;
+    } else if (observed_help) {
+        if (!static_decoration or rtl or result.cursor != .help or dottedHelpBorderColor(result.border) == null)
+            return .{ .unresolved = true };
+        result.radius = (try roundedInlineBoxRadius(a, declarations, environment, true)) orelse return .{ .unresolved = true };
+        const background = try observedFigureColor(a, declarations, "background-color", environment, null, null);
+        if (background.unresolved or background.value == null or background.value.?.kind != .transparent) return .{ .unresolved = true };
     } else {
     inline for (.{ "border-top-left-radius", "border-top-right-radius", "border-bottom-right-radius", "border-bottom-left-radius",
         "border-start-start-radius", "border-start-end-radius", "border-end-start-radius", "border-end-end-radius" }) |corner| {
@@ -37563,11 +37891,11 @@ pub fn staticInlineDecorationCandidateAlloc(a: std.mem.Allocator, css: []const u
     defer declarations.deinit(a);
     try appendObservedFigureDeclarations(a, &declarations, css,
         .{ .inline_style = true, .order = max_rules * 1024 }, false, false, null, 0);
-    const selected_edges = (try inlineBoxBorders(a, declarations.items, .{}, true)) orelse {
+    const selected_edges = (try inlineBoxBorders(a, declarations.items, .{}, true, false)) orelse {
         // This alternative only chooses which full source/cascade query to try.
         // The emitter separately requires the resolved authored edge with its
         // current custom environment; this fallback never supplies wire values.
-        const fallback = (try inlineBoxBorders(a, declarations.items, .{ .complete = true }, true)) orelse return .unknown;
+        const fallback = (try inlineBoxBorders(a, declarations.items, .{ .complete = true }, true, false)) orelse return .unknown;
         return if (fallback.bottom == .dashed) .dashed else .unknown;
     };
     if (selected_edges.bottom == .dashed) return .dashed;
@@ -37600,7 +37928,7 @@ fn resolveStaticInlineDecorationWithAncestorsModeAlloc(a: std.mem.Allocator, css
     try appendObservedFigureDeclarations(a, &declarations, css,
         .{ .inline_style = true, .order = max_rules * 1024 }, false, false, null, 0);
     if (rtl or !try staticInlineDirectionDefaultsAlloc(a, null, current_first_css)) return .{ .unresolved = true };
-    const result = try inlineBoxDeclarationsIn(a, declarations.items, environment, rtl, false, false, true, rounded_decoration);
+    const result = try inlineBoxDeclarationsIn(a, declarations.items, environment, rtl, false, false, true, rounded_decoration, false);
     if (result.unresolved or !try inlineBoxAncestorDefaultsAlloc(a, css, environment, current_first_css, false))
         return .{ .unresolved = true };
     return result;
@@ -38316,7 +38644,13 @@ fn staticInlineDirectionCssDiagnosedAlloc(a: std.mem.Allocator, css: []const u8,
     defer declarations.deinit(a);
     try appendObservedFigureDeclarations(a, &declarations, css,
         .{ .inline_style = true, .order = max_rules * 1024 }, false, false, null, 0);
-    for (declarations.items) |declaration| {
+    return staticInlineDirectionDeclarationsValid(declarations.items, css, detail);
+}
+
+fn staticInlineDirectionDeclarationsValid(declarations: []const ObservedFigureDeclaration, css: []const u8,
+    detail: ?*StaticInlineDirectionDiagnostic) bool
+{
+    for (declarations) |declaration| {
         const cause: @FieldType(StaticInlineDirectionDiagnostic, "cause") = if (declaration.syntax_unknown) .syntax
             else if (std.ascii.eqlIgnoreCase(declaration.name, "all")) .all
             else if (std.ascii.eqlIgnoreCase(declaration.name, "direction") and
@@ -40226,7 +40560,7 @@ fn positionedLabelStyle(a: std.mem.Allocator, node: PositionedContainerPathNode)
 fn positionedLabelStyleUnder(a: std.mem.Allocator, node: PositionedContainerPathNode, parent_line_px: ?f32) !?PositionedLabelStyle {
     const placement = (try positionedBoxPlacement(a, node)) orelse return null;
     const background = (try positionedRequiredValue(PositionedBackground, a, node, "background-color", &.{"background"})) orelse return null;
-    const radius = (try roundedInlineBoxRadius(a, node.declarations, node.environment)) orelse return null;
+    const radius = (try roundedInlineBoxRadius(a, node.declarations, node.environment, false)) orelse return null;
     const stacking = (try positionedAutoValue(PositionedStackLevel, a, node, "z-index")) orelse return null;
     const size = (try positionedRequiredValue(PositionedPixelLength, a, node, "font-size", &.{"font"})) orelse return null;
     const height = (try positionedAutoValue(PositionedPixelLength, a, node, "height")) orelse return null;
@@ -40455,7 +40789,7 @@ pub fn translatedContainerStyle(a: std.mem.Allocator, profile: *const Profile, e
             if (!std.ascii.eqlIgnoreCase(position, "relative")) return null;
             const alignment = (try positionedContainerKeyword(a, node, "text-align", &.{}, &.{"center"}, "start", "start", true)) orelse return null;
             if (!std.ascii.eqlIgnoreCase(alignment, "center")) return null;
-            const radius = (try roundedInlineBoxRadius(a, declarations.items, environment)) orelse return null;
+            const radius = (try roundedInlineBoxRadius(a, declarations.items, environment, false)) orelse return null;
             if (radius.unit != .px) return null;
             const padding = try observedFigureEdges(a, declarations.items, environment, true, false, 1, null);
             if (padding.unresolved or padding.value == null) return null;

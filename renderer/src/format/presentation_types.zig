@@ -977,13 +977,30 @@ pub fn validInlineBoxGroup(value: anytype) bool {
     if (inlineBoxRadius(value)) |radius| {
         if (!validInlineBoxRadius(radius) or value.overlays.len != 0) return false;
         const line = switch (value.border.top) { .solid, .dotted => |border_line| border_line, else => return false };
-        if (!validStyleLength(line.width) or line.color != .rgb or !isCanonicalRgb(line.color.rgb)) return false;
+        if (!validStyleLength(line.width) or !validInlineBoxColor(line.color)) return false;
+        switch (line.color) {
+            .rgb => {},
+            .light_dark => |pair| {
+                if (value.border.top != .dotted or radius.unit != .percent or radius.value != 50 or
+                    line.width.unit != .px or line.width.value != 1 or value.spans.len != 1 or
+                    std.mem.eql(u8, pair.light, pair.dark)) return false;
+                inline for (.{ "top", "right", "bottom", "left" }) |side|
+                    if (@field(value.padding, side).value != 0) return false;
+            },
+            else => return false,
+        }
         inline for (.{ "right", "bottom", "left" }) |side| {
             const edge = @field(value.border, side);
             if (std.meta.activeTag(edge) != std.meta.activeTag(value.border.top)) return false;
             const other_line = switch (edge) { .solid, .dotted => |border_line| border_line, else => return false };
             if (other_line.width.unit != line.width.unit or other_line.width.value != line.width.value or
-                other_line.color != .rgb or !std.mem.eql(u8, other_line.color.rgb, line.color.rgb)) return false;
+                std.meta.activeTag(other_line.color) != std.meta.activeTag(line.color)) return false;
+            switch (line.color) {
+                .rgb => |rgb| if (!std.mem.eql(u8, rgb, other_line.color.rgb)) return false,
+                .light_dark => |pair| if (!std.mem.eql(u8, pair.light, other_line.color.light_dark.light) or
+                    !std.mem.eql(u8, pair.dark, other_line.color.light_dark.dark)) return false,
+                else => unreachable,
+            }
         }
     }
     if (!validStyleEdges(value.padding) or !validInlineBoxBorderEdges(value.border) or
@@ -999,6 +1016,16 @@ pub fn validInlineBoxGroup(value: anytype) bool {
     }
     return true;
 }
+fn roundedHelpText(span: anytype) bool {
+    if (comptime !@hasField(@TypeOf(span), "tooltip") or !@hasField(@TypeOf(span), "inline_style")) return false;
+    const title = span.tooltip orelse return false;
+    const style = span.inline_style orelse return false;
+    if (comptime @hasField(@TypeOf(span), "background")) if (span.background != null) return false;
+    if (comptime @hasField(@TypeOf(span), "trail")) if (span.trail.len != 0) return false;
+    return std.mem.eql(u8, @tagName(span.kind), "text") and span.target.len == 0 and
+        title.len != 0 and style.cursor == .help;
+}
+
 pub fn validInlineBoxGroupOwner(span: anytype) bool {
     if (!spanHasInlineBoxGroup(span) or !validRubyChild(span) or span.text.len != 0 or
         spanHasRuby(span) or spanHasInlinePaddingGroup(span) or spanHasInlineActionGroup(span) or spanHasClippedAbsolute(span)) return false;
@@ -1012,6 +1039,16 @@ pub fn validInlineBoxGroupOwner(span: anytype) bool {
             if (comptime @hasField(@TypeOf(span), "explanation")) if (span.explanation.len != 0) return false;
             if (comptime @hasField(@TypeOf(span), "target_fragment")) if (span.target_fragment != null) return false;
             if (comptime @hasField(@TypeOf(span), "inline_style")) if (span.inline_style != null) return false;
+        }
+        if (inlineBoxRadius(group) != null and group.border.top == .dotted and group.border.top.dotted.color == .light_dark) {
+            if (!roundedHelpText(span) or group.spans.len != 1) return false;
+            const child = group.spans[0];
+            if (!roundedHelpText(child) or child.text.len == 0 or !validRubyChild(child) or
+                spanHasRuby(child) or spanHasInlinePaddingGroup(child) or spanHasInlineActionGroup(child) or
+                spanHasInlineBoxGroup(child) or spanHasClippedAbsolute(child)) return false;
+            if (comptime @hasField(@TypeOf(span), "tooltip") and @hasField(@TypeOf(child), "tooltip")) {
+                if (!std.mem.eql(u8, span.tooltip.?, child.tooltip.?)) return false;
+            } else return false;
         }
         return validInlineBoxGroup(group);
     }

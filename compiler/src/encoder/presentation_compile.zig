@@ -4665,6 +4665,16 @@ pub const SourceElementBinding = struct {
     owner: MissingText,
     page_start: usize,
 
+    pub fn matchesHelpCircleOwner(binding: ?SourceElementBinding, live: []const u8, paint: table_style_profile.SourceHelpCirclePaint) bool {
+        if (!Renderer.wikiClassContains(paint.source, paint.opening) or !std.mem.eql(u8, live, paint.owner_snapshot)) return false;
+        const start = @intFromPtr(paint.opening.ptr) - @intFromPtr(paint.source.ptr);
+        if (live.len > paint.source.len - start or !std.mem.eql(u8, paint.source[start..][0..live.len], paint.owner_snapshot)) return false;
+        if (live.ptr == paint.opening.ptr) return true;
+        const held = binding orelse return false;
+        return held.projection.original.bytes.ptr == paint.source.ptr and held.projection.original.bytes.len == paint.source.len and
+            held.originalRange(live) == start;
+    }
+
     fn ownerOffset(self: @This(), part: []const u8) ?usize {
         const first = @intFromPtr(self.owner.bytes.ptr);
         const pointer = @intFromPtr(part.ptr);
@@ -12126,12 +12136,36 @@ pub const Renderer = struct {
         diagnostic: ?*InlineBoxResolutionDiagnostic, native_diagnostic: ?*NativeInlineMotionDeclarationDiagnostic,
         source_diagnostic: ?*NativeSourceClassQueryDiagnostic, profile_diagnostic: ?*table_style_profile.InlineBoxSourceDiagnostic) Error!table_style_profile.InlineBoxResolution
     {
-        return self.inlineBoxResolutionMode(tag, style, inherited, diagnostic, native_diagnostic, source_diagnostic, profile_diagnostic, false, false);
+        return self.inlineBoxResolutionMode(tag, style, inherited, diagnostic, native_diagnostic, source_diagnostic, profile_diagnostic, false, false, null);
     }
+    fn currentHelpCirclePaint(self: *Renderer, tag: syntax.Tag, style: Style, live_owner: []const u8) Error!?table_style_profile.SourceHelpCirclePaint {
+        const domain = self.pageStyleDomain() orelse return null;
+        if (domain.scope.help_circle_paints.len == 0 or style.kind != .text or style.target.len != 0 or !tag.is("span")) return null;
+        const held = switch (style.native_inline_motion) { .proved => |known| known, else => return null };
+        if (held.root != self.native_inline_motion_root or held.epoch != self.native_inline_motion_epoch) return null;
+        const entry = held.last orelse return null;
+        if (entry.origin != .html or !wikiClassContains(entry.source.bytes, entry.opening) or
+            !std.mem.eql(u8, entry.opening, entry.opening_snapshot)) return null;
+        // Native motion already verified this exact physical token. Its tag.end
+        // may be relative to a borrowed suffix, so compare the token's pointers.
+        const raw = syntax.tagAt(entry.opening, 0) orelse return null;
+        if (raw.end != entry.opening.len or raw.closing or raw.self_closing or raw.html_pre or
+            raw.name.ptr != tag.name.ptr or raw.name.len != tag.name.len or
+            raw.attrs.ptr != tag.attrs.ptr or raw.attrs.len != tag.attrs.len) return null;
+        if (live_owner.ptr != entry.opening.ptr or entry.opening.len > live_owner.len) return null;
+        for (domain.scope.help_circle_paints) |paint| {
+            if (paint.styles != self.textPaintProfile() or paint.source.ptr != domain.source.ptr or
+                paint.source.len != domain.source.len or paint.opening.len != entry.opening.len or
+                !SourceElementBinding.matchesHelpCircleOwner(self.source_element_binding, live_owner, paint)) continue;
+            return paint;
+        }
+        return null;
+    }
+
     fn inlineBoxResolutionMode(self: *Renderer, tag: syntax.Tag, style: Style, inherited: Style,
         diagnostic: ?*InlineBoxResolutionDiagnostic, native_diagnostic: ?*NativeInlineMotionDeclarationDiagnostic,
         source_diagnostic: ?*NativeSourceClassQueryDiagnostic, profile_diagnostic: ?*table_style_profile.InlineBoxSourceDiagnostic,
-        comptime static_decoration: bool, comptime rounded_decoration: bool) Error!table_style_profile.InlineBoxResolution
+        comptime static_decoration: bool, comptime rounded_decoration: bool, live_owner: ?[]const u8) Error!table_style_profile.InlineBoxResolution
     {
         self.inline_box_direction_detail = .{};
         if (profile_diagnostic) |detail| detail.* = .none;
@@ -12211,9 +12245,18 @@ pub const Renderer = struct {
             !try profile.?.hasInlineBoxCandidateIn(self.a, query_element, css)) return .{};
         const use_profile = profile != null and !profile.?.inlineBoxIsolatedProfile();
         const result = if (use_profile) selected: {
-            const declarations = try self.nativeInlineMotionDeclarationsDiagnosed(style.native_inline_motion, native_diagnostic);
+            var tags: [65][]const u8 = undefined;
+            const declarations = try self.nativeInlineMotionDeclarationsForQuery(style.native_inline_motion, native_diagnostic, null,
+                if (live_owner != null) &tags else null);
             if (declarations) |complete| {
                 defer self.a.free(complete);
+                if (static_decoration and !rounded_decoration) if (live_owner) |owner| {
+                    if (try self.currentHelpCirclePaint(tag, style, owner)) |paint| {
+                        if (complete.len > tags.len) break :selected table_style_profile.InlineBoxResolution{ .unresolved = true };
+                        break :selected profile.?.resolveSourceHelpCircleIn(self.a, query_element, css, rtl, complete,
+                            tags[0..complete.len], paint, profile_diagnostic, &self.inline_box_direction_detail);
+                    }
+                };
                 if (rounded_decoration) break :selected profile.?.resolveRoundedInlineDecorationIn(self.a, query_element, css, self.customParent(style), rtl, complete);
                 if (static_decoration) break :selected profile.?.resolveStaticInlineDecorationWithDirectionDiagnosticIn(self.a, query_element, css, self.customParent(style), rtl, complete, profile_diagnostic, &self.inline_box_direction_detail);
                 break :selected profile.?.resolveInlineBoxSourceDiagnosedIn(self.a, query_element, css,
@@ -13264,9 +13307,10 @@ pub const Renderer = struct {
             return error.UncompiledPresentation;
         }
         const pending = if (rounded_action_candidate)
-            self.inlineBoxResolutionMode(tag, effective, inherited, &geometry_reason, &native_reason, &source_reason, &profile_reason, true, true)
+            self.inlineBoxResolutionMode(tag, effective, inherited, &geometry_reason, &native_reason, &source_reason, &profile_reason, true, true, null)
         else if (static_candidate)
-            self.inlineBoxResolutionMode(tag, effective, inherited, &geometry_reason, &native_reason, &source_reason, &profile_reason, true, false)
+            self.inlineBoxResolutionMode(tag, effective, inherited, &geometry_reason, &native_reason, &source_reason, &profile_reason, true, false,
+                if (noLiParentSourceRange(tracked, tracked.bytes[at..pair.end])) tracked.bytes[at..pair.end] else null)
         else self.inlineBoxResolutionWithProfileDiagnostic(tag, effective, inherited, &geometry_reason, &native_reason, &source_reason, &profile_reason);
         const box = pending catch |failure| {
             if (failure == error.UncompiledPresentation) self.tracePresentationRejection("inline_box", "resolution_rejection", tracked.bytes, at, 0, error.UncompiledPresentation);
@@ -13308,6 +13352,20 @@ pub const Renderer = struct {
         if (rounded_action_candidate and (box.radius == null or box.rounded_background == null or effective.background == null or
             !std.mem.eql(u8, box.rounded_background.?, effective.background.?) or
             !self.decoratedLinkSourceCurrent(tracked, at, pair, effective, false))) return error.UncompiledPresentation;
+        if (box.radius != null and box.radius.?.unit == .percent) {
+            const title = try self.semanticAttribute(tag, "title");
+            if (box.cursor == .help) {
+                if (title == null or title.?.len == 0 or effective.tooltip == null or !std.mem.eql(u8, effective.tooltip.?, title.?))
+                    return error.UncompiledPresentation;
+            } else if (box.cursor != null or title != null or effective.tooltip != null or box.border.top != .dotted or
+                box.border.top.dotted.color != .rgb or !htmlNestedAttributes(tag.attrs, &.{"style"})) return error.UncompiledPresentation;
+            const content = try missingSlice(self.a, tracked, tracked.bytes[tag.end..pair.inner_end]);
+            if (effective.kind != .text or effective.target.len != 0 or effective.self_link_target != null or
+                effective.background != null or nested_label or content.lost_missing_range or
+                content.ranges.len != 0 or content.bytes.len == 0) return error.UncompiledPresentation;
+            var nodes: ir.InlineIterator = .{ .input = content.bytes, .renderer_boundaries = true };
+            while (nodes.next()) |node| if (node.kind != .text) return error.UncompiledPresentation;
+        }
         if (dashed_action_candidate or box.dashed_link_background != null) {
             if (!dashed_action_candidate or box.dashed_link_background == null or effective.background == null or
                 !std.mem.eql(u8, box.dashed_link_background.?, effective.background.?) or effective.foreground == null)
@@ -32877,6 +32935,12 @@ pub const Renderer = struct {
     fn nativeInlineMotionDeclarationsWithScriptAbsence(self: *Renderer, state: NativeInlineMotionState,
         diagnostic: ?*NativeInlineMotionDeclarationDiagnostic, no_sup_sub: ?*bool) Error!?[]const []const u8
     {
+        return self.nativeInlineMotionDeclarationsForQuery(state, diagnostic, no_sup_sub, null);
+    }
+
+    fn nativeInlineMotionDeclarationsForQuery(self: *Renderer, state: NativeInlineMotionState,
+        diagnostic: ?*NativeInlineMotionDeclarationDiagnostic, no_sup_sub: ?*bool, tags: ?[][]const u8) Error!?[]const []const u8
+    {
         if (no_sup_sub) |out| out.* = false;
         var script_absent = true;
         const held = switch (state) {
@@ -32945,6 +33009,9 @@ pub const Renderer = struct {
                 result.deinit(self.a); return null;
             }
             if (tag.is("sup") or tag.is("sub")) script_absent = false;
+            if (tags) |names| {
+                if (result.items.len < names.len) names[result.items.len] = tag.name;
+            }
             try result.append(self.a, css);
         }
         const declarations = try result.toOwnedSlice(self.a);
@@ -43781,7 +43848,7 @@ pub const Renderer = struct {
                         self.isolated_inline_table_opening = if (grid_tail == null and self.isolatedTableLine(input, wrapper_source, tag, pair)) wrapper_source[0..tag.end] else null;
                         defer self.isolated_inline_table_opening = previous_inline_table;
                         var fostered: std.ArrayList(Block) = .empty;
-                        if (try self.htmlTable(wrapper_source[tag.end..pair.inner_end], &fostered, false, try self.htmlLanguageDirection(tag, self.body_language_direction orelse .{}), try self.tableCellBackground(tag, null), htmlNestedGridAdmissionWithStyles(tag, wrapper_source[tag.end..pair.inner_end], self.context.table_styles != null), tag, self.body_formatting_attributes.text_align, self.cellNativeFlowContext(inherited_formatting))) |parsed_table| {
+                        if (try self.htmlTable(wrapper_source[tag.end..pair.inner_end], &fostered, false, try self.htmlLanguageDirection(tag, self.blockParentWithNativeMotion()), try self.tableCellBackground(tag, null), htmlNestedGridAdmissionWithStyles(tag, wrapper_source[tag.end..pair.inner_end], self.context.table_styles != null), tag, self.body_formatting_attributes.text_align, self.cellNativeFlowContext(inherited_formatting))) |parsed_table| {
                             var table_value = parsed_table;
                             const feature = try self.htmlSwatchFeature(tag, wrapper_source[tag.end..pair.inner_end], table_value, fostered.items);
                             if (feature != null and presentation_types.tableStyleIsInline(table_value.style)) self.declineInlineTable(&table_value);
@@ -43859,10 +43926,7 @@ pub const Renderer = struct {
                     const parent_language_direction = self.body_language_direction;
                     // Resolve from the inherited state before installing this
                     // wrapper's own aligned metadata as its child's state.
-                    var scoped_parent = parent_language_direction orelse Style{};
-                    if (scoped_parent.native_inline_motion == .absent)
-                        scoped_parent.native_inline_motion = self.body_formatting_attributes.native_inline_motion;
-                    const scoped_style = try self.htmlLanguageDirection(tag, scoped_parent);
+                    const scoped_style = try self.htmlLanguageDirection(tag, self.blockParentWithNativeMotion());
                     const parent_text_align = alignment_parent_attributes.text_align;
                     self.body_formatting_attributes.text_align = try self.htmlTextAlignment(tag, parent_text_align);
                     defer self.body_formatting_attributes = alignment_parent_attributes;
@@ -44449,6 +44513,13 @@ pub const Renderer = struct {
         }
         return self.parseSpansWithMissing(tracked, self.bodyFormattingStyle(style));
     }
+    fn blockParentWithNativeMotion(self: *const Renderer) Style {
+        var parent = self.body_language_direction orelse Style{};
+        if (parent.native_inline_motion == .absent)
+            parent.native_inline_motion = self.body_formatting_attributes.native_inline_motion;
+        return parent;
+    }
+
     fn bodyFormattingStyle(self: *Renderer, style: Style) Style {
         var effective = style;
         if (effective.font_features == null) effective.font_features = self.body_formatting_attributes.font_features;
@@ -127926,6 +127997,40 @@ test "inline padding root block wrapper preserves native motion proof and unsupp
 }
 
 
+test "literal HTML table keeps only current inherited native motion custody" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = try a.dupe(u8, "<table style='border-spacing:2px'><tr><td><small><span style='border-radius:50%'>æ</span></small></td></tr></table>");
+    const tracked = MissingText.untracked(source);
+    const root: NativeInlineMotionRoot = .{ .source = tracked };
+    const table = syntax.tagAt(source, 0) orelse return error.TestUnexpectedResult;
+    var renderer: Renderer = .{ .a = a, .context = .{}, .body_missing = tracked };
+    const scope = renderer.nativeInlineMotionBegin(&root, false);
+    defer scope.deinit();
+    try std.testing.expect(renderer.native_inline_motion_root == &root);
+    try std.testing.expect((try renderer.htmlLanguageDirection(table, .{})).native_inline_motion == .unknown);
+    const parent = renderer.blockParentWithNativeMotion();
+    const current_table = try renderer.htmlLanguageDirection(table, parent);
+    const declarations = (try renderer.nativeInlineMotionDeclarations(current_table.native_inline_motion)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 1), declarations.len);
+    try std.testing.expectEqualStrings("border-spacing:2px", declarations[0]);
+
+    const detached = try a.dupe(u8, source);
+    const detached_table = syntax.tagAt(detached, 0) orelse return error.TestUnexpectedResult;
+    try std.testing.expect((try renderer.htmlLanguageDirection(detached_table, parent)).native_inline_motion == .unknown);
+    renderer.body_language_direction = .{ .language = "th", .native_inline_motion = .unknown };
+    const unknown_parent = renderer.blockParentWithNativeMotion();
+    try std.testing.expectEqualStrings("th", unknown_parent.language);
+    try std.testing.expect(unknown_parent.native_inline_motion == .unknown);
+    try std.testing.expect((try renderer.htmlLanguageDirection(table, unknown_parent)).native_inline_motion == .unknown);
+    renderer.body_language_direction = null;
+    const isolated = renderer.nativeInlineMotionBegin(&root, true);
+    defer isolated.deinit();
+    try std.testing.expect((try renderer.htmlLanguageDirection(table, renderer.blockParentWithNativeMotion())).native_inline_motion == .unknown);
+    try std.testing.expect((try renderer.htmlLanguageDirection(table, parent)).native_inline_motion == .unknown);
+}
+
 test "heading source offset follows all registered tracked copy relations beyond render depth" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -131515,13 +131620,13 @@ test "dispatched table geometry refutes only absent direct parent classes" {
         const style: Style = .{ .language = "ja", .native_inline_motion = state };
         const inherited: Style = .{ .text_element = node.parent };
         var reason: table_style_profile.InlineBoxSourceDiagnostic = .none;
-        const result = try value.renderer.inlineBoxResolutionMode(tag, style, inherited, null, null, null, &reason, true, false);
+        const result = try value.renderer.inlineBoxResolutionMode(tag, style, inherited, null, null, null, &reason, true, false, null);
         // "inflection" occurs on the original table. A class superset cannot
         // refute that selector even though the actual cell itself is unclassed.
         try std.testing.expectEqual(index == 1, result.unresolved);
         if (index == 1) try std.testing.expectEqual(table_style_profile.InlineBoxSourceDiagnostic.own_geometry_unresolved, reason);
         value.renderer.inline_box_root_table_opening = try a.dupe(u8, value.operation.table_opening);
-        const foreign = try value.renderer.inlineBoxResolutionMode(tag, style, inherited, null, null, null, &reason, true, false);
+        const foreign = try value.renderer.inlineBoxResolutionMode(tag, style, inherited, null, null, null, &reason, true, false, null);
         try std.testing.expect(foreign.unresolved);
     }
 }

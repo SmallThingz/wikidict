@@ -913,6 +913,12 @@ pub fn build(b: *std.Build) void {
     const prepare_group = b.option(PreparedTestGroup, "prepare-test-group", "Compile only this prepare-tests group");
     const requested_filters = b.option([]const []const u8, "prepare-test-filter", "Repeat to compile named tests in the selected prepare-tests group") orelse &.{};
     const prepare_error_tracing = b.option(bool, "prepare-test-error-tracing", "Enable error-return traces for selected prepared test roots") orelse false;
+    const prepare_baseline_cpu = b.option(bool, "prepare-test-baseline-cpu", "Use baseline CPU features for the selected pure-Zig Tools test graph") orelse false;
+    if (prepare_baseline_cpu and prepare_group != .tools) {
+        std.log.err("baseline prepared CPU requires the Tools group", .{});
+        b.invalid_user_input = true;
+        return;
+    }
     const prepare_no_emit = b.option(bool, "prepare-test-no-emit", "Check selected tests without emitting or running a test binary") orelse false;
     const prepare_filters = preparedTestFilters(b.allocator, prepare_group, requested_filters) catch |err| {
         std.log.err("invalid prepare-tests selection: {s}", .{@errorName(err)});
@@ -1036,7 +1042,11 @@ pub fn build(b: *std.Build) void {
         if (!preparedTestGroupIncluded(prepare_group, prepared.group)) continue;
         const selected_filters = if (isToolsPartition(prepared.group)) toolsPartitionFilters(prepared.group) else prepare_filters;
         var options = preparedTestOptions(prepared.artifact, selected_filters);
-        options.root_module = preparedRoot(b, options.root_module, prepare_error_tracing);
+        options.root_module = preparedSelectedRoot(b, options.root_module, prepare_error_tracing, prepare_baseline_cpu) catch |err| {
+            std.log.err("unsupported baseline prepared graph: {s}", .{@errorName(err)});
+            b.invalid_user_input = true;
+            return;
+        };
         const compiled = b.addTest(options);
         if (cache_report) |report| {
             report.addArg(@tagName(prepared.group));
@@ -1296,6 +1306,55 @@ fn preparedRoot(b: *std.Build, original: *std.Build.Module, tracing: bool) *std.
     return traced;
 }
 
+fn preparedSelectedRoot(b: *std.Build, original: *std.Build.Module, tracing: bool, baseline_cpu: bool) !*std.Build.Module {
+    if (!baseline_cpu) return preparedRoot(b, original, tracing);
+    // Deep-clone the original graph before changing the root. A shallow traced
+    // root would leave indirect back-edges pointing at a second original root.
+    const copy = try preparedBaselineRoot(b, original);
+    if (tracing) copy.error_tracing = true;
+    return copy;
+}
+
+// Clone the complete selected module graph, retaining cycles and shared imports.
+// Normal build modules and their cached graph remain unchanged. System libraries
+// are resolved and verified on the execution host; external objects or C/asm
+// inputs need a separate CPU contract and cannot use this pure-Zig option.
+fn preparedBaselineRoot(b: *std.Build, original: *std.Build.Module) !*std.Build.Module {
+    const target = original.resolved_target orelse return error.MissingPreparedTarget;
+    var copies: std.AutoHashMapUnmanaged(*std.Build.Module, *std.Build.Module) = .empty;
+    defer copies.deinit(b.allocator);
+    return preparedBaselineModule(b, original, target, &copies);
+}
+
+fn preparedBaselineModule(b: *std.Build, original: *std.Build.Module, root_target: std.Build.ResolvedTarget,
+    copies: *std.AutoHashMapUnmanaged(*std.Build.Module, *std.Build.Module)) anyerror!*std.Build.Module
+{
+    if (copies.get(original)) |known| return known;
+    for (original.link_objects.items) |object| switch (object) {
+        .system_lib => {},
+        else => return error.ExternalPreparedCpuInput,
+    };
+    if (original.resolved_target) |target| {
+        if (target.result.cpu.arch != root_target.result.cpu.arch or
+            target.result.os.tag != root_target.result.os.tag or target.result.abi != root_target.result.abi)
+            return error.IncompatiblePreparedTarget;
+    }
+    const copy = try b.allocator.create(std.Build.Module);
+    copy.init(b, .{ .existing = original });
+    copy.import_table = try original.import_table.clone(b.allocator);
+    copy.cached_graph = .{ .modules = &.{}, .names = &.{} };
+    if (copy.resolved_target) |*target| {
+        target.query.cpu_model = .baseline;
+        target.query.cpu_features_add = .empty;
+        target.query.cpu_features_sub = .empty;
+        target.result.cpu = std.Target.Cpu.baseline(target.result.cpu.arch, target.result.os);
+    }
+    try copies.put(b.allocator, original, copy);
+    for (copy.import_table.values()) |*dependency|
+        dependency.* = try preparedBaselineModule(b, dependency.*, root_target, copies);
+    return copy;
+}
+
 fn preparedTestGroupIncluded(selected: ?PreparedTestGroup, group: PreparedTestGroup) bool {
     if (selected) |wanted| {
         if (wanted == .encoder) return isEncoderPartition(group);
@@ -1421,6 +1480,58 @@ test "prepared test no emission retains partition filters and normal test option
     try std.testing.expect(traced.error_tracing.? and !module.error_tracing.?);
     try std.testing.expectEqual(@as(usize, 0), traced.cached_graph.modules.len);
     try std.testing.expect(module.cached_graph.modules[0] == &module);
+}
+
+
+test "prepared baseline CPU clones cyclic shared imports and refuses opaque machine code" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var context: std.Build = undefined;
+    context.allocator = a;
+    var graph: std.Build.Graph = undefined;
+    graph.arena = a;
+    context.graph = &graph;
+    const native: std.Build.ResolvedTarget = .{ .query = .{}, .result = @import("builtin").target };
+    var root: std.Build.Module = undefined;
+    var child: std.Build.Module = undefined;
+    var leaf: std.Build.Module = undefined;
+    root.init(&context, .{ .options = .{ .target = native, .optimize = .safe, .link_libc = true, .error_tracing = false } });
+    child.init(&context, .{ .options = .{ .target = native } });
+    leaf.init(&context, .{ .options = .{} });
+    try root.import_table.put(a, "self", &root);
+    try root.import_table.put(a, "child", &child);
+    try root.import_table.put(a, "shared", &leaf);
+    try child.import_table.put(a, "parent", &root);
+    try child.import_table.put(a, "shared", &leaf);
+    root.cached_graph = .{ .modules = &.{ &root, &child, &leaf }, .names = &.{ "root", "child", "leaf" } };
+    try std.testing.expect(try preparedSelectedRoot(&context, &root, false, false) == &root);
+    const copy = try preparedSelectedRoot(&context, &root, true, true);
+    const copied_child = copy.import_table.get("child").?;
+    const copied_leaf = copy.import_table.get("shared").?;
+    try std.testing.expect(copy != &root and copied_child != &child and copied_leaf != &leaf);
+    try std.testing.expect(copy.import_table.get("self").? == copy);
+    try std.testing.expect(copied_child.import_table.get("parent").? == copy);
+    try std.testing.expect(copied_child.import_table.get("shared").? == copied_leaf);
+    for ([_]*std.Build.Module{ copy, copied_child }) |module| {
+        const target = module.resolved_target.?;
+        try std.testing.expect(target.query.cpu_model == .baseline);
+        try std.testing.expect(target.query.cpu_features_add.eql(.empty) and target.query.cpu_features_sub.eql(.empty));
+        const baseline = std.Target.Cpu.baseline(native.result.cpu.arch, native.result.os);
+        try std.testing.expect(target.result.cpu.model == baseline.model);
+        try std.testing.expect(target.result.cpu.features.eql(baseline.features));
+        try std.testing.expectEqual(native.result.os.tag, target.result.os.tag);
+        try std.testing.expectEqual(native.result.abi, target.result.abi);
+        try std.testing.expectEqual(@as(usize, 0), module.cached_graph.modules.len);
+    }
+    try std.testing.expect(copied_leaf.resolved_target == null);
+    try std.testing.expect(copy.error_tracing.? and copy.link_libc.? and copy.optimize.? == .safe);
+    try std.testing.expect(!root.error_tracing.?);
+    try std.testing.expect(root.resolved_target.?.result.cpu.model == native.result.cpu.model);
+    try std.testing.expect(root.import_table.get("self").? == &root);
+    try std.testing.expect(root.cached_graph.modules.len == 3);
+    try leaf.link_objects.append(a, .{ .static_path = .{ .cwd_relative = "native.o" } });
+    try std.testing.expectError(error.ExternalPreparedCpuInput, preparedSelectedRoot(&context, &root, true, true));
 }
 
 test "prepared test default retains seven logical suites with partitioned Encoder and Tools" {
@@ -1807,6 +1918,7 @@ const tools_partitions = [_]ToolsPartition{
         "blob_build.test.actual ",
         "blob_build.test.audit ",
         "blob_build.test.blob ",
+        "blob_build.test.archived English Thai article preserves all four advisory circles through its ordinary complete row",
         "blob_build.test.captured ",
         "blob_build.test.complete ",
         "blob_build.test.continuous ",

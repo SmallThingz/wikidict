@@ -71943,3 +71943,248 @@ test "held language template index reuses complete scan checksum and rejects cha
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = idx, .data = indices[0 .. indices.len - 1] });
     try std.testing.expectError(error.InvalidTemplateSourceIndex, view.templates(root, &ns));
 }
+
+test "original English advisory circles reject one changed physical table path and foreign direction" {
+    const invocation = getenv("WIKIDICT_EN_THAI_INVOCATION") orelse return error.SkipZigTest;
+    const input = getenv("WIKIDICT_EN_THAI_FAILURE_CAPSULE") orelse return error.SkipZigTest;
+    const io = std.testing.io;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const text = try std.Io.Dir.cwd().readFileAlloc(io, std.mem.span(invocation), a, .limited(32 * 1024));
+    const args = (try std.json.parseFromSlice([][]const u8, a, text, .{})).value;
+    const options = try parseOptions(args);
+    try std.testing.expect(options.start_page == 2 and options.index_byte_offset.? == 299 and options.limit_pages.? == 1);
+    const root = options.expander_root;
+    const F = struct {
+        fn read(dir: []const u8, name: []const u8, alloc: std.mem.Allocator, sys_io: std.Io) ![]const u8 {
+            return std.Io.Dir.cwd().readFileAlloc(sys_io, try std.fs.path.join(alloc, &.{dir, name}), alloc, .limited(4 * 1024 * 1024));
+        }
+        fn identity(bytes: []const u8, expected: []const u8) !void {
+            var digest: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
+            try std.testing.expectEqualStrings(expected, &std.fmt.bytesToHex(digest, .lower));
+        }
+    };
+    const raw = try F.read(std.mem.span(input), "failure-00000001-raw.wikitext", a, io);
+    const expanded = try F.read(std.mem.span(input), "failure-00000001-expanded.wikitext", a, io);
+    try F.identity(raw, "2f55e3ef2f3b660f84a3c921502c01659395040491af874d1bf916fbcf95f203");
+    try F.identity(expanded, "1b82552ae0845ac87a50041914fcc9a837e45296c3026ffe0e00ba713e8f572a");
+    var ns = try namespace_registry.Registry.load(io, a, root); defer ns.deinit();
+    try ns.attachInterwikiMap(try F.read(root, "interwiki-map.tsv", a, io));
+    const index_path = try std.fs.path.join(a, &.{root,"page-index.tsv"});
+    var index = try mmapPath(io, index_path); defer index.deinit();
+    var titles = try mmapPath(io, try std.fs.path.join(a, &.{root,dump_source.page_title_index_filename})); defer titles.deinit();
+    const ti = try dump_source.PageTitleIndex.init(titles.bytes);
+    const kind = dump_source.pageIndexKind(index.bytes);
+    try std.testing.expect(ti.page_index_size == index.bytes.len and kind == ti.kind);
+    try std.testing.expect(options.bzip2_source_directory == null);
+    const streams = try std.fs.path.join(a, &.{root,"dump-streams.tsv"});
+    var dump = try dump_source.SourceReader.openForRoot(io, a, a, root, args[1], kind, index.bytes,
+        if (dump_source.isMultistream(kind)) streams else null, .legacy); defer dump.deinit();
+    const observation = try source_table_styles.observeWithImportsForTarget(a, &ns, &dump, index.bytes, ti, null, .screen);
+    var global = observation.authority orelse return error.MissingGlobalStyles; defer global.deinit();
+    try std.testing.expect(observation.screen_styles == null and observation.article_styles == null);
+    const site = (try loadWriterFigureSite(io, a, root, options.figure_input_root, &ns)) orelse return error.MissingFigureSite;
+    var sizing = (try loadWriterFigureSizing(io, a, root, options.figure_input_root, &ns, site)) orelse return error.MissingFigureSizing; defer sizing.deinit();
+    var book = (try loadFigurePageObservations(io, a, root, &ns, &sizing, site)) orelse return error.MissingFigurePageBook; defer book.deinit();
+    const page = (try book.selectPageStyles(a, &ns, 0, 10500003, 87816728, "แมวเสือ", raw, expanded, site.source_sha256, &global.profile)) orelse return error.MissingOriginalScreenContext;
+    try std.testing.expectEqualStrings(expanded, page.source);
+    const source = page.source;
+    const profile = encoder.table_style_profile;
+    try figure_page_observations.expectOriginalHelpCircleCensus(a, &ns, &book, source);
+    const paints = page.scope.help_circle_paints;
+    try std.testing.expectEqual(@as(usize, 4), paints.len);
+    const own_css = "border:1px dotted var(--wikt-palette-grey-9,gray);border-radius:50%;cursor:help";
+    const td = "border-bottom:1px solid var(--border-color-base,lightgray);padding:10px";
+    const table = "border-spacing: 2px; border: 1px solid var(--border-color-base,lightgray); text-align:center";
+    const chain: []const []const u8 = &.{ own_css, "", td, "", table };
+    const subject: profile.TextElement = .{ .tag = "span", .page_style_root = page.scope.page_style_root };
+    const tags: []const []const u8 = &.{ "span", "small", "td", "tr", "table" };
+    const paint = paints[0];
+    try std.testing.expect(paint.opening.ptr == source[2043..].ptr);
+    const positive = try page.styles.resolveSourceHelpCircleIn(a, &subject, own_css, false, chain, tags, paint, null, null);
+    try std.testing.expect(!positive.unresolved and positive.border.top == .dotted and positive.radius.?.value == 50);
+    const crossed_tags: []const []const u8 = &.{ "span", "small", "div", "div", "div" };
+    try std.testing.expect((try page.styles.resolveSourceHelpCircleIn(a, &subject, own_css, false, chain, crossed_tags, paint, null, null)).unresolved);
+    const changed_parent: []const []const u8 = &.{ "span", "em", "td", "tr", "table" };
+    try std.testing.expect((try page.styles.resolveSourceHelpCircleIn(a, &subject, own_css, false, chain, changed_parent, paint, null, null)).unresolved);
+
+    const compile = encoder.presentation_compile;
+    const Binding = compile.SourceElementBinding;
+    const Projection = compile.SourceElementProjection;
+    const start = 2043;
+    const opening_end = 2201;
+    const end = 2210;
+    try std.testing.expectEqualStrings("æ</span>", source[opening_end..end]);
+    try std.testing.expectEqualStrings(source[start..end], paint.owner_snapshot);
+    try std.testing.expect(Binding.matchesHelpCircleOwner(null, source[start..end], paint));
+
+    const copy = try a.dupe(u8, source);
+    var projection: Projection = .{ .original = compile.MissingText.untracked(source), .prepared = copy,
+        .copies = &.{.{ .original_start = 0, .prepared_start = 0, .len = source.len }} };
+    var binding: Binding = .{ .scope = &page.scope, .projection = &projection, .owner = compile.MissingText.untracked(copy), .page_start = 0 };
+    try std.testing.expect(Binding.matchesHelpCircleOwner(binding, copy[start..end], paint));
+    projection.copies = &.{ .{ .original_start = 0, .prepared_start = 0, .len = opening_end },
+        .{ .original_start = opening_end, .prepared_start = opening_end, .len = source.len - opening_end } };
+    try std.testing.expect(!Binding.matchesHelpCircleOwner(binding, copy[start..end], paint));
+
+    const inserted = try std.mem.concat(a, u8, &.{ source[0..opening_end], "x", source[opening_end..] });
+    projection.prepared = inserted;
+    projection.copies = &.{ projection.copies[0],
+        .{ .original_start = opening_end, .prepared_start = opening_end + 1, .len = source.len - opening_end } };
+    binding.owner = compile.MissingText.untracked(inserted);
+    try std.testing.expect(!Binding.matchesHelpCircleOwner(binding, inserted[start..end + 1], paint));
+
+    // Simulate a writable source alias after issue, keeping the same pointers and length.
+    var alias = paint;
+    alias.source = copy;
+    alias.opening = copy[start..opening_end];
+    try std.testing.expect(Binding.matchesHelpCircleOwner(null, copy[start..end], alias));
+    copy[opening_end + 1] = 0xb8; // æ -> ø
+    try std.testing.expect(!Binding.matchesHelpCircleOwner(null, copy[start..end], alias));
+    copy[opening_end + 1] = source[opening_end + 1];
+    copy[end - 2] = 'X';
+    try std.testing.expect(!Binding.matchesHelpCircleOwner(null, copy[start..end], alias));
+
+    var changed = try a.dupe([]const u8, chain);
+    changed[2] = "direction:rtl";
+    try std.testing.expect((try page.styles.resolveSourceHelpCircleIn(a, &subject, own_css, false, changed, tags, paint, null, null)).unresolved);
+    try std.testing.expect((try page.styles.resolveSourceHelpCircleIn(a, &subject, own_css, true, chain, tags, paint, null, null)).unresolved);
+    var one_head = paint;
+    one_head.physical.table_chains[1] = &.{};
+    try std.testing.expect((try page.styles.resolveSourceHelpCircleIn(a, &subject, own_css, false, chain, tags, one_head, null, null)).unresolved);
+
+    // Change only the classed phonemic row's SMALL parent. Identical vowel
+    // labels in the orthographic row cannot authorize the affected copies.
+    for ([_][]const u8{ ".th-reading small{unicode-bidi:isolate}", ".th-reading small{--wikt-palette-grey-9:revert !important}" }) |extra| {
+        var scratch = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer scratch.deinit();
+        const alloc = scratch.allocator();
+        const sources = try std.mem.concat(alloc, profile.Source, &.{ global.profile.retained_sources,
+            &.{.{ .css = extra, .base_url = "" }} });
+        var altered = try profile.parseSourcesForTargetAlloc(alloc, sources, .screen);
+        defer altered.deinit();
+        const negative = (try book.selectPageStyles(alloc, &ns, 0, 10500003, 87816728, "แมวเสือ", raw, expanded,
+            site.source_sha256, &altered)) orelse return error.MissingOriginalScreenContext;
+        try std.testing.expectEqual(@as(usize, 0), negative.scope.help_circle_paints.len);
+    }
+}
+
+test "original indexed English Thai entry retains its four advisory vowel circles and source palette" {
+    const raw = getenv("WIKIDICT_EN_THAI_INVOCATION") orelse return error.SkipZigTest;
+    const io = std.testing.io;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const json = try std.Io.Dir.cwd().readFileAlloc(io, std.mem.span(raw), a, .limited(32 * 1024));
+    const argv = (try std.json.parseFromSlice([][]const u8, a, json, .{})).value;
+    const options = try parseOptions(argv);
+    try std.testing.expect(options.start_page == 2 and options.index_byte_offset.? == 299 and
+        options.limit_pages.? == 1 and options.workers == 1 and options.now_unix.? == 1791731560);
+    first_failure_capture_context = FirstFailureCaptureContext.fromCli(io, a, argv, options);
+    defer first_failure_capture_context = null;
+    failure_receipt_context = .{ .io = io, .a = a, .path = options.failure_receipt.?,
+        .invocation_id = options.invocation_id.?, .invocation_args = argv[1..] };
+    defer failure_receipt_context = null;
+    try runBlobBuild(io, std.heap.smp_allocator, argv, options, null, null);
+    try expectEnglishThaiAdvisoryCircles(io, a, argv[2]);
+}
+
+test "archived English Thai article preserves all four advisory circles through its ordinary complete row" {
+    const request = std.mem.span(getenv("WIKIDICT_EN_THAI_CAPTURED_REQUEST") orelse return error.SkipZigTest);
+    const out = std.mem.span(getenv("WIKIDICT_EN_THAI_CAPTURED_OUTPUT") orelse return error.SkipZigTest);
+    const io = std.testing.io;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(io, request, a, .limited(128 * 1024));
+    try std.testing.expectEqualStrings("8ea7bfc6138690a6519c55432d837cc6e969d4a607cc0956bf35e39003c1aa48", try auditHash(a, bytes));
+    // This fingerprint identifies the actual r07 source set which issued the first failure.
+    // The diagnostic uses the current normal Writer and the original expanded response.
+    try runCapturedWriterDiagnostic(io, a, request, out, "cf3a592bed2f7671e054f2e3ac10a42b358a8c9198116239a3ba35d72cfd03ae");
+    try expectEnglishThaiAdvisoryCircles(io, a, try std.fs.path.join(a, &.{out, "data"}));
+}
+
+fn expectEnglishThaiInterprojectActions(entry: encoder.presentation_types.Entry) !void {
+    const title = "แมวเสือ";
+    const target = "https://en.wikipedia.org/wiki/th:%E0%B9%81%E0%B8%A1%E0%B8%A7%E0%B9%80%E0%B8%AA%E0%B8%B7%E0%B8%AD";
+    const owner = "interproject-box sister-wikipedia sister-project noprint floatright";
+    const Classes = encoder.table_style_profile.Profile;
+    var article_actions: usize = 0;
+    var wikipedia_actions: usize = 0;
+    for (entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+        try std.testing.expect(!Classes.hasClass(span.classes, "interProject"));
+        if (std.mem.eql(u8, span.target, target)) {
+            try std.testing.expectEqualStrings(title, span.text);
+            try std.testing.expectEqualStrings("Thai", section.title);
+            try std.testing.expectEqualStrings(owner ++ " Thai extiw", span.classes);
+            try std.testing.expectEqualStrings("th", span.language);
+            try std.testing.expect(span.kind == .external_link and span.bold and block.kind == .paragraph);
+            article_actions += 1;
+        }
+        if (std.mem.eql(u8, span.target, "Wikipedia") and std.mem.eql(u8, span.classes, owner)) {
+            try std.testing.expectEqualStrings("Wikipedia", span.text);
+            try std.testing.expectEqualStrings("Thai", section.title);
+            try std.testing.expect(span.kind == .link and block.kind == .paragraph);
+            wikipedia_actions += 1;
+        }
+    };
+    try std.testing.expectEqual(@as(usize, 1), article_actions);
+    try std.testing.expectEqual(@as(usize, 1), wikipedia_actions);
+}
+
+fn expectEnglishThaiAdvisoryCircles(io: std.Io, a: std.mem.Allocator, root: []const u8) !void {
+    const records = try CapturedWriterCurrentStored.load(io, a, root, "แมวเสือ");
+    const Check = struct {
+        const T = encoder.presentation_types;
+        count: usize = 0,
+        fn spans(self: *@This(), values: []const T.Span) !void {
+            const expected = [_][]const u8{ "æ", "e", "æ", "e" };
+            for (values) |span| {
+                const box = span.inline_box_group orelse continue;
+                if (!std.mem.eql(u8, span.tooltip orelse "", "Vowel sign appearing in front of the initial consonant.")) continue;
+                try std.testing.expect(self.count < expected.len and span.kind == .text and span.target.len == 0);
+                try std.testing.expect(span.inline_style.?.cursor == .help and box.spans.len == 1);
+                const child = box.spans[0];
+                try std.testing.expectEqualStrings(expected[self.count], child.text);
+                try std.testing.expect(child.kind == .text and child.target.len == 0 and child.inline_style.?.cursor == .help);
+                try std.testing.expectEqualStrings(span.tooltip.?, child.tooltip orelse "");
+                try std.testing.expect(span.direction.len == 0 and child.direction.len == 0 and box.overlays.len == 0);
+                try std.testing.expectEqual(span.font_scale, child.font_scale);
+                try std.testing.expectApproxEqAbs(@as(f32, 0.8333), span.font_scale orelse return error.MissingSmallScale, 0.0001);
+                try std.testing.expect(box.radius.?.unit == .percent and box.radius.?.value == 50);
+                for ([_]@TypeOf(box.border.top){ box.border.top, box.border.right, box.border.bottom, box.border.left }) |edge| {
+                    try std.testing.expect(edge == .dotted and edge.dotted.width.unit == .px and edge.dotted.width.value == 1);
+                    try std.testing.expect(edge.dotted.color == .light_dark);
+                    try std.testing.expectEqualStrings("#777777", edge.dotted.color.light_dark.light);
+                    try std.testing.expectEqualStrings("#b8b8b8", edge.dotted.color.light_dark.dark);
+                }
+                self.count += 1;
+            }
+        }
+        fn table(self: *@This(), value: T.Table) anyerror!void {
+            for (value.rows) |row| for (row.cells) |cell| {
+                try self.spans(cell.spans);
+                if (cell.blocks) |children| try self.blocks(children);
+                if (cell.nested_table) |nested| try self.table(nested);
+            };
+        }
+        fn blocks(self: *@This(), values: []const T.Block) anyerror!void {
+            for (values) |block| {
+                if (block.table) |value| try self.table(value);
+                if (block.container) |value| try self.blocks(value.blocks);
+                try self.spans(block.spans);
+            }
+        }
+    };
+    var domains: usize = 0;
+    for (records) |record| {
+        if (record.kind != .language) continue;
+        try std.testing.expectEqualStrings("th", record.stored.entry.language_code);
+        try expectEnglishThaiInterprojectActions(record.stored.entry);
+        var check: Check = .{};
+        for (record.stored.entry.sections) |section| try check.blocks(section.blocks);
+        try std.testing.expectEqual(@as(usize, 4), check.count);
+        domains += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1), domains);
+}

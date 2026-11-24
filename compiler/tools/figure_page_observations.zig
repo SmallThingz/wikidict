@@ -5302,6 +5302,7 @@ pub const Book = struct {
             }
             scope.source_custom_elements = stored.source_custom_elements;
             scope.source_custom_elements_source = expanded;
+            scope.help_circle_paints = try observedSourceHelpCirclePaints(a, ns, expanded, parent, styles, stored);
             scope.page_style_complete_root = complete_root;
             scope.source_div_parent_tags = page.source_div_parent_tags;
             scope.source_div_parent_tags_source = expanded;
@@ -6050,6 +6051,7 @@ fn observedPageStyleProfile(a: A, ns: *const namespaces.Registry, schema: []cons
         !page.text_class_scope or text_scope == null or outer == null) return invalid;
     const served = if (currentGetLiteral(page)) try currentLiteralStyleSet(a, page, ns.wiki) else
         try validateObservedStyleSet(a, page.page_styles orelse return invalid, ns.wiki);
+    if (suppliedScreen(page) and !equal(schema, "wikidict.figure-page-observations.v8")) return invalid;
     const selected = try missingHeadSources(a, ns, page, served);
     var context_sources: std.ArrayList(profile.Source) = .empty;
     for (selected) |index| try context_sources.append(a, .{ .css = served.responses[index], .base_url = served.urls[index] });
@@ -6060,7 +6062,9 @@ fn observedPageStyleProfile(a: A, ns: *const namespaces.Registry, schema: []cons
     // known. These slices and source identities are owned by the immutable Book.
     result.* = .{ .authored_sources = authored_sources.items, .context_sources = context_sources.items,
         // The selected dedicated HR head was validated by missingHeadSources above.
-        .figure_alternative_sources = if (page.figure_style_operations != null or page.authored_head_context != null)
+        .figure_alternative_sources = if (suppliedScreen(page))
+            try suppliedScreenStyles(a, ns, page, served, selected, authored_sources.items)
+        else if (page.figure_style_operations != null or page.authored_head_context != null)
             try figureStyleGetHeadSources(a, ns, page.outer_context.?.response, served) else null,
         .page = page, .scope = text_scope.?, .outer = outer.? };
     return result;
@@ -6287,6 +6291,254 @@ fn observedSourceCustomElements(a: A, source: []const u8, html: []const u8, node
         try proofs.append(a, .{ .range = anchor_value.range, .candidate_count = @intCast(actual_count) });
     }
     return try proofs.toOwnedSlice(a);
+}
+
+const HelpCircleSource = struct {
+    owner: []const u8,
+    opening: []const u8,
+    text: []const u8,
+    attributes: Inventory,
+    variable: []const u8,
+};
+
+fn helpCircleLiteralAttributes(a: A, tag: syntax.Tag, css: []const u8, title: []const u8) !?Inventory {
+    // This subject owns a native advisory title. Check its exact inventory and
+    // preprocessing grammar independently of class-only sibling constructors.
+    if (std.mem.indexOfAny(u8, tag.attrs, "{}[]<>|&\\\r\n\x00") != null or std.mem.indexOf(u8, tag.attrs, "__") != null) return null;
+    for (css) |byte| if (!std.ascii.isAlphanumeric(byte) and std.mem.indexOfScalar(u8, " #.,%+_-:;()", byte) == null) return null;
+    const attributes = inventory(a, tag) catch |failure| switch (failure) { error.OutOfMemory => return error.OutOfMemory, else => return null };
+    if (attributes.attributes.len != 2 or !equal(attributes.get("title") orelse return null, title) or
+        !equal(attributes.get("style") orelse return null, css)) return null;
+    return attributes;
+}
+
+fn helpCircleSources(a: A, expanded: []const u8) ![]const HelpCircleSource {
+    var out: std.ArrayList(HelpCircleSource) = .empty;
+    var at: usize = 0;
+    while (std.mem.indexOfPos(u8, expanded, at, "<")) |start| {
+        at = start + 1;
+        const tag = syntax.tagAt(expanded, start) orelse continue;
+        at = tag.end;
+        if (!tag.is("span") or tag.closing or tag.self_closing) continue;
+        const css = tag.attr("style") orelse continue;
+        const title = tag.attr("title") orelse continue;
+        if (title.len == 0) continue;
+        const variable = (try profile.inlineHelpVariable(a, css)) orelse continue;
+        const attributes = (try helpCircleLiteralAttributes(a, tag, css, title)) orelse continue;
+        const pair = syntax.matchingTag(expanded, tag) orelse continue;
+        const value = expanded[tag.end..pair.inner_end];
+        if (value.len == 0 or value.len > 256 or std.mem.indexOfAny(u8, value, "<>&[]{}|\r\n") != null) continue;
+        if (out.items.len == 32) return &.{};
+        try out.append(a, .{ .owner = expanded[start..pair.end], .opening = expanded[start..tag.end], .text = value, .attributes = attributes, .variable = variable });
+    }
+    return out.toOwnedSlice(a);
+}
+
+const HelpCircleTheme = enum { day, night, os };
+const HelpCirclePreference = struct { theme: HelpCircleTheme, os_dark: ?bool, dark: bool };
+const help_circle_preferences = [_]HelpCirclePreference{
+    .{ .theme = .day, .os_dark = null, .dark = false }, .{ .theme = .night, .os_dark = null, .dark = true },
+    .{ .theme = .os, .os_dark = false, .dark = false }, .{ .theme = .os, .os_dark = true, .dark = true },
+};
+
+fn helpCircleThemeClasses(a: A, seed: []const u8, theme: HelpCircleTheme) !?[]const u8 {
+    // verifiedThemePreferenceSeed checked the exact executable class assignment
+    // and literal seed against this transport's HTML, preserving every other token.
+    var parts = std.mem.tokenizeScalar(u8, seed, ' ');
+    var updated: std.ArrayList([]const u8) = .empty;
+    defer updated.deinit(a);
+    var found = false;
+    while (parts.next()) |token| {
+        if (!std.mem.startsWith(u8, token, "skin-theme-clientpref-")) {
+            try updated.append(a, token);
+            continue;
+        }
+        if (found or !equal(token, "skin-theme-clientpref-day")) return null;
+        found = true;
+        try updated.append(a, switch (theme) {
+            .day => "skin-theme-clientpref-day", .night => "skin-theme-clientpref-night", .os => "skin-theme-clientpref-os",
+        });
+    }
+    return if (found) try std.mem.join(a, " ", updated.items) else null;
+}
+
+const HelpCircleOccurrence = struct {
+    table_chains: [2]std.ArrayList([32]u8) = .{ .empty, .empty },
+    geometry: ?profile.InlineBoxResolution = null,
+    light: ?[]const u8 = null,
+    dark: ?[]const u8 = null,
+};
+// Complete the occurrence census before running a physical cascade for this group.
+fn matchingHelpCircleLeaves(html: []const u8, nodes: []const ObservedSiblingNode, candidate: HelpCircleSource, matches: []usize) bool {
+    var count: usize = 0;
+    for (nodes, 0..) |node, index| {
+        if (!node.tag.is("span") or node.first_child != null or !sameSiblingAttributes(candidate.attributes, node.attributes)) continue;
+        const end = node.inner_end orelse return false;
+        if (end < node.tag.end or end > html.len) return false;
+        if (!equal(html[node.tag.end..end], candidate.text)) continue;
+        if (count == matches.len) return false;
+        matches[count] = index;
+        count += 1;
+    }
+    return count != 0 and count == matches.len;
+}
+
+// Exercise the census on the two real transports and on a private edit of the GET root.
+pub fn expectOriginalHelpCircleCensus(a: A, ns: *const namespaces.Registry, book: *const Book, expanded: []const u8) !void {
+    const candidates = try helpCircleSources(a, expanded);
+    try std.testing.expectEqual(@as(usize, 4), candidates.len);
+    const candidate = candidates[0];
+    const title = candidate.attributes.get("title").?;
+    const title_at = std.mem.indexOf(u8, candidate.owner, title).?;
+    const event = try std.mem.concat(a, u8, &.{ candidate.owner[0..5], " onclick='x'", candidate.owner[5..] });
+    const templated = try std.mem.concat(a, u8, &.{ candidate.owner[0..title_at], "{{advice}}", candidate.owner[title_at + title.len..] });
+    for ([_][]const u8{ event, templated }) |changed|
+        try std.testing.expectEqual(@as(usize, 0), (try helpCircleSources(a, changed)).len);
+    for (book.pages) |record| {
+        if (record.page_id != 10500003 or record.revision_id != 87816728 or !equal(record.source, expanded)) continue;
+        const stored = record.page_styles orelse return error.MissingOriginalScreenContext;
+        var matches: [2]usize = undefined;
+        try std.testing.expect(matchingHelpCircleLeaves(try selectedStoredHtml(a, stored), stored.observed_nodes, candidate, &matches));
+        const response = stored.page.outer_context.?.response;
+        const prefix = try observedOuterPrefix(a, response, true);
+        const root = response[prefix.root_start.?..];
+        var nodes: std.ArrayList(ObservedSiblingNode) = .empty;
+        var end: usize = 0;
+        _ = try observedTextClassScopeToEndWithSections(a, ns, root, &nodes, &end, prefix.root, true);
+        const html = root[0..end];
+        try std.testing.expect(matchingHelpCircleLeaves(html, nodes.items, candidate, &matches));
+        const leaf = nodes.items[matches[0]];
+        const pair = syntax.matchingTag(html, leaf.tag).?;
+        const extra = try std.mem.concat(a, u8, &.{ html[0..pair.end], html[leaf.start..pair.end], html[pair.end..] });
+        nodes.clearRetainingCapacity();
+        _ = try observedTextClassScopeToEndWithSections(a, ns, extra, &nodes, &end, prefix.root, true);
+        try std.testing.expectEqual(extra.len, end);
+        var three: [3]usize = undefined;
+        try std.testing.expect(matchingHelpCircleLeaves(extra, nodes.items, candidate, &three));
+        try std.testing.expect(!matchingHelpCircleLeaves(extra, nodes.items, candidate, &matches));
+        return;
+    }
+    return error.MissingOriginalScreenContext;
+}
+
+fn observedHelpCircleArm(a: A, ns: *const namespaces.Registry, stored: *const PageStyleData, parent: *const profile.Profile,
+    candidates: []const HelpCircleSource, colors: []*HelpCircleOccurrence, alternative: bool) !bool
+{
+    const seed = (try verifiedThemePreferenceSeed(a, ns, stored.page, alternative)) orelse return false;
+    const heads = if (alternative) stored.figure_alternative_sources orelse return false else stored.context_sources;
+    var observed = stored.*;
+    if (alternative) {
+        const response = (stored.page.outer_context orelse return false).response;
+        const prefix = try observedOuterPrefix(a, response, true);
+        const root_start = prefix.root_start orelse return false;
+        var nodes: std.ArrayList(ObservedSiblingNode) = .empty;
+        var end: usize = 0;
+        _ = try observedTextClassScopeToEndWithSections(a, ns, response[root_start..], &nodes, &end, prefix.root, true);
+        if (end == 0 or end > response.len - root_start) return false;
+        observed.observed_html = response[root_start..][0..end];
+        observed.observed_nodes = nodes.items;
+        var sheets: std.ArrayList(profile.Source) = .empty;
+        try appendObservedPageStyles(a, &sheets, observed.observed_html);
+        observed.authored_sources = sheets.items;
+    }
+    const html = try selectedStoredHtml(a, &observed);
+    var styles = try profile.joinPageSourcesAlloc(a, parent, heads, observed.authored_sources);
+    defer styles.deinit();
+    const graph = try figureObservedGraph(a, &styles, &observed, alternative);
+    const root: u32 = @intCast(stored.outer.ancestors.len);
+    const attrs = try a.dupe(profile.FigureObservedAttribute, graph[0].attributes);
+    graph[0].attributes = attrs;
+    var class_index: ?usize = null;
+    for (attrs, 0..) |attr, index| if (equal(attr.name, "class")) { class_index = index; break; };
+    const root_class = class_index orelse return false;
+    for (help_circle_preferences) |preference| {
+        attrs[root_class].value = (try helpCircleThemeClasses(a, seed, preference.theme)) orelse return false;
+        for (candidates, colors, 0..) |candidate, paint, candidate_index| {
+            // All identical authored occurrences must agree. Do not associate them
+            // with a DOM element by ordinal, including when they share a vowel.
+            var reused = false;
+            for (candidates[0..candidate_index], colors[0..candidate_index]) |prior, known| {
+                if (equal(prior.opening, candidate.opening) and equal(prior.text, candidate.text)) {
+                    if (paint != known) return false;
+                    reused = true; break;
+                }
+            }
+            if (reused) continue;
+            var source_count: usize = 0;
+            for (candidates) |other| if (sameSiblingAttributes(candidate.attributes, other.attributes) and equal(candidate.text, other.text)) {
+                source_count += 1;
+            };
+            var matches: [32]usize = undefined;
+            if (source_count > matches.len or !matchingHelpCircleLeaves(html, observed.observed_nodes, candidate, matches[0..source_count])) return false;
+            for (matches[0..source_count]) |index| {
+                // Keep each full cascade evaluation bounded to this occurrence.
+                var scratch = std.heap.ArenaAllocator.init(a);
+                defer scratch.deinit();
+                const physical = (try profile.observedHelpCircleBox(scratch.allocator(), &styles, graph, root,
+                    root + @as(u32, @intCast(index)), candidate.variable, preference.os_dark)) orelse return false;
+                if (paint.geometry) |known| {
+                    if (!physical.agrees(known)) return false;
+                } else paint.geometry = physical.geometry;
+                const chains = &paint.table_chains[@intFromBool(alternative)];
+                for (chains.items) |known| {
+                    if (std.mem.eql(u8, &physical.table_chain, &known)) break;
+                } else try chains.append(a, physical.table_chain);
+                const ink = physical.ink;
+                const destination = if (preference.dark) &paint.dark else &paint.light;
+                if (destination.*) |known| {
+                    if (!equal(ink, known)) return false;
+                } else destination.* = try a.dupe(u8, ink);
+            }
+        }
+    }
+    return true;
+}
+
+fn observedSourceHelpCirclePaints(a: A, ns: *const namespaces.Registry, expanded: []const u8, parent: *const profile.Profile,
+    selected: *const profile.Profile, stored: *const PageStyleData) ![]const profile.SourceHelpCirclePaint
+{
+    if (!suppliedScreen(stored.page) or stored.figure_alternative_sources == null or
+        std.mem.indexOf(u8, expanded, "border-radius") == null) return &.{};
+    var scratch = std.heap.ArenaAllocator.init(a);
+    defer scratch.deinit();
+    const arena = scratch.allocator();
+    const candidates = try helpCircleSources(arena, expanded);
+    if (candidates.len == 0) return &.{};
+    const colors = try arena.alloc(*HelpCircleOccurrence, candidates.len);
+    for (candidates, colors, 0..) |candidate, *paint, index| {
+        for (candidates[0..index], colors[0..index]) |prior, known| {
+            if (equal(prior.opening, candidate.opening) and equal(prior.text, candidate.text)) {
+                paint.* = known;
+                break;
+            }
+        } else {
+            paint.* = try arena.create(HelpCircleOccurrence);
+            paint.*.* = .{};
+        }
+    }
+    for ([_]bool{ false, true }) |alternative| {
+        const covered = observedHelpCircleArm(arena, ns, stored, parent, candidates, colors, alternative) catch |failure| switch (failure) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return &.{},
+        };
+        if (!covered) return &.{};
+    }
+    const result = try a.alloc(profile.SourceHelpCirclePaint, candidates.len);
+    if (selected.page_style_parent != parent or parent.page_style_parent != null or
+        !profile.helpCircleProfileBound(parent) or !profile.helpCircleProfileBound(selected)) return &.{};
+    for (result, candidates, colors) |*out, candidate, paint| {
+        var box = paint.geometry orelse return &.{};
+        const light = try a.dupe(u8, paint.light orelse return &.{});
+        const dark = try a.dupe(u8, paint.dark orelse return &.{});
+        inline for (.{ "top", "right", "bottom", "left" }) |side|
+            @field(box.border, side).dotted.color = if (equal(light, dark)) .{ .rgb = light }
+                else .{ .light_dark = .{ .light = light, .dark = dark } };
+        out.* = .{ .source = expanded, .styles = selected, .opening = candidate.opening, .owner_snapshot = try a.dupe(u8, candidate.owner),
+            .physical = .{ .parent = parent, .box = box, .table_chains = .{
+                try a.dupe([32]u8, paint.table_chains[0].items), try a.dupe([32]u8, paint.table_chains[1].items),
+            } } };
+    }
+    return result;
 }
 
 fn observedCustomAncestor(node: OuterObservedNode, root: bool) profile.CustomElement {
@@ -8797,6 +9049,8 @@ pub const RawOuterContext = struct {
 };
 const OuterObservedNode = struct { tag: []const u8, attributes: Inventory };
 const OuterObservedPrefix = struct {
+    configuration_program: ?[]const u8 = null,
+    configuration_programs: usize = 0,
     body_open_end: usize = 0,
     root_start: ?usize = null,
     root_open_end: ?usize = null,
@@ -8862,6 +9116,8 @@ fn observedOuterPrefix(a: A, html: []const u8, parser_root: bool) !OuterObserved
     var stack: [128]OuterObservedNode = undefined;
     var depth: usize = 0;
     var at: usize = 0;
+    var configuration_program: ?[]const u8 = null;
+    var configuration_programs: usize = 0;
     var generator: ?[]const u8 = null;
     var html_seen = false;
     var body_seen = false;
@@ -8905,11 +9161,20 @@ fn observedOuterPrefix(a: A, html: []const u8, parser_root: bool) !OuterObserved
         }
         if (profile.Profile.hasClass(inv.get("class") orelse "", "mw-parser-output")) {
             if (!parser_root or !body_seen or !tag.is("div") or tag.self_closing) return invalid;
-            return .{ .ancestors = try a.dupe(OuterObservedNode, stack[0..depth]), .root = inv, .generator = generator orelse return invalid, .body_open_end = body_open_end, .root_start = at, .root_open_end = tag.end };
+            return .{ .configuration_program = configuration_program, .configuration_programs = configuration_programs, .ancestors = try a.dupe(OuterObservedNode, stack[0..depth]), .root = inv, .generator = generator orelse return invalid, .body_open_end = body_open_end, .root_start = at, .root_open_end = tag.end };
         }
         if (tag.is("script") or tag.is("style")) {
             if (tag.self_closing) return invalid;
-            at = try outerRawTextEnd(html, tag); continue;
+            const end = try outerRawTextEnd(html, tag);
+            if (tag.is("script") and depth == 2 and equal(stack[1].tag, "head")) {
+                const close = std.mem.lastIndexOfScalar(u8, html[tag.end..end], '<') orelse return invalid;
+                const program = html[tag.end..][0..close];
+                if (std.mem.indexOf(u8, program, "RLCONF=") != null) {
+                    configuration_programs += 1;
+                    if (tag.attrs.len == 0) configuration_program = program;
+                }
+            }
+            at = end; continue;
         }
         if (!outerVoidTag(tag)) {
             if (tag.self_closing or depth == stack.len) return invalid;
@@ -8918,7 +9183,7 @@ fn observedOuterPrefix(a: A, html: []const u8, parser_root: bool) !OuterObserved
         at = tag.end;
     }
     if (parser_root or !html_seen or !body_seen or depth != 2 or !equal(stack[0].tag, "html") or !equal(stack[1].tag, "body")) return invalid;
-    return .{ .ancestors = try a.dupe(OuterObservedNode, stack[0..depth]), .generator = generator orelse return invalid, .body_open_end = body_open_end };
+    return .{ .configuration_program = configuration_program, .configuration_programs = configuration_programs, .ancestors = try a.dupe(OuterObservedNode, stack[0..depth]), .generator = generator orelse return invalid, .body_open_end = body_open_end };
 }
 fn outerSameAttributes(left: Inventory, right: Inventory, omit_class: bool) bool {
     var left_count: usize = 0;
@@ -9075,6 +9340,98 @@ const ObservedOuterContext = struct {
 fn observedOuterClasses(a: A, ns: *const namespaces.Registry, page: RawPage, outer: RawOuterContext, scope: profile.BoundedTextClassScope) ![]const u8 {
     return (try observedOuterContext(a, ns, page, outer, scope)).classes;
 }
+const supplied_screen_profile = "mediawiki-vector-2022-1.48.0-wmf.5-supplied-screen";
+
+fn suppliedScreen(page: RawPage) bool {
+    const outer = page.outer_context orelse return false;
+    return equal(outer.profile, supplied_screen_profile);
+}
+
+fn suppliedScreenStyles(a: A, ns: *const namespaces.Registry, page: RawPage, served: ValidatedMissingSet,
+    supplied: []const usize, authored: []const profile.Source) ![]const profile.Source
+{
+    const outer = page.outer_context.?;
+    const observed = try observedOuterPrefix(a, outer.response, true);
+    const end = observed.root_open_end orelse return invalid;
+    const prefix = outer.response[0..end];
+    const identity = try @import("page_language_prefix.zig").revisionExteriorTagsAlloc(a, prefix, page.page_id, page.revision_id, page.title, ns.wiki);
+    defer a.free(identity);
+    const head = try figureStyleGetHeadSources(a, ns, outer.response, served);
+    const urls = try a.alloc([]const u8, head.len);
+    const responses = try a.alloc([]const u8, head.len);
+    for (head, 0..) |item, i| {
+        urls[i] = item.base_url;
+        responses[i] = item.css;
+    }
+    for (served.urls, 0..) |url, i| {
+        for (supplied) |j| {
+            if (i == j) break;
+        } else {
+            for (urls) |found| {
+                if (equal(url, found)) break;
+            } else return invalid;
+        }
+    }
+    const root_end = try sourceParentOwnedRootEnd(outer.response, prefix);
+    const url = try string((try field(try json(a, outer.receipt), "sources")).array.items[0], "url");
+    const all = try sourceParentStyleSourcesIn(a, ns, outer.response, .{ .urls = urls, .responses = responses }, true, url, root_end);
+    if (all.len != head.len + authored.len) return invalid;
+    for (all[0..head.len], head) |actual, expected| {
+        if (!equal(actual.base_url, expected.base_url) or !equal(actual.css, expected.css)) return invalid;
+    }
+    for (all[head.len..], authored) |actual, expected| {
+        if (!equal(actual.base_url, url) or !equal(actual.css, expected.css)) return invalid;
+    }
+    return head;
+}
+
+fn verifiedThemePreferenceSeed(a: A, ns: *const namespaces.Registry, page: RawPage, alternative: bool) !?[]const u8 {
+    if (!suppliedScreen(page)) return null;
+    const outer = page.outer_context.?;
+    if (!equal(ns.wiki, "enwiktionary") or !equal(ns.content_language, "en") or page.namespace_id != 0 or
+        outer.selected_body != null or outer.current_identity != null or currentGetLiteral(page) or
+        !page.text_class_scope or page.page_styles == null or page.occurrences.len != 0 or
+        page.missing_head_context != null or page.authored_head_context != null or page.missing_served_set != null or
+        page.authored_style_operations != null or page.figure_style_operations != null or page.figure_style_assets != null or
+        page.image_map_no_link != null or page.figure_block_renditions != null or page.source_element_relations != null) return invalid;
+    const html = if (alternative) outer.response else try suppliedPageHead(a, page);
+    const observed = try observedOuterPrefix(a, html, alternative);
+    if (!equal(observed.generator, "MediaWiki 1.48.0-wmf.5") or observed.configuration_programs != 1) return invalid;
+    const program = observed.configuration_program orelse return invalid;
+    const split = std.mem.indexOf(u8, program, "RLCONF=") orelse return invalid;
+    const prelude = program[0..split];
+    const expected_hash = if (alternative) "b6129c442db8c69b404736c234c3837a87fdbbe7c8c7ff4e060a3d788c6c210b" else
+        "f26cbdb7ecaea7af9e730d5ec6439854bb1874d1c718c760572b37da98407e44";
+    if (!digestMatches(prelude, expected_hash)) return invalid;
+    const start = "(function(){var className=\"";
+    if (!std.mem.startsWith(u8, prelude, start)) return invalid;
+    const stop = std.mem.indexOfPos(u8, prelude, start.len, "\";var cookie=") orelse return invalid;
+    const seed = prelude[start.len..stop];
+    const classes = observed.ancestors[0].attributes.get("class") orelse return invalid;
+    if (!std.mem.startsWith(u8, classes, "client-nojs ") or !std.mem.startsWith(u8, seed, "client-js ") or
+        !equal(classes["client-nojs ".len..], seed["client-js ".len..])) return invalid;
+    const payload = program[split + "RLCONF=".len..];
+    const terminator = std.mem.indexOf(u8, payload, ";\nRLSTATE=") orelse return invalid;
+    if (std.mem.indexOf(u8, payload[terminator..], "RLCONF=") != null) return invalid;
+    const config = try json(a, payload[0..terminator]);
+    const revision = try field(config, "wgRevisionId");
+    const namespace = try field(config, "wgNamespaceNumber");
+    const groups = try field(config, "wgUserGroups");
+    const article = try field(config, "wgIsArticle");
+    const redirect = try field(config, "wgIsRedirect");
+    const page_name = try a.dupe(u8, page.title);
+    defer a.free(page_name);
+    std.mem.replaceScalar(u8, page_name, ' ', '_');
+    if (try number(config, "wgArticleId") != page.page_id or try number(config, "wgCurRevisionId") != page.revision_id or
+        revision != .integer or revision.integer < 0 or @as(u64, @intCast(revision.integer)) != (if (alternative) page.revision_id else 0) or
+        namespace != .integer or namespace.integer != 0 or !equal(try string(config, "wgTitle"), page.title) or
+        !equal(try string(config, "wgPageName"), page_name) or !equal(try string(config, "wgAction"), "view") or
+        (try field(config, "wgUserName")) != .null or groups != .array or groups.array.items.len != 1 or
+        groups.array.items[0] != .string or !equal(groups.array.items[0].string, "*") or
+        article != .bool or !article.bool or redirect != .bool or redirect.bool) return invalid;
+    return seed;
+}
+
 // This selected-oldid branch binds the observed SR wrapper, not a generic WMF5
 // profile. The supplied parse remains an input echo, not revision evidence.
 fn selectedSrWmf5Outer(a: A, ns: *const namespaces.Registry, page: RawPage, outer: RawOuterContext) !void {
@@ -9111,6 +9468,11 @@ fn observedOuterContext(a: A, ns: *const namespaces.Registry, page: RawPage, out
         "MediaWiki 1.48.0-wmf.3"
     else if (equal(outer.profile, "mediawiki-vector-2022-1.48.0-wmf.4"))
         "MediaWiki 1.48.0-wmf.4"
+    else if (suppliedScreen(page)) screen: {
+        _ = (try verifiedThemePreferenceSeed(a, ns, page, false)) orelse return invalid;
+        _ = (try verifiedThemePreferenceSeed(a, ns, page, true)) orelse return invalid;
+        break :screen "MediaWiki 1.48.0-wmf.5";
+    }
     else if (equal(outer.profile, "mediawiki-vector-2022-1.48.0-wmf.5")) sr: {
         try selectedSrWmf5Outer(a, ns, page, outer);
         break :sr "MediaWiki 1.48.0-wmf.5";
