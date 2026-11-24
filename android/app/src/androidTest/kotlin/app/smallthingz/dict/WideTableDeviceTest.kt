@@ -33,7 +33,7 @@ import org.junit.Rule
 import org.junit.Test
 
 class WideTableDeviceTest {
-    @get:Rule val compose = createPhysicalComposeRule()
+    @get:Rule val compose = createPhysicalContentRule()
     private val witness = "𓂜𓐰𓏏𓐱𓏭𓅪𓆑"
     private fun fixture(): ByteArray {
         fun u32(n: Int) = ByteArray(4) { (n ushr (it * 8)).toByte() }
@@ -89,13 +89,62 @@ class WideTableDeviceTest {
     }
 
     private val observedDensity = AtomicReference<Density?>()
+    private val keyboardOwner = AtomicReference<androidx.compose.ui.input.InputModeManager>()
+
+    private fun withReaderKeyboard(action: () -> Unit) {
+        val input = checkNotNull(keyboardOwner.get())
+        val initial = compose.runOnIdle { input.inputMode }
+        var primary: Throwable? = null
+        try {
+            compose.runOnIdle {
+                assertPhysicalActivity(compose.activity)
+                assertTrue(compose.activity.hasWindowFocus())
+                assertTrue(input.requestInputMode(androidx.compose.ui.input.InputMode.Keyboard))
+            }
+            compose.waitUntil(10_000) { input.inputMode == androidx.compose.ui.input.InputMode.Keyboard }
+            action()
+        } catch (failure: Throwable) {
+            primary = failure
+            throw failure
+        } finally {
+            try {
+                if (initial == androidx.compose.ui.input.InputMode.Touch && input.inputMode != initial) {
+                    // An owned physical touch returns Android to touch mode. Cancel before it can activate content.
+                    val start = android.os.SystemClock.uptimeMillis()
+                    var first: android.graphics.Point? = null
+                    for (eventType in listOf(android.view.MotionEvent.ACTION_DOWN, android.view.MotionEvent.ACTION_CANCEL)) {
+                        val point = compose.runOnIdle {
+                            val activity = compose.activity
+                            assertPhysicalActivity(activity)
+                            val decor = activity.window.decorView
+                            assertTrue(activity.hasWindowFocus() && decor.hasWindowFocus())
+                            val content = checkNotNull(activity.findViewById<android.view.View>(android.R.id.content))
+                            val origin = IntArray(2).also(content::getLocationOnScreen)
+                            val frame = android.graphics.Rect().also(decor::getWindowVisibleDisplayFrame)
+                            assertTrue(frame.intersect(origin[0], origin[1], origin[0] + content.width, origin[1] + content.height))
+                            assertTrue(frame.width() > 2 && frame.height() > 2)
+                            android.graphics.Point(frame.left + 1, frame.top + 1)
+                        }
+                        if (first == null) first = point else assertEquals(first, point)
+                        val event = android.view.MotionEvent.obtain(start, android.os.SystemClock.uptimeMillis(), eventType,
+                            point.x.toFloat(), point.y.toFloat(), 0).apply { source = android.view.InputDevice.SOURCE_TOUCHSCREEN }
+                        try { InstrumentationRegistry.getInstrumentation().sendPointerSync(event) } finally { event.recycle() }
+                    }
+                }
+                compose.waitUntil(10_000) { input.inputMode == initial }
+            } catch (cleanup: Throwable) {
+                if (primary != null) primary.addSuppressed(cleanup) else throw cleanup
+            }
+        }
+    }
 
     @Composable
     private fun TableViewport(mode: String, fontScale: Float, fixedDensity: Float? = null,
                               content: @Composable () -> Unit) {
         val base = LocalDensity.current
         val local = Density(fixedDensity ?: base.density, fontScale = fontScale)
-        SideEffect { observedDensity.set(local) }
+        val input = androidx.compose.ui.platform.LocalInputModeManager.current
+        SideEffect { observedDensity.set(local); keyboardOwner.set(input) }
         CompositionLocalProvider(LocalDensity provides local, LocalLayoutDirection provides LayoutDirection.Ltr) {
             DictTheme(mode) {
                 androidx.compose.material3.Surface(Modifier.width(320.dp).height(480.dp).clipToBounds().testTag("table-viewport")) {
@@ -255,13 +304,90 @@ class WideTableDeviceTest {
         }
     }
 
+    private fun frequencyLinkEntry(last: Int): Entry = tableEntry("oversized-table-owner", "Frequency",
+        Table(emptyList(), List(last + 1) { row -> listOf(
+            Cell(listOf(Span("text", row.toString())), row == 0, 1, 1),
+            Cell(listOf(Span("link", "word $row", target = "word-$row")), false, 1, 1)) }))
+
+    @Test fun keyboardTraversesUncomposedRowBandsInOrder() {
+        val mode = LearningStore.get(InstrumentationRegistry.getInstrumentation().targetContext).data.settings.darkMode
+        val entry = frequencyLinkEntry(6999)
+        val opened = mutableListOf<EntryLink>()
+        val finalRow = 24
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        fun key(code: Int) {
+            val start = android.os.SystemClock.uptimeMillis()
+            for (action in listOf(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.ACTION_UP)) {
+                compose.runOnIdle {
+                    assertPhysicalActivity(compose.activity)
+                    assertTrue(compose.activity.hasWindowFocus())
+                }
+                instrumentation.sendKeySync(android.view.KeyEvent(start, android.os.SystemClock.uptimeMillis(), action,
+                    code, 0, 0, android.view.KeyCharacterMap.VIRTUAL_KEYBOARD, 0, 0, android.view.InputDevice.SOURCE_DPAD))
+            }
+            compose.waitForIdle()
+        }
+        fun focusDescription(): String = compose.onAllNodes(isFocused(), useUnmergedTree = true)
+            .fetchSemanticsNodes().joinToString { focused ->
+                generateSequence(focused) { it.parent }.take(8).joinToString(" > ") { node ->
+                    val tag = node.config.getOrNull(SemanticsProperties.TestTag)
+                    val text = node.config.getOrNull(SemanticsProperties.Text)?.joinToString { it.text }
+                    "${node.id}(${tag.orEmpty()},${text.orEmpty()},click=${SemanticsActions.OnClick in node.config},${node.boundsInRoot})"
+                }
+            }
+        fun link(row: Int) = compose.onNode(hasAnyAncestor(hasTestTag("compiled-table-cell-root-${row * 2 + 1}")) and
+            hasClickAction() and SemanticsMatcher.keyIsDefined(SemanticsActions.RequestFocus), useUnmergedTree = true)
+        try {
+            compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+                TableViewport(mode, 1f, fixedDensity = 1f) {
+                    EntryView(entry, false, {}, onLink = { opened += it },
+                        settings = AppSettings(collapseOtherSections = false, collapseDetails = false))
+                }
+            } }
+            compose.onNodeWithTag("entry-scroll").performScrollToNode(hasTestTag("compiled-table-grid"))
+            link(finalRow).assertDoesNotExist()
+            var reached = -1
+            try {
+                withReaderKeyboard {
+                    link(0).performSemanticsAction(SemanticsActions.RequestFocus) { assertTrue(it()) }
+                    for (row in 0 until finalRow) {
+                        link(row).assertIsFocused()
+                        key(android.view.KeyEvent.KEYCODE_DPAD_DOWN)
+                        val actual = focusDescription()
+                        instrumentation.sendStatus(0, android.os.Bundle().apply {
+                            putString("stream", "\nTALL_DIRECTION from=$row to=${row + 1} focused=$actual\n")
+                        })
+                        link(row + 1).assertIsFocused()
+                        reached = row + 1
+                    }
+                    link(finalRow).assertIsFocused().assertIsDisplayed()
+                    key(android.view.KeyEvent.KEYCODE_DPAD_UP)
+                    link(finalRow - 1).assertIsFocused()
+                    key(android.view.KeyEvent.KEYCODE_DPAD_DOWN)
+                    link(finalRow).assertIsFocused()
+                    key(android.view.KeyEvent.KEYCODE_ENTER)
+                    compose.runOnIdle { assertEquals(listOf(EntryLink("word-$finalRow")), opened) }
+                    val selection = compose.onNode(hasAnyAncestor(hasTestTag("compiled-table-cell-root-${finalRow * 2 + 1}")) and
+                        SemanticsMatcher.keyIsDefined(SemanticsActions.RequestFocus) and !hasClickAction(),
+                        useUnmergedTree = true)
+                    selection.performSemanticsAction(SemanticsActions.RequestFocus) { assertTrue(it()) }.assertIsFocused()
+                }
+            } finally {
+                val count = compose.runOnIdle { opened.size }
+                InstrumentationRegistry.getInstrumentation().sendStatus(0, android.os.Bundle().apply {
+                    putString("stream", "\nTALL_KEYBOARD reached=$reached target=$finalRow activations=$count\n")
+                })
+            }
+        } finally {
+            compose.runOnIdle { compose.activity.setContent {} }
+            compose.waitForIdle()
+        }
+    }
+
     @Test fun oversizedTableScrollsToMiddleAndFinalLinksWithGlobalCellSemantics() {
         val mode = LearningStore.get(InstrumentationRegistry.getInstrumentation().targetContext).data.settings.darkMode
         val last = 6999
-        val table = Table(emptyList(), List(last + 1) { row -> listOf(
-            Cell(listOf(Span("text", row.toString())), row == 0, 1, 1),
-            Cell(listOf(Span("link", "word $row", target = "word-$row")), false, 1, 1)) })
-        val entry = tableEntry("oversized-table-owner", "Frequency", table)
+        val entry = frequencyLinkEntry(last)
         val opened = mutableListOf<String>()
         val visit = EntryReadingState()
         val selectedVisit = mutableStateOf(visit)
@@ -288,18 +414,17 @@ class WideTableDeviceTest {
                 val item = cell.fetchSemanticsNode().config[SemanticsProperties.CollectionItemInfo]
                 assertEquals(row, item.rowIndex)
                 assertEquals(1, item.columnIndex)
-                val link = compose.onNodeWithText("word $row", useUnmergedTree = true)
-                link.performScrollTo().assertIsDisplayed()
+                val (link, layout) = visibleText("word $row", 1f)
                 val count = compose.runOnIdle { opened.size }
                 if (row == last) {
                     val action = compose.onNode(hasAnyAncestor(hasTestTag(cellTag)) and hasClickAction() and
                         SemanticsMatcher.keyIsDefined(SemanticsActions.RequestFocus), useUnmergedTree = true)
-                    action.performSemanticsAction(SemanticsActions.RequestFocus) { assertTrue(it()) }
-                    action.assertIsFocused().performKeyInput { pressKey(androidx.compose.ui.input.key.Key.Enter) }
+                    withReaderKeyboard {
+                        action.performSemanticsAction(SemanticsActions.RequestFocus) { assertTrue(it()) }
+                        action.assertIsFocused().performKeyInput { pressKey(androidx.compose.ui.input.key.Key.Enter) }
+                    }
                 } else {
-                    val layouts = mutableListOf<TextLayoutResult>()
-                    link.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
-                    link.performTouchInput { click(layouts.single().getBoundingBox(0).center) }
+                    link.performTouchInput { click(layout.getBoundingBox(0).center) }
                 }
                 compose.runOnIdle {
                     assertEquals(count + 1, opened.size)

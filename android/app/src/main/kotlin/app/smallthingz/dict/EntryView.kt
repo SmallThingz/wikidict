@@ -40,6 +40,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.input.nestedscroll.*
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.focus.FocusDirection
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
@@ -107,6 +111,8 @@ private val LocalEntryMediaOwners = staticCompositionLocalOf { MediaOwners(empty
 internal val LocalEntryEdition = staticCompositionLocalOf { "" }
 private val LocalReaderSettings = staticCompositionLocalOf { AppSettings() }
 private val LocalTextCache = staticCompositionLocalOf<TextCache?> { null }
+private class BandLinkFocus { var focusedSelection: Any? = null }
+private val LocalBandLinkFocus = staticCompositionLocalOf<BandLinkFocus?> { null }
 private val LocalReadingVisit = staticCompositionLocalOf<EntryReadingState?> { null }
 private val LocalTableRecord = staticCompositionLocalOf<Pair<String, WordHit>?> { null }
 private val LocalEntryScroll = staticCompositionLocalOf<androidx.compose.foundation.lazy.LazyListState?> { null }
@@ -1375,6 +1381,7 @@ private fun TallOrdinaryTable(table: Table, onLink: (EntryLink) -> Unit, path: S
     val owner = rememberNativeTableBorderSourceKey(table)
     val grid = remember(owner) { tableGrid(table) }
     val bands = remember(grid) { tableRowBands(grid) }
+    val bandLinks = remember(grid) { BandLinkFocus() }
     val density = LocalDensity.current
     val state = rememberLazyListState(position?.band ?: 0, position?.offset ?: 0)
     val scope = rememberCoroutineScope()
@@ -1411,7 +1418,7 @@ private fun TallOrdinaryTable(table: Table, onLink: (EntryLink) -> Unit, path: S
                 tableBandPaint(grid, it, bands, index)
             } }
             // Scrolling through the dictionary must not retain every built annotated string.
-            CompositionLocalProvider(LocalTextCache provides null) {
+            CompositionLocalProvider(LocalTextCache provides null, LocalBandLinkFocus provides bandLinks) {
                 Box(Modifier.clipToBounds()) {
                     TableGridView(source, onLink, path, metrics.width, semanticPath, localMetrics, 1.0, {},
                         ownCollectionSemantics = false, bandGrid = localGrid, band = band, bandPaint = paint)
@@ -2530,9 +2537,39 @@ internal fun StyledText(source: List<Span>, modifier: Modifier = Modifier, weigh
         { target -> (cache?.link?.value ?: currentLink.value)(target) },
         authoredSpanForegroundArgb(null, inheritedBackground)?.let { Color(it) } ?: MaterialTheme.colorScheme.onSurfaceVariant)
         else emptyMap()
-    SelectionContainer(modifier = modifier.then(if (cellTextAlign == null) Modifier else Modifier.fillMaxWidth())) {
+    SelectionContainer(modifier = modifier.then(if (cellTextAlign == null) Modifier else Modifier.fillMaxWidth())
+        .then(bandLinkFocusModifier(annotated))) {
         EgyptianInlineText(annotated, egyptianRuns, Modifier.then(if (cellTextAlign == null) Modifier else Modifier.fillMaxWidth()),
             renderedStyle.copy(textDirection = compiledDirection, textAlign = cellTextAlign ?: style.textAlign), linkColor, inlineContent)
+    }
+}
+
+/** Compose gives a selectable single-link cell two overlapping focus targets. When a vertical
+ * key moves from its link to another such cell, enter the newly focused selection's link. */
+@Composable
+private fun bandLinkFocusModifier(text: AnnotatedString): Modifier {
+    val bands = LocalBandLinkFocus.current ?: return Modifier
+    val fullLink = remember(text) { text.getLinkAnnotations(0, text.length).singleOrNull()?.let {
+        it.start == 0 && it.end == text.length
+    } == true }
+    if (!fullLink) return Modifier
+    val owner = remember { Any() }
+    val manager = LocalFocusManager.current
+    return Modifier.onFocusChanged { focus ->
+        if (focus.isFocused) bands.focusedSelection = owner
+        else if (bands.focusedSelection === owner) bands.focusedSelection = null
+    }.onKeyEvent { key ->
+        val event = key.nativeKeyEvent
+        if (event.action != android.view.KeyEvent.ACTION_DOWN || !event.hasNoModifiers() ||
+            bands.focusedSelection != null) return@onKeyEvent false
+        val direction = when (event.keyCode) {
+            android.view.KeyEvent.KEYCODE_DPAD_UP -> FocusDirection.Up
+            android.view.KeyEvent.KEYCODE_DPAD_DOWN -> FocusDirection.Down
+            else -> return@onKeyEvent false
+        }
+        if (!manager.moveFocus(direction)) return@onKeyEvent false
+        if (bands.focusedSelection != null) manager.moveFocus(FocusDirection.Enter)
+        true
     }
 }
 

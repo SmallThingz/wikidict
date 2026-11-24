@@ -3,6 +3,7 @@ package app.smallthingz.dict
 import android.app.ActivityOptions
 import android.os.Bundle
 import android.view.Display
+import androidx.activity.ComponentActivity
 import androidx.compose.ui.test.junit4.AndroidComposeTestRule
 import androidx.compose.ui.test.junit4.v2.AndroidComposeTestRule as createV2AndroidComposeTestRule
 import androidx.test.core.app.ActivityScenario
@@ -17,23 +18,23 @@ import org.junit.runners.model.Statement
 internal fun physicalActivityLaunchOptions(): Bundle =
     ActivityOptions.makeBasic().setLaunchDisplayId(Display.DEFAULT_DISPLAY).toBundle()
 
-internal fun assertPhysicalActivity(activity: MainActivity) {
+internal fun assertPhysicalActivity(activity: ComponentActivity) {
     assertEquals(InstrumentationRegistry.getInstrumentation().targetContext.packageName, activity.packageName)
     assertEquals(Display.DEFAULT_DISPLAY, activity.windowManager.defaultDisplay.displayId)
     assertEquals(Display.DEFAULT_DISPLAY, checkNotNull(activity.window.decorView.display).displayId)
 }
 
 /** Launch only our validation activity on the physical display; never move a foreign task. */
-class PhysicalActivityRule : TestRule {
+open class PhysicalScenarioRule<A : ComponentActivity>(activityType: Class<A>) : TestRule {
     private val delegate = ActivityScenarioRule(
-        MainActivity::class.java,
+        activityType,
         physicalActivityLaunchOptions(),
     )
 
-    val scenario: ActivityScenario<MainActivity> get() = delegate.scenario
+    val scenario: ActivityScenario<A> get() = delegate.scenario
 
-    fun activity(): MainActivity {
-        var current: MainActivity? = null
+    fun activity(): A {
+        var current: A? = null
         scenario.onActivity { activity ->
             assertPhysicalActivity(activity)
             current = activity
@@ -49,6 +50,12 @@ class PhysicalActivityRule : TestRule {
             }
         }, description)
 }
+
+class PhysicalActivityRule : PhysicalScenarioRule<MainActivity>(MainActivity::class.java)
+
+// A reader-content fixture supplies its own EntryView and does not open the saved library.
+internal fun createPhysicalContentRule() =
+    createV2AndroidComposeTestRule(PhysicalScenarioRule(ComponentActivity::class.java), EmptyCoroutineContext) { it.activity() }
 
 internal fun createPhysicalComposeRule(): AndroidComposeTestRule<PhysicalActivityRule, MainActivity> =
     createV2AndroidComposeTestRule(PhysicalActivityRule(), EmptyCoroutineContext) { it.activity() }

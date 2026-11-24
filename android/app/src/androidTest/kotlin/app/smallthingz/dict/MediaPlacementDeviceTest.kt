@@ -14,7 +14,7 @@ import org.junit.Test
 
 /** Valid DPR2 fixtures; audio is disabled so rendering cannot fetch or play media. */
 class MediaPlacementDeviceTest {
-    @get:Rule val compose = createPhysicalComposeRule()
+    @get:Rule val compose = createPhysicalContentRule()
 
     private val firstCaptionLine = "First caption line " + "a".repeat(21)
     private val secondCaptionLine = "Second caption line " + "b".repeat(20)
