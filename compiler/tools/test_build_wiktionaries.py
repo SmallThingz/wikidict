@@ -6720,14 +6720,46 @@ class PreparedBlobToolsTests(unittest.TestCase):
 
                 with patch.object(b, 'PROJECT', root), patch.dict(b.os.environ, environ, clear=True), \
                      patch.object(b, 'source_fingerprint', return_value=identity['source']), \
-                     patch.object(b, 'check_figure_compatibility'), patch.object(b.subprocess, 'run', side_effect=native):
+                     patch.object(b, 'check_figure_compatibility'), patch.object(b.subprocess, 'run', side_effect=native), \
+                     patch.object(b, 'phase_event') as events:
                     tools = b.prepare_blob_tools(workspace, str(compiler), 'testwiktionary', '20261001',
                                                  identity, expander_args=args, figure_inputs=())
                     self.assertEqual(dict(b.os.environ), environ)
                 self.assertEqual(len(invocations), 2)
-                self.assertEqual(invocations[0][-1], 'prepare-blob-tools')
+                self.assertEqual(invocations[0][6:], ['--summary', 'all', 'prepare-blob-tools'])
+                commands = [call for call in events.call_args_list if call.args[2].startswith('zig_')]
+                self.assertEqual([(call.args[2], call.args[3]) for call in commands],
+                    [(phase, event) for phase in ('zig_prepare_blob_tools', 'zig_build_dictionary')
+                     for event in ('start', 'end')])
+                for call in commands[1::2]:
+                    self.assertEqual(call.kwargs['status'], 'success')
+                    for field in ('seconds', 'self_cpu_seconds', 'process_reaped_children_cpu_seconds',
+                                  'process_reaped_children_input_blocks', 'process_reaped_children_major_faults'):
+                        self.assertGreaterEqual(call.kwargs[field], 0)
                 self.assertEqual(invocations[1][6:], ['--summary', 'all', 'build-dictionary', '--', *args])
                 self.assertEqual(set(tools), set(b.BLOB_TOOL_NAMES))
+
+    def test_split_preparation_reports_the_failing_command(self):
+        for failed in ('zig_prepare_blob_tools', 'zig_build_dictionary'):
+            with self.subTest(failed=failed), tempfile.TemporaryDirectory() as tmp:
+                workspace, compiler, identity = self.fixture(Path(tmp))
+                error = subprocess.CalledProcessError(47, str(compiler))
+                def native(command, *, env):
+                    if failed == 'zig_prepare_blob_tools' or 'build-dictionary' in command:
+                        raise error
+                    self.install(command)
+                with patch.object(b,'source_fingerprint',return_value=identity['source']), \
+                     patch.object(b,'run_checked',side_effect=native), \
+                     patch.object(b,'check_figure_compatibility') as compatibility, \
+                     patch.object(b,'phase_event') as events, self.assertRaises(subprocess.CalledProcessError) as caught:
+                    b.prepare_blob_tools(workspace,str(compiler),'testwiktionary','20261001',identity,
+                                         expander_args=['dump'],figure_inputs=())
+                self.assertIs(caught.exception,error)
+                self.assertEqual(compatibility.call_count,int(failed == 'zig_build_dictionary'))
+                ends = [call for call in events.call_args_list if call.args[3] == 'end']
+                self.assertEqual([call.args[2] for call in ends if call.kwargs['status'] == 'failure'],
+                                 [failed,'expander_and_blob_tools_prepare'])
+                self.assertIn('process_reaped_children_cpu_seconds',ends[-2].kwargs)
 
     def test_combined_graph_preserves_forwarded_arguments_and_binds_all_tools_once(self):
         with tempfile.TemporaryDirectory() as tmp:

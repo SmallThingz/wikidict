@@ -7010,11 +7010,15 @@ def phase_event(edition, date, name, event, **fields):
 
 
 @contextmanager
-def build_phase(edition, date, name, **fields):
+def build_phase(edition, date, name, *, measure_reaped_children=False, **fields):
     started=time.monotonic()
     # Inclusive CPU of this process (all its threads), excluding child processes.
     try: cpu_started=time.process_time()
     except Exception: cpu_started=None
+    child_start = None
+    if measure_reaped_children:
+        try: child_start = resource.getrusage(resource.RUSAGE_CHILDREN)
+        except OSError: pass
     phase_event(edition,date,name,'start',**fields)
     result=dict(fields)
     status='failure'
@@ -7023,18 +7027,30 @@ def build_phase(edition, date, name, **fields):
         status='success'
     finally:
         cpu_fields={}
+        if child_start is not None:
+            # Process-wide window may include concurrent edition children.
+            try:
+                usage = resource.getrusage(resource.RUSAGE_CHILDREN)
+                cpu_fields['process_reaped_children_cpu_seconds'] = round(
+                    usage.ru_utime - child_start.ru_utime + usage.ru_stime - child_start.ru_stime, 6)
+                cpu_fields['process_reaped_children_input_blocks'] = usage.ru_inblock - child_start.ru_inblock
+                cpu_fields['process_reaped_children_major_faults'] = usage.ru_majflt - child_start.ru_majflt
+            except OSError: pass
         if cpu_started is not None:
             try: cpu_fields['self_cpu_seconds']=round(time.process_time()-cpu_started,6)
             except Exception: pass  # Optional timing cannot replace the stage result.
         phase_event(edition,date,name,'end',status=status,seconds=round(time.monotonic()-started,3),**(result|cpu_fields))
 
 
-def timed_run(command, edition, date, phase, *, native_working_directory=None, **fields):
+def timed_run(command, edition, date, phase, *, native_working_directory=None, env=None, **fields):
     if native_working_directory is not None:
         fields=dict(fields,native_working_directory=str(native_working_directory))
     with build_phase(edition,date,phase,**fields):
-        if native_working_directory is None:run_checked(command)
-        else:subprocess.run(command,cwd=native_working_directory,check=True)
+        if native_working_directory is None:
+            if env is None:run_checked(command)
+            else:run_checked(command,env=env)
+        else:
+            subprocess.run(command,cwd=native_working_directory,check=True,env=env)
 
 
 BLOB_TOOL_NAMES = ('dict-blob-build', 'dict-blob-merge', 'dict-blob-verify')
@@ -8490,8 +8506,13 @@ def prepare_blob_tools(workspace, zig, edition, date, build_identity=None, *, ex
             command=[str(compiler),'build','-j1','-Doptimize=fast','--prefix',str(prefix),'prepare-blob-tools']
             if expander_args is not None and figure_inputs is None:
                 command.extend(['--summary','all','build-dictionary','--',*expander_args])
+            else:
+                command[-1:] = ['--summary','all','prepare-blob-tools']
             command_started=time.monotonic()
-            run_checked(command, env=build_env)
+            if expander_args is not None and figure_inputs is not None:
+                timed_run(command,edition,date,'zig_prepare_blob_tools',env=build_env,measure_reaped_children=True)
+            else:
+                run_checked(command, env=build_env)
             post_started=time.monotonic()
             if source_fingerprint()!=source or sha256_file(compiler)!=compiler_sha:
                 raise ValueError('Source or compiler changed during native blob tool preparation')
@@ -8508,8 +8529,9 @@ def prepare_blob_tools(workspace, zig, edition, date, build_identity=None, *, ex
                 # The normal build graph may reuse its prepared tools, but it
                 # must not execute the expensive expander before this check.
                 post_started=None
-                run_checked([str(compiler),'build','-j1','-Doptimize=fast','--prefix',str(prefix),
-                    '--summary','all','build-dictionary','--',*expander_args], env=build_env)
+                timed_run([str(compiler),'build','-j1','-Doptimize=fast','--prefix',str(prefix),
+                    '--summary','all','build-dictionary','--',*expander_args],edition,date,'zig_build_dictionary',
+                    env=build_env,measure_reaped_children=True)
                 post_started=time.monotonic()
                 if source_fingerprint()!=source or sha256_file(compiler)!=compiler_sha:
                     raise ValueError('Source or compiler changed during expander preparation')
