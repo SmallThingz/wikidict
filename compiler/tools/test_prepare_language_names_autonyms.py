@@ -19,6 +19,33 @@ def response():
 
 
 class AutonymCaptureTests(unittest.TestCase):
+    def test_continued_capture_waits_before_the_next_request(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); sources = root / 'sources'; sources.mkdir()
+            source = b"private const DEPRECATED_LANGUAGE_CODE_MAPPING = [\n\t];\nprivate const NON_STANDARD_LANGUAGE_CODE_MAPPING = [\n\t];\n"
+            builtin = b"public const NAMES = [\n\t'en' => 'English',\n\t'ar' => 'Arabic',\n\t];\n"
+            (sources / 'LanguageCode.php').write_bytes(source)
+            (sources / 'Names.php').write_bytes(builtin)
+            namespace = root / 'namespace.tsv'
+            namespace.write_text('# wikidict-namespace-registry-v1\n# wiki\tarwiktionary\n# dump-date\t20261001\n# content-language\tar\n')
+            first, second = response(), response()
+            first['query']['languageinfo'] = {'ar': first['query']['languageinfo']['ar']}
+            first['continue'] = {'continue': '-||', 'licontinue': 'en'}
+            del second['query']['languageinfo']['ar']
+            pending, events = [first, second], []
+            def transport(url, timeout):
+                events.append('request')
+                return 200, {}, json.dumps(pending.pop(0)).encode()
+            def sleep(delay):
+                events.append(('wait', delay))
+            with mock.patch.object(m, 'SOURCE_PINS', {'LanguageCode.php': hashlib.sha256(source).hexdigest(),
+                                                     'Names.php': hashlib.sha256(builtin).hexdigest()}):
+                observed = m.capture_observation('arwiktionary', '20261001', namespace, sources,
+                                                root / 'capture', transport=transport, sleep=sleep)
+                self.assertEqual(events, ['request', ('wait', 1), 'request'])
+                self.assertEqual(observed['observed_codes'], 3)
+                self.assertEqual(m.replay_observation(root / 'capture', observed)[1]['ar'], 'العربية')
+
     def test_genuine_autonyms_ignore_translated_siteinfo_values(self):
         names, mw, _, continuation = m.parse_response(response(), 'arwiktionary', 'ar')
         self.assertEqual(names['ar'], 'العربية')
@@ -245,6 +272,97 @@ class AutonymCaptureTests(unittest.TestCase):
                 m.replay_previous(root, manifest)
 
 
+
+
+class CurrentSourceContractTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        fixture = Path(__file__).with_name('testdata') / 'en-september-language-names'
+        for name in m.CURRENT_SOURCE_PINS:
+            (self.root / (m.PREFIX + 'source-' + name)).write_bytes((fixture / 'sources' / name).read_bytes())
+        self.comparison = json.loads((fixture / 'autonyms-comparison.json').read_text())
+        self.proof = self.root / (m.PREFIX + 'source-comparison.json')
+        self.proof.write_text(json.dumps(self.comparison))
+
+    def test_current_profile_rejects_offline_revalidation_of_genuinely_refused_capture(self):
+        fixture = Path(__file__).with_name('testdata') / 'en-september-language-names'
+        current_sources, old_sources = self.root / 'current-sources', self.root / 'old-sources'
+        current_sources.mkdir(); old_sources.mkdir()
+        for name in m.CURRENT_SOURCE_PINS:
+            raw = (fixture / 'sources' / name).read_bytes()
+            (current_sources / name).write_bytes(raw)
+            if name == 'LanguageNameUtils.php':
+                raw = (fixture / 'previous-LanguageNameUtils.php').read_bytes()
+            self.assertEqual(hashlib.sha256(raw).hexdigest(), m.SOURCE_PINS[name])
+            (old_sources / name).write_bytes(raw)
+        (current_sources / 'comparison.json').write_text(json.dumps(self.comparison))
+        namespace = self.root / 'namespace.tsv'
+        namespace.write_text('# wikidict-namespace-registry-v1\n# wiki\tenwiktionary\n# dump-date\t20260901\n# content-language\ten\n')
+        aliases, required = m.validate_source_contract(self.root, m.CURRENT_CORE)
+        codes = sorted(required | set(aliases.values()))
+        raw = json.dumps({'query': {'general': {'wikiid': 'enwiktionary', 'lang': 'en', 'git-hash': m.CURRENT_CORE},
+            'languageinfo': {code: {'code': code, 'autonym': 'synthetic test'} for code in codes},
+            'languages': [{'code': code, 'name': 'synthetic test'} for code in codes]}}).encode()
+        def transport(url, timeout):
+            return 200, {}, raw
+        current, old = self.root / 'current', self.root / 'old'
+        observed = m.capture_observation('enwiktionary', '20260901', namespace, current_sources, current, transport=transport)
+        self.assertEqual(len(m.replay_observation(current, observed)[0]), len(codes))
+        with self.assertRaisesRegex(ValueError, '^Exact API wiki/content/core identity changed$'):
+            m.capture_observation('enwiktionary', '20260901', namespace, old_sources, old, transport=transport)
+        with self.assertRaisesRegex(ValueError, 'Unreviewed adoption source'):
+            m.adopt_observation('enwiktionary', '20260901', old, current_sources, current_sources / 'comparison.json', self.root / 'adopt')
+        record, = observed['requests']
+        for name in (record['request'], m.PREFIX + '0001-01.raw.json'):
+            self.assertEqual((current / name).read_bytes(), (old / name).read_bytes())
+        requested, proof = m.PREFIX + 'original-requested.json', m.PREFIX + 'offline-revalidation.json'
+        (current / record['accepted_receipt']).write_bytes((old / record['accepted_receipt']).read_bytes())
+        (current / requested).write_bytes((old / (m.PREFIX + 'requested.json')).read_bytes())
+        digest = lambda name: m.evidence.digest((current / name).read_bytes())
+        m.evidence.document(current / proof, dict(schema='wikidict.autonym-core-revalidation.v2',
+            original_receipt_sha256=digest(record['accepted_receipt']), original_requested_sha256=digest(requested),
+            source_comparison_sha256=digest(m.PREFIX + 'source-comparison.json'),
+            previous_core=m.CORE, core=m.CURRENT_CORE, original_receipt_accepted=False))
+        record['offline_revalidation'] = proof
+        with self.assertRaisesRegex(ValueError, 'Current autonym source profile requires an accepted observation'):
+            m.replay_observation(current, observed)
+
+    def test_original_sources_use_the_reviewed_cache_initialization_profile(self):
+        aliases, required = m.validate_source_contract(self.root, m.CURRENT_CORE)
+        self.assertEqual(aliases['als'], 'gsw')
+        self.assertGreater(len(required), 500)
+        self.assertNotIn('en-x-piglatin', required)
+        self.assertIn('en', required)
+        with self.assertRaisesRegex(ValueError, 'Unreviewed autonym source'):
+            m.validate_source_contract(self.root, m.CORE)
+
+    def test_current_profile_cannot_claim_identical_source_or_other_revision(self):
+        for key, value in (('core', m.CORE), ('previous_core', '0' * 40),
+                           ('source_profile_scope', 'deployment-observation'),
+                           ('all_five_byte_identical', True), ('changed_files', []),
+                           ('source_profile', 'unknown')):
+            changed = {**self.comparison, key: value}; self.proof.write_text(json.dumps(changed))
+            with self.subTest(key=key), self.assertRaisesRegex(ValueError, 'source profile'):
+                m.validate_source_contract(self.root, m.CURRENT_CORE)
+
+    def test_original_receipts_and_source_members_are_independently_checked(self):
+        for field, value in (('status', 404), ('source_path', 'includes/Language/Other.php'),
+                             ('previous_sha256', '0' * 64), ('byte_identical_to_previous', True)):
+            changed = copy.deepcopy(self.comparison)
+            next(row for row in changed['files'] if row['file'] == 'LanguageNameUtils.php')[field] = value
+            self.proof.write_text(json.dumps(changed))
+            with self.subTest(field=field), self.assertRaisesRegex(ValueError, 'source receipt'):
+                m.validate_source_contract(self.root, m.CURRENT_CORE)
+        changed = copy.deepcopy(self.comparison); changed['files'][1] = changed['files'][0]
+        self.proof.write_text(json.dumps(changed))
+        with self.assertRaisesRegex(ValueError, 'Duplicate'):
+            m.validate_source_contract(self.root, m.CURRENT_CORE)
+        self.proof.write_text(json.dumps(self.comparison))
+        with (self.root / (m.PREFIX + 'source-LanguageNameUtils.php')).open('ab') as stream:
+            stream.write(b'\nchanged\n')
+        with self.assertRaisesRegex(ValueError, 'Unreviewed autonym source'):
+            m.validate_source_contract(self.root, m.CURRENT_CORE)
 
 
 class SupportProjectionTests(unittest.TestCase):

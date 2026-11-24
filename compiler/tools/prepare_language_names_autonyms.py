@@ -39,6 +39,13 @@ SOURCE_PINS = {
     'LanguageCode.php': '17962f89468aa25369f126cc7a4edd8c074cb73497c8d4de77e8cbb04858d60d',
     'Names.php': '0b0c62791924c139d7d476530c2ad9a58d053c0f34e1195595b0c2e43776b11f',
 }
+CURRENT_CORE = 'db332802a5f05525b779baadbf8d3394bc7d989e'
+CURRENT_SOURCE_PROFILE = 'core-db332-autonyms-v1'
+CURRENT_SOURCE_SCOPE = 'immutable-public-source-profile-not-deployment-observation'
+CURRENT_SOURCE_PINS = {
+    **SOURCE_PINS,
+    'LanguageNameUtils.php': '2dc72ee00d7df558f80ec4ef66c1b3665d006989ad63b26702c63372efa4252a',
+}
 DEPENDENCIES = (
     'prepare_language_names.py',
     'prepare_language_names_generic.py',
@@ -123,9 +130,10 @@ def parse_response(data, wiki, content, core=CORE):
     return names, mw, {}, continuation
 
 
-def source_aliases(root):
+def source_aliases(root, pins=None):
+    pins = SOURCE_PINS if pins is None else pins
     sources = {}
-    for name, expected in SOURCE_PINS.items():
+    for name, expected in pins.items():
         raw = regular(Path(root) / (PREFIX + 'source-' + name))
         if evidence.digest(raw) != expected:
             raise ValueError('Unreviewed autonym source: ' + name)
@@ -186,11 +194,47 @@ def accepted_producer(record):
                for value in hashes)
 
 
+def validate_current_source_contract(root):
+    """Exact reviewed cache-initialization change; name lookup is unchanged."""
+    aliases = source_aliases(root, CURRENT_SOURCE_PINS)
+    comparison = evidence.decode(regular(root / (PREFIX + 'source-comparison.json'), MAX_MANIFEST))
+    if (comparison.get('schema') != 'wikidict.observed-core-source-comparison.v2'
+            or comparison.get('outcome') != 'completed-reviewed-source-comparison'
+            or comparison.get('core') != CURRENT_CORE or comparison.get('previous_core') != CORE
+            or comparison.get('source_profile') != CURRENT_SOURCE_PROFILE
+            or comparison.get('source_profile_scope') != CURRENT_SOURCE_SCOPE
+            or comparison.get('all_five_byte_identical') is not False
+            or comparison.get('changed_files') != ['LanguageNameUtils.php']
+            or comparison.get('source_requests') != len(CURRENT_SOURCE_PINS) or comparison.get('api_requests') != 0):
+        raise ValueError('Reviewed autonym source profile differs')
+    rows = comparison.get('files')
+    if not isinstance(rows, list) or len(rows) != len(CURRENT_SOURCE_PINS):
+        raise ValueError('Incomplete reviewed autonym source set')
+    seen = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            raise ValueError('Invalid reviewed autonym source row')
+        name = row.get('file')
+        if name not in CURRENT_SOURCE_PINS or name in seen:
+            raise ValueError('Duplicate or unreviewed autonym source')
+        raw = regular(root / (PREFIX + 'source-' + name))
+        url = f'https://raw.githubusercontent.com/wikimedia/mediawiki/{CURRENT_CORE}/{SOURCE_PATHS[name]}'
+        if (row.get('source_path') != SOURCE_PATHS[name] or row.get('url') != url or row.get('status') != 200
+                or row.get('bytes') != len(raw) or row.get('sha256') != CURRENT_SOURCE_PINS[name]
+                or row.get('previous_sha256') != SOURCE_PINS[name]
+                or row.get('byte_identical_to_previous') is not (CURRENT_SOURCE_PINS[name] == SOURCE_PINS[name])):
+            raise ValueError('Changed reviewed autonym source receipt')
+        seen.add(name)
+    return aliases
+
+
 def validate_source_contract(root, core):
     """Authenticate the fixed five-file API contract at its observed revision."""
     root = Path(root)
     if not isinstance(core, str) or not re.fullmatch('[0-9a-f]{40}', core):
         raise ValueError('Invalid observed core revision')
+    if core == CURRENT_CORE:
+        return validate_current_source_contract(root)
     aliases = source_aliases(root)
     comparison_path = root / (PREFIX + 'source-comparison.json')
     if not comparison_path.exists():
@@ -232,6 +276,8 @@ def accepted_receipt(root, record, receipt, core=CORE):
         if set(record) != {'request', 'accepted_receipt'}:
             raise ValueError('Unexpected normal observation record')
         return
+    if core == CURRENT_CORE:
+        raise ValueError('Current autonym source profile requires an accepted observation')
     if set(record) != {'request', 'accepted_receipt', 'offline_revalidation'} or receipt.get('accepted') is not False or receipt.get('error') != 'Exact API wiki/content/core identity changed':
         raise ValueError('Unaccepted autonym response')
     root = Path(root)
@@ -364,7 +410,8 @@ def capture_observation(wiki, date, namespace_path, sources, output, wall_second
                   namespace_registry_sha256=evidence.digest(namespace))
     evidence.document(output / (PREFIX + 'requested.json'), config)
     evidence.put(output / (PREFIX + 'namespace-registry.tsv'), namespace)
-    for name, expected in SOURCE_PINS.items():
+    pins = CURRENT_SOURCE_PINS if core == CURRENT_CORE else SOURCE_PINS
+    for name, expected in pins.items():
         raw = regular(Path(sources) / name)
         if evidence.digest(raw) != expected:
             raise ValueError('Unreviewed capture source')
@@ -382,6 +429,10 @@ def capture_observation(wiki, date, namespace_path, sources, output, wall_second
     records, continuation, seen = [], {}, set()
     try:
         while True:
+            if records:
+                if time.monotonic() + 1 >= deadline:
+                    raise ValueError('Capture deadline reached before continuation')
+                sleep(1)
             parsed, record = runner.observe(output, len(records) + 1, query(continuation),
                                             transport or evidence.get_response, sleep, 1, deadline)
             records.append(record); continuation = parsed[3]

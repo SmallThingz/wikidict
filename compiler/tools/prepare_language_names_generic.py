@@ -89,15 +89,48 @@ ITALIAN_SOURCE_PATHS = {
 }
 CLDR_RECEIPTS = 'cldr-source-receipts.json'
 
+# Current English observations use this independently reviewed source tuple.
+# The core change is first-class callable syntax in fallback initialization;
+# the CLDR PHP change is a comment. Name data remains separately pinned.
+ENGLISH_CORE = 'db332802a5f05525b779baadbf8d3394bc7d989e'
+ENGLISH_CORE_OVERRIDES = {
+    'LocalisationCache.php': 'b33f60a6e21a0550c59b7bc00a4d03803025f3eb99c242674a9672b03c12d459',
+}
+ENGLISH_SOURCE_PROFILE = 'cldr-bf2d-en-v1'
+ENGLISH_CLDR_COMMIT = 'bf2dd4586bf7e1fdee99630fba7e0cd800c6c5d7'
+ENGLISH_SOURCE_PINS = {
+    'cldr-LanguageNames.php': 'b5d4eebe24ed03d81530a19223537838181010574652f19dfc1d2f2647b38f87',
+    'cldr-Hooks.php': '4fdbd86bfa8ecb8ca319ec7166c13cb4878cc742b96083fd3ffc678114b78cf9',
+    'cldr-en.json': 'a0ded1059408afc65bef09d1101799428bcc2ec50d62101907c013fb40c31d43',
+    'cldr-extension.json': 'feeab5e5e60c2c4ae3dc146386adea7ff8e1849b461773f54ae68f0087169c70',
+    'cldr-tree.json': '65b2c5a63caddce190044b1dbceed9cbcdbf8cf2a3273f63a4f2def6622d9eb3',
+}
+ENGLISH_SOURCE_PATHS = {
+    'cldr-LanguageNames.php': 'includes/LanguageNames.php',
+    'cldr-Hooks.php': 'includes/Hooks.php',
+    'cldr-en.json': 'i18n/LanguageNames/en.json',
+    'cldr-extension.json': 'extension.json',
+}
+
+
+def explicit_source_profile(profile):
+    if profile == ITALIAN_SOURCE_PROFILE:
+        return CURRENT_CORE, ['it'], ITALIAN_CLDR_COMMIT, ('en', 'it'), ITALIAN_SOURCE_PINS, ITALIAN_SOURCE_PATHS
+    if profile == ENGLISH_SOURCE_PROFILE:
+        return ENGLISH_CORE, ['en'], ENGLISH_CLDR_COMMIT, ('en',), ENGLISH_SOURCE_PINS, ENGLISH_SOURCE_PATHS
+    raise ValueError('Unreviewed explicit language-name source profile')
+
 
 def name_source_config(config):
     fields = {'name_source_profile', 'name_source_profile_scope'} & set(config)
     if not fields:
+        if config.get('core') == ENGLISH_CORE:
+            raise ValueError('Reviewed English core requires its explicit language-name source profile')
         return None
+    core, languages, *_ = explicit_source_profile(config.get('name_source_profile'))
     if (fields != {'name_source_profile', 'name_source_profile_scope'}
-            or config['name_source_profile'] != ITALIAN_SOURCE_PROFILE
             or config['name_source_profile_scope'] != NAME_SOURCE_SCOPE
-            or config.get('core') != CURRENT_CORE or config.get('languages') != ['it']):
+            or config.get('core') != core or config.get('languages') != languages):
         raise ValueError('Unreviewed explicit language-name source profile')
     return config['name_source_profile']
 
@@ -109,17 +142,18 @@ def select_name_source(config, profile):
     return config
 
 
-def italian_source_tables(root, prefix, sources):
+def explicit_source_tables(root, prefix, sources, profile):
+    _, _, commit, locales, _, paths = explicit_source_profile(profile)
     tree = evidence.decode(sources['cldr-tree.json'])
-    if (tree.get('sha') != ITALIAN_CLDR_COMMIT or tree.get('truncated') is not False
+    if (tree.get('sha') != commit or tree.get('truncated') is not False
             or not isinstance(tree.get('tree'), list)):
         raise ValueError('Incomplete reviewed CLDR source tree')
     blobs = {row['path']: row for row in tree['tree'] if row.get('type') == 'blob'}
     raw = evidence.small(root / (prefix + CLDR_RECEIPTS), MAX_MANIFEST)
     record = evidence.decode(raw)
-    expected = {**ITALIAN_SOURCE_PATHS, 'cldr-tree.json': None}
+    expected = {**paths, 'cldr-tree.json': None}
     rows = record.get('sources') if isinstance(record, dict) else None
-    if (not isinstance(record, dict) or record.get('commit') != ITALIAN_CLDR_COMMIT
+    if (not isinstance(record, dict) or record.get('commit') != commit
             or not isinstance(rows, list) or len(rows) != len(expected)):
         raise ValueError('Incomplete reviewed CLDR source receipts')
     found = set()
@@ -128,8 +162,8 @@ def italian_source_tables(root, prefix, sources):
         if name not in expected or name in found:
             raise ValueError('Unexpected or duplicate CLDR source role')
         path = expected[name]
-        url = (f'https://raw.githubusercontent.com/wikimedia/mediawiki-extensions-cldr/{ITALIAN_CLDR_COMMIT}/{path}'
-               if path else f'https://api.github.com/repos/wikimedia/mediawiki-extensions-cldr/git/trees/{ITALIAN_CLDR_COMMIT}?recursive=1')
+        url = (f'https://raw.githubusercontent.com/wikimedia/mediawiki-extensions-cldr/{commit}/{path}'
+               if path else f'https://api.github.com/repos/wikimedia/mediawiki-extensions-cldr/git/trees/{commit}?recursive=1')
         body = sources[name]
         if (row.get('source_path') != path or row.get('url') != url or row.get('status') != 200
                 or row.get('bytes') != len(body) or row.get('sha256') != evidence.digest(body)):
@@ -142,7 +176,7 @@ def italian_source_tables(root, prefix, sources):
         found.add(name)
     sources[CLDR_RECEIPTS] = raw
     tables = {}
-    for locale in ('en', 'it'):
+    for locale in locales:
         data = evidence.decode(sources['cldr-' + locale + '.json'])
         if not isinstance(data, dict):
             raise ValueError('Invalid complete CLDR locale table')
@@ -162,7 +196,7 @@ def italian_source_tables(root, prefix, sources):
 
 
 def core_revision(value):
-    if not isinstance(value, str) or value not in (*CORE_TREE_SHA256, CURRENT_CORE):
+    if not isinstance(value, str) or value not in (*CORE_TREE_SHA256, CURRENT_CORE, ENGLISH_CORE):
         raise ValueError('Unreviewed core source revision')
     return value
 
@@ -193,20 +227,25 @@ def namespace_identity(raw, wiki, date):
 
 def primary_contract(root, prefix='', core=CORE, name_source_profile=None):
     core = core_revision(core)
-    pins = SOURCE_PINS if core != CURRENT_CORE else {**SOURCE_PINS, **CURRENT_CORE_OVERRIDES}
+    pins = SOURCE_PINS if core not in (CURRENT_CORE, ENGLISH_CORE) else {**SOURCE_PINS, **CURRENT_CORE_OVERRIDES}
+    if core == ENGLISH_CORE:
+        if name_source_profile != ENGLISH_SOURCE_PROFILE:
+            raise ValueError('Reviewed English core requires its explicit language-name source profile')
+        pins = {**pins, **ENGLISH_CORE_OVERRIDES}
     if name_source_profile is not None:
-        if name_source_profile != ITALIAN_SOURCE_PROFILE or core != CURRENT_CORE:
+        profile_core, _, _, _, profile_pins, _ = explicit_source_profile(name_source_profile)
+        if core != profile_core:
             raise ValueError('Unreviewed primary language-name source profile')
         pins = {name: digest for name, digest in pins.items()
                 if name not in ('cldr-ar.json', 'cldr-en.json', 'cldr-catalog.json')}
-        pins.update(ITALIAN_SOURCE_PINS)
+        pins.update(profile_pins)
     sources = {}
     for name, digest in pins.items():
         raw = evidence.small(root / (prefix + name), MAX_SOURCE)
         if evidence.digest(raw) != digest:
             raise ValueError('Unreviewed primary source: ' + name)
         sources[name] = raw
-    if core == CURRENT_CORE:
+    if core in (CURRENT_CORE, ENGLISH_CORE):
         raw = evidence.small(root / (prefix + CORE_RECEIPTS), MAX_MANIFEST)
         record = evidence.decode(raw)
         rows = record.get('sources') if isinstance(record, dict) else None
@@ -234,7 +273,7 @@ def primary_contract(root, prefix='', core=CORE, name_source_profile=None):
                mapping('NON_STANDARD_LANGUAGE_CODE_MAPPING').items()}
     aliases.update(deprecated)
     aliases = {key: deprecated.get(value, value) for key, value in aliases.items()}
-    tables = (italian_source_tables(root, prefix, sources) if name_source_profile else
+    tables = (explicit_source_tables(root, prefix, sources, name_source_profile) if name_source_profile else
               source_catalog(sources['cldr-catalog.json']))
     return sources, aliases, tables
 
@@ -1037,17 +1076,17 @@ def main():
     replay = sub.add_parser('replay-observation', help='Offline revalidation of one preserved core-mismatch response')
     for name in ('observation', 'observation-generator', 'primary-sources', 'output'):
         replay.add_argument('--' + name, required=True, type=Path)
-    replay.add_argument('--core', required=True, choices=sorted((*CORE_TREE_SHA256, CURRENT_CORE)))
-    replay.add_argument('--name-source-profile', choices=[ITALIAN_SOURCE_PROFILE])
+    replay.add_argument('--core', required=True, choices=sorted((*CORE_TREE_SHA256, CURRENT_CORE, ENGLISH_CORE)))
+    replay.add_argument('--name-source-profile', choices=[ITALIAN_SOURCE_PROFILE, ENGLISH_SOURCE_PROFILE])
     collect = sub.add_parser('capture')
     for name in ('wiki', 'date'):
         collect.add_argument('--' + name, required=True)
     for name in ('namespace-registry', 'primary-sources', 'output'):
         collect.add_argument('--' + name, required=True, type=Path)
     collect.add_argument('--languages', nargs='+', default=[])
-    collect.add_argument('--core', choices=sorted((*CORE_TREE_SHA256, CURRENT_CORE)), default=CORE,
+    collect.add_argument('--core', choices=sorted((*CORE_TREE_SHA256, CURRENT_CORE, ENGLISH_CORE)), default=CORE,
                          help='Exact reviewed API core revision for this complete capture')
-    collect.add_argument('--name-source-profile', choices=[ITALIAN_SOURCE_PROFILE])
+    collect.add_argument('--name-source-profile', choices=[ITALIAN_SOURCE_PROFILE, ENGLISH_SOURCE_PROFILE])
     collect.add_argument('--extra-direction-codes', nargs='+', default=[])
     collect.add_argument('--direction-primary-sources', type=Path)
     collect.add_argument('--delay', type=float, default=1)

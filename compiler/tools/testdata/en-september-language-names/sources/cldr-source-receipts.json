@@ -1,0 +1,54 @@
+{
+  "commit": "bf2dd4586bf7e1fdee99630fba7e0cd800c6c5d7",
+  "sources": [
+    {
+      "status": 200,
+      "url": "https://raw.githubusercontent.com/wikimedia/mediawiki-extensions-cldr/bf2dd4586bf7e1fdee99630fba7e0cd800c6c5d7/includes/LanguageNames.php",
+      "source_path": "includes/LanguageNames.php",
+      "retrieved_utc": "2026-11-24T14:59:55.602122+00:00",
+      "bytes": 5207,
+      "sha256": "b5d4eebe24ed03d81530a19223537838181010574652f19dfc1d2f2647b38f87",
+      "git_blob_sha1": "39327b37979ee2004fb3db674a137abb6fb87cec",
+      "file": "cldr-LanguageNames.php"
+    },
+    {
+      "status": 200,
+      "url": "https://raw.githubusercontent.com/wikimedia/mediawiki-extensions-cldr/bf2dd4586bf7e1fdee99630fba7e0cd800c6c5d7/includes/Hooks.php",
+      "source_path": "includes/Hooks.php",
+      "retrieved_utc": "2026-11-24T14:59:55.472321+00:00",
+      "bytes": 4398,
+      "sha256": "4fdbd86bfa8ecb8ca319ec7166c13cb4878cc742b96083fd3ffc678114b78cf9",
+      "git_blob_sha1": "f24d6f976519f45ba3a6af668866f612b45a7870",
+      "file": "cldr-Hooks.php"
+    },
+    {
+      "status": 200,
+      "url": "https://raw.githubusercontent.com/wikimedia/mediawiki-extensions-cldr/bf2dd4586bf7e1fdee99630fba7e0cd800c6c5d7/i18n/LanguageNames/en.json",
+      "source_path": "i18n/LanguageNames/en.json",
+      "retrieved_utc": "2026-11-24T14:59:55.231182+00:00",
+      "bytes": 67050,
+      "sha256": "a0ded1059408afc65bef09d1101799428bcc2ec50d62101907c013fb40c31d43",
+      "git_blob_sha1": "ebdc554bd34117834302c38ce7c29c14a8103c41",
+      "file": "cldr-en.json"
+    },
+    {
+      "status": 200,
+      "url": "https://raw.githubusercontent.com/wikimedia/mediawiki-extensions-cldr/bf2dd4586bf7e1fdee99630fba7e0cd800c6c5d7/extension.json",
+      "source_path": "extension.json",
+      "retrieved_utc": "2026-11-24T14:59:55.068436+00:00",
+      "bytes": 934,
+      "sha256": "feeab5e5e60c2c4ae3dc146386adea7ff8e1849b461773f54ae68f0087169c70",
+      "git_blob_sha1": "19270ce858f2f2987b49e4081afcca553af41059",
+      "file": "cldr-extension.json"
+    },
+    {
+      "status": 200,
+      "url": "https://api.github.com/repos/wikimedia/mediawiki-extensions-cldr/git/trees/bf2dd4586bf7e1fdee99630fba7e0cd800c6c5d7?recursive=1",
+      "retrieved_utc": "2026-11-24T15:00:27.178762+00:00",
+      "bytes": 179141,
+      "sha256": "65b2c5a63caddce190044b1dbceed9cbcdbf8cf2a3273f63a4f2def6622d9eb3",
+      "file": "cldr-tree.json",
+      "source_path": null
+    }
+  ]
+}

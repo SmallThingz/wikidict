@@ -714,6 +714,67 @@ class ItalianSourceProfileTests(unittest.TestCase):
                 names.primary_contract(root, core=names.CURRENT_CORE, name_source_profile=names.ITALIAN_SOURCE_PROFILE)
 
 
+class EnglishSourceProfileTests(unittest.TestCase):
+    """Original immutable PHP/CLDR sources, with independent receipt crossings."""
+    def source_root(self):
+        return Path(__file__).with_name('testdata') / 'en-september-language-names' / 'sources'
+
+    def config(self):
+        return names.select_name_source(dict(wiki='enwiktionary', content_language='en',
+            languages=['en'], core=names.ENGLISH_CORE), names.ENGLISH_SOURCE_PROFILE)
+
+    def test_original_source_tuple_has_complete_english_names(self):
+        sources, aliases, tables = names.primary_contract(self.source_root(), core=names.ENGLISH_CORE,
+                                                        name_source_profile=names.ENGLISH_SOURCE_PROFILE)
+        self.assertEqual(len(sources), 15)
+        self.assertEqual(set(tables), {'en'})
+        self.assertEqual(len(tables['en']), 1504)
+        self.assertEqual(tables['en']['en'], 'English')
+        self.assertEqual(aliases['als'], 'gsw')
+
+    def test_unreviewed_core_display_and_source_scope_are_rejected(self):
+        config = self.config()
+        for field, value in (('core', names.CURRENT_CORE), ('languages', ['it']),
+                             ('languages', ['en', 'it']), ('name_source_profile', names.ITALIAN_SOURCE_PROFILE),
+                             ('name_source_profile_scope', 'deployment-observation')):
+            with self.subTest(field=field, value=value), self.assertRaisesRegex(ValueError, 'source profile'):
+                names.name_source_config({**config, field: value})
+        for field in ('name_source_profile', 'name_source_profile_scope'):
+            changed = dict(config); del changed[field]
+            with self.subTest(missing=field), self.assertRaisesRegex(ValueError, 'source profile'):
+                names.name_source_config(changed)
+        with self.assertRaisesRegex(ValueError, 'source profile'):
+            names.name_source_config({'core': names.ENGLISH_CORE})
+        with self.assertRaisesRegex(ValueError, 'source profile'):
+            names.primary_contract(self.source_root(), core=names.ENGLISH_CORE)
+        with self.assertRaisesRegex(ValueError, 'reviewed tree'):
+            names.extra_direction_contract(None, ['rmq'], {}, core=names.ENGLISH_CORE)
+
+    def test_original_receipts_cannot_be_rebound_to_other_sources(self):
+        import shutil
+        for receipt_name, role, field, value, pattern in (
+            (names.CORE_RECEIPTS, 'LocalisationCache.php', 'url',
+             f'https://raw.githubusercontent.com/wikimedia/mediawiki/{names.CURRENT_CORE}/includes/Language/LocalisationCache.php', 'core source receipt'),
+            (names.CORE_RECEIPTS, 'LanguageNameUtils.php', 'status', 404, 'core source receipt'),
+            (names.CLDR_RECEIPTS, 'cldr-en.json', 'source_path', 'i18n/LanguageNames/it.json', 'CLDR source receipt'),
+            (names.CLDR_RECEIPTS, 'cldr-tree.json', 'sha256', '0' * 64, 'CLDR source receipt'),
+        ):
+            with self.subTest(role=role, field=field), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory) / 'sources'; shutil.copytree(self.source_root(), root)
+                path = root / receipt_name; record = json.loads(path.read_text())
+                next(row for row in record['sources'] if row['file'] == role)[field] = value
+                path.write_text(json.dumps(record))
+                with self.assertRaisesRegex(ValueError, pattern):
+                    names.primary_contract(root, core=names.ENGLISH_CORE, name_source_profile=names.ENGLISH_SOURCE_PROFILE)
+        for role in ('LanguageLibrary.php', 'LocalisationCache.php', 'cldr-en.json', 'cldr-LanguageNames.php'):
+            with self.subTest(changed=role), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory) / 'sources'; shutil.copytree(self.source_root(), root)
+                with (root / role).open('ab') as stream:
+                    stream.write(b'\nchanged\n')
+                with self.assertRaisesRegex(ValueError, 'Unreviewed primary source'):
+                    names.primary_contract(root, core=names.ENGLISH_CORE, name_source_profile=names.ENGLISH_SOURCE_PROFILE)
+
+
 class ObservationReplayTests(unittest.TestCase):
     fixture = CurrentCoreSourceTests.fixture
     def observation_fixture(self, root):

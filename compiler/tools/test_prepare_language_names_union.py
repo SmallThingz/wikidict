@@ -16,8 +16,8 @@ class ProducerContractTests(unittest.TestCase):
         actual = m.producer()
         self.assertEqual(actual['generator_sha256'], m.identity(Path(m.__file__).read_bytes())['sha256'])
         self.assertEqual(actual['dependency_sha256'], {
-            'prepare_language_names_autonyms.py': 'bf84f0c4ff9549a054e213704031bab06bb0e6c0f6564183c44ee888a901d904',
-            'prepare_language_names_generic.py': 'bbe9020879766923c63021b93016aa0edb5331be0b996671351cb4f953e6ebc3',
+            'prepare_language_names_autonyms.py': '9534df03523fd2adf311961035fa1179ce2c30288fd03244f54dc13716236dd5',
+            'prepare_language_names_generic.py': '51239dab11a2ad403815b94769867a9a63865753b08a256ab51e803f692022d6',
             'prepare_file_metadata.py': 'cc8684fd9d0b8e38d4ccf53730cb0863249b2706132c474a2c5c42c0e738d802',
         })
         for name, module in (('prepare_language_names_autonyms.py', m.autonyms),

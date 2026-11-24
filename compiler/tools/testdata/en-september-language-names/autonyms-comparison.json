@@ -1,0 +1,71 @@
+{
+  "schema": "wikidict.observed-core-source-comparison.v2",
+  "outcome": "completed-reviewed-source-comparison",
+  "core": "db332802a5f05525b779baadbf8d3394bc7d989e",
+  "previous_core": "18344669b5e5bd97a08905f87d4317edc7411396",
+  "source_profile": "core-db332-autonyms-v1",
+  "source_profile_scope": "immutable-public-source-profile-not-deployment-observation",
+  "all_five_byte_identical": false,
+  "changed_files": [
+    "LanguageNameUtils.php"
+  ],
+  "source_requests": 5,
+  "api_requests": 0,
+  "files": [
+    {
+      "status": 200,
+      "url": "https://raw.githubusercontent.com/wikimedia/mediawiki/db332802a5f05525b779baadbf8d3394bc7d989e/includes/Api/ApiQueryLanguageinfo.php",
+      "retrieved_utc": "2026-11-24T15:00:25.349488+00:00",
+      "bytes": 8646,
+      "sha256": "3f37142b0d676c68b1cac50fd510ac039ff52de186388b92083428e445fe3e96",
+      "file": "ApiQueryLanguageinfo.php",
+      "source_path": "includes/Api/ApiQueryLanguageinfo.php",
+      "previous_sha256": "3f37142b0d676c68b1cac50fd510ac039ff52de186388b92083428e445fe3e96",
+      "byte_identical_to_previous": true
+    },
+    {
+      "status": 200,
+      "url": "https://raw.githubusercontent.com/wikimedia/mediawiki/db332802a5f05525b779baadbf8d3394bc7d989e/includes/Api/ApiQuerySiteinfo.php",
+      "retrieved_utc": "2026-11-24T15:00:25.369067+00:00",
+      "bytes": 38396,
+      "sha256": "a318da6f2cae4275a15595a93aa324bcbeb433381b29bd356fc577f72d5c2ced",
+      "file": "ApiQuerySiteinfo.php",
+      "source_path": "includes/Api/ApiQuerySiteinfo.php",
+      "previous_sha256": "a318da6f2cae4275a15595a93aa324bcbeb433381b29bd356fc577f72d5c2ced",
+      "byte_identical_to_previous": true
+    },
+    {
+      "status": 200,
+      "url": "https://raw.githubusercontent.com/wikimedia/mediawiki/db332802a5f05525b779baadbf8d3394bc7d989e/includes/Language/LanguageNameUtils.php",
+      "retrieved_utc": "2026-11-24T15:00:25.484743+00:00",
+      "bytes": 9901,
+      "sha256": "2dc72ee00d7df558f80ec4ef66c1b3665d006989ad63b26702c63372efa4252a",
+      "file": "LanguageNameUtils.php",
+      "source_path": "includes/Language/LanguageNameUtils.php",
+      "previous_sha256": "5f55c8ed75da5dfee8f708a3c620b5f17dbe33396e99882175cb92f4828ba8f8",
+      "byte_identical_to_previous": false
+    },
+    {
+      "status": 200,
+      "url": "https://raw.githubusercontent.com/wikimedia/mediawiki/db332802a5f05525b779baadbf8d3394bc7d989e/includes/Language/LanguageCode.php",
+      "retrieved_utc": "2026-11-24T15:00:25.352339+00:00",
+      "bytes": 13214,
+      "sha256": "17962f89468aa25369f126cc7a4edd8c074cb73497c8d4de77e8cbb04858d60d",
+      "file": "LanguageCode.php",
+      "source_path": "includes/Language/LanguageCode.php",
+      "previous_sha256": "17962f89468aa25369f126cc7a4edd8c074cb73497c8d4de77e8cbb04858d60d",
+      "byte_identical_to_previous": true
+    },
+    {
+      "status": 200,
+      "url": "https://raw.githubusercontent.com/wikimedia/mediawiki/db332802a5f05525b779baadbf8d3394bc7d989e/includes/Languages/Data/Names.php",
+      "retrieved_utc": "2026-11-24T15:00:25.670189+00:00",
+      "bytes": 28645,
+      "sha256": "0b0c62791924c139d7d476530c2ad9a58d053c0f34e1195595b0c2e43776b11f",
+      "file": "Names.php",
+      "source_path": "includes/Languages/Data/Names.php",
+      "previous_sha256": "0b0c62791924c139d7d476530c2ad9a58d053c0f34e1195595b0c2e43776b11f",
+      "byte_identical_to_previous": true
+    }
+  ]
+}
