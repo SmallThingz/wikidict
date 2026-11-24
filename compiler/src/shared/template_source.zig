@@ -62,6 +62,11 @@ pub const TemplateSource = struct {
     /// Both assets must be absent for an old expander to use the compressed dump.
     /// A partial or malformed sidecar is a build failure, not a silent fallback.
     pub fn open(io: Io, allocator: A, root: []const u8, page_index: []const u8) !?TemplateSource {
+        return openWithPageIndexDigest(io, allocator, root, page_index, null);
+    }
+
+    /// A supplied digest must cover the entire unchanged page-index mapping.
+    pub fn openWithPageIndexDigest(io: Io, allocator: A, root: []const u8, page_index: []const u8, digest: ?[32]u8) !?TemplateSource {
         const idx_path = try std.fs.path.join(allocator, &.{ root, index_name });
         defer allocator.free(idx_path);
         const bin_path = try std.fs.path.join(allocator, &.{ root, data_name });
@@ -93,7 +98,7 @@ pub const TemplateSource = struct {
         const records_bytes = std.math.mul(usize, count, record_len) catch return error.InvalidTemplateSourceIndex;
         const expected_len = std.math.add(usize, header_len, records_bytes) catch return error.InvalidTemplateSourceIndex;
         if (idx.len != expected_len) return error.InvalidTemplateSourceIndex;
-        const page_index_sha = hash(page_index);
+        const page_index_sha = digest orelse hash(page_index);
         const data_sha = hash(bin);
         const records_sha = hash(idx[header_len..]);
         if (!std.mem.eql(u8, idx[24..56], &page_index_sha) or

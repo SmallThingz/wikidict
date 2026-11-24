@@ -1543,7 +1543,7 @@ fn loadSourceHeadwordRoleWithRows(io: std.Io, a: std.mem.Allocator, root: []cons
     registry.source_headword_codes.clearRetainingCapacity();
     if (ns.byId(828) == null) return;
     try view.requireContext(root, ns);
-    var candidates = (try view.begin()) orelse return;
+    var candidates = (try view.beginDigest(true)) orelse return;
     const Role = struct { row: dump_source.IndexedPage, ordinal: u64 };
     const template_names = [_][]const u8{ "head", "Dil", "Alban əlifbası" };
     var roles: [template_names.len]?Role = @splat(null);
@@ -1562,7 +1562,7 @@ fn loadSourceHeadwordRoleWithRows(io: std.Io, a: std.mem.Allocator, root: []cons
         }
     }
     if (roles[0] == null or roles[1] == null) return;
-    var templates = (try openLanguageTemplateSource(io, a, root, view.index.?.bytes)) orelse return;
+    var templates = (try openLanguageTemplateSourceWithDigest(io, a, root, view.index.?.bytes, view.index_digest)) orelse return;
     defer templates.deinit();
     var template_sources: [template_names.len]?[]u8 = @splat(null);
     defer for (template_sources) |value| if (value) |source| a.free(source);
@@ -1898,6 +1898,7 @@ const LanguageTemplateRows = struct {
     file: ?std.Io.File = null,
     identity: ?CapturedWriterSourceFileIdentity = null,
     index: ?Mapped = null,
+    index_digest: ?[32]u8 = null,
     entries: std.ArrayList(Entry) = .empty,
     // Only hot string fields count against this optional locality cache. A large
     // edition can always use the authenticated mapping for the remaining rows.
@@ -2028,7 +2029,7 @@ const LanguageTemplateRows = struct {
         var adopted = false;
         defer if (!adopted) files.deinit(self.io, self.a);
         self.template_opens += 1;
-        var source = (try openLanguageTemplateSource(self.io, self.a, root, index.bytes)) orelse return null;
+        var source = (try openLanguageTemplateSourceWithDigest(self.io, self.a, root, index.bytes, self.index_digest)) orelse return null;
         errdefer source.deinit();
         if (!files.unchanged(self.io)) return error.LanguageTemplateSourceChanged;
         try self.check();
@@ -2051,6 +2052,10 @@ const LanguageTemplateRows = struct {
     }
 
     fn begin(self: *LanguageTemplateRows) !?Cursor {
+        return self.beginDigest(false);
+    }
+
+    fn beginDigest(self: *LanguageTemplateRows, digest: bool) !?Cursor {
         if (self.index == null) {
             if (self.path == null) self.path = try std.fs.path.join(self.a, &.{ self.root, "page-index.tsv" });
             const file = std.Io.Dir.cwd().openFile(self.io, self.path.?, .{}) catch |err| switch (err) {
@@ -2078,7 +2083,8 @@ const LanguageTemplateRows = struct {
             self.scans += 1;
         }
         return .{ .view = self, .lines = std.mem.splitScalar(u8, self.index.?.bytes, '\n'),
-            .kind = dump_source.pageIndexKind(self.index.?.bytes), .cached = self.complete };
+            .kind = dump_source.pageIndexKind(self.index.?.bytes), .cached = self.complete,
+            .hash = if (digest and !self.complete) std.crypto.hash.sha2.Sha256.init(.{}) else null };
     }
 
     fn retainTemplateRow(self: *LanguageTemplateRows, input: dump_source.IndexedPage) dump_source.IndexedPage {
@@ -2125,6 +2131,15 @@ const LanguageTemplateRows = struct {
         ordinal: u64 = 0,
         position: usize = 0,
         ended: bool = false,
+        hash: ?std.crypto.hash.sha2.Sha256 = null,
+        hashed: usize = 0,
+
+        fn hashThrough(self: *Cursor, end: usize) void {
+            if (self.hash) |*hash| {
+                hash.update(self.view.index.?.bytes[self.hashed..end]);
+                self.hashed = end;
+            }
+        }
 
         fn next(self: *Cursor) !?Entry {
             if (self.ended) return null;
@@ -2139,6 +2154,10 @@ const LanguageTemplateRows = struct {
                 return entry;
             }
             while (self.lines.next()) |line| {
+                if (self.hash != null) {
+                    const end = self.lines.index orelse self.view.index.?.bytes.len;
+                    if (end - self.hashed >= 64 * 1024) self.hashThrough(end);
+                }
                 self.view.parsed_bytes += line.len + @intFromBool(self.lines.index != null);
                 if (line.len == 0 or line[0] == '#') continue;
                 const row = try dump_source.parsePageIndexLine(self.kind, line);
@@ -2150,7 +2169,12 @@ const LanguageTemplateRows = struct {
                 try self.view.entries.append(self.view.a, entry);
                 return entry;
             }
+            if (self.hash) |_| {
+                self.hashThrough(self.view.index.?.bytes.len);
+            }
             try self.view.check();
+            // A partial scan never supplies authority for the sidecar checksum.
+            if (self.hash) |*hash| self.view.index_digest = hash.finalResult();
             self.view.complete = true;
             self.view.completed_scans += 1;
             self.ended = true;
@@ -20508,6 +20532,10 @@ fn readLanguageMetadataSource(io: std.Io, a: std.mem.Allocator, path: []const u8
 }
 
 fn openLanguageTemplateSource(io: std.Io, a: std.mem.Allocator, root: []const u8, index: []const u8) !?dump_source.TemplateSource {
+    return openLanguageTemplateSourceWithDigest(io, a, root, index, null);
+}
+
+fn openLanguageTemplateSourceWithDigest(io: std.Io, a: std.mem.Allocator, root: []const u8, index: []const u8, digest: ?[32]u8) !?dump_source.TemplateSource {
     var observed: [2]?usize = .{ null, null };
     if (captured_writer_inputs) |inputs| {
         inline for (.{ "template-source.idx", "template-source.bin" }, 0..) |name, i| {
@@ -20516,7 +20544,7 @@ fn openLanguageTemplateSource(io: std.Io, a: std.mem.Allocator, root: []const u8
             observed[i] = try inputs.hold(path, "normal-template-sidecar");
         }
     }
-    var result = dump_source.TemplateSource.open(io, a, root, index) catch |err| {
+    var result = dump_source.TemplateSource.openWithPageIndexDigest(io, a, root, index, digest) catch |err| {
         if (captured_writer_inputs) |inputs| for (observed) |slot| if (slot) |i| inputs.fail(i, err) catch {};
         return err;
     };
@@ -71790,4 +71818,63 @@ test "normal Figure loader accepts exact SH and SA current57 dated File authorit
         try std.testing.expectError(error.InvalidFigureSizingSource,
             loadFigureSizingAt(io, a, .{ projection, raw, site }, &ns, forged));
     }
+}
+
+test "held language template index reuses complete scan checksum and rejects changed bytes" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const io = std.testing.io;
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    try SourceEquivalentLanguageTest.install(io, a, root, .ordinary);
+    const path = try std.fs.path.join(a, &.{ root, "page-index.tsv" });
+    const original = try std.Io.Dir.cwd().readFileAlloc(io, path, a, .limited(1024 * 1024));
+    const padding = try a.alloc(u8, 256 * 1024);
+    @memset(padding, 'x');
+    const bytes = try std.mem.concat(a, u8, &.{ "#", padding, "\n\n", std.mem.trimEnd(u8, original, "\n") });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = bytes });
+    try SharedTemplateSessionTest.writeSidecars(io, a, root);
+    var ns = try namespace_registry.Registry.init(a, SourceEquivalentLanguageTest.namespaces);
+    defer ns.deinit();
+    const Counter = dump_source.TemplateSource.TestCounters;
+    const cases = [_]bool{ false, true };
+    var fallback_bytes: usize = 0;
+    for (cases) |complete| {
+        var view: LanguageTemplateRows = .{ .io = io, .a = a, .root = root, .namespaces = &ns };
+        defer view.deinit();
+        var cursor = (try view.beginDigest(true)).?;
+        const entry = (try cursor.next()).?;
+        try std.testing.expect(view.index_digest == null);
+        if (complete) {
+            while (try cursor.next()) |_| {}
+            try std.testing.expect(view.index_digest != null);
+        }
+        Counter.reset();
+        const source = (try view.templates(root, &ns)).?;
+        try std.testing.expectEqualStrings(SourceEquivalentLanguageTest.wrapper, (try source.lookup(entry.ordinal, entry.row.page_id, entry.row.revision_id)).?);
+        if (complete) {
+            try std.testing.expectEqual(@as(usize, 2), Counter.value.hash_calls);
+            try std.testing.expectEqual(bytes.len, fallback_bytes - Counter.value.hashed_bytes);
+            diagnostics.printLine("template_index_checksum avoided_separate_read_bytes={d}\n", .{bytes.len});
+            try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = bytes[0 .. bytes.len - 1] });
+            try std.testing.expectError(error.LanguageTemplateIndexChanged, view.templates(root, &ns));
+        } else {
+            try std.testing.expectEqual(@as(usize, 3), Counter.value.hash_calls);
+            fallback_bytes = Counter.value.hashed_bytes;
+        }
+    }
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = bytes });
+    var view: LanguageTemplateRows = .{ .io = io, .a = a, .root = root, .namespaces = &ns };
+    defer view.deinit();
+    var cursor = (try view.beginDigest(true)).?;
+    while (try cursor.next()) |_| {}
+    const idx = try std.fs.path.join(a, &.{ root, "template-source.idx" });
+    const indices = try std.Io.Dir.cwd().readFileAlloc(io, idx, a, .limited(1024 * 1024));
+    indices[24] ^= 1;
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = idx, .data = indices });
+    try std.testing.expectError(error.TemplateSourceChecksumMismatch, view.templates(root, &ns));
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = idx, .data = indices[0 .. indices.len - 1] });
+    try std.testing.expectError(error.InvalidTemplateSourceIndex, view.templates(root, &ns));
 }
