@@ -22,7 +22,7 @@
 +endif()
 --- a/tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp
 +++ b/tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp
-@@ -3,24 +3,15992 @@
+@@ -3,24 +3,16191 @@
  
  
  #include <QTest>
@@ -2016,6 +2016,56 @@
 +    void citationNoWrapKeepsSourceClustersAndNeighborBreaks();
 +    void citationTargetOutlineSharesPaintTraversalAndEpoch();
 +    void projectedRegisteredObjectsKeepOriginalSourceAndLineMetrics();
++    void clippedAbsoluteSourceRetainsHungarianTextAndRealTableOwnership()
++    {
++        QTextDocument doc; doc.setLayoutEnabled(false); doc.setDocumentMargin(0);
++        auto options = doc.defaultTextOption(); options.setTextDirection(Qt::LeftToRight);
++        options.setAlignment(Qt::AlignLeft); doc.setDefaultTextOption(options);
++        QTextCursor cursor(&doc);
++        QTextTableFormat tableFormat; tableFormat.setWidth(QTextLength(QTextLength::FixedLength, 900));
++        auto *table = cursor.insertTable(1, 1, tableFormat);
++        cursor = table->cellAt(0, 0).firstCursorPosition();
++        const int begin = cursor.position();
++        QTextCharFormat link; link.setAnchor(true); link.setAnchorHref(QStringLiteral("time to peak concentrations"));
++        cursor.insertText(QStringLiteral("T"), link);
++        auto sub = link; sub.setVerticalAlignment(QTextCharFormat::AlignSubScript);
++        cursor.insertText(QStringLiteral("max"), sub);
++        const int hidden = cursor.position();
++        const QString literal = QStringLiteral("Tooltip time to peak concentrations");
++        cursor.insertText(literal, QTextCharFormat());
++        const int after = cursor.position();
++        cursor.insertText(QStringLiteral(")"), QTextCharFormat());
++        const int end = cursor.position();
++        const QVariantMap clipped{{"kind","clippedAbsolute"},{"first",hidden},{"last",after},{"owner","article"},
++            {"sizeCssPx",QSizeF(1,1)},{"marginCssPx",-1.0}};
++        auto flow = [&](QVariantMap owner) {
++            return QVariantMap{{"first",begin},{"last",end},{"direction",int(Qt::LeftToRight)},{"joins",QVariantList{}},
++                {"parts",QVariantList{QVariantMap{{"kind","text"},{"first",begin},{"last",hidden}},
++                    owner,QVariantMap{{"kind","text"},{"first",after},{"last",end}}}}};
++        };
++        auto *native = qobject_cast<QTextDocumentLayout *>(doc.documentLayout()); QVERIFY(native);
++        auto wrong = clipped; wrong.insert("owner","cell"); QVERIFY(!native->wikidictSetLogicalFlows({flow(wrong)}));
++        QVERIFY(native->wikidictSetLogicalFlows({flow(clipped)}));
++        doc.setLayoutEnabled(true); doc.setTextWidth(900); native->documentSize();
++        const auto value = native->wikidictLogicalPosition(hidden);
++        QCOMPARE(value.value("error").toInt(),0);
++        const QRectF rect = value.value("articleClippedRect").toRectF();
++        QVERIFY(rect.isValid()); QCOMPARE(rect.width(),rect.height());
++        QVERIFY(!value.contains("characterRect")); QVERIFY(!value.contains("actionRect"));
++        QCOMPARE(native->wikidictLogicalPosition(after-1).value("articleClippedRect").toRectF(),rect);
++        QVERIFY(!native->wikidictLogicalPosition(after).contains("articleClippedRect"));
++        cursor.setPosition(hidden); cursor.setPosition(after,QTextCursor::KeepAnchor);
++        QCOMPARE(cursor.selectedText(),literal);
++        cursor.setPosition(begin); cursor.setPosition(hidden,QTextCursor::KeepAnchor);
++        QCOMPARE(cursor.selectedText(),QStringLiteral("Tmax")); QCOMPARE(cursor.charFormat().anchorHref(),QStringLiteral("time to peak concentrations"));
++        cursor.clearSelection();
++        QTextBlockFormat right = cursor.blockFormat();
++        right.setAlignment(Qt::AlignRight | Qt::AlignAbsolute);
++        cursor.setBlockFormat(right);
++        native->documentSize();
++        QVERIFY(!native->wikidictLogicalPosition(hidden).contains("articleClippedRect"));
++    }
++
 +    void projectedRubyUsesResolvedBaseMetricsOnly();
 +    void projectedRubyRejectsMalformedMetrics();
 +    void projectedRubyKeepsOnlyAdmittedOrdinaryBoundaries();
@@ -8405,6 +8455,84 @@
 +        }
 +    }
 +
++    void containerVerticalClipKeepsHorizontalActionsAndPhysicalDashes()
++    {
++        constexpr int plain = QTextFormat::UserProperty + 0x57e0, onlyY = QTextFormat::UserProperty + 0x5863;
++        const auto edge = [](int style, double width) {
++            return QVariantMap{{"style", style}, {"width", width}, {"color", QColor("#a2a9b1")}};
++        };
++        for (int dpi : {96, 144}) {
++            QImage image(640, 240, QImage::Format_ARGB32_Premultiplied);
++            image.setDotsPerMeterX(qRound(dpi / .0254)); image.setDotsPerMeterY(qRound(dpi / .0254));
++            QTextDocument doc; doc.setLayoutEnabled(false); doc.setDocumentMargin(16); doc.setTextWidth(380);
++            doc.documentLayout()->setPaintDevice(&image);
++            QTextFrameFormat format; format.setWidth(80); format.setHeight(25);
++            format.setPadding(0); format.setBorder(0); format.setMargin(0);
++            format.setProperty(plain, "wikidict.plain-container/1"); format.setProperty(plain + 1, 0);
++            format.setProperty(plain + 8, QVariantMap{{"padding", QVariantList{2.0, 0.0, 0.0, 0.0}},
++                {"borders", QVariantList{edge(6, 1), edge(0, 0), edge(0, 0), edge(0, 0)}}});
++            const QByteArray source = R"({"kind":"container","spans":[],"container":{"style":{"overflow":"visible_x_clip_y"},"blocks":[]}})";
++            format.setProperty(plain + 2, source);
++            QTextCursor cursor(&doc); auto *frame = cursor.insertFrame(format);
++            QTextBlockFormat paragraph; paragraph.setNonBreakableLines(true); paragraph.setTextIndent(-12);
++            cursor.setBlockFormat(paragraph);
++            QTextCharFormat link; link.setForeground(Qt::blue); link.setFontPointSize(12);
++            link.setAnchor(true); link.setAnchorHref("dict:horizontal");
++            const int first = cursor.position(); cursor.insertText(QString(38, 'W'), link);
++            cursor.insertBlock(); link.setAnchorHref("dict:below"); cursor.insertText("below", link);
++            const int last = cursor.position();
++            for (auto block = doc.begin(); block.isValid(); block = block.next()) if (block.length() == 1) block.setVisible(false);
++            doc.setLayoutEnabled(true); auto *layout = qobject_cast<QTextDocumentLayout *>(doc.documentLayout()); QVERIFY(layout);
++            layout->documentSize(); QCOMPARE(layout->wikidictParagraphBoxLayoutError(), 0);
++            const auto raw = doc.toRawText(); const auto rectangle = layout->frameBoundingRect(frame);
++            const qreal dx = 8, dy = 4;
++            auto paint = [&]() {
++                image.fill(Qt::white); QPainter painter(&image); painter.translate(dx, dy);
++                QAbstractTextDocumentLayout::PaintContext context; layout->draw(&painter, context);
++            };
++            paint(); const auto all = image.copy();
++            format.setProperty(onlyY, "wikidict.container-clip-y/1"); frame->setFrameFormat(format);
++            layout->documentSize(); QCOMPARE(layout->wikidictParagraphBoxLayoutError(), 0);
++            QCOMPARE(layout->frameBoundingRect(frame), rectangle); QCOMPARE(doc.toRawText(), raw);
++            const auto clip = layout->wikidictScrollClip(first);
++            QVERIFY(clip.value("handled").toBool()); QVERIFY(clip.value("vertical_only").toBool());
++            QVERIFY(!clip.contains("clip_path")); QVERIFY(layout->wikidictScrollports().isEmpty());
++            QVERIFY(layout->wikidictRevealScrollPosition(last - 1));
++            QCOMPARE(layout->frameBoundingRect(frame), rectangle);
++            const auto top = clip.value("top").toDouble(), bottom = clip.value("bottom").toDouble();
++            QVERIFY(top > rectangle.top()); QCOMPARE(bottom, rectangle.bottom());
++            paint(); bool left = false, right = false, hidden = false;
++            for (int y = 0; y < image.height(); ++y) for (int x = 0; x < image.width(); ++x) {
++                const QPointF point(x + .5 - dx, y + .5 - dy); const auto original = all.pixelColor(x, y);
++                if (original.blue() < 180 || original.red() > 60) continue;
++                if (point.y() > top + 1 && point.y() < bottom - 1) {
++                    QCOMPARE(image.pixelColor(x, y), original);
++                    if ((point.x() < rectangle.left() || point.x() > rectangle.right())
++                        && layout->anchorAt(point) == "dict:horizontal") {
++                        const int pos = layout->hitTest(point, Qt::ExactHit);
++                        QVERIFY(pos >= first && pos < last);
++                        left |= point.x() < rectangle.left(); right |= point.x() > rectangle.right();
++                    }
++                } else if (point.y() > bottom + 1) {
++                    QVERIFY(image.pixelColor(x, y) != original);
++                    QVERIFY(layout->anchorAt(point) != "dict:below"); hidden = true;
++                }
++            }
++            QVERIFY(left); QVERIFY(right); QVERIFY(hidden);
++            const int row = qFloor((rectangle.top() + top) / 2 + dy);
++            int painted = 0, gaps = 0;
++            for (int x = qCeil(rectangle.left() + dx) + 4; x < qFloor(rectangle.right() + dx) - 4; ++x) {
++                const auto color = image.pixelColor(x, row);
++                painted += color.red() < 225; gaps += color.red() > 245;
++            }
++            QVERIFY(painted > 1); QVERIFY(gaps > 1);
++            QTextCursor selection(&doc); selection.setPosition(first); selection.setPosition(last, QTextCursor::KeepAnchor);
++            QVERIFY(selection.selectedText().endsWith("below"));
++            format.setProperty(onlyY, "foreign"); frame->setFrameFormat(format);
++            layout->documentSize(); QVERIFY(layout->wikidictParagraphBoxLayoutError() != 0);
++        }
++    }
++
 +    void containerMinimumPhysicalEdgesKeepsContentFloorAndInk()
 +    {
 +        constexpr int plain = QTextFormat::UserProperty + 0x57e0, clear = plain + 1, minimum = plain + 7, physical = plain + 8;
@@ -9100,6 +9228,37 @@
 +            doc.setTextWidth(280); native->documentSize(); QCOMPARE(native->frameBoundingRect(frame).height(), 80.0);
 +            QCOMPARE(doc.toRawText(), source); QCOMPARE(selection.selectedText(), selected);
 +            if (!inCell) {
++                // At 100px preferred width and a 20px gap the second column
++                // first fits at 220px, and the third at 340px.
++                for (int cap : {0, 2}) {
++                    doc.setLayoutEnabled(false);
++                    auto responsive = format;
++                    responsive.setProperty(columns, QVariantMap{{"count", cap}, {"gap", 20.0}, {"width", 100.0}});
++                    frame->setFrameFormat(responsive);
++                    doc.setLayoutEnabled(true);
++                    for (int available : {219, 220, 340, 220, 219}) {
++                        doc.setTextWidth(available);
++                        native->documentSize();
++                        QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
++                        const auto area = native->frameBoundingRect(frame);
++                        QCOMPARE(area.width(), qreal(available));
++                        const int used = available < 220 ? 1 : (available >= 340 && cap == 0 ? 3 : 2);
++                        QCOMPARE(area.height(), qreal(20 * ((8 + used - 1) / used)));
++                        QCOMPARE(doc.toRawText(), source);
++                        QCOMPARE(selection.selectedText(), selected);
++                        for (int i = 0; i < 8; ++i) {
++                            const auto line = block.layout()->lineAt(i);
++                            QCOMPARE(block.position() + line.textStart(), positions[i]);
++                            QList<quint32> indexes;
++                            for (const auto &run : line.glyphRuns()) indexes.append(run.glyphIndexes());
++                            QCOMPARE(indexes, glyphs[i]);
++                            const auto local = line.naturalTextRect().center();
++                            QCOMPARE(native->anchorAt(area.topLeft() + block.layout()->position() + local),
++                                     QStringLiteral("dict:column-%1").arg(i));
++                        }
++                    }
++                }
++                doc.setTextWidth(280);
 +                doc.setLayoutEnabled(false); auto ordinary = format; ordinary.clearProperty(columns); frame->setFrameFormat(ordinary);
 +                doc.setLayoutEnabled(true); native->documentSize(); QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
 +                QCOMPARE(native->frameBoundingRect(frame).height(), 160.0);
@@ -9108,6 +9267,46 @@
 +                doc.setLayoutEnabled(false); frame->setFrameFormat(format); doc.setLayoutEnabled(true); native->documentSize();
 +                QCOMPARE(native->frameBoundingRect(frame).height(), 80.0); QCOMPARE(doc.toRawText(), source);
 +            }
++        }
++    }
++
++    void containerColumnsHoldOneSourceListItemAndTwoDetailParagraphs()
++    {
++        constexpr int policy = QTextFormat::UserProperty + 0x57e0, clear = QTextFormat::UserProperty + 0x57e1;
++        constexpr int columns = QTextFormat::UserProperty + 0x57e5, avoid = QTextFormat::UserProperty + 0x587d;
++        for (auto direction : {Qt::LeftToRight, Qt::RightToLeft}) {
++            QTextDocument doc; doc.setLayoutEnabled(false); doc.setDocumentMargin(0); doc.setTextWidth(220);
++            QTextCursor cursor(&doc);
++            QTextFrameFormat frameFormat; frameFormat.setMargin(0); frameFormat.setPadding(0); frameFormat.setBorder(0);
++            frameFormat.setWidth(QTextLength(QTextLength::PercentageLength, 100)); frameFormat.setLayoutDirection(direction);
++            frameFormat.setProperty(policy,QStringLiteral("wikidict.plain-container/1")); frameFormat.setProperty(clear,0);
++            frameFormat.setProperty(columns,QVariantMap{{"width",100.0},{"gap",20.0},{"count",0}});
++            auto *frame=cursor.insertFrame(frameFormat);
++            QList<QTextBlock> blocks;
++            for (int i = 0; i < 6; ++i) {
++                if (i) cursor.insertBlock();
++                QTextBlockFormat format; format.setLineHeight(20,QTextBlockFormat::FixedHeight);
++                if (i >= 1 && i <= 3) format.setProperty(avoid,2);
++                cursor.setBlockFormat(format);
++                QTextCharFormat link; link.setAnchor(true); link.setAnchorHref(QStringLiteral("dict:item-%1").arg(i));
++                cursor.insertText(QStringLiteral("row%1").arg(i),link);
++                blocks.append(cursor.block());
++            }
++            for (auto block=doc.begin(); block.isValid(); block=block.next()) if (block.length()==1) block.setVisible(false);
++            const auto source=doc.toRawText(); doc.setLayoutEnabled(true);
++            auto *layout=qobject_cast<QTextDocumentLayout*>(doc.documentLayout()); QVERIFY(layout);
++            layout->documentSize(); QCOMPARE(layout->wikidictParagraphBoxLayoutError(),0);
++            const auto box=layout->frameBoundingRect(frame); QCOMPARE(box.height(),80.0);
++            for (int i = 0; i < 6; ++i) {
++                const auto line=blocks[i].layout()->lineAt(0);
++                const auto point=box.topLeft()+blocks[i].layout()->position()+line.naturalTextRect().center();
++                QCOMPARE(layout->anchorAt(point),QStringLiteral("dict:item-%1").arg(i));
++                QCOMPARE(point.x() < box.center().x(), (i < 4) == (direction == Qt::LeftToRight));
++            }
++            doc.setLayoutEnabled(false);
++            for (auto block : blocks) { QTextCursor edit(block); auto format=block.blockFormat(); format.clearProperty(avoid); edit.setBlockFormat(format); }
++            doc.setLayoutEnabled(true); layout->documentSize(); QCOMPARE(layout->frameBoundingRect(frame).height(),60.0);
++            QCOMPARE(doc.toRawText(),source);
 +        }
 +    }
 +
@@ -16015,7 +16214,7 @@
      void init();
      void cleanup();
      void cleanupTestCase();
-@@ -648,5 +16616,3682 @@
+@@ -648,5 +16815,3682 @@
      }
  }
  

@@ -5,8 +5,8 @@
   "patches": [
     {
       "file": "0001-logical-flow-renderer.patch",
-      "sha256": "d0d0514d389480b1a268b95ece36ea206d367993296c7e60ec109ef686096b7b",
-      "bytes": 1268038,
+      "sha256": "487a26c12924e0d1dc87af657046af61d0df29de7f04238de9605cdde3b96f6b",
+      "bytes": 1342828,
       "files": [
         {
           "path": "src/gui/accessible/qaccessible.cpp",
@@ -54,8 +54,8 @@
           "path": "src/gui/text/qtextdocumentlayout.cpp",
           "new_file": false,
           "upstream_sha256": "26c75b9708bcfca3f2ffb387e59e648d816c689453644f91eff36e373de5adc7",
-          "qualified_sha256": "984c4a653f568f6417e990ab326c00aefb7c98623d20cc8bbf728213fd2d3e57",
-          "bytes": 928483
+          "qualified_sha256": "1b1373121da6d40ae1affa5c899c6888ce873252c608e80850036fce38081339",
+          "bytes": 991121
         },
         {
           "path": "src/gui/text/qtextdocumentlayout_p.h",
@@ -89,15 +89,15 @@
           "path": "src/gui/text/qtextlayout.cpp",
           "new_file": false,
           "upstream_sha256": "a6b8d41c3b4f0d81777edbc84ca53037940ddf3066fa95223fb95cd56ee9c2a8",
-          "qualified_sha256": "4e2ee56a94925bb10776c79cfadd1f5091a8048cf12fe63c9acf89e1d54f5d55",
-          "bytes": 160302
+          "qualified_sha256": "c567693d902225e69681aedc31b38f921c028dbcbbe85f2d6357b6979dc8f7f5",
+          "bytes": 160703
         },
         {
           "path": "src/gui/text/qtextlogicalflow_p.h",
           "new_file": true,
           "upstream_sha256": null,
-          "qualified_sha256": "f6054bc95bfaa0abbeefcb099466970609d95961e1061c8a14cdc0bf5d93ca0f",
-          "bytes": 54443
+          "qualified_sha256": "d564ab897ca8d2354b6f11d5cb14b6dc61e342f249c2d0bdbfaf9459bd158091",
+          "bytes": 62378
         },
         {
           "path": "src/gui/text/qtextsourceprovenance_p.h",
@@ -201,8 +201,8 @@
           "path": "src/gui/text/qtextinlinebox_p.h",
           "new_file": true,
           "upstream_sha256": null,
-          "bytes": 67828,
-          "qualified_sha256": "2db10b19734e798b8e193310b462c8a77a5ee371f3042a9ff57e3cd1b0aa85e0"
+          "bytes": 70486,
+          "qualified_sha256": "1fcfba804e692a4160d887b3681332e59223d5ef029cb5120670efabd167b3da"
         },
         {
           "path": "src/gui/text/qfontengine.cpp",
@@ -243,8 +243,8 @@
     },
     {
       "file": "0002-layout-regressions.patch",
-      "sha256": "6f01df6a09ee36ea799bfe267ad33e8befa4de6deda17d62ca66a2dc1d6707f3",
-      "bytes": 1560149,
+      "sha256": "fe09d0fa04080c9641e4efe5a896c1a7a2c7648e41d8126e4e436e9ad3b3b6e9",
+      "bytes": 1574396,
       "files": [
         {
           "path": "tests/auto/gui/text/qtextdocumentlayout/CMakeLists.txt",
@@ -257,8 +257,8 @@
           "path": "tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp",
           "new_file": false,
           "upstream_sha256": "aeca9826b762034d580c7024cb22641c6f9eafc04501a0099ca57af8d0770d14",
-          "qualified_sha256": "9b6ae209dd08c92fb8e6c7e32d13d768d2a52d1ae4d60b76c70aa3e4a69210a0",
-          "bytes": 1560727
+          "qualified_sha256": "b18faa2c80889078822930f093f7ea35def3bfcc16cf301303cb7202cc529f86",
+          "bytes": 1574775
         }
       ]
     },

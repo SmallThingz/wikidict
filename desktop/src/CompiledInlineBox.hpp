@@ -46,6 +46,8 @@ inline void requireExtendedCapability(QTextDocument *document, const QJsonObject
     if (CompiledContent::hasNestedPitchChildren(span))
         require(document->documentLayout()->property("_wikidictInlineBoxNestedPitchCapability").toString()
             == QString::fromLatin1(QCompiledInlineBox::NestedPitchCapability));
+    if (QCompiledInlineBox::dashedBottomLink(span)) require(document->documentLayout()->property("_wikidictDashedBottomLinkCapability").toString()
+        == QStringLiteral("wikidict.inline-box-dashed-bottom-link/1"));
     if (CompiledContent::dottedBottomLabel(span)) require(document->documentLayout()->property("_wikidictDottedBottomLabelCapability").toString()
         == QStringLiteral("wikidict.inline-box-dotted-bottom-label/1"));
     if (childLink(span)) require(document->documentLayout()->property("_wikidictInlineBoxChildLinkCapability").toString()
@@ -91,7 +93,7 @@ struct Owner {
     QVariantList padding, widths, colors;
     QVariant radius;
     bool percentRadius = false, dottedBorder = false, nonbreakingSwatch = false;
-    QVariant childItalic;
+    QVariant childItalic, dashedChildItalic;
     QVariantMap action, childAction, sourceTree;
     QByteArray borderSource;
     QVariantList currentColors, overlays;
@@ -188,7 +190,9 @@ inline Expansion expand(QTextDocument *document) {
             require(ownerContext.blockCount() == 1 && ownerContext.toPlainText() == QStringLiteral("X"));
             declaring = ownerContext.find(QStringLiteral("X")).charFormat();
             declaring.setFont(declaring.font().resolve(base));
-            const QString href = QStringLiteral("dict:") + QString::fromLatin1(QUrl::toPercentEncoding(span.value("target").toString()));
+            QString href = QStringLiteral("dict:") + QString::fromLatin1(QUrl::toPercentEncoding(span.value("target").toString()));
+            if (CompiledContent::present(span.value("target_fragment")))
+                href += QChar('#') + QString::fromLatin1(QUrl::toPercentEncoding(span.value("target_fragment").toString()));
             require(declaring.isAnchor() && declaring.anchorHref() == href && declaring.anchorNames().isEmpty());
         } else declaring = SemanticHtml::inlineSnapshotFormat(&ownerContext, CompiledRuby::spanFont(span),
             item.data.value("owner_html").toString(), points);
@@ -207,7 +211,8 @@ inline Expansion expand(QTextDocument *document) {
         require(font.pointSizeF() > 0);
         const bool dottedLabel = CompiledContent::dottedBottomLabel(span);
         QFont childFont = font;
-        if (dottedLabel) childFont.setItalic(leaves.first().toObject().value("italic").toBool());
+        const bool dashedLink = QCompiledInlineBox::dashedBottomLink(span);
+        if (dashedLink || dottedLabel) childFont.setItalic(leaves.first().toObject().value("italic").toBool());
         QCompiledInlineBox::DecodedSourceRanges decoded;
         QVariantMap packet;
         if (sourceTree) {
@@ -258,7 +263,10 @@ inline Expansion expand(QTextDocument *document) {
                     : QCompiledInlineBox::sameMetricFont(format.font(), childFont)));
             // Keep the ordinary link renderer's resolved ink/decoration/focus
             // authority. The child contributes its unchanged original characters.
-            if (wholeLink) format = declaring;
+            if (wholeLink) {
+                format = declaring;
+                if (dashedLink) format.setFontItalic(childFont.italic());
+            }
             if (sourceBound && CompiledContent::present(span.value("foreground")))
                 format.setForeground(declaring.foreground());
             if (sourceBound) require(QCompiledInlineBox::borderFormat(span, format));
@@ -292,6 +300,7 @@ inline Expansion expand(QTextDocument *document) {
         Owner owner; owner.font = font; owner.source = source; owner.nested = nested;
         owner.nonbreakingSwatch = CompiledContent::nonbreakingSwatch(span, group);
         owner.sourceTree = packet;
+        if (dashedLink) owner.dashedChildItalic = childFont.italic();
         if (!sourceTree && dottedLabel) owner.childItalic = childFont.italic();
         if (childLink(span)) {
             const auto original = group.value("spans").toArray().first().toObject();
@@ -318,7 +327,7 @@ inline Expansion expand(QTextDocument *document) {
             const qreal p = SemanticHtml::styleLengthUnits(padding.value(key), document, font.pointSizeF());
             const auto edge = border.value(key).toObject(); const auto mode = edge.keys().first();
             qreal width = 0; QColor color(Qt::transparent);
-            if (mode == "solid" || mode == "dotted") {
+            if (mode == "solid" || mode == "dotted" || (dashedLink && mode == "dashed")) {
                 width = SemanticHtml::styleLengthUnits(edge.value(mode).toObject().value("width"), document, font.pointSizeF());
                 color = borderColor(edge.value(mode).toObject().value("color"), span, declaring, sourceBound);
             }
@@ -398,6 +407,7 @@ inline void finalize(const Expansion &result) {
         if (owner.background.isValid()) metadata.insert("background", owner.background);
         if (owner.radius.isValid()) metadata.insert("radius", owner.radius);
         if (!owner.sourceTree.isEmpty()) metadata.insert("sourceTree", owner.sourceTree);
+        if (owner.dashedChildItalic.isValid()) metadata.insert("dashedBottomChildItalic", owner.dashedChildItalic);
         if (owner.childItalic.isValid()) metadata.insert("dottedBottomChildItalic", owner.childItalic);
         if (owner.percentRadius) metadata.insert("radiusUnit", QStringLiteral("percent"));
         if (owner.dottedBorder) metadata.insert("borderStyle", QStringLiteral("dotted"));

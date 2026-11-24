@@ -87,6 +87,7 @@
 #include <QtGui/private/qtextrubyrangemap_p.h>
 #include <QtGui/private/qtextinlinestyle_p.h>
 #include "CompiledRuby.hpp"
+#include "CompiledClippedAbsolute.hpp"
 #include "CompiledInlineAction.hpp"
 #include "CompiledInlineBox.hpp"
 #include <QMimeData>
@@ -1415,6 +1416,14 @@ public:
         if (!self || !doc || !layout || self->document() != doc || doc->documentLayout() != layout
             || result.value(QStringLiteral("error")).toBool()) return {};
         if (!result.value(QStringLiteral("handled")).toBool()) return path;
+        if (result.value(QStringLiteral("vertical_only")).toBool()) {
+            const QRectF bounds = path.boundingRect();
+            const qreal top = qMax(bounds.top(), result.value(QStringLiteral("top")).toDouble());
+            const qreal bottom = qMin(bounds.bottom(), result.value(QStringLiteral("bottom")).toDouble());
+            if (bottom <= top) return {};
+            QPainterPath band; band.addRect(QRectF(bounds.left(), top, bounds.width(), bottom - top));
+            return path.intersected(band);
+        }
         const auto clipPath = result.value(QStringLiteral("clip_path"));
         if (clipPath.isValid()) {
             if (clipPath.metaType().id() != qMetaTypeId<QPainterPath>()) return {};
@@ -2680,10 +2689,25 @@ public:
         end = browser_->documentOffset(end, ReadingBrowser::RubyMap::Bias::Before);
         if (start < 0 || end < start) return;
         const QPointer<ReadingBrowser> guard(browser_);
+        if (end > start) {
+            const auto lastSource = LogicalFlow::position(guard->document(), end - 1);
+            if (!guard) return;
+            if (lastSource.status == LogicalFlow::Status::Handled &&
+                lastSource.values.contains(QStringLiteral("articleClippedRect"))) --end;
+        }
         if (!guard->revealLocalPosition(start) || !guard || !guard->revealLocalPosition(end) || !guard) return;
         QTextCursor first(browser_->document()); first.setPosition(start);
         QTextCursor last(browser_->document()); last.setPosition(end);
-        const QRect wanted = browser_->cursorRect(first).united(browser_->cursorRect(last));
+        const auto revealRect = [&](const QTextCursor &cursor) {
+            const auto source = LogicalFlow::position(browser_->document(), cursor.position());
+            const auto clipped = source.values.value(QStringLiteral("articleClippedRect"));
+            return source.status == LogicalFlow::Status::Handled && LogicalFlow::finiteRect(clipped)
+                ? clipped.toRectF().translated(-browser_->rootDocumentOffset()).toAlignedRect()
+                : browser_->cursorRect(cursor);
+        };
+        // end is exclusive. If the selection ends at visible punctuation it
+        // must not reveal the table on behalf of the preceding clipped literal.
+        const QRect wanted = revealRect(first).united(revealRect(last));
         const QRect viewport = browser_->viewport()->rect();
         const int dy = wanted.height() > viewport.height() || wanted.top() < 0 ? wanted.top()
             : qMax(0, wanted.bottom() - viewport.bottom());
@@ -5409,6 +5433,7 @@ bool MainWindow::refreshReading() {
         }
     }
     beginEdit();
+    FlowConstruction::translatedAtomicOwners(document, containers, true);
     if (FlowConstruction::hasResponsiveContainers(document)) FlowConstruction::reflowContainers(document, qreal(contentsRect().width()));
     if (SemanticHtml::hasTableBlockViewports(document)) {
         SemanticHtml::reflowTableBlockViewports(document, qreal(contentsRect().width()));
@@ -5639,10 +5664,12 @@ bool MainWindow::refreshReading() {
         document->rootFrame()->setFrameFormat(rootFormat); CompiledContent::require(current());
     }
     QVariantList descriptors = SemanticHtml::inlineTableOwners(document);
+    descriptors += FlowConstruction::translatedAtomicOwners(document, containers, false);
     for (const auto &owner : owners) descriptors.append(FlowConstruction::descriptor(owner));
     const auto actionRegistry = CompiledInlineAction::finalize(actionExpansion, rubyExpansion);
     auto rubyFinal = CompiledRuby::finalize(rubyExpansion, std::move(descriptors));
     descriptors = std::move(rubyFinal.descriptors);
+    CompiledClippedAbsolute::install(document, descriptors);
     const bool checkedNativeLayout = bodyEnd >= 0 || !descriptors.isEmpty() || !containers.isEmpty() || SemanticHtml::hasTableBoxes(document) || SemanticHtml::hasInlineText(document);
     const QString source = document->toRawText();
     const int revision = document->revision(), count = document->characterCount();
@@ -6095,6 +6122,10 @@ QString MainWindow::spansHtml(const QJsonArray &spans, qreal leftMargin, const Q
                         prefix, boxBackground, basePoints, inheritedInk, sourceRun, false,
                         typedScopeOwnsIsolation, {}, computedCellTraits, contextFamily);
                 out += CompiledInlineBox::marker(span, children, ownerHtml, basePoints, sourceRun, probes);
+                continue;
+            }
+            if (SemanticHtml::present(span.value("clipped_absolute"))) {
+                out += CompiledClippedAbsolute::marker(span, sourceRun);
                 continue;
             }
             if (CompiledInlineAction::present(span)) {
@@ -6697,8 +6728,22 @@ QString MainWindow::blockHtml(const QJsonObject &block, const QString &cellBackg
         const auto owned = CompiledContent::containerBlock(block);
         const bool columns = CompiledContent::present(owned.value(QStringLiteral("style")).toObject().value(QStringLiteral("columns")));
         const auto positioningStyle = owned.value(QStringLiteral("style")).toObject();
+        if (positioningStyle.contains(QStringLiteral("flex_edge")) && reading_->document()->documentLayout()->property("_wikidictFlexEdgeCapability").toString()
+            !=QStringLiteral("wikidict.flex-column-edge/1")) throw DictApiError("compiled flex item offset and corner are unavailable");
+        if (positioningStyle.value(QStringLiteral("layout")) == QStringLiteral("flex_column") && reading_->document()->documentLayout()->property("_wikidictFlexColumnCapability").toString()
+            != QStringLiteral("wikidict.flex-column/1")) throw DictApiError("compiled flex column layout is not available");
+        if (positioningStyle.contains(QStringLiteral("flex_column_gap")) && reading_->document()->documentLayout()->property("_wikidictFlexColumnGapCapability").toString()
+            != QStringLiteral("wikidict.flex-column-gap/1")) throw DictApiError("compiled flex column gap is not available");
         const bool positioned = CompiledContent::present(positioningStyle.value(QStringLiteral("positioning")));
         const bool absolute = CompiledContent::present(positioningStyle.value(QStringLiteral("absolute_position")));
+        const bool translated = positioningStyle.contains(QStringLiteral("translated_absolute"));
+        if (translated || positioningStyle.contains(QStringLiteral("corner_radius_px")) || positioningStyle.contains(QStringLiteral("inline_atomic"))) {
+            if (reading_->document()->documentLayout()->property("_wikidictContainerTranslatedAbsoluteCapability").toString()
+                != QStringLiteral("wikidict.container-translated-absolute/1"))
+                throw DictApiError("compiled translated Container layout is not available");
+            if (translated && !context.relativeContainingBlock)
+                throw DictApiError("compiled translated Container has no represented containing block");
+        }
         const bool absoluteExtension = FlowConstruction::absoluteContainerExtension(owned);
         const bool relativeImage = !FlowConstruction::relativeFloatImageSource(owned).isEmpty();
         if ((relativeImage || FlowConstruction::hasRelativeFloatImageDescendant(owned))
@@ -6809,9 +6854,10 @@ QString MainWindow::blockHtml(const QJsonObject &block, const QString &cellBackg
         CompiledContent::require(context.contentDepth <= 16);
         FlowConstruction::Rendered rendered;
         const auto children = owned.value(QStringLiteral("blocks")).toArray();
+        const auto avoidGroups = columns ? FlowConstruction::columnAvoidGroups(children) : QList<int>{};
         auto childContext = context; childContext.flexItem = inputs.layout == QStringLiteral("flex_row");
         if (absolute) childContext.relativeContainingBlock = false;
-        else if (positioned) childContext.relativeContainingBlock = true;
+        else if (positioned || translated) childContext.relativeContainingBlock = true;
         for (qsizetype index = 0; index < children.size(); ++index) {
             auto child = childContext;
             if (context.referenceStage == 0) child.referenceStage = 1;
@@ -6823,8 +6869,17 @@ QString MainWindow::blockHtml(const QJsonObject &block, const QString &cellBackg
                 child.referenceTypography = reference.value("body_typography").toObject();
                 child.citationBacklinks = QJsonArray{reference.value("backlinks").toArray().first().toObject().value("span")};
             }
-            rendered.html += blockHtml(CompiledContent::object(children.at(index)), cellBackground, tableDepth,
+            QString html = blockHtml(CompiledContent::object(children.at(index)), cellBackground, tableDepth,
                 location + QStringLiteral("/container/%1").arg(index), context.alignment, child);
+            if (!avoidGroups.isEmpty()) {
+                // One generated paragraph per ordinary child. Qt's HTML importer
+                // transfers its index without adding selectable marker text.
+                const QString marker = QStringLiteral("-qt-user-state:%1;").arg(index + 1);
+                if (html.startsWith(QStringLiteral("<p style='"))) html.insert(10, marker);
+                else if (html.startsWith(QStringLiteral("<p>"))) html.replace(0, 3, QStringLiteral("<p style='%1'>").arg(marker));
+                else throw DictApiError("unsupported column break owner structure");
+            }
+            rendered.html += html;
         }
         return QStringLiteral("<p style='margin:0'>%1</p>").arg(FlowConstruction::placeholder(block, rendered, context));
     }

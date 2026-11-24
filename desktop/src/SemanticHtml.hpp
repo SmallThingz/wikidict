@@ -3020,6 +3020,7 @@ inline void normalizeImages(QTextDocument *document) {
     }
 }
 
+inline constexpr int clippedAbsoluteProperty = QTextFormat::UserProperty + 0x58d3;
 inline constexpr int rubyImportProperty = QTextFormat::UserProperty + 0x5813;
 inline constexpr int actionImportProperty = QTextFormat::UserProperty + 0x5814;
 inline constexpr int inlineStyleProperty = QTextFormat::UserProperty + 0x5804;
@@ -3198,7 +3199,7 @@ inline bool hasInlineText(const QTextDocument *document) {
 inline QString scaledText(const QString &html, double scale, const QString &tooltip,
                           Basis basis = Basis::Context, qreal normalBodyPoints = 0,
                           bool small = false, bool superscript = false, bool subscript = false, qreal contextPoints = 0,
-                          const QJsonValue &advisory = QJsonValue(), bool metadataOnly = false, int sourceRun = -1, const QJsonObject &linkPaint = {}, qint64 linkOwner = -1, qreal linkEm = 0, bool linkUnderline = false, const QJsonValue &fontFeatures = {}, bool ordinaryLink = false, const QJsonObject &inlineSpan = {}, qreal inlineBodyPoints = 0, qreal inlineContextPoints = 0, const QString &inlineOwnerHtml = {}, const QJsonValue &fontFamily = {}, const QJsonObject &compiledRuby = {}, const QJsonObject &compiledAction = {}, const QJsonObject &compiledCitation = {}) {
+                          const QJsonValue &advisory = QJsonValue(), bool metadataOnly = false, int sourceRun = -1, const QJsonObject &linkPaint = {}, qint64 linkOwner = -1, qreal linkEm = 0, bool linkUnderline = false, const QJsonValue &fontFeatures = {}, bool ordinaryLink = false, const QJsonObject &inlineSpan = {}, qreal inlineBodyPoints = 0, qreal inlineContextPoints = 0, const QString &inlineOwnerHtml = {}, const QJsonValue &fontFamily = {}, const QJsonObject &compiledRuby = {}, const QJsonObject &compiledAction = {}, const QJsonObject &compiledCitation = {}, const QString &clippedLiteral = {}) {
     if (!compiledRuby.isEmpty() && (!inlineSpan.isEmpty() || !linkPaint.isEmpty()))
         throw std::runtime_error("Ruby import metadata cannot enter an ordinary inline split");
     if (!compiledAction.isEmpty() && (!inlineSpan.isEmpty() || !linkPaint.isEmpty() || !compiledRuby.isEmpty()))
@@ -3228,6 +3229,12 @@ inline QString scaledText(const QString &html, double scale, const QString &tool
         }
     }
     QJsonObject metadata{{"scale", scale}, {"tooltip", tooltip}};
+    if (!clippedLiteral.isEmpty()) {
+        if (!metadataOnly || html != clippedLiteral.toHtmlEscaped() || !compiledRuby.isEmpty() ||
+            !compiledAction.isEmpty() || !compiledCitation.isEmpty() || !inlineSpan.isEmpty() || !linkPaint.isEmpty())
+            throw std::runtime_error("invalid clipped literal owner");
+        metadata.insert("clipped_literal",clippedLiteral);
+    }
     if (!compiledCitation.isEmpty()) {
         ReferencePolicy::citationImport(compiledCitation);
         if (!compiledRuby.isEmpty() || !compiledAction.isEmpty()) throw std::runtime_error("citation cannot replace another inline owner");
@@ -3306,6 +3313,7 @@ struct ScaleInfo {
     bool ordinaryLink = false;
     FontFeaturePolicy fontFeatures = FontFeaturePolicy::Legacy;
     QJsonObject inlineSpan;
+    QString clippedLiteral;
     QJsonObject compiledRuby;
     QJsonObject compiledAction;
     QVariantMap citation;
@@ -3365,12 +3373,17 @@ inline QString prepare(const QString &html, QHash<QString, ScaleInfo> &markers) 
             || (present(advisory) && !advisory.isString())
             || (hasSourceRun && (!sourceRun.isDouble() || !std::isfinite(run)
                 || run < 0 || run > std::numeric_limits<int>::max() || std::floor(run) != run))
-            || (metadataOnly && (scale != 1 || absolute || (!present(advisory) && !hasSourceRun && !hasLinkPaint && !hasInline && !hasRuby && !hasAction && !hasCitation && !hasGeneratedIsolate && !hasFamily && fontFeatures == FontFeaturePolicy::Legacy)
+            || (metadataOnly && (scale != 1 || absolute || (!present(advisory) && !hasSourceRun && !hasLinkPaint && !hasInline && !hasRuby && !hasAction && !hasCitation && !value.contains("clipped_literal") && !hasGeneratedIsolate && !hasFamily && fontFeatures == FontFeaturePolicy::Legacy)
                 || value.contains(QStringLiteral("context_points")) || value.contains(QStringLiteral("legacy_flags"))))
             || (!basisValue.isUndefined() && (!basisValue.isString()
                 || (basisValue.toString() != QStringLiteral("context") && !absolute))))
             throw std::runtime_error("invalid renderer font-scale metadata");
         ScaleInfo info{scale, value.value(QStringLiteral("tooltip")).toString()};
+        if (value.contains("clipped_literal")) {
+            info.clippedLiteral = value.value("clipped_literal").toString();
+            if (info.clippedLiteral.isEmpty() || !metadataOnly || hasRuby || hasAction || hasCitation || hasInline || hasLinkPaint)
+                throw std::runtime_error("invalid clipped literal metadata");
+        }
         if (hasCitation) {
             if (hasRuby || hasAction || hasGeneratedIsolate || !value.value("compiled_citation").isObject())
                 throw std::runtime_error("invalid citation import owner");
@@ -3703,6 +3716,10 @@ inline void normalize(QTextDocument *document, const QHash<QString, ScaleInfo> &
                     format.setProperty(generatedIsolateProperty, marker->generatedIsolate);
                 }
                 if (marker->sourceRun >= 0) format.setProperty(sourceRunProperty, marker->sourceRun);
+                if (!marker->clippedLiteral.isEmpty()) {
+                    if (fragment.text()!=marker->clippedLiteral) throw std::runtime_error("clipped source text changed");
+                    format.setProperty(clippedAbsoluteProperty,marker->clippedLiteral);
+                }
                 if (!marker->compiledRuby.isEmpty()) {
                     for (QChar c : fragment.text()) if (c != QChar(0xe000))
                         throw std::runtime_error("generated Ruby anchor changed during HTML import");

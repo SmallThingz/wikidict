@@ -127,15 +127,16 @@ inline bool dottedBottomLabel(const QJsonObject &owner) {
     return width.value("unit") == QStringLiteral("px") && width.value("value").toDouble() > 0
         && edge.value("color").toObject().contains("rgb");
 }
-inline void inlineBoxBorder(const QJsonValue &value, const QJsonObject &span, bool sourceBound, bool rounded = false, bool dottedBottom = false) {
+inline void inlineBoxBorder(const QJsonValue &value, const QJsonObject &span, bool sourceBound, bool rounded = false, bool dottedBottom = false, bool dashedBottom = false) {
     const auto border = containerObject(value, {"top", "right", "bottom", "left"},
         {"top", "right", "bottom", "left"});
     for (const auto key : {"top", "right", "bottom", "left"}) {
         const auto edge = object(border.value(key)); require(edge.size() == 1);
         const auto tag = edge.keys().first();
         require((tag == "none" || (!sourceBound && tag == "hidden") || tag == "solid"
+            || (dashedBottom && QString::fromLatin1(key) == QStringLiteral("bottom") && tag == "dashed")
             || ((rounded || (dottedBottom && QString::fromLatin1(key) == QStringLiteral("bottom"))) && !sourceBound && tag == "dotted")) && edge.value(tag).isObject());
-        if (tag == "solid" || tag == "dotted") {
+        if (tag == "solid" || tag == "dotted" || tag == "dashed") {
             const auto solid = containerObject(edge.value(tag), {"width", "color"}, {"width", "color"});
             containerLength(solid.value("width"));
             const auto color = object(solid.value("color")); require(color.size() == 1);
@@ -306,8 +307,10 @@ inline QJsonObject inlineBoxGroup(const QJsonObject &span) {
         && span.value("trail").isString() && span.value("trail").toString().isEmpty()
         && (wholeLink ? span.value("target").isString() && !span.value("target").toString().isEmpty()
                       : span.value("target").toString().isEmpty()));
+    const bool dashedLink = QCompiledInlineBox::dashedBottomLink(span);
+    require(!present(span.value("target_fragment")) || (dashedLink && span.value("target_fragment").isString()));
     for (const auto key : {"image", "ruby", "inline_action_group", "inline_padding_group",
-                           "link_paint", "target_fragment", "audio_control", "citation_marker"})
+                           "link_paint", "audio_control", "citation_marker"})
         require(!present(span.value(key)));
     require(!span.value("superscript").toBool() && !span.value("subscript").toBool()
         && (!present(span.value("direction")) || span.value("direction").toString().isEmpty()));
@@ -346,7 +349,7 @@ inline QJsonObject inlineBoxGroup(const QJsonObject &span) {
     containerEdges(group.value("padding"));
     require(group.value("overlays").isArray());
     const auto border = group.value("border").toObject();
-    inlineBoxBorder(group.value("border"), span, sourceBound, rounded, dottedBottomLabel(span));
+    inlineBoxBorder(group.value("border"), span, sourceBound, rounded, dottedBottomLabel(span), dashedLink);
     if (sourceBound) {
         require(!rounded && !wholeLink && span.value("target") == QJsonValue(QString())
             && span.value("direction") == QJsonValue(QString()));
@@ -373,7 +376,7 @@ inline QJsonObject inlineBoxGroup(const QJsonObject &span) {
                 && (!insets.value("left").isNull() || !insets.value("right").isNull()));
         }
     }
-    if (rounded || wholeLink) {
+    if (rounded || (wholeLink && !dashedLink)) {
         const auto edge = border.value("top").toObject();
         const QString style = edge.keys().first();
         require((style == "solid" || (rounded && style == "dotted"))
@@ -399,7 +402,8 @@ inline QJsonObject inlineBoxGroup(const QJsonObject &span) {
                 && !present(child.value("target_fragment")));
             // This branch materializes one owner over its original plain text.
             // It cannot flatten a separately styled or actionable descendant.
-            const auto effectiveStyle = [](QJsonObject value) {
+            const auto effectiveStyle = [dashedLink](QJsonObject value) {
+                if (dashedLink) { value.remove("italic"); value.remove("target_fragment"); }
                 for (const auto key : {"kind", "text", "trail", "target", "inline_box_group"}) value.remove(key);
                 for (const auto &key : value.keys()) if (value.value(key).isNull()) value.remove(key);
                 return value;
@@ -537,7 +541,7 @@ inline void containerLineHeight(const QJsonValue &value) {
 }
 inline void containerBorderEdge(const QJsonValue &value) {
     const auto kind = containerUnion(value, {QStringLiteral("none"), QStringLiteral("hidden"),
-        QStringLiteral("solid"), QStringLiteral("dotted")});
+        QStringLiteral("solid"), QStringLiteral("dotted"), QStringLiteral("dashed")});
     const auto payload = value.toObject().value(kind);
     if (kind == QStringLiteral("none") || kind == QStringLiteral("hidden"))
         require(containerObject(payload, {}).isEmpty());
@@ -653,14 +657,113 @@ inline void requireBodyTextBlock(const QJsonObject &block) {
     require(text);
 }
 
+inline void translatedContainerStyle(const QJsonObject &style) {
+    const bool atom = style.contains("inline_atomic");
+    const bool absolute = style.contains("translated_absolute");
+    const bool rounded = style.contains("corner_radius_px");
+    if (!atom && !absolute && !rounded) return;
+    if (atom) {
+        containerObject(style, {"inline_atomic", "owner_font"}, {"inline_atomic", "owner_font"});
+        require(!containerOwnerFont(style).isEmpty() && (style.value("inline_atomic") == QStringLiteral("adjacent")
+            || style.value("inline_atomic") == QStringLiteral("after_space")));
+        return;
+    }
+    require(rounded && !containerOwnerFont(style).isEmpty());
+    containerNumber(style.value("corner_radius_px"));
+    const auto px = [](const QJsonValue &value) {
+        containerLength(value);
+        require(value.toObject().value("unit") == QStringLiteral("px"));
+    };
+    if (style.contains("padding")) {
+        const QStringList sides{"top", "right", "bottom", "left"};
+        const auto edges = containerObject(style.value("padding"), sides, sides);
+        for (const auto &side : sides) px(edges.value(side));
+    }
+    require(containerUnion(style.value("background"), {"rgb"}) == QStringLiteral("rgb"));
+    if (!absolute) {
+        const QStringList card{"corner_radius_px", "owner_font", "positioning", "text_align", "background", "border", "padding"};
+        containerObject(style, card, card);
+        require(style.value("positioning") == QStringLiteral("relative_auto") && style.value("text_align") == QStringLiteral("center"));
+        const auto border = containerObject(style.value("border"), {"solid"}, {"solid"}).value("solid").toObject();
+        px(border.value("width"));
+        require(containerUnion(border.value("color"), {"rgb"}) == QStringLiteral("rgb"));
+        return;
+    }
+    const QStringList required{"translated_absolute", "owner_font", "corner_radius_px", "width", "background", "line_height"};
+    const QStringList allowed = required + QStringList{"padding", "height"};
+    containerObject(style, allowed, required);
+    require(containerUnion(style.value("width"), {"fit_content"}) == QStringLiteral("fit_content"));
+    px(containerObject(style.value("line_height"), {"length"}, {"length"}).value("length"));
+    if (style.contains("height")) px(style.value("height"));
+    const auto data = containerObject(style.value("translated_absolute"), {"placement", "z_index", "background_alpha", "owns_abbreviation"},
+        {"placement", "background_alpha", "owns_abbreviation"});
+    require(data.value("owns_abbreviation").isBool() && containerNumber(data.value("background_alpha")) <= 1);
+    const auto level = data.value("z_index");
+    if (present(level)) require(level.isDouble() && level.toDouble() >= 0 && level.toDouble() <= std::numeric_limits<int>::max()
+        && level.toDouble() == level.toInt(-1));
+    const QStringList axes{"left", "top", "translate_x", "translate_y"};
+    const auto placement = containerObject(data.value("placement"), axes, axes);
+    for (const auto &axis : axes) {
+        const QStringList units{"px", "percent"};
+        const auto offset = containerObject(placement.value(axis), units, units);
+        for (const auto &unit : units) {
+            const auto number = offset.value(unit);
+            require(number.isDouble() && std::isfinite(number.toDouble()) && std::abs(number.toDouble()) <= std::numeric_limits<float>::max());
+        }
+    }
+}
+
+inline void translatedContainerBody(const QJsonObject &style, const QJsonArray &body) {
+    const auto law = style.value("translated_absolute").toObject();
+    const bool atom = style.contains("inline_atomic");
+    if (law.isEmpty() && !atom && !style.contains("corner_radius_px")) return;
+    require(!body.isEmpty());
+    if (law.isEmpty() && !atom) {
+        for (qsizetype i = 0; i < body.size(); ++i) {
+            const auto child = body[i].toObject();
+            require(child.value("kind") == QStringLiteral("container"));
+            const auto childStyle = child.value("container").toObject().value("style").toObject();
+            if (childStyle.contains("inline_atomic")) require(i != 0 || childStyle.value("inline_atomic") == QStringLiteral("adjacent"));
+            else require(i > 0 && i == body.size() - 1 && childStyle.value("translated_absolute").isObject()
+                && !childStyle.value("translated_absolute").toObject().value("owns_abbreviation").toBool(true));
+        }
+        return;
+    }
+    const bool advisory = law.value("owns_abbreviation").toBool();
+    require(body.size() == 1 || (!atom && !advisory && body.size() == 2));
+    const auto paragraph = body.first().toObject();
+    require(paragraph.value("kind") == QStringLiteral("paragraph") && paragraph.value("spans").isArray());
+    const auto runs = paragraph.value("spans").toArray();
+    require(!runs.isEmpty() && (!advisory || runs.size() == 1));
+    const auto first = runs.first().toObject();
+    for (const auto &raw : runs) {
+        const auto run = object(raw);
+        const bool link = run.value("kind") == QStringLiteral("link");
+        require((link || run.value("kind") == QStringLiteral("text")) && !run.value("text").toString().isEmpty()
+            && link == !run.value("target").toString().isEmpty());
+        for (const auto key : {"image", "ruby", "inline_padding_group", "inline_action_group", "inline_box_group", "clipped_absolute", "audio_control", "citation_marker"}) require(!present(run.value(QLatin1String(key))));
+        if (atom) continue;
+        require(run.value("trail").toString().isEmpty());
+        if (advisory) require(!link && !run.value("explanation").toString().isEmpty() && !present(run.value("tooltip")));
+        else require(link && run.value("target") == first.value("target") && run.value("target_fragment") == first.value("target_fragment"));
+    }
+    if (body.size() == 2) {
+        const auto child = body.last().toObject();
+        require(child.value("kind") == QStringLiteral("container") && child.value("container").toObject().value("style").toObject()
+            .value("translated_absolute").toObject().value("owns_abbreviation").toBool());
+    }
+}
+
 inline QJsonObject containerStyle(const QJsonValue &value) {
     if (value.isUndefined()) return {};
     const auto style = containerObject(value, {QStringLiteral("margins"), QStringLiteral("padding"),
         QStringLiteral("width"), QStringLiteral("float_side"), QStringLiteral("clear"), QStringLiteral("max_width"),
-        QStringLiteral("box_sizing"), QStringLiteral("layout"), QStringLiteral("align_items"), QStringLiteral("flex_item"),
+        QStringLiteral("box_sizing"), QStringLiteral("layout"), QStringLiteral("align_items"), QStringLiteral("flex_item"), QStringLiteral("flex_column_gap"), QStringLiteral("flex_edge"),
         QStringLiteral("background"), QStringLiteral("border"), QStringLiteral("line_height"),
         QStringLiteral("text_align"), QStringLiteral("screen_max_width"), QStringLiteral("owner_font_scale"), QStringLiteral("height"), QStringLiteral("columns"), QStringLiteral("positioning"), QStringLiteral("min_height"), QStringLiteral("margin_values"), QStringLiteral("overflow"), QStringLiteral("font_family"), QStringLiteral("owner_font"),
-        QStringLiteral("absolute_position"), QStringLiteral("text_wrap")});
+        QStringLiteral("absolute_position"), QStringLiteral("text_wrap"), QStringLiteral("translated_absolute"),
+        QStringLiteral("inline_atomic"), QStringLiteral("corner_radius_px")});
+    translatedContainerStyle(style);
     const auto enumeration = [](const QJsonObject &owner, const QString &key, const QStringList &choices) {
         const auto field = owner.value(key);
         if (present(field)) require(field.isString() && choices.contains(field.toString()));
@@ -675,16 +778,55 @@ inline QJsonObject containerStyle(const QJsonValue &value) {
     if (present(style.value(QStringLiteral("padding")))) containerEdges(style.value(QStringLiteral("padding")));
     if (present(style.value(QStringLiteral("width")))) containerWidth(style.value(QStringLiteral("width")));
     if (present(style.value(QStringLiteral("max_width")))) containerWidth(style.value(QStringLiteral("max_width")), true);
-    enumeration(style, QStringLiteral("overflow"), {QStringLiteral("visible"), QStringLiteral("auto")});
+    enumeration(style, QStringLiteral("overflow"), {QStringLiteral("visible"), QStringLiteral("auto"), QStringLiteral("visible_x_clip_y")});
     enumeration(style, QStringLiteral("float_side"), {QStringLiteral("left"), QStringLiteral("right")});
     enumeration(style, QStringLiteral("clear"), {QStringLiteral("none"), QStringLiteral("left"), QStringLiteral("right"), QStringLiteral("both")});
     enumeration(style, QStringLiteral("box_sizing"), {QStringLiteral("content_box"), QStringLiteral("border_box")});
-    enumeration(style, QStringLiteral("layout"), {QStringLiteral("flow"), QStringLiteral("flex_row")});
+    enumeration(style, QStringLiteral("layout"), {QStringLiteral("flow"), QStringLiteral("flex_row"), QStringLiteral("flex_column")});
     enumeration(style, QStringLiteral("align_items"), {QStringLiteral("stretch"), QStringLiteral("start"), QStringLiteral("center"), QStringLiteral("end")});
     enumeration(style, QStringLiteral("flex_item"), {QStringLiteral("none")});
     enumeration(style, QStringLiteral("text_align"), {QStringLiteral("left"), QStringLiteral("center"), QStringLiteral("right")});
     enumeration(style, QStringLiteral("text_wrap"), {QStringLiteral("normal"), QStringLiteral("nowrap")});
-    require(!present(style.value(QStringLiteral("align_items"))) || style.value(QStringLiteral("layout")) == QStringLiteral("flex_row"));
+    if (style.contains(QStringLiteral("flex_edge"))) {
+        containerObject(style,{"flex_edge","border","height","owner_font"},{"flex_edge","border","height","owner_font"});
+        const auto edge=containerObject(style.value("flex_edge"),{"align_self","inset_side","width_percent","width_add","inset_percent","bottom_radius_px"},
+                                                          {"align_self","inset_side","width_percent","width_add","inset_percent","bottom_radius_px"});
+        require(style.value("owner_font").toObject().value("font_scale_basis") == QStringLiteral("normal_body"));
+        require(edge.value("align_self")==QStringLiteral("start") || edge.value("align_self")==QStringLiteral("end"));
+        const bool left=edge.value("inset_side")==QStringLiteral("left");
+        require(left || edge.value("inset_side")==QStringLiteral("right"));
+        for (const auto key: {"width_percent","inset_percent","bottom_radius_px"}) {
+            const auto field=edge.value(QLatin1String(key));
+            require(field.isDouble() && std::isfinite(field.toDouble()) &&
+                    (QLatin1String(key)==QLatin1String("inset_percent") ? field.toDouble()>=0 : field.toDouble()>0));
+        }
+        containerLength(edge.value("width_add")); const auto height=style.value("height").toObject();
+        require(height.value("unit")==QStringLiteral("px") && height.value("value").toDouble()>0);
+        const auto sides=style.value("border").toObject().value("edges").toObject();
+        const auto upright=sides.value(left?"left":"right").toObject().value("solid").toObject();
+        const auto bottom=sides.value("bottom").toObject().value("solid").toObject();
+        require(!upright.isEmpty() && upright.value("width")==bottom.value("width")
+                && upright.value("width").toObject().value("unit")==QStringLiteral("px")
+                && upright.value("width").toObject().value("value").toDouble()>0);
+        const auto ink=upright.value("color").toObject().value("rgb").toString();
+        require(!ink.isEmpty() && ink.compare(bottom.value("color").toObject().value("rgb").toString(),Qt::CaseInsensitive)==0
+                && sides.value("top").toObject().contains("none") && sides.value(left?"right":"left").toObject().contains("none"));
+    }
+    const bool column = style.value(QStringLiteral("layout")) == QStringLiteral("flex_column");
+    require(!present(style.value(QStringLiteral("align_items"))) || style.value(QStringLiteral("layout")) == QStringLiteral("flex_row") || column);
+    if (column) {
+        containerObject(style, {"layout","align_items","width","padding","margin_values","owner_font","owner_font_scale"}, {"layout","align_items"});
+        require(style.value("align_items") == QStringLiteral("center"));
+        if (style.contains("width")) require(containerUnion(style.value("width"), {"fit_content"}) == QStringLiteral("fit_content"));
+        if (style.contains("margin_values")) for (const auto &side : {"top","right","bottom","left"})
+            require(style.value("margin_values").toObject().value(QLatin1String(side)).toObject().contains("auto"));
+    }
+    if (style.contains(QStringLiteral("flex_column_gap"))) {
+        const auto gap = style.value(QStringLiteral("flex_column_gap"));
+        containerLength(gap);
+        require(style.value(QStringLiteral("layout")) == QStringLiteral("flex_row") && !style.contains(QStringLiteral("columns"))
+            && gap.toObject().value(QStringLiteral("value")).toDouble() > 0);
+    }
     if (present(style.value(QStringLiteral("background")))) containerColor(style.value(QStringLiteral("background")));
     if (present(style.value(QStringLiteral("border")))) {
         const auto border = style.value(QStringLiteral("border"));
@@ -745,10 +887,14 @@ inline QJsonObject containerStyle(const QJsonValue &value) {
     }
     if (present(style.value(QStringLiteral("columns")))) {
         const auto columns = containerObject(style.value(QStringLiteral("columns")),
-            {QStringLiteral("count"), QStringLiteral("gap")}, {QStringLiteral("count"), QStringLiteral("gap")});
+            {QStringLiteral("count"), QStringLiteral("gap"), QStringLiteral("width")},
+            {QStringLiteral("gap")});
         const auto count = columns.value(QStringLiteral("count"));
-        require(count.isDouble() && std::isfinite(count.toDouble()) && count.toDouble() >= 1
+        const auto width = columns.value(QStringLiteral("width"));
+        require(present(count) || present(width));
+        if (present(count)) require(count.isDouble() && std::isfinite(count.toDouble()) && count.toDouble() >= 1
             && count.toDouble() <= 65535 && std::floor(count.toDouble()) == count.toDouble());
+        if (present(width)) containerLength(width);
         containerLength(columns.value(QStringLiteral("gap")));
         require(!present(style.value(QStringLiteral("height")))
             && style.value(QStringLiteral("layout")) != QStringLiteral("flex_row"));
@@ -819,10 +965,19 @@ inline QJsonObject containerBlock(const QJsonObject &block, int depth = 1) {
     const auto owned = containerObject(block.value(QStringLiteral("container")), {QStringLiteral("blocks"), QStringLiteral("style")}, {QStringLiteral("blocks")});
     require(owned.value(QStringLiteral("blocks")).isArray() && owned.value(QStringLiteral("blocks")).toArray().size() <= (1 << 20));
     const auto style = containerStyle(owned.value(QStringLiteral("style")));
+    translatedContainerBody(style, owned.value(QStringLiteral("blocks")).toArray());
+    if (style.contains(QStringLiteral("flex_edge"))) require(owned.value(QStringLiteral("blocks")).toArray().isEmpty());
     // Native admission owns signed ordinary margins; child BlockStyle spacing remains a separate protocol.
     for (const auto &value : owned.value(QStringLiteral("blocks")).toArray()) {
         const auto child = object(value);
         require(child.value(QStringLiteral("kind")) != QStringLiteral("heading"));
+        if (style.value("layout") == QStringLiteral("flex_column")) {
+            require(child.value("kind") == QStringLiteral("container"));
+            const auto item = child.value("container").toObject().value("style").toObject();
+            for (const auto key : {"float_side","clear","flex_item","columns","overflow","absolute_position","absolute_static","translated_absolute",
+                    "screen_max_width","margin_values","margins","min_height","max_width"}) require(!item.contains(QLatin1String(key)));
+            if (item.contains("width")) containerUnion(item.value("width"), {"auto","fit_content"});
+        }
         if (present(child.value(QStringLiteral("style")))) {
             const auto childStyle = object(child.value(QStringLiteral("style")));
             require(!containerVerticalMargins(childStyle.value(QStringLiteral("margins"))));

@@ -76,7 +76,16 @@ inline Position position(QTextDocument *document, int originalOffset) {
         || values.value(QStringLiteral("first")).toInt() < 0
         || values.value(QStringLiteral("last")).toInt() < originalOffset
         || values.value(QStringLiteral("last")).toInt() >= document->characterCount()
-        || !finiteRect(values.value(QStringLiteral("cursorRect")))) return {};
+        ) return {};
+    if (values.contains(QStringLiteral("articleClippedRect"))) {
+        const auto rect = values.value(QStringLiteral("articleClippedRect"));
+        if (!finiteRect(rect) || rect.toRectF().isEmpty() ||
+            values.contains(QStringLiteral("actionRect")) || values.contains(QStringLiteral("characterRect")) ||
+            values.contains(QStringLiteral("cursorRect")) || values.value(QStringLiteral("projected")).toInt() != -1)
+            return {};
+        return {Status::Handled, 0, values};
+    }
+    if (!finiteRect(values.value(QStringLiteral("cursorRect")))) return {};
     if (values.contains(QStringLiteral("characterRect")) && !finiteRect(values.value(QStringLiteral("characterRect")))) return {};
     return {Status::Handled, 0, values};
 }
