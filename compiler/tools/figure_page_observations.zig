@@ -10431,6 +10431,48 @@ test "static STL context joins both actual Vector ancestors while keeping distin
     }
 }
 
+test "Italian WMF5 two authentic ImageInfo batches bind the unchanged static STL Book" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const original = StaticPosterContextTesting.prefix;
+    const prefix = "testdata/it-static-poster-wmf5/";
+    const Slice = CombinedObservationTesting.Slice;
+    var ns = try namespaces.Registry.init(a, @embedFile(original ++ "namespace-registry.tsv")); defer ns.deinit();
+    const defaults = Testing.hash(@embedFile(original ++ "figure-siteinfo.raw.json"));
+    var projection_slice: Slice = .{ .bytes = @embedFile(prefix ++ "figure-sizing.json") };
+    var raw_slice: Slice = .{ .bytes = @embedFile(prefix ++ "figure-sizing.raw.json") };
+    var projection_input: sizing.StreamInput = .{ .context = &projection_slice, .read_at = Slice.readAt, .size = projection_slice.bytes.len };
+    var raw_input: sizing.StreamInput = .{ .context = &raw_slice, .read_at = Slice.readAt, .size = raw_slice.bytes.len };
+    var files = try sizing.Registry.initStreamWithDefaults(a, &projection_input, &raw_input,
+        @embedFile(prefix ++ "figure-sizing.site.json"), &ns, .{ .core = "f45897451256aa3799aecc5d7ee320ade22beaec", .sha256 = defaults });
+    defer files.deinit();
+    const input = @embedFile(original ++ "figure-page-observations.outer03.json");
+    try std.testing.expectError(invalid, Book.init(a, input, &ns, &files, defaults, 250));
+    try files.bindStaticPosterLabel("3D");
+    const posters = [_][]const u8{
+        "File:BodyParts3D FJ6385 FJ6472 Parietal bone.stl",
+        "File:BodyParts3D FJ6411 Occipital bone.stl",
+        "File:BodyParts3D Femur.stl",
+        "File:BodyParts3D Neurocranium.stl",
+        "File:BodyParts3D Tibia.stl",
+        "File:High quality skull.stl",
+    };
+    try std.testing.expectEqual(posters.len, files.static_poster_files.count());
+    for (posters) |file| {
+        try std.testing.expect((try sizing.Registry.resolve(&files, a, file, .thumbnail, 250, null)) == null);
+        const poster = (try sizing.Registry.resolveStaticPoster(&files, a, file, .thumbnail, 250, null)) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(encoder.presentation_types.StaticPosterPolicy.three_d_stl_v1, poster.policy);
+        try std.testing.expectEqualStrings("3D", poster.label);
+    }
+    try std.testing.expectError(invalid, Book.init(a, input, &ns, &files, defaults, 251));
+    var book = try Book.init(a, input, &ns, &files, defaults, 250);
+    defer book.deinit();
+    try std.testing.expectEqual(@as(usize, 2), book.pages.len);
+    for (book.pages) |page| {
+        try std.testing.expectEqual(@as(usize, 1), page.occurrences.len);
+        try std.testing.expect(page.occurrences[0].static_poster != null);
+    }
+}
+
 test "static STL context refuses missing outer proof and extra middle ancestor attributes" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
     var ns = try namespaces.Registry.init(a, @embedFile(StaticPosterContextTesting.prefix ++ "namespace-registry.tsv")); defer ns.deinit();

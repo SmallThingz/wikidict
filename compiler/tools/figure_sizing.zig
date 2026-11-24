@@ -1907,6 +1907,8 @@ pub const Registry = struct {
         };
         const gif = gifProfile(doc.source_profile);
         const webp = webpProfile(doc.source_profile);
+        const italian_poster_document = batches.streamed_v6 and gif and !webp and equal(doc.core_revision, wmf5_imageinfo_core) and
+            equal(ns.wiki, "itwiktionary") and equal(ns.content_language, "it") and equal(ns.dump_date, "20261001");
         const sr_jpeg_document = batches.streamed_v6 and gif and !webp and equal(doc.core_revision, wmf5_imageinfo_core) and
             equal(ns.wiki, "srwiktionary") and equal(ns.content_language, "sr") and equal(ns.dump_date, "20261001");
         // Coverage belongs to each requested file. Keep the index only while
@@ -2208,10 +2210,13 @@ pub const Registry = struct {
                 }
                 if (supplement) continue;
                 if (equal(fact.mime, "application/sla") and equal(fact.mediatype, "3D")) {
-                    // mediaRegistration already authenticated every media module
-                    // for this exact batch. Only f458 + ThreeD59f implementation
-                    // is covered; all aliases must retain that complete proof.
-                    const proven = gif and equal(batch_core, current_core) and
+                    // mediaRegistration already authenticated the entire set.
+                    // Italian WMF5 87f + ThreeD43498 keeps the same STL handler,
+                    // thumbnail wrapper, badge and parser style hook as f458 +
+                    // ThreeD59f. This covers only the selected static poster.
+                    const poster_epoch = equal(batch_core, current_core) or
+                        (italian_poster_document and equal(batch_core, wmf5_imageinfo_core));
+                    const proven = gif and poster_epoch and
                         fact.state == .unsupported and width == 5120 and height == 2880 and
                         std.ascii.endsWithIgnoreCase(fact.canonical_file, ".stl");
                     const proof = try static_poster_proofs.getOrPut(a, fact.canonical_file);
