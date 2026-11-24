@@ -68850,6 +68850,44 @@ const RoaRupStaticBannerTest = struct {
         const source = try rows(a);
         return source.selected_rows.map.get(title) orelse return error.TestUnexpectedResult;
     }
+    fn expectUnoRegions(io: std.Io, a: std.mem.Allocator, output: []const u8, ns: *const namespace_registry.Registry,
+        registry: *const language_registry.Registry, page: Row, source: []const u8, second: language_registry.Resolved) !void
+    {
+        const doc = encoder.presentation_document;
+        const italian = try row(a, "Format:-it-");
+        const proof = source_language_banner.parse(italian.text, ns, null, registry, "it").?;
+        const marker = try std.fmt.allocPrint(a, "={s}=", .{proof.heading});
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, source, marker));
+        const cut = std.mem.indexOf(u8, source, marker).?;
+        const observed = try doc.observeHeadingAnchorsWithWikiScopeAlloc(a, page.title, doc.MissingText.untracked(source), .{}, ns, null, null, .{}, null, true);
+        try std.testing.expect(observed.page_wiki_scope_complete);
+        for ([_]language_registry.Resolved{ registry.resolve("es").?, second }, 0..) |owner, arm| {
+            errdefer diagnostics.printLine("roa_uno_failure heading={s} code={s}\n", .{ owner.heading, owner.code });
+            const begin: usize = if (arm == 0) 0 else cut;
+            const end: usize = if (arm == 0) cut else source.len;
+            const region = source[begin..end];
+            const ranges = [_]doc.HeadingSourceRange{.{ .owner_start = 0, .page_start = begin, .len = region.len }};
+            var fallback: doc.Fallbacks = .{};
+            const expected_bytes = try doc.compileClassifiedWithHeadingAnchorsAndSourceMediaRootAlloc(a, page.title, .language,
+                owner.heading, owner.code, doc.MissingText.untracked(region), null, .{}, ns, null, null, .{}, &fallback,
+                null, &.{}, &observed, &ranges, if (owner.code.len != 0) .{ .heading = owner.heading, .code = owner.code } else null, null, null, .parser_output);
+            const expected = try encoder.presentation_codec.decodeAlloc(a, expected_bytes, page.title, .language, .{ .heading = owner.heading, .code = owner.code });
+            const actual = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, output, owner.heading, page.title);
+            try std.testing.expectEqualDeep(expected.entry, actual);
+            try std.testing.expectEqualStrings(owner.code, actual.language_code);
+            try std.testing.expectEqual(@as(usize, 2), actual.sections.len);
+            try std.testing.expectEqual(@as(u8, 1), actual.sections[0].level);
+            try std.testing.expectEqualStrings(if (arm == 0) "Ispanjolã" else "Italianeaşci", actual.sections[0].title);
+            try std.testing.expectEqual(@as(u8, 3), actual.sections[1].level);
+            try std.testing.expectEqual(@as(usize, 1), GaHtmlLanguageBoundaryFixture.targetCount(actual, "un"));
+            try std.testing.expectEqualStrings("Númir", actual.sections[1].title);
+            try std.testing.expect(actual.sections[0].blocks[0].spans[0].image != null);
+            const stored: T.Stored = .{ .entry = actual }; const bytes = try encoder.presentation_codec.encodeAlloc(a, stored);
+            const decoded = try encoder.presentation_codec.decodeAlloc(a, bytes, page.title, .language, .{ .heading = owner.heading, .code = owner.code });
+            try std.testing.expectEqualDeep(stored, decoded);
+            try std.testing.expectEqualSlices(u8, bytes, try encoder.presentation_codec.encodeAlloc(a, decoded));
+        }
+    }
     fn namespace(a: std.mem.Allocator) !namespace_registry.Registry {
         var ns = try namespace_registry.Registry.init(a, @embedFile("testdata/roa-rup-static-banner/namespace-registry.tsv"));
         try ns.attachInterwikiMap(@embedFile("testdata/roa-rup-static-banner/interwiki-map.tsv"));
@@ -69143,7 +69181,7 @@ test "Aromanian normal source-instantiated water and limbã excerpts preserve ex
 }
 
 test "Aromanian complete original uno static instantiation keeps Spanish Italian regions and numeral support without a default owner" {
-    const F = RoaRupStaticBannerTest; const doc = encoder.presentation_document; const T = encoder.presentation_types;
+    const F = RoaRupStaticBannerTest;
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator(); const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup(); const root = try tmp.dir.realPathFileAlloc(io, ".", a);
     try F.installSupport(io, a, root, 1); var ns = try F.namespace(a); defer ns.deinit();
@@ -69151,43 +69189,14 @@ test "Aromanian complete original uno static instantiation keeps Spanish Italian
     try std.testing.expect(registry.sourceStaticSupport("num") != null);
     try std.testing.expectEqualStrings("num", registry.resolve("num").?.code);
     const page = try F.row(a, "uno"); const source = try F.expanded(a, page.text);
-    const italian = try F.row(a, "Format:-it-");
-    const proof = source_language_banner.parse(italian.text, &ns, null, &registry, "it").?;
-    const marker = try std.fmt.allocPrint(a, "={s}=", .{proof.heading});
-    const cut = std.mem.indexOf(u8, source, marker).?;
-    const observed = try doc.observeHeadingAnchorsWithWikiScopeAlloc(a, page.title, doc.MissingText.untracked(source), .{}, &ns, null, null, .{}, null, true);
-    try std.testing.expect(observed.page_wiki_scope_complete);
     const output = try std.fs.path.join(a, &.{root, "output"});
     var writer = try encoder.blob_builder.Writer.init(io, a, output); defer writer.deinit(); writer.language_codes = codes;
     // Every selected provider is complete and static; this is an explicitly
     // source-instantiated full original page, not a saved Worker response.
     try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, page.title, source, page.text, null);
     const stats = try writer.finish(codes);
-    var uno_stage: []const u8 = "language_records";
-    errdefer diagnostics.printLine("roa_uno_failure stage={s} language_records={d}\n", .{uno_stage, stats.language_records});
     try std.testing.expectEqual(@as(usize, 2), stats.language_records);
-    for ([_][]const u8{"es", "it"}, 0..) |code, arm| {
-        const owner = registry.resolve(code).?;
-        const begin: usize = if (arm == 0) 0 else cut;
-        const end: usize = if (arm == 0) cut else source.len;
-        const region = source[begin..end];
-        const ranges = [_]doc.HeadingSourceRange{.{ .owner_start = 0, .page_start = begin, .len = region.len }};
-        var fallback: doc.Fallbacks = .{};
-        const expected_bytes = try doc.compileClassifiedWithHeadingAnchorsAndSourceMediaRootAlloc(a, page.title, .language,
-            owner.heading, owner.code, doc.MissingText.untracked(region), null, .{}, &ns, null, null, .{}, &fallback,
-            null, &.{}, &observed, &ranges, .{ .heading = owner.heading, .code = owner.code }, null, null, .parser_output);
-        const expected = try encoder.presentation_codec.decodeAlloc(a, expected_bytes, page.title, .language, .{ .heading = owner.heading, .code = owner.code });
-        uno_stage = code;
-        const actual = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, output, owner.heading, page.title);
-        try std.testing.expectEqualDeep(expected.entry, actual);
-        try std.testing.expectEqual(@as(usize, 2), actual.sections.len);
-        try std.testing.expectEqualStrings("Númir", actual.sections[1].title);
-        try std.testing.expect(actual.sections[0].blocks[0].spans[0].image != null);
-        const stored: T.Stored = .{ .entry = actual }; const bytes = try encoder.presentation_codec.encodeAlloc(a, stored);
-        const decoded = try encoder.presentation_codec.decodeAlloc(a, bytes, page.title, .language, .{ .heading = owner.heading, .code = owner.code });
-        try std.testing.expectEqualDeep(stored, decoded);
-        try std.testing.expectEqualSlices(u8, bytes, try encoder.presentation_codec.encodeAlloc(a, decoded));
-    }
+    try F.expectUnoRegions(io, a, output, &ns, &registry, page, source, registry.resolve("it").?);
 }
 
 test "Aromanian source support intake requires genuine complete POS provider and rejects duplicate and conflicting proofs" {
@@ -69240,18 +69249,19 @@ test "Aromanian source support intake requires genuine complete POS provider and
     var writer = try encoder.blob_builder.Writer.init(io, a, output); defer writer.deinit(); writer.language_codes = codes;
     try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, page.title, expanded, page.text, null);
     const stats = try writer.finish(codes);
-    try std.testing.expectEqual(@as(usize, 1), stats.language_records);
-    const unknown = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, output, "Unclassified", page.title);
-    try std.testing.expectEqualStrings("", unknown.language_code);
-    // Missing support authority retains the complete article, including both
-    // source language headings, both numeral headings and both authored links.
-    var meanings: usize = 0; var language_headings: usize = 0;
-    for (unknown.sections) |section| {
-        if (section.level == 1) language_headings += 1;
-        for (section.blocks) |block| for (block.spans) |span| if (span.kind == .link and std.mem.eql(u8, span.target, "un")) { meanings += 1; };
-    }
-    try std.testing.expectEqual(@as(usize, 2), meanings);
-    try std.testing.expectEqual(@as(usize, 2), language_headings);
+    // The indexed first banner authenticates the leading Spanish region.
+    // Without the POS certificate the raw hyphen markers do not align with the
+    // two rendered language headings, so the final region has no certified owner.
+    try std.testing.expectEqual(@as(usize, 2), stats.language_records);
+    try F.expectUnoRegions(io, a, output, &ns, &no_provider, page, expanded, .{ .code = "", .heading = "Unclassified" });
+    const reasons = try std.Io.Dir.cwd().readFileAlloc(io,
+        try std.fs.path.join(a, &.{output, "fallback-pages.jsonl"}), a, .limited(4096));
+    const Failure = struct { namespace: i32, title: []const u8, reasons: []const []const u8 };
+    const fallback = try std.json.parseFromSliceLeaky(Failure, a, reasons, .{});
+    try std.testing.expectEqual(@as(i32, 0), fallback.namespace);
+    try std.testing.expectEqualStrings(page.title, fallback.title);
+    try std.testing.expectEqual(@as(usize, 1), fallback.reasons.len);
+    try std.testing.expectEqualStrings("unresolved_language_heading", fallback.reasons[0]);
     var duplicate = std.testing.tmpDir(.{}); defer duplicate.cleanup(); const duplicate_root = try duplicate.dir.realPathFileAlloc(io, ".", a);
     try F.installSupport(io, a, duplicate_root, 2);
     try std.testing.expectError(error.DuplicateLanguageTemplateSource, loadLanguageRegistry(io, a, duplicate_root, &ns));
