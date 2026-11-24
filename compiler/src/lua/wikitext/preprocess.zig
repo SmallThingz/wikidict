@@ -777,12 +777,12 @@ pub fn appendParsingTextTrackedState(a: std.mem.Allocator, out: *dependency.Buil
 
 // Residual source closers are unconditional, even when the default is unused.
 // Inspect its literal nodes without evaluating any template or parser function.
-pub fn parameterLiteralCloseCount(a: std.mem.Allocator, inside: []const u8) !usize {
-    const fallback = splitParameter(inside).default orelse return 0;
+pub fn parameterLiteralCloseCount(a: std.mem.Allocator, inside: []const u8, conversion_enabled: bool) !usize {
+    const fallback = splitParameterWithConversion(inside, conversion_enabled).default orelse return 0;
     if (!hasParsingBoundary(fallback)) return 0;
     var out: dependency.Builder = .{};
     defer out.deinit(a);
-    var scan: ExpansionScan = .{};
+    var scan: ExpansionScan = .{ .conversion_enabled = conversion_enabled };
     var literal_state: ParsingLiteralState = .{};
     var pos: usize = 0;
     while (scan.next(fallback, pos, false)) |node| {
@@ -1338,8 +1338,12 @@ pub fn splitParameter(s: []const u8) ParameterSplit {
 }
 
 pub fn splitParameterWithConversion(s: []const u8, conversion_enabled: bool) ParameterSplit {
-    if (findTopDelimiterWithConversion(s, '|', conversion_enabled)) |bar| return .{ .key = s[0..bar], .default = s[bar + 1 ..] };
-    return .{ .key = s, .default = null };
+    var scan: OpaqueParserScan = .{};
+    const bar = findTopDelimiterFrom(s, '|', false, 0, &scan, conversion_enabled) orelse
+        return .{ .key = s, .default = null };
+    // Parser::argSubstitution evaluates only the first part when lookup fails.
+    const end = findTopDelimiterFrom(s, '|', false, bar + 1, &scan, conversion_enabled) orelse s.len;
+    return .{ .key = s[0..bar], .default = s[bar + 1 .. end] };
 }
 
 test "template opener scan skips literal extension bodies but enters wikitext extensions" {
@@ -1913,9 +1917,9 @@ test "parsing inclusion boundaries preserve plain API and selected literal segme
     try appendParsingTextTracked(a, &out, selected, hasParsingBoundary(selected));
     try std.testing.expectEqualStrings("&#123;&#123;uc:cat&#125;&#125;", (try dependency.escapeLiteralCurly(a, try out.finish(a))).bytes);
     try std.testing.expectEqualStrings("# first\n# second", try stripDecodedCommentsForParsingPreservingPoem(a, "# first\n<!--x-->\n# second"));
-    try std.testing.expectEqual(@as(usize, 2), try parameterLiteralCloseCount(a, "missing|{<noinclude/>{uc:cat"));
-    try std.testing.expectEqual(@as(usize, 2), try parameterLiteralCloseCount(a, "missing|{<noinclude/>{uc:cat{{#expr:1/0}}"));
-    try std.testing.expectEqual(@as(usize, 0), try parameterLiteralCloseCount(a, "missing|A<noinclude/>B {{broken"));
+    try std.testing.expectEqual(@as(usize, 2), try parameterLiteralCloseCount(a, "missing|{<noinclude/>{uc:cat", false));
+    try std.testing.expectEqual(@as(usize, 2), try parameterLiteralCloseCount(a, "missing|{<noinclude/>{uc:cat{{#expr:1/0}}", false));
+    try std.testing.expectEqual(@as(usize, 0), try parameterLiteralCloseCount(a, "missing|A<noinclude/>B {{broken", false));
 }
 
 

@@ -1395,7 +1395,7 @@ pub const Expander = struct {
                     try out.append(self.runtime.allocator, expanded);
                     pos = construct.close + if (construct.kind == .parameter) @as(usize, 3) else 2;
                     if (construct.kind == .parameter) {
-                        var remaining = try preprocess.parameterLiteralCloseCount(self.runtime.allocator, text[construct.open + 3 .. construct.close]);
+                        var remaining = try preprocess.parameterLiteralCloseCount(self.runtime.allocator, text[construct.open + 3 .. construct.close], expansion_scan.conversion_enabled);
                         const trailing = pos;
                         while (remaining != 0 and pos < text.len and text[pos] == '}') : (remaining -= 1) pos += 1;
                         if (pos != trailing) try out.appendLiteralCurly(self.runtime.allocator, text[trailing..pos]);
@@ -1552,7 +1552,7 @@ pub const Expander = struct {
                 pos += 1;
             }
             if (node == .construct and node.construct.kind == .parameter) {
-                var remaining = try preprocess.parameterLiteralCloseCount(self.runtime.allocator, text[node.construct.open + 3 .. node.construct.close]);
+                var remaining = try preprocess.parameterLiteralCloseCount(self.runtime.allocator, text[node.construct.open + 3 .. node.construct.close], expansion_scan.conversion_enabled);
                 const trailing = pos;
                 while (remaining != 0 and pos < text.len and text[pos] == '}') : (remaining -= 1) pos += 1;
                 if (pos != trailing) {
@@ -10399,6 +10399,59 @@ const NativeSerializerDependencyFixture = struct {
         try std.testing.expectEqualStrings("Template:MissingSibling", decoded.occurrences()[range.occurrence - 1].title);
     }
 };
+
+test "parameter substitution expands only the first default part in the owning template" {
+    const Source = struct {
+        ignored_lookups: usize = 0,
+
+        fn get(raw: ?*anyopaque, _: std.mem.Allocator, title: []const u8) !?[]const u8 {
+            const self: *@This() = @ptrCast(@alignCast(raw.?));
+            if (std.mem.eql(u8, title, "Template:Heading")) return "===Етимологија {{{#if{{{2}}}|{{{2}}}|}}}===";
+            if (std.mem.eql(u8, title, "Template:Choose")) return "{{{1|[[Target|label]] {{{2|nested}}}|{{Ignored}}}}}";
+            if (std.mem.eql(u8, title, "Template:Empty")) return "{{{1||{{Ignored}}}}}";
+            if (std.mem.eql(u8, title, "Template:Ignored")) self.ignored_lookups += 1;
+            return null;
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 24);
+    defer runtime.deinit();
+    runtime.namespace_catalog = try rt.namespace_registry.englishTestRegistry();
+    try rt.bindGlobalTable(&runtime, null, 0);
+    try stdlib.install(&runtime);
+    var source: Source = .{};
+    var expander: Expander = .{
+        .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23,
+        .provider = .{ .ctx = &source, .get = Source.get, .exists = TestProvider.exists },
+    };
+    for ([_][2][]const u8{
+        .{ "{{{foo|bar|baz}}}", "bar" },
+        .{ "{{Heading|it}}", "===Етимологија {{{2}}}===" },
+        .{ "{{Heading|it|X}}", "===Етимологија X===" },
+        .{ "{{Choose}}", "[[Target|label]] nested" },
+        .{ "{{Choose|override}}", "override" },
+        .{ "{{Choose|}}", "" },
+        .{ "{{Empty}}", "" },
+    }) |case| {
+        const expanded = try expander.expandFragment("Page", case[0], null);
+        try std.testing.expectEqualStrings(case[1], expanded);
+        try std.testing.expect(expander.missing_dependency_metadata == null);
+    }
+    try std.testing.expectEqual(@as(usize, 0), source.ignored_lookups);
+    for ([_]struct { body: []const u8, conversion: bool, expected: ?[]const u8 }{
+        .{ .body = "name", .conversion = false, .expected = null },
+        .{ .body = "name|<nowiki>|</nowiki>|ignored", .conversion = false, .expected = "<nowiki>|</nowiki>" },
+        .{ .body = "name|-{a|b}-|ignored", .conversion = true, .expected = "-{a|b}-" },
+        .{ .body = "name|-{a|b}-|ignored", .conversion = false, .expected = "-{a" },
+    }) |case| {
+        const split = preprocess.splitParameterWithConversion(case.body, case.conversion);
+        try std.testing.expectEqualStrings("name", split.key);
+        if (case.expected) |expected| {
+            try std.testing.expectEqualStrings(expected, split.default.?);
+        } else try std.testing.expect(split.default == null);
+    }
+}
 
 test "native localurl known inputs retain site serialization single evaluation and precise missing sibling" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
