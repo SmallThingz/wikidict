@@ -130,11 +130,22 @@ took about six minutes with a reported 3 GiB maximum RSS; that measures tool
 preparation, not the peak requirement or duration of a complete edition.
 
 The pushed source rejects the newer private R08 Babua record with
-`InvalidPresentation`. That failure is retained separately from the pending
-R09 matching-source qualification. It does not change the corpus completion
-count. The R09 source was reconstructed locally from 1.06 MB of authenticated
-diffs and fixtures; its composition, source manifest, commands and individual
-qualification receipts are under `.tmp/r09-local/`.
+`InvalidPresentation`; the matching R09 Reader reproduces the retained export
+byte for byte. R09 was reconstructed locally from 1.06 MB of authenticated
+diffs and fixtures. Its ten selected Encoder tests passed. The codec command
+needed an explicit `blob encoder root imports data-only presentation codecs`
+filter to discover its tests. All three codec tests passed after an independently
+reviewed test-only correction: include the existing trailing extension byte
+and corrupt the marker-weight and layout bytes independently. Production
+encoding and decoding were unchanged. The original failures remain recorded.
+
+R09 source, manifests and Encoder receipts are under `.tmp/r09-local/`.
+The codec repair patch, compressed postimage and passing receipts are under
+`.tmp/r09-codec-repair/`; its redundant source copy was retired after cleanup.
+The combined local validation summary is `.tmp/local-build/qualification.json`.
+These are selected checks, not full R09 or corpus acceptance. No new edition
+was counted as complete, and the remaining Tools/Writer and application
+qualification still need their original inputs and separate verification.
 
 Keep this setup and its active cache while local consumers remain. Detailed
 environment metadata and validation receipts are in `.tmp/local-environment.json`
