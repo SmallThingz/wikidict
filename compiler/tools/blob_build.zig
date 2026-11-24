@@ -38873,6 +38873,23 @@ test "normal Writer retained ID rampai preserves three owners request example no
     const F = struct {
         const raw = @embedFile("testdata/id-rampai129/page.raw.wikitext");
         const expanded = @embedFile("testdata/id-rampai129/page.expanded.wikitext");
+        fn under(a: std.mem.Allocator, old: []const T.Span, owners: []const u8) ![]T.Span {
+            const result = try a.dupe(T.Span, old);
+            for (result) |*span| {
+                var leaf_classes = span.classes;
+                var prefix = owners;
+                if (span.image) |image| {
+                    const marker = "wikidict-media wikidict-media-file-";
+                    try std.testing.expect(std.mem.startsWith(u8, leaf_classes, marker));
+                    const end = std.mem.indexOfScalarPos(u8, leaf_classes, marker.len, ' ') orelse leaf_classes.len;
+                    try std.testing.expectEqual(image.file.len * 2, end - marker.len);
+                    prefix = try std.mem.join(a, " ", &.{ leaf_classes[0..end], owners });
+                    leaf_classes = std.mem.trimStart(u8, leaf_classes[end..], " ");
+                }
+                span.classes = if (leaf_classes.len == 0) prefix else try std.mem.join(a, " ", &.{ prefix, leaf_classes });
+            }
+            return result;
+        }
         fn hash(bytes: []const u8, expected: []const u8) !void {
             var digest: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
             try std.testing.expectEqualStrings(expected, &std.fmt.bytesToHex(digest, .lower));
@@ -38895,7 +38912,12 @@ test "normal Writer retained ID rampai preserves three owners request example no
     // Match the normal indexed Common.css context of the retained Reader.
     const css = @embedFile("testdata/id-rampai129/common.css");
     try F.hash(css, "c94c6f82363ace5b7ac8fc39335ad44eef9f9c0e5674b2f9cbcf73a8ffe0041e");
-    var styles = try encoder.table_style_profile.parseAlloc(a, css); defer styles.deinit();
+    // runBlobBuild selects the screen medium for the indexed stylesheet.
+    // The same complete source in an unknown medium cannot issue an ancestry proof.
+    var unknown_styles = try encoder.table_style_profile.parseAlloc(a, css); defer unknown_styles.deinit();
+    const expanded = encoder.presentation_compile.MissingText.untracked(F.expanded);
+    try std.testing.expect((try encoder.presentation_compile.nativeSourceClassProofAlloc(a, expanded, &unknown_styles)) == null);
+    var styles = try encoder.table_style_profile.parseForTargetAlloc(a, css, .screen); defer styles.deinit();
     var codes = languageCodes(&registry, &ns); codes.behavior_switches = &behavior; codes.image_options = &images; codes.table_styles = &styles;
     const output = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/id-rampai", .{tmp.sub_path});
     var writer = try encoder.blob_builder.Writer.init(io, a, output); defer writer.deinit(); writer.language_codes = codes;
@@ -38994,7 +39016,21 @@ test "normal Writer retained ID rampai preserves three owners request example no
             try std.testing.expectEqualStrings("headword-text", heading_spans[4].classes);
             heading_spans[4].classes = "headword-text extiw";
         }
-        tooltip_blocks[0].spans = heading_spans;
+        try std.testing.expectEqual(@as(usize, 3), std.mem.count(u8, F.expanded, "<div class=\"headword-wrapper\" title="));
+        try std.testing.expectEqual(@as(usize, 3), std.mem.count(u8, F.expanded, "<div class=\"headword-inner\" style="));
+        tooltip_blocks[0].spans = try F.under(a, heading_spans, "headword-wrapper headword-inner");
+        var terms: usize = 0;
+        for (tooltip_blocks) |*block| if (block.kind == .term) {
+            try std.testing.expect(block.spans.len >= 2);
+            const image = block.spans[0].image orelse return error.MissingSectionHeaderIcon;
+            const label = block.spans[1].text;
+            const markup = try std.fmt.allocPrint(a, "<div class=\"section-header section-header-def\">\n" ++
+                "; <span class=\"section-header-img\">[[File:{s}|12px|link=]]</span>{s}", .{image.file, label});
+            try std.testing.expectEqual(@as(usize, if (std.mem.eql(u8, label, "Nomina")) 2 else 1), std.mem.count(u8, F.expanded, markup));
+            block.spans = try F.under(a, block.spans, "section-header section-header-def");
+            terms += 1;
+        };
+        try std.testing.expectEqual(@as(usize, if (index == 1) 2 else 1), terms);
         if (index == 0) {
             try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, F.expanded,
                 "<span class=\"hyphenation\" title=\"Pemenggalan &quot;rampai&quot; dalam bahasa Burusu\">ram‧pai</span>"));
@@ -39014,8 +39050,37 @@ test "normal Writer retained ID rampai preserves three owners request example no
             try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, F.expanded, "<div style=\"overflow: auto; font-size:90%;\">"));
             try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, F.expanded, "<div style=\"padding:4px 0 4px 8px;\">"));
             try std.testing.expectEqual(@as(usize, 7), tooltip_blocks.len);
-            const title_line = tooltip_blocks[5];
-            const child = tooltip_blocks[6];
+            var title_line = tooltip_blocks[5];
+            const title_spans = try a.dupe(T.Span, title_line.spans);
+            const icon_source = "<span style=\"position:relative;top:-1px; padding-right: 0.4em;\">" ++
+                "[[Berkas:OOjs UI icon book-ltr-progressive.svg|12px|link=]]</span>" ++
+                "<b><span class=\"trans-title\">rampai</span></b>";
+            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, F.expanded, icon_source));
+            try std.testing.expectEqual(@as(usize, 2), title_spans.len);
+            try std.testing.expect(title_spans[0].kind == .text and title_spans[0].inline_action_group == null);
+            try std.testing.expectEqualStrings("", title_spans[0].text);
+            try std.testing.expectEqualStrings("", title_spans[0].target);
+            try std.testing.expectEqual(@as(?f32, 0.9), title_spans[0].font_scale);
+            try std.testing.expect(title_spans[1].bold);
+            try std.testing.expectEqualStrings("rampai", title_spans[1].text);
+            const icon = if (title_spans[0].image) |*image| image else return error.MissingPositionedTranslationIcon;
+            try std.testing.expectEqualDeep(T.InlineImage{ .file = "OOjs UI icon book-ltr-progressive.svg", .width_px = 12 }, icon.*);
+            icon.occurrence_layout = .{
+                .x = .{ .unit = .px, .value = 0 }, .y = .{ .unit = .px, .value = -1 },
+                .padding_left = .{ .unit = .px, .value = 0 },
+                .padding_right = .{ .unit = .em, .value = @as(f32, 0.4) * @as(f32, 0.9) },
+            };
+            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, F.expanded, "<div class=\"trans-top\" style="));
+            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, F.expanded, "<div class=\"trans-header\" style="));
+            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, F.expanded, "<div class=\"trans-content\" style="));
+            title_line.spans = try F.under(a, title_spans, "trans-top trans-header");
+            var child = tooltip_blocks[6];
+            const translations = try F.under(a, child.spans, "trans-top trans-content");
+            try std.testing.expectEqual(@as(usize, 2), translations.len);
+            try std.testing.expectEqualStrings("bahasa Prancis : ", translations[0].text);
+            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, F.expanded, "* bahasa Prancis : <span class=\"Latn\" lang=\"fr\">"));
+            translations[0].text = "bahasa Prancis\u{a0}: ";
+            child.spans = translations;
             try std.testing.expect(title_line.kind == .paragraph and title_line.container == null and title_line.table == null);
             try std.testing.expect(child.kind == .list_item and child.container == null);
             try std.testing.expectEqualStrings("*", child.list_path);
