@@ -176,6 +176,8 @@ test('selected genuine Writer payload and Reader modeled graph agree',{skip:!pro
    const result=Object.fromEntries(Object.entries(value).filter(([k])=>!root||!['organization','redirect','alias','presentation_version'].includes(k)).map(([k,v])=>[k==='list_path'?'path':k,project(v)]));
    if(Object.hasOwn(result,'text')&&Object.hasOwn(result,'trail')&&Object.hasOwn(result,'target')){
     result.background??=null;result.tooltip??=null;if(result.font_scale!==undefined)result.font_scale=Math.fround(result.font_scale);
+    if(result.inline_style?.wrap===null)delete result.inline_style.wrap;
+    if(result.audio_control)for(const key of ['width','height','focus'])result.audio_control[key]??=null;
    }
    if(Object.hasOwn(result,'depth')&&Object.hasOwn(result,'level')&&Object.hasOwn(result,'spans')){result.feature??=null;result.table??=null;}
    return result;
@@ -259,32 +261,133 @@ test('M fixed container height keeps owner basis and rejects malformed or unsupp
  assert.throws(()=>validateContainerBlock({kind:'container',container:{style:{height:{unit:'em',value:1.6}},blocks:[]}}));
 });
 
+const laoArchiveLimits = {compressed: 8 * 1024 ** 2, expanded: 160 * 1024 ** 2, line: 1024 ** 2};
+
+async function compareLaoArchive(input, {archiveHash, language, root, rows, limits = laoArchiveLimits}, compare) {
+ const {createHash}=await import('node:crypto');
+ const {Transform}=await import('node:stream');
+ const {pipeline}=await import('node:stream/promises');
+ const {createGunzip}=await import('node:zlib');
+ const hash=createHash('sha256');
+ let compressedBytes=0, expandedBytes=0, largestLine=0;
+ const hashed=new Transform({
+  transform(chunk, encoding, done) {
+   compressedBytes+=chunk.length;
+   if(compressedBytes>limits.compressed){
+    done(new Error('Lao Reader archive exceeds compressed byte limit'));
+    return;
+   }
+   hash.update(chunk);
+   done(null,chunk);
+  },
+ });
+ const pendingTitles=new Set(rows.keys());
+ const requestPrefix=['export','--root',root,'--language',language,'--case-sensitive','--batch','--'];
+ const compareLine=async bytes=>{
+  const {request,response}=JSON.parse(bytes);
+  assert.deepEqual(
+   [response.schema,response.operation,response.kind,response.language,response.match_mode,
+    response.offset,response.record_count,response.total_matches,response.has_more,response.entries.length],
+   ['dict.results.v1','lookup','language',language,'exact-utf8',0,rows.size,1,false,1],
+   'unexpected Lao Reader response envelope',
+  );
+  const [expected]=response.entries;
+  assert.deepEqual(request,[...requestPrefix,expected.title],'Lao Reader request title or scope mismatch');
+  assert.deepEqual([response.query,expected.language],[expected.title,language],'Lao Reader response title or language mismatch');
+  const row=rows.get(expected.title);
+  assert.ok(row,`unindexed Lao Reader title ${expected.title}`);
+  assert.ok(pendingTitles.delete(expected.title),`duplicate Lao Reader title ${expected.title}`);
+  await compare(row,expected,{request,response});
+ };
+ await pipeline(input,hashed,createGunzip(),async expanded=>{
+  let parts=[], lineBytes=0;
+  for await(const chunk of expanded){
+   expandedBytes+=chunk.length;
+   assert.ok(expandedBytes<=limits.expanded,'Lao Reader archive exceeds expanded byte limit');
+   let start=0;
+   while(start<chunk.length){
+    const newline=chunk.indexOf(0x0a,start);
+    const end=newline===-1?chunk.length:newline;
+    lineBytes+=end-start;
+    assert.ok(lineBytes<=limits.line,'Lao Reader archive exceeds line byte limit');
+    parts.push(chunk.subarray(start,end));
+    start=end+1;
+    if(newline!==-1){
+     largestLine=Math.max(largestLine,lineBytes);
+     await compareLine(Buffer.concat(parts,lineBytes));
+     parts=[];
+     lineBytes=0;
+    }
+   }
+  }
+  if(lineBytes){
+   largestLine=Math.max(largestLine,lineBytes);
+   await compareLine(Buffer.concat(parts,lineBytes));
+  }
+ });
+ assert.equal(hash.digest('hex'),archiveHash,'Lao Reader archive hash mismatch');
+ assert.equal(pendingTitles.size,0,`missing Lao Reader titles: ${[...pendingTitles].slice(0,3).join(', ')}`);
+ return {compressedBytes,expandedBytes,largestLine,uniqueTitles:rows.size};
+}
+
 test('current Lao container height member matches complete retained native graphs',{skip:!process.env.WIKIDICT_WEB_LO_HEIGHT_CASE},async()=>{
- const {createHash}=await import('node:crypto'),{openAsBlob}=await import('node:fs'),{gunzipSync}=await import('node:zlib');
+ const {createHash}=await import('node:crypto'),{createReadStream}=await import('node:fs');
+ const {Readable}=await import('node:stream'),{gzipSync}=await import('node:zlib');
  const {openSource}=await import('./xz.js'),{pathToFileURL}=await import('node:url');
  const c=JSON.parse(await readFile(process.env.WIKIDICT_WEB_LO_HEIGHT_CASE,'utf8')),sha=b=>createHash('sha256').update(b).digest('hex');
  const baseline=await readFile(c.baseline_decoder.path);assert.equal(sha(baseline),c.baseline_decoder.sha256);assert.equal(baseline.length,c.baseline_decoder.bytes);const {decode:before}=await import(pathToFileURL(c.baseline_decoder.path).href);
  const manifest=await readFile(c.root+'/complete.json');assert.equal(sha(manifest),c.complete_sha256);const authority=JSON.parse(manifest).publication_files[c.member];
  const compressed=await readFile(c.root+'/'+c.member);assert.equal(sha(compressed),authority.sha256);assert.equal(compressed.length,authority.size);
- const source=await openSource(await openAsBlob(c.root+'/'+c.member)),index=await buildIndex(source);assert.equal(index.rows.length,c.expected_records);
- const decoded=new Map(),failures={},heightValues=new Map();let heightEntries=0,heightNodes=0;
+ const source=await openSource(new Blob([compressed])),index=await buildIndex(source);assert.equal(index.rows.length,c.expected_records);
+ const rows=new Map(index.rows.map(row=>[row.title,row])),failures={},heightValues=new Map();let heightEntries=0,heightNodes=0;
+ assert.equal(rows.size,index.rows.length,'duplicate Lao title in the indexed member');
  const inspect=v=>{let found=false;if(v&&typeof v==='object'){if(v.style?.height!=null){heightNodes++;heightValues.set(JSON.stringify(v.style.height),true);found=true;}for(const x of Object.values(v))if(inspect(x))found=true;}return found;};
  for(const row of index.rows){const bytes=await source.read(row.offset,row.length);try{before(bytes,{...index.metadata,title:row.title});}catch(error){failures[error.message]=(failures[error.message]||0)+1;}
-  const entry=decode(bytes,{...index.metadata,title:row.title});decoded.set(row.title,entry);if(inspect(entry))heightEntries++;
+  const entry=decode(bytes,{...index.metadata,title:row.title});if(inspect(entry))heightEntries++;
  }
- const archive=await readFile(c.reader_archive);assert.equal(sha(archive),c.reader_archive_sha256);
  const project=(v,top=false)=>{if(Array.isArray(v))return v.map(x=>project(x));if(!v||typeof v!=='object')return v;
   const out=Object.fromEntries(Object.entries(v).filter(([k])=>!top||!['organization','redirect','alias','presentation_version'].includes(k)).map(([k,x])=>[k==='list_path'?'path':k,project(x)]));
   if(Object.hasOwn(out,'text')&&Object.hasOwn(out,'trail')&&Object.hasOwn(out,'target')){out.background??=null;out.tooltip??=null;if(out.font_scale!==undefined)out.font_scale=Math.fround(out.font_scale);}
   if(Object.hasOwn(out,'depth')&&Object.hasOwn(out,'level')&&Object.hasOwn(out,'spans')){out.feature??=null;out.table??=null;}return out;};
- let nativeCompared=0,nativeHeightCompared=0;
- for(const line of gunzipSync(archive,{maxOutputLength:64*1024*1024}).toString().trim().split('\n')){const item=JSON.parse(line),req=item.request;if(req?.[4]!==index.metadata.language)continue;
-  const expected=item.response?.entries?.[0];if(!expected||!decoded.has(expected.title))continue;
-  assert.deepEqual(project(decoded.get(expected.title),true),project(expected,true),expected.title);nativeCompared++;
-  const prior=heightNodes;if(inspect(expected))nativeHeightCompared++;heightNodes=prior;
+ let nativeHeightCompared=0;
+ const sampleTitles=['ราตรี','ກ'];
+ const samples=new Map();
+ const archiveOptions={archiveHash:c.reader_archive_sha256,language:index.metadata.language,root:c.root,rows};
+ const archive=await compareLaoArchive(createReadStream(c.reader_archive),archiveOptions,
+  async(row,expected,item)=>{
+   const entry=decode(await source.read(row.offset,row.length),{...index.metadata,title:row.title});
+   assert.deepEqual(project(entry,true),project(expected,true),expected.title);
+   if(sampleTitles.includes(row.title))samples.set(row.title,item);
+   const prior=heightNodes;if(inspect(expected))nativeHeightCompared++;heightNodes=prior;
+  },
+ );
+ assert.equal(archive.uniqueTitles,c.expected_native_graphs);assert.equal(nativeHeightCompared,c.expected_native_height_graphs);assert.equal(heightEntries,c.expected_height_entries);assert.equal(heightNodes,c.expected_height_nodes);assert.equal(Object.keys(failures).length,1);assert.equal(failures['Unsupported container layout policy'],c.expected_height_entries);
+
+ // Preserve the two authentic graphs inside explicitly synthetic two-record archives.
+ const controlRows=new Map(sampleTitles.map(title=>[title,rows.get(title)]));
+ const [first,second]=sampleTitles.map(title=>{
+  const {request,response}=samples.get(title);
+  return {request,response:{...response,record_count:controlRows.size}};
+ });
+ const compareControl=(items,{limits,wrongHash=false}={})=>{
+  const bytes=gzipSync(items.map(item=>JSON.stringify(item)+'\n').join(''));
+  const input=Readable.from([bytes.subarray(0,11),bytes.subarray(11)]);
+  return compareLaoArchive(input,{...archiveOptions,rows:controlRows,limits,
+   archiveHash:wrongHash?'0'.repeat(64):sha(bytes)},(row,expected)=>{
+    assert.deepEqual(expected,samples.get(row.title).response.entries[0]);
+   });
+ };
+ assert.equal((await compareControl([first,second])).uniqueTitles,2);
+ await assert.rejects(compareControl([first,first]),/duplicate Lao Reader title ราตรี/);
+ await assert.rejects(compareControl([first]),/missing Lao Reader titles: ກ/);
+ await assert.rejects(compareControl([{...first,request:[...first.request.slice(0,-1),'ກ']},second]),/request title or scope mismatch/);
+ await assert.rejects(compareControl([{...first,response:{...first.response,query:'ກ'}},second]),/response title or language mismatch/);
+ await assert.rejects(compareControl([first,second],{wrongHash:true}),/archive hash mismatch/);
+ for(const bound of ['compressed','expanded','line']){
+  await assert.rejects(compareControl([first,second],{limits:{...laoArchiveLimits,[bound]:64}}),
+   new RegExp(`exceeds ${bound} byte limit`));
  }
- assert.equal(nativeCompared,c.expected_native_graphs);assert.equal(nativeHeightCompared,c.expected_native_height_graphs);assert.equal(heightEntries,c.expected_height_entries);assert.equal(heightNodes,c.expected_height_nodes);assert.equal(Object.keys(failures).length,1);assert.equal(failures['Unsupported container layout policy'],c.expected_height_entries);
- console.log(JSON.stringify({scope:'current2b9 affectedLao member, not frozenoldf412 census',records:index.rows.length,baseline_current_failures:failures,candidate_decode_failures:0,height_entries:heightEntries,height_nodes:heightNodes,height_values:[...heightValues.keys()],complete_native_graphs_compared:nativeCompared,native_height_graphs_compared:nativeHeightCompared,compressed_bytes:compressed.length}));
+ console.log(JSON.stringify({scope:'current2b9 affectedLao member, not frozenoldf412 census',records:index.rows.length,baseline_current_failures:failures,candidate_decode_failures:0,height_entries:heightEntries,height_nodes:heightNodes,height_values:[...heightValues.keys()],complete_native_graphs_compared:archive.uniqueTitles,native_height_graphs_compared:nativeHeightCompared,compressed_bytes:compressed.length,archive_compressed_bytes:archive.compressedBytes,archive_uncompressed_bytes:archive.expandedBytes,archive_largest_line_bytes:archive.largestLine,archive_limits:laoArchiveLimits,unique_reader_titles:archive.uniqueTitles,duplicate_reader_titles:0,synthetic_controls:{positive:1,rejected:['duplicate-with-omission','missing-title','crossed-request','crossed-response','bad-hash','compressed-limit','expanded-limit','line-limit']}}));
 });
 
 test('M balanced container columns preserve count gap and native composition limits',()=>{
