@@ -40,8 +40,8 @@ internal fun floatBodyRuns(rows: List<ReadingRow>, bodyAdjoining: BodyAdjoiningP
     // reader's 2/6dp gaps as authored adjoining margins and refuse the entire title.
     if (bodyAdjoining == null && headingPrefixStart < 0 && rows.any { it.heading?.headingStyle?.wrappers != null } &&
         rows.none { row -> row.referenceBatch != null || row.heading?.headingStyle?.let { it.wrappers == null } == true ||
-            row.block?.let { block -> block.style != null || block.needsNativeBlockContext() } == true }) {
-        return rows.mapIndexedNotNull { index, row -> if (row.heading?.headingStyle?.wrappers == null) null else index..index }
+            row.block?.let { block -> block.style != null || block.descriptionBody == null && block.needsNativeBlockContext() } == true }) {
+        return rows.mapIndexedNotNull { index, row -> if (row.heading?.headingStyle?.wrappers != null || row.block?.descriptionBody != null) index..index else null }
     }
     val first = when (bodyAdjoining) {
         null -> if (headingPrefixStart >= 0) headingPrefixStart else
@@ -61,7 +61,7 @@ internal fun Block.hasNativeAudioControlBody(): Boolean = kind in nativeBodyText
     spans.any { it.audioControl?.presentation == AudioControlPresentation.Transport }
 
 /** An authored Container needs the same block context even when its active style has no float. */
-internal fun Block.needsNativeBlockContext(): Boolean = ruleStyle != null || container != null || table?.blockViewport != null || table?.let { nativeHasCellOpacity(it) || nativeHasTablePositionedScope(it) } == true || hasBodyFloat() || hasNativeAudioControlBody() ||
+internal fun Block.needsNativeBlockContext(): Boolean = ruleStyle != null || contentBox != null || table?.blockViewport != null || table?.let { nativeHasCellOpacity(it) || nativeHasTablePositionedScope(it) } == true || hasBodyFloat() || hasNativeAudioControlBody() ||
     table?.style?.let { it.marginValues != null && !it.isInline } == true
 
 /** An enrolled table cell needs its original native context even when its Figure

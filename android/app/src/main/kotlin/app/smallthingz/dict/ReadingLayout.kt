@@ -257,7 +257,7 @@ fun readingRows(sections: List<Section>, media: List<Media> = emptyList(), etymo
             appendBatches(blockIndex)
             if (blockIndex == 0 && headingBlock != null) return@forEachIndexed
             val key = "block-$sectionIndex-$blockIndex"
-            if (bodyAdjoining == BodyAdjoiningPolicy.Ordinary ||
+            if (original.descriptionBody != null || bodyAdjoining == BodyAdjoiningPolicy.Ordinary ||
                 (authoredBody && sectionIndex == 0 && section.isAuthoredBodyPrefix()) ||
                 (original.spans.hasAuthoredFontFamily() || original.spans.hasNativeInlineGroups())) {
                 // This owner consumes source block boundaries, including empty or unsupported ones.
@@ -540,7 +540,7 @@ internal fun headingDestination(entry: Entry, target: String): HeadingDestinatio
             if (block.kind == "heading") headings.add(HeadingCandidate(HeadingDestination(rowKey, path.takeIf { nested },
                 block.anchor.isNotEmpty() || block.anchorFallback.isNotEmpty(), referenceIndex,
                 rowsHiddenMaxWidthPx = rowsHidden), block.anchor, block.anchorFallback, textOf(block.spans)))
-            val container = block.container
+            val container = block.contentBox
             if (container != null && (disclosureAncestor || block.hasContainerDisclosure() || block.hasTableRowVisibilityPolicy())) {
                 // Only a disclosure or row-policy source owner opens this path. Container
                 // heading validity and original Table/cell paths remain unchanged.

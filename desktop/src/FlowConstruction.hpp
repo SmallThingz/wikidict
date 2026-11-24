@@ -3,6 +3,7 @@
 #include <QRegularExpression>
 
 #include "CompiledContent.hpp"
+#include "DescriptionBody.hpp"
 #include "ReferencePolicy.hpp"
 #include "SemanticHtml.hpp"
 #include "SectionHeading.hpp"
@@ -35,6 +36,7 @@ struct RenderContext {
     QString alignment;
     QJsonValue fontFamily;
     QJsonObject sectionHeading;
+    QJsonObject descriptionOwner;
     int sectionIndex = -1;
     qreal headingNormalBodyPoints = 0;
     qreal pointSize = 0;
@@ -77,7 +79,7 @@ struct RenderContext {
 // requests in CSS pixels, not used rectangles or glyph ink. In particular,
 // zero width and an empty child array cannot be replaced with intrinsic text.
 struct ContainerWidthInput {
-    enum class Mode { Auto, Length, FitContent, None };
+    enum class Mode { Auto, Length, FitContent, MaxContent, None };
     Mode mode = Mode::Auto;
     bool authored = false;
     qreal requested = 0; // Meaningful only for Length, before box-sizing.
@@ -182,6 +184,7 @@ inline ContainerInputs containerInputs(const QJsonObject &containerBlock, qreal 
         const auto spec = value.toObject();
         if (spec.contains(QStringLiteral("length"))) { input.mode = ContainerWidthInput::Mode::Length; input.requested = length(spec.value(QStringLiteral("length"))); }
         else if (spec.contains(QStringLiteral("fit_content"))) input.mode = ContainerWidthInput::Mode::FitContent;
+        else if (spec.contains(QStringLiteral("max_content"))) input.mode = ContainerWidthInput::Mode::MaxContent;
         return input;
     };
     const auto color = [&](const QJsonValue &value) {
@@ -298,7 +301,7 @@ inline ContainerInputs containerInputs(const QJsonObject &containerBlock, qreal 
     result.boxSizing = stringOr(QStringLiteral("box_sizing"), result.boxSizing);
     result.textAlignment = stringOr(QStringLiteral("text_align"), {});
     result.flexNone = CompiledContent::present(style.value(QStringLiteral("flex_item")));
-    result.separateFormattingContext = result.localScrollport || !result.floatSide.isEmpty() || result.layout == QStringLiteral("flex_row");
+    result.separateFormattingContext = result.width.mode == ContainerWidthInput::Mode::MaxContent || result.localScrollport || !result.floatSide.isEmpty() || result.layout == QStringLiteral("flex_row");
     return result;
 }
 
@@ -564,7 +567,8 @@ inline QTextFrameFormat plainContainerFormat(const QJsonObject &block, qreal nor
     const bool fixedFloat = !input.floatSide.isEmpty();
     const bool intrinsicImage = !intrinsicFloatImageSource(owned).isEmpty();
     const bool relativeImage = !relativeFloatImageSource(owned).isEmpty();
-    const bool fitContent = input.width.mode == ContainerWidthInput::Mode::FitContent;
+    const bool maxContent = input.width.mode == ContainerWidthInput::Mode::MaxContent;
+    const bool intrinsicWidth = maxContent || input.width.mode == ContainerWidthInput::Mode::FitContent;
     const bool boundedWidth = input.width.mode == ContainerWidthInput::Mode::Length
         && input.maximumWidth.mode == ContainerWidthInput::Mode::Length
         && !fixedFloat && !input.hasColumns && !input.relativeAuto && !input.absolutePosition
@@ -581,8 +585,8 @@ inline QTextFrameFormat plainContainerFormat(const QJsonObject &block, qreal nor
     }
     CompiledContent::require(!CompiledContent::present(style.value(QStringLiteral("screen_max_width")))
         && input.layout == QStringLiteral("flow") && !input.flexNone
-        && (input.maximumWidth.mode == ContainerWidthInput::Mode::None || marginValues || input.localScrollport || fitContent || boundedWidth));
-    if (fitContent) CompiledContent::require(!fixedFloat && !input.localScrollport && !input.hasColumns
+        && (input.maximumWidth.mode == ContainerWidthInput::Mode::None || marginValues || input.localScrollport || intrinsicWidth || boundedWidth));
+    if (intrinsicWidth) CompiledContent::require(!fixedFloat && !input.localScrollport && !input.hasColumns
         && !input.relativeAuto && input.maximumWidth.mode != ContainerWidthInput::Mode::FitContent);
     if (relativeImage) {
         CompiledContent::require(input.width.mode == ContainerWidthInput::Mode::Auto && !input.heightAuthored
@@ -594,11 +598,12 @@ inline QTextFrameFormat plainContainerFormat(const QJsonObject &block, qreal nor
         for (const auto &edge : input.borderEdges) CompiledContent::require(edge.width == 0);
     }
     const bool adjoining = !relativeImage && (input.margins.top() != 0 || input.margins.bottom() != 0
-        || input.margins.left() < 0 || input.margins.right() < 0 || marginValues || input.localScrollport || fitContent || boundedWidth);
+        || input.margins.left() < 0 || input.margins.right() < 0 || marginValues || input.localScrollport || intrinsicWidth || boundedWidth);
     CompiledContent::require(!adjoining || !input.hasColumns);
     QTextFrameFormat format;
     format.setProperty(containerPolicyProperty, QStringLiteral("wikidict.plain-container/1"));
     format.setProperty(containerSourceProperty, QJsonDocument(block).toJson(QJsonDocument::Compact));
+    if (maxContent) format.setProperty(containerClipVerticalProperty, QStringLiteral("wikidict.container-max-content/1"));
     if (input.clipVertical) format.setProperty(containerClipVerticalProperty, QStringLiteral("wikidict.container-clip-y/1"));
     if (input.localScrollport) {
         CompiledContent::require(!input.heightAuthored && !input.minimumHeightAuthored && !input.hasColumns
@@ -660,7 +665,7 @@ inline QTextFrameFormat plainContainerFormat(const QJsonObject &block, qreal nor
     if (adjoining) {
         format.setProperty(containerMarginsProperty, QVariantMap{
             {QStringLiteral("edges"), QVariantList{input.margins.top(), input.margins.right(), input.margins.bottom(), input.margins.left()}},
-            {QStringLiteral("auto_width"), marginValues || input.width.mode == ContainerWidthInput::Mode::Auto || fitContent || boundedWidth}});
+            {QStringLiteral("auto_width"), marginValues || input.width.mode == ContainerWidthInput::Mode::Auto || intrinsicWidth || boundedWidth}});
     } else {
         format.setLeftMargin(input.margins.left()); format.setRightMargin(input.margins.right());
         if (relativeImage) { format.setTopMargin(input.margins.top()); format.setBottomMargin(input.margins.bottom()); }
@@ -715,11 +720,11 @@ inline QTextFrameFormat plainContainerFormat(const QJsonObject &block, qreal nor
         format.setHeight(QTextLength(QTextLength::VariableLength, 0));
         return format;
     }
-    if (marginValues || input.localScrollport || fitContent || boundedWidth) {
+    if (marginValues || input.localScrollport || intrinsicWidth || boundedWidth) {
         const auto nativeWidth = [&](const QString &key, const QString &absent) {
             const auto width = style.value(key).toObject();
-            if (key == QStringLiteral("width") && fitContent)
-                return QVariantMap{{QStringLiteral("unit"), QStringLiteral("fit_content")}, {QStringLiteral("value"), qreal(0)}};
+            if (key == QStringLiteral("width") && intrinsicWidth)
+                return QVariantMap{{QStringLiteral("unit"), maxContent ? QStringLiteral("max_content") : QStringLiteral("fit_content")}, {QStringLiteral("value"), qreal(0)}};
             const auto length = width.value(QStringLiteral("length")).toObject();
             if (length.isEmpty()) return QVariantMap{{QStringLiteral("unit"), absent}, {QStringLiteral("value"), qreal(0)}};
             const auto unit = length.value(QStringLiteral("unit"));
@@ -1007,6 +1012,10 @@ inline QString placeholder(const QJsonObject &block, const Rendered &rendered, c
         {QStringLiteral("legacy_vertical_scale"), context.legacyVerticalScale},
         {QStringLiteral("context_points"), context.pointSize},
         {QStringLiteral("flex_item"), context.flexItem}};
+    if (!context.descriptionOwner.isEmpty()) {
+        CompiledContent::require(DescriptionBody::box(context.descriptionOwner)==block);
+        metadata.insert("description_owner",context.descriptionOwner);
+    }
     if (context.referenceStage == 2) {
         const auto source = CompiledReferences::itemSource(context.referenceItem);
         CompiledContent::require(block == CompiledReferences::itemProjection(source.value("reference").toObject(), source.value("item").toObject()));
@@ -1380,6 +1389,12 @@ inline QVector<Owner> expand(QTextDocument *document, QVector<QPointer<QTextFram
                 && insertion.block().position() == insertion.selectionStart() && insertion.block().length() == 2);
             const QPointer<QTextFrame> parent(insertion.currentFrame());
             auto format = containerFrameFormat(sourceBlock, em / scale, effectiveDark, item.metadata.value(QStringLiteral("flex_item")).toBool());
+            if (item.metadata.contains("description_owner")) {
+                const auto owner=item.metadata.value("description_owner").toObject();
+                CompiledContent::require(DescriptionBody::box(owner)==sourceBlock
+                    && layout->property("_wikidictDescriptionRailCapability").toString()==QStringLiteral("wikidict.description-rail/1"));
+                format.setProperty(DescriptionBody::paintProperty,DescriptionBody::paint(owner,em/scale,effectiveDark));
+            }
             const auto shape = owned.value(QStringLiteral("style")).toObject();
             if (shape.contains(QStringLiteral("inline_atomic")))
                 format.setProperty(containerInlineAtomicProperty, shape.value(QStringLiteral("inline_atomic")).toString());
@@ -1573,7 +1588,10 @@ inline QVector<Owner> expand(QTextDocument *document, QVector<QPointer<QTextFram
             if (format.hasProperty(containerMinimumHeightProperty))
                 CompiledContent::require(layout->property("_wikidictContainerMinimumHeightCapability").toString()
                     == QStringLiteral("wikidict.container-minimum-height/1"));
-            if (format.hasProperty(containerClipVerticalProperty))
+            if (format.stringProperty(containerClipVerticalProperty) == QStringLiteral("wikidict.container-max-content/1"))
+                CompiledContent::require(layout->property("_wikidictContainerMaxContentCapability").toString()
+                    == QStringLiteral("wikidict.container-max-content/1"));
+            else if (format.hasProperty(containerClipVerticalProperty))
                 CompiledContent::require(layout->property("_wikidictContainerClipYCapability").toString()
                     == QStringLiteral("wikidict.container-clip-y/1"));
             if (format.hasProperty(containerPhysicalEdgesProperty)) {

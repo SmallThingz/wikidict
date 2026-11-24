@@ -95,7 +95,7 @@ internal data class NativeExactChildMeasure(val block: NativeBlockMeasure, val i
 internal sealed interface NativeFloatContextSpec {
     data class Text(val prepared: PreparedNativeFloatText, val gapAfter: Float, val path: String? = null,
         val box: ParagraphBox? = null,
-        val columnBreakInside: ColumnBreakInside? = null, val headingFramePaddingAbove: Float? = null) : NativeFloatContextSpec
+        val columnBreakInside: ColumnBreakInside? = null, val headingFramePaddingAbove: Float? = null, val columnAvoidGroup: Int = 0) : NativeFloatContextSpec
     data class Rule(val id: Int, val metrics: NativeRuleMetrics) : NativeFloatContextSpec
     data class Flow(val id: Int, val gapAfter: Float, val path: String?, val box: ParagraphBox?,
         val empty: Boolean,
@@ -454,11 +454,13 @@ internal fun NativeFloatContextLayout(
                         }
                         return if (sum > TablePixelLimit) Constraints.Infinity else ceil(sum).toInt()
                     }
-                    val childWidths = if (structural) emptyMap() else slots.associate { slot ->
-                        val scope = (slot.value as? NativeFloatContextSpec.Container)?.scrollport?.takeIf { it.positioned != null }
-                        slot.index to if (scope != null) intrinsicWidthOf(measurables, maximum, scope.parts, structural = true)
-                            else if (maximum) measurables[slots.indexOf(slot)].maxIntrinsicWidth(Constraints.Infinity)
-                            else measurables[slots.indexOf(slot)].minIntrinsicWidth(Constraints.Infinity)
+                    fun childWidth(index: Int): Int? {
+                        if (structural) return null
+                        val position = slots.indexOfFirst { it.index == index }
+                        if (position < 0) return null
+                        val measurable = measurables[position]
+                        return if (maximum) measurable.maxIntrinsicWidth(Constraints.Infinity)
+                            else measurable.minIntrinsicWidth(Constraints.Infinity)
                     }
                     var used = 0L
                     var floatLine = 0L
@@ -478,8 +480,8 @@ internal fun NativeFloatContextLayout(
                                 if (part.columnContentWidths != null) 0 else
                                 (part.preparedParts ?: part.scrollport?.takeIf { it.positioned != null }?.parts)?.let {
                                     intrinsicWidthOf(measurables, maximum, it, part.row != null, structural || part.scrollport != null, part.column != null)
-                                } ?: childWidths[index] ?: throw UnsupportedFloatLayout("Positioned scope intrinsic child is unavailable"), maximum)
-                            else -> childWidths[index] ?: throw UnsupportedFloatLayout("Positioned scope requires prepared native intrinsic content")
+                                } ?: childWidth(index) ?: throw UnsupportedFloatLayout("Positioned scope intrinsic child is unavailable"), maximum)
+                            else -> childWidth(index) ?: throw UnsupportedFloatLayout("Positioned scope requires prepared native intrinsic content")
                         }
                         val box = when (part) {
                             is NativeFloatContextSpec.Text -> part.box
@@ -626,7 +628,7 @@ internal fun NativeFloatContextLayout(
                                     { available, carried -> part.prepared.geometry!!(available, carried, false) },
                                     part.gapAfter, part.box, part.prepared.emptyInlineOwner,
                                     part.prepared.geometryAtWidth?.let { exact -> { available, carried -> exact(available, carried, false) } },
-                                    part.prepared.geometryForColumns, part.columnBreakInside, part.headingFramePaddingAbove)
+                                    part.prepared.geometryForColumns, part.columnBreakInside, part.headingFramePaddingAbove, part.columnAvoidGroup)
                             }
                             is NativeFloatContextSpec.Rule -> NativeFloatContextPart.Rule(part.id, part.metrics, available)
                             is NativeFloatContextSpec.Flow -> NativeFloatContextPart.Flow(part.id, { available, carried ->

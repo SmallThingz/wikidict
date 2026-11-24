@@ -42,11 +42,9 @@ internal class NativeRubyGroupFormat(
     val clippedAbsolute: NativeClippedAbsoluteFormat? = null,
     val annotationMargins: NativeRubyAnnotationMargins? = null,
 ) {
-    // TextPaint(Paint) copies native paint only. Inline box backgrounds are drawn
-    // once from this declaring owner, independently of glyph and baseline spans.
-    val paint = TextPaint(paint).also { copy ->
-        if (box != null) copy.bgColor = paint.bgColor
-    }
+    // TextPaint(Paint) omits the Java background field. Each declaring group
+    // paints its own background independently of its children and their baselines.
+    val paint = TextPaint(paint).also { it.bgColor = paint.bgColor }
     init {
         require(baselineShift.isFinite() && kotlin.math.abs(baselineShift) <= TablePixelLimit)
         require(this.paint.baselineShift == 0) { "Ruby compound displacement must be applied once" }
@@ -619,6 +617,10 @@ internal data class NativeRubyOverlayScope(val start: Int, val end: Int,
 internal data class NativeRubyBoxScope(val start: Int, val end: Int, val nativeStart: Int,
     val nativeEnd: Int, val format: NativeRubyGroupFormat, val shift: Float, val parentRtl: Boolean?,
     val overlays: List<NativeRubyOverlayScope> = emptyList(), val isolatedRtl: Boolean? = null)
+
+/** Text in a non-atomic styled action uses the drawable native runs for interaction. */
+internal interface NativePaintedSourceText
+internal class NativePaintedActionText : NativePaintedSourceText
 
 /** The actual declaring metric point is the authority for an empty no-wrap line. */
 internal class NativeInlineActionPoint(val owner: NativeInlineActionOwner,
@@ -2132,6 +2134,9 @@ private class NativeRubyCompiler(private val original: Spanned, private val pain
         val leaves = ranges.filter { it.span != null && it.role !in setOf(RubyTextRole.Owner,
             RubyTextRole.PaddingGroup, RubyTextRole.ActionGroup, RubyTextRole.BoxGroup) &&
             owners.none { owner -> it.path.startsWith(owner.path + "/") } }
+        val rootAction = context == null && owners.any {
+            it.role == RubyTextRole.ActionGroup && prepared.groups[it.path]?.let { format -> format.box == null } == true
+        }
         val events = (owners + leaves).sortedWith(compareBy({ it.start }, {
             if (it.role in setOf(RubyTextRole.Owner, RubyTextRole.ActionGroup, RubyTextRole.BoxGroup)) 0 else 1 }))
         val rootText = buildString {
@@ -2163,9 +2168,23 @@ private class NativeRubyCompiler(private val original: Spanned, private val pain
             }
             else -> {
                 val span = checkNotNull(range.span)
-                fun emitPart(first: Int, last: Int) = text(sourceStart + first, sourceStart + last,
-                    styled = context?.styled?.subSequence(first - context.range.start,
-                        last - context.range.start) as? Spanned, preservePoint = context != null)
+                fun emitPart(first: Int, last: Int) {
+                    val firstPiece = pieces.size
+                    text(sourceStart + first, sourceStart + last,
+                        styled = context?.styled?.subSequence(first - context.range.start,
+                            last - context.range.start) as? Spanned, preservePoint = context != null)
+                    // Enter only direct, unchanged source text in this projected action flow.
+                    // Box/column children, replacements and collapsed gaps retain their own map.
+                    if (!rootAction || range.role != RubyTextRole.Text) return
+                    for (index in firstPiece until pieces.size) {
+                        val piece = pieces[index] as? NativeRubyPiece.Text ?: continue
+                        if (piece.collapsed || piece.trimmed || piece.start == piece.end ||
+                            piece.nativeEnd - piece.nativeStart != piece.end - piece.start ||
+                            original.getSpans(piece.start, piece.end, ReplacementSpan::class.java).isNotEmpty()) continue
+                        native.setSpan(NativePaintedActionText(), piece.nativeStart, piece.nativeEnd,
+                            Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    }
+                }
                 val emit = { emitPart(range.start, range.end) }
                 val marker = span.citationMarker
                 val firstPiece = pieces.size
@@ -3256,6 +3275,11 @@ private class NativeRubyCompiler(private val original: Spanned, private val pain
         pieces.filterIsInstance<NativeRubyPiece.Text>().forEach { piece ->
             val styled = piece.styled ?: return@forEach
             if (piece.collapsed && piece.nativeStart == piece.nativeEnd) return@forEach
+            if (actionScopes.isNotEmpty() && !piece.collapsed && !piece.trimmed &&
+                actionScopes.any { it.ownBox == null && piece.start >= it.start && piece.end <= it.end } &&
+                styled.getSpans(0, styled.length, ReplacementSpan::class.java).isEmpty()) {
+                target.setSpan(NativePaintedActionText(), piece.nativeStart, piece.nativeEnd, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            }
             styled.getSpans(0, styled.length, Any::class.java).filter(::nativeRubyLocalEffect).forEach { span ->
                 val first = styled.getSpanStart(span); val last = styled.getSpanEnd(span)
                 if (piece.collapsed) {
@@ -3434,10 +3458,10 @@ private fun nativeRubyGroupPaint(format: NativeRubyGroupFormat, left: Float, wid
     if (format.paint.isStrikeThruText) decoration(format.paint.strikeThruPosition,
         format.paint.strikeThruThickness, format.paint.color, InlineUnderlineStyle.Solid)
     if (format.underline != null) decoration(format.paint.underlinePosition,
-        format.underline.thickness ?: format.paint.underlineThickness,
+        format.underline.thickness ?: format.paint.getUnderlineThickness(),
         format.underline.color ?: format.paint.color, format.underline.style)
     else if (format.paint.isUnderlineText) decoration(format.paint.underlinePosition,
-        format.paint.underlineThickness, format.paint.color, InlineUnderlineStyle.Solid)
+        format.paint.getUnderlineThickness(), format.paint.color, InlineUnderlineStyle.Solid)
 }
 
 /** Complete source paint snapshots remain absolute until this one slice boundary. Both

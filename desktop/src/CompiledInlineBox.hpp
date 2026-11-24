@@ -111,9 +111,13 @@ struct Expansion {
     struct EmptyEdge { QTextCursor boundary; QFont font; };
     QList<EmptyEdge> emptyEdges;
 };
-inline QColor borderColor(const QJsonValue &value, const QJsonObject &owner, const QTextCharFormat &declaring, bool sourceBound = false) {
+inline QColor borderColor(const QJsonValue &value, const QJsonObject &owner, const QTextCharFormat &declaring, bool sourceBound = false, bool dark = false) {
     const auto color = CompiledContent::object(value); require(color.size() == 1);
     if (color.contains("rgb")) return SemanticHtml::styleColor(color.value("rgb"));
+    if (color.contains("light_dark")) {
+        CompiledContent::containerColor(color);
+        return SemanticHtml::styleColor(color.value("light_dark").toObject().value(dark ? QStringLiteral("dark") : QStringLiteral("light")));
+    }
     const QString tag = color.keys().first();
     require((tag == "transparent" || tag == "current_color") && color.value(tag).isObject()
         && color.value(tag).toObject().isEmpty());
@@ -343,7 +347,8 @@ inline Expansion expand(QTextDocument *document) {
             qreal width = 0; QColor color(Qt::transparent);
             if (mode == "solid" || mode == "dotted" || (dashedLink && mode == "dashed")) {
                 width = SemanticHtml::styleLengthUnits(edge.value(mode).toObject().value("width"), document, font.pointSizeF());
-                color = borderColor(edge.value(mode).toObject().value("color"), span, declaring, sourceBound);
+                color = borderColor(edge.value(mode).toObject().value("color"), span, declaring, sourceBound,
+                    document->property(SemanticHtml::imageDarkThemeProperty).toBool());
             }
             require(QCompiledInlineBox::finite(p) && QCompiledInlineBox::finite(width)
                 && QCompiledInlineBox::finite(p + width));

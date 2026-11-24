@@ -6336,7 +6336,9 @@ QString MainWindow::spansHtml(const QJsonArray &spans, qreal leftMargin, const Q
                 classes.simplified().split(QChar(' '), Qt::SkipEmptyParts).contains(QStringLiteral("Egyp")))
                 text = QStringLiteral("<span style=\"font-family:'%1'\">%2</span>")
                     .arg(egyptianFamily().toHtmlEscaped(), text);
-            const QJsonValue foregroundValue = span.value(QStringLiteral("foreground"));
+            const auto alternate = span.value("inline_style").toObject().value("dark_foreground");
+            const QJsonValue foregroundValue = !alternate.isUndefined() && reading_->document()->property(SemanticHtml::imageDarkThemeProperty).toBool()
+                ? alternate : span.value(QStringLiteral("foreground"));
             const QString foreground = foregroundValue.toString();
             bool canonicalForeground = foregroundValue.isString() && foreground.size() == 7 && foreground.startsWith(QChar('#'));
             for (const QChar digit : foreground.mid(1))
@@ -6645,6 +6647,9 @@ QString MainWindow::tableHtml(const QJsonObject &table, int depth, int tableDept
         context.inheritedInk, -1, context.zeroFontContext, context.typedScopeOwnsIsolation, context.captionLinkPaint, (context.computedCellTraits || !context.containerOwnerFont.isEmpty()), context.fontFamily);
     if (!captionHtml.isEmpty()) out += QStringLiteral("<caption%1>%2</caption>")
         .arg(inheritedAlignment.isEmpty() ? QString() : QStringLiteral(" align='%1'").arg(inheritedAlignment), captionHtml);
+    const bool rendererDefaultBorder = tableDepth == 1 && ownerPolicy.isEmpty() &&
+        geometryValue.isUndefined() && table.value(QStringLiteral("style")).isUndefined();
+    const auto covered = TableCellLayers::finalCellCover(table, border, rendererDefaultBorder);
     qsizetype rowIndex = 0;
     for (const QJsonValue &rowValue : table.value(QStringLiteral("rows")).toArray()) {
         out += QStringLiteral("<tr>");
@@ -6654,7 +6659,9 @@ QString MainWindow::tableHtml(const QJsonObject &table, int depth, int tableDept
             const QJsonObject cell = cellValue.toObject();
             const QString tag = cell.value(QStringLiteral("header")).toBool() ? QStringLiteral("th") : QStringLiteral("td");
             const int colspan = SemanticHtml::compiledTableSpan(cell.value(QStringLiteral("colspan")));
-            const int rowspan = SemanticHtml::compiledTableSpan(cell.value(QStringLiteral("rowspan")));
+            const int declaredRows = SemanticHtml::compiledTableSpan(cell.value(QStringLiteral("rowspan")));
+            const int rowspan = covered && rowIndex == covered->lowerRow && cellIndex == covered->lowerCell
+                ? covered->exposedRows() : declaredRows;
             QString style = QStringLiteral("border:%1px solid %2").arg(border).arg(palette().color(QPalette::Mid).name());
             const QJsonValue backgroundValue = cell.value(QStringLiteral("background"));
             const QString background = backgroundValue.toString();
@@ -6748,13 +6755,18 @@ QString MainWindow::tableHtml(const QJsonObject &table, int depth, int tableDept
             // its own caption/grid wrapper without manufacturing a list cell.
             const QString marker = QStringLiteral("<p style='margin:0;margin-left:%1px'>%2</p>")
                 .arg(qMax(0, indent - 12)).arg(listMarker.toHtmlEscaped());
-            return marker + SemanticHtml::tableStyleMarker(table, readingPointSize_, indent, !inheritedAlignment.isEmpty(), {}, tableDepth, context.pointSize, tableOwnerInk, cellOwnerInks) + out;
+            return marker + SemanticHtml::tableStyleMarker(table, readingPointSize_, indent, !inheritedAlignment.isEmpty(), {}, tableDepth, context.pointSize, tableOwnerInk, cellOwnerInks, covered) + out;
         }
     }
-    return SemanticHtml::tableStyleMarker(table, readingPointSize_, indent, !inheritedAlignment.isEmpty(), listMarker, tableDepth, context.pointSize, tableOwnerInk, cellOwnerInks) + out;
+    return SemanticHtml::tableStyleMarker(table, readingPointSize_, indent, !inheritedAlignment.isEmpty(), listMarker, tableDepth, context.pointSize, tableOwnerInk, cellOwnerInks, covered) + out;
 }
 
 QString MainWindow::blockHtml(const QJsonObject &block, const QString &cellBackground, int tableDepth, const QString &location, const QString &inheritedAlignment, FlowConstruction::RenderContext context) const {
+    if (CompiledContent::present(block.value(QStringLiteral("description_body")))) {
+        const auto projected=DescriptionBody::box(block);
+        context.descriptionOwner=block;
+        return blockHtml(projected,cellBackground,tableDepth,location,inheritedAlignment,context);
+    }
     if (SemanticHtml::tableDisplay(block.value(QStringLiteral("table")).toObject().value(QStringLiteral("style")).toObject())) {
         const QString kind = block.value(QStringLiteral("kind")).toString();
         if ((kind != QStringLiteral("table") && kind != QStringLiteral("list_item"))
@@ -6905,7 +6917,7 @@ QString MainWindow::blockHtml(const QJsonObject &block, const QString &cellBackg
         FlowConstruction::Rendered rendered;
         const auto children = owned.value(QStringLiteral("blocks")).toArray();
         const auto avoidGroups = columns ? FlowConstruction::columnAvoidGroups(children) : QList<int>{};
-        auto childContext = context; childContext.flexItem = inputs.layout == QStringLiteral("flex_row");
+        auto childContext = context; childContext.descriptionOwner = {}; childContext.flexItem = inputs.layout == QStringLiteral("flex_row");
         if (absolute) childContext.relativeContainingBlock = false;
         else if (positioned || translated) childContext.relativeContainingBlock = true;
         for (qsizetype index = 0; index < children.size(); ++index) {

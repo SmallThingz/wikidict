@@ -104,7 +104,7 @@ internal class NativeContainerDisclosureIndex(entry: Entry) {
             } }
         }
         block = { value, path, rowKey, referenceIndex ->
-            val container = value.container
+            val container = value.contentBox
             when {
                 container != null -> {
                     if (container.disclosure != null) result += NativeContainerDisclosureOwner(container, path, rowKey, referenceIndex)

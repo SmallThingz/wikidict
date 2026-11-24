@@ -22,6 +22,7 @@ private fun ContainerStyle.needsDocumentExtent(): Boolean {
 }
 
 internal fun Block.needsContainerDocumentExtent(): Boolean = when {
+    descriptionBody != null -> descriptionBody.box.blocks.any(Block::needsContainerDocumentExtent)
     container != null -> container.style.needsDocumentExtent() || container.blocks.any(Block::needsContainerDocumentExtent)
     table != null -> table.needsContainerDocumentExtent()
     figure != null -> figure.captionBlocks?.any(Block::needsContainerDocumentExtent) == true

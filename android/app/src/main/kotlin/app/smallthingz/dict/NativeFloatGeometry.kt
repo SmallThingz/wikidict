@@ -252,7 +252,12 @@ private class NativeStaticFloatGeometry private constructor(
     private val linePainter = NativeLinePainter(layout)
     private val citationFit = nativeHasCitationNoWrap(text as Spanned) &&
         text.getSpans(0, text.length, NativeRubyLinePlan::class.java).isNotEmpty()
-    private fun horizontalOffset(line: Int, x: Float): Int = if (!citationFit)
+    private val paintedSourceText = nativeInlineRanges(text as Spanned, NativePaintedSourceText::class.java)
+    private fun paintedSourceLine(line: Int) = paintedSourceText.any {
+        it.start < layout.getLineEnd(line) && it.end > layout.getLineStart(line)
+    }
+    private fun paintedSourceCaret(offset: Int) = paintedSourceText.any { offset in it.start..it.end }
+    private fun horizontalOffset(line: Int, x: Float): Int = if (!citationFit && !paintedSourceLine(line))
         layout.getOffsetForHorizontal(line, x - originX(line)) else linePainter.getOffsetForHorizontal(line,
             x - linePainter.horizontalShift(NativeLinePaintPlacement(line, flow.baselines[line],
                 flow.left[line], flow.right[line], originX(line))))
@@ -397,7 +402,7 @@ private class NativeStaticFloatGeometry private constructor(
         inlineBox?.let { return it.caretRect(offset) }
         require(offset in 0..text.length)
         val line = layout.getLineForOffset(offset)
-        val x = if (!citationFit && emptyColumnLane == null) layout.getPrimaryHorizontal(offset) + originX(line) else
+        val x = if (!citationFit && emptyColumnLane == null && !paintedSourceCaret(offset)) layout.getPrimaryHorizontal(offset) + originX(line) else
             linePainter.caretHorizontalOnLine(line, offset, NativeLinePaintPlacement(line,
                 flow.baselines[line], flow.left[line], flow.right[line], originX(line)))
         if (!linePresent(line)) return RectF(x, flow.tops[line], x, flow.tops[line])
@@ -437,7 +442,8 @@ private class NativeStaticFloatGeometry private constructor(
     override fun visualOffset(offset: Int, direction: Int): Int {
         ruby?.let { return it.visualOffset(offset, direction) }
         require(offset in 0..text.length && direction in listOf(-1, 1))
-        return if (direction < 0) layout.getOffsetToLeftOf(offset) else layout.getOffsetToRightOf(offset)
+        val owner = if (paintedSourceCaret(offset)) linePainter else layout
+        return if (direction < 0) owner.getOffsetToLeftOf(offset) else owner.getOffsetToRightOf(offset)
     }
 
     override fun visualLineRanges(offset: Int): List<Pair<Int, Int>> =
@@ -529,6 +535,13 @@ private class NativeStaticFloatGeometry private constructor(
         inlineBox?.let { return it.rectsForRange(start, end) }
         require(start in 0..text.length && end in start..text.length)
         if (start == end) return emptyList()
+        if (paintedSourceText.any { start >= it.start && end <= it.end }) {
+            // The native painter measures individual characters inside a styled run. The
+            // precomputed fitting layout can otherwise return a single advance for the run.
+            return (layout.getLineForOffset(start)..layout.getLineForOffset(end - 1)).flatMap { line ->
+                nativeRubyLineRects(line, start, end)
+            }
+        }
         if (authoredBaselines.any { it.start < end && it.end > start } ||
             alignedImages.any { it.start < end && it.end > start }) return authoredRangeRects(start, end)
         return legacyRangeRects(start, end)

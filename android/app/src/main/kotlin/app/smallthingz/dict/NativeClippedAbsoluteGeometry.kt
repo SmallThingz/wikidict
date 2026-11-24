@@ -89,6 +89,11 @@ internal class NativeClippedAbsoluteGeometry private constructor(
     }
     override fun rectsForRange(start: Int, end: Int): List<RectF> = map.visibleIntersections(start, end)
         .flatMap { inner.rectsForRange(it.visualStart, it.visualEnd) }
+    override fun inlineActionGroupRects(owner: NativeInlineActionOwner, start: Int, end: Int): List<RectF>? {
+        val range = map.visibleIntersections(start, end).singleOrNull() ?: return null
+        if (range.sourceStart != start || range.sourceEnd != end) return null
+        return inner.inlineActionGroupRects(owner, range.visualStart, range.visualEnd)
+    }
     override fun characterRects(start: Int, length: Int): List<RectF?> {
         require(start >= 0 && length >= 0 && start.toLong() + length <= text.length)
         val result = MutableList<RectF?>(length) { null }

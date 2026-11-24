@@ -29,15 +29,26 @@ internal fun Block.hasTableRowVisibilityPolicy(): Boolean {
 }
 
 /** Only activates the new policy's source-epoch navigation; it never filters source. */
-internal fun Entry.hasTableRowVisibilityPolicy(): Boolean {
+internal class TableVisibilityPolicies(val viewport: Boolean, val categories: Map<String, Boolean>,
+    val categorySizes: Map<String, Int>)
+
+internal fun Entry.tableVisibilityPolicies(): TableVisibilityPolicies {
+    val categories = linkedMapOf<String, Boolean>()
+    val categorySizes = mutableMapOf<String, Int>()
     var found = false
     val visitor = PresentationSpanVisitor { _, _ -> }.apply { onTable = { table, _, _ ->
         if (table.rowsHiddenMaxWidthPx != null) found = true
+        table.disclosure?.let { policy ->
+            categories.putIfAbsent(policy.category, !policy.initiallyCollapsed)
+            categorySizes[policy.category] = categorySizes.getOrDefault(policy.category, 0) + 1
+        }
     } }
     sections.forEach { visitor.blocks(it.blocks) }
     references.forEach { reference -> reference.blocks?.let { visitor.blocks(it) } }
-    return found
+    return TableVisibilityPolicies(found, categories, categorySizes)
 }
+
+internal fun Entry.hasTableRowVisibilityPolicy() = tableVisibilityPolicies().viewport
 
 internal enum class CitationSourceSlot { Title, Preamble, Section, Reference }
 

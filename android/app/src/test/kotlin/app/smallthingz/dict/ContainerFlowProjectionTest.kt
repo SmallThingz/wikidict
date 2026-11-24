@@ -7,6 +7,29 @@ class ContainerFlowProjectionTest {
     private fun block(kind: String, path: String = "", number: String = "") =
         Block(kind, path.length, listOf(Span("text", "$kind:$path:$number")), listPath = path, number = number)
 
+    @Test fun indivisibleListItemIncludesItsTwoDetailLinksDuringNativeBalancing() {
+        val rows = listOf(block("list_item","*"),
+            block("list_item","*").copy(columnBreakInside = ColumnBreakInside.Avoid),
+            block("list_detail","*:").copy(columnBreakInside = ColumnBreakInside.Auto,
+                spans = listOf(Span("link", "first", target = "one", targetFragment = "sense"))),
+            block("list_detail","*:").copy(spans = listOf(Span("link", "second", target = "two", targetFragment = "entry"))),
+            block("list_item","*"), block("list_item","*"))
+        val groups = requireNotNull(containerColumnAvoidGroups(rows))
+        assertArrayEquals(intArrayOf(0,2,2,2,0,0), groups)
+        val lines = rows.indices.map { NativeColumnLine(it,0,20f,avoidGroup = groups[it]) }
+        val balanced = balanceNativeColumns(lines,2)
+        assertEquals(80f,balanced.height,0f)
+        assertEquals(listOf(0,4,6),balanced.breaks)
+        assertEquals(60f,balanceNativeColumns(lines.map { it.copy(avoidGroup = 0) },2).height,0f)
+        assertEquals(6,balanced.placements.size)
+        val actions = lines.zip(balanced.placements).flatMap { (line, placement) ->
+            rows[line.owner].spans.filter { it.kind == "link" }.map { span ->
+                listOf(span.text, span.target, span.targetFragment, placement.column)
+            }
+        }
+        assertEquals(listOf(listOf("first","one","sense",0), listOf("second","two","entry",0)),actions)
+    }
+
     @Test fun adjacentRootsDetailsAndNestedListsKeepOneDirectFlexOwnerAndEveryAddress() {
         val blocks = listOf(block("list_item", "*"), block("list_detail", "*:"),
             block("list_item", "*#", "1"), block("list_detail", "*#:"),

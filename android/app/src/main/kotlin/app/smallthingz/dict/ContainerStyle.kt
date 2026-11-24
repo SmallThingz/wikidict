@@ -481,7 +481,7 @@ private fun supportedContainerShape(value: Container, depth: Int): Boolean {
 internal fun resolveBlockPath(blocks: List<Block>, root: Int, suffix: List<Int>): Block {
     require(suffix.size <= MaxContentDepth) { "Container address is too deep" }
     var block = blocks.getOrNull(root) ?: error("Invalid root block address")
-    for (index in suffix) block = block.container?.blocks?.getOrNull(index)
+    for (index in suffix) block = block.contentBox?.blocks?.getOrNull(index)
         ?: error("Invalid container child address")
     return block
 }

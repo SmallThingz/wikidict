@@ -127,7 +127,8 @@ inline bool dottedBottomLabel(const QJsonObject &owner) {
     return width.value("unit") == QStringLiteral("px") && width.value("value").toDouble() > 0
         && edge.value("color").toObject().contains("rgb");
 }
-inline void inlineBoxBorder(const QJsonValue &value, const QJsonObject &span, bool sourceBound, bool rounded = false, bool dottedBottom = false, bool dashedBottom = false) {
+inline void containerColor(const QJsonValue &value);
+inline void inlineBoxBorder(const QJsonValue &value, const QJsonObject &span, bool sourceBound, bool rounded = false, bool dottedBottom = false, bool dashedBottom = false, bool paletteDotted = false) {
     const auto border = containerObject(value, {"top", "right", "bottom", "left"},
         {"top", "right", "bottom", "left"});
     for (const auto key : {"top", "right", "bottom", "left"}) {
@@ -145,6 +146,8 @@ inline void inlineBoxBorder(const QJsonValue &value, const QJsonObject &span, bo
                 const auto rgb = color.value(colorTag); const QString spelling = rgb.toString();
                 require(rgb.isString() && spelling.size() == 7 && spelling.front() == '#');
                 for (QChar c : spelling.mid(1)) require((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'));
+            } else if (paletteDotted && tag == "dotted" && colorTag == "light_dark") {
+                containerColor(color);
             } else {
                 require((colorTag == "transparent" || colorTag == "current_color")
                     && color.value(colorTag).isObject() && color.value(colorTag).toObject().isEmpty());
@@ -363,7 +366,25 @@ inline QJsonObject inlineBoxGroup(const QJsonObject &span) {
     containerEdges(group.value("padding"));
     require(group.value("overlays").isArray());
     const auto border = group.value("border").toObject();
-    inlineBoxBorder(group.value("border"), span, sourceBound, rounded, dottedBottomLabel(span), dashedLink);
+    const auto topDotted = border.value("top").toObject().value("dotted").toObject();
+    const bool paletteDotted = topDotted.value("color").toObject().contains("light_dark");
+    if (paletteDotted) {
+        const QJsonObject radius{{"unit", "percent"}, {"value", 50}};
+        const QJsonObject strokeWidth{{"unit", "px"}, {"value", 1}};
+        const auto children = group.value("spans").toArray();
+        require(!wholeLink && !sourceBound && span.value("kind") == QStringLiteral("text")
+            && span.value("target").toString().isEmpty() && !present(span.value("background"))
+            && !span.value("tooltip").toString().isEmpty()
+            && span.value("inline_style").toObject().value("cursor") == QStringLiteral("help")
+            && group.value("radius").toObject() == radius && topDotted.value("width").toObject() == strokeWidth
+            && group.value("overlays").toArray().isEmpty() && children.size() == 1);
+        const auto child = children.first().toObject();
+        require(child.value("kind") == QStringLiteral("text") && child.value("target").toString().isEmpty()
+            && !child.value("text").toString().isEmpty() && !present(child.value("inline_box_group")));
+        const auto padding = group.value("padding").toObject();
+        for (const auto &side : padding) require(side.toObject().value("value").toDouble(-1) == 0);
+    }
+    inlineBoxBorder(group.value("border"), span, sourceBound, rounded, dottedBottomLabel(span), dashedLink, paletteDotted);
     if (sourceBound) {
         require(!rounded && !wholeLink && span.value("target") == QJsonValue(QString())
             && span.value("direction") == QJsonValue(QString()));
@@ -394,7 +415,7 @@ inline QJsonObject inlineBoxGroup(const QJsonObject &span) {
         const auto edge = border.value("top").toObject();
         const QString style = edge.keys().first();
         require((style == "solid" || (rounded && style == "dotted"))
-            && edge.value(style).toObject().value("color").toObject().contains("rgb"));
+            && (paletteDotted || edge.value(style).toObject().value("color").toObject().contains("rgb")));
         for (const auto key : {"right", "bottom", "left"}) require(border.value(key) == border.value("top"));
     }
     require(group.value("spans").isArray());
@@ -790,9 +811,17 @@ inline QJsonObject containerStyle(const QJsonValue &value) {
         containerMarginValues(style.value(QStringLiteral("margin_values")));
     }
     if (present(style.value(QStringLiteral("padding")))) containerEdges(style.value(QStringLiteral("padding")));
-    if (present(style.value(QStringLiteral("width")))) containerWidth(style.value(QStringLiteral("width")));
+    const bool maxContent = style.value("width").toObject().contains("max_content");
+    if (maxContent) {
+        containerObject(style, {"width", "max_width", "box_sizing", "overflow", "margins", "padding", "border",
+            "background", "text_align", "line_height", "font_family", "owner_font_scale", "owner_font"});
+        const QJsonObject width{{"max_content", QJsonObject{}}};
+        const QJsonObject cap{{"length", QJsonObject{{"unit", "percent"}, {"value", 100}}}};
+        require(style.value("width").toObject() == width && style.value("max_width").toObject() == cap
+            && style.value("box_sizing") == QStringLiteral("border_box") && style.value("overflow") == QStringLiteral("hidden"));
+    } else if (present(style.value(QStringLiteral("width")))) containerWidth(style.value(QStringLiteral("width")));
     if (present(style.value(QStringLiteral("max_width")))) containerWidth(style.value(QStringLiteral("max_width")), true);
-    enumeration(style, QStringLiteral("overflow"), {QStringLiteral("visible"), QStringLiteral("auto"), QStringLiteral("visible_x_clip_y")});
+    if (!maxContent) enumeration(style, QStringLiteral("overflow"), {QStringLiteral("visible"), QStringLiteral("auto"), QStringLiteral("visible_x_clip_y")});
     enumeration(style, QStringLiteral("float_side"), {QStringLiteral("left"), QStringLiteral("right")});
     enumeration(style, QStringLiteral("clear"), {QStringLiteral("none"), QStringLiteral("left"), QStringLiteral("right"), QStringLiteral("both")});
     enumeration(style, QStringLiteral("box_sizing"), {QStringLiteral("content_box"), QStringLiteral("border_box")});

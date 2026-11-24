@@ -78,10 +78,10 @@ internal class NativeInlineActionPaint(
                 format.paint.strikeThruThickness, color, InlineUnderlineStyle.Solid)
             val authored = format.underline
             if (authored != null) addDecoration(format.paint.underlinePosition,
-                authored.thickness ?: format.paint.underlineThickness,
+                authored.thickness ?: format.paint.getUnderlineThickness(),
                 authored.color ?: color, authored.style)
             else if (reserve && format.actionPaint != null || (appearance?.underline ?: format.paint.isUnderlineText))
-                addDecoration(format.paint.underlinePosition, format.paint.underlineThickness, color, InlineUnderlineStyle.Solid)
+                addDecoration(format.paint.underlinePosition, format.paint.getUnderlineThickness(), color, InlineUnderlineStyle.Solid)
         }
     }
     /** Conservative envelopes only; paint and hit geometry never use their unions. */

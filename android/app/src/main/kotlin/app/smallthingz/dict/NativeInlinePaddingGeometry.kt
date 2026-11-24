@@ -63,9 +63,9 @@ internal class NativeInlinePaddingGeometry(
                 format.paint.strikeThruThickness, color, InlineUnderlineStyle.Solid)
             val authored = format.underline
             if (authored != null) decoration(format.paint.underlinePosition,
-                authored.thickness ?: format.paint.underlineThickness, authored.color ?: color, authored.style)
+                authored.thickness ?: format.paint.getUnderlineThickness(), authored.color ?: color, authored.style)
             else if (reserve && format.actionPaint != null || (appearance?.underline ?: format.paint.isUnderlineText))
-                decoration(format.paint.underlinePosition, format.paint.underlineThickness, color, InlineUnderlineStyle.Solid)
+                decoration(format.paint.underlinePosition, format.paint.getUnderlineThickness(), color, InlineUnderlineStyle.Solid)
         }
     }
     private val reservedDecorations = decorations(reserve = true).map { it.bounds }

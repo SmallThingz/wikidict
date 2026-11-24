@@ -26,7 +26,8 @@ inline QJsonObject companionWrappers(const QJsonValue &value) {
     const auto dash = edges.value("top").toObject().value("dashed").toObject();
     require(dash.value("width").toObject().value("unit") == QStringLiteral("px")
         && dash.value("width").toObject().value("value").toDouble() > 0
-        && dash.value("color").toObject().value("rgb").isString());
+        && (dash.value("color").toObject().contains("rgb") || dash.value("color").toObject().contains("light_dark")));
+    containerColor(dash.value("color"));
     const auto positiveEm = [](const QJsonValue &v) {
         containerLength(v);
         require(v.toObject().value("unit") == QStringLiteral("em") && v.toObject().value("value").toDouble() > 0);

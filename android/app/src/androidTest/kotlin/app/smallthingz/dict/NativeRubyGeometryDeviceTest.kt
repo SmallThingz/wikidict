@@ -2043,7 +2043,7 @@ class NativeRubyGeometryDeviceTest {
             assertSame(value.action, calls.last())
             if (value.state != null) {
                 val expectedUnderline = NativeFloatBounds(groupBox.left, baseline + value.ownerPaint.underlinePosition,
-                    groupBox.right, baseline + value.ownerPaint.underlinePosition + value.ownerPaint.underlineThickness)
+                    groupBox.right, baseline + value.ownerPaint.underlinePosition + value.ownerPaint.getUnderlineThickness())
                 val reserved = checkNotNull(geometry.ordinaryPaintBounds.reduceOrNull { a, b -> a.enclosing(b) })
                 assertTrue(reserved.left <= expectedUnderline.left && reserved.right >= expectedUnderline.right &&
                     reserved.top <= expectedUnderline.top && reserved.bottom >= expectedUnderline.bottom)
@@ -2280,7 +2280,8 @@ class NativeRubyGeometryDeviceTest {
                 assertEquals(checkNotNull(part.span).text + checkNotNull(part.span).trail,
                     geometry.text.subSequence(part.start, part.end).toString())
                 for (offset in part.start until part.end) if (!geometry.text[offset].isWhitespace())
-                    assertNotNull(geometry.characterRects(offset, 1).single())
+                    assertNotNull("Missing source character at $offset in leaf ${part.path} " +
+                        "[${part.start},${part.end}) of ${geometry.text}", geometry.characterRects(offset, 1).single())
             }
             node.onClick!!.invoke()
             assertSame(value.action, callbacks.last())
@@ -2317,7 +2318,7 @@ class NativeRubyGeometryDeviceTest {
             val ink = geometry.extents.ink
             val imageLeft = kotlin.math.floor(minOf(0f, ink?.left ?: 0f)).toInt() - 8
             val imageTop = kotlin.math.floor(minOf(0f, ink?.top ?: 0f)).toInt() - 8
-            assertTrue(value.declaring.underlineThickness.isFinite() && value.declaring.underlineThickness > 0f)
+            assertTrue(value.declaring.getUnderlineThickness().isFinite() && value.declaring.getUnderlineThickness() > 0f)
             var changedBackground = 0
             // Authored interior spaces give glyph-free native X allocations. The Y band
             // comes independently from the declaring font; these captures omit the outline.
@@ -2335,7 +2336,7 @@ class NativeRubyGeometryDeviceTest {
                 if (left >= right) continue
                 val underlineTop = geometry.nativeRubyRaw.nativeRubyLineBaseline(line) + value.declaring.underlinePosition
                 val top = kotlin.math.floor(underlineTop.toDouble()).toInt() - imageTop
-                val bottom = ceil((underlineTop + value.declaring.underlineThickness).toDouble()).toInt() - imageTop
+                val bottom = ceil((underlineTop + value.declaring.getUnderlineThickness()).toDouble()).toInt() - imageTop
                 for (y in top.coerceAtLeast(0) until bottom.coerceAtMost(before.height))
                     for (x in left.coerceAtLeast(0) until right.coerceAtMost(before.width)) {
                         val original = before.getPixel(x, y)
@@ -2372,6 +2373,9 @@ class NativeRubyGeometryDeviceTest {
         assertEquals(NativeLineHeightPolicy.Pixels(24f),
             metric.prepared.source.getSpans(0, metric.prepared.source.length, NativeRunLineMetrics::class.java)
                 .single { it.strut }.policy)
+        val declaringFormat = metric.prepared.groups.getValue(metric.range.path)
+        assertEquals(Color.GREEN, declaringFormat.paint.bgColor)
+        assertEquals(Color.BLUE, declaringFormat.paint.color)
         val direct = build(metric, 400)
         verify(metric, direct)
         assertEquals(1, direct.shapedLineCount)
@@ -2399,7 +2403,20 @@ class NativeRubyGeometryDeviceTest {
         catch (failure: UnsupportedFloatLayout) { assertTrue(failure.message.orEmpty().contains("normal", ignoreCase = true)) }
         val paintedRecovery = make(metricOwner, outside = true)
         assertEquals(paintedNormal.projection.text, paintedRecovery.projection.text)
-        verify(paintedRecovery, build(paintedRecovery, 400))
+        val recoveredSiblings = build(paintedRecovery, 400)
+        verify(paintedRecovery, recoveredSiblings)
+        for (part in paintedRecovery.projection.ranges.filter { it.role == RubyTextRole.Text &&
+                (it.end <= paintedRecovery.range.start || it.start >= paintedRecovery.range.end) }) {
+            for (offset in part.start until part.end) {
+                if (recoveredSiblings.text[offset].isWhitespace()) continue
+                val box = checkNotNull(recoveredSiblings.characterRects(offset, 1).single())
+                val left = recoveredSiblings.caretRect(NativeTextCaret(offset)).left
+                val right = recoveredSiblings.caretRect(NativeTextCaret(offset + 1, NativeTextAffinity.Upstream)).left
+                assertEquals("left edge of original sibling $offset", box.left, left, 1f)
+                assertEquals("right edge of original sibling $offset", box.right, right, 1f)
+                assertTrue("positive sibling advance at $offset", left < right)
+            }
+        }
         val natural = NativeFloatGeometry.build(metric.prepared.source, metric.root, 400, emptyList(),
             textDirection = TextDirectionHeuristics.LTR).nativeUsedLineMetrics(0)
         val expectedTop = minOf(middle - 24f, natural.top, childBands.minOf { it.first })
@@ -2477,10 +2494,41 @@ class NativeRubyGeometryDeviceTest {
         assertEquals(relativePaint.baselineShift.toFloat(), relativeMetrics.primary.baselineShift, 0f)
         assertTrue(relativeGeometry.characterRects(relativeRange.start, 1).single() != null)
         val relativeImage = image(relativeGeometry)
-        try { assertTrue(owned(relativeImage, blue = true) > 0) } finally { relativeImage.recycle() }
+        val expectedInk = Bitmap.createBitmap(relativeImage.width, relativeImage.height, Bitmap.Config.ARGB_8888)
+        try {
+            val nativeInk = relativeGeometry.extents.ink
+            val originX = 8f - kotlin.math.floor(minOf(0f, nativeInk?.left ?: 0f))
+            val originY = 8f - kotlin.math.floor(minOf(0f, nativeInk?.top ?: 0f))
+            val start = relativeGeometry.caretRect(NativeTextCaret(relativeRange.start, NativeTextAffinity.Downstream))
+            val baseline = relativeGeometry.baselineForOffset(relativeRange.start)
+            val nativePaint = TextPaint(relativePaint).apply { baselineShift = 0 }
+            Canvas(expectedInk).drawTextRun(relativeChild.text, 0, relativeChild.text.length,
+                0, relativeChild.text.length, originX + start.left, originY + baseline, false, nativePaint)
+            var expectedPixels = 0
+            var bluePixels = 0
+            var differences = 0
+            for (y in 0 until expectedInk.height) for (x in 0 until expectedInk.width) {
+                val coverage = Color.alpha(expectedInk.getPixel(x, y))
+                val pixel = relativeImage.getPixel(x, y)
+                // Blue source composited over transparent or green has exactly
+                // this premultiplied blue coverage, including antialiased edges.
+                val blue = (Color.blue(pixel) * Color.alpha(pixel) + 127) / 255
+                if (coverage != 0) expectedPixels++
+                if (blue != 0) bluePixels++
+                if (kotlin.math.abs(coverage - blue) > 1) differences++
+            }
+            val solidPixels = owned(relativeImage, blue = true)
+            val evidence = "relative glyph text=${relativeChild.text} fontPx=${nativePaint.textSize} " +
+                "caret=$start baseline=$baseline ink=$nativeInk origin=($originX,$originY) " +
+                "reference=$expectedPixels blueCoverage=$bluePixels solidBlue=$solidPixels different=$differences"
+            androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().sendStatus(0,
+                android.os.Bundle().apply { putString("stream", "\nRICH_RELATIVE_INK $evidence\n") })
+            assertTrue(evidence, expectedPixels > 0 && bluePixels > 0)
+            assertEquals(evidence, 0, differences)
+        } finally { expectedInk.recycle(); relativeImage.recycle() }
 
         val paddingText = sourceLeaf("nhân", .75f).copy(language = "vi")
-        val padding = sourceLeaf("", .75f).copy(language = "vi", direction = "ltr",
+        val padding = paddingText.copy(text = "", direction = "ltr",
             inlinePaddingGroup = InlinePaddingGroup(StyleLength(StyleLengthUnit.Em, .25f),
                 StyleLength(StyleLengthUnit.Px, .125f), listOf(paddingText)))
         val baseText = sourceLeaf("漢")
@@ -2516,8 +2564,8 @@ class NativeRubyGeometryDeviceTest {
             assertTrue(readingRects.isNotEmpty())
             assertTrue(readingRects.all { child -> boxes.any { it.contains(child.centerX(), child.centerY()) } })
             if (!rtl) {
-                // Focus underlines this declaring base line; the independently placed
-                // reading remains unchanged. Pressed foreground still reaches that reading.
+                // An annotation selection includes its line-height band and touches neighboring
+                // pixels after raster rounding. Account for every outer declaring line independently.
                 val baseRange = value.projection.ranges.single { it.span === baseText }
                 val underlineTop = narrow.baselineForOffset(baseRange.start) + value.declaring.underlinePosition
                 assertTrue(readingRects.all { it.bottom <= underlineTop })
@@ -2534,21 +2582,60 @@ class NativeRubyGeometryDeviceTest {
                     val ink = narrow.extents.ink
                     val imageLeft = kotlin.math.floor(minOf(0f, ink?.left ?: 0f)).toInt() - 8
                     val imageTop = kotlin.math.floor(minOf(0f, ink?.top ?: 0f)).toInt() - 8
-                    var readingRed = 0
-                    readingRects.forEach { rect ->
-                        val left = kotlin.math.floor(rect.left.toDouble()).toInt() - imageLeft
-                        val top = kotlin.math.floor(rect.top.toDouble()).toInt() - imageTop
-                        val right = ceil(rect.right.toDouble()).toInt() - imageLeft
-                        val bottom = ceil(rect.bottom.toDouble()).toInt() - imageTop
-                        for (y in top.coerceAtLeast(0) until bottom.coerceAtMost(before.height))
-                            for (x in left.coerceAtLeast(0) until right.coerceAtMost(before.width)) {
-                                assertEquals(before.getPixel(x, y), focused.getPixel(x, y))
-                                val pixel = active.getPixel(x, y)
-                                if (Color.alpha(pixel) > 0 && Color.red(pixel) > 0 && Color.green(pixel) == 0 && Color.blue(pixel) == 0)
-                                    readingRed++
-                            }
-                    }
-                    assertTrue(readingRed > 0)
+                    val raw = narrow.nativeRubyRaw
+                    val first = narrow.nativeRubyRawOffset(value.range.start)
+                    val end = narrow.nativeRubyRawOffset(value.range.end)
+                    val fragments = raw.nativeInlineActionFragments(first, end)
+                    assertTrue(fragments.map { it.line }.distinct().size > 1)
+                    // Draw the outer action's focus-only declaration over the unchanged image.
+                    // No ruby child, padding paint, active color, or focused renderer is invoked.
+                    val expected = before.copy(Bitmap.Config.ARGB_8888, true)
+                    try {
+                        val canvas = Canvas(expected)
+                        canvas.translate(-imageLeft.toFloat(), -imageTop.toFloat())
+                        val pen = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.BLUE }
+                        for (fragment in fragments) {
+                            val baseline = raw.nativeRubyLineBaseline(fragment.line)
+                            assertEquals(baseline, fragment.baseline, .01f)
+                            val top = baseline + value.declaring.underlinePosition
+                            canvas.drawPath(fragment.pathForBand(top, top + value.declaring.getUnderlineThickness()), pen)
+                        }
+                        var readingRed = 0
+                        var stableBlueCoverage = 0
+                        var coveredByOuterLine = 0
+                        var mispainted = 0
+                        var firstDifference = ""
+                        readingRects.forEach { rect ->
+                            val left = kotlin.math.floor(rect.left.toDouble()).toInt() - imageLeft
+                            val top = kotlin.math.floor(rect.top.toDouble()).toInt() - imageTop
+                            val right = ceil(rect.right.toDouble()).toInt() - imageLeft
+                            val bottom = ceil(rect.bottom.toDouble()).toInt() - imageTop
+                            for (y in top.coerceAtLeast(0) until bottom.coerceAtMost(before.height))
+                                for (x in left.coerceAtLeast(0) until right.coerceAtMost(before.width)) {
+                                    val normalPixel = before.getPixel(x, y)
+                                    val expectedPixel = expected.getPixel(x, y)
+                                    val focusedPixel = focused.getPixel(x, y)
+                                    if (normalPixel != expectedPixel) coveredByOuterLine++
+                                    if (normalPixel == expectedPixel && Color.blue(normalPixel) > 0 && Color.alpha(normalPixel) > 0)
+                                        stableBlueCoverage++
+                                    if (expectedPixel != focusedPixel) {
+                                        if (firstDifference.isEmpty()) firstDifference = "($x,$y) normal=$normalPixel expected=$expectedPixel focused=$focusedPixel"
+                                        mispainted++
+                                    }
+                                    val pixel = active.getPixel(x, y)
+                                    if (Color.alpha(pixel) > 0 && Color.red(pixel) > 0 && Color.green(pixel) == 0 && Color.blue(pixel) == 0)
+                                        readingRed++
+                                }
+                        }
+                        val proof = "source=${paddingText.text} range=$readingRange rects=$readingRects " +
+                            "rawOwner=[$first,$end) lines=${fragments.map { it.line to it.baseline }} " +
+                            "stableBlue=$stableBlueCoverage outerOverlap=$coveredByOuterLine readingRed=$readingRed " +
+                            "unexpected=$mispainted first=$firstDifference"
+                        androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().sendStatus(0,
+                            android.os.Bundle().apply { putString("stream", "\nRICH_READING_FOCUS $proof\n") })
+                        assertTrue(proof, stableBlueCoverage > 0 && readingRed > 0)
+                        assertEquals(proof, 0, mispainted)
+                    } finally { expected.recycle() }
                 } finally { before.recycle(); focused.recycle(); active.recycle() }
             }
             val glyphRange = value.projection.ranges.single { it.span === bidi }
@@ -2562,7 +2649,9 @@ class NativeRubyGeometryDeviceTest {
         }
 
         for (height in listOf(48f, 0f)) for (noWrap in listOf(false, true)) {
-            val emptyLeaf = sourceLeaf("").copy(fontFamily = ContainerFontFamily.Stack(emptyList(), GenericFontFamily.Serif))
+            val emptyLeaf = Span("text", "", language = "ja", foreground = "#0000ff", fontScale = 1f,
+                fontScaleBasis = FontScaleBasis.NormalBody,
+                fontFamily = ContainerFontFamily.Stack(emptyList(), GenericFontFamily.Serif))
             val owner = action(listOf(emptyLeaf), height, paintPolicy = null, stack = true)
             val value = make(owner, noWrap = noWrap)
             val geometry = build(value, 80)
@@ -2643,7 +2732,9 @@ class NativeRubyGeometryDeviceTest {
         // An empty child's numeric baseline affects its own point metrics, never the
         // declaring action band's origin. The old raw.baselineForOffset(point) path
         // incorrectly added this child shift to the owner a second time.
-        val emptyChild = sourceLeaf("")
+        val emptyChild = Span("text", "", language = "ja", foreground = "#0000ff", fontScale = 1f,
+            fontScaleBasis = FontScaleBasis.NormalBody, inlineStyle = InlineTextStyle(fontNormalized = true,
+                lineHeight = InlineLineHeight.Computed(InlineComputedLength(48f, FontScaleBasis.CssPx))))
         val shiftedChild = emptyChild.copy(inlineStyle = checkNotNull(emptyChild.inlineStyle).copy(
             baselineShift = InlineComputedLength(-64f, FontScaleBasis.CssPx)))
         val unshiftedOwner = action(listOf(emptyChild), paintPolicy = null)

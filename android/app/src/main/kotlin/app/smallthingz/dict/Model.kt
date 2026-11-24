@@ -41,6 +41,13 @@ data class Span(
 ) {
     internal val isQualifiedCitationBacklink: Boolean get() = citationBacklinkWitness != null
     init {
+        inlineStyle?.darkForeground?.let { dark ->
+            require(kind == "text" && text.isNotEmpty() && foreground != null &&
+                canonicalColorArgb(foreground) != null && foreground != dark && image == null && ruby == null &&
+                inlinePaddingGroup == null && inlineActionGroup == null && inlineBoxGroup == null && clippedAbsolute == null) {
+                "Conditional foreground requires one original text leaf and distinct day and night colors"
+            }
+        }
         require(audioControl == null || validAudioControlOwner(this)) { "Invalid audio control owner" }
         require(citationMarker == null || validCitationMarkerSpan(this)) { "Invalid citation marker owner" }
         require(citationBacklinkWitness == null || citationMarker == null && validCitationLinkShape(this)) {
@@ -544,6 +551,7 @@ data class RubyOwner(val font: InlineFontSnapshot, val direction: String = "",
         require(foreground == null || Regex("#[0-9a-f]{6}").matches(foreground)) { "Invalid ruby owner foreground" }
         require(background == null || Regex("#[0-9a-f]{6}").matches(background)) { "Invalid ruby owner background" }
         inlineStyle?.let { policy ->
+            require(policy.darkForeground == null) { "Conditional ink belongs to a visible text leaf" }
             require(!policy.fontNormalized || font.fontNormalized) { "Ruby owner normalized font differs from its style" }
             val height = policy.lineHeight
             if (height is InlineLineHeight.FontRelative) {
@@ -678,10 +686,11 @@ enum class TextWrap { Normal, BreakWord, NoWrap }
 enum class InlineCursor { Help }
 data class InlineTextStyle(val decoration: InlineUnderline? = null, val lineHeight: InlineLineHeight? = null,
     val baselineShift: InlineComputedLength? = null, val fontNormalized: Boolean = false,
-    val cursor: InlineCursor? = null, val wrap: TextWrap? = null) {
+    val cursor: InlineCursor? = null, val wrap: TextWrap? = null, val darkForeground: String? = null) {
     init {
         require(wrap != TextWrap.NoWrap) { "No-wrap requires a positioned owner" }
-        require(decoration != null || lineHeight != null || baselineShift != null || fontNormalized || cursor != null || wrap != null) {
+        require(darkForeground == null || Regex("#[0-9a-f]{6}").matches(darkForeground))
+        require(decoration != null || lineHeight != null || baselineShift != null || fontNormalized || cursor != null || wrap != null || darkForeground != null) {
             "Empty inline text style"
         }
     }
@@ -1285,11 +1294,31 @@ data class TableFloatViewport(val maxViewportWidthPx: Long,
     }
 }
 
+enum class TableRowMode { Always, Collapsed, Expanded }
+
+data class TableDisclosure(val headerRow: Int, val headerCell: Int, val rowModes: List<TableRowMode>,
+    val initiallyCollapsed: Boolean, val expandLabel: String, val collapseLabel: String, val category: String) {
+    init {
+        require(rowModes.getOrNull(headerRow) == TableRowMode.Always && headerCell >= 0 &&
+            rowModes.any { it != TableRowMode.Always }) { "Disclosure requires an always-visible header and conditional rows" }
+        require(listOf(expandLabel, collapseLabel, category).all { label -> label.isNotEmpty() &&
+            validPresentationString(label) && label.none { it.code < 0x20 || it.code == 0x7f } }) {
+            "Invalid table disclosure label"
+        }
+    }
+}
+
 data class Table(val caption: List<Span>, val rows: List<List<Cell>>, val geometry: TableGeometry? = null,
     val style: TableStyle? = null, val captionBlocks: List<Block>? = null,
     val blockViewport: TableBlockViewport? = null, val floatViewport: TableFloatViewport? = null,
-    val rowsHiddenMaxWidthPx: Long? = null) {
+    val rowsHiddenMaxWidthPx: Long? = null, val disclosure: TableDisclosure? = null) {
     init {
+        disclosure?.let { policy ->
+            require(policy.rowModes.size == rows.size && rows[policy.headerRow].getOrNull(policy.headerCell)?.header == true &&
+                rowsHiddenMaxWidthPx == null && blockViewport == null && floatViewport == null && style?.isInline != true) {
+                "Invalid disclosure table or original header cell"
+            }
+        }
         validateRowsHiddenPolicy()
         validateResolvedBorderOwners()
         require(style?.minWidth == null || blockViewport == null && floatViewport == null) { "Responsive tables cannot carry minimum width" }
@@ -1707,21 +1736,23 @@ internal class PresentationSpanVisitor(private val visit: (List<Span>, Boolean) 
         if ((value.table != null || value.kind == "rule") &&
             (value.spans.any { it.audioControl != null || it.clippedAbsolute != null } || hasAtomicOrOverlayContent(value.spans)))
             spanList(value.spans, false, contentDepth, display = false, rubyChild = false)
+        val contentBox = value.contentBox
+        if (value.descriptionBody != null) charge(1)
         when {
-            value.container != null -> {
-                require(validContainerDisclosureOwner(value.container)) { "Invalid original disclosure child" }
-                value.container.disclosure?.let {
+            contentBox != null -> {
+                require(validContainerDisclosureOwner(contentBox)) { "Invalid original disclosure child" }
+                contentBox.disclosure?.let {
                     charge(1)
                     if (it.focus != null) charge(1)
                     if (it.expandRun != null) charge(1)
                     if (it.collapseRun != null) charge(1)
                 }
-                if (value.container.style.ownerFont != null) charge(1)
+                if (contentBox.style.ownerFont != null) charge(1)
                 val previous = relativeContainerAvailable
                 val previousStatic = staticInlineParent
-                val style = value.container.style
+                val style = contentBox.style
                 if (validateAbsoluteContainers && style.absoluteStatic != null) {
-                    require(previousStatic && validContainerAbsoluteStaticBody(value.container)) {
+                    require(previousStatic && validContainerAbsoluteStaticBody(contentBox)) {
                         "Static inline Container requires its sole immediate relative parent"
                     }
                 }
@@ -1729,12 +1760,12 @@ internal class PresentationSpanVisitor(private val visit: (List<Span>, Boolean) 
                     require(style.absolutePosition == null || previous) { "Absolute Container requires a represented relative ancestor" }
                     relativeContainerAvailable = false
                 } else if (style.positioning == ContainerPositioning.RelativeAuto) relativeContainerAvailable = true
-                staticInlineParent = value.container.blocks.size == 1 && validContainerStaticParentStyle(style)
+                staticInlineParent = contentBox.blocks.size == 1 && validContainerStaticParentStyle(style)
                 val previousClipped = clippedNonstaticAncestor
                 clippedNonstaticAncestor = previousClipped || createsClippedContainingBlock(style)
                 try {
-                    onContainer(value.container)
-                    blocks(value.container.blocks, tableDepth, descend(contentDepth))
+                    onContainer(contentBox)
+                    blocks(contentBox.blocks, tableDepth, descend(contentDepth))
                 } finally {
                     relativeContainerAvailable = previous
                     staticInlineParent = previousStatic
@@ -1812,6 +1843,27 @@ internal fun Table.visitSpanRuns(visit: (List<Span>, Boolean) -> Unit) = Present
 internal fun Table.visitSpans(visit: (List<Span>) -> Unit) = visitSpanRuns { spans, _ -> visit(spans) }
 enum class ColumnBreakInside { Auto, Avoid }
 
+data class DescriptionBefore(val top: StyleLength, val bottom: StyleLength, val left: StyleLength,
+    val width: StyleLength, val fill: ContainerColor) {
+    init { require(width.value > 0f && fill != ContainerColor.Transparent) }
+}
+
+data class DescriptionBody(val before: DescriptionBefore, val box: Container) {
+    init {
+        val style = box.style
+        val margins = requireNotNull(style.margins)
+        val padding = requireNotNull(style.padding)
+        require(box.blocks.isNotEmpty() && box.disclosure == null && style.ownerFontScale != null &&
+            style.positioning == ContainerPositioning.RelativeAuto &&
+            style == ContainerStyle(margins = margins, padding = padding, ownerFontScale = style.ownerFontScale,
+                positioning = ContainerPositioning.RelativeAuto) &&
+            listOf(margins.top, margins.right, margins.bottom, margins.left).all { it.value == 0f } &&
+            listOf(padding.top, padding.right, padding.bottom).all { it.value == 0f } && padding.left.value > 0f) {
+            "Invalid source description body"
+        }
+    }
+}
+
 data class Block(
     val kind: String,
     val depth: Int,
@@ -1830,8 +1882,16 @@ data class Block(
     val container: Container? = null,
     val ruleStyle: RuleStyle? = null,
     val columnBreakInside: ColumnBreakInside? = null,
+    val descriptionBody: DescriptionBody? = null,
 ) {
+    val contentBox: Container? get() = descriptionBody?.box ?: container
     init {
+        require(descriptionBody == null || (kind == "example" && listPath == "#:" || kind == "indent" && listPath == ":") &&
+            depth == listPath.length && spans.isEmpty() && number.isEmpty() && level == 0 && anchor.isEmpty() &&
+            anchorFallback.isEmpty() && feature == null && table == null && container == null && figure == null &&
+            flow == null && ruleStyle == null && style == null && textAlign == null && columnBreakInside == null) {
+            "Description body requires a single original description-list owner"
+        }
         require(columnBreakInside == null || kind in setOf("paragraph", "definition", "example", "quotation",
             "list_item", "list_detail", "indent", "term") && table == null && feature == null &&
             figure == null && flow == null && container == null && ruleStyle == null) {
@@ -1869,8 +1929,9 @@ data class HeadingAnchorReveal(val primaryTop: StyleLength, val fallbackTop: Sty
 
 /** Closed outer, inner and title-block boxes of the relative section heading. Outer clips Y only. */
 data class SectionHeadingWrappers(val outerMarginTop: ContainerMarginLength, val outerTopWidth: StyleLength,
-    val outerTopColor: ContainerColor.Rgb, val innerPaddingTop: StyleLength, val titlePaddingRight: StyleLength) {
+    val outerTopColor: ContainerColor, val innerPaddingTop: StyleLength, val titlePaddingRight: StyleLength) {
     init {
+        require(outerTopColor != ContainerColor.Transparent)
         require(outerMarginTop.unit == StyleLengthUnit.Em && outerMarginTop.value > 0f &&
             outerTopWidth.unit == StyleLengthUnit.Px && outerTopWidth.value > 0f &&
             listOf(innerPaddingTop, titlePaddingRight).all { it.unit == StyleLengthUnit.Em && it.value > 0f }) {

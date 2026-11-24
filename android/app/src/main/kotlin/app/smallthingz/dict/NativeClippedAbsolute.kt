@@ -75,6 +75,19 @@ internal class NativeClippedAbsoluteProjection private constructor(val source: S
 
     private data class Prepared(val start: Int, val end: Int, val value: NativeRubyPreparedSource)
 
+    private fun installVisibleGroups(target: SpannableString, start: Int, end: Int,
+        original: NativeRubyPreparedSource, ranges: List<RubyTextRange>) {
+        val actions = ranges.filter { it.role == RubyTextRole.ActionGroup }
+        if (actions.isEmpty() && ranges.none { it.span?.let { span ->
+                span.usesInlineDirectionIsolate() || span.citationMarker != null
+            } == true }) return
+        val local = SpannedString(target.subSequence(start, end))
+        val groups = actions.associate { it.path to original.groups.getValue(it.path) }
+        val marker = NativeRubyPreparedSource(RubyTextProjection(local.toString(), ranges), local,
+            original.paint, original.direction, groups, original.parentScript)
+        target.setSpan(marker, start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+    }
+
     init {
         val result = SpannableString(map.visual)
         for (value in source.getSpans(0, source.length, Any::class.java)) {
@@ -107,17 +120,11 @@ internal class NativeClippedAbsoluteProjection private constructor(val source: S
             val original = item.value
             val leaves = original.projection.ranges.filter { it.role != RubyTextRole.ClippedAbsolute &&
                 it.role != RubyTextRole.ClippedText }
-            if (leaves.none { it.span?.let { span ->
-                    span.usesInlineDirectionIsolate() || span.citationMarker != null
-                } == true }) continue
             val start = map.toVisual(item.start); val end = map.toVisual(item.end)
             if (start == end) continue
             val ranges = leaves.map { it.copy(start = map.toVisual(item.start + it.start) - start,
                 end = map.toVisual(item.start + it.end) - start) }
-            val local = SpannedString(result.subSequence(start, end))
-            val marker = NativeRubyPreparedSource(RubyTextProjection(local.toString(), ranges), local,
-                original.paint, original.direction, emptyMap(), original.parentScript)
-            result.setSpan(marker, start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            installVisibleGroups(result, start, end, original, ranges)
         }
         points.filter { it.start == it.end }.forEach { point ->
             val at = map.toVisual(point.start)
@@ -261,11 +268,7 @@ internal class NativeClippedAbsoluteProjection private constructor(val source: S
                     end = localMap.toVisual(minOf(b, originalEnd) - first) - localStart,
                     role = if (range.role == RubyTextRole.ClippedText) RubyTextRole.Text else range.role)
             }
-            if (ranges.none { it.span?.let { span -> span.usesInlineDirectionIsolate() || span.citationMarker != null } == true }) continue
-            val local = SpannedString(target.subSequence(localStart, localEnd))
-            target.setSpan(NativeRubyPreparedSource(RubyTextProjection(local.toString(), ranges), local,
-                item.value.paint, item.value.direction, emptyMap(), item.value.parentScript),
-                localStart, localEnd, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            installVisibleGroups(target, localStart, localEnd, item.value, ranges)
         }
         target.setSpan(NativeClippedParagraphDirection(checkNotNull(occurrence.format.owner.span.clippedAbsolute).staticParentDirection),
             0, target.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
@@ -283,10 +286,18 @@ internal class NativeClippedAbsoluteProjection private constructor(val source: S
                 if (item.end - item.start != value.projection.text.length ||
                     source.subSequence(item.start, item.end).toString() != value.projection.text)
                     throw UnsupportedFloatLayout("Clipped absolute source projection lost its occurrence")
-                if (value.projection.ranges.any { it.role !in setOf(RubyTextRole.Text,
+                if (value.projection.ranges.any { it.role !in setOf(RubyTextRole.Text, RubyTextRole.ActionGroup,
                         RubyTextRole.ClippedAbsolute, RubyTextRole.ClippedText) } ||
                     value.visualOmissions.isNotEmpty() || value.visualSpaces.isNotEmpty() || value.protectedSpaces.isNotEmpty())
                     throw UnsupportedFloatLayout("Clipped absolute mixed structural source is unavailable")
+                val structural = value.projection.ranges.filter {
+                    it.role == RubyTextRole.ActionGroup || it.role == RubyTextRole.ClippedAbsolute
+                }.sortedBy { it.start }
+                // A visible action must survive as one complete original owner in both projections.
+                if (structural.zipWithNext().any { (a, b) -> a.end > b.start } || structural.any { range ->
+                        range.role == RubyTextRole.ActionGroup && (range.start == range.end ||
+                            (range.start until range.end).any { value.projection.text[it] == '\n' })
+                    }) throw UnsupportedFloatLayout("Clipped absolute source requires independent paragraph-local action groups")
                 prepared += Prepared(item.start, item.end, value)
                 for (range in value.projection.ranges.filter { it.role == RubyTextRole.ClippedAbsolute }) {
                     val declaring = value.groups[range.path]

@@ -44,6 +44,7 @@ internal sealed interface NativeFloatContextPart {
         val buildInColumns: ((Float) -> NativeFloatGeometry)? = null,
         val columnBreakInside: ColumnBreakInside? = null,
         val headingFramePaddingAbove: Float? = null,
+        val columnAvoidGroup: Int = 0,
     ) : NativeFloatContextPart
     data class Rule(val id: Int, val metrics: NativeRuleMetrics,
         val containingWidth: Float? = null) : NativeFloatContextPart
@@ -504,10 +505,11 @@ internal class NativeFloatContextGeometry private constructor(
                 var previousText: NativeFloatContextPart.Text? = null
                 shaped.forEachIndexed { index, geometry ->
                     if (geometry == null) return@forEachIndexed
+                    val part = parts[index] as NativeFloatContextPart.Text
                     for (line in 0 until geometry.shapedLineCount) add(NativeColumnLine(index, line,
                         geometry.usedLineHeight(line), if (line == 0) previousText?.let { it.box?.after ?: it.gapAfter } ?: 0f else 0f,
-                        (parts[index] as NativeFloatContextPart.Text).columnBreakInside == ColumnBreakInside.Avoid))
-                    previousText = parts[index] as NativeFloatContextPart.Text
+                        part.columnBreakInside == ColumnBreakInside.Avoid, part.columnAvoidGroup))
+                    previousText = part
                 }
             }
             val balance = balanceNativeColumns(lines, resolved.count)

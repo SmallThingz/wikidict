@@ -52,3 +52,26 @@ internal fun containerFlowItems(blocks: List<Block>): List<ContainerFlowItem> {
     } }
     return freeze(roots)
 }
+
+// A list item owns its continuation and nested-list boxes for fragmentation.
+// IDs are local to this one source flow. Zero leaves ordinary line breaks intact.
+internal fun containerColumnAvoidGroups(blocks: List<Block>): IntArray? {
+    if (blocks.none { it.columnBreakInside == ColumnBreakInside.Avoid }) return null
+    val groups = IntArray(blocks.size)
+    fun assign(index: Int, ancestor: Int): Int {
+        val owner = if (ancestor != 0) ancestor else if (blocks[index].columnBreakInside == ColumnBreakInside.Avoid) index + 1 else 0
+        groups[index] = owner
+        return owner
+    }
+    fun visit(node: ContainerFlowItem, ancestor: Int) {
+        when (node) {
+            is ContainerFlowItem.Block -> assign(node.index, ancestor)
+            is ContainerFlowItem.ListGroup -> for (item in node.items) {
+                val owner = assign(item.index, ancestor)
+                item.children.forEach { child -> visit(child, owner) }
+            }
+        }
+    }
+    containerFlowItems(blocks).forEach { visit(it, 0) }
+    return groups
+}

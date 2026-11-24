@@ -717,7 +717,7 @@ object BlobDecoder {
         private fun inlineTextStyle(): InlineTextStyle {
             require(inlineStyles) { "Inline text effects require O" }
             val flags = byte()
-            require(flags != 0 && flags and (if (textFlow) 0xc0 else 0xe0) == 0) { "Invalid inline text effect flags" }
+            require(flags != 0 && flags and (if (positionedContainers) 0x80 else if (textFlow) 0xc0 else 0xe0) == 0) { "Invalid inline text effect flags" }
             val decoration = if (flags and 1 != 0) InlineUnderline(
                 InlineUnderlineStyle.entries.getOrNull(byte()) ?: error("Unknown inline underline style"),
                 if (presence()) string() else null, if (presence()) styleLength() else null) else null
@@ -730,7 +730,8 @@ object BlobDecoder {
             val cursor = if (flags and 16 != 0) InlineCursor.entries.getOrNull(byte())
                 ?: error("Unknown inline cursor") else null
             val wrap = if (flags and 32 != 0) textWrap().also { hasTextFlowFeature = true } else null
-            return InlineTextStyle(decoration, lineHeight, baselineShift, flags and 8 != 0, cursor, wrap)
+            val darkForeground = if (flags and 64 != 0) string().also { hasPositionedContainers = true } else null
+            return InlineTextStyle(decoration, lineHeight, baselineShift, flags and 8 != 0, cursor, wrap, darkForeground)
         }
         private fun imageMapAction(): ImageMapAction {
             val kind = ImageMapActionKind.entries.getOrNull(byte()) ?: error("Unknown image map action")
@@ -910,10 +911,6 @@ object BlobDecoder {
                 else -> error("Unknown flow part")
             }
         }
-        private fun flow(tableDepth: Int): List<FlowPart>? {
-            if (!imageMaps || !presence()) return null
-            return content { flowParts(tableDepth) }
-        }
         private fun styleLength(): StyleLength {
             val unit = when (byte()) { 0 -> StyleLengthUnit.Px; 1 -> StyleLengthUnit.Em; else -> error("Unknown style length unit") }
             require(buffer.remaining() >= 4) { "Truncated style length" }
@@ -1019,7 +1016,7 @@ object BlobDecoder {
             require(listOf(margins.right, margins.bottom, margins.left).all { it.value == 0f })
             require(byte() == 2 && byte() == 4) { "Expected a dashed top border on the heading frame" }
             val stroke = styleLength()
-            val color = containerColor() as? ContainerColor.Rgb ?: error("Heading frame requires an RGB stroke")
+            val color = containerColor().also { require(it != ContainerColor.Transparent) { "Heading frame requires a visible stroke" } }
             require(byte() == 0 && byte() == 0 && byte() == 0 && byte() == 3 && byte() == 0) {
                 "Heading frame requires only a top border, visible X and clipped Y"
             }
@@ -1413,7 +1410,9 @@ object BlobDecoder {
             val tableFlags = byte()
             if (tableFlags == 0) return@positionedRoot null
             val hiddenRows = tableFlags and 0x20 != 0
-            val baseFlags = tableFlags and 0x20.inv()
+            val disclosureOwner = tableFlags and 0x40 != 0
+            require(!disclosureOwner || containerFonts && tableFlags == 0x41) { "Disclosure requires an ordinary table" }
+            val baseFlags = tableFlags and 0x60.inv()
             require(!hiddenRows || containerFonts) { "Table row visibility requires M" }
             require(baseFlags == 1 || containerFonts && (baseFlags == 3 || baseFlags == 5) ||
                 tableFloatClears && baseFlags == 13 || tableScrollPairs && baseFlags == 7 ||
@@ -1461,7 +1460,17 @@ object BlobDecoder {
             require(containerFonts || style?.isInline != true || rows.all { row ->
                 row.all { cell -> cell.spans.none { it.image != null } }
             }) { "Inline table images require M" }
-            Table(caption, rows, geometry, style, rich, blockViewport, floatViewport, rowsHiddenMaxWidthPx).also { tableGrid(it) }
+            val disclosure = if (!disclosureOwner) null else {
+                require(remainingItems > rows.size && rows.isNotEmpty()) { "Table disclosure exhausted the item budget" }
+                remainingItems -= rows.size + 1
+                val headerRow = u32().also { require(it < rows.size) }.toInt()
+                val headerCell = u32().also { require(it < rows[headerRow].size) }.toInt()
+                val collapsed = presence()
+                val expand = string(); val collapse = string(); val category = string()
+                val modes = List(rows.size) { TableRowMode.entries.getOrNull(byte()) ?: error("Invalid disclosure row mode") }
+                TableDisclosure(headerRow, headerCell, modes, collapsed, expand, collapse, category)
+            }
+            Table(caption, rows, geometry, style, rich, blockViewport, floatViewport, rowsHiddenMaxWidthPx, disclosure).also { tableGrid(it) }
         }
         fun block(tableDepth: Int = 0): Block {
             val kind = enum(if (containers) kinds else kinds.dropLast(1)); val depth = byte(); val level = byte()
@@ -1476,7 +1485,17 @@ object BlobDecoder {
                 0 -> CellTextAlign.Left; 1 -> CellTextAlign.Center; 2 -> CellTextAlign.Right
                 else -> error("Unknown block text alignment")
             } else null
-            val style = blockStyle(); val figure = figure(tableDepth); val flow = flow(tableDepth)
+            val style = blockStyle(); val figure = figure(tableDepth)
+            val flowTag = if (imageMaps) byte() else 0
+            require(flowTag == 0 || flowTag == 1 || flowTag == 2 && positionedContainers && containerFonts) { "Invalid block content owner" }
+            val flow = if (flowTag == 1) content { flowParts(tableDepth) } else null
+            val description = if (flowTag == 2) {
+                require(remainingItems > 0)
+                remainingItems--
+                hasPositionedContainers = true
+                val before = DescriptionBefore(styleLength(), styleLength(), styleLength(), styleLength(), containerColor())
+                DescriptionBody(before, container(tableDepth))
+            } else null
             val container = if (kind == "container") container(tableDepth) else null
             val ruleStyle = if (ruleStyles && kind == "rule") {
                 val marker = byte()
@@ -1497,7 +1516,7 @@ object BlobDecoder {
             } else null
             if (columnBreakInside != null) hasColumnLayout = true
             return Block(kind, depth, spans, path, number, table, feature, level, anchor, fallback, textAlign,
-                style, figure, flow, container, ruleStyle, columnBreakInside)
+                style, figure, flow, container, ruleStyle, columnBreakInside, description)
         }
     }
 }

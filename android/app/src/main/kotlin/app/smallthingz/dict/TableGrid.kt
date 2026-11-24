@@ -7,7 +7,9 @@ import java.util.TreeSet
 /** Stored spans stay unchanged; placements use global boundary-compressed columns. */
 data class PlacedCell(val cell: Cell, val row: Int, val column: Int, val colspan: Int)
 data class TableGrid(val cells: List<PlacedCell>, val rows: Int, val columns: Int)
-fun tableGrid(table: Table): TableGrid {
+fun tableGrid(table: Table): TableGrid = tableGrid(table, null)
+
+internal fun tableGrid(table: Table, physicalColumns: MutableList<Int>?): TableGrid {
     data class Interval(val start: Int, val end: Int, val untilRow: Int)
     data class Original(val cell: Cell, val row: Int, val start: Int, val end: Int)
     val active = TreeMap<Int, Interval>()
@@ -49,6 +51,7 @@ fun tableGrid(table: Table): TableGrid {
     }
     val compact = boundaries.withIndex().associate { it.value to it.index }
     val placed = original.map { item ->
+        physicalColumns?.add(item.start)
         val start = compact.getValue(item.start)
         PlacedCell(item.cell, item.row, start, compact.getValue(item.end) - start)
     }

@@ -102,7 +102,7 @@ private data class TextCacheKey(val weight: FontWeight?, val direction: LayoutDi
     val inheritedFamily: ContainerFontFamily? = null, val authoredPreformatted: Boolean = false,
     val computedContainerTraits: Boolean = false, val bodyDirection: BidiResolvedDirection? = null,
     val columnDirection: BidiResolvedDirection? = null,
-    val cellForeground: NativeCellForegroundContext? = null, val darkPage: Int? = null)
+    val cellForeground: NativeCellForegroundContext? = null, val darkPage: Int? = null, val darkScheme: Boolean = false)
 private class TextCache(val link: State<(EntryLink) -> Unit>) {
     val values = java.util.IdentityHashMap<List<Span>, MutableMap<TextCacheKey, AnnotatedString>>()
 }
@@ -245,16 +245,18 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
     val mediaOwners = remember(entry.key, entry.media) { MediaOwners(entry.media) }
     val missingLinkVisits = LocalMissingLinkVisits.current ?: remember { MissingLinkVisits() }
     val missingLinkOwner = remember(entry, readingState) { Any() }
+    val tablePolicies = remember(missingLinkOwner) { entry.tableVisibilityPolicies() }
+    val tableVisibility = rememberTableVisibilityVisit(entry, missingLinkOwner, tablePolicies)
     val tableRecord = entry.contentDictionary?.let { dictionary -> entry.origin?.let { dictionary to it } }
     CompositionLocalProvider(LocalNativeSemanticBorderInk provides semanticBorderInk, LocalReadingVisit provides readingState,
-        LocalTableRecord provides tableRecord,
+        LocalTableRecord provides tableRecord, LocalTableVisibilityVisit provides tableVisibility,
         LocalEntryMedia provides entry.media, LocalEntryMediaOwners provides mediaOwners,
         LocalEntryEdition provides entry.edition, LocalReaderSettings provides settings, LocalMissingLinkVisits provides missingLinkVisits,
         LocalMissingLinkDocument provides entry.title, LocalMissingLinkOwner provides missingLinkOwner) {
       key(entry.key) {
         val disclosureEpoch = NativeContainerDisclosureSourceIdentity(entry)
         val disclosureIndex = remember(disclosureEpoch) { NativeContainerDisclosureIndex(entry) }
-        val rowVisibilityNavigation = remember(disclosureEpoch) { entry.hasTableRowVisibilityPolicy() }
+        val rowVisibilityNavigation = tablePolicies.viewport
         val guardedSourceNavigation = disclosureIndex.owners.isNotEmpty() || rowVisibilityNavigation
         val disclosureState = remember(readingState, disclosureEpoch) {
             readingState?.disclosure?.stateFor(entry) ?: NativeContainerDisclosureState()
@@ -612,6 +614,13 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
                         Box {
                             IconButton(onClick = { contents = true }) { Icon(Icons.AutoMirrored.Filled.List, "Sections", Modifier.size(22.dp)) }
                             DropdownMenu(contents, { contents = false }, Modifier.heightIn(max = 340.dp)) {
+                                tableVisibility?.categories?.keys?.forEach { category ->
+                                    val label = if (tableVisibility.categoryExpanded(category)) "Hide $category" else "Show $category"
+                                    DropdownMenuItem(text = { Text(label) }, onClick = {
+                                        tableVisibility.toggleCategory(category)
+                                        contents = false
+                                    })
+                                }
                                 entry.readingRows.forEach { row -> row.heading?.let { section ->
                                     if (section.headingStyle != null || sectionInContents(section, entry.language)) DropdownMenuItem(text = { Text(section.title) }, onClick = {
                                         clearCitationRequest()
@@ -966,7 +975,7 @@ private fun BlockContent(block: Block, onLink: (EntryLink) -> Unit, path: String
         return
     }
     when {
-        block.container != null -> NativeFloatBlockContext(listOf(block), onLink, path ?: gridPath,
+        block.contentBox != null -> NativeFloatBlockContext(listOf(block), onLink, path ?: gridPath,
             Modifier, inCell, gridPath, 0f, false)
         block.figure != null || block.flow != null -> {
             // List ownership is outside the figure/anonymous formatting owner.
@@ -1046,7 +1055,7 @@ private fun tableHasMinimumWidth(table: Table): Boolean {
 }
 
 private fun tableLayoutFeature(table: Table, feature: Feature?): Feature? =
-    feature?.takeUnless { tableHasMinimumWidth(table) || nativeTableHasRowVisibility(table) || nativeHasCellOpacity(table) || nativeHasCellForeground(table) || nativeHasResolvedTableBorders(table) }
+    feature?.takeUnless { table.disclosure != null || tableHasMinimumWidth(table) || nativeTableHasRowVisibility(table) || nativeHasCellOpacity(table) || nativeHasCellForeground(table) || nativeHasResolvedTableBorders(table) }
 
 @Composable
 private fun TableCaptionContext(table: Table, content: @Composable () -> Unit) {
@@ -1209,6 +1218,21 @@ private fun TableMinimumContainingWidth(content: @Composable () -> Unit) {
 
 @Composable
 private fun TableView(table: Table, onLink: (EntryLink) -> Unit, path: String = "root", nested: Boolean = false, semanticPath: String = "") {
+  table.disclosure?.let { policy ->
+      val context = LocalContext.current
+      val visit = LocalTableVisibilityVisit.current ?: remember(rememberNativeTableBorderSourceKey(table), context) {
+          TableVisibilityVisit(mapOf(policy.category to !policy.initiallyCollapsed), mapOf(policy.category to 1), "",
+              context.getSharedPreferences("dict.table.visibility.v1", android.content.Context.MODE_PRIVATE))
+      }
+      val expanded = visit.expanded(table, semanticPath)
+      val projection = remember(rememberNativeTableBorderSourceKey(table), semanticPath, expanded) {
+          DisclosureTableProjection(table, semanticPath, expanded)
+      }
+      CompositionLocalProvider(LocalDisclosureTable provides projection, LocalTableVisibilityVisit provides visit) {
+          TableView(projection.displayed, onLink, path, nested, semanticPath)
+      }
+      return
+  }
   val resolvedBorderFailure = nativeTableResolvedBorderFailure(table)
   if (resolvedBorderFailure != null) {
       UnavailableAnonymousGrid(table, onLink, path, semanticPath, null, null,
@@ -1338,15 +1362,17 @@ private fun TableView(table: Table, onLink: (EntryLink) -> Unit, path: String = 
             key(if (tall == null) null else visit, if (tall == null) null else record ?: NativeContainerDisclosureSourceIdentity(table), semanticPath) {
                 val position = if (tall != null) visit?.tablePositions?.get(semanticPath)?.takeIf { it.belongsTo(table, record) } else null
                 val horizontal = rememberScrollState(position?.horizontal ?: 0)
-                Box((if (inline) Modifier else Modifier.fillMaxWidth()).horizontalScroll(horizontal)) {
-                    if (tall != null && decorationHeight != null && decorationHeight > 0) {
-                        TallOrdinaryTable(table, onLink, path, semanticPath, tall, decorationHeight, horizontal, visit, position)
-                    } else TableGridView(table, onLink, path, viewportWidth, semanticPath,
-                        natural, decorationProjection, { decorationProjection = 0.0 }, onHeightOverflow = { actual ->
-                            val supported = !inline && decorationHeight != null && decorationHeight > 0 && tableCanUseRowBands(table, actual)
-                            if (supported) measuredOverflow = actual
-                            supported
-                        })
+                NativeTableHorizontalScroll(horizontal, if (inline) Modifier else Modifier.fillMaxWidth()) { viewport ->
+                    Box(viewport) {
+                        if (tall != null && decorationHeight != null && decorationHeight > 0) {
+                            TallOrdinaryTable(table, onLink, path, semanticPath, tall, decorationHeight, horizontal, visit, position)
+                        } else TableGridView(table, onLink, path, viewportWidth, semanticPath,
+                            natural, decorationProjection, { decorationProjection = 0.0 }, onHeightOverflow = { actual ->
+                                val supported = !inline && decorationHeight != null && decorationHeight > 0 && tableCanUseRowBands(table, actual)
+                                if (supported) measuredOverflow = actual
+                                supported
+                            })
+                    }
                 }
             }
         }
@@ -1734,6 +1760,8 @@ private fun TableGridView(table: Table, onLink: (EntryLink) -> Unit, path: Strin
     pairedHeightIntrinsics: Boolean = false, ownCollectionSemantics: Boolean = true,
     bandGrid: TableGrid? = null, band: TableRowBand? = null, bandPaint: NativeTableBandPaint? = null,
     onHeightOverflow: ((TableRenderMetrics) -> Boolean)? = null) {
+    val disclosure = LocalDisclosureTable.current?.takeIf { it.displayed === table }
+    val visibility = LocalTableVisibilityVisit.current
     val resolvedBorderFailure = nativeTableResolvedBorderFailure(table, anonymousGridStyle ?: table.style,
         anonymousGridStyle != null)
     if (resolvedBorderFailure != null) {
@@ -1900,7 +1928,7 @@ private fun TableGridView(table: Table, onLink: (EntryLink) -> Unit, path: Strin
             delegated?.positionedGrid(coordinates, scopeClipMinimum)
         }
         .then(if (ownCollectionSemantics) Modifier.semantics {
-            collectionInfo = androidx.compose.ui.semantics.CollectionInfo(grid.rows, grid.columns)
+            collectionInfo = androidx.compose.ui.semantics.CollectionInfo(grid.rows, disclosure?.columnCount ?: grid.columns)
         } else Modifier)
         .drawWithCache {
             // Measurement publishes paint geometry. Observe it in the draw cache,
@@ -1966,7 +1994,8 @@ private fun TableGridView(table: Table, onLink: (EntryLink) -> Unit, path: Strin
         }, content = {
         observeTablePhase(phaseObserver, TablePhase.Composition, grid.cells.size) {
         grid.cells.forEachIndexed { index, placed ->
-            val sourceIndex = index + (band?.firstCell ?: 0)
+            val visibleIndex = index + (band?.firstCell ?: 0)
+            val sourceIndex = disclosure?.cellIndices?.get(visibleIndex) ?: visibleIndex
             val insets = styled?.cellInsets?.get(index)
             val padding = if (insets == null) with(density) { Modifier.padding((natural.cellPadding + natural.borderWidth).toDp()) }
                 else with(density) { Modifier.absolutePadding(left = insets.left.toDp(), top = insets.top.toDp(),
@@ -2002,7 +2031,9 @@ private fun TableGridView(table: Table, onLink: (EntryLink) -> Unit, path: Strin
                 delegatedCell?.let { it.cellCoordinates = coordinates; it.table.validateAfterPlacement() }
             }.semantics {
                 collectionItemInfo = androidx.compose.ui.semantics.CollectionItemInfo(
-                    placed.row + (band?.firstRow ?: 0), placed.cell.rowspan, placed.column, placed.colspan)
+                    placed.row + (band?.firstRow ?: 0), placed.cell.rowspan,
+                    disclosure?.physicalColumns?.get(visibleIndex) ?: placed.column,
+                    if (disclosure == null) placed.colspan else placed.cell.colspan)
                 if (placed.cell.header) heading()
             }.then(padding)) {
                 val cellForeground = cellForegroundContexts[index]
@@ -2020,21 +2051,26 @@ private fun TableGridView(table: Table, onLink: (EntryLink) -> Unit, path: Strin
                     val selection = selectionCells?.get(index)
                     val blocks = delegated?.scopeSource?.blocks?.get(index) ?: placed.cell.blocks
                     val paragraph = if (intrinsicTable) intrinsicTableSingleParagraph(placed.cell) else null
-                    if (opacityOwner != null && blocks == null && placed.cell.nestedTable == null)
-                        StyledText(placed.cell.spans, onLink = onLink,
-                            measuredCellGeometry = opacityOwner.text[index])
-                    else if (selection != null) selection.content { selection.geometry = it }
-                    else if (paragraph != null) BlockView(paragraph, onLink, "$cellPath/block-0", inCell = true,
-                        gridPath = "$path/$index/block-0")
-                    else if (blocks != null) FloatBlockSequence(blocks, onLink, cellPath, inCell = true,
-                        gridPath = "$path/$index", gapDp = 4f, trailingGap = false)
-                    else {
-                        val child = placed.cell.nestedTable
-                        if (child == null && (pairedHeightIntrinsics || separateCornerTable || anonymousGridStyle != null || cellContext?.cellText != null ||
-                            placed.cell.style?.verticalAlign == CellVerticalAlign.Middle) && placed.cell.spans.isEmpty()) Spacer(Modifier)
-                         else if (child == null) StyledText(placed.cell.spans, onLink = onLink)
-                        else TableView(child, onLink, "$path/$index", nested = true, semanticPath = "$cellPath/nested")
+                    val cellContent: @Composable () -> Unit = {
+                        if (opacityOwner != null && blocks == null && placed.cell.nestedTable == null)
+                            StyledText(placed.cell.spans, onLink = onLink,
+                                measuredCellGeometry = opacityOwner.text[index])
+                        else if (selection != null) selection.content { selection.geometry = it }
+                        else if (paragraph != null) BlockView(paragraph, onLink, "$cellPath/block-0", inCell = true,
+                            gridPath = "$path/${if (disclosure == null) index else sourceIndex}/block-0")
+                        else if (blocks != null) FloatBlockSequence(blocks, onLink, cellPath, inCell = true,
+                            gridPath = "$path/${if (disclosure == null) index else sourceIndex}", gapDp = 4f, trailingGap = false)
+                        else {
+                            val child = placed.cell.nestedTable
+                            if (child == null && (pairedHeightIntrinsics || separateCornerTable || anonymousGridStyle != null || cellContext?.cellText != null ||
+                                placed.cell.style?.verticalAlign == CellVerticalAlign.Middle) && placed.cell.spans.isEmpty()) Spacer(Modifier)
+                             else if (child == null) StyledText(placed.cell.spans, onLink = onLink)
+                            else TableView(child, onLink, "$path/$index", nested = true, semanticPath = "$cellPath/nested")
+                        }
                     }
+                    if (disclosure != null && sourceIndex == disclosure.headerIndex && visibility != null) {
+                        DisclosureHeader(disclosure, { visibility.toggle(disclosure.source, disclosure.path) }, cellContent)
+                    } else cellContent()
                 }
             }
         }
@@ -2622,14 +2658,17 @@ private fun ordinaryStyledTextAnnotation(spans: List<Span>, weight: FontWeight?,
     val bodyFamily = (if (computedContainerTraits) LocalTextStyle.current.merge(style).fontFamily
         else MaterialTheme.typography.bodyLarge.fontFamily) ?: FontFamily.Default
     val darkPage = darkReadingPage.takeIf { inheritedBackground == null && cellForeground == null && inheritedForeground == null }
-    val cacheKey = TextCacheKey(effectiveWeight, layoutDirection, inheritedBackground, normalBodySize, contextSize, textDensity, inheritedForeground, cellLetterSpacing, cssPixelTextZoom, computedCellTraits, bodyFamily.takeIf { computedCellTraits }, compiledTableDirection, compiledTableLanguage, inheritedFamily, authoredPreformatted, computedContainerTraits, bodyDirection, columnDirection, cellForeground, darkPage)
-    val annotated = remember(spans, directionControls, effectiveWeight, linkColor, codeColor, cache, layoutDirection, inheritedBackground, normalBodySize, contextSize, textDensity, inheritedForeground, cellLetterSpacing, cssPixelTextZoom, computedCellTraits, computedContainerTraits, bodyFamily, compiledTableDirection, compiledTableLanguage, inheritedFamily, authoredPreformatted, bodyDirection, columnDirection, cellForeground, darkPage) {
+    val darkScheme = LocalReaderDarkTheme.current
+    val cacheKey = TextCacheKey(effectiveWeight, layoutDirection, inheritedBackground, normalBodySize, contextSize, textDensity, inheritedForeground, cellLetterSpacing, cssPixelTextZoom, computedCellTraits, bodyFamily.takeIf { computedCellTraits }, compiledTableDirection, compiledTableLanguage, inheritedFamily, authoredPreformatted, computedContainerTraits, bodyDirection, columnDirection, cellForeground, darkPage, darkScheme)
+    val annotated = remember(spans, directionControls, effectiveWeight, linkColor, codeColor, cache, layoutDirection, inheritedBackground, normalBodySize, contextSize, textDensity, inheritedForeground, cellLetterSpacing, cssPixelTextZoom, computedCellTraits, computedContainerTraits, bodyFamily, compiledTableDirection, compiledTableLanguage, inheritedFamily, authoredPreformatted, bodyDirection, columnDirection, cellForeground, darkPage, darkScheme) {
         cache?.values?.get(spans)?.get(cacheKey) ?: buildAnnotatedString {
             val appendedSpans = ArrayList<Pair<Span, IntRange>>(spans.size)
             spans.forEachIndexed { index, span ->
                 val effectiveBackground = span.background ?: inheritedBackground.takeIf { !span.code }
-                val explicitForeground = canonicalColorArgb(span.linkPaint?.normal?.foreground ?: span.foreground)?.toInt()
-                val foreground = nativeCellPlainForeground(cellForeground, readingSpanInk(span, explicitForeground, darkPage), inheritedForeground,
+                val themeInk = span.inlineStyle?.darkForeground
+                val sourceInk = if (darkScheme && themeInk != null) themeInk else span.foreground
+                val explicitForeground = canonicalColorArgb(span.linkPaint?.normal?.foreground ?: sourceInk)?.toInt()
+                val foreground = nativeCellPlainForeground(cellForeground, if (themeInk != null) explicitForeground else readingSpanInk(span, explicitForeground, darkPage), inheritedForeground,
                     span.background, effectiveBackground, span.code)?.let { Color(it) }
                 val normalLinkForeground = nativeCellLinkForeground(cellForeground, explicitForeground, inheritedForeground,
                     span.background, effectiveBackground, span.code)?.let { Color(it) }

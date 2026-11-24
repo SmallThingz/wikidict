@@ -56,18 +56,19 @@ internal fun TableContentColumn(modifier: Modifier, spacing: Dp, content: @Compo
     })
 }
 
-/** The same grid receives the real viewport and exposes its unconstrained paint width to scrolling. */
+// Both ordinary boxes and bounded grids must publish the same pan that moves
+// their children. A positioned descendant outside the table escapes this pan.
 @Composable
-internal fun TableContentViewport(scrolling: Boolean, content: @Composable () -> Unit) {
-    val scroll = if (scrolling) rememberScrollState() else null
+internal fun NativeTableHorizontalScroll(scroll: androidx.compose.foundation.ScrollState?, viewport: Modifier,
+    content: @Composable (Modifier) -> Unit) {
     val inheritedClip = LocalNativeScrollClip.current
-    val semantic = LocalNativeClippedAbsoluteCoordinateScope.current != null && scrolling
-    val clip = androidx.compose.runtime.remember(inheritedClip, semantic) {
+    val semantic = LocalNativeClippedAbsoluteCoordinateScope.current != null && scroll != null
+    val clip = androidx.compose.runtime.remember(inheritedClip, semantic, scroll) {
         if (semantic) NativeScrollClip(inheritedClip) else null
     }
     val view = androidx.compose.ui.platform.LocalView.current
     val rtl = androidx.compose.ui.platform.LocalLayoutDirection.current == androidx.compose.ui.unit.LayoutDirection.Rtl
-    val modifier = if (scroll == null) Modifier else Modifier.fillMaxWidth().then(
+    val modifier = if (scroll == null) viewport else viewport.then(
         if (clip == null) Modifier else Modifier.onGloballyPositioned { coordinates ->
             clip.update(coordinates.boundsInWindow(), view)
             clip.updateSemanticScroll(coordinates) {
@@ -76,28 +77,36 @@ internal fun TableContentViewport(scrolling: Boolean, content: @Composable () ->
                 }
             }
         }).horizontalScroll(scroll)
-    val sourceContent: @Composable () -> Unit = {
-        androidx.compose.runtime.CompositionLocalProvider(LocalNativeScrollClip provides (clip ?: inheritedClip), content = content)
+    androidx.compose.runtime.CompositionLocalProvider(LocalNativeScrollClip provides (clip ?: inheritedClip)) {
+        content(modifier)
     }
-    Layout(content = sourceContent, modifier = modifier, measurePolicy = object : MeasurePolicy {
-        override fun MeasureScope.measure(measurables: List<Measurable>, constraints: Constraints): MeasureResult {
-            // horizontalScroll preserves the filled viewport minimum while removing its maximum.
-            val viewport = if (scrolling) constraints.minWidth else
-                constraints.maxWidth.takeIf { constraints.hasBoundedWidth } ?: TablePixelLimit
-            val grid = measurables.single().measure(Constraints(maxWidth = viewport,
-                maxHeight = constraints.maxHeight))
-            val width = constraints.constrainWidth(grid.measuredWidth)
-            val height = constraints.constrainHeight(grid.measuredHeight)
-            return layout(width, height) {
-                // Compose centers an overwide layout in its coerced Placeable. The table's own
-                // physical origin stays at the scroll origin; its real width is the scroll extent.
-                grid.place(-(grid.width - grid.measuredWidth) / 2, -(grid.height - grid.measuredHeight) / 2)
-            }
-        }
+}
 
-        override fun IntrinsicMeasureScope.minIntrinsicWidth(measurables: List<IntrinsicMeasurable>, height: Int) =
-            measurables.single().minIntrinsicWidth(height)
-        override fun IntrinsicMeasureScope.maxIntrinsicWidth(measurables: List<IntrinsicMeasurable>, height: Int) =
-            measurables.single().maxIntrinsicWidth(height)
-    })
+/** The same grid receives the real viewport and exposes its unconstrained paint width to scrolling. */
+@Composable
+internal fun TableContentViewport(scrolling: Boolean, content: @Composable () -> Unit) {
+    val scroll = if (scrolling) rememberScrollState() else null
+    NativeTableHorizontalScroll(scroll, if (scrolling) Modifier.fillMaxWidth() else Modifier) { modifier ->
+        Layout(content = content, modifier = modifier, measurePolicy = object : MeasurePolicy {
+            override fun MeasureScope.measure(measurables: List<Measurable>, constraints: Constraints): MeasureResult {
+                // horizontalScroll preserves the filled viewport minimum while removing its maximum.
+                val viewport = if (scrolling) constraints.minWidth else
+                    constraints.maxWidth.takeIf { constraints.hasBoundedWidth } ?: TablePixelLimit
+                val grid = measurables.single().measure(Constraints(maxWidth = viewport,
+                    maxHeight = constraints.maxHeight))
+                val width = constraints.constrainWidth(grid.measuredWidth)
+                val height = constraints.constrainHeight(grid.measuredHeight)
+                return layout(width, height) {
+                    // Compose centers an overwide layout in its coerced Placeable. The table's own
+                    // physical origin stays at the scroll origin; its real width is the scroll extent.
+                    grid.place(-(grid.width - grid.measuredWidth) / 2, -(grid.height - grid.measuredHeight) / 2)
+                }
+            }
+
+            override fun IntrinsicMeasureScope.minIntrinsicWidth(measurables: List<IntrinsicMeasurable>, height: Int) =
+                measurables.single().minIntrinsicWidth(height)
+            override fun IntrinsicMeasureScope.maxIntrinsicWidth(measurables: List<IntrinsicMeasurable>, height: Int) =
+                measurables.single().maxIntrinsicWidth(height)
+        })
+    }
 }

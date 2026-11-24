@@ -55,7 +55,231 @@ import androidx.compose.ui.unit.sp
 /** Source-only donor for retained AndroidView clip replacement; no device result is implied. */
 @RunWith(AndroidJUnit4::class)
 class NativeScrollClipUpdateDeviceTest {
-    @get:Rule val compose = createPhysicalComposeRule()
+    @get:Rule val compose = createPhysicalContentRule()
+
+    @Test fun hungarianTooltipKeepsArticleScreenBoundsAcrossOrdinaryInfoboxPan() {
+        val literal = "Tooltip time to peak concentrations"
+        val target = "time to peak concentrations"
+        val one = StyleLength(StyleLengthUnit.Px, 1f)
+        val minusOne = ContainerMargin.Length(SignedContainerMargin(StyleLengthUnit.Px, -1f))
+        val hidden = Span("text", "", clippedAbsolute = ClippedAbsoluteInline(one, one,
+            ContainerMargins(minusOne, minusOne, minusOne, minusOne), listOf(Span("text", literal)), BidiResolvedDirection.Ltr))
+        val sourceMax = Span("text", "max", subscript = true)
+        val neutralMax = sourceMax.copy(subscript = false, fontScale = spanFontScale(sourceMax))
+        assertEquals(spanFontScale(sourceMax), spanFontScale(neutralMax), 0f)
+        fun entryFor(maxRun: Span): Entry {
+            val link = Span("link", "", target, tooltip = target, inlineActionGroup = InlineActionGroup(
+                listOf(Span("text", "T"), maxRun)))
+            val table = Table(emptyList(), listOf(listOf(
+                Cell(listOf(link, hidden, Span("text", ")")), false, 1, 1),
+                Cell(listOf(Span("text", "wide control cell")), false, 1, 1,
+                    style = CellStyle(minWidth = StyleLength(StyleLengthUnit.Px, 640f))))))
+            val blocks = listOf(Block("table", 0, emptyList(), table = table)) +
+                List(25) { Block("paragraph", 0, listOf(Span("text", "Scroll control $it"))) }
+            return Entry("klavulánsav", emptyList(), "language", "Hungarian", "hu",
+                listOf(Section(2, "Pharmacokinetic data", blocks)), emptyList())
+        }
+        val display = mutableStateOf(entryFor(neutralMax))
+        val calls = mutableListOf<EntryLink>()
+        val logical = "Tmax" + literal + ")"
+        compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+            CompositionLocalProvider(LocalDensity provides Density(1f, 1f), LocalLayoutDirection provides LayoutDirection.Ltr) {
+                DictTheme("light") { Box(Modifier.safeDrawingPadding().size(320.dp, 500.dp).testTag("hu-painted-viewport")) {
+                    EntryView(display.value, false, {}, onLink = { calls += it },
+                        settings = AppSettings(collapseOtherSections = false, collapseDetails = false))
+                } }
+            }
+        } }
+        try {
+            compose.waitForIdle()
+            lateinit var view: NativeFloatTextView
+            lateinit var startRect: RectF
+            var startX = 0
+            fun hostBounds(): Rect {
+                val node = checkNotNull(view.accessibilityNodeProvider.createAccessibilityNodeInfo(View.NO_ID))
+                return try {
+                    assertTrue(node.isVisibleToUser)
+                    assertEquals(logical, node.text.toString())
+                    Rect().also(node::getBoundsInScreen)
+                } finally { node.recycle() }
+            }
+            fun locate(node: View): List<NativeFloatTextView> = buildList {
+                if (node is NativeFloatTextView && node.logicalText.toString() == logical) add(node)
+                if (node is android.view.ViewGroup) for (i in 0 until node.childCount) addAll(locate(node.getChildAt(i)))
+            }
+            data class Ink(val top: Int, val bottom: Int)
+            data class Witness(val capital: Ink, val x: Ink)
+            fun witness(phase: String): Witness {
+                val viewport = compose.onNodeWithTag("hu-painted-viewport", useUnmergedTree = true)
+                val origin = viewport.fetchSemanticsNode().boundsInWindow
+                val bitmap = viewport.captureToImage().asAndroidBitmap()
+                try {
+                    val inst = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation()
+                    val file = java.io.File(inst.targetContext.cacheDir, "wikidict-hu-glyph-$phase.png")
+                    file.outputStream().use { assertTrue(bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)) }
+                    inst.sendStatus(0, android.os.Bundle().apply {
+                        putString("stream", "HU_GLYPH_FRAME $phase ${file.name} bytes=${file.length()}\n")
+                    })
+                    val cells = compose.runOnIdle {
+                        val current = locate(compose.activity.window.decorView).single()
+                        val geometry = checkNotNull(current.currentMeasuredGeometry)
+                        val at = IntArray(2).also(current::getLocationInWindow)
+                        val action = geometry.nodes.single { it.start == 0 && it.end == 4 && it.onClick != null }
+                        val boxes = geometry.characterRects(0, 4)
+                        val carets = (0 until 4).map { i ->
+                            geometry.caretRect(NativeTextCaret(i, NativeTextAffinity.Downstream)).left to
+                                geometry.caretRect(NativeTextCaret(i + 1, NativeTextAffinity.Upstream)).left
+                        }
+                        inst.sendStatus(0, android.os.Bundle().apply {
+                            putString("stream", "HU_GLYPH_GEOMETRY $phase origin=$origin at=${at.toList()} " +
+                                "action=${action.bounds} characters=$boxes carets=$carets\n")
+                        })
+                        // Each visible UTF-16 letter has its own rectangle. The collapsed
+                        // tooltip starts after the word and has no character rectangles.
+                        val fragments = action.bounds.filterNot { it.isEmpty }.sortedBy { it.left }
+                        assertTrue("Missing visible action fragments", fragments.isNotEmpty())
+                        val word = RectF(fragments.first())
+                        for (fragment in fragments.drop(1)) {
+                            assertTrue("Disjoint or wrapped link: $fragments", fragment.left <= word.right + 1 &&
+                                fragment.top < word.bottom && word.top < fragment.bottom)
+                            word.union(fragment)
+                        }
+                        assertFalse("Missing visible action extent: $word", word.isEmpty)
+                        carets.mapIndexed { i, (first, last) ->
+                            val box = checkNotNull(boxes[i]) { "Missing character $i in $phase: $boxes" }
+                            assertEquals("Character $i start", first, box.left, 1f)
+                            assertEquals("Character $i end", last, box.right, 1f)
+                            // The two interior ASCII stops belong to visible "max" in
+                            // both frames. Probe within the actual glyph advance on
+                            // its native line so an adjacent public boundary cannot win.
+                            if (i == 2 || i == 3) {
+                                val hitX = first + (last - first) * 0.125f
+                                assertEquals("Visible glyph $i inverse hit in $phase", i,
+                                    geometry.caretAt(hitX, box.centerY()).offset)
+                                assertEquals(i, geometry.visualCaret(NativeTextCaret(i - 1), 1).offset)
+                                assertEquals(i - 1, geometry.visualCaret(NativeTextCaret(i), -1).offset)
+                            }
+                            assertTrue("Unusable shaped glyph boundaries: $carets for $word",
+                                first < last && first >= word.left - 1 && last <= word.right + 1)
+                            RectF(first, word.top, last, word.bottom).apply {
+                                offset(at[0] + current.paddingLeft - origin.left, at[1] + current.paddingTop - origin.top)
+                            }
+                        }
+                    }
+                    val top = kotlin.math.floor(cells.minOf { it.top }).toInt()
+                    val bottom = kotlin.math.ceil(cells.maxOf { it.bottom }).toInt()
+                    val start = kotlin.math.floor(cells.minOf { it.left }).toInt()
+                    val end = kotlin.math.ceil(cells.maxOf { it.right }).toInt()
+                    assertTrue("The whole painted word must be on screen in $phase: $cells",
+                        start in 0 until end && end <= bitmap.width && top in 0 until bottom && bottom <= bitmap.height)
+                    // The cell has one solid background. Sample its modal color across
+                    // the actual word box rather than treating opaque screen pixels as ink.
+                    val colors = mutableMapOf<Int, Int>()
+                    for (y in top until bottom) for (x in start until end) {
+                        val pixel = bitmap.getPixel(x, y)
+                        colors[pixel] = (colors[pixel] ?: 0) + 1
+                    }
+                    val background = colors.maxBy { it.value }.key
+                    fun isInk(x: Int, y: Int): Boolean {
+                        val color = bitmap.getPixel(x, y)
+                        return maxOf(kotlin.math.abs(Color.red(color) - Color.red(background)),
+                            kotlin.math.abs(Color.green(color) - Color.green(background)),
+                            kotlin.math.abs(Color.blue(color) - Color.blue(background))) >= 64
+                    }
+                    fun ink(offset: Int): Ink {
+                        val cell = cells[offset]
+                        val left = kotlin.math.ceil(cell.left).toInt()
+                        val right = kotlin.math.floor(cell.right).toInt()
+                        val rows = (top until bottom).filter { y -> (left until right).any { x -> isInk(x, y) } }
+                        assertTrue("No visible glyph $offset in $phase at $cell", rows.isNotEmpty())
+                        return Ink(rows.first(), rows.last())
+                    }
+                    return Witness(ink(0), ink(3))
+                } finally { bitmap.recycle() }
+            }
+            val neutral = runCatching { witness("neutral") }
+            compose.runOnIdle { display.value = entryFor(sourceMax) }
+            compose.waitForIdle()
+            val actual = runCatching { witness("source") }
+            val touch = runCatching {
+                for (i in 2..3) {
+                    if (i == 3) SystemClock.sleep(android.view.ViewConfiguration.getDoubleTapTimeout().toLong() + 1)
+                    compose.runOnIdle {
+                        val current = locate(compose.activity.window.decorView).single()
+                        val geometry = checkNotNull(current.currentMeasuredGeometry)
+                        val cell = checkNotNull(geometry.characterRects(i, 1).single())
+                        val x = current.paddingLeft + cell.left + cell.width() / 8
+                        val y = current.paddingTop + cell.centerY()
+                        // A tap in an existing selection sets the text caret. Both
+                        // handles are inside the invisible tooltip, away from this glyph.
+                        current.setSelection(5, 6)
+                        val down = SystemClock.uptimeMillis()
+                        for (action in listOf(MotionEvent.ACTION_DOWN, MotionEvent.ACTION_UP)) {
+                            val event = MotionEvent.obtain(down, SystemClock.uptimeMillis(), action, x, y, 0)
+                            try { assertTrue(current.dispatchTouchEvent(event)) } finally { event.recycle() }
+                        }
+                        assertEquals(i, current.selectionAnchorCaret.offset)
+                        assertEquals(i, current.selectionExtentCaret.offset)
+                        assertTrue(calls.isEmpty())
+                    }
+                }
+            }
+            compose.runOnIdle {
+                view = locate(compose.activity.window.decorView).single()
+                val geometry = checkNotNull(view.currentMeasuredGeometry)
+                val rect = geometry.clippedAbsoluteSemanticLocations.single().bounds
+                assertEquals(1f, rect.width(), .001f); assertEquals(1f, rect.height(), .001f)
+                assertTrue(geometry.characterRects(4, literal.length).all { it == null })
+                val xy = IntArray(2).also(view::getLocationOnScreen)
+                startX = xy[0]
+                startRect = RectF(rect).apply { offset(xy[0] + view.paddingLeft.toFloat(), xy[1] + view.paddingTop.toFloat()) }
+                val action = geometry.nodes.single()
+                assertEquals(0, action.start); assertEquals(4, action.end)
+                assertTrue(action.bounds.any { !it.isEmpty })
+                assertTrue(view.accessibilityNodeProvider.performAction(action.id, AccessibilityNodeInfo.ACTION_CLICK, null))
+                assertEquals(target, calls.single().target)
+                view.setSelection(4, 4 + literal.length); assertEquals(literal, view.selectedTextForCopy())
+            }
+            val h = compose.onNode(androidx.compose.ui.test.SemanticsMatcher.keyIsDefined(
+                androidx.compose.ui.semantics.SemanticsProperties.HorizontalScrollAxisRange))
+            h.performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.ScrollBy) { assertTrue(it(240f, 0f)) }
+            compose.waitForIdle()
+            compose.runOnIdle {
+                assertTrue(IntArray(2).also(view::getLocationOnScreen)[0] < startX - 100)
+                // The visible link has panned away. Its plain clipped sibling still
+                // contributes the original 1px screen rectangle to the host.
+                val expected = Rect().also(startRect::roundOut)
+                assertTrue("host does not contain escaped tooltip", hostBounds().contains(expected))
+                assertTrue(view.revealLogicalOffset(5))
+            }
+            compose.waitForIdle()
+            val horizontal = h.fetchSemanticsNode().config[androidx.compose.ui.semantics.SemanticsProperties.HorizontalScrollAxisRange]
+            assertTrue(horizontal.value() >= 100f)
+            val v = compose.onNode(androidx.compose.ui.test.SemanticsMatcher.keyIsDefined(
+                androidx.compose.ui.semantics.SemanticsProperties.VerticalScrollAxisRange))
+            var oldY = 0
+            compose.runOnIdle { oldY = IntArray(2).also(view::getLocationOnScreen)[1] }
+            v.performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.ScrollBy) { assertTrue(it(0f, 16f)) }
+            compose.waitForIdle()
+            compose.runOnIdle {
+                val deltaY = IntArray(2).also(view::getLocationOnScreen)[1] - oldY
+                assertTrue(deltaY < 0)
+                val expected = RectF(startRect).apply { offset(0f, deltaY.toFloat()) }
+                assertTrue(hostBounds().contains(Rect().also(expected::roundOut)))
+            }
+            // Keep the visible-action, copy, horizontal pan and vertical reveal checks
+            // independent of whether an ink measurement is available in both frames.
+            touch.getOrThrow()
+            val neutralInk = neutral.getOrThrow()
+            val sourceInk = actual.getOrThrow()
+            val deltaTop = (sourceInk.x.top - sourceInk.capital.top) - (neutralInk.x.top - neutralInk.capital.top)
+            val deltaBottom = (sourceInk.x.bottom - sourceInk.capital.bottom) - (neutralInk.x.bottom - neutralInk.capital.bottom)
+            assertTrue("subscript x relative to T: neutral=$neutralInk actual=$sourceInk", deltaTop > 0 && deltaBottom > 0)
+        } finally {
+            compose.activityRule.scenario.onActivity { it.setContent {} }
+            compose.waitForIdle()
+        }
+    }
 
     @Test fun retainedTextOwnerUsesEachCurrentClipForAccessibilityAndPointerInput() {
         val span = Span("link", "MMMM", "clip-target", targetFragment = "retained")
@@ -373,7 +597,16 @@ class NativeScrollClipUpdateDeviceTest {
         val point = owner(0f, 0f, listOf(hiddenLink, hiddenExternal))
         val plainChild = Span("text", "retained plain source")
         val plain = owner(0f, 0f, listOf(plainChild))
-        val sources = listOf(listOf(before, clipped, after), listOf(clipped), listOf(point), listOf(plain))
+        // klavulánsav p83843/r3513767. This typed consumer control isolates
+        // the target and adjacent source action from the infobox's other cells.
+        val huTarget = Span("link", "Tmax", "time to peak concentrations", tooltip = "time to peak concentrations")
+        val huLiteral = Span("text", "Tooltip time to peak concentrations")
+        val huMargin = signed(-1f)
+        val huTooltip = Span("text", "", clippedAbsolute = ClippedAbsoluteInline(
+            StyleLength(StyleLengthUnit.Px, 1f), StyleLength(StyleLengthUnit.Px, 1f),
+            ContainerMargins(huMargin, huMargin, huMargin, huMargin), listOf(huLiteral), BidiResolvedDirection.Ltr))
+        val sources = listOf(listOf(before, clipped, after), listOf(clipped), listOf(point), listOf(plain),
+            listOf(huTarget, huTooltip, Span("text", ")")))
         val projections = sources.map { rubyGraphicalProjection(it, "clipped-view") }
         val paint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
             textSize = 20f; typeface = Typeface.MONOSPACE; color = Color.BLACK
@@ -381,7 +614,7 @@ class NativeScrollClipUpdateDeviceTest {
         val policy = NativeLineHeightPolicy.Pixels(32f)
         val calls = mutableListOf<Span>()
         val failures = mutableListOf<String>()
-        val callbacks = listOf(before, hiddenLink, hiddenExternal, after).associateWith { span ->
+        val callbacks = listOf(before, hiddenLink, hiddenExternal, after, huTarget).associateWith { span ->
             { calls.add(span); Unit }
         }
         val coordinateOwner = NativeClippedAbsoluteCoordinateOwner()
@@ -393,13 +626,13 @@ class NativeScrollClipUpdateDeviceTest {
         var revealCancelled = false
         var cancelCalls = 0
         var rootCoordinates: androidx.compose.ui.layout.LayoutCoordinates? = null
-        fun publishRoot() {
+        fun publishRoot(clip: NativeScrollClip?) {
             val coordinates = rootCoordinates?.takeIf { it.isAttached } ?: return
             val origin = coordinates.localToScreen(androidx.compose.ui.geometry.Offset.Zero)
             val bounds = RectF(origin.x, origin.y, origin.x + coordinates.size.width, origin.y + coordinates.size.height)
             coordinateOwner.publish(coordinateOwner.rootScope, rootBinding, coordinates,
-                androidx.compose.ui.geometry.Offset.Zero, selectedClip.value, NativeTextClip.rectangle(bounds),
-                current = { coordinates.isAttached }, reveal = { target, complete ->
+                androidx.compose.ui.geometry.Offset.Zero, clip, NativeTextClip.rectangle(bounds),
+                current = { coordinates.isAttached && selectedClip.value === clip }, reveal = { target, complete ->
                     val visible = target.left >= bounds.left && target.right <= bounds.right &&
                         target.top >= bounds.top && target.bottom <= bounds.bottom
                     if (holdReveal) { assertTrue(visible); queuedReveal = complete } else complete(visible)
@@ -422,8 +655,10 @@ class NativeScrollClipUpdateDeviceTest {
                     0, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
             }
             val format = NativeClippedAbsoluteFormat(NativeClippedAbsoluteOwner(original, range.path),
-                if (phase < 2) 12.5f else 0f, if (phase < 2) 6.25f else 0f,
-                NativeClippedAbsoluteMargins(-.5f, -2f, -3f, -1.25f), coordinateOwner.rootScope)
+                when (phase) { 0, 1 -> 12.5f; 4 -> 1f; else -> 0f },
+                when (phase) { 0, 1 -> 6.25f; 4 -> 1f; else -> 0f },
+                if (phase == 4) NativeClippedAbsoluteMargins(-1f, -1f, -1f, -1f)
+                else NativeClippedAbsoluteMargins(-.5f, -2f, -3f, -1.25f), coordinateOwner.rootScope)
             val marker = NativeRubyPreparedSource(projection, source, paint, TextDirectionHeuristics.LTR,
                 mapOf(range.path to NativeRubyGroupFormat(paint, TextDirectionHeuristics.LTR, policy,
                     clippedAbsolute = format)))
@@ -450,16 +685,16 @@ class NativeScrollClipUpdateDeviceTest {
         var primary: Throwable? = null
         try {
             compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+                val composedClip = selectedClip.value
                 CompositionLocalProvider(LocalDensity provides Density(1f, 1f),
                     LocalLayoutDirection provides LayoutDirection.Ltr,
                     LocalNativeClippedAbsoluteCoordinateScope provides coordinateOwner.rootScope,
-                    LocalNativeScrollClip provides selectedClip.value) {
+                    LocalNativeScrollClip provides composedClip) {
                     androidx.compose.runtime.DisposableEffect(coordinateOwner) {
                         onDispose { coordinateOwner.clear(rootBinding) }
                     }
-                    androidx.compose.runtime.SideEffect { publishRoot() }
                     Box(Modifier.safeDrawingPadding().padding(32.dp).size(240.dp).onGloballyPositioned {
-                        rootCoordinates = it; publishRoot()
+                        rootCoordinates = it; publishRoot(composedClip)
                     }) {
                       TableContentViewport(scrolling = true) {
                        val actualClip = LocalNativeScrollClip.current
@@ -475,6 +710,7 @@ class NativeScrollClipUpdateDeviceTest {
                             }
                         }, update = { current ->
                             current.updateScrollClip(actualClip)
+                            publishRoot(composedClip)
                             current.bind(selectedFactory, Color.CYAN, Color.MAGENTA,
                                 onUnsupported = { failures += it.message.orEmpty() })
                         })
@@ -661,7 +897,7 @@ class NativeScrollClipUpdateDeviceTest {
                 coordinateOwner.clear(rootBinding)
                 val detached = checkNotNull(originalView.accessibilityNodeProvider.createAccessibilityNodeInfo(hidden[0].id))
                 try { assertFalse(detached.isVisibleToUser) } finally { detached.recycle() }
-                publishRoot()
+                publishRoot(selectedClip.value)
             }
             tableViewport.performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.ScrollBy) {
                 assertTrue(it(-80f, 0f))
@@ -750,6 +986,29 @@ class NativeScrollClipUpdateDeviceTest {
                     current.setSelection(0, geometry.text.length)
                     assertEquals(projections[next].text, current.selectedTextForCopy())
                 }
+            }
+            compose.runOnIdle { phase.value = 4 }
+            compose.waitForIdle()
+            compose.runOnIdle {
+                val current = checkNotNull(view)
+                val geometry = checkNotNull(current.currentMeasuredGeometry)
+                val text = huTarget.text + huLiteral.text + ")"
+                assertEquals(text, geometry.text.toString())
+                val location = geometry.clippedAbsoluteSemanticLocations.single()
+                assertEquals(1f, location.bounds.width(), .001f)
+                assertEquals(1f, location.bounds.height(), .001f)
+                val start = huTarget.text.length
+                assertTrue(geometry.rectsForRange(start, start + huLiteral.text.length).isEmpty())
+                assertTrue(geometry.characterRects(start, huLiteral.text.length).all { it == null })
+                val action = geometry.nodes.single()
+                assertNull(action.clippedAbsoluteLocation)
+                assertSame(callbacks[huTarget], action.onClick)
+                assertTrue(current.accessibilityNodeProvider.performAction(action.id, AccessibilityNodeInfo.ACTION_CLICK, null))
+                assertSame(huTarget, calls.last())
+                val host = checkNotNull(current.accessibilityNodeProvider.createAccessibilityNodeInfo(View.NO_ID))
+                try { assertEquals(text, host.text.toString()) } finally { host.recycle() }
+                current.setSelection(start, start + huLiteral.text.length)
+                assertEquals(huLiteral.text, current.selectedTextForCopy())
             }
             compose.runOnIdle { phase.value = 0 }
             compose.waitForIdle()

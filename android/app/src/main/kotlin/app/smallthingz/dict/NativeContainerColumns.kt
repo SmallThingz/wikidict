@@ -64,8 +64,8 @@ internal data class NativeResolvedColumns(val count: Int, val width: Float, val 
 
 /** One actual native line, in source order. A paragraph is never re-created per column. */
 internal data class NativeColumnLine(val owner: Int, val line: Int, val height: Float,
-    val gapBefore: Float = 0f, val keepTogether: Boolean = false) {
-    init { require(owner >= 0 && line >= 0 && height.isFinite() && height >= 0f &&
+    val gapBefore: Float = 0f, val keepTogether: Boolean = false, val avoidGroup: Int = 0) {
+    init { require(avoidGroup >= 0 && owner >= 0 && line >= 0 && height.isFinite() && height >= 0f &&
         gapBefore.isFinite() && gapBefore >= 0f) }
 }
 internal data class NativeColumnPlacement(val column: Int, val top: Float)
@@ -89,7 +89,8 @@ internal fun balanceNativeColumns(lines: List<NativeColumnLine>, count: Int): Na
         var end = start + 1
         require(lines[start].line == 0)
         while (end < size && lines[end].owner == lines[start].owner) {
-            require(lines[end].line == end - start && lines[end].keepTogether == lines[start].keepTogether)
+            require(lines[end].line == end - start && lines[end].keepTogether == lines[start].keepTogether &&
+                lines[end].avoidGroup == lines[start].avoidGroup)
             end++
         }
         for (i in start until end) {
@@ -104,9 +105,13 @@ internal fun balanceNativeColumns(lines: List<NativeColumnLine>, count: Int): Na
     }
     if (!y.isFinite() || y > TablePixelLimit)
         throw UnsupportedFloatLayout("Column source extent exceeds native geometry")
-    fun legalBoundary(index: Int): Boolean = index == 0 || index == size ||
-        lines[index - 1].owner != lines[index].owner ||
-        !lines[index].keepTogether && index - first[index] >= 2 && last[index] - index >= 2
+    fun legalBoundary(index: Int): Boolean {
+        if (index == 0 || index == size) return true
+        val before = lines[index - 1]
+        val after = lines[index]
+        if (before.avoidGroup != 0 && before.avoidGroup == after.avoidGroup) return false
+        return before.owner != after.owner || !after.keepTogether && index - first[index] >= 2 && last[index] - index >= 2
+    }
     data class Partition(val previous: IntArray, val columns: Int)
     fun partition(limit: Double): Partition? {
         val unreachable = size + 1

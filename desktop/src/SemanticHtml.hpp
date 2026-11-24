@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CompiledImageMap.hpp"
+#include "TableCellLayers.hpp"
 #include "CompiledContent.hpp"
 #include "ReferencePolicy.hpp"
 #include "MissingFigurePaint.hpp"
@@ -1361,7 +1362,8 @@ inline int compiledTableSpan(const QJsonValue &value, bool allowAbsent = true) {
 
 inline QString tableStyleMarker(const QJsonObject &table, qreal containerPoints, int indent, bool resetTextAlignment = false,
                                 const QString &listMarker = {}, int tableDepth = 1, qreal tableOriginPoints = -1,
-                                const QColor &ownerInk = {}, const QJsonArray &cellOwnerInks = {}) {
+                                const QColor &ownerInk = {}, const QJsonArray &cellOwnerInks = {},
+                                const std::optional<TableCellLayers::FooterOverlap> &cover = {}) {
     const auto minimum = tableMinimumWidthPolicy(table, containerPoints);
     bool hasCell = false;
     for (const auto &row : table.value(QStringLiteral("rows")).toArray())
@@ -1426,6 +1428,13 @@ inline QString tableStyleMarker(const QJsonObject &table, qreal containerPoints,
     }
     if (!styled && !hasCell) return {};
     QJsonObject metadata{{"container_points", containerPoints}, {"indent", indent}, {"rows", rows}};
+    if (cover) {
+        if (resolvedBorders || !viewport.isEmpty() || !floatViewport.isEmpty() || present(sourceStyle.value("border_edges")))
+            throw std::runtime_error("unsupported styled covering cell");
+        metadata.insert("covered_cell", QJsonObject{{"row",cover->lowerRow},{"cell",cover->lowerCell},
+            {"column",cover->lowerColumn},{"declared_rows",cover->lowerDeclaredRows},
+            {"front_row",cover->upperRow},{"front_columns",cover->upperColumns}});
+    }
     if (resolvedBorders) metadata.insert(QStringLiteral("resolved_owner_ink"), ownerInk.name());
     if (!minimum.isEmpty()) metadata.insert(QStringLiteral("minimum_source"), table);
     metadata.insert(QStringLiteral("empty_nested"), tableDepth > 1);
@@ -2352,6 +2361,14 @@ inline void normalizeTables(QTextDocument *document, const QVector<TableInfo> &r
                 format.setTopMargin(0); format.setBottomMargin(0);
             }
         }
+        const auto covered = record.value.value(QStringLiteral("covered_cell")).toObject();
+        if (!covered.isEmpty()) {
+            const auto front = table->cellAt(table->rows()-1, 0);
+            if (!front.isValid() || covered.value("front_row").toInt(-1) != table->rows()-1
+                || front.columnSpan() != table->columns() || covered.value("front_columns").toInt(-1) != front.columnSpan())
+                throw std::runtime_error("invalid covering table cell geometry");
+            format.setProperty(QTextFormat::UserProperty + 0x5881, covered.toVariantMap());
+        }
         table->setFormat(format);
         if (format.hasProperty(tableLineHeightProperty) || present(record.value.value(QStringLiteral("block_viewport")))) {
             for (QTextBlock block = document->findBlock(table->firstPosition()); block.isValid() && block.position() < table->lastPosition(); block = block.next()) {
@@ -2447,7 +2464,13 @@ inline void normalizeTables(QTextDocument *document, const QVector<TableInfo> &r
                 // bounds the used span to that allocation. Preserve the declared
                 // metadata and require exactly this result, not an arbitrary match.
                 const int remainingSourceRows = int(rows.size()) - row;
-                const int usedRows = qMin(declaredRows, remainingSourceRows);
+                int usedRows = qMin(declaredRows, remainingSourceRows);
+                if (!covered.isEmpty() && row == covered.value("row").toInt(-1) && index-1 == covered.value("cell").toInt(-1)) {
+                    if (declaredColumns != 1 || declaredRows != covered.value("declared_rows").toInt(-1)
+                        || column != covered.value("column").toInt(-1) || usedRows != remainingSourceRows)
+                        throw std::runtime_error("invalid covered source cell geometry");
+                    usedRows = covered.value("front_row").toInt(-1) - row;
+                }
                 if (((floatViewport || intrinsicViewport) && declaredRows > remainingSourceRows)
                     || usedRows != cell.rowSpan() || declaredColumns != cell.columnSpan())
                     throw std::runtime_error("table style span mismatch");
@@ -3053,7 +3076,14 @@ inline QJsonObject inlineFontSnapshot(const QJsonValue &value) {
 inline QJsonObject inlineTextStyle(const QJsonObject &span) {
     const auto raw = span.value("inline_style");
     if (!present(raw)) return {};
-    const auto style = inlineObject(raw, {"decoration", "line_height", "baseline_shift", "font_normalized", "cursor", "wrap"});
+    const auto style = inlineObject(raw, {"decoration", "line_height", "baseline_shift", "font_normalized", "cursor", "wrap", "dark_foreground"});
+    if (style.contains("dark_foreground")) {
+        for (const auto &source : {span.value("foreground"),style.value("dark_foreground")}) {
+            const QString value=source.toString();const QColor color(value);
+            if (value.size()!=7 || !color.isValid() || color.name()!=value || span.value("kind")!="text"
+                || !span.value("target").toString().isEmpty()) throw std::runtime_error("invalid paired source foreground");
+        }
+    }
     if (!span.value("kind").isString() || !span.value("text").isString()
         || (present(span.value("trail")) && !span.value("trail").isString())
         || (present(span.value("target")) && !span.value("target").isString()))
@@ -3112,7 +3142,7 @@ inline QJsonObject inlineTextStyle(const QJsonObject &span) {
     }
     if (!present(style.value("decoration")) && !present(style.value("line_height"))
         && !present(style.value("baseline_shift")) && !present(style.value("cursor"))
-        && !present(style.value("wrap")) && !style.value("font_normalized").toBool())
+        && !present(style.value("wrap")) && !present(style.value("dark_foreground")) && !style.value("font_normalized").toBool())
         throw std::runtime_error("empty inline text policy");
     if (span.value("text").toString().isEmpty() && span.value("trail").toString().isEmpty()
         && !present(style.value("line_height"))) throw std::runtime_error("empty inline text requires a metric owner");

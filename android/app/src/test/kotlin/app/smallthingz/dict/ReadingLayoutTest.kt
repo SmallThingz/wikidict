@@ -1327,6 +1327,68 @@ class ReadingLayoutTest {
     }
 
 
+    @Test fun originalDisclosureProjectsPhysicalRowsAndCellOwnersAcrossBothStates() {
+        val path = "src/androidTest/assets/tl-society/disclosure.wikblb.xz"
+        val member = listOf(java.io.File(path), java.io.File("android/app", path)).first { it.isFile }
+        val entry = BlobSource(member).use { source ->
+            assertTrue(source.compressed)
+            assertEquals(20587L, source.length)
+            BlobDecoder.decode(source.read(35, 20552), "समाज", "language", "Marati", "mr")
+        }
+        val originals = entry.sections.flatMap { section -> section.blocks.mapNotNull { it.table } }
+            .filter { it.disclosure != null }
+        assertEquals(listOf(12, 6), originals.map { it.rows.size })
+        assertEquals(mapOf("inflection" to false), entry.tableVisibilityPolicies().categories)
+        for ((index, table) in originals.withIndex()) {
+            val closed = DisclosureTableProjection(table, "root/$index", false)
+            val open = DisclosureTableProjection(table, "root/$index", true)
+            assertSame(table.rows[0][0], closed.displayed.rows[0][0])
+            assertEquals(if (index == 0) 4 else 8, closed.columnCount)
+            assertEquals(if (index == 0) (0..4).toList() else listOf(0), closed.cellIndices)
+            assertEquals(if (index == 0) listOf(0) + (5..30) else (0..30).toList(), open.cellIndices)
+            for ((position, cell) in open.displayed.rows.flatten().withIndex())
+                assertSame(table.rows.flatten()[open.cellIndices[position]], cell)
+            assertSame(table.rows.last().first(), open.displayed.rows.last().first())
+            if (index == 0) assertEquals(10, open.displayed.rows.flatten().single { it.rowspan > 1 }.rowspan)
+            val policy = requireNotNull(table.disclosure)
+            assertThrows(IllegalArgumentException::class.java) { table.copy(disclosure = policy.copy(headerCell = 9)) }
+            assertThrows(IllegalArgumentException::class.java) { table.copy(rowsHiddenMaxWidthPx = 320) }
+            assertThrows(IllegalArgumentException::class.java) { policy.copy(category = "\n") }
+        }
+    }
+
+    @Test fun originalDescriptionBodyKeepsBothListOwnersAndIndependentDayAndNightInk() {
+        val relative = "src/androidTest/assets/babua/description-body.wikblb.xz"
+        val member = listOf(java.io.File(relative), java.io.File("android/app", relative)).first { it.isFile }
+        val entry = BlobSource(member).use { source ->
+            assertTrue(source.compressed)
+            assertEquals(3575L, source.length)
+            BlobDecoder.decode(source.read(30, 3545), "babua", "language", "Buginese", "bug")
+        }
+        val section = entry.sections.single { it.anchor == "babua_[bug]" }
+        val example = section.blocks.single { it.kind == "example" }
+        val outer = requireNotNull(example.descriptionBody)
+        val usage = requireNotNull(requireNotNull(outer.box.blocks.single().container).blocks.single().container)
+        val translation = requireNotNull(usage.blocks.last().container).blocks.single()
+        val inner = requireNotNull(translation.descriptionBody)
+        assertEquals("#:", example.listPath)
+        assertEquals(":", translation.listPath)
+        assertEquals("Maloppo babuana amboku.", usage.blocks.first().spans.joinToString("") { it.text })
+        assertEquals("Perut bapak saya besar.", inner.box.blocks.single().spans.joinToString("") { it.text })
+        assertEquals(ContainerColor.LightDark("#cccccc", "#333333"), inner.before.fill)
+        val head = section.blocks.first().spans.first()
+        assertEquals("#333333", head.foreground)
+        assertEquals("#e0e0e0", head.inlineStyle?.darkForeground)
+        val rows = readingRows(entry.sections, entry.media)
+        val original = rows.indexOfFirst { it.block === example }
+        assertTrue(original >= 0)
+        assertTrue(floatBodyRuns(rows).any { it == original..original })
+        assertThrows(IllegalArgumentException::class.java) { example.copy(kind = "paragraph") }
+        assertThrows(IllegalArgumentException::class.java) { example.copy(spans = listOf(head)) }
+        assertThrows(IllegalArgumentException::class.java) { head.copy(foreground = head.inlineStyle?.darkForeground) }
+        assertThrows(IllegalArgumentException::class.java) { head.copy(kind = "link", target = "babua") }
+    }
+
     @Test fun compactPhonosOwnerKeepsItsMediaAndAdjacentDescriptionIndependent() {
         val media = Media("Tone.ogg", "audio", "Tone")
         val owners = MediaOwners(listOf(media))

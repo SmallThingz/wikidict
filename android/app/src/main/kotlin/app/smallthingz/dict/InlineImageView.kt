@@ -145,6 +145,10 @@ internal sealed interface InlineImageAssetState {
         val blockMediaIdentity: FigureBlockMediaIdentity? = null) : InlineImageAssetState
     data class GeometryUnavailable(val resource: Ready) : InlineImageAssetState
 }
+internal val InlineImageAssetState.showsUnavailableMarker: Boolean
+    get() = this == InlineImageAssetState.Failed || this == InlineImageAssetState.LayoutUnavailable ||
+        this is InlineImageAssetState.GeometryUnavailable
+
 internal fun inlineImageFallbackText(image: InlineImage, state: InlineImageAssetState): String? =
     if (state == InlineImageAssetState.LayoutUnavailable)
         listOfNotNull("Image layout unavailable.", image.alt?.takeIf { it.isNotEmpty() }, image.staticPoster?.label?.takeIf { it.isNotEmpty() }).joinToString(" ")
@@ -437,7 +441,7 @@ private fun InlineImageOccurrence(span: Span, pixels: InlineImagePixels, metrics
                     canvas.drawBitmap(state.decoded.bitmap, null, bounds, paint)
                     paint.colorFilter = null // The authored border and status label keep their own colors.
                 }
-                else if (fallback == null) {
+                else if (fallback == null && state.showsUnavailableMarker) {
                     paint.color = placeholderColor.toArgb(); paint.style = Paint.Style.STROKE; paint.strokeWidth = 1f
                     canvas.drawRect(bounds, paint)
                     canvas.drawLine(bounds.left, bounds.top, bounds.right, bounds.bottom, paint)

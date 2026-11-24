@@ -101,7 +101,7 @@ private data class NativeInlineSourceRange(val span: Span, val start: Int, val e
     val declaringPaint: TextPaint?, val emptyPaint: TextPaint?, val rubyParentPath: String? = null, val clippedChild: Boolean = false)
 private data class NativeResolvedInlineStyle(val source: NativeInlineSourceRange,
     val height: Float?, val shift: Float?, val thickness: Float?)
-private class NativePaintSpan(private val value: TextPaint, private val missingLink: NativeMissingLinkPaint? = null,
+private open class NativePaintSpan(private val value: TextPaint, private val missingLink: NativeMissingLinkPaint? = null,
     private val groupAction: Boolean = false) : MetricAffectingSpan(), NativeMayUnderline, NativeInlineSafePaintSpan {
     override val mayUnderline: Boolean get() = (!groupAction && missingLink != null) || value.isUnderlineText
     override fun updateMeasureState(paint: TextPaint) { paint.set(value) }
@@ -114,6 +114,10 @@ private class NativePaintSpan(private val value: TextPaint, private val missingL
         }
     }
 }
+
+/** A direct source text run is shaped and drawn by NativeLinePainter with these exact metrics. */
+private class NativeSourcePaintSpan(value: TextPaint, link: NativeMissingLinkPaint?) :
+    NativePaintSpan(value, link), NativePaintedSourceText
 
 /** Partition at every authored style/link boundary; overlapping styles are merged in their original order. */
 @Composable
@@ -1011,7 +1015,7 @@ internal fun prepareNativeFloatText(
                         canvas.clipRect(0f, 0f, rect.width(), rect.height()); fallbackLayout.draw(canvas); canvas.restoreToCount(saved) }
                     state is InlineImageAssetState.Ready -> canvas.drawBitmap(state.decoded.bitmap, null, rect,
                         Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply { colorFilter = bitmapColorFilter })
-                    else -> { val marker = Paint(paint).apply { this.style = Paint.Style.STROKE; strokeWidth = 1f }
+                    state.showsUnavailableMarker -> { val marker = Paint(paint).apply { this.style = Paint.Style.STROKE; strokeWidth = 1f }
                         canvas.drawRect(rect, marker); canvas.drawLine(rect.left, rect.top, rect.right, rect.bottom, marker) }
                 }
                 if (image.border) {
@@ -1024,10 +1028,11 @@ internal fun prepareNativeFloatText(
             }
             // The unresolved marker strokes the content rectangle; its actual half-stroke
             // can extend outside an unbordered image. Ready/fallback pixels stay in their box.
-            val markerOverflow = if (fallbackLayout == null && state !is InlineImageAssetState.Ready)
-                (0.5f - borderWidth).coerceAtLeast(0f) else 0f
-            val imageInk = NativeFloatBounds(-markerOverflow, -markerOverflow,
-                outerPixels.width + markerOverflow, outerPixels.height + markerOverflow)
+            val marker = fallbackLayout == null && state.showsUnavailableMarker
+            val markerOverflow = if (marker) (0.5f - borderWidth).coerceAtLeast(0f) else 0f
+            val imageInk = if (image.border || marker || fallbackLayout != null || state is InlineImageAssetState.Ready)
+                NativeFloatBounds(-markerOverflow, -markerOverflow, outerPixels.width + markerOverflow, outerPixels.height + markerOverflow)
+            else NativeFloatBounds(0f, 0f, 0f, 0f)
             val imageMap = image.map?.let {
                 val path = ruby?.leaves?.getOrNull(id)?.range?.takeIf { it.span === span }?.path ?: "span-$id"
                 val layout = ready?.takeIf { dimensions != null }?.let { asset ->
@@ -1121,9 +1126,13 @@ internal fun prepareNativeFloatText(
                 if (ownerWrap != null && (native.isNotEmpty() || sourceLineStarts != null)) native.setSpan(
                     NativeAuthoredTextWrap(ownerWrap, inheritedOwner = true, sourceLineStarts = sourceLineStarts), 0, native.length,
                     if (native.isEmpty()) Spanned.SPAN_MARK_MARK else Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-                styles.forEach { range -> native.setSpan(NativePaintSpan(range.paint, linkPaintAt(range.start, range.end),
-                    groupAction = groupActions.any { it.start <= range.start && it.end >= range.end }),
-                    range.start, range.end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE) }
+                val directText = ruby == null && nativeRuns.isEmpty() && images.isEmpty() && '\ufffc' !in native
+                styles.forEach { range ->
+                    val link = linkPaintAt(range.start, range.end)
+                    val paintSpan = if (directText) NativeSourcePaintSpan(range.paint, link) else NativePaintSpan(range.paint, link,
+                        groupAction = groupActions.any { it.start <= range.start && it.end >= range.end })
+                    native.setSpan(paintSpan, range.start, range.end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                }
                 val inlineParentPolicies = mutableListOf<Triple<Int, Int, NativeLineHeightPolicy>>()
                 val paragraphStarts = listOf(0) + paragraphBreaks.filter {
                     it + 1 < annotated.length || inlineSources.any { owner ->
