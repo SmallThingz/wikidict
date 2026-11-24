@@ -781,7 +781,14 @@ pub const InlineBoxColor = union(enum) {
     rgb: []const u8,
     light_dark: struct { light: []const u8, dark: []const u8 },
 };
-pub const InlineBoxBorderEdge = BorderEdgeFor(InlineBoxColor);
+pub const InlineBoxBorderEdge = union(enum) {
+    const Line = struct { width: StyleLength, color: InlineBoxColor };
+    none,
+    hidden,
+    solid: Line,
+    dotted: Line,
+    dashed: Line,
+};
 pub const InlineBoxBorderEdges = BorderEdgesFor(InlineBoxBorderEdge);
 /// A resolved signed offset, not a nonnegative width. null in Insets means auto.
 pub const InlineBoxInset = struct {
@@ -920,7 +927,7 @@ pub fn validInlineBoxColor(value: InlineBoxColor) bool {
 pub fn validInlineBoxBorderEdge(value: InlineBoxBorderEdge) bool {
     return switch (value) {
         .none, .hidden => true,
-        .solid, .dotted => |line| validStyleLength(line.width) and validInlineBoxColor(line.color),
+        .solid, .dotted, .dashed => |line| validStyleLength(line.width) and validInlineBoxColor(line.color),
     };
 }
 pub fn validInlineBoxBorderEdges(value: InlineBoxBorderEdges) bool {

@@ -9,6 +9,7 @@ import argparse
 from datetime import datetime, timezone
 import gzip
 import hashlib
+import io
 import errno
 import os
 import shutil
@@ -17,6 +18,7 @@ from pathlib import Path
 import re
 import sys
 import stat
+import tarfile
 import time
 import urllib.error
 import urllib.parse
@@ -513,6 +515,8 @@ def derive_core_defaults(output, root_css, root_authority, siteinfo_raw, siteinf
 def verify(root, require_complete=True):
     root = checked_root(root)
     manifest = evidence.decode(read(root / MANIFEST))
+    if manifest.get('schema') == ARTICLE_STYLES_SCHEMA:
+        return verify_article_styles(root, manifest, require_complete)
     if manifest.get('schema') in (CUSTOM_SCHEMA, ABSENT_SCHEMA):
         return verify_custom_properties(root, manifest, require_complete)
     if manifest.get('schema') == CORE_SCHEMA:
@@ -593,6 +597,7 @@ def main():
     parser.add_argument('--dumpstatus', type=Path)
     parser.add_argument('--core-defaults', action='store_true')
     parser.add_argument('--custom-properties-capture', type=Path)
+    parser.add_argument('--article-styles-archive', type=Path)
     parser.add_argument('--siteinfo-raw', type=Path)
     parser.add_argument('--siteinfo-normalized', type=Path)
     parser.add_argument('--namespace-registry', type=Path)
@@ -600,6 +605,10 @@ def main():
     args = parser.parse_args()
     if args.verify:
         verify(args.verify)
+    elif args.article_styles_archive:
+        if not args.output:
+            parser.error('article stylesheet collection requires an output directory')
+        derive_article_styles(args.output, args.article_styles_archive)
     elif args.resume_first_response:
         if not all((args.output, args.root_css, args.root_authority)):
             parser.error('continuation requires output, root css and authority')
@@ -669,6 +678,10 @@ ABSENT_SCOPE = 'current anonymous server-emitted screen styles before client scr
 ABSENT_SCHEMA = 'wikidict.stylesheet-imports.custom-properties-absent-root.v1'
 CUSTOM_SCHEMA = 'wikidict.custom-property-styles.v1'
 CUSTOM_TEMPORAL_SCOPE = 'current anonymous screen stylesheet observation applied to retained source; not historical dump deployment'
+ARTICLE_STYLES_SCHEMA = 'wikidict.stylesheet-imports.custom-properties-articles.v1'
+ARTICLE_STYLES_ARCHIVE = 'stylesheet-imports.article-captures.tar.gz'
+MAX_ARTICLE_STYLES = 16
+MAX_ARTICLE_ARCHIVE_BYTES = 8 * 1024 * 1024
 
 
 def custom_page_context(raw, page_url):
@@ -859,29 +872,8 @@ def screen_snapshot(artifacts, auth, root_fields, root_css_bytes, expected, sche
             'generator': parsed.generator, 'skin': skin, 'dark': dark, 'ancestors': parsed.ancestors, 'sources': sources}
 
 
-def absent_root_snapshot(artifacts, page_table):
-    import category_tree_snapshot
+def retained_page_configuration(raw):
     from html.parser import HTMLParser
-
-    registry = artifacts['namespace-registry.tsv']
-    lines = registry.decode().splitlines()
-    if (len(lines) < 4 or lines[0] != '# wikidict-namespace-registry-v1' or
-            not re.fullmatch(r'# wiki\t[a-z0-9_-]+wiktionary', lines[1]) or
-            not re.fullmatch(r'# dump-date\t[0-9]{8}', lines[2]) or
-            [line.split('\t')[2] for line in lines if line.startswith('8\t')] != ['MediaWiki']):
-        raise ValueError('Invalid MediaWiki namespace or edition identity')
-    wiki = lines[1].split('\t')[1]
-    date = lines[2].split('\t')[1]
-    filename = f'{wiki}-{date}-page.sql.gz'
-    status = evidence.decode(artifacts['pagetable-dumpstatus.raw.json'])['jobs']['pagetable']
-    if status['status'] != 'done' or set(status['files']) != {filename}:
-        raise ValueError('Expected complete official page table')
-    official = status['files'][filename]
-    before = evidence.stamp(page_table)
-    pin = evidence.fingerprint(page_table)
-    if (official['url'] != f'/{wiki}/{date}/{filename}' or official['sha1'] != pin['sha1'] or
-            official['size'] != pin['size']):
-        raise ValueError('Dated page table identity mismatch')
 
     class PageConfig(HTMLParser):
         in_head = False
@@ -908,11 +900,37 @@ def absent_root_snapshot(artifacts, page_table):
 
     parser = PageConfig()
     parser.configurations = []
-    parser.feed(artifacts['request-02.response'].decode())
+    parser.feed(raw.decode('utf-8'))
     parser.close()
     if len(parser.configurations) != 1:
         raise ValueError('Missing or ambiguous observed page identity')
-    config = parser.configurations[0]
+    return parser.configurations[0]
+
+
+def absent_root_snapshot(artifacts, page_table):
+    import category_tree_snapshot
+
+    registry = artifacts['namespace-registry.tsv']
+    lines = registry.decode().splitlines()
+    if (len(lines) < 4 or lines[0] != '# wikidict-namespace-registry-v1' or
+            not re.fullmatch(r'# wiki\t[a-z0-9_-]+wiktionary', lines[1]) or
+            not re.fullmatch(r'# dump-date\t[0-9]{8}', lines[2]) or
+            [line.split('\t')[2] for line in lines if line.startswith('8\t')] != ['MediaWiki']):
+        raise ValueError('Invalid MediaWiki namespace or edition identity')
+    wiki = lines[1].split('\t')[1]
+    date = lines[2].split('\t')[1]
+    filename = f'{wiki}-{date}-page.sql.gz'
+    status = evidence.decode(artifacts['pagetable-dumpstatus.raw.json'])['jobs']['pagetable']
+    if status['status'] != 'done' or set(status['files']) != {filename}:
+        raise ValueError('Expected complete official page table')
+    official = status['files'][filename]
+    before = evidence.stamp(page_table)
+    pin = evidence.fingerprint(page_table)
+    if (official['url'] != f'/{wiki}/{date}/{filename}' or official['sha1'] != pin['sha1'] or
+            official['size'] != pin['size']):
+        raise ValueError('Dated page table identity mismatch')
+
+    config = retained_page_configuration(artifacts['request-02.response'])
     page_id, revision_id = config['wgArticleId'], config['wgRevisionId']
     url = evidence.decode(artifacts['request-02.json'])['url']
     query = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query, strict_parsing=True)
@@ -1024,6 +1042,108 @@ def verify_custom_properties(root, manifest, require_complete=True):
         raise ValueError('Changed custom-property snapshot derivation')
     if require_complete and evidence.decode(read(root / COMPLETE)) != {'schema': manifest['schema'], 'manifest_sha256': digest(read(root / MANIFEST))}:
         raise ValueError('Incomplete custom-property generation')
+    return expected
+
+
+def archive_article_styles(raw):
+    # The retained tar is an input, never an extraction destination. Bound
+    # decompression before interpreting any tar metadata or member names.
+    with gzip.GzipFile(fileobj=io.BytesIO(raw)) as compressed:
+        payload = compressed.read(MAX_ARTICLE_ARCHIVE_BYTES + 1)
+    if len(payload) > MAX_ARTICLE_ARCHIVE_BYTES:
+        raise ValueError('Oversized article stylesheet archive')
+    packages = {}
+    inventory = set()
+    with tarfile.open(fileobj=io.BytesIO(payload), mode='r:') as archive:
+        for member in archive:
+            parts = member.name.split('/')
+            if (member.type not in (tarfile.REGTYPE, tarfile.AREGTYPE) or member.size > MAX_JSON or member.name in inventory
+                    or len(inventory) >= 512):
+                raise ValueError('Invalid article stylesheet archive member')
+            inventory.add(member.name)
+            if parts == ['capture.json']:
+                continue  # Original collection handoff is retained in the archive.
+            if (len(parts) != 2 or not re.fullmatch(r'[1-9][0-9]{0,19}', parts[0])
+                    or not re.fullmatch(r'[a-z0-9][a-z0-9.-]+', parts[1])):
+                raise ValueError('Unexpected article stylesheet member path')
+            packages.setdefault(int(parts[0]), {})[parts[1]] = archive.extractfile(member).read()
+    if not 1 <= len(packages) <= MAX_ARTICLE_STYLES:
+        raise ValueError('Unexpected article stylesheet collection size')
+    return packages
+
+
+def article_styles_snapshot(raw):
+    articles = []
+    root_binding = None
+    titles = set()
+    for page_id, artifacts in sorted(archive_article_styles(raw).items()):
+        raw_manifest = artifacts.pop(MANIFEST)
+        manifest = evidence.decode(raw_manifest)
+        if (manifest.get('schema') != CUSTOM_SCHEMA or manifest.get('temporal_scope') != CUSTOM_TEMPORAL_SCOPE
+                or evidence.decode(artifacts.pop(COMPLETE)) != {'schema': CUSTOM_SCHEMA, 'manifest_sha256': digest(raw_manifest)}
+                or manifest.get('artifacts') != {name: digest(body) for name, body in artifacts.items()}):
+            raise ValueError('Changed retained article stylesheet package')
+        checked_producer(manifest.get('producer'))
+        original = artifacts.pop(SNAPSHOT)
+        snapshot = custom_snapshot(artifacts)
+        if evidence.decode(original) != snapshot:
+            raise ValueError('Changed retained article stylesheet derivation')
+        binding = {key: snapshot[key] for key in ('wiki', 'dump_date', 'namespace_sha256', 'root_css_sha256',
+                                                  'root_page_id', 'root_revision_id', 'temporal_scope')}
+        if root_binding is None:
+            root_binding = binding
+        elif binding != root_binding:
+            raise ValueError('Mixed article stylesheet root authorities')
+        config = retained_page_configuration(artifacts['request-02.response'])
+        revision = config.get('wgRevisionId')
+        title = snapshot['page_title']
+        url = urllib.parse.urlsplit(snapshot['page_url'])
+        if (type(config.get('wgArticleId')) is not int or config['wgArticleId'] != page_id
+                or not 0 < page_id < 2**64 or type(revision) is not int or not 0 < revision < 2**64
+                or type(config.get('wgNamespaceNumber')) is not int or config['wgNamespaceNumber'] != 0
+                or config.get('wgPageName') != title.replace(' ', '_') or config.get('wgTitle') != title
+                or config.get('wgAction') != 'view' or config.get('wgIsArticle') is not True
+                or config.get('wgIsRedirect') is not False or config.get('wgPageContentModel') != 'wikitext'
+                or 'wgUserName' not in config or config['wgUserName'] is not None
+                or snapshot['ancestors'][0]['classes'].split()[:1] != ['client-nojs']
+                or url.path != '/w/index.php' or url.netloc != binding['wiki'][:-10] + '.wiktionary.org'
+                or urllib.parse.parse_qs(url.query, strict_parsing=True) != {
+                    'title': [title], 'oldid': [str(revision)], 'useskin': [snapshot['skin']]}
+                or title in titles):
+            raise ValueError('Unbound or duplicate observed article stylesheet identity')
+        titles.add(title)
+        articles.append({'page_id': page_id, 'revision_id': revision, 'snapshot': original.decode('utf-8')})
+    return {'schema': ARTICLE_STYLES_SCHEMA, **root_binding, 'articles': articles}
+
+
+def derive_article_styles(output, archive):
+    raw = read(archive)
+    value = article_styles_snapshot(raw)
+    snapshot = evidence.encoded(value)
+    if len(snapshot) > MAX_JSON:
+        raise ValueError('Oversized article stylesheet projection')
+    root = Path(output)
+    root.mkdir(parents=True, exist_ok=False)
+    evidence.put(root / ARTICLE_STYLES_ARCHIVE, raw)
+    evidence.put(root / SNAPSHOT, snapshot)
+    evidence.document(root / MANIFEST, {'schema': ARTICLE_STYLES_SCHEMA, 'producer': producer(),
+                      'artifacts': {ARTICLE_STYLES_ARCHIVE: digest(raw), SNAPSHOT: digest(snapshot)}})
+    verify(root, require_complete=False)
+    evidence.document(root / COMPLETE, {'schema': ARTICLE_STYLES_SCHEMA, 'manifest_sha256': digest(read(root / MANIFEST))})
+    return verify(root)
+
+
+def verify_article_styles(root, manifest, require_complete):
+    checked_producer(manifest.get('producer'))
+    raw = read(root / ARTICLE_STYLES_ARCHIVE)
+    snapshot = read(root / SNAPSHOT)
+    if (manifest.get('artifacts') != {ARTICLE_STYLES_ARCHIVE: digest(raw), SNAPSHOT: digest(snapshot)}
+            or require_complete and evidence.decode(read(root / COMPLETE)) != {
+                'schema': ARTICLE_STYLES_SCHEMA, 'manifest_sha256': digest(read(root / MANIFEST))}):
+        raise ValueError('Changed article stylesheet collection')
+    expected = article_styles_snapshot(raw)
+    if evidence.decode(snapshot) != expected:
+        raise ValueError('Changed article stylesheet collection derivation')
     return expected
 
 

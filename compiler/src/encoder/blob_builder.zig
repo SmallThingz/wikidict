@@ -39,13 +39,21 @@ fn noLanguageCode(_: ?*const anyopaque, _: []const u8) ?[]const u8 {
 
 pub const SourceSectionHeading = struct { owner: ?ResolvedLanguage };
 
+pub const ScreenStyleArticle = struct {
+    page_id: u64,
+    revision_id: u64,
+    title: []const u8,
+    profile: *const @import("table_style_profile.zig").Profile,
+};
+
 pub const LanguageCodes = struct {
     local_link_targets: ?@import("presentation_compile.zig").LocalLinkTargetSource = null,
     // A selected page borrows its Profile from the page arena. Retain the stable
     // global parent here so the next page resets without dereferencing that view.
-    screen_style_article: ?struct {
-        page_id: u64, revision_id: u64, title: []const u8,
-        profile: *const @import("table_style_profile.zig").Profile,
+    screen_style_article: ?ScreenStyleArticle = null,
+    screen_style_collection: ?struct {
+        baseline: *const @import("table_style_profile.zig").Profile,
+        articles: []const ScreenStyleArticle,
     } = null,
     page_style_parent: ?*const @import("table_style_profile.zig").Profile = null,
     figure_sizing: ?presentation_document.FigureSizingSource = null,

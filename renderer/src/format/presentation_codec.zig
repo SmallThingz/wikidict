@@ -490,8 +490,11 @@ const Encoder = struct {
         inline for (.{ "top", "right", "bottom", "left" }) |edge| switch (@field(value, edge)) {
             .none => try self.byte(0),
             .hidden => try self.byte(1),
-            .solid, .dotted => |line| {
-                try self.byte(if (@field(value, edge) == .solid) 2 else 3);
+            .solid, .dotted, .dashed => |line| {
+                const tag: u8 = switch (@field(value, edge)) {
+                    .solid => 2, .dotted => 3, .dashed => 4, else => unreachable,
+                };
+                try self.byte(tag);
                 try self.styleLength(line.width); try self.inlineBoxColor(line.color);
             },
         };
@@ -2174,6 +2177,7 @@ const Reader = struct {
                 1 => .hidden,
                 2 => .{ .solid = .{ .width = try self.styleLength(), .color = try self.inlineBoxColor() } },
                 3 => .{ .dotted = .{ .width = try self.styleLength(), .color = try self.inlineBoxColor() } },
+                4 => .{ .dashed = .{ .width = try self.styleLength(), .color = try self.inlineBoxColor() } },
                 else => return error.InvalidPresentation,
             };
         }
@@ -18139,4 +18143,31 @@ test "RT margin generic old annotation shape keeps null binary and JSON exact" {
     try std.testing.expectEqualSlices(u8, typed_out.out.items, generic_out.out.items);
     var cursor = T.reader(a, generic_out.out.items);
     try std.testing.expectEqualDeep(types.Span{ .ruby = &stored }, try cursor.span());
+}
+
+
+test "inline box dashed bottom retains its own wire tag and linked owner" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const T = RoundedInlineBox39CodecTest;
+    var group = T.square;
+    group.border = .all(.none);
+    group.border.bottom = .{ .dashed = .{ .width = .{ .unit = .px, .value = 1 }, .color = .current_color } };
+    var stream = T.encoder(a);
+    defer stream.deinit();
+    try stream.inlineBoxBorders(group.border);
+    try std.testing.expectEqualSlices(u8, &.{ 0, 0, 4 }, stream.out.items[0..3]);
+    var input = T.reader(a, stream.out.items);
+    try std.testing.expectEqualDeep(group.border, try input.inlineBoxBorders());
+    stream.out.items[2] = 3;
+    var legacy = T.reader(a, stream.out.items);
+    try std.testing.expect((try legacy.inlineBoxBorders()).bottom == .dotted);
+    stream.out.items[2] = 5;
+    var foreign = T.reader(a, stream.out.items);
+    try std.testing.expectError(error.InvalidPresentation, foreign.inlineBoxBorders());
+    const owner: types.Span = .{ .kind = .link, .target = "στόχος", .inline_box_group = &group };
+    const record = T.stored(&.{owner});
+    const bytes = try encodeAlloc(a, record);
+    try std.testing.expectEqualDeep(record, try decodeAlloc(a, bytes, "rounded", .supplemental, null));
 }

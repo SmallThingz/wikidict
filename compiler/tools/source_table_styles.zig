@@ -248,9 +248,14 @@ pub const Absence = struct {
 };
 pub const Observation = struct {
     screen_styles: ?imports.Joined = null,
+    article_styles: ?[]imports.Joined = null,
     authority: ?Authority = null,
     absence: ?Absence = null,
 };
+
+pub fn deinitArticleStyles(a: std.mem.Allocator, articles: []imports.Joined) void {
+    imports.deinitArticleStyles(a, articles);
+}
 
 fn requireIndexedAbsence(namespaces: *const namespace_registry.Registry, page_index: []const u8, kind: dump_source.PageIndexKind, title: ?[]const u8) !void {
     // A structurally valid title-index table can omit a member. A negative
@@ -359,14 +364,23 @@ pub fn observeWithImportsForTarget(
     const css = if (row.source_needs_decode) try xml_decode.decodeSinglePassAlloc(sa, raw) else raw;
     if (css.len > max_source_bytes or !std.unicode.utf8ValidateSlice(css)) return error.InvalidTableStylesSource;
     const namespace_hash = std.fmt.bytesToHex(namespaces.source_sha256, .lower);
-    const joined: ?imports.Joined = if (snapshot) |bytes| try imports.joinForTargetAlloc(a, css, .{
+    const root: imports.Root = .{
         .wiki = namespaces.wiki, .dump_date = namespaces.dump_date, .namespace_sha256 = &namespace_hash,
         .page_id = row.page_id, .revision_id = row.revision_id,
-    }, bytes, target) else null;
+    };
+    const article_styles = if (snapshot) |bytes|
+        try imports.joinIndexedArticleStylesAlloc(a, css, root, bytes, target, namespaces, page_index, title_index)
+    else null;
+    errdefer if (article_styles) |articles| imports.deinitArticleStyles(a, articles);
+    const joined: ?imports.Joined = if (snapshot != null and article_styles == null)
+        try imports.joinForTargetAlloc(a, css, root, snapshot.?, target)
+    else null;
     // An explicit captured/import snapshot keeps its existing closure and
     // order. Do not duplicate indexed gadgets into that independently issued
     // environment. The ordinary snapshot-free route uses the retained defaults.
-    const gadget_inputs = if (snapshot == null) try defaultGadgetInputs(sa, spec.name, source, page_index, title_index) else null;
+    // The article collection supplements the ordinary baseline. Its captured
+    // cascade is selected for matching article revisions only.
+    const gadget_inputs = if (joined == null) try defaultGadgetInputs(sa, spec.name, source, page_index, title_index) else null;
     var profile = if (joined) |value| value.profile else profile: {
         if (gadget_inputs) |inputs| {
             const sources = try sa.alloc(encoder.table_style_profile.Source, inputs.sources.len + 1);
@@ -378,7 +392,7 @@ pub fn observeWithImportsForTarget(
     };
     errdefer profile.deinit();
     const gadget_proof = if (gadget_inputs) |inputs| try retainGadgetProof(profile.arena.allocator(), inputs.proof) else null;
-    return .{ .authority = .{
+    return .{ .article_styles = article_styles, .authority = .{
         .profile = profile,
         .provenance = .{
             .wiki = namespaces.wiki,

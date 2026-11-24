@@ -1025,6 +1025,25 @@ fn loadFigurePageObservationsAt(io: std.Io, a: std.mem.Allocator, path: []const 
         defaults.source_context.defaults.default_thumbnail_width orelse return error.InvalidFigurePageObservations);
 }
 
+fn installScreenStyleArticles(a: std.mem.Allocator, codes: *encoder.blob_builder.LanguageCodes,
+    observations: []const @import("source_stylesheet_imports.zig").Joined) ![]encoder.blob_builder.ScreenStyleArticle
+{
+    const baseline = codes.table_styles orelse return error.InvalidStylesheetImports;
+    const articles = try a.alloc(encoder.blob_builder.ScreenStyleArticle, observations.len);
+    for (articles, observations) |*article, *observation| {
+        const custom = observation.proof.custom.?;
+        const identity = custom.article.?;
+        article.* = .{ .page_id = identity.page_id, .revision_id = identity.revision_id,
+            .title = custom.page_title, .profile = &observation.profile };
+    }
+    codes.screen_style_collection = .{ .baseline = baseline, .articles = articles };
+    return articles;
+}
+
+fn screenStyleMatches(article: encoder.blob_builder.ScreenStyleArticle, namespace_id: i32, page_id: u64, revision_id: u64, title: []const u8) bool {
+    return namespace_id == 0 and article.page_id == page_id and article.revision_id == revision_id and std.mem.eql(u8, article.title, title);
+}
+
 // Selection happens once for the complete expansion. No later owner fragment
 // can reuse another page's observation or leave a previous job's pointer active.
 fn attachFigurePageObservation(a: std.mem.Allocator, codes: *encoder.blob_builder.LanguageCodes, book: ?*const figure_page_observations.Book,
@@ -1035,8 +1054,15 @@ fn attachFigurePageObservation(a: std.mem.Allocator, codes: *encoder.blob_builde
     if (codes.page_style_parent) |parent| codes.table_styles = parent;
     codes.page_style_parent = null;
     if (codes.screen_style_article) |article| {
-        codes.table_styles = if (namespace_id == 0 and article.page_id == page_id and article.revision_id == revision_id and
-            std.mem.eql(u8, article.title, title)) article.profile else null;
+        codes.table_styles = if (screenStyleMatches(article, namespace_id, page_id, revision_id, title)) article.profile else null;
+    }
+    if (codes.screen_style_collection) |collection| {
+        codes.table_styles = collection.baseline;
+        for (collection.articles) |article| {
+            if (!screenStyleMatches(article, namespace_id, page_id, revision_id, title)) continue;
+            codes.table_styles = article.profile;
+            break;
+        }
     }
     const sizing_source = if (codes.figure_sizing) |*value| value else return;
     if (sizing_source.table_containing_direction) |direction| {
@@ -4758,7 +4784,12 @@ fn runBlobBuild(io: std.Io, a: std.mem.Allocator, args: []const []const u8, opti
     defer if (table_styles) |*authority| authority.deinit();
     var screen_styles = style_observation.screen_styles;
     defer if (screen_styles) |*screen| screen.profile.deinit();
+    defer if (style_observation.article_styles) |articles| source_table_styles.deinitArticleStyles(a, articles);
     codes.table_styles = if (table_styles) |*authority| &authority.profile else null;
+    const style_articles = if (style_observation.article_styles) |articles|
+        try installScreenStyleArticles(a, &codes, articles)
+    else null;
+    defer if (style_articles) |articles| a.free(articles);
     if (screen_styles) |*screen| {
         const custom = screen.proof.custom.?;
         const article = custom.article.?;
@@ -20760,7 +20791,12 @@ fn capturedWriterRun(io: std.Io, a: std.mem.Allocator, request: CapturedWriterRe
     defer if (table_styles) |*authority| authority.deinit();
     var screen_styles = style_observation.screen_styles;
     defer if (screen_styles) |*screen| screen.profile.deinit();
+    defer if (style_observation.article_styles) |articles| source_table_styles.deinitArticleStyles(a, articles);
     codes.table_styles = if (table_styles) |*authority| &authority.profile else null;
+    const style_articles = if (style_observation.article_styles) |articles|
+        try installScreenStyleArticles(a, &codes, articles)
+    else null;
+    defer if (style_articles) |articles| a.free(articles);
     if (screen_styles) |*screen| {
         const custom = screen.proof.custom.?;
         const article = custom.article.?;
@@ -32379,6 +32415,73 @@ test "retained PL Jedzenie preserves499 media525 occurrences complete supplement
 }
 
 
+const GreekDashedLinkFixture = struct {
+    const Span = encoder.presentation_types.Span;
+    const labels = [_]struct { target: []const u8, text: []const u8, italic: bool, tooltip: ?[]const u8, literal_colors: bool = false }{
+        .{ .target = "αγγλικά", .text = "την αγγλική", .italic = true, .tooltip = null },
+        .{ .target = "έκθλιψη", .text = "έκθλιψη", .italic = false, .tooltip = null },
+        .{ .target = "κυριολεκτώ", .text = "κυριολεκτικά", .italic = false, .tooltip = "κυριολεκτικά, κυριολεκτώντας" },
+        .{ .target = "αρχαία ελληνικά", .text = "αρχαία ελληνική", .italic = true, .tooltip = null },
+        .{ .target = "καθαρεύουσα", .text = "καθαρεύουσα", .italic = true, .tooltip = null, .literal_colors = true },
+        .{ .target = "νέα ελληνικά", .text = "νέα ελληνικά", .italic = true, .tooltip = null, .literal_colors = true },
+        .{ .target = "συλλαβισμός#Ουσιαστικό", .text = "τυπογραφικός συλλαβισμός", .italic = false, .tooltip = "ο χωρισμός γραπτής λέξης σε συλλαβές" },
+    };
+    fn styles(a: std.mem.Allocator, ns: *const namespace_registry.Registry, css: []const u8, title: []const u8,
+        compressed: []const u8, digest: []const u8) !encoder.table_style_profile.Profile {
+        var input: std.Io.Reader = .fixed(compressed);
+        var inflater: std.compress.flate.Decompress = .init(&input, .gzip, &.{});
+        const snapshot = try inflater.reader.allocRemaining(a, .limited(@import("source_stylesheet_imports.zig").max_snapshot_bytes));
+        defer a.free(snapshot);
+        try std.testing.expect(inflater.err == null and inflater.state == .end);
+        var joined = try @import("source_stylesheet_imports.zig").joinAlloc(a, css, .{
+            .wiki = ns.wiki, .dump_date = ns.dump_date,
+            .namespace_sha256 = &std.fmt.bytesToHex(ns.source_sha256, .lower),
+            .page_id = 171723, .revision_id = 7307525,
+        }, snapshot);
+        errdefer joined.profile.deinit();
+        try std.testing.expect(joined.proof.joined);
+        try std.testing.expectEqualStrings(digest, &joined.proof.snapshot_sha256);
+        const proof = joined.proof.custom orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualStrings(title, proof.page_title);
+        const custom = joined.profile.custom_properties orelse return error.TestUnexpectedResult;
+        inline for (.{ "--background-color-base", "--color-emphasized", "--border-color-muted" },
+            .{ "#fff", "#101418", "#dadde3" }) |name, value| {
+            const observed = custom.root_environment.get(name);
+            try std.testing.expect(observed == .known);
+            try std.testing.expectEqualStrings(value, observed.known);
+        }
+        return joined.profile;
+    }
+
+    fn visible(a: std.mem.Allocator, owner: Span, count: *usize) !Span {
+        const box = owner.inline_box_group orelse return owner;
+        if (box.border.bottom != .dashed) return owner;
+        const child = if (box.spans.len == 1) box.spans[0] else return error.TestUnexpectedResult;
+        const destination = if (owner.target_fragment) |fragment| try std.fmt.allocPrint(a, "{s}#{s}", .{ owner.target, fragment }) else owner.target;
+        for (labels) |label| {
+            if (!std.mem.eql(u8, label.target, destination) or !std.mem.eql(u8, label.text, child.text)) continue;
+            try std.testing.expect(owner.kind == .link and owner.text.len == 0 and owner.trail.len == 0);
+            try std.testing.expect(child.kind == .text and child.target.len == 0 and child.target_fragment == null and child.trail.len == 0);
+            try std.testing.expect(box.overlays.len == 0 and box.radius == null and box.border.left == .none and box.border.top == .none and box.border.right == .none);
+            inline for (.{ "left", "top", "right", "bottom" }) |edge| try std.testing.expect(@field(box.padding, edge).value == 0);
+            const line = box.border.bottom.dashed;
+            try std.testing.expect(line.width.unit == .px and line.width.value == 1 and line.color == .rgb);
+            try std.testing.expectEqualStrings(if (label.literal_colors) "#dddddd" else "#dadde3", line.color.rgb);
+            try std.testing.expectEqualStrings("#ffffff", owner.background orelse return error.TestUnexpectedResult);
+            try std.testing.expectEqualStrings(if (label.literal_colors) "#002000" else "#101418", owner.foreground orelse return error.TestUnexpectedResult);
+            try std.testing.expectEqualDeep(owner.background, child.background);
+            try std.testing.expectEqualDeep(owner.foreground, child.foreground);
+            try std.testing.expectEqualDeep(label.tooltip, owner.tooltip);
+            try std.testing.expectEqualDeep(owner.tooltip, child.tooltip);
+            try std.testing.expectEqual(label.italic, owner.italic);
+            try std.testing.expectEqual(label.italic or label.tooltip != null, child.italic);
+            count.* += 1;
+            return child;
+        }
+        return error.TestUnexpectedResult;
+    }
+};
+
 test "normal Writer retained EL katasvestir preserves malformed prefix physical grid child actions original error owner and complete codec" {
     const F = struct {
         const raw = @embedFile("testdata/el-katasvestir110/page.raw.wikitext");
@@ -32465,6 +32568,7 @@ test "normal Writer retained EL katasvestir preserves malformed prefix physical 
             }
         };
         const Scan = struct {
+            dashed_labels: usize = 0,
             visible: std.ArrayList(u8) = .empty,
             labels: [actions.len]std.ArrayList(u8) = @splat(.empty),
             action_runs: usize = 0,
@@ -32483,6 +32587,7 @@ test "normal Writer retained EL katasvestir preserves malformed prefix physical 
             caption_owner: ?usize = null,
             fn spans(self: *@This(), a_: std.mem.Allocator, values: []const encoder.presentation_types.Span) !void {
                 for (values) |span| {
+                    const label = try GreekDashedLinkFixture.visible(a_, span, &self.dashed_labels);
                     if (self.caption_owner) |index| {
                         try std.testing.expect(span.image == null);
                         try std.testing.expectEqual(index == 1 and std.mem.eql(u8, span.text, "κατασβεστήρ"), span.bold);
@@ -32490,7 +32595,7 @@ test "normal Writer retained EL katasvestir preserves malformed prefix physical 
                         try self.floating_labels[index].appendSlice(a_, span.text);
                         try self.floating_labels[index].appendSlice(a_, span.trail);
                     }
-                    try self.visible.appendSlice(a_, span.text);
+                    try self.visible.appendSlice(a_, label.text);
                     try self.visible.appendSlice(a_, span.trail);
                     if (span.image) |image| {
                         var source_file: ?usize = null;
@@ -32545,8 +32650,8 @@ test "normal Writer retained EL katasvestir preserves malformed prefix physical 
                     }
                     const expected = actions[found];
                     try std.testing.expect(if (expected.external) span.kind == .external_link else span.kind == .link);
-                    if (expected.italic) try std.testing.expect(span.italic);
-                    try self.labels[found].appendSlice(a_, span.text);
+                    if (expected.italic) try std.testing.expect(label.italic);
+                    try self.labels[found].appendSlice(a_, label.text);
                     try self.labels[found].appendSlice(a_, span.trail);
                 }
             }
@@ -32653,7 +32758,8 @@ test "normal Writer retained EL katasvestir preserves malformed prefix physical 
     try std.testing.expect(registry.resolve("gkm") == null);
     try std.testing.expect(registry.resolveStrong("μεσαιωνικά ελληνικά") == null);
     try std.testing.expect(registry.resolveTrusted("Μεσαιωνικά ελληνικά") == null);
-    var styles = try encoder.table_style_profile.parseAlloc(a, ElGeiosiRetainedFixture.css); defer styles.deinit();
+    var styles = try GreekDashedLinkFixture.styles(a, &namespaces, ElGeiosiRetainedFixture.css, "κατασβεστήρ",
+        @embedFile("testdata/el-screen-observations/65452.json.gz"), "10ca0229de0dffe43b52230a8caa4bbfe4d17e21f0138d78c137998d2860deed"); defer styles.deinit();
     var codes = languageCodes(&registry, &namespaces); codes.behavior_switches = &behavior; codes.image_options = &images; codes.table_styles = &styles;
     var sizing_roots: [2][]const u8 = undefined;
     inline for (0..2) |index| {
@@ -32742,6 +32848,7 @@ test "normal Writer retained EL katasvestir preserves malformed prefix physical 
     // The independent entity reference intentionally spells four delimiters
     // literally. Its report need not share the original source's recovery bit;
     // its entire Entry, every action/media/style field and codec bytes must.
+    try std.testing.expectEqual(@as(usize, 3), scan.dashed_labels);
 }
 
 
@@ -38511,6 +38618,7 @@ test "normal Writer retained EL regular expression preserves exact code punctuat
         }
         const expression = "\\b[\\w.!#$%&’*+\\/=?^`{|}~-]+@[\\w-]+(?:\\.[\\w-]+)*\\b";
         const Scan = struct {
+            dashed_labels: usize = 0,
             text: std.ArrayList(u8) = .empty,
             code_text: std.ArrayList(u8) = .empty,
             actions: std.ArrayList(struct { target: []const u8, label: []const u8 }) = .empty,
@@ -38520,10 +38628,11 @@ test "normal Writer retained EL regular expression preserves exact code punctuat
             references: usize = 0,
             fn spans(self: *@This(), a: std.mem.Allocator, values: []const T.Span) !void {
                 for (values) |span| {
-                    try self.text.appendSlice(a, span.text); try self.text.appendSlice(a, span.trail);
+                    const label = try GreekDashedLinkFixture.visible(a, span, &self.dashed_labels);
+                    try self.text.appendSlice(a, label.text); try self.text.appendSlice(a, span.trail);
                     if (span.code) try self.code_text.appendSlice(a, span.text);
                     if (span.kind == .link or span.kind == .external_link)
-                        try self.actions.append(a, .{ .target = span.target, .label = span.text });
+                        try self.actions.append(a, .{ .target = span.target, .label = label.text });
                     if (span.bold and std.mem.indexOf(u8, span.text, title) != null) self.bold_title = true;
                     if (std.mem.eql(u8, span.text, "{|}")) {
                         self.marker_count += 1;
@@ -38583,7 +38692,8 @@ test "normal Writer retained EL regular expression preserves exact code punctuat
     var images = try namespace_registry.image_options.Registry.init(a, @embedFile("testdata/el-regex130/image-options.tsv"), ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256, digest); defer images.deinit();
     const css = @embedFile("testdata/el-regex130/common.css");
     try F.hash(css, "9bf38ccd4d75910298181c590907a5cd755f618067bac8503a1a61323f1c3cd6");
-    var styles = try encoder.table_style_profile.parseAlloc(a, css); defer styles.deinit();
+    var styles = try GreekDashedLinkFixture.styles(a, &ns, css, F.title,
+        @embedFile("testdata/el-screen-observations/518221.json.gz"), "94c9658c185fde41ca5379f1171a3f33c4a56908b04ededff273fb22668d42c6"); defer styles.deinit();
     const metadata_root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/el-regex130-metadata", .{tmp.sub_path});
     try std.Io.Dir.cwd().createDirPath(io, try std.fs.path.join(a, &.{ metadata_root, "modules" }));
     const files = .{
@@ -38657,6 +38767,7 @@ test "normal Writer retained EL regular expression preserves exact code punctuat
     const actual_report = try std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(a, &.{roots[0], "fallback-pages.jsonl"}), a, .limited(128 * 1024));
     const expected_report = try std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(a, &.{roots[1], "fallback-pages.jsonl"}), a, .limited(128 * 1024));
     try std.testing.expectEqualSlices(u8, expected_report, actual_report);
+    try std.testing.expectEqual(@as(usize, 1), scan.dashed_labels);
 }
 
 test "normal Writer retained KU rengder preserves conversion link breaks complete owner body errors inflection actions and codec" {
@@ -43940,14 +44051,16 @@ test "normal Writer retained EL aston preserves separated closing punctuation co
             try std.testing.expectEqualStrings(expected, &std.fmt.bytesToHex(digest, .lower));
         }
         const Scan = struct {
+            dashed_labels: usize = 0,
             visible: std.ArrayList(u8) = .empty,
             actions: std.ArrayList(struct { target: []const u8, label: []const u8, italic: bool }) = .empty,
             tables: usize = 0, rows: usize = 0, cells: usize = 0, definitions: usize = 0,
             small_prose: bool = false, small_close: usize = 0, bold_title: bool = false,
             fn spans(self: *@This(), a: std.mem.Allocator, values: []const T.Span) !void {
                 for (values) |span| {
-                    try self.visible.appendSlice(a, span.text); try self.visible.appendSlice(a, span.trail);
-                    if (span.kind == .link or span.kind == .external_link) try self.actions.append(a, .{ .target = span.target, .label = span.text, .italic = span.italic });
+                    const label = try GreekDashedLinkFixture.visible(a, span, &self.dashed_labels);
+                    try self.visible.appendSlice(a, label.text); try self.visible.appendSlice(a, span.trail);
+                    if (span.kind == .link or span.kind == .external_link) try self.actions.append(a, .{ .target = span.target, .label = label.text, .italic = label.italic });
                     if (std.mem.eql(u8, span.text, prose)) {
                         try std.testing.expect(!span.small and span.kind == .text and span.target.len == 0 and span.font_scale_basis == .normal_body);
                         try std.testing.expectApproxEqAbs(@as(f32, 1.0 / 1.2), span.font_scale orelse return error.TestUnexpectedResult, 0.000001);
@@ -44016,7 +44129,8 @@ test "normal Writer retained EL aston preserves separated closing punctuation co
     var images = try namespace_registry.image_options.Registry.init(a, @embedFile("testdata/el-regex130/image-options.tsv"), ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256, digest); defer images.deinit();
     const css = @embedFile("testdata/el-regex130/common.css");
     try F.hash(css, "9bf38ccd4d75910298181c590907a5cd755f618067bac8503a1a61323f1c3cd6");
-    var styles = try encoder.table_style_profile.parseAlloc(a, css); defer styles.deinit();
+    var styles = try GreekDashedLinkFixture.styles(a, &ns, css, F.title,
+        @embedFile("testdata/el-screen-observations/1500114.json.gz"), "da5972dc14ea15fb2084bb4b6fa78d255318c01d4b0b64b1209775b0ba4df0d5"); defer styles.deinit();
     const metadata_root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/el-aston156-metadata", .{tmp.sub_path});
     try std.Io.Dir.cwd().createDirPath(io, try std.fs.path.join(a, &.{ metadata_root, "modules" }));
     inline for (.{
@@ -44081,6 +44195,7 @@ test "normal Writer retained EL aston preserves separated closing punctuation co
     const actual_report = try std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(a, &.{roots[0], "fallback-pages.jsonl"}), a, .limited(128 * 1024));
     const expected_report = try std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(a, &.{roots[1], "fallback-pages.jsonl"}), a, .limited(128 * 1024));
     try std.testing.expectEqualSlices(u8, expected_report, actual_report);
+    try std.testing.expectEqual(@as(usize, 2), scan.dashed_labels);
 }
 
 test "normal Writer retained MG blo preserves interrupted colon citation three owners errors inline media full body actions styles and codec" {
@@ -60718,13 +60833,15 @@ test "normal Writer and Reader retain complete EL lekani height figures nested c
             return figure_sizing.Registry.resolveWidthLimit(oracle.registry, a, file, format);
         }
         const Scan = struct {
+            dashed_labels: usize = 0,
             text: std.ArrayList(u8) = .empty,
             targets: std.ArrayList([]const u8) = .empty,
             figures: usize = 0, pelvis: usize = 0, toilet: usize = 0, kad: usize = 0,
             tables: usize = 0, references: usize = 0,
             fn spans(self: *@This(), a: std.mem.Allocator, values: []const T.Span) !void {
                 for (values) |span| {
-                    try self.text.appendSlice(a, span.text); try self.text.appendSlice(a, span.trail);
+                    const label = try GreekDashedLinkFixture.visible(a, span, &self.dashed_labels);
+                    try self.text.appendSlice(a, label.text); try self.text.appendSlice(a, span.trail);
                     if (span.target.len != 0) try self.targets.append(a, span.target);
                 }
             }
@@ -60810,7 +60927,8 @@ test "normal Writer and Reader retain complete EL lekani height figures nested c
     var images = try namespace_registry.image_options.Registry.init(a, @embedFile(F.prefix ++ "image-options.tsv"), ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256, digest); defer images.deinit();
     const css = @embedFile(F.prefix ++ "common.css");
     try F.hash(css, "9bf38ccd4d75910298181c590907a5cd755f618067bac8503a1a61323f1c3cd6");
-    var styles = try encoder.table_style_profile.parseAlloc(a, css); defer styles.deinit();
+    var styles = try GreekDashedLinkFixture.styles(a, &ns, css, F.title,
+        @embedFile("testdata/el-screen-observations/5630.json.gz"), "9925ee01cc3e030fc7edab18bc1b38df2df347a153c797acd0764dee9cff9a39"); defer styles.deinit();
     const input = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/el-height-normal-input", .{tmp.sub_path});
     try std.Io.Dir.cwd().createDirPath(io, try std.fs.path.join(a, &.{input, "modules"}));
     inline for (.{ "namespace-registry.tsv", "language-registry.tsv", "language-names.tsv", "manifest.jsonl", "modules/442770.lua", "figure-siteinfo.raw.json", "figure-sizing.json", "figure-sizing.raw.json", "figure-sizing.site.json", "file-metadata.tsv", "figure-page-observations.json" }) |name|
@@ -60927,6 +61045,7 @@ test "normal Writer and Reader retain complete EL lekani height figures nested c
     }
     for ([_][]const u8{ "Module:el-nouns-decl", "Module:grc-nouns-decl", "Τα οστά", "τουαλέτας", "πλαστική" }) |text|
         try std.testing.expect(std.mem.indexOf(u8, scan.text.items, text) != null);
+    try std.testing.expectEqual(@as(usize, 2), scan.dashed_labels);
 }
 
 const CapturedWriterIndexRebaseTest = struct {
@@ -69495,6 +69614,106 @@ test "normal equals project loader retains local namespace model owner and colli
     try registry.addSourceEqualsLabel("fr", "Plain source label");
     try std.testing.expectEqualStrings("Plain source label", registry.source_equals_labels.get("fr").?.?);
     try std.testing.expect(registry.resolve("Plain source label") == null);
+}
+
+test "ordinary Greek stylesheet collection binds four complete observations to their indexed page revisions" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    const css = @embedFile("testdata/el-regex130/common.css");
+    var ns = try namespace_registry.Registry.init(a, @embedFile("testdata/el-regex130/namespace-registry.tsv"));
+    defer ns.deinit();
+    const joins = @import("source_stylesheet_imports.zig");
+    const root_page_id = 171723;
+    const root_revision_id = 7307525;
+    const cases = [_]struct { title: []const u8, page_id: u64, revision_id: u64, compressed: []const u8, sha256: []const u8 }{
+        .{ .title = "λεκάνη", .page_id = 5630, .revision_id = 7336336,
+            .compressed = @embedFile("testdata/el-screen-observations/5630.json.gz"),
+            .sha256 = "9925ee01cc3e030fc7edab18bc1b38df2df347a153c797acd0764dee9cff9a39" },
+        .{ .title = "κατασβεστήρ", .page_id = 65452, .revision_id = 6472267,
+            .compressed = @embedFile("testdata/el-screen-observations/65452.json.gz"),
+            .sha256 = "10ca0229de0dffe43b52230a8caa4bbfe4d17e21f0138d78c137998d2860deed" },
+        .{ .title = "κανονική έκφραση", .page_id = 518221, .revision_id = 5548799,
+            .compressed = @embedFile("testdata/el-screen-observations/518221.json.gz"),
+            .sha256 = "94c9658c185fde41ca5379f1171a3f33c4a56908b04ededff273fb22668d42c6" },
+        .{ .title = "άσ' τον", .page_id = 1500114, .revision_id = 6500207,
+            .compressed = @embedFile("testdata/el-screen-observations/1500114.json.gz"),
+            .sha256 = "da5972dc14ea15fb2084bb4b6fa78d255318c01d4b0b64b1209775b0ba4df0d5" },
+    };
+    var articles: [cases.len]struct { page_id: u64, revision_id: u64, snapshot: []const u8 } = undefined;
+    var rows: std.ArrayList(u8) = .empty;
+    // Native index framing around the retained exact Common.css and original
+    // page identities. Full compressed XML remains the ordinary runtime source.
+    try rows.print(a, "0\t{d}\tMediaWiki:Common.css\t\t{d}\t{d}\t2026-09-01T00:00:00Z\tFixture\tcss\t8\t1\t0\n",
+        .{ css.len, root_page_id, root_revision_id });
+    for (cases, &articles) |case, *article| {
+        try rows.print(a, "0\t1\t{s}\t\t{d}\t{d}\t2026-09-01T00:00:00Z\tFixture\twikitext\t0\t1\t0\n",
+            .{ case.title, case.page_id, case.revision_id });
+        var body: std.Io.Reader = .fixed(case.compressed);
+        var inflater: std.compress.flate.Decompress = .init(&body, .gzip, &.{});
+        article.* = .{ .page_id = case.page_id, .revision_id = case.revision_id,
+            .snapshot = try inflater.reader.allocRemaining(a, .limited(joins.max_snapshot_bytes)) };
+        try std.testing.expect(inflater.err == null and inflater.state == .end);
+    }
+    try tmp.dir.writeFile(io, .{ .sub_path = "page-index.tsv", .data = rows.items });
+    try tmp.dir.writeFile(io, .{ .sub_path = "page-source", .data = css });
+    try dump_source.buildPageTitleIndex(io, a, try std.fs.path.join(a, &.{ path, "page-index.tsv" }),
+        try std.fs.path.join(a, &.{ path, "page-title-index.bin" }));
+    const titles = try dump_source.PageTitleIndex.init(try tmp.dir.readFileAlloc(io, "page-title-index.bin", a, .limited(64 * 1024)));
+    var reader = try dump_source.SourceReader.open(io, a, std.heap.page_allocator,
+        try std.fs.path.join(a, &.{ path, "page-source" }), .raw_xml, null);
+    defer reader.deinit();
+    var css_digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(css, &css_digest, .{});
+    const css_hash = std.fmt.bytesToHex(css_digest, .lower);
+    const namespace_hash = std.fmt.bytesToHex(ns.source_sha256, .lower);
+    const projection = .{
+        .schema = "wikidict.stylesheet-imports.custom-properties-articles.v1",
+        .wiki = ns.wiki, .dump_date = ns.dump_date,
+        .namespace_sha256 = @as([]const u8, &namespace_hash),
+        .root_css_sha256 = @as([]const u8, &css_hash),
+        .root_page_id = root_page_id, .root_revision_id = root_revision_id,
+        .temporal_scope = "current anonymous screen stylesheet observation applied to retained source; not historical dump deployment",
+        .articles = &articles,
+    };
+    const snapshot = try std.json.Stringify.valueAlloc(a, projection, .{});
+    var observed = try source_table_styles.observeWithImportsForTarget(a, &ns, &reader, rows.items, titles, snapshot, .screen);
+    const article_styles = observed.article_styles.?;
+    defer joins.deinitArticleStyles(a, article_styles);
+    const baseline = &observed.authority.?;
+    defer baseline.deinit();
+    try std.testing.expect(baseline.profile.custom_properties == null and observed.screen_styles == null);
+    var codes: encoder.blob_builder.LanguageCodes = .{ .namespace_catalog = &ns, .table_styles = &baseline.profile };
+    const installed = try installScreenStyleArticles(a, &codes, article_styles);
+    defer a.free(installed);
+    for (cases, article_styles) |case, *article| {
+        try std.testing.expectEqualStrings(case.sha256, &article.proof.snapshot_sha256);
+        try attachFigurePageObservation(a, &codes, null, null, 0, case.page_id, case.revision_id, case.title, "", "");
+        try std.testing.expect(codes.table_styles == &article.profile);
+        const custom = codes.table_styles.?.custom_properties.?;
+        inline for (.{ "--background-color-base", "--color-emphasized", "--border-color-muted" },
+            .{ "#fff", "#101418", "#dadde3" }) |name, value| {
+            const property = custom.root_environment.get(name);
+            try std.testing.expect(property == .known);
+            try std.testing.expectEqualStrings(value, property.known);
+        }
+        try attachFigurePageObservation(a, &codes, null, null, 0, case.page_id, case.revision_id + 1, case.title, "", "");
+        try std.testing.expect(codes.table_styles == &baseline.profile);
+        try attachFigurePageObservation(a, &codes, null, null, 8, case.page_id, case.revision_id, case.title, "", "");
+        try std.testing.expect(codes.table_styles == &baseline.profile);
+    }
+    try attachFigurePageObservation(a, &codes, null, null, 0, cases[0].page_id, cases[0].revision_id, cases[1].title, "", "");
+    try std.testing.expect(codes.table_styles == &baseline.profile);
+    articles[0].revision_id += 1;
+    const altered = try std.json.Stringify.valueAlloc(a, projection, .{});
+    try std.testing.expectError(error.InvalidStylesheetImports,
+        source_table_styles.observeWithImportsForTarget(a, &ns, &reader, rows.items, titles, altered, .screen));
+    try std.testing.expectError(error.InvalidStylesheetImports,
+        source_table_styles.observeWithImportsForTarget(a, &ns, &reader, rows.items, titles, snapshot, .print));
 }
 
 test "Amharic screen observation paints the captured message box and retains its three stored actions" {

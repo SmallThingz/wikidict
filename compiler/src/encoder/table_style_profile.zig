@@ -35450,6 +35450,7 @@ pub const InlineBoxResolution = struct {
     static_decoration: bool = false,
     radius: ?types.StyleWidth = null,
     rounded_background: ?[]const u8 = null,
+    dashed_link_background: ?[]const u8 = null,
     position: enum { static, relative, absolute } = .static,
     padding: types.StyleEdges = .{ .top = .{ .unit = .px, .value = 0 }, .right = .{ .unit = .px, .value = 0 },
         .bottom = .{ .unit = .px, .value = 0 }, .left = .{ .unit = .px, .value = 0 } },
@@ -35517,7 +35518,7 @@ fn inlineBoxInsets(a: std.mem.Allocator, declarations: []const ObservedFigureDec
 }
 
 const InlineBoxBorderAtom = union(enum) {
-    unknown, length: types.StyleLength, line_style: BorderLineStyle, color: types.InlineBoxColor,
+    unknown, dashed, length: types.StyleLength, line_style: BorderLineStyle, color: types.InlineBoxColor,
 };
 
 const InlineBoxBorderUpdate = struct { atoms: [12]?InlineBoxBorderAtom = @splat(null) };
@@ -35539,6 +35540,11 @@ fn inlineBoxColor(a: std.mem.Allocator, raw: []const u8) !?types.InlineBoxColor 
         .light_dark => |value| .{ .light_dark = .{ .light = value.light, .dark = value.dark } } };
 }
 
+fn inlineBoxLineStyle(raw: []const u8) ?InlineBoxBorderAtom {
+    if (std.ascii.eqlIgnoreCase(raw, "dashed")) return .dashed;
+    const atom = borderStyleAtom(raw) orelse return null;
+    return if (atom == .line_style) .{ .line_style = atom.line_style } else .unknown;
+}
 fn inlineBoxBorderUpdate(a: std.mem.Allocator, property: []const u8, raw: []const u8) !InlineBoxBorderUpdate {
     var side: ?usize = null; var component: ?usize = null;
     var recognized = std.ascii.eqlIgnoreCase(property, "border");
@@ -35563,7 +35569,7 @@ fn inlineBoxBorderUpdate(a: std.mem.Allocator, property: []const u8, raw: []cons
         var atoms: [4]InlineBoxBorderAtom = undefined;
         for (tokens[0..count], 0..) |token, index| atoms[index] = switch (part) {
             0 => if (reset) .unknown else if (borderWidthAtom(token)) |width| if (width == .length) .{ .length = width.length } else .unknown else .unknown,
-            1 => if (reset) .{ .line_style = .none } else if (borderStyleAtom(token)) |line| if (line == .line_style) .{ .line_style = line.line_style } else .unknown else .unknown,
+            1 => if (reset) .{ .line_style = .none } else inlineBoxLineStyle(token) orelse .unknown,
             2 => if (reset) .{ .color = .current_color } else if (try inlineBoxColor(a, token)) |color| .{ .color = color } else .unknown,
             else => unreachable,
         };
@@ -35573,7 +35579,7 @@ fn inlineBoxBorderUpdate(a: std.mem.Allocator, property: []const u8, raw: []cons
     }
     var width: ?InlineBoxBorderAtom = null; var line: ?InlineBoxBorderAtom = null; var color: ?InlineBoxBorderAtom = null;
     if (!reset) for (tokens[0..count]) |token| {
-        if (borderStyleAtom(token)) |known| { if (line != null or known != .line_style) return inlineBoxBorderUnknown(side, null); line = .{ .line_style = known.line_style }; }
+        if (inlineBoxLineStyle(token)) |known| { if (line != null or known == .unknown) return inlineBoxBorderUnknown(side, null); line = known; }
         else if (try inlineBoxColor(a, token)) |known| { if (color != null) return inlineBoxBorderUnknown(side, null); color = .{ .color = known }; }
         else if (borderWidthAtom(token)) |known| { if (width != null or known != .length) return inlineBoxBorderUnknown(side, null); width = .{ .length = known.length }; }
         else return inlineBoxBorderUnknown(side, null);
@@ -35589,7 +35595,7 @@ fn inlineBoxBorderUpdate(a: std.mem.Allocator, property: []const u8, raw: []cons
 fn inlineBoxBorderAtomEqual(left: InlineBoxBorderAtom, right: InlineBoxBorderAtom) bool {
     if (std.meta.activeTag(left) != std.meta.activeTag(right)) return false;
     return switch (left) {
-        .unknown => true, .length => |value| std.meta.eql(value, right.length), .line_style => |value| value == right.line_style,
+        .unknown, .dashed => true, .length => |value| std.meta.eql(value, right.length), .line_style => |value| value == right.line_style,
         .color => |value| switch (value) {
             .current_color, .transparent => std.meta.activeTag(value) == std.meta.activeTag(right.color),
             .rgb => |text| right.color == .rgb and std.mem.eql(u8, text, right.color.rgb),
@@ -35871,7 +35877,7 @@ fn positionedContainerGeometry(a: std.mem.Allocator, node: PositionedContainerPa
     if (padding.unresolved or margins.unresolved) return positionedContainerQueryRefusal(types.ContainerStyle, diagnostic, if (padding.unresolved) .geometry_padding else .geometry_margin, node.tag, if (padding.unresolved) "padding" else "margin", null);
     if (padding.value) |edge_values| { const fixed = observedFigureFixedEdges(edge_values) orelse return positionedContainerQueryRefusal(types.ContainerStyle, diagnostic, .geometry_padding, node.tag, "padding", null); if (!observedFigureEdgesZero(fixed)) return positionedContainerQueryRefusal(types.ContainerStyle, diagnostic, .geometry_padding, node.tag, "padding", null); }
     if (margins.value) |edge_values| { const fixed = observedFigureFixedEdges(edge_values) orelse return positionedContainerQueryRefusal(types.ContainerStyle, diagnostic, .geometry_margin, node.tag, "margin", null); if (!observedFigureEdgesZero(fixed)) return positionedContainerQueryRefusal(types.ContainerStyle, diagnostic, .geometry_margin, node.tag, "margin", null); }
-    const borders = (try inlineBoxBorders(a, node.declarations, node.environment)) orelse return positionedContainerQueryRefusal(types.ContainerStyle, diagnostic, .geometry_border, node.tag, "border", null);
+    const borders = (try inlineBoxBorders(a, node.declarations, node.environment, false)) orelse return positionedContainerQueryRefusal(types.ContainerStyle, diagnostic, .geometry_border, node.tag, "border", null);
     inline for (.{ "top", "right", "bottom", "left" }) |side| if (@field(borders, side) != .none) return positionedContainerQueryRefusal(types.ContainerStyle, diagnostic, .geometry_border, node.tag, "border", null);
     used.boxEdges(true); used.boxEdges(false); used.borderEdges();
     var lengths: [6]ObservedFigureLength = undefined;
@@ -36073,7 +36079,39 @@ fn resolvePositionedContainerFromText(a: std.mem.Allocator, profile: *const Prof
     return positionedContainerTextBranches(a, profile, element, &reverse, 0, css, environment, inherited_font, absence, &work, diagnostic);
 }
 
-fn inlineBoxBorders(a: std.mem.Allocator, declarations: []const ObservedFigureDeclaration, environment: CustomEnvironment) !?types.InlineBoxBorderEdges {
+// A border shorthand is a component list. Resolve a retained color var() in
+// that list only when the other tokens independently specify its line/width.
+// Its assignment keeps the declaration's original cascade rank.
+fn inlineBoxBorderValue(a: std.mem.Allocator, environment: CustomEnvironment, name: []const u8,
+    raw: []const u8, allow_dashed: bool) !CustomValue
+{
+    const whole = try customColorValue(a, environment, raw);
+    if (whole != .unknown or !allow_dashed or !std.ascii.eqlIgnoreCase(name, "border-bottom")) return whole;
+    var tokens: [4][]const u8 = undefined;
+    if ((borderTokens(raw, &tokens) orelse return whole) != 3) return whole;
+    var width: ?[]const u8 = null;
+    var color: ?[]const u8 = null;
+    var dashed = false;
+    for (tokens[0..3]) |token| {
+        if (std.ascii.eqlIgnoreCase(token, "dashed")) {
+            if (dashed) return whole;
+            dashed = true;
+        } else if (customCall(token) == null and borderWidthAtom(token) != null) {
+            if (width != null) return whole;
+            width = token;
+        } else if (customCall(token) != null) {
+            if (color != null) return whole;
+            const value = try customColorValue(a, environment, token);
+            if (value != .known) return value;
+            if (try inlineBoxColor(a, trim(value.known)) == null) return whole;
+            color = trim(value.known);
+        } else return whole;
+    }
+    if (!dashed or width == null or color == null) return whole;
+    return .{ .known = try std.fmt.allocPrint(a, "{s} dashed {s}", .{ width.?, color.? }) };
+}
+
+fn inlineBoxBorders(a: std.mem.Allocator, declarations: []const ObservedFigureDeclaration, environment: CustomEnvironment, allow_dashed: bool) !?types.InlineBoxBorderEdges {
     var assignments: std.ArrayList(InlineBoxBorderAssignment) = .empty;
     defer assignments.deinit(a);
     for (declarations) |declaration| {
@@ -36082,7 +36120,7 @@ fn inlineBoxBorders(a: std.mem.Allocator, declarations: []const ObservedFigureDe
         if (!declaration.syntax_unknown and (std.ascii.eqlIgnoreCase(declaration.name, "border-collapse") or std.ascii.eqlIgnoreCase(declaration.name, "border-spacing"))) continue;
         // Radius has its own cascade: the border shorthand does not reset it.
         if (!declaration.syntax_unknown and std.ascii.endsWithIgnoreCase(declaration.name, "radius")) continue;
-        const computed = try customColorValue(a, environment, declaration.raw);
+        const computed = try inlineBoxBorderValue(a, environment, declaration.name, declaration.raw, allow_dashed);
         const update = if (declaration.syntax_unknown) inlineBoxBorderUnknown(null, null)
             else switch (computed) {
                 .known => |raw| try inlineBoxBorderUpdate(a, if (all) "border" else declaration.name, trim(raw)),
@@ -36096,8 +36134,12 @@ fn inlineBoxBorders(a: std.mem.Allocator, declarations: []const ObservedFigureDe
     var result: types.InlineBoxBorderEdges = .all(.none);
     inline for (.{ "top", "right", "bottom", "left" }, 0..) |side, index| {
         const line = inlineBoxBorderAtom(assignments.items, index * 3 + 1);
-        if (line != .line_style) return null;
-        @field(result, side) = switch (line.line_style) {
+        @field(result, side) = if (line == .dashed) value: {
+            const width = inlineBoxBorderAtom(assignments.items, index * 3);
+            const color = inlineBoxBorderAtom(assignments.items, index * 3 + 2);
+            if (!allow_dashed or width != .length or color != .color) return null;
+            break :value .{ .dashed = .{ .width = width.length, .color = color.color } };
+        } else if (line == .line_style) switch (line.line_style) {
             .none => .none, .hidden => .hidden,
             .solid, .dotted => value: {
                 const width = inlineBoxBorderAtom(assignments.items, index * 3);
@@ -36106,7 +36148,7 @@ fn inlineBoxBorders(a: std.mem.Allocator, declarations: []const ObservedFigureDe
                 break :value if (line.line_style == .solid) .{ .solid = .{ .width = width.length, .color = color.color } }
                     else .{ .dotted = .{ .width = width.length, .color = color.color } };
             },
-        };
+        } else return null;
     }
     return result;
 }
@@ -36128,7 +36170,8 @@ fn inlineBoxStaticBackgroundImageAbsent(a: std.mem.Allocator, declarations: []co
     defer a.free(projected);
     for (projected) |*declaration| {
         if (declaration.syntax_unknown or !std.ascii.eqlIgnoreCase(declaration.name, "background")) continue;
-        if ((try figureColor(a, trim(declaration.raw))) != null) {
+        const computed = try customColorValue(a, environment, declaration.raw);
+        if (computed == .known and (try figureColor(a, trim(computed.known))) != null) {
             declaration.name = "background-image";
             declaration.raw = "none";
         }
@@ -36220,12 +36263,22 @@ fn inlineBoxDeclarationsIn(a: std.mem.Allocator, declarations: []const ObservedF
         if (edge != .length) return .{ .unresolved = true };
         @field(result.padding, side) = edge.length;
     }
-    result.border = (try inlineBoxBorders(a, declarations, environment)) orelse return .{ .unresolved = true };
+    result.border = (try inlineBoxBorders(a, declarations, environment, static_decoration and !rounded_decoration)) orelse return .{ .unresolved = true };
     if (static_decoration) {
         inline for (.{ "top", "right", "bottom", "left" }) |side|
             if ((!rounded_decoration or std.mem.eql(u8, side, "top") or std.mem.eql(u8, side, "bottom")) and
                 @field(result.padding, side).value != 0) return .{ .unresolved = true };
         result.static_decoration = true;
+    }
+    if (result.border.top == .dashed or result.border.right == .dashed or result.border.bottom == .dashed or result.border.left == .dashed) {
+        if (!static_decoration or rounded_decoration or result.border.top != .none or result.border.right != .none or
+            result.border.left != .none or result.border.bottom != .dashed or result.border.bottom.dashed.width.unit != .px or
+            result.border.bottom.dashed.width.value != 1 or result.border.bottom.dashed.color != .rgb or result.cursor != null)
+            return .{ .unresolved = true };
+        const background = try observedFigureColor(a, declarations, "background-color", environment, null, null);
+        if (background.unresolved or background.value == null or background.value.?.kind != .rgb)
+            return .{ .unresolved = true };
+        result.dashed_link_background = background.value.?.value;
     }
     if (rounded_decoration) {
         if (!static_decoration or rtl or !roundedInlineBoxEdgesEqual(result.border)) return .{ .unresolved = true };
@@ -36540,7 +36593,7 @@ fn inlineBoxSelectionAlloc(a: std.mem.Allocator, css: []const u8) !InlineBoxSele
     return selected;
 }
 
-pub const StaticInlineDecorationCandidate = enum { none, known, unknown };
+pub const StaticInlineDecorationCandidate = enum { none, known, dashed, unknown };
 
 pub fn staticInlineDecorationCandidateAlloc(a: std.mem.Allocator, css: []const u8) !StaticInlineDecorationCandidate {
     if (css.len > max_css_bytes) return .none;
@@ -36561,10 +36614,17 @@ pub fn staticInlineDecorationCandidateAlloc(a: std.mem.Allocator, css: []const u
     defer declarations.deinit(a);
     try appendObservedFigureDeclarations(a, &declarations, css,
         .{ .inline_style = true, .order = max_rules * 1024 }, false, false, null, 0);
-    const selected_edges = (try inlineBoxBorders(a, declarations.items, .{})) orelse return .unknown;
+    const selected_edges = (try inlineBoxBorders(a, declarations.items, .{}, true)) orelse {
+        // This alternative only chooses which full source/cascade query to try.
+        // The emitter separately requires the resolved authored edge with its
+        // current custom environment; this fallback never supplies wire values.
+        const fallback = (try inlineBoxBorders(a, declarations.items, .{ .complete = true }, true)) orelse return .unknown;
+        return if (fallback.bottom == .dashed) .dashed else .unknown;
+    };
+    if (selected_edges.bottom == .dashed) return .dashed;
     inline for (.{ "top", "right", "bottom", "left" }) |side| switch (@field(selected_edges, side)) {
         .none, .hidden => {},
-        .solid, .dotted => |line| if (line.width.value != 0) return .known,
+        .solid, .dotted, .dashed => |line| if (line.width.value != 0) return .known,
     };
     return .none;
 }
@@ -38791,4 +38851,26 @@ test "classifier padding and paint are three independent source-owned inline ran
     defer styled.deinit();
     try std.testing.expect(try staticInlineOwnerPaintIn(&styled, a, &element, outer, .{}, &.{outer}) == null);
     try std.testing.expect(try staticInlineOwnerPaintIn(&empty, a, &element, outer, .{}, &.{separator}) == null);
+}
+
+
+test "static dashed bottom links resolve CSS variable colors and refuse other shapes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const css = "background:var(--paper,#fff);color:#002000;border-bottom:1px dashed var(--edge,#ddd)";
+    const environment: CustomEnvironment = .{ .complete = true };
+    const ok = try resolveStaticInlineDecorationWithAncestorsAlloc(a, css, environment, false, &.{css});
+    try std.testing.expect(!ok.unresolved and ok.border.bottom == .dashed);
+    try std.testing.expectEqualStrings("#ffffff", ok.dashed_link_background orelse return error.TestUnexpectedResult);
+    try std.testing.expectEqualStrings("#dddddd", ok.border.bottom.dashed.color.rgb);
+    const chosen = try resolveStaticInlineDecorationWithAncestorsAlloc(a, css, .{ .values = &.{.{ .name = "--edge", .value = .{ .known = "#123456" } }}, .complete = true }, false, &.{css});
+    try std.testing.expect(!chosen.unresolved and chosen.border.bottom == .dashed);
+    try std.testing.expectEqualStrings("#123456", chosen.border.bottom.dashed.color.rgb);
+    const unknown = try resolveStaticInlineDecorationWithAncestorsAlloc(a, css, .{}, false, &.{css});
+    try std.testing.expect(unknown.unresolved);
+    for ([_][]const u8{ "background:#fff;border:1px dashed #ddd", "background:#fff;border-bottom:2px dashed #ddd", "background:#fff;border-bottom:1px dashed currentColor", "border-bottom:1px dashed #ddd" }) |bad| {
+        const refused = try resolveStaticInlineDecorationWithAncestorsAlloc(a, bad, environment, false, &.{bad});
+        try std.testing.expect(refused.unresolved);
+    }
 }

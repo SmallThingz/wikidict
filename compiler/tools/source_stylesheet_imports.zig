@@ -566,6 +566,19 @@ test "site cascade overrides reviewed core defaults and matching unknown rules s
 }
 
 const custom_schema = "wikidict.custom-property-styles.v1";
+const article_styles_schema = "wikidict.stylesheet-imports.custom-properties-articles.v1";
+const ArticleStyles = struct {
+    schema: []const u8,
+    wiki: []const u8,
+    dump_date: []const u8,
+    namespace_sha256: []const u8,
+    root_css_sha256: []const u8,
+    root_page_id: u64,
+    root_revision_id: u64,
+    temporal_scope: []const u8,
+    articles: []const struct { page_id: u64, revision_id: u64, snapshot: []const u8 },
+};
+const custom_temporal_scope = "current anonymous screen stylesheet observation applied to retained source; not historical dump deployment";
 const CustomSnapshot = struct {
     schema: []const u8,
     wiki: []const u8,
@@ -641,11 +654,106 @@ fn joinCustomAlloc(a: A, root_css: []const u8, root: Root, snapshot_bytes: []con
     const parsed = try std.json.parseFromSlice(CustomSnapshot, a, snapshot_bytes, .{});
     defer parsed.deinit();
     const value = parsed.value;
-    if (!std.mem.eql(u8, value.schema, custom_schema) or !std.mem.eql(u8, value.wiki, root.wiki) or
-        !std.mem.eql(u8, value.dump_date, root.dump_date) or !std.mem.eql(u8, value.namespace_sha256, root.namespace_sha256) or
-        !std.mem.eql(u8, value.root_css_sha256, &sha256(root_css)) or value.root_page_id != root.page_id or value.root_revision_id != root.revision_id or
-        root.page_id == 0 or root.revision_id == 0) return error.InvalidStylesheetImports;
+    if (!std.mem.eql(u8, value.schema, custom_schema) or !matchesCustomRoot(value, root, &sha256(root_css)))
+        return error.InvalidStylesheetImports;
     return buildCustomContext(a, root_css, snapshot_bytes, target, value);
+}
+
+fn matchesCustomRoot(value: anytype, root: Root, root_sha256: *const [64]u8) bool {
+    return std.mem.eql(u8, value.wiki, root.wiki) and
+        std.mem.eql(u8, value.dump_date, root.dump_date) and std.mem.eql(u8, value.namespace_sha256, root.namespace_sha256) and
+        std.mem.eql(u8, value.root_css_sha256, root_sha256) and value.root_page_id == root.page_id and value.root_revision_id == root.revision_id and
+        root.page_id != 0 and root.revision_id != 0;
+}
+
+pub fn deinitArticleStyles(a: A, articles: []Joined) void {
+    for (articles) |*article| article.profile.deinit();
+    a.free(articles);
+}
+
+pub fn joinIndexedArticleStylesAlloc(a: A, root_css: []const u8, root: Root, snapshot_bytes: []const u8,
+    target: styles.ReadingTarget, namespaces: anytype, page_index: []const u8, titles: anytype) !?[]Joined
+{
+    if (snapshot_bytes.len > max_snapshot_bytes) return error.InvalidStylesheetImports;
+    const header = try std.json.parseFromSlice(struct { schema: []const u8 }, a, snapshot_bytes, .{ .ignore_unknown_fields = true });
+    defer header.deinit();
+    if (!std.mem.eql(u8, header.value.schema, article_styles_schema)) return null;
+    const parsed = try std.json.parseFromSlice(ArticleStyles, a, snapshot_bytes, .{});
+    defer parsed.deinit();
+    const root_sha256 = sha256(root_css);
+    const value = parsed.value;
+    if (target != .screen or value.articles.len == 0 or value.articles.len > 16 or
+        !matchesCustomRoot(value, root, &root_sha256) or !std.mem.eql(u8, value.temporal_scope, custom_temporal_scope))
+        return error.InvalidStylesheetImports;
+    const results = try a.alloc(Joined, value.articles.len);
+    var joined_count: usize = 0;
+    errdefer {
+        for (results[0..joined_count]) |*item| item.profile.deinit();
+        a.free(results);
+    }
+    var last_page: u64 = 0;
+    for (value.articles, results) |article, *result| {
+        if (article.page_id <= last_page or article.revision_id == 0) return error.InvalidStylesheetImports;
+        const child = try std.json.parseFromSlice(CustomSnapshot, a, article.snapshot, .{});
+        defer child.deinit();
+        const observed = child.value;
+        if (!std.mem.eql(u8, observed.schema, custom_schema) or !matchesCustomRoot(observed, root, &root_sha256) or
+            observed.ancestors.len < 2 or observed.ancestors[observed.ancestors.len - 1].end > observed.page_html.len or
+            !styles.Profile.hasClass(observed.ancestors[0].classes, "client-nojs"))
+            return error.InvalidStylesheetImports;
+        try requireIndexedArticle(page_index, titles, article.page_id, article.revision_id, observed.page_title);
+        var scratch = std.heap.ArenaAllocator.init(a);
+        defer scratch.deinit();
+        const sa = scratch.allocator();
+        try requireArticleUrl(sa, root.wiki, article.revision_id, observed);
+        const prefix_end = observed.ancestors[observed.ancestors.len - 1].end;
+        const identity = @import("page_language_prefix.zig").parseSelectedOldidAlloc(sa, observed.page_html[0..prefix_end],
+            article.page_id, article.revision_id, 0, observed.page_title) catch |err| switch (err) {
+            error.OutOfMemory => return err,
+            else => return error.InvalidStylesheetImports,
+        };
+        if (!std.mem.eql(u8, identity.root_language, namespaces.content_language)) return error.InvalidStylesheetImports;
+        result.* = try buildCustomContext(a, root_css, article.snapshot, target, observed);
+        result.proof.custom.?.article = .{ .page_id = article.page_id, .revision_id = article.revision_id };
+        joined_count += 1;
+        last_page = article.page_id;
+    }
+    return results;
+}
+
+fn requireArticleUrl(a: A, wiki: []const u8, revision_id: u64, observed: CustomSnapshot) !void {
+    const suffix = "wiktionary";
+    if (!std.mem.endsWith(u8, wiki, suffix) or wiki.len <= suffix.len) return error.InvalidStylesheetImports;
+    const prefix = try std.fmt.allocPrint(a, "https://{s}.wiktionary.org/w/index.php?", .{wiki[0 .. wiki.len - suffix.len]});
+    if (!std.mem.startsWith(u8, observed.page_url, prefix)) return error.InvalidStylesheetImports;
+    var query = std.mem.splitScalar(u8, observed.page_url[prefix.len..], '&');
+    const revision = try std.fmt.allocPrint(a, "{d}", .{revision_id});
+    var has_title = false;
+    var has_revision = false;
+    var has_skin = false;
+    while (query.next()) |part| {
+        const split = std.mem.indexOfScalar(u8, part, '=') orelse return error.InvalidStylesheetImports;
+        const key = part[0..split];
+        const raw_value = part[split + 1 ..];
+        if (!has_title and std.mem.eql(u8, key, "title")) {
+            var at: usize = 0;
+            while (at < raw_value.len) : (at += 1) {
+                if (raw_value[at] != '%') continue;
+                if (raw_value.len - at < 3 or !std.ascii.isHex(raw_value[at + 1]) or !std.ascii.isHex(raw_value[at + 2]))
+                    return error.InvalidStylesheetImports;
+                at += 2;
+            }
+            const encoded = try a.dupe(u8, raw_value);
+            std.mem.replaceScalar(u8, encoded, '+', ' ');
+            if (!std.mem.eql(u8, std.Uri.percentDecodeInPlace(encoded), observed.page_title)) return error.InvalidStylesheetImports;
+            has_title = true;
+        } else if (!has_revision and std.mem.eql(u8, key, "oldid") and std.mem.eql(u8, raw_value, revision)) {
+            has_revision = true;
+        } else if (!has_skin and std.mem.eql(u8, key, "useskin") and std.mem.eql(u8, raw_value, observed.skin)) {
+            has_skin = true;
+        } else return error.InvalidStylesheetImports;
+    }
+    if (!has_title or !has_revision or !has_skin) return error.InvalidStylesheetImports;
 }
 
 pub fn joinIndexedAbsentCustomAlloc(a: A, snapshot_bytes: []const u8, target: styles.ReadingTarget, namespaces: anytype, page_index: []const u8, titles: anytype) !Joined {
@@ -663,21 +771,25 @@ pub fn joinIndexedAbsentCustomAlloc(a: A, snapshot_bytes: []const u8, target: st
         if (hash.len != 64) return error.InvalidStylesheetImports;
         for (hash) |c| if (!(std.ascii.isDigit(c) or (c >= 'a' and c <= 'f'))) return error.InvalidStylesheetImports;
     }
+    try requireIndexedArticle(page_index, titles, value.article_page_id, value.article_revision_id, value.page_title);
+    var result = try buildCustomContext(a, null, snapshot_bytes, target, value);
+    result.proof.custom.?.article = .{ .page_id = value.article_page_id, .revision_id = value.article_revision_id };
+    return result;
+}
+
+fn requireIndexedArticle(page_index: []const u8, titles: anytype, page_id: u64, revision_id: u64, title: []const u8) !void {
     const dump_source = @import("wikimedia_dump");
-    const ref = (try titles.lookup(page_index, value.page_title)) orelse return error.InvalidStylesheetImports;
+    const ref = (try titles.lookup(page_index, title)) orelse return error.InvalidStylesheetImports;
     const at = dump_source.pageRowRefOffset(ref);
     if (at >= page_index.len or (at != 0 and page_index[at - 1] != '\n')) return error.InvalidStylesheetImports;
     const end = std.mem.indexOfScalarPos(u8, page_index, at, '\n') orelse page_index.len;
     const row = try dump_source.parsePageIndexLine(titles.kind, page_index[at..end]);
     if (row.ns != 0 or !row.has_source or row.redirect != null or !std.mem.eql(u8, row.content_model, "wikitext") or
-        !std.mem.eql(u8, row.title, value.page_title) or row.page_id != value.article_page_id or row.revision_id != value.article_revision_id) return error.InvalidStylesheetImports;
-    var result = try buildCustomContext(a, null, snapshot_bytes, target, value);
-    result.proof.custom.?.article = .{ .page_id = row.page_id, .revision_id = row.revision_id };
-    return result;
+        !std.mem.eql(u8, row.title, title) or row.page_id != page_id or row.revision_id != revision_id) return error.InvalidStylesheetImports;
 }
 
 fn buildCustomContext(a: A, css: ?[]const u8, snapshot_bytes: []const u8, target: styles.ReadingTarget, value: anytype) !Joined {
-    const scope = if (css != null) "current anonymous screen stylesheet observation applied to retained source; not historical dump deployment" else "current anonymous server-emitted screen styles before client scripts applied to retained source; not historical dump deployment";
+    const scope = if (css != null) custom_temporal_scope else "current anonymous server-emitted screen styles before client scripts applied to retained source; not historical dump deployment";
     if (!std.mem.eql(u8, value.temporal_scope, scope) or
         value.observed_utc.len < 20 or value.generator.len == 0 or value.skin.len == 0 or value.page_title.len == 0 or
         !std.mem.startsWith(u8, value.page_url, "https://") or

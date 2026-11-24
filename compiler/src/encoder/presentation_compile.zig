@@ -6075,12 +6075,21 @@ fn staticInlineOrdinarySpan(span: Span) bool {
         span.pending_bidi_scope == null and span.image == null and span.ruby == null and span.inline_padding_group == null and
         span.inline_action_group == null and span.pending_figure == null and span.pending_container == null;
 }
+fn staticDashedLinkLabel(owner: Span, box: presentation_types.InlineBoxGroup(Span)) bool {
+    if (owner.kind != .link or owner.target.len == 0 or owner.background == null or box.radius != null or box.overlays.len != 0 or
+        box.spans.len != 1 or box.spans[0].kind != .text or box.spans[0].target.len != 0 or box.spans[0].text.len == 0 or
+        box.border.top != .none or box.border.right != .none or box.border.left != .none or box.border.bottom != .dashed) return false;
+    const line = box.border.bottom.dashed;
+    if (line.color != .rgb or line.width.unit != .px or line.width.value != 1) return false;
+    inline for (.{ "top", "right", "bottom", "left" }) |side| if (@field(box.padding, side).value != 0) return false;
+    return true;
+}
 fn inlineBoxWireMetricEqual(owner: Span, child: Span) bool {
     var child_flags = child.flags;
     if (owner.inline_box_group) |box| {
         // A square dotted baseline label uses the declaring font for its border
         // band and the native child's actual font for shaping and line metrics.
-        if (staticDottedTextLabel(owner, box.*)) child_flags.italic = owner.flags.italic;
+        if (staticDottedTextLabel(owner, box.*) or staticDashedLinkLabel(owner, box.*)) child_flags.italic = owner.flags.italic;
     }
     const help_style: ?presentation_types.InlineTextStyle = .{ .cursor = .help };
     return (owner.inline_style == null or Renderer.sameFigurePreparationValue(owner.inline_style, help_style)) and
@@ -9113,6 +9122,7 @@ pub const Renderer = struct {
     native_article_host: ?*const NativeArticleHost = null,
     native_source_class_range: ?NativeSourceClassRange = null,
     native_quote_source: ?*const NativeQuoteSourceDomain = null,
+    decorated_link_quotes: ?*const DecoratedLinkQuotes = null,
     root_language_quote_source: ?*const RootLanguageQuoteDomain = null,
     native_html_copy_source: ?*const NativeHtmlCopySourceDomain = null,
     native_body_language: ?[]const u8 = null,
@@ -12096,8 +12106,47 @@ pub const Renderer = struct {
 
     // A decorated whole link is the existing source action, not a new action
     // inferred from inherited formatting. Geometry still needs its own query.
-    fn roundedInlineBoxLinkSourceCurrent(self: *const Renderer, tracked: MissingText, at: usize,
-        pair: syntax.Pair, effective: Style) bool
+    // This receipt covers the normalized wikilink token only. Its original
+    // input is bound to this render body's native root, independent of whether
+    // the page has enough evidence for a class inventory.
+    const DecoratedLinkQuotes = struct {
+        map: *const QuoteSourceMap,
+        original: MissingText,
+        output: MissingText,
+        root: *const NativeInlineMotionRoot,
+        epoch: u64,
+        digest: [32]u8,
+    };
+
+    fn decoratedQuoteInput(self: *const Renderer, original: MissingText) ?*const NativeInlineMotionRoot {
+        const root = self.native_inline_motion_root orelse return null;
+        if (!self.native_inline_motion_active or self.native_inline_motion_epoch == 0 or root.reference != null or
+            self.in_reference or self.in_template_literal_scope or self.pre_block or self.parsed_pre or self.poem_depth != 0 or
+            self.ruby_depth != 0 or self.figure_caption_depth != 0 or self.typed_table_depth != 0 or
+            self.content_root != .parser_output or self.context.observe_structure_only or !QuoteSourceMap.clean(root.source) or
+            !QuoteSourceMap.clean(original) or !self.nativeQuoteContainingSourcesClean(original.bytes) or
+            self.wikiCellCurrentBodyRange(root.source, original.bytes) == null) return null;
+        return root;
+    }
+
+    fn decoratedQuoteMapBound(map: *const QuoteSourceMap, original: MissingText, output: MissingText) bool {
+        return QuoteSourceMap.clean(original) and QuoteSourceMap.clean(output) and
+            inlineOverlaySameSourceSlice(map.original, original.bytes) and inlineOverlaySameSourceSlice(map.output, output.bytes) and
+            rootLanguageQuoteMapClean(map);
+    }
+
+    fn decoratedLinkMap(self: *const Renderer, token: []const u8) ?*const QuoteSourceMap {
+        if (self.native_quote_source) |issued| if (issued.map.outputOffset(token) != null)
+            return if (self.nativeQuoteDomainCurrent(issued)) issued.map else null;
+        const issued = self.decorated_link_quotes orelse return null;
+        if (issued.root != self.native_inline_motion_root or issued.epoch != self.native_inline_motion_epoch or
+            self.decoratedQuoteInput(issued.original) != issued.root or !decoratedQuoteMapBound(issued.map, issued.original, issued.output) or
+            !std.mem.eql(u8, &issued.digest, &nativeQuoteMapDigest(issued.map)) or issued.map.outputOffset(token) == null) return null;
+        return issued.map;
+    }
+
+    fn decoratedLinkSourceCurrent(self: *const Renderer, tracked: MissingText, at: usize,
+        pair: syntax.Pair, effective: Style, allow_quote_copy: bool) bool
     {
         if (self.context.observe_structure_only or self.in_reference or self.in_template_literal_scope or
             self.pre_block or self.parsed_pre or self.poem_depth != 0 or self.figure_caption_depth != 0 or
@@ -12118,8 +12167,22 @@ pub const Renderer = struct {
             label.ptr != tracked.bytes.ptr or label.len != tracked.bytes.len) return false;
         const motion = switch (effective.native_inline_motion) { .proved => |value| value, else => return false };
         if (!self.native_inline_motion_active or self.native_inline_motion_root != motion.root or
-            self.native_inline_motion_epoch != motion.epoch or motion.epoch == 0 or motion.root.source.unknown or
-            !noLiParentSourceRange(motion.root.source, token)) return false;
+            self.native_inline_motion_epoch != motion.epoch or motion.epoch == 0 or motion.root.source.unknown) return false;
+        if (!noLiParentSourceRange(motion.root.source, token)) {
+            if (!allow_quote_copy) return false;
+            const map = self.decoratedLinkMap(token) orelse return false;
+            const original = map.coveredOriginal(token, map.original) orelse return false;
+            const physical = self.wikiCellCurrentBodyRange(motion.root.source, original) orelse return false;
+            var physical_iterator: ir.InlineIterator = .{ .input = physical, .renderer_boundaries = true, .link_trail = self.context.link_trail };
+            const physical_action = physical_iterator.next() orelse return false;
+            if (physical_action.kind != .link or !physical_action.link_has_pipe or physical_action.link_label_restored_close or
+                physical_action.trail.len != 0 or physical_iterator.cursor != physical.len) return false;
+            var normalized_iterator: ir.InlineIterator = .{ .input = token, .renderer_boundaries = true, .link_trail = self.context.link_trail };
+            const current = normalized_iterator.next() orelse return false;
+            const original_target = map.copiedOriginal(current.target) orelse return false;
+            const physical_target = self.wikiCellCurrentBodyRange(motion.root.source, original_target) orelse return false;
+            if (!inlineOverlaySameSourceSlice(physical_target, physical_action.target)) return false;
+        }
         var iterator: ir.InlineIterator = .{ .input = token, .renderer_boundaries = true, .link_trail = self.context.link_trail };
         const action = iterator.next() orelse return false;
         if (action.kind != .link or !action.link_has_pipe or action.link_label_restored_close or action.trail.len != 0 or
@@ -12501,9 +12564,11 @@ pub const Renderer = struct {
                 },
             }) else table_style_profile.StaticInlineDecorationCandidate.none;
         const static_candidate = static_kind != .none;
-        const rounded_action_candidate = static_kind == .known and
-            self.roundedInlineBoxLinkSourceCurrent(tracked, at, pair, effective);
-        if (static_candidate and !rounded_action_candidate and (effective.kind != .text or effective.target.len != 0)) {
+        const dashed_hint = static_kind == .dashed;
+        const dashed_action_candidate = static_candidate and dashed_hint and self.decoratedLinkSourceCurrent(tracked, at, pair, effective, true);
+        const rounded_action_candidate = static_kind == .known and !dashed_hint and self.decoratedLinkSourceCurrent(tracked, at, pair, effective, false);
+        const linked_decoration = rounded_action_candidate or dashed_action_candidate;
+        if (static_candidate and !linked_decoration and (effective.kind != .text or effective.target.len != 0)) {
             // A linked declaring owner remains on its existing action/font
             // path. The new plain-text slice carrier grants it no geometry.
             self.fallbacks.unsupported_element = true;
@@ -12523,7 +12588,7 @@ pub const Renderer = struct {
         const nested_label = static_candidate and std.mem.indexOfScalar(u8, tracked.bytes[tag.end..pair.inner_end], '<') != null;
         if (static_candidate and ((nested_label and (rounded_action_candidate or !try self.staticInlineItalicLabel(tracked, tag, pair, effective))) or
             effective.direction.len != 0 or effective.captured_direction != null or effective.superscript or effective.subscript or
-            (!rounded_action_candidate and (effective.kind != .text or effective.target.len != 0)))) {
+            (!linked_decoration and (effective.kind != .text or effective.target.len != 0)))) {
             self.tracePresentationRejection("static_inline_box", "unsupported_source_scope", tracked.bytes, at, 0, error.UncompiledPresentation);
             return error.UncompiledPresentation;
         }
@@ -12570,7 +12635,12 @@ pub const Renderer = struct {
         };
         if (rounded_action_candidate and (box.radius == null or box.rounded_background == null or effective.background == null or
             !std.mem.eql(u8, box.rounded_background.?, effective.background.?) or
-            !self.roundedInlineBoxLinkSourceCurrent(tracked, at, pair, effective))) return error.UncompiledPresentation;
+            !self.decoratedLinkSourceCurrent(tracked, at, pair, effective, false))) return error.UncompiledPresentation;
+        if (dashed_action_candidate or box.dashed_link_background != null) {
+            if (!dashed_action_candidate or box.dashed_link_background == null or effective.background == null or
+                !std.mem.eql(u8, box.dashed_link_background.?, effective.background.?) or effective.foreground == null)
+                return error.UncompiledPresentation;
+        }
         if (box.position == .static and !box.static_decoration) {
             if (self.inline_box_owner != null and box.specified) {
                 inline for (.{ "top", "right", "bottom", "left" }) |side| {
@@ -12665,7 +12735,8 @@ pub const Renderer = struct {
             self.spans.items[before].inline_style = .{ .cursor = cursor };
         }
         const emitted = self.spans.items[before];
-        if (nested_label and !staticDottedTextLabel(emitted, group.*)) return error.UncompiledPresentation;
+        if (dashed_action_candidate and !staticDashedLinkLabel(emitted, group.*)) return error.UncompiledPresentation;
+        if (nested_label and !staticDottedTextLabel(emitted, group.*) and !staticDashedLinkLabel(emitted, group.*)) return error.UncompiledPresentation;
         if (emitted.inline_box_group != group or emitted.kind != effective.kind or emitted.font_size_unknown) { self.tracePresentationRejection("inline_box", "emitted_group", tracked.bytes, at, 0, error.UncompiledPresentation); return error.UncompiledPresentation; }
         if (emitted.target.ptr != effective.target.ptr or emitted.target.len != effective.target.len) { self.tracePresentationRejection("inline_box", "emitted_target", tracked.bytes, at, 0, error.UncompiledPresentation); return error.UncompiledPresentation; }
         if (box.static_decoration) for (children) |child| {
@@ -38325,6 +38396,7 @@ pub const Renderer = struct {
         var local_target_quote_live = false;
         var static_numbered_quote_live = false;
         var native_quote_input_live = false;
+        var decorated_quote_root: ?*const NativeInlineMotionRoot = null;
         var box_quote_input_live = false;
         var root_language_quote_proof: ?*const SourceRootLanguageProof = null;
         const figure_source_domain = self.figureClassSourceDomain();
@@ -38363,6 +38435,9 @@ pub const Renderer = struct {
                 (table_style_profile.staticInlineOwnerCandidate(prepared.source.bytes) or std.ascii.findIgnoreCase(prepared.source.bytes, "border") != null) and
                 self.staticNumberedQuoteInput(prepared.source);
             native_quote_input_live = ordinary and figure_quote_input_live and self.nativeQuoteInputEligible(prepared.source, previous_source_domain);
+            if (!native_quote_input_live and ordinary and figure_quote_input_live and previous_source_domain == null and
+                std.mem.indexOf(u8, prepared.source.bytes, "[[") != null and std.ascii.findIgnoreCase(prepared.source.bytes, "border") != null)
+                decorated_quote_root = self.decoratedQuoteInput(prepared.source);
             if (ordinary and figure_quote_input_live) root_language_quote_proof = self.rootLanguageQuoteInputProof(prepared.source);
             const selected_quote_source = ordinary and figure_quote_input_live and QuoteSourceMap.cleanLocal(prepared.source) and
                 self.registeredCaptionOriginal(prepared.source.bytes) != null;
@@ -38373,7 +38448,7 @@ pub const Renderer = struct {
             };
             const output = try normalizeWikiQuotesPreparedMappedInDomain(self.a, prepared.source, 0, false, self.context,
                 if (table_tails.seed) |seed| prepared.forwardSeed(comparisons.forwardSeed(seed)) else null,
-                if (static_numbered_quote_live or quote_scope != null or table_link_quote_live or local_target_quote_live or native_quote_input_live or box_quote_input_live or root_language_quote_proof != null or
+                if (static_numbered_quote_live or quote_scope != null or table_link_quote_live or local_target_quote_live or native_quote_input_live or decorated_quote_root != null or box_quote_input_live or root_language_quote_proof != null or
                     (ordinary and figure_quote_input_live and (figure_source_domain != null or self.context.body_link_continuations != null))) &quote_map else null,
                 static_numbered_quote_live or selected_quote_source or selected_table_quote_source);
             prepared.release(self.a, comparisons.source, output);
@@ -38406,6 +38481,15 @@ pub const Renderer = struct {
         if (native_quote_input_live) native_quote_domain = self.nativeQuoteDomainInit(&quote_map, unmatched, quoted, previous_source_domain, previous_native_quotes);
         if (native_quote_domain) |*domain| self.native_quote_source = domain;
         defer self.native_quote_source = previous_native_quotes;
+        const previous_decorated_quotes = self.decorated_link_quotes;
+        var decorated_quotes: DecoratedLinkQuotes = undefined;
+        self.decorated_link_quotes = null;
+        if (decorated_quote_root) |root| if (self.decoratedQuoteInput(unmatched) == root and decoratedQuoteMapBound(&quote_map, unmatched, quoted)) {
+            decorated_quotes = .{ .map = &quote_map, .original = unmatched, .output = quoted, .root = root,
+                .epoch = self.native_inline_motion_epoch, .digest = nativeQuoteMapDigest(&quote_map) };
+            self.decorated_link_quotes = &decorated_quotes;
+        };
+        defer self.decorated_link_quotes = previous_decorated_quotes;
         const previous_body_link_quotes = self.body_link_quote_source;
         var body_link_quotes: BodyLinkQuoteDomain = undefined;
         if (self.context.body_link_continuations != null and QuoteSourceMap.clean(quoted) and
@@ -131418,4 +131502,22 @@ test "static inline decoration accepts only authored span siblings under the ope
         defer a.free(output.bytes);
         try std.testing.expect(!Renderer.inlineBoxPairedBoldMap(&invalid_map, input, output));
     }
+}
+
+
+test "ordinary decorated wikilink copy certificate refuses other sources or opaque quote edits" {
+    const a = std.testing.allocator;
+    const source = "[[target|<span>label</span>]]";
+    const output = try a.dupe(u8, source);
+    defer a.free(output);
+    const unrelated = try a.dupe(u8, source);
+    defer a.free(unrelated);
+    var map: QuoteSourceMap = .{ .original = source, .output = output };
+    defer map.deinit(a);
+    try map.appendCopy(a, 0, 0, output.len);
+    try std.testing.expect(Renderer.decoratedQuoteMapBound(&map, MissingText.untracked(source), MissingText.untracked(output)));
+    try std.testing.expect(!Renderer.decoratedQuoteMapBound(&map, MissingText.untracked(unrelated), MissingText.untracked(output)));
+    try std.testing.expect(!Renderer.decoratedQuoteMapBound(&map, MissingText.untracked(source), MissingText.untracked(unrelated)));
+    map.has_literal_quote_edits = true;
+    try std.testing.expect(!Renderer.decoratedQuoteMapBound(&map, MissingText.untracked(source), MissingText.untracked(output)));
 }
