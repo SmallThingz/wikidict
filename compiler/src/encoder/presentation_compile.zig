@@ -15656,6 +15656,9 @@ pub const Renderer = struct {
         if (self.spans.items[index].pending_figure) |pending| {
             const owned = try self.a.create(Figure);
             owned.* = pending.*;
+            // The provisional File link was an ordinary raster until this exact
+            // occurrence acquired its map. Its area coordinates use the original asset.
+            owned.intrinsic_size = null;
             owned.map_fallback = try self.a.dupe(Span, self.spans.items[index + 1 ..]);
             self.spans.items[index].pending_figure = owned;
         }
@@ -87455,6 +87458,81 @@ test "J figure image and caption preserve H advice independently and exclude I w
         const spans = [_]Span{.{ .kind = .link, .target = "A", .text = "label", .tooltip = tip }};
         try std.testing.expect((try renderer.imageMapAction(&spans, "A", false)) == null);
     }
+}
+
+test "original Italian retina image map keeps its six source areas while the ordinary raster keeps its intrinsic axes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const original =
+        \\<imagemap>
+        \\Image:Occhio umano.png|thumb|right|280px|parti che compongono l'[[occhio]] [[umano]], inclusa la '''retina'''
+        \\rect 17 9 104 40 [[retina]]
+        \\rect 8 46 72 74 [[cornea]]
+        \\rect 0 117 52 151 [[iride]]
+        \\rect 5 186 84 217 [[cristallino]]
+        \\rect 286 100 342 148 [[nervo ottico]]
+        \\rect 234 164 325 219 [[macula]]
+        \\desc bottom-left
+        \\</imagemap>
+    ;
+    const file = "Occhio umano.png";
+    const Source = struct {
+        fn intrinsic(_: ?*const anyopaque, _: A, name: []const u8) A.Error!?presentation_types.FigureIntrinsicSize {
+            if (!std.mem.eql(u8, name, file)) return null;
+            return .{ .width_px = 342, .height_px = 235 };
+        }
+    };
+    var context = try FigureProducerTest.context(a);
+    context.figure_sizing.?.resolve_intrinsic_size_fn = Source.intrinsic;
+    var renderer: Renderer = .{ .a = a, .context = context };
+    const blocks = try renderer.renderBody(original);
+    const parts = blocks[0].flow orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 2), parts.len);
+    const mapped = parts[0].figure orelse return error.TestUnexpectedResult;
+    const image = mapped.content.image.span.image orelse return error.TestUnexpectedResult;
+    try std.testing.expect(mapped.intrinsic_size == null and image.height_px == null);
+    try std.testing.expectEqual(@as(?u32, 280), image.width_px);
+    try std.testing.expectEqualStrings(file, image.file);
+    try std.testing.expectEqual(presentation_types.FigurePlacement.float_right, mapped.placement);
+    try std.testing.expectEqual(presentation_types.FigureSizingPolicy.requested_fit, mapped.content.image.sizing);
+    const map = image.map orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(presentation_types.MapDescription.bottom_left, map.description);
+    try std.testing.expect(map.default_action == null);
+    const targets = [_][]const u8{ "retina", "cornea", "iride", "cristallino", "nervo ottico", "macula" };
+    const coordinates = [_][4]f64{
+        .{ 17, 9, 104, 40 }, .{ 8, 46, 72, 74 }, .{ 0, 117, 52, 151 },
+        .{ 5, 186, 84, 217 }, .{ 286, 100, 342, 148 }, .{ 234, 164, 325, 219 },
+    };
+    try std.testing.expectEqual(targets.len, map.regions.len);
+    for (map.regions, targets, coordinates) |region, target, area| {
+        try std.testing.expectEqual(presentation_types.MapShape.rectangle, region.shape);
+        try std.testing.expectEqualSlices(f64, &area, region.coordinates);
+        try std.testing.expectEqualStrings(target, region.action.target);
+        try std.testing.expectEqualStrings(target, region.action.label);
+    }
+    var actions: usize = 0;
+    for (parts[1].spans) |span| if (span.kind != .line_break) {
+        try std.testing.expect(actions < targets.len and span.kind == .link);
+        try std.testing.expectEqualStrings(targets[actions], span.target);
+        actions += 1;
+    };
+    try std.testing.expectEqual(targets.len, actions);
+
+    // Keep the identical photograph, caption and sizing evidence when the
+    // source invokes a normal thumbnail rather than the ImageMap extension.
+    const first = std.mem.indexOfScalar(u8, original, '\n').? + 1;
+    const end = std.mem.indexOfScalarPos(u8, original, first, '\n').?;
+    var ordinary: Renderer = .{ .a = a, .context = context };
+    const plain = try ordinary.renderBody(try std.fmt.allocPrint(a, "[[{s}]]", .{original[first..end]}));
+    const thumb = try FigureProducerTest.find(plain);
+    try std.testing.expect(thumb.content.image.span.image.?.map == null);
+    try std.testing.expectEqualDeep(presentation_types.FigureIntrinsicSize{ .width_px = 342, .height_px = 235 },
+        thumb.intrinsic_size orelse return error.TestUnexpectedResult);
+    try std.testing.expectEqualDeep(thumb.caption, mapped.caption);
+    try std.testing.expectEqualStrings("parti che compongono l'occhio umano, inclusa la retina", try plainText(a, mapped.caption));
+    try FigureProducerTest.roundtrip(a, &ordinary, plain);
+    try FigureProducerTest.roundtrip(a, &renderer, blocks);
 }
 
 test "J figure imagemap moves its exact image occurrence while source fallback actions remain separate body" {
