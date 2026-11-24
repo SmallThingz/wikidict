@@ -43,6 +43,32 @@ and checks the effective settings paths. CTest runs from the build directory, so
 these artifacts and its outer XDG directories under `.tmp/ctest` stay there.
 The fixture paths remain anchored to the source checkout.
 
+Three compositor tests load compressed ordinary Reader exports into memory.
+The Korean and Serbian exports match the original desktop captures byte for
+byte. The Korean Writer record is
+`android/app/src/test/resources/zh-geoyigsimjo-c06.wikblb`. The Serbian
+presentation payload is
+`android/app/src/androidTest/assets/captured-sr-current212.dprj`. To read the
+latter independently, frame the payload with the standard WIKBLB08 language
+header for `sr` and `Српски`, followed by the NUL-terminated title `Србија`,
+its unsigned varint payload length and the original payload bytes.
+
+The Italian default comes from the official 20261001 Italian Wiktionary page
+58290, revision 4263306, at zero-based ordinal 41030. The ordinary Writer read
+one page from the prepared multistream archive with its original worker and
+the tracked historical snapshot
+`compiler/tools/testdata/figure-page-observations/it/figure-page-observations.json`.
+That snapshot contains observations for `poliziotto`. The Writer emitted two
+language records. The `italiano` record has SHA-256
+`5c95c03380e89544911e93b85c19f91bf887806a344dc58cb0bffe34d45c2651`.
+The earlier 270465-byte desktop capture remains unlocated. An explicit
+`WIKIDICT_IT_PIANOFORTE_READER_JSON` still checks its original digest.
+
+Each capture uses `wikidict export TITLE --case-sensitive --language HEADING
+--root DICTIONARY`. The compressed fixture stores the stdout length as four
+big-endian bytes followed by its zlib stream, as expected by `qUncompress`.
+The tests pin the SHA-256 of the decompressed bytes.
+
 On Linux, `native-unified-entry` installs the application twice into an isolated
 directory, relocates that install, checks the `wikidict-gio` symlink and library
 paths, runs CLI help without a display or Qt, and launches the real GUI entry with

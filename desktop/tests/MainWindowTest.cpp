@@ -5795,14 +5795,16 @@ private slots:
 
     void retainedItalianPianoforteReportsHorizontalBounds()
     {
-        // Complete authenticated Stored response from the ordinary Reader. This
-        // observes the current compositor; it does not reproduce the producer.
-        QFile input(qEnvironmentVariable("WIKIDICT_IT_PIANOFORTE_READER_JSON"));
-        QVERIFY2(input.open(QIODevice::ReadOnly), "The retained Italian Reader response is required.");
-        const QByteArray bytes = input.readAll();
-        QCOMPARE(bytes.size(), 270465);
-        QCOMPARE(QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex(),
-            QByteArrayLiteral("91a0fcc096db8eb908d53339d6c957926ba9a21da2673a526826b8ed4d000d0e"));
+        // The default captures the ordinary Writer/Reader replay of p58290/r4263306.
+        // An explicit capture retains the original response's independent byte identity.
+        const QString capture = qEnvironmentVariable("WIKIDICT_IT_PIANOFORTE_READER_JSON");
+        QFile input(capture.isEmpty() ? QFINDTESTDATA("fixtures/it-pianoforte-reader.qz") : capture);
+        QVERIFY2(input.open(QIODevice::ReadOnly), qPrintable(input.errorString()));
+        const QByteArray bytes = capture.isEmpty() ? qUncompress(input.readAll()) : input.readAll();
+        QCOMPARE(bytes.size(), capture.isEmpty() ? 273481 : 270465);
+        QCOMPARE(QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex(), capture.isEmpty()
+            ? QByteArrayLiteral("6a5f5725faf20370bf10ad5f3c04d09e71a8f6e66b419f3f4d785f79fb0f4a8e")
+            : QByteArrayLiteral("91a0fcc096db8eb908d53339d6c957926ba9a21da2673a526826b8ed4d000d0e"));
         QJsonParseError parseError;
         const auto response = QJsonDocument::fromJson(bytes, &parseError);
         QCOMPARE(parseError.error, QJsonParseError::NoError); QVERIFY(response.isObject());
@@ -12961,9 +12963,10 @@ private slots:
     void actionlessBoxKeepsSoleCjkLinkGlyphsAdviceAndAccessibleRange() {
         // Complete genuine ordinary Writer/Reader response, authenticated before composition.
         // Padded and invalid variants below are separate derived consumer controls.
-        QFile input(qEnvironmentVariable("WIKIDICT_ZH_KOREAN_READER_JSON"));
-        QVERIFY2(input.open(QIODevice::ReadOnly), "The genuine Korean ordinary Reader response is required.");
-        const QByteArray readerBytes = input.readAll();
+        const QString capture = qEnvironmentVariable("WIKIDICT_ZH_KOREAN_READER_JSON");
+        QFile input(capture.isEmpty() ? QFINDTESTDATA("fixtures/zh-geoyigsimjo-reader.qz") : capture);
+        QVERIFY2(input.open(QIODevice::ReadOnly), qPrintable(input.errorString()));
+        const QByteArray readerBytes = capture.isEmpty() ? qUncompress(input.readAll()) : input.readAll();
         QCOMPARE(readerBytes.size(), 11926);
         QCOMPARE(QCryptographicHash::hash(readerBytes, QCryptographicHash::Sha256).toHex(),
             QByteArrayLiteral("3632474a63b5c0969e3f8ea2535d68c73666a06f9aa7b9f03927790d8f64f577"));
@@ -18036,9 +18039,10 @@ private slots:
     void retainedSerbianEntryComposesTypedTableBoxesAndFigures() {
         // Complete response retained from GUI16, including both real figures.
         // This is consumer composition coverage, not another producer/FFI run.
-        QFile input(qEnvironmentVariable("WIKIDICT_SR212_READER_JSON"));
-        QVERIFY2(input.open(QIODevice::ReadOnly), "The retained SR212 Reader response is required.");
-        const QByteArray bytes = input.readAll();
+        const QString capture = qEnvironmentVariable("WIKIDICT_SR212_READER_JSON");
+        QFile input(capture.isEmpty() ? QFINDTESTDATA("fixtures/sr-serbia-reader.qz") : capture);
+        QVERIFY2(input.open(QIODevice::ReadOnly), qPrintable(input.errorString()));
+        const QByteArray bytes = capture.isEmpty() ? qUncompress(input.readAll()) : input.readAll();
         QCOMPARE(QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex(),
             QByteArrayLiteral("8594c1089a4e8ecb79743a5f8ae17fb679aa625f54f6a481712eb9877710246b"));
         QJsonParseError parseError;
