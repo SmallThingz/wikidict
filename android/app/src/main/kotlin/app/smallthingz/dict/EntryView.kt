@@ -54,6 +54,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.positionInWindow
@@ -639,8 +640,7 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
                         }
                         IconButton(onClick = onBookmark) { Icon(if (bookmarked) Icons.Filled.Bookmark else Icons.Outlined.BookmarkBorder, if (bookmarked) "Remove bookmark" else "Bookmark", Modifier.size(22.dp)) }
                     }
-                    if (entry.displayTitle.isNotEmpty()) StyledText(entry.displayTitle, Modifier.fillMaxWidth().testTag("entry-title"), style = MaterialTheme.typography.displayMedium, onLink = readerLink)
-                    else Text(entry.title, Modifier.fillMaxWidth().testTag("entry-title"), style = MaterialTheme.typography.displayMedium.copy(textDirection=TextDirection.Content))
+                    EntryTitle(entry, readerLink)
                     if (entryHasNoContent(entry)) {
                         Text("No entry content is available in this dictionary.",
                             Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 8.dp).testTag("entry-empty-message"),
@@ -2389,6 +2389,45 @@ internal fun inlineFontSnapshotAnnotation(snapshot: InlineFontSnapshot, style: T
 @Composable
 internal fun inlineMetricOwnerAnnotation(span: Span, style: TextStyle): AnnotatedString =
     styledTextAnnotation(listOf(inlineMetricOwnerSpan(span)), null, style) { }
+
+@Composable
+private fun EntryTitle(entry: Entry, onLink: (EntryLink) -> Unit) {
+    val type = MaterialTheme.typography
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val width = constraints.maxWidth
+        val styles = listOf(type.displayMedium, type.headlineMedium, type.titleLarge)
+        val display = entry.displayTitle
+        val modifier = Modifier.fillMaxWidth().testTag("entry-title")
+        if (display.isNotEmpty()) {
+            // Ruby, embedded media and styled links can have different geometry from their plain text.
+            val density = LocalDensity.current
+            var tier by remember(display, width, density, type) { mutableIntStateOf(0) }
+            val chosen = styles[tier]
+            val twoLines = with(density) { (2 * chosen.lineHeight.toPx()).roundToInt() }
+            key(tier) {
+                StyledText(display, modifier.onSizeChanged { size ->
+                    if (size.height > twoLines + 1 && tier < styles.lastIndex) tier++
+                }, style = chosen, onLink = onLink)
+            }
+            return@BoxWithConstraints
+        }
+        val measurer = rememberTextMeasurer()
+        val locale = Locale.current
+        val text = remember(entry.title) { AnnotatedString(entry.title) }
+        var chosen = styles.last()
+        for (candidate in styles.dropLast(1)) {
+            val style = candidate.copy(textDirection = TextDirection.Content)
+            val layout = measurer.measure(text, style = style, maxLines = 2, constraints = Constraints(maxWidth = width))
+            if (!layout.hasVisualOverflow && (layout.lineCount < 2 || java.text.BreakIterator.getLineInstance(
+                    java.util.Locale.forLanguageTag(locale.toLanguageTag())).apply { setText(text.text) }
+                    .isBoundary(layout.getLineStart(1)))) {
+                chosen = candidate
+                break
+            }
+        }
+        Text(entry.title, modifier, style = chosen.copy(textDirection = TextDirection.Content))
+    }
+}
 
 @Composable
 internal fun StyledText(source: List<Span>, modifier: Modifier = Modifier, weight: FontWeight? = null, style: TextStyle = inheritedContainerBodyStyle(), onLink: (EntryLink) -> Unit = {}, preserveWhitespace: Boolean = false,

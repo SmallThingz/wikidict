@@ -26,6 +26,70 @@ class SectionLinkDeviceTest {
     @get:Rule val compose = createLegacyPhysicalComposeRule()
     private val forwarded = mutableListOf<String>()
 
+    @Test fun responsiveTitleKeepsFullTextAndLinkAtNarrowWidthsAndLargeFontScale() {
+        val long = "Indeks:Bahasa Indonesia/Frekuensi/1"
+        val rich = listOf(Span("text", "   "), Span("text", "Indeks:Bahasa "),
+            Span("link", "Indonesia/Frekuensi/1", target = "dictionary#section", italic = true), Span("text", " "))
+        val clicked = mutableListOf<EntryLink>()
+        val entry = androidx.compose.runtime.mutableStateOf(Entry("cat", emptyList(), "supplemental", null, "", emptyList(), emptyList()))
+        val viewport = androidx.compose.runtime.mutableIntStateOf(320)
+        val scale = androidx.compose.runtime.mutableFloatStateOf(1f)
+        fun layout(label: String): TextLayoutResult {
+            val node = compose.onNode((hasTestTag("entry-title") or hasAnyAncestor(hasTestTag("entry-title"))) and
+                hasText(label) and SemanticsMatcher.keyIsDefined(SemanticsActions.GetTextLayoutResult), useUnmergedTree = true)
+            node.assertIsDisplayed()
+            val layouts = mutableListOf<TextLayoutResult>()
+            node.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { assertTrue(it(layouts)) }
+            return layouts.single().also { actual ->
+                assertEquals(label, actual.layoutInput.text.text)
+                assertEquals(label.length, actual.getLineEnd(actual.lineCount - 1))
+                assertFalse(actual.hasVisualOverflow)
+            }
+        }
+        try {
+            compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+                androidx.compose.runtime.CompositionLocalProvider(androidx.compose.ui.platform.LocalDensity provides
+                    androidx.compose.ui.unit.Density(1f, scale.floatValue)) {
+                    DictTheme("dark") { androidx.compose.material3.Surface(androidx.compose.ui.Modifier.width(viewport.intValue.dp).height(700.dp)) {
+                        EntryView(entry.value, false, {}, onLink = { clicked += it }, settings = AppSettings())
+                    } }
+                }
+            } }
+            val short = layout("cat")
+            assertEquals(68.sp, short.layoutInput.style.fontSize)
+            assertEquals(1, short.lineCount)
+            compose.runOnIdle { entry.value = entry.value.copy(title = long) }
+            val fitted = layout(long)
+            assertTrue(fitted.lineCount in 1..2)
+            assertTrue(fitted.layoutInput.style.fontSize < short.layoutInput.style.fontSize)
+            compose.runOnIdle { viewport.intValue = 220; scale.floatValue = 1.6f }
+            val enlarged = layout(long)
+            assertEquals(27.sp, enlarged.layoutInput.style.fontSize)
+            assertTrue(enlarged.lineCount > 2)
+            compose.runOnIdle { entry.value = entry.value.copy(displayTitle = rich) }
+            val styled = layout(long)
+            assertEquals(27.sp, styled.layoutInput.style.fontSize)
+            assertTrue(styled.layoutInput.text.spanStyles.any { it.item.fontStyle == androidx.compose.ui.text.font.FontStyle.Italic })
+            compose.onNode(hasAnyAncestor(hasTestTag("entry-title")) and hasClickAction(), useUnmergedTree = true).performClick()
+            compose.runOnIdle { assertEquals(listOf(EntryLink("dictionary#section")), clicked) }
+            compose.runOnIdle { viewport.intValue = 720; scale.floatValue = 1f }
+            val widened = layout(long)
+            assertTrue(widened.layoutInput.style.fontSize > styled.layoutInput.style.fontSize)
+            assertTrue(widened.lineCount in 1..2)
+            compose.runOnIdle { entry.value = entry.value.copy(title = "cat", displayTitle = listOf(Span("text", "cat", italic = true))) }
+            val restored = layout("cat")
+            assertEquals(short.layoutInput.style.fontSize, restored.layoutInput.style.fontSize)
+            assertEquals(1, restored.lineCount)
+            compose.runOnIdle { assertEquals(listOf(EntryLink("dictionary#section")), clicked) }
+            InstrumentationRegistry.getInstrumentation().sendStatus(0, android.os.Bundle().apply {
+                putString("stream", "\nTITLE_FIT short=${short.lineCount}/${short.layoutInput.style.fontSize} " +
+                    "long=${fitted.lineCount}/${fitted.layoutInput.style.fontSize} enlarged=${enlarged.lineCount}/${enlarged.layoutInput.style.fontSize} " +
+                    "styled=${styled.lineCount}/${styled.layoutInput.style.fontSize} widened=${widened.lineCount}/${widened.layoutInput.style.fontSize} " +
+                    "restored=${restored.lineCount}/${restored.layoutInput.style.fontSize}\n")
+            })
+        } finally { compose.runOnIdle { compose.activity.setContent {} }; compose.waitForIdle() }
+    }
+
     @Test fun virtualFocusRevealsTallNativeLinksWithoutActivatingOrChangingCopy() {
         val clicks = mutableListOf<String>()
         val text = "First link\n" + "Body line\n".repeat(60) + "Last link"
