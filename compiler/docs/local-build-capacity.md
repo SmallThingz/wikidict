@@ -286,3 +286,26 @@ editions and 486,631 attempted layouts, retaining the 306 baseline refusals.
 A separately identified Qt candidate passes 301 of those exact failures;
 four Pa'O cases and Gaelic `attá` still require qualification. These scoped
 repairs do not close all editions or the complete application acceptance gate.
+
+The ordinary R19 Babua pipeline subsequently passed in Cloud. The first attempt
+built the native tools, then failed before page compilation because the portable
+Worker projection omitted the Lua module source files used by the language
+registry. Its 34-file receipt described the copied top-level roles only. A
+streaming pass over the already authenticated local dump recovered all 636
+manifest modules (9,301,014 bytes), verifying page/revision identity, title,
+model, format, length and SHA-256 for every file. It scanned 342,004 pages in
+8.572 seconds with 49,321,984 bytes peak PSS. The initial failure and bindings
+remain preserved; the supplemental module binding is `58c1b6f8…`.
+
+With those inputs, a fresh ordinary attempt reused the compiled tools and
+completed Writer, raw verification, compression, compressed verification and
+case-sensitive Buginese CLI readback. Its guard closed in 4.138 seconds at
+206,176,256 bytes peak PSS; the preceding cold tool build and early failure
+took 392.214 seconds at 4,255,065,088 bytes. Source and all 670 input files
+remained unchanged during the successful attempt. The 1,252-byte member is
+`b04077322097ea8bcdee4e3ca45f037f376617ff56b64170358f79e6aa775fe5`.
+Independent readback confirms the original Nomina owner's inclusive 720px
+flow transition, base flex row and 12×12 icon. Its DPRa bits are `0x01002120`;
+the retained R17 member uses legacy DPRZ `0x2120` without the new capability.
+Actual client rendering remains separately gated. Receipts are under
+`.tmp/completion-council/s5-packed/babua-r19-ordinary-02/`.
