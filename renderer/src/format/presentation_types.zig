@@ -1818,7 +1818,245 @@ pub const TableFloatViewport = struct {
             .grid_direction = value.grid_direction, .language = value.language, .narrow_clear = narrow_clear };
     }
 };
+// Allocated parent ebee9372: typed owner only; shared binary codec belongs to SR.
+// Em lengths below are already normalized once into original NormalBody units.
+// The caption's strut is independent of its inherited computed line length.
+pub const ResponsiveTableCaptionBox = struct {
+    margins: StyleEdges,
+    padding: StyleEdges,
+    line: CellLineHeight,
+    text_align: CellTextAlign,
+    // Only this new value opts into strict parsing. Legacy Table parsing is
+    // unchanged when the new owner is absent.
+    const JsonFields = struct {
+        margins: StyleEdges, padding: StyleEdges, line: CellLineHeight,
+        text_align: std.json.Value,
+    };
+    pub fn jsonParse(a: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) std.json.ParseError(@TypeOf(source.*))!@This() {
+        var strict = options;
+        strict.ignore_unknown_fields = false;
+        strict.duplicate_field_behavior = .@"error";
+        return fromJson(try std.json.innerParse(JsonFields, a, source, strict));
+    }
+    pub fn jsonParseFromValue(a: std.mem.Allocator, source: std.json.Value, options: std.json.ParseOptions) std.json.ParseFromValueError!@This() {
+        var strict = options;
+        strict.ignore_unknown_fields = false;
+        strict.duplicate_field_behavior = .@"error";
+        return fromJson(try std.json.innerParseFromValue(JsonFields, a, source, strict));
+    }
+    fn fromJson(raw: JsonFields) error{ UnexpectedToken, InvalidEnumTag }!@This() {
+        if (raw.text_align != .string) return error.UnexpectedToken;
+        const value: @This() = .{ .margins = raw.margins, .padding = raw.padding, .line = raw.line,
+            .text_align = std.meta.stringToEnum(CellTextAlign, raw.text_align.string) orelse return error.InvalidEnumTag };
+        if (!validResponsiveTableCaptionBox(value)) return error.UnexpectedToken;
+        return value;
+    }
+};
+
+/// One persistent physical right float. The wide form is a CSS table wrapper
+/// with its caption before the separate grid. Below the root viewport bound,
+/// the table element is a border-box block scrollport containing that caption
+/// and one anonymous separate grid. These are two forms of one content owner.
+pub const ResponsiveCaptionTable = struct {
+    max_viewport_width_px: u32,
+    narrow_box_style: TableStyle,
+    narrow_grid_style: TableStyle,
+    // This preferred-width cap applies in BOTH modes. Wide intrinsic minima
+    // may exceed it; it is never an overflow clipping instruction.
+    max_width: StyleWidth,
+    grid_spacing_x: StyleLength,
+    grid_spacing_y: StyleLength,
+    caption_box: ResponsiveTableCaptionBox,
+    containing_direction: TableContainingDirection,
+    grid_direction: TableContainingDirection,
+    language: []const u8,
+    focus_paint: ?TableScrollFocusPaint = null,
+    const JsonColor = struct { kind: std.json.Value, value: ?[]const u8 = null };
+    const JsonFocus = struct { mode: std.json.Value, color: ?JsonColor = null };
+    const JsonFields = struct {
+        max_viewport_width_px: u32,
+        narrow_box_style: TableStyle,
+        narrow_grid_style: TableStyle,
+        max_width: StyleWidth,
+        grid_spacing_x: StyleLength,
+        grid_spacing_y: StyleLength,
+        caption_box: ResponsiveTableCaptionBox,
+        containing_direction: TableContainingDirection,
+        grid_direction: TableContainingDirection,
+        language: []const u8,
+        focus_paint: ?JsonFocus = null,
+    };
+    pub fn jsonParse(a: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) std.json.ParseError(@TypeOf(source.*))!@This() {
+        var strict = options;
+        strict.ignore_unknown_fields = false;
+        strict.duplicate_field_behavior = .@"error";
+        return fromJson(try std.json.innerParse(JsonFields, a, source, strict));
+    }
+    pub fn jsonParseFromValue(a: std.mem.Allocator, source: std.json.Value, options: std.json.ParseOptions) std.json.ParseFromValueError!@This() {
+        var strict = options;
+        strict.ignore_unknown_fields = false;
+        strict.duplicate_field_behavior = .@"error";
+        return fromJson(try std.json.innerParseFromValue(JsonFields, a, source, strict));
+    }
+    fn fromJson(raw: JsonFields) error{ UnexpectedToken, InvalidEnumTag }!@This() {
+        if (raw.max_viewport_width_px == 0 or raw.language.len == 0 or raw.language.len > 1024 or
+            !std.unicode.utf8ValidateSlice(raw.language)) return error.UnexpectedToken;
+        var paint: ?TableScrollFocusPaint = null;
+        if (raw.focus_paint) |focus| {
+            if (focus.mode != .string) return error.UnexpectedToken;
+            var color: ?FigureColor = null;
+            if (focus.color) |item| {
+                if (item.kind != .string) return error.UnexpectedToken;
+                color = .{ .kind = std.meta.stringToEnum(FigureColorKind, item.kind.string) orelse return error.InvalidEnumTag,
+                    .value = item.value };
+            }
+            paint = .{ .mode = std.meta.stringToEnum(TableScrollFocusMode, focus.mode.string) orelse return error.InvalidEnumTag,
+                .color = color };
+            if (!validTableScrollFocusPaint(paint.?)) return error.UnexpectedToken;
+        }
+        // The enclosing Table supplies its wide style and semantic contents.
+        // Parsing this header alone is never an aggregate/source grant.
+        return .{ .max_viewport_width_px = raw.max_viewport_width_px,
+            .narrow_box_style = raw.narrow_box_style, .narrow_grid_style = raw.narrow_grid_style,
+            .max_width = raw.max_width, .grid_spacing_x = raw.grid_spacing_x, .grid_spacing_y = raw.grid_spacing_y,
+            .caption_box = raw.caption_box, .containing_direction = raw.containing_direction,
+            .grid_direction = raw.grid_direction, .language = raw.language, .focus_paint = paint };
+    }
+};
+
+pub fn validResponsiveTableCaptionBox(value: ResponsiveTableCaptionBox) bool {
+    if (!validStyleEdges(value.margins) or !validStyleEdges(value.padding) or
+        !validCellLineHeight(value.line)) return false;
+    const strut = value.line.strut orelse return false;
+    if (strut.font_scale_basis != .normal_body or strut.font_scale <= 0 or
+        strut.owner_font == null) return false;
+    // This first shape represents a computed inherited length, not a caption
+    // multiplier. 1.5 table-em must not become 1.5 caption-em at the reader.
+    if (value.line.height != .length or
+        value.line.height.length.font_scale_basis != .normal_body or
+        value.line.height.length.value <= 0) return false;
+    return true;
+}
+
+pub fn validResponsiveCaptionTableHeader(geometry: ?TableGeometry, style: ?TableStyle,
+    value: ResponsiveCaptionTable) bool
+{
+    if (geometry != null or value.max_viewport_width_px == 0 or
+        value.language.len == 0 or value.language.len > 1024 or
+        !std.unicode.utf8ValidateSlice(value.language) or
+        !validResponsiveTableCaptionBox(value.caption_box) or
+        !validStyleWidth(value.max_width) or value.max_width.unit != .px or value.max_width.value <= 0 or
+        !validStyleLength(value.grid_spacing_x) or value.grid_spacing_x.unit != .px or
+        !validStyleLength(value.grid_spacing_y) or value.grid_spacing_y.unit != .px) return false;
+    if (value.focus_paint) |paint| if (!validTableScrollFocusPaint(paint)) return false;
+    const wide = style orelse return false;
+    const box = value.narrow_box_style;
+    const grid = value.narrow_grid_style;
+    if (!validTableStyle(wide) or !validTableStyle(box) or !validTableStyle(grid) or
+        wide.float_side != .right or box.float_side != .right or
+        wide.clear != .right or box.clear != .right or
+        wide.collapse != .separate or grid.collapse != .separate or box.collapse != null or
+        wide.width == null or wide.width.?.unit != .em or wide.width.?.value <= 0 or
+        box.width == null or box.width.?.unit != .percent or box.width.?.value != 100 or
+        wide.margins == null or box.margins == null or
+        wide.padding == null or box.padding == null) return false;
+    // These new owners cannot defer em/line interpretation to a caller's
+    // ambient context. The source table line length is shared by both forms.
+    const wide_line = wide.line_height orelse return false;
+    const grid_line = grid.line_height orelse return false;
+    if (wide_line.font_scale_basis != .normal_body or grid_line.font_scale_basis != .normal_body or
+        !std.math.isFinite(wide_line.value) or wide_line.value <= 0 or
+        !std.meta.eql(wide_line, grid_line)) return false;
+    const wide_allowed: TableStyle = .{ .background = wide.background, .border = wide.border,
+        .collapse = wide.collapse, .margins = wide.margins, .float_side = wide.float_side,
+        .width = wide.width, .padding = wide.padding, .clear = wide.clear,
+        .line_height = wide.line_height };
+    const box_allowed: TableStyle = .{ .background = box.background, .border = box.border,
+        .margins = box.margins, .float_side = box.float_side, .width = box.width,
+        .padding = box.padding, .clear = box.clear };
+    const grid_allowed: TableStyle = .{ .collapse = .separate, .line_height = grid.line_height };
+    return std.meta.eql(wide, wide_allowed) and std.meta.eql(box, box_allowed) and
+        std.meta.eql(grid, grid_allowed);
+}
+
+pub fn validResponsiveCaptionTableContent(caption_spans: usize, caption_blocks: ?usize,
+    has_cells: bool) bool
+{
+    if (!has_cells) return false;
+    if (caption_blocks) |count| return caption_spans == 0 and count != 0;
+    return caption_spans != 0;
+}
+
+/// Required alongside the legacy Table checks at EVERY issuer/codec boundary.
+/// The field-absent path grants no new meaning to any preexisting Table shape.
+pub fn validResponsiveCaptionTable(table: anytype) bool {
+    const policy = if (comptime @hasField(@TypeOf(table), "caption_viewport"))
+        table.caption_viewport orelse return true else return true;
+    inline for (.{ "block_viewport", "float_viewport", "rows_hidden_max_width_px", "disclosure" }) |name| {
+        if (comptime @hasField(@TypeOf(table), name)) if (@field(table, name) != null) return false;
+    }
+    const geometry: ?TableGeometry = if (comptime @hasField(@TypeOf(table), "geometry")) table.geometry else null;
+    const style: ?TableStyle = if (comptime @hasField(@TypeOf(table), "style")) table.style else null;
+    if (!validResponsiveCaptionTableHeader(geometry, style, policy.*)) return false;
+    const blocks: ?usize = if (comptime @hasField(@TypeOf(table), "caption_blocks"))
+        if (table.caption_blocks) |items| items.len else null else null;
+    var has_cells = false;
+    for (table.rows) |row| if (row.cells.len != 0) { has_cells = true; break; };
+    return validResponsiveCaptionTableContent(table.caption.len, blocks, has_cells);
+}
+
+/// Clone only a validated policy into the caller's arena. Caption/rows remain
+/// owned by their existing Table paths and are not copied or emitted here.
+pub fn cloneResponsiveCaptionTableAlloc(a: std.mem.Allocator, wide: TableStyle,
+    value: ResponsiveCaptionTable) error{ OutOfMemory, InvalidPresentation }!*const ResponsiveCaptionTable
+{
+    if (!validResponsiveCaptionTableHeader(null, wide, value)) return error.InvalidPresentation;
+    const result = try a.create(ResponsiveCaptionTable);
+    result.* = try cloneResponsiveCaptionValue(ResponsiveCaptionTable, a, value);
+    return result;
+}
+
+// This private helper is instantiated only for the finite, acyclic policy
+// value above. It owns every dynamic family-name/color/language leaf.
+fn cloneResponsiveCaptionValue(comptime T: type, a: std.mem.Allocator, value: T) std.mem.Allocator.Error!T {
+    return switch (@typeInfo(T)) {
+        .pointer => |pointer| switch (pointer.size) {
+            .slice => blk: {
+                const items = try a.alloc(pointer.child, value.len);
+                for (value, items) |item, *target| target.* = try cloneResponsiveCaptionValue(pointer.child, a, item);
+                break :blk items;
+            },
+            .one => blk: {
+                const item = try a.create(pointer.child);
+                item.* = try cloneResponsiveCaptionValue(pointer.child, a, value.*);
+                break :blk item;
+            },
+            else => @compileError("unsupported pointer in responsive caption policy"),
+        },
+        .optional => |optional| if (value) |item| try cloneResponsiveCaptionValue(optional.child, a, item) else null,
+        .@"struct" => |info| blk: {
+            var result: T = undefined;
+            inline for (info.field_names) |name|
+                @field(result, name) = try cloneResponsiveCaptionValue(@FieldType(T, name), a, @field(value, name));
+            break :blk result;
+        },
+        .@"union" => |info| blk: {
+            inline for (info.field_names) |name| if (std.mem.eql(u8, @tagName(value), name))
+                break :blk @unionInit(T, name, try cloneResponsiveCaptionValue(@FieldType(T, name), a, @field(value, name)));
+            unreachable;
+        },
+        .array => |info| blk: {
+            var result: T = undefined;
+            for (value, 0..) |item, index| result[index] = try cloneResponsiveCaptionValue(info.child, a, item);
+            break :blk result;
+        },
+        .@"enum", .bool, .int, .float, .void => value,
+        else => @compileError("unsupported value in responsive caption policy"),
+    };
+}
+
 pub const Table = struct {
+    caption_viewport: ?*const ResponsiveCaptionTable = null,
     caption: []const Span = &.{},
     /// Non-null is authoritative; flat caption must be empty.
     caption_blocks: ?[]const Block = null,
@@ -1849,6 +2087,7 @@ pub const Table = struct {
             try jw.objectField("style");
             try jw.write(style);
         }
+        if (self.caption_viewport) |viewport| { try jw.objectField("caption_viewport"); try jw.write(viewport.*); }
         if (self.block_viewport) |viewport| { try jw.objectField("block_viewport"); try jw.write(viewport.*); }
         if (self.rows_hidden_max_width_px) |bound| { try jw.objectField("rows_hidden_max_width_px"); try jw.write(bound); }
         try jw.endObject();
@@ -2311,7 +2550,7 @@ pub const FlowPart = struct {
     scope: ?BidiScope = null,
 };
 // Private shared declaration candidate. Generic semantic data, not CSS source.
-pub const ContainerWidth = union(enum) { auto, length: StyleWidth, fit_content };
+pub const ContainerWidth = union(enum) { auto, length: StyleWidth, fit_content, max_content };
 pub const ContainerMaxWidth = union(enum) { none, length: StyleWidth };
 pub const ContainerBoxSizing = enum { content_box, border_box };
 // A real OL owns decimal outside markers on its direct LI boxes. Its margin
@@ -2400,6 +2639,69 @@ pub const ContainerOverflow = enum(u8) { visible = 0, auto = 1, hidden = 2, visi
 /// Auto-height balanced fragmentation of one ordered child flow. Gap em is
 /// computed once at this owner into normal-body units, never from a child span.
 pub const ColumnBreakInside = enum(u8) { auto = 1, avoid = 2 };
+
+pub fn validDefinitionId(id: []const u8) bool {
+    if (id.len > 255 or !std.unicode.utf8ValidateSlice(id)) return false;
+    const split = std.mem.indexOf(u8, id, ":_Q") orelse return false;
+    if (split == 0 or split + 3 == id.len or id[split + 3] == '0') return false;
+    for (id[0..split]) |byte| if (byte < 128 and !std.ascii.isAlphabetic(byte) and byte != '-' and byte != '_') return false;
+    for (id[split + 3 ..]) |byte| if (!std.ascii.isDigit(byte)) return false;
+    return true;
+}
+
+pub fn validDefinitionAnchor(block: anytype) bool {
+    inline for (.{ "kind", "anchor", "depth", "level", "number", "list_path", "spans" }) |field|
+        if (comptime !@hasField(@TypeOf(block), field)) return false;
+    if (!std.mem.eql(u8, @tagName(block.kind), "definition") or !validDefinitionId(block.anchor) or
+        block.level != 0 or block.depth != 1 or !std.mem.eql(u8, block.list_path, "#") or
+        block.number.len == 0 or block.number[0] == '0' or block.spans.len == 0) return false;
+    for (block.number) |byte| if (!std.ascii.isDigit(byte)) return false;
+    if (comptime @hasField(@TypeOf(block), "anchor_fallback")) if (block.anchor_fallback.len != 0) return false;
+    inline for (.{ "table", "feature", "container", "figure", "flow", "rule_style", "description_body" }) |field|
+        if (comptime @hasField(@TypeOf(block), field)) { if (@field(block, field) != null) return false; };
+    return true;
+}
+
+/// The compiler binds the incoming ID to the live source opening. This predicate
+/// checks the wire owner and its existing action without deriving a destination.
+pub fn validNavHeadAnchor(block: anytype) bool {
+    inline for (.{ "kind", "anchor", "anchor_fallback", "depth", "level", "number", "list_path", "spans", "text_align" }) |field|
+        if (comptime !@hasField(@TypeOf(block), field)) return false;
+    if (!std.mem.eql(u8, @tagName(block.kind), "paragraph") or block.depth != 0 or block.level != 0 or
+        block.list_path.len != 0 or block.number.len != 0 or block.text_align != .left or
+        block.anchor_fallback.len != 0 or block.spans.len != 5) return false;
+    inline for (.{ "table", "feature", "container", "figure", "flow", "style", "rule_style", "description_body", "column_break_inside" }) |field|
+        if (comptime @hasField(@TypeOf(block), field)) { if (@field(block, field) != null) return false; };
+
+    const prefix = "Translations-Q";
+    const id = block.anchor;
+    if (id.len <= prefix.len or id.len > 255 or !std.mem.startsWith(u8, id, prefix) or id[prefix.len] == '0') return false;
+    for (id[prefix.len..]) |byte| if (!std.ascii.isDigit(byte)) return false;
+
+    const spans = block.spans;
+    const S = @TypeOf(spans[0]);
+    inline for (.{ "kind", "text", "target", "classes" }) |field| if (comptime !@hasField(S, field)) return false;
+    for (spans, 0..) |span, i| {
+        if (!std.mem.eql(u8, @tagName(span.kind), if (i == 4) "link" else "text") or
+            !std.mem.eql(u8, span.classes, "pseudo NavFrame NavHead") or (i != 4 and span.target.len != 0)) return false;
+        const italic = if (comptime @hasField(S, "flags")) (@as(u8, @bitCast(span.flags)) & 2) != 0
+            else if (comptime @hasField(S, "italic")) span.italic else false;
+        if (italic != (i == 2)) return false;
+        if (comptime @hasField(S, "trail")) if (span.trail.len != 0) return false;
+        inline for (.{ "target_fragment", "image", "ruby", "inline_padding_group", "inline_action_group", "inline_box_group", "audio_control", "clipped_absolute" }) |field|
+            if (comptime @hasField(S, field)) { if (@field(span, field) != null) return false; };
+    }
+    const link = spans[4];
+    const split = std.mem.indexOfScalar(u8, link.target, '#') orelse return false;
+    return split != 0 and std.mem.eql(u8, link.target[0..split], link.text) and
+        std.mem.eql(u8, link.target[split + 1 ..], id) and
+        std.mem.endsWith(u8, spans[0].text, " ") and std.mem.eql(u8, spans[0].text[0 .. spans[0].text.len - 1], link.text) and
+        std.mem.eql(u8, spans[1].text, "— ") and std.mem.eql(u8, spans[2].text, "see") and std.mem.eql(u8, spans[3].text, " ");
+}
+
+pub fn validSourceAnchor(block: anytype, section_root: bool) bool {
+    return validDefinitionAnchor(block) or (section_root and validNavHeadAnchor(block));
+}
 
 pub fn validColumnBreakContext(block: anytype) bool {
     const kind = std.meta.stringToEnum(BlockKind, @tagName(block.kind)) orelse return false;
@@ -3074,6 +3376,90 @@ pub fn validRuleStyleContext(block: anytype) bool {
     return true;
 }
 
+
+/// Exact source-owned destination before one complete serialized text+trail run.
+/// The compiler owns source provenance; no executable marker enters this type.
+pub const InlineDestination = struct { id: []const u8, before_run: u32 };
+pub const max_inline_destination_id_bytes: usize = 255;
+pub fn inlineDestinations(value: anytype) []const InlineDestination {
+    return if (comptime @hasField(@TypeOf(value), "inline_destinations")) value.inline_destinations else &.{};
+}
+pub fn validInlineDestinationId(id: []const u8) bool {
+    if (id.len == 0 or id.len > max_inline_destination_id_bytes or !std.unicode.utf8ValidateSlice(id)) return false;
+    for (id) |byte| if (byte <= 0x20 or byte == 0x7f) return false;
+    return true;
+}
+fn inlineDestinationAscii(text: []const u8) bool {
+    for (text) |byte| if (byte < 0x20 or byte > 0x7e) return false;
+    return true;
+}
+pub fn validInlineDestinationFlatRun(span: anytype) bool {
+    const kind = @tagName(span.kind);
+    if (!std.mem.eql(u8, kind, "text") and !std.mem.eql(u8, kind, "link") and !std.mem.eql(u8, kind, "external_link")) return false;
+    if (!inlineDestinationAscii(span.text)) return false;
+    if (comptime @hasField(@TypeOf(span), "trail")) if (!inlineDestinationAscii(span.trail)) return false;
+    if (comptime @hasField(@TypeOf(span), "direction")) if (span.direction.len != 0 and !std.mem.eql(u8, span.direction, "ltr")) return false;
+    inline for (.{ "image", "ruby", "inline_padding_group", "inline_action_group", "inline_box_group", "audio_control", "clipped_absolute" }) |name|
+        if (comptime @hasField(@TypeOf(span), name)) { if (@field(span, name) != null) return false; };
+    return true;
+}
+pub fn validInlineDestinationFollowingRun(span: anytype) bool {
+    if (!validInlineDestinationFlatRun(span)) return false;
+    const trail: []const u8 = if (comptime @hasField(@TypeOf(span), "trail")) span.trail else "";
+    if (span.text.len == 0 and trail.len == 0) return false;
+    inline for (comptime std.meta.tags(RubyFallbackDecoration.Field)) |flag|
+        if (RubyFallbackDecoration.flag(span, flag)) return false;
+    inline for (.{ "font_scale", "font_family", "font_features", "inline_style" }) |name|
+        if (comptime @hasField(@TypeOf(span), name)) { if (@field(span, name) != null) return false; };
+    if (comptime @hasField(@TypeOf(span), "font_scale_basis")) if (!std.mem.eql(u8, @tagName(span.font_scale_basis), "context")) return false;
+    if (comptime @hasField(@TypeOf(span), "role")) if (!std.mem.eql(u8, @tagName(span.role), "normal")) return false;
+    inline for (.{ "classes", "language" }) |name|
+        if (comptime @hasField(@TypeOf(span), name)) { if (@field(span, name).len != 0) return false; };
+    return true;
+}
+/// Local shape only. Entry traversal supplies first-companion identity and the
+/// collision index; it also rejects lists in every nested/early-return carrier.
+pub fn validInlineDestinationBlock(block: anytype) bool {
+    const values = inlineDestinations(block);
+    if (values.len == 0) return true;
+    if (values.len > max_presentation_items or block.spans.len > max_presentation_items or
+        !std.mem.eql(u8, @tagName(block.kind), "heading") or block.depth != 0 or block.level < 1 or block.level > 6 or
+        block.list_path.len != 0 or block.number.len != 0 or block.feature != null or block.table != null) return false;
+    inline for (.{ "figure", "flow", "container", "description_body", "rule_style", "column_break_inside", "style", "text_align" }) |name|
+        if (comptime @hasField(@TypeOf(block), name)) { if (@field(block, name) != null) return false; };
+    for (block.spans) |span| if (!validInlineDestinationFlatRun(span)) return false;
+    var previous: u32 = 0;
+    for (values, 0..) |value, index| {
+        if (!validInlineDestinationId(value.id) or value.before_run >= block.spans.len or
+            (index != 0 and value.before_run < previous) or !validInlineDestinationFollowingRun(block.spans[value.before_run])) return false;
+        previous = value.before_run;
+    }
+    return true;
+}
+pub fn validInlineDestinationSection(section: anytype) bool {
+    inline for (.{ "heading_style", "level", "title", "blocks", "anchor", "anchor_fallback" }) |name|
+        if (comptime !@hasField(@TypeOf(section), name)) return false;
+    if (section.blocks.len == 0) return false;
+    const first = section.blocks[0];
+    if (inlineDestinations(first).len == 0 or !validInlineDestinationBlock(first) or
+        first.level != section.level or !std.mem.eql(u8, first.anchor, section.anchor) or
+        !std.mem.eql(u8, first.anchor_fallback, section.anchor_fallback)) return false;
+    // Explicit V2 plain context is a new bit28 producer/runtime proof obligation.
+    // Never infer direction from ASCII or fabricate an old wrapped-heading style.
+    if (section.heading_style) |style| {
+        if (style.direction != .ltr or !validSectionHeadingCompanion(section)) return false;
+    }
+    var offset: usize = 0;
+    for (first.spans) |span| {
+        const trail: []const u8 = if (comptime @hasField(@TypeOf(span), "trail")) span.trail else "";
+        for ([_][]const u8{span.text, trail}) |text| {
+            if (text.len > section.title.len - offset or !std.mem.eql(u8, text, section.title[offset..][0..text.len])) return false;
+            offset += text.len;
+        }
+    }
+    return offset != 0 and offset == section.title.len;
+}
+
 pub const Block = struct {
     kind: BlockKind,
     depth: u8 = 0,
@@ -3094,10 +3480,15 @@ pub const Block = struct {
     description_body: ?DescriptionBodyFor(Block) = null,
     rule_style: ?RuleStyle = null,
     column_break_inside: ?ColumnBreakInside = null,
+    inline_destinations: []const InlineDestination = &.{},
 
     pub fn jsonStringify(self: Block, jw: anytype) !void {
         try jw.beginObject();
         inline for (@typeInfo(Block).@"struct".field_names) |name| {
+            if (comptime std.mem.eql(u8, name, "inline_destinations")) {
+                if (self.inline_destinations.len != 0) { try jw.objectField(name); try jw.write(self.inline_destinations); }
+                continue;
+            }
             if (comptime std.mem.eql(u8, name, "text_align") or std.mem.eql(u8, name, "style") or std.mem.eql(u8, name, "figure") or std.mem.eql(u8, name, "flow") or std.mem.eql(u8, name, "container") or std.mem.eql(u8, name, "rule_style") or std.mem.eql(u8, name, "column_break_inside") or std.mem.eql(u8, name, "description_body")) {
                 if (@field(self, name)) |present| {
                     try jw.objectField(name);
@@ -3598,7 +3989,38 @@ fn figureLayoutCreatesClippedContainingBlock(value: anytype) bool {
     return false;
 }
 
+
+// Index explicit destinations only for records that carry source anchors. A heading
+// and its section companion can both describe the same existing destination.
+pub const SourceAnchorDestinations = struct {
+    ids: std.StringHashMap(bool),
+    failure: ?ValidationError = null,
+
+    pub fn init(a: std.mem.Allocator) SourceAnchorDestinations {
+        return .{ .ids = std.StringHashMap(bool).init(a) };
+    }
+    pub fn deinit(self: *SourceAnchorDestinations) void {
+        self.ids.deinit();
+    }
+    fn add(self: *SourceAnchorDestinations, id: []const u8, source_owned: bool) void {
+        if (id.len == 0 or self.failure != null) return;
+        const slot = self.ids.getOrPut(id) catch {
+            self.failure = error.OutOfMemory;
+            return;
+        };
+        if (slot.found_existing and (slot.value_ptr.* or source_owned)) {
+            self.failure = error.InvalidPresentation;
+            return;
+        }
+        slot.value_ptr.* = source_owned;
+    }
+    pub fn finish(self: *const SourceAnchorDestinations) ValidationError!void {
+        if (self.failure) |err| return err;
+    }
+};
+
 pub const DeepTableWork = struct {
+    destinations: ?*SourceAnchorDestinations = null,
     remaining: usize = max_presentation_items,
     inline_group_found: bool = false,
     inline_action_group_found: bool = false,
@@ -3616,9 +4038,13 @@ pub const DeepTableWork = struct {
     positioned_container_found: bool = false,
     column_layout_found: bool = false,
     responsive_container_flow_found: bool = false,
+    source_anchor_found: bool = false,
+    inline_destination_found: bool = false,
     discover_positioned_container: bool = false,
     table_min_width_found: bool = false,
     discover_table_min_width: bool = false,
+    responsive_caption_table_found: bool = false,
+    discover_responsive_caption_table: bool = false,
     table_rows_visibility_found: bool = false,
     discover_table_rows_visibility: bool = false,
     resolved_style_border_found: bool = false,
@@ -3759,9 +4185,9 @@ pub const DeepTableWork = struct {
     /// Model work admission shares the existing table-minimum discovery walk.
     /// The separate public minimum census retains its exact wire512 meaning.
     pub fn hasTablePolicyWork(display: anytype, sections: anytype, preamble: anytype, references: anytype) bool {
-        var work: DeepTableWork = .{ .discover_table_min_width = true, .discover_table_rows_visibility = true };
+        var work: DeepTableWork = .{ .discover_table_min_width = true, .discover_table_rows_visibility = true, .discover_responsive_caption_table = true };
         work.entry(display, sections, preamble, references) catch {};
-        return work.table_min_width_found or work.table_rows_visibility_found;
+        return work.table_min_width_found or work.table_rows_visibility_found or work.responsive_caption_table_found;
     }
     pub fn hasTableMinWidths(display: anytype, sections: anytype, preamble: anytype, references: anytype) bool {
         var work: DeepTableWork = .{ .discover_table_min_width = true };
@@ -3775,11 +4201,12 @@ pub const DeepTableWork = struct {
             if (!validStyleWidth(minimum)) return error.InvalidPresentation;
         }
     }
-    pub fn containerLayouts(display: anytype, sections: anytype, preamble: anytype, references: anytype) struct { positioned: bool, column_layout: bool, responsive_flow: bool } {
+    pub fn containerLayouts(display: anytype, sections: anytype, preamble: anytype, references: anytype) struct { positioned: bool, column_layout: bool, responsive_flow: bool, source_anchor: bool, inline_destination: bool, responsive_caption_table: bool } {
         var work: DeepTableWork = .{};
         work.entry(display, sections, preamble, references) catch {};
         return .{ .positioned = work.positioned_container_found, .column_layout = work.column_layout_found,
-            .responsive_flow = work.responsive_container_flow_found };
+            .responsive_flow = work.responsive_container_flow_found ,
+            .source_anchor = work.source_anchor_found, .inline_destination = work.inline_destination_found, .responsive_caption_table = work.responsive_caption_table_found };
     }
     pub fn hasPositionedContainers(display: anytype, sections: anytype, preamble: anytype, references: anytype) bool {
         var work: DeepTableWork = .{ .discover_positioned_container = true };
@@ -3861,7 +4288,7 @@ pub const DeepTableWork = struct {
         try self.spans(&subject, content_depth, 0);
         if (comptime @hasField(@TypeOf(value), "caption")) try self.spans(value.caption, content_depth, 0);
         if (comptime @hasField(@TypeOf(value), "caption_blocks")) if (value.caption_blocks) |children|
-            try self.blocks(children, table_depth, content_depth + 1);
+            try self.blocks(children, table_depth, content_depth + 1, false);
     }
     fn parts(self: *DeepTableWork, values: anytype, table_depth: usize, content_depth: usize) Error!void {
         if (content_depth > max_content_depth) return error.InvalidPresentation;
@@ -3873,11 +4300,33 @@ pub const DeepTableWork = struct {
                 try self.parts(scope.parts, table_depth, content_depth + 1);
         }
     }
-    fn blocks(self: *DeepTableWork, values: anytype, table_depth: usize, content_depth: usize) Error!void {
+    fn blocks(self: *DeepTableWork, values: anytype, table_depth: usize, content_depth: usize, section_root: bool) Error!void {
         if (content_depth > max_content_depth) return error.InvalidPresentation;
         try self.take(values.len);
-        for (values) |value| {
+        for (values, 0..) |value, block_index| {
+            const destinations = inlineDestinations(value);
+            if (destinations.len != 0) {
+                self.inline_destination_found = true;
+                if (!section_root or block_index != 0 or !validInlineDestinationBlock(value)) return error.InvalidPresentation;
+                try self.take(destinations.len);
+                if (self.destinations) |ids| for (destinations) |destination| ids.add(destination.id, true);
+            }
             try self.spans(value.spans, content_depth, 0);
+            if (self.destinations) |ids| {
+                if (comptime @hasField(@TypeOf(value), "anchor")) {
+                    if (std.mem.eql(u8, @tagName(value.kind), "heading")) {
+                        ids.add(value.anchor, false);
+                        if (comptime @hasField(@TypeOf(value), "anchor_fallback")) ids.add(value.anchor_fallback, false);
+                    } else if (validSourceAnchor(value, section_root)) ids.add(value.anchor, true);
+                }
+            }
+            if (comptime @hasField(@TypeOf(value), "anchor") and @hasField(@TypeOf(value), "kind")) {
+                if (value.anchor.len != 0 and (std.mem.eql(u8, @tagName(value.kind), "definition") or
+                    std.mem.eql(u8, @tagName(value.kind), "paragraph"))) {
+                    if (!validSourceAnchor(value, section_root)) return error.InvalidPresentation;
+                    self.source_anchor_found = true;
+                }
+            }
             if (comptime @hasField(@TypeOf(value), "column_break_inside")) if (value.column_break_inside != null) {
                 if (!validColumnBreakContext(value)) return error.InvalidPresentation;
                 self.column_layout_found = true;
@@ -3932,7 +4381,7 @@ pub const DeepTableWork = struct {
                     try self.take(1);
                     self.inlineFeatures(font);
                 }
-                try self.blocks(box.blocks, table_depth, content_depth + 1);
+                try self.blocks(box.blocks, table_depth, content_depth + 1, false);
             };
             if (comptime @hasField(@TypeOf(value), "flow")) if (value.flow) |flow|
                 try self.parts(flow, table_depth, content_depth + 1);
@@ -3981,10 +4430,21 @@ pub const DeepTableWork = struct {
             if (self.discover_table_rows_visibility) return error.InvalidPresentation;
             try self.take(1);
         };
+        if (comptime @hasField(@TypeOf(value), "caption_viewport")) if (value.caption_viewport) |policy| {
+            self.responsive_caption_table_found = true;
+            if (self.discover_responsive_caption_table) return error.InvalidPresentation;
+            // Exactly one new owner charge. Existing semantic caption and rows
+            // continue through the unchanged recursive traversal below once.
+            try self.take(1);
+            if (!validResponsiveCaptionTable(value)) return error.InvalidPresentation;
+            try self.resolvedStyleBorder(policy.narrow_box_style.border);
+            try self.resolvedStyleBorder(policy.narrow_grid_style.border);
+            self.inlineFeatures(policy.caption_box.line.strut.?.owner_font.?);
+        };
         if (!validTableRowsVisibility(value)) return error.InvalidPresentation;
         if (comptime @hasField(@TypeOf(value), "caption")) try self.spans(value.caption, content_depth, 0);
         if (comptime @hasField(@TypeOf(value), "caption_blocks")) if (value.caption_blocks) |children|
-            try self.blocks(children, table_depth, content_depth + 1);
+            try self.blocks(children, table_depth, content_depth + 1, false);
         try self.take(value.rows.len);
         for (value.rows) |row| {
             try self.take(row.cells.len);
@@ -3993,7 +4453,7 @@ pub const DeepTableWork = struct {
                     try self.resolvedStyleBorder(style.border);
                 try self.spans(cell.spans, content_depth, 0);
                 if (comptime @hasField(@TypeOf(cell), "blocks")) if (cell.blocks) |children|
-                    try self.blocks(children, table_depth, content_depth);
+                    try self.blocks(children, table_depth, content_depth, false);
                 if (comptime @hasField(@TypeOf(cell), "nested_table")) if (cell.nested_table) |child|
                     try self.table(child, table_depth + 1, content_depth);
             }
@@ -4005,6 +4465,11 @@ pub const DeepTableWork = struct {
         try self.spans(display, 0, 0);
         try self.take(sections.len);
         for (sections) |section| {
+            if (section.blocks.len != 0 and inlineDestinations(section.blocks[0]).len != 0 and !validInlineDestinationSection(section)) return error.InvalidPresentation;
+            if (self.destinations) |ids| {
+                if (comptime @hasField(@TypeOf(section), "anchor")) ids.add(section.anchor, false);
+                if (comptime @hasField(@TypeOf(section), "anchor_fallback")) ids.add(section.anchor_fallback, false);
+            }
             if (comptime @hasField(@TypeOf(section), "heading_style")) if (section.heading_style) |heading| {
                 if (heading.wrappers) |frames| {
                     self.positioned_container_found = true;
@@ -4019,7 +4484,7 @@ pub const DeepTableWork = struct {
             self.inline_atomic_parent = false;
             self.direct_flex_column = false;
             self.clipped_nonstatic_ancestor = false;
-            try self.blocks(section.blocks, 0, 0);
+            try self.blocks(section.blocks, 0, 0, true);
         }
         try self.spans(preamble, 0, 0);
         try self.take(references.len);
@@ -4032,7 +4497,7 @@ pub const DeepTableWork = struct {
             self.clipped_nonstatic_ancestor = false;
             try self.spans(reference.spans, 0, 0);
             if (comptime @hasField(@TypeOf(reference), "blocks")) if (reference.blocks) |children|
-                try self.blocks(children, 0, 0);
+                try self.blocks(children, 0, 0, false);
         }
     }
 };
@@ -4045,11 +4510,14 @@ pub fn validatePositionedContainers(display: anytype, sections: anytype, preambl
 }
 
 const ImageValidation = struct {
+    has_source_anchor: bool = false,
+    has_inline_destination: bool = false,
     // Discovery can exhaust before the first W owner. Only a completed entry
     // budget walk permits an owner at the real validation encounter below.
     container_owner_work_checked: bool = false,
     positioned_container_work_checked: bool = false,
     table_min_width_work_checked: bool = false,
+    responsive_caption_table_work_checked: bool = false,
     table_rows_visibility_work_checked: bool = false,
     resolved_style_border_work_checked: bool = false,
     clipped_absolute_work_checked: bool = false,
@@ -4874,6 +5342,8 @@ pub fn resolveTableFloatStyle(table: Table, viewport_css_px: f32) error{InvalidP
 }
 
 fn validateTable(table: Table, depth: usize, media: *ImageValidation) ValidationError!void {
+    if (!validResponsiveCaptionTable(table) or
+        (table.caption_viewport != null and !media.responsive_caption_table_work_checked)) return error.InvalidPresentation;
     if (tableStyleHasResolvedEdges(table.style) and !media.resolved_style_border_work_checked) return error.InvalidPresentation;
     if (!validResolvedStyleBorderTableDomain(table)) return error.InvalidPresentation;
     if (!validTableRowsVisibility(table) or (table.rows_hidden_max_width_px != null and !media.table_rows_visibility_work_checked)) return error.InvalidPresentation;
@@ -4954,7 +5424,7 @@ pub fn validInlineTableOwner(kind: BlockKind, spans_len: usize, has_feature: boo
     return (kind == .table or kind == .list_item) and spans_len == 0 and !has_feature;
 }
 pub fn validContainerWidth(value: ContainerWidth) bool {
-    return switch (value) { .auto, .fit_content => true, .length => |length| validStyleWidth(length) };
+    return switch (value) { .auto, .fit_content, .max_content => true, .length => |length| validStyleWidth(length) };
 }
 pub fn validContainerMaxWidth(value: ContainerMaxWidth) bool {
     return switch (value) { .none => true, .length => |length| validStyleWidth(length) };
@@ -4999,6 +5469,7 @@ pub fn validContainerMargins(value: ContainerMargins) bool {
 }
 fn validContainerScreenFields(value: ContainerScreenMaxWidth) bool {
     if (value.layout) |layout| if (layout != .flow) return false;
+    if (value.width) |width| if (width == .max_content) return false;
     if (value.width == null and value.max_width == null and value.box_sizing == null and value.line_height == null and
         value.float_side == null and value.margins == null and value.clear == null and value.layout == null) return false;
     if (value.width) |width| if (!validContainerWidth(width)) return false;
@@ -5061,6 +5532,7 @@ pub fn validContainerAbsolutePosition(value: ContainerAbsolutePosition) bool {
     return std.math.isFinite(value.left.value) and std.math.isFinite(value.top.value);
 }
 pub fn containerStyleRequiresPositionedCapability(value: ContainerStyle) bool {
+    if (value.width) |width| if (width == .max_content) return true;
     if (value.border) |border| if (border == .edges) {
         inline for (.{ "top", "right", "bottom", "left" }) |side| if (@field(border.edges, side) == .dashed) return true;
     };
@@ -5145,9 +5617,26 @@ fn orderedListBoxStyle(style: ContainerStyle, root: bool) bool {
     return true;
 }
 
+// Intrinsic preferred width precedes the containing-block percentage clamp.
+// Limit the first issued shape to a clipped, normal-flow border box. Its
+// children and independent box edges still use their ordinary source owners.
+fn validMaxContentContainer(value: ContainerStyle) bool {
+    const maximum = value.max_width orelse return false;
+    if (maximum != .length or maximum.length.unit != .percent or maximum.length.value != 100 or
+        value.overflow != .hidden or value.box_sizing != .border_box) return false;
+    inline for (@typeInfo(ContainerStyle).@"struct".field_names) |field| {
+        if (comptime @hasField(@TypeOf(.{ .width = {}, .max_width = {}, .overflow = {}, .box_sizing = {},
+            .margins = {}, .padding = {}, .border = {}, .background = {}, .text_align = {}, .line_height = {},
+            .font_family = {}, .owner_font_scale = {}, .owner_font = {} }), field)) continue;
+        if (@field(value, field) != null) return false;
+    }
+    return true;
+}
+
 pub fn validContainerStyle(value: ContainerStyle) bool {
     if ((value.layout == .ordered_list) != (value.ordered_marker_weight != null)) return false;
     if (value.layout == .ordered_list and !orderedListBoxStyle(value,true)) return false;
+    if (value.width) |width| if (width == .max_content and !validMaxContentContainer(value)) return false;
     if (value.flex_edge) |edge| if (!validContainerFlexEdge(value,edge)) return false;
     // An indefinite main axis has no free-space distribution. Centered children
     // retain their own measured widths and source order in this first domain.
@@ -5422,6 +5911,7 @@ fn containerStructureSupported(value: anytype, depth: usize) bool {
     if (value.style.layout == .ordered_list and !orderedListStructure(value)) return false;
     if (depth > max_content_depth or value.blocks.len > max_presentation_items or !validContainerStyle(value.style)) return false;
     if (!validContainerDisclosureOwner(value) or !translatedContainerBodySupported(value)) return false;
+    if (value.style.width) |width| if (width == .max_content and containerDisclosure(value) != null) return false;
     if (value.style.flex_edge != null and (containerDisclosure(value) != null or value.blocks.len != 0)) return false;
     if (containerHasResponsiveFlow(value.style)) {
         if (containerDisclosure(value) != null or value.blocks.len != 1) return false;
@@ -5494,6 +5984,11 @@ pub fn validBlockPaths(blocks: []const Block, roots: []const usize, paths: []con
 }
 
 fn validateBlock(block: Block, table_depth: usize, media: *ImageValidation) ValidationError!void {
+    if (block.inline_destinations.len != 0) {
+        media.has_inline_destination = true;
+        if (!validInlineDestinationBlock(block)) return error.InvalidPresentation;
+    }
+    if ((block.kind == .definition or block.kind == .paragraph) and block.anchor.len != 0) media.has_source_anchor = true;
     if (block.rule_style) |style| if (!validRuleStyle(style) or !validRuleStyleContext(block)) return error.InvalidPresentation;
     if (block.column_break_inside != null and !validColumnBreakContext(block)) return error.InvalidPresentation;
     if (block.description_body) |description| {
@@ -5525,7 +6020,8 @@ fn validateBlock(block: Block, table_depth: usize, media: *ImageValidation) Vali
     if (block.style) |style| {
         if (!validBlockStyle(style) or !validBlockStyleContext(block.kind, block.depth, block.table != null, block.feature != null, block.list_path)) return error.InvalidPresentation;
     }
-    if ((block.anchor.len != 0 or block.anchor_fallback.len != 0) and block.kind != .heading) return error.InvalidPresentation;
+    if ((block.anchor.len != 0 or block.anchor_fallback.len != 0) and block.kind != .heading and
+        !validSourceAnchor(block, table_depth == 0 and media.content_depth == 0 and !media.in_reference)) return error.InvalidPresentation;
     try validateSpanColors(block.spans, media);
     if (block.table) |table| try validateTable(table, table_depth + 1, media);
 }
@@ -5582,7 +6078,7 @@ pub fn validateStored(
         }
     }
 
-    var media: ImageValidation = .{ .a = a, .media = entry.media, .container_owner_work_checked = owner_work_checked, .positioned_container_work_checked = owner_work_checked, .table_min_width_work_checked = owner_work_checked, .table_rows_visibility_work_checked = owner_work_checked, .resolved_style_border_work_checked = owner_work_checked, .clipped_absolute_work_checked = owner_work_checked };
+    var media: ImageValidation = .{ .a = a, .media = entry.media, .container_owner_work_checked = owner_work_checked, .positioned_container_work_checked = owner_work_checked, .table_min_width_work_checked = owner_work_checked, .table_rows_visibility_work_checked = owner_work_checked, .responsive_caption_table_work_checked = owner_work_checked, .resolved_style_border_work_checked = owner_work_checked, .clipped_absolute_work_checked = owner_work_checked };
     defer media.deinit();
     try validateSpanColors(entry.display_title, &media);
     try validateSpanColors(entry.preamble_spans, &media);
@@ -5597,6 +6093,13 @@ pub fn validateStored(
     for (entry.sections) |section| {
         if (section.heading_style) |style| if (!validSectionHeadingStyle(style) or !validSectionHeadingCompanion(section)) return error.InvalidPresentation;
         for (section.blocks) |block| try validateBlock(block, 0, &media);
+    }
+    if (media.has_source_anchor or media.has_inline_destination) {
+        var ids = SourceAnchorDestinations.init(a);
+        defer ids.deinit();
+        var work: DeepTableWork = .{ .destinations = &ids };
+        work.entry(entry.display_title, entry.sections, entry.preamble_spans, entry.references) catch return error.InvalidPresentation;
+        try ids.finish();
     }
 
     for (entry.references) |reference| {
@@ -11873,4 +12376,225 @@ test "responsive container flow is inclusive and uses the root viewport" {
     wrong = style;
     wrong.flex_column_gap = .{ .unit = .px, .value = 3 };
     try std.testing.expect(!validContainerStyle(wrong));
+}
+
+// V2 fills the required complete, explicitly synthetic caption font tuple.
+// V1 is preserved unrun; its incomplete font made the intended positive invalid.
+// Controlled typed-contract tests only. These fixtures are not source captures,
+// wire records, field allocations or renderer geometry evidence.
+const ResponsiveCaptionContractFixture = struct {
+    const ControlRow = struct { cells: []const u8 };
+    const TableOwner = struct {
+        caption_viewport: ?*const ResponsiveCaptionTable,
+        block_viewport: ?u8 = null,
+        float_viewport: ?u8 = null,
+        rows_hidden_max_width_px: ?u8 = null,
+        disclosure: ?u8 = null,
+        geometry: ?TableGeometry = null,
+        style: ?TableStyle,
+        caption: []const u8 = "caption",
+        caption_blocks: ?[]const u8 = null,
+        rows: []const ControlRow = &.{.{ .cells = "cell" }},
+    };
+
+    fn wide() TableStyle {
+        return .{ .collapse = .separate, .float_side = .right, .clear = .right,
+            .width = .{ .unit = .em, .value = 19.36 },
+            .margins = StyleEdges.all(.{ .unit = .em, .value = 0.88 }),
+            .padding = StyleEdges.all(.{ .unit = .em, .value = 0.176 }),
+            .line_height = .{ .value = 1.32, .font_scale_basis = .normal_body } };
+    }
+
+    fn policy() ResponsiveCaptionTable {
+        return .{ .max_viewport_width_px = 639,
+            .narrow_box_style = .{ .float_side = .right, .clear = .right,
+                .width = .{ .unit = .percent, .value = 100 },
+                .margins = StyleEdges.all(.{ .unit = .em, .value = 0.88 }),
+                .padding = StyleEdges.all(.{ .unit = .em, .value = 0.176 }) },
+            .narrow_grid_style = .{ .collapse = .separate,
+                .line_height = .{ .value = 1.32, .font_scale_basis = .normal_body } },
+            .max_width = .{ .unit = .px, .value = 330 },
+            .grid_spacing_x = .{ .unit = .px, .value = 2 },
+            .grid_spacing_y = .{ .unit = .px, .value = 2 },
+            .caption_box = .{
+                .margins = StyleEdges.all(.{ .unit = .em, .value = 0.88 }),
+                .padding = StyleEdges.all(.{ .unit = .em, .value = 0.22 }),
+                .line = .{ .strut = .{ .font_scale = 1.1, .font_scale_basis = .normal_body,
+                    .owner_font = .{ .font_scale = 1.1, .font_scale_basis = .normal_body,
+                        .font_family = .sans_serif, .font_features = .normal, .language = "hu" } },
+                    .height = .{ .length = .{ .value = 1.32, .font_scale_basis = .normal_body } } },
+                .text_align = .center },
+            .containing_direction = .ltr, .grid_direction = .ltr, .language = "hu" };
+    }
+};
+
+test "responsive caption aggregate refuses legacy disclosure and every independent owner" {
+    const F = ResponsiveCaptionContractFixture;
+    const policy = F.policy();
+    const original: F.TableOwner = .{ .caption_viewport = &policy, .style = F.wide() };
+    try std.testing.expect(validResponsiveCaptionTableHeader(null, original.style, policy));
+    try std.testing.expect(validResponsiveCaptionTable(original));
+    inline for (.{ "block_viewport", "float_viewport", "rows_hidden_max_width_px", "disclosure" }) |name| {
+        var changed = original;
+        @field(changed, name) = 1;
+        // The new header remains independently valid. The aggregate must be
+        // what refuses the two competing owners, including legacy disclosure.
+        try std.testing.expect(validResponsiveCaptionTableHeader(null, changed.style, policy));
+        try std.testing.expect(!validResponsiveCaptionTable(changed));
+    }
+    var legacy = original;
+    legacy.caption_viewport = null;
+    legacy.disclosure = 1;
+    try std.testing.expect(validResponsiveCaptionTable(legacy));
+    // A field-absent old caller acquires no new validation or semantic grant.
+    try std.testing.expect(validResponsiveCaptionTable(.{ .disclosure = @as(?u8, 1) }));
+    var blocks = original;
+    blocks.caption = "";
+    blocks.caption_blocks = "block";
+    try std.testing.expect(validResponsiveCaptionTable(blocks));
+    blocks.caption = "duplicate";
+    try std.testing.expect(!validResponsiveCaptionTable(blocks));
+    blocks.caption = "";
+    blocks.caption_blocks = "";
+    try std.testing.expect(!validResponsiveCaptionTable(blocks));
+    var empty = original;
+    empty.rows = &.{};
+    try std.testing.expect(!validResponsiveCaptionTable(empty));
+    empty.rows = &.{.{ .cells = "" }};
+    try std.testing.expect(!validResponsiveCaptionTable(empty));
+}
+
+test "responsive caption keeps normalized inherited line length separate from caption font" {
+    const F = ResponsiveCaptionContractFixture;
+    const original = F.policy();
+    const wide = F.wide();
+    try std.testing.expect(validResponsiveCaptionTableHeader(null, wide, original));
+    var taller_caption = original;
+    taller_caption.caption_box.line.strut.?.font_scale = 1.5;
+    taller_caption.caption_box.line.strut.?.owner_font.?.font_scale = 1.5;
+    try std.testing.expect(validResponsiveCaptionTableHeader(null, wide, taller_caption));
+    try std.testing.expectEqual(@as(f32, 1.32), taller_caption.caption_box.line.height.length.value);
+    for (0..12) |which| {
+        var bad = original;
+        var bad_wide = wide;
+        switch (which) {
+            0 => bad_wide.line_height = null,
+            1 => bad_wide.line_height.?.font_scale_basis = .context,
+            2 => bad.narrow_grid_style.line_height = null,
+            3 => bad.narrow_grid_style.line_height.?.font_scale_basis = .context,
+            4 => bad.narrow_grid_style.line_height.?.value = 1.5,
+            5 => bad.caption_box.line.height = .{ .multiplier = 1.5 },
+            6 => bad.caption_box.line.height.length.font_scale_basis = .context,
+            7 => bad.caption_box.line.strut.?.owner_font = null,
+            8 => bad.narrow_grid_style.padding = StyleEdges.all(.{ .unit = .px, .value = 1 }),
+            9 => bad.narrow_box_style.float_side = null,
+            10 => bad.narrow_box_style.clear = null,
+            11 => bad.max_width.value = std.math.nan(f32),
+            else => unreachable,
+        }
+        try std.testing.expect(!validResponsiveCaptionTableHeader(null, bad_wide, bad));
+    }
+}
+
+// Explicitly controlled Stored-model fixtures. These are not the authenticated
+// klavulansav page, CSS/font authority, or physical client geometry.
+const ResponsiveCaptionStoredFixture = struct {
+    fn table(policy: *const ResponsiveCaptionTable) Table {
+        return .{ .caption_viewport = policy, .style = ResponsiveCaptionContractFixture.wide(),
+            .caption = &.{.{ .text = "controlled caption" }},
+            .rows = &.{.{ .cells = &.{.{ .spans = &.{.{ .text = "controlled cell" }} }} }} };
+    }
+    fn stored(a: std.mem.Allocator, table_value: Table) !Stored {
+        const blocks = try a.alloc(Block, 1);
+        blocks[0] = .{ .kind = .paragraph, .table = table_value };
+        const sections = try a.alloc(Section, 1);
+        sections[0] = .{ .title = "Controlled", .level = 2, .blocks = blocks };
+        return .{ .entry = .{ .title = "Controlled caption", .kind = .language,
+            .language = "Magyar", .language_code = "hu", .sections = sections } };
+    }
+};
+
+test "responsive caption Stored JSON validates aggregate and preserves one semantic caption" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const policy = ResponsiveCaptionContractFixture.policy();
+    const table = ResponsiveCaptionStoredFixture.table(&policy);
+    const stored = try ResponsiveCaptionStoredFixture.stored(a, table);
+    try validateStored(a, stored, stored.entry.title, .language, .{ .heading = "Magyar", .code = "hu" });
+    const json = try std.json.Stringify.valueAlloc(a, stored, .{});
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, json, "controlled caption"));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, json, "controlled cell"));
+    const parsed = try std.json.parseFromSlice(Stored, a, json, .{}); defer parsed.deinit();
+    try validateStored(a, parsed.value, stored.entry.title, .language, .{ .heading = "Magyar", .code = "hu" });
+    try std.testing.expectEqualDeep(stored, parsed.value);
+    var conflict = table;
+    conflict.rows_hidden_max_width_px = 639;
+    const bad = try ResponsiveCaptionStoredFixture.stored(a, conflict);
+    try std.testing.expectError(error.InvalidPresentation,
+        validateStored(a, bad, bad.entry.title, .language, .{ .heading = "Magyar", .code = "hu" }));
+    var legacy = table; legacy.caption_viewport = null;
+    const legacy_json = try std.json.Stringify.valueAlloc(a, legacy, .{});
+    try std.testing.expect(std.mem.indexOf(u8, legacy_json, "caption_viewport") == null);
+}
+
+test "responsive caption JSON new owner refuses unknown duplicate and numeric enums" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const policy = ResponsiveCaptionContractFixture.policy();
+    const json = try std.json.Stringify.valueAlloc(a, policy, .{});
+    const unknown = try std.fmt.allocPrint(a, "{{\"unknown\":true,{s}", .{json[1..]});
+    try std.testing.expectError(error.UnknownField, std.json.parseFromSlice(ResponsiveCaptionTable, a, unknown,
+        .{ .ignore_unknown_fields = true }));
+    const duplicate = try std.fmt.allocPrint(a, "{{\"language\":\"hu\",{s}", .{json[1..]});
+    try std.testing.expectError(error.DuplicateField, std.json.parseFromSlice(ResponsiveCaptionTable, a, duplicate,
+        .{ .duplicate_field_behavior = .use_last }));
+    var raw = try std.json.parseFromSlice(std.json.Value, a, json, .{}); defer raw.deinit();
+    const caption = raw.value.object.getPtr("caption_box").?;
+    try caption.object.put(a, "text_align", .{ .integer = 0 });
+    try std.testing.expectError(error.UnexpectedToken,
+        std.json.parseFromValue(ResponsiveCaptionTable, a, raw.value, .{}));
+}
+
+test "responsive caption policy clone owns font family language and box paint leaves" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var language = [_]u8{ 'h', 'u' };
+    var family = [_]u8{ 'S', 'y', 'n' };
+    var color = [_]u8{ '#', 'f', 'f', 'f', 'f', 'f', 'f' };
+    var policy = ResponsiveCaptionContractFixture.policy();
+    policy.language = &language;
+    policy.narrow_box_style.background = &color;
+    policy.caption_box.line.strut.?.owner_font.?.language = &language;
+    policy.caption_box.line.strut.?.owner_font.?.font_family = .{ .stack = .{ .names = &.{&family}, .fallback = .sans_serif } };
+    const copy = try cloneResponsiveCaptionTableAlloc(a, ResponsiveCaptionContractFixture.wide(), policy);
+    try std.testing.expectEqualDeep(policy, copy.*);
+    try std.testing.expect(copy.language.ptr != policy.language.ptr);
+    try std.testing.expect(copy.narrow_box_style.background.?.ptr != color[0..].ptr);
+    try std.testing.expect(copy.caption_box.line.strut.?.owner_font.?.font_family.?.stack.names[0].ptr != family[0..].ptr);
+    language[0] = 'x'; family[0] = 'X'; color[1] = '0';
+    try std.testing.expectEqualStrings("hu", copy.language);
+    try std.testing.expectEqualStrings("Syn", copy.caption_box.line.strut.?.owner_font.?.font_family.?.stack.names[0]);
+    try std.testing.expectEqualStrings("#ffffff", copy.narrow_box_style.background.?);
+}
+
+test "responsive caption bounded census charges exactly one owner and discovers nested caption tables" {
+    const policy = ResponsiveCaptionContractFixture.policy();
+    const table = ResponsiveCaptionStoredFixture.table(&policy);
+    var legacy = table; legacy.caption_viewport = null;
+    var old_work: DeepTableWork = .{}; try old_work.table(legacy, 1, 0);
+    var new_work: DeepTableWork = .{}; try new_work.table(table, 1, 0);
+    try std.testing.expectEqual(@as(usize, 1), old_work.remaining - new_work.remaining);
+    const used = max_presentation_items - new_work.remaining;
+    var exact: DeepTableWork = .{ .remaining = used }; try exact.table(table, 1, 0);
+    try std.testing.expectEqual(@as(usize, 0), exact.remaining);
+    var short: DeepTableWork = .{ .remaining = used - 1 };
+    try std.testing.expectError(error.PresentationTooLarge, short.table(table, 1, 0));
+    const outer: Table = .{ .rows = &.{.{ .cells = &.{.{ .nested_table = table }} }} };
+    var nested: DeepTableWork = .{}; try nested.table(outer, 1, 0);
+    try std.testing.expect(nested.responsive_caption_table_found);
+    const sections = [_]Section{.{ .title = "Controlled", .level = 2,
+        .blocks = &.{.{ .kind = .paragraph, .table = outer }} }};
+    const census = DeepTableWork.containerLayouts(@as([]const Span, &.{}), &sections,
+        @as([]const Span, &.{}), @as([]const Reference, &.{}));
+    try std.testing.expect(census.responsive_caption_table);
 }

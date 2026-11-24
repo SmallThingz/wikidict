@@ -59,13 +59,22 @@ const resolved_style_borders_feature: u32 = 0x100000;
 const ruby_annotation_margins_feature: u32 = 0x40000;
 const responsive_container_flow_feature: u32 = types.responsive_container_flow_wire_feature;
 const container_screen_flow_extension: u8 = 1;
-const a_high_features: u32 = resolved_style_borders_feature | ruby_annotation_margins_feature | responsive_container_flow_feature;
+// Global DPRa bit 27, allocated for exact source-owned nonheading anchors.
+const source_anchor_feature: u32 = 0x08000000;
+// Parent allocation f492300d: explicit final run-boundary destinations.
+const inline_destination_feature: u32 = 0x10000000;
+const responsive_caption_table_feature: u32 = 0x02000000;
+const table_caption_viewport_flag: u8 = 0x80;
+const a_high_features: u32 = resolved_style_borders_feature | ruby_annotation_margins_feature | responsive_container_flow_feature | source_anchor_feature | inline_destination_feature | responsive_caption_table_feature;
 comptime {
     // Bits 16..22 already occur in the current Android DPRa union. Global
     // bit 23 remains reserved. None of those bits belongs to this extension.
     if (@popCount(responsive_container_flow_feature) != 1 or
         (responsive_container_flow_feature & (@as(u32, positioned_containers_features) | 0xff0000)) != 0)
         @compileError("Invalid responsive container flow feature allocation");
+    if (@popCount(source_anchor_feature) != 1 or
+        (source_anchor_feature & (@as(u32, positioned_containers_features) | 0xff0000 | responsive_container_flow_feature)) != 0)
+        @compileError("Invalid source anchor feature allocation");
 }
 const resolved_style_borders_features: u32 = positioned_containers_features | a_high_features;
 // Bit23 remains reserved; DPRZ uses a separate style extension.
@@ -138,6 +147,9 @@ const Encoder = struct {
     resolved_style_borders_enabled: bool = false,
     ruby_annotation_margins_enabled: bool = false,
     responsive_container_flow_enabled: bool = false,
+    source_anchors_enabled: bool = false,
+    inline_destinations_enabled: bool = false,
+    responsive_caption_tables_enabled: bool = false,
     body_typography_enabled: bool = false,
     inline_box_groups: bool = false,
     clipped_absolute_enabled: bool = false,
@@ -1222,6 +1234,30 @@ const Encoder = struct {
             if (focus.color) |color| try self.figureColor(color);
         }
     }
+
+    fn responsiveCaptionTable(self: *Encoder, value: types.ResponsiveCaptionTable) !void {
+        // The Table aggregate was checked before any bytes or owner debit.
+        // Caption and rows remain in their old positions and are emitted once.
+        try self.writeU32(value.max_viewport_width_px);
+        try self.tableStyle(value.narrow_box_style);
+        try self.tableStyle(value.narrow_grid_style);
+        try self.styleWidth(value.max_width);
+        try self.styleLength(value.grid_spacing_x);
+        try self.styleLength(value.grid_spacing_y);
+        try self.styleEdges(value.caption_box.margins);
+        try self.styleEdges(value.caption_box.padding);
+        try self.cellLineHeight(value.caption_box.line);
+        try self.enumByte(types.CellTextAlign, value.caption_box.text_align);
+        try self.enumByte(types.TableContainingDirection, value.containing_direction);
+        try self.enumByte(types.TableContainingDirection, value.grid_direction);
+        try self.string(value.language);
+        try self.byte(@intFromBool(value.focus_paint != null));
+        if (value.focus_paint) |paint| {
+            try self.enumByte(types.TableScrollFocusMode, paint.mode);
+            try self.byte(@intFromBool(paint.color != null));
+            if (paint.color) |color| try self.figureColor(color);
+        }
+    }
     fn table(self: *Encoder, value: anytype) error{ OutOfMemory, InvalidPresentation, PresentationTooLarge, UncompiledTemplate }!void {
         if (value) |table_value| {
             if (self.table_depth >= (if (self.capability_t or self.capability_u) types.max_table_depth else types.legacy_table_depth)) return error.InvalidPresentation;
@@ -1237,6 +1273,13 @@ const Encoder = struct {
                 if (self.remaining_items == 0) return error.PresentationTooLarge;
                 self.remaining_items -= 1;
             }
+            const caption_viewport: ?*const types.ResponsiveCaptionTable = if (comptime @hasField(@TypeOf(table_value), "caption_viewport")) table_value.caption_viewport else null;
+            if (!types.validResponsiveCaptionTable(table_value) or
+                (caption_viewport != null and (self.version != .container_fonts or !self.responsive_caption_tables_enabled))) return error.InvalidPresentation;
+            if (caption_viewport != null) {
+                if (self.remaining_items == 0) return error.PresentationTooLarge;
+                self.remaining_items -= 1;
+            }
             const paired = viewport != null and float_viewport != null;
             const intrinsic = if (viewport) |policy| policy.intrinsic_containing_direction != null else false;
             if (intrinsic and !self.capability_r) return error.InvalidPresentation;
@@ -1247,7 +1290,8 @@ const Encoder = struct {
             if (extended_clear and !self.capability_p) return error.InvalidPresentation;
             try self.byte(1 | (@as(u8, @intFromBool(viewport != null)) << 1) | (@as(u8, @intFromBool(float_viewport != null)) << 2) |
                 (@as(u8, @intFromBool(extended_clear)) << 3) | (@as(u8, @intFromBool(intrinsic)) << 4) |
-                (@as(u8, @intFromBool(rows_hidden != null)) << 5));
+                (@as(u8, @intFromBool(rows_hidden != null)) << 5) |
+                (if (caption_viewport != null) table_caption_viewport_flag else @as(u8, 0)));
             if (hasNestedFields(self.version)) {
                 const geometry: ?types.TableGeometry = if (comptime @hasField(@TypeOf(table_value), "geometry")) table_value.geometry else null;
                 try self.tableGeometry(geometry);
@@ -1290,6 +1334,7 @@ const Encoder = struct {
             }
             // Same Table owner, after every preexisting viewport tail.
             if (rows_hidden) |bound| try self.writeU32(bound);
+            if (caption_viewport) |policy| try self.responsiveCaptionTable(policy.*);
             if (!types.validResolvedStyleBorderTableDomain(table_value)) return error.InvalidPresentation;
         } else try self.byte(0);
     }
@@ -1299,6 +1344,7 @@ const Encoder = struct {
             .auto => try self.byte(0),
             .length => |length| { try self.byte(1); try self.styleWidth(length); },
             .fit_content => try self.byte(2),
+            .max_content => if (self.version == .container_fonts and self.positioned_containers_enabled) try self.byte(3) else return error.InvalidPresentation,
         }
     }
     fn containerMaxWidth(self: *Encoder, value: types.ContainerMaxWidth) !void {
@@ -1464,11 +1510,15 @@ const Encoder = struct {
         if (value.collapse_run) |run| try self.containerDisclosureLabelRun(run);
     }
     fn containerStyle(self: *Encoder, value: types.ContainerStyle) !void {
+        if (value.width) |width| if (width == .max_content) return error.InvalidPresentation;
         if (value.layout == .ordered_list or value.flex_edge != null or value.layout == .flex_column or value.flex_column_gap != null or value.inline_atomic != null or value.translated_absolute != null or value.corner_radius_px != null) return error.InvalidPresentation;
         return self.containerStyleWithDisclosure(value, null);
     }
     fn containerStyleWithDisclosure(self: *Encoder, value: types.ContainerStyle, disclosure: ?types.ContainerDisclosure) !void {
-        if (disclosure != null and (!self.positioned_containers_enabled or self.version != .container_fonts)) return error.InvalidPresentation;
+        if (disclosure != null) {
+            if (!self.positioned_containers_enabled or self.version != .container_fonts) return error.InvalidPresentation;
+            if (value.width) |width| if (width == .max_content) return error.InvalidPresentation;
+        }
         if (!hasLFields(self.version) or !types.validContainerStyle(value)) return error.InvalidPresentation;
         if ((value.owner_font_scale != null or value.height != null or value.columns != null or value.positioning != null or value.min_height != null or value.margin_values != null or value.font_family != null or value.owner_font != null or value.overflow == .hidden) and self.version != .container_fonts) return error.InvalidPresentation;
         if (value.owner_font != null and !self.capability_w) return error.InvalidPresentation;
@@ -1622,7 +1672,8 @@ const Encoder = struct {
             const kind: types.BlockKind = @enumFromInt(try enumByteValue(types.BlockKind, value.kind));
             if (!types.validInlineTableOwner(kind, value.spans.len, value.feature != null)) return error.InvalidPresentation;
         };
-        if ((anchorValue(value).len != 0 or fallbackValue(value).len != 0) and (try enumByteValue(types.BlockKind, value.kind)) != @backingInt(types.BlockKind.heading)) return error.InvalidPresentation;
+        if ((anchorValue(value).len != 0 or fallbackValue(value).len != 0) and block_kind != @backingInt(types.BlockKind.heading) and
+            (!self.source_anchors_enabled or !types.validSourceAnchor(value, self.table_depth == 0 and self.content_depth == 0 and !self.in_reference))) return error.InvalidPresentation;
         try self.enumByte(types.BlockKind, value.kind);
         try self.byte(value.depth);
         try self.byte(value.level);
@@ -1666,6 +1717,15 @@ const Encoder = struct {
         if (break_inside != null and (!self.column_layout_enabled or !types.validColumnBreakContext(value)))
             return error.InvalidPresentation;
         if (self.column_layout_enabled) try self.byte(if (break_inside) |policy| @intFromEnum(policy) else 0);
+        const destinations = types.inlineDestinations(value);
+        if (destinations.len != 0 and (!self.inline_destinations_enabled or !types.validInlineDestinationBlock(value))) return error.InvalidPresentation;
+        if (self.inline_destinations_enabled) {
+            try self.count(destinations.len);
+            for (destinations) |destination| {
+                try self.string(destination.id);
+                try self.writeU32(destination.before_run);
+            }
+        }
     }
     fn blocks(self: *Encoder, values: anytype) !void {
         try self.count(values.len);
@@ -1959,6 +2019,13 @@ pub const DecodeMetrics = struct {
     }
 };
 
+pub const TestContainerWidthObservation = if (@import("builtin").is_test) struct {
+    max_content_count: usize = 0,
+    offset: usize = 0,
+
+    pub threadlocal var active: ?*@This() = null;
+} else struct {};
+
 const Reader = struct {
     a: A,
     version: Version = .plain,
@@ -1979,6 +2046,9 @@ const Reader = struct {
     resolved_style_borders_enabled: bool = false,
     ruby_annotation_margins_enabled: bool = false,
     responsive_container_flow_enabled: bool = false,
+    source_anchors_enabled: bool = false,
+    inline_destinations_enabled: bool = false,
+    responsive_caption_tables_enabled: bool = false,
     body_typography_enabled: bool = false,
     inline_box_groups: bool = false,
     clipped_absolute_enabled: bool = false,
@@ -2185,7 +2255,7 @@ const Reader = struct {
                 if (!std.math.isFinite(n) or n < 0) return error.InvalidPresentation;
                 if (hasFontScaleBasisFields(self.version)) result.font_scale_basis = try self.enumValue(types.FontScaleBasis);
                 if (result.font_scale_basis == .css_px and self.version != .container_fonts) return error.InvalidPresentation;
-                result.font_scale = if (n == 1 and result.font_scale_basis == .context) null else n;
+                result.font_scale = if (n == 1 and result.font_scale_basis == .context and !self.inline_destinations_enabled) null else n;
             }
             if (font_fields & 2 != 0) result.font_features = try self.enumValue(types.FontFeaturePolicy);
             if (font_fields & 4 != 0) result.link_paint = try self.linkPaint();
@@ -3010,12 +3080,54 @@ const Reader = struct {
         if (!(if (paired) types.validTableScrollViewport(value.*) else types.validTableBlockViewport(value.*) or (self.capability_q and types.validTableCornerBlockViewport(value.*)) or (self.capability_r and types.validTableIntrinsicViewport(value.*)))) return error.InvalidPresentation;
         return value;
     }
+
+    fn responsiveCaptionTable(self: *Reader) !*const types.ResponsiveCaptionTable {
+        // The owning Table header debited one item before allocating content.
+        const value: types.ResponsiveCaptionTable = .{
+            .max_viewport_width_px = try self.readU32(),
+            .narrow_box_style = (try self.tableStyle()) orelse return error.InvalidPresentation,
+            .narrow_grid_style = (try self.tableStyle()) orelse return error.InvalidPresentation,
+            .max_width = try self.styleWidth(),
+            .grid_spacing_x = try self.styleLength(),
+            .grid_spacing_y = try self.styleLength(),
+            .caption_box = .{
+                .margins = try self.styleEdges(), .padding = try self.styleEdges(),
+                .line = try self.cellLineHeight(),
+                .text_align = try self.enumValue(types.CellTextAlign),
+            },
+            .containing_direction = try self.enumValue(types.TableContainingDirection),
+            .grid_direction = try self.enumValue(types.TableContainingDirection),
+            .language = try self.string(),
+            .focus_paint = if (try self.presence()) .{
+                .mode = try self.enumValue(types.TableScrollFocusMode),
+                .color = if (try self.presence()) try self.figureColor() else null,
+            } else null,
+        };
+        // Required marker2/full owner font is enforced by the caption validator;
+        // cellLineHeight rejects a second encoded font size before normalization.
+        if (!types.validResponsiveTableCaptionBox(value.caption_box) or
+            value.language.len == 0 or value.language.len > 1024 or
+            !std.unicode.utf8ValidateSlice(value.language)) return error.InvalidPresentation;
+        const owned = try self.a.create(types.ResponsiveCaptionTable);
+        owned.* = value;
+        return owned;
+    }
     fn table(self: *Reader) error{ OutOfMemory, InvalidPresentation }!?types.Table {
         const wire_flags = try self.byte();
         if (wire_flags == 0) return null;
+        const caption_viewport = wire_flags & table_caption_viewport_flag != 0;
+        // Local0x40 remains its old native refusal. Other clients' disclosure
+        // grammar is independent; new25 admits only exact0x81, never0xC1/0xA1.
+        if (caption_viewport and (wire_flags != 0x81 or self.version != .container_fonts or
+            !self.responsive_caption_tables_enabled)) return error.InvalidPresentation;
         const rows_hidden = wire_flags & 0x20 != 0;
-        if (wire_flags & 0xc0 != 0 or (rows_hidden and self.version != .container_fonts)) return error.InvalidPresentation;
-        const flags = wire_flags & ~@as(u8, 0x20);
+        if (wire_flags & 0x40 != 0 or (rows_hidden and self.version != .container_fonts)) return error.InvalidPresentation;
+        const flags = wire_flags & ~@as(u8, 0xa0);
+        if (caption_viewport) {
+            if (self.remaining_items == 0) return error.InvalidPresentation;
+            self.remaining_items -= 1;
+            if (self.metrics) |metrics| metrics.total_items = std.math.add(u64, metrics.total_items, 1) catch return error.InvalidPresentation;
+        }
         if (flags != 1 and !(self.version == .container_fonts and (flags == 3 or flags == 5 or (self.capability_p and (flags == 7 or flags == 13)) or (self.capability_r and flags == 19)))) return error.InvalidPresentation;
         if (self.table_depth >= (if (self.capability_t or self.capability_u) types.max_table_depth else types.legacy_table_depth)) return error.InvalidPresentation;
         self.table_depth += 1;
@@ -3036,8 +3148,9 @@ const Reader = struct {
                 self.remaining_items -= 1;
                 if (self.metrics) |metrics| metrics.total_items = std.math.add(u64, metrics.total_items, 1) catch return error.InvalidPresentation;
                 break :bound try self.readU32();
-            } else null };
-        if (!types.validTableRowsVisibility(value) or !types.validResolvedStyleBorderTableDomain(value)) return error.InvalidPresentation;
+            } else null,
+            .caption_viewport = if (caption_viewport) try self.responsiveCaptionTable() else null };
+        if (!types.validResponsiveCaptionTable(value) or !types.validTableRowsVisibility(value) or !types.validResolvedStyleBorderTableDomain(value)) return error.InvalidPresentation;
         if (!types.validTableViewportHeaders(value.geometry, value.style, value.block_viewport, value.float_viewport)) return error.InvalidPresentation;
         if (value.caption_blocks != null and value.caption.len != 0) return error.InvalidPresentation;
         var has_cells = false;
@@ -3050,7 +3163,20 @@ const Reader = struct {
         return value;
     }
     fn containerWidth(self: *Reader) !types.ContainerWidth {
-        return switch (try self.byte()) { 0 => .auto, 1 => .{ .length = try self.styleWidth() }, 2 => .fit_content, else => error.InvalidPresentation };
+        return switch (try self.byte()) {
+            0 => .auto, 1 => .{ .length = try self.styleWidth() }, 2 => .fit_content,
+            3 => width: {
+                if (self.version != .container_fonts or !self.positioned_containers_enabled) return error.InvalidPresentation;
+                if (comptime @import("builtin").is_test) {
+                    if (TestContainerWidthObservation.active) |observation| {
+                        observation.max_content_count += 1;
+                        observation.offset = self.pos - 1;
+                    }
+                }
+                break :width .max_content;
+            },
+            else => error.InvalidPresentation,
+        };
     }
     fn containerMaxWidth(self: *Reader) !types.ContainerMaxWidth {
         return switch (try self.byte()) { 0 => .none, 1 => .{ .length = try self.styleWidth() }, else => error.InvalidPresentation };
@@ -3235,7 +3361,9 @@ const Reader = struct {
         return value;
     }
     fn containerStyle(self: *Reader) !types.ContainerStyle {
-        return self.containerStyleWithDisclosure(null);
+        const style = try self.containerStyleWithDisclosure(null);
+        if (style.width) |width| if (width == .max_content) return error.InvalidPresentation;
+        return style;
     }
     fn containerStyleWithDisclosure(self: *Reader, disclosure: ?*?types.ContainerDisclosure) !types.ContainerStyle {
         if (disclosure) |slot| slot.* = null;
@@ -3431,16 +3559,28 @@ const Reader = struct {
             };
             if (value.column_break_inside != null and !types.validColumnBreakContext(value)) return error.InvalidPresentation;
         }
+        if (self.inline_destinations_enabled) {
+            const len = try self.count(9);
+            const destinations = try self.a.alloc(types.InlineDestination, len);
+            for (destinations) |*destination| {
+                destination.id = try self.string();
+                destination.before_run = try self.readU32();
+            }
+            value.inline_destinations = destinations;
+            if (!types.validInlineDestinationBlock(value)) return error.InvalidPresentation;
+        }
         if (value.table) |table_value| if (types.tableStyleIsInline(table_value.style) and
             !types.validInlineTableOwner(value.kind, value.spans.len, value.feature != null)) return error.InvalidPresentation;
         if (value.style != null and !types.validBlockStyleContext(value.kind, value.depth, value.table != null, value.feature != null, value.list_path)) return error.InvalidPresentation;
         if (value.figure != null and (value.spans.len != 0 or !types.validFigureContext(value.kind, value.depth, value.table != null, value.feature != null, value.style != null, value.list_path))) return error.InvalidPresentation;
         if (value.flow != null and (value.spans.len != 0 or !types.validFlowContext(value.kind, value.depth, value.table != null, value.feature != null, value.figure != null, value.list_path))) return error.InvalidPresentation;
+        if ((value.anchor.len != 0 or value.anchor_fallback.len != 0) and kind != .heading and
+            (!self.source_anchors_enabled or !types.validSourceAnchor(value, self.table_depth == 0 and self.content_depth == 0 and !self.in_reference))) return error.InvalidPresentation;
         return value;
     }
     fn blocks(self: *Reader) ![]const types.Block {
         const minimum: usize = if ((self.version == .image_maps or hasKFields(self.version))) 29 else if ((self.version == .block_geometry or (self.version == .image_maps or hasKFields(self.version)))) 27 else if ((self.version == .block_layout or (self.version == .explicit_targets or (self.version == .dynamic_catalog or (self.version == .tooltips or (self.version == .block_geometry or (self.version == .image_maps or hasKFields(self.version)))))))) 26 else 25;
-        const len = try self.count(minimum + @intFromBool(self.column_layout_enabled));
+        const len = try self.count(minimum + @intFromBool(self.column_layout_enabled) + 4 * @as(usize, @intFromBool(self.inline_destinations_enabled)));
         const out = try self.a.alloc(types.Block, len);
         for (out) |*value| value.* = try self.block();
         return out;
@@ -3454,7 +3594,7 @@ const Reader = struct {
             section.title = try self.string();
             section.anchor = if (hasAnchorFields(self.version)) try self.string() else "";
             section.anchor_fallback = if (hasAnchorFields(self.version)) try self.string() else "";
-            const block_len = try self.count(if ((self.version == .image_maps or hasKFields(self.version))) 29 else if ((self.version == .block_geometry or (self.version == .image_maps or hasKFields(self.version)))) 27 else if ((self.version == .block_layout or (self.version == .explicit_targets or (self.version == .dynamic_catalog or (self.version == .tooltips or (self.version == .block_geometry or (self.version == .image_maps or hasKFields(self.version)))))))) 26 else if (hasAnchorFields(self.version)) 25 else 17);
+            const block_len = try self.count((if ((self.version == .image_maps or hasKFields(self.version))) 29 else if ((self.version == .block_geometry or (self.version == .image_maps or hasKFields(self.version)))) 27 else if ((self.version == .block_layout or (self.version == .explicit_targets or (self.version == .dynamic_catalog or (self.version == .tooltips or (self.version == .block_geometry or (self.version == .image_maps or hasKFields(self.version)))))))) 26 else if (hasAnchorFields(self.version)) 25 else @as(usize, 17)) + 4 * @as(usize, @intFromBool(self.inline_destinations_enabled)));
             const block_values = try self.a.alloc(types.Block, block_len);
             for (block_values) |*block_value| block_value.* = try self.block();
             section.blocks = block_values;
@@ -3992,6 +4132,14 @@ fn contentTableHasFeature(value: anytype, comptime feature: TreeFeature, table_d
     if (content_depth > types.max_content_depth) return false;
     if (feature == .deep_tables and table_depth > types.legacy_table_depth) return true;
     if (table_depth > types.max_table_depth) return false;
+    if (comptime @hasField(@TypeOf(value), "caption_viewport")) if (value.caption_viewport) |policy| {
+        if (feature == .container_fonts) return true;
+        if (feature == .cell_owner_fonts or feature == .extended_font_families) {
+            if (policy.caption_box.line.strut) |strut| if (strut.owner_font) |font| {
+                if (feature == .cell_owner_fonts or font.font_family != null) return true;
+            };
+        }
+    };
     if (feature == .intrinsic_tables) {
         if (comptime @hasField(@TypeOf(value), "block_viewport")) if (value.block_viewport) |viewport|
             if (viewport.intrinsic_containing_direction != null) return true;
@@ -4469,18 +4617,24 @@ pub fn encodeAlloc(a: A, stored: types.Stored) ![]u8 {
     const positioned_required = container_layouts.positioned;
     const columns_required = container_layouts.column_layout;
     const responsive_flow_required = container_layouts.responsive_flow;
+    const source_anchors_required = container_layouts.source_anchor;
+    const inline_destinations_required = container_layouts.inline_destination;
+    const caption_tables_required = container_layouts.responsive_caption_table;
     const table_min_width_required = DeepTableWork.hasTableMinWidths(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references);
     const audio_required = DeepTableWork.hasAudioControls(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references);
     const resolved_style_borders_required = DeepTableWork.hasResolvedStyleBorders(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references);
-    const z_required = responsive_flow_required or resolved_style_borders_required or positioned_required or table_min_width_required or columns_required or audio_required;
+    const z_required = caption_tables_required or inline_destinations_required or responsive_flow_required or source_anchors_required or resolved_style_borders_required or positioned_required or table_min_width_required or columns_required or audio_required;
     const v_required = z_required or y_required or DeepTableWork.hasInlineActionGroups(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references);
     const u_required = v_required or DeepTableWork.hasInlinePaddingOrRubyMargins(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references);
     const t_required = !u_required and hasDeepTables(stored.entry.sections, stored.entry.references);
-    var work: DeepTableWork = .{};
+    var ids = types.SourceAnchorDestinations.init(a);
+    defer ids.deinit();
+    var work: DeepTableWork = .{ .destinations = if (source_anchors_required or inline_destinations_required) &ids else null };
     if (body_typography) |body| try work.bodyTypography(body);
     if (u_required or t_required) try work.entry(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references);
+    try ids.finish();
     const ruby_annotation_margins_required = work.ruby_annotation_margins_found;
-    const a_required = responsive_flow_required or resolved_style_borders_required or ruby_annotation_margins_required;
+    const a_required = caption_tables_required or inline_destinations_required or responsive_flow_required or source_anchors_required or resolved_style_borders_required or ruby_annotation_margins_required;
     const y_features: u8 = (if (work.container_owner_font_found) owner_font_feature else @as(u8, 0)) |
         (if (body_required) body_typography_feature else @as(u8, 0)) |
         (if (work.inline_box_group_found) inline_box_feature else @as(u8, 0)) |
@@ -4489,6 +4643,9 @@ pub fn encodeAlloc(a: A, stored: types.Stored) ![]u8 {
     if (y_required != (y_features != 0) or w_required != work.container_owner_font_found or box_required != work.inline_box_group_found or
         positioned_required != work.positioned_container_found or columns_required != work.column_layout_found or
         responsive_flow_required != work.responsive_container_flow_found or
+        source_anchors_required != work.source_anchor_found or
+        inline_destinations_required != work.inline_destination_found or
+        caption_tables_required != work.responsive_caption_table_found or
         table_min_width_required != work.table_min_width_found or occurrence_required != work.image_occurrence_found or audio_required != work.audio_control_found or
         clipped_required != work.clipped_absolute_found or resolved_style_borders_required != work.resolved_style_border_found) return error.InvalidPresentation;
     if (layoutHasPaths(stored.entry.organization) and !buildLayoutPathsValid(stored.entry.organization, stored.entry.sections)) return error.InvalidPresentation;
@@ -4506,13 +4663,16 @@ pub fn encodeAlloc(a: A, stored: types.Stored) ![]u8 {
     var inline_catalog: ?types.ImageCatalogIndex = null;
     defer if (inline_catalog) |*catalog| catalog.deinit(a);
     if (audio_required or hasInlineTableMedia(stored.entry.sections, stored.entry.references)) inline_catalog = try types.ImageCatalogIndex.init(a, stored.entry.media);
-    var encoder: Encoder = .{ .a = a, .version = version, .rule_styles = rule_styles, .inline_styles = inline_styles, .capability_p = s_required or r_required or q_required or pending_features != 0, .capability_q = s_required or r_required or q_required, .capability_r = s_required or r_required, .capability_s = s_required, .capability_t = t_required, .capability_u = u_required, .capability_v = v_required or a_required, .capability_w = w_required, .positioned_containers_enabled = positioned_required, .table_min_width_enabled = table_min_width_required, .column_layout_enabled = columns_required, .resolved_style_borders_enabled = resolved_style_borders_required, .ruby_annotation_margins_enabled = ruby_annotation_margins_required, .responsive_container_flow_enabled = responsive_flow_required, .body_typography_enabled = body_required, .inline_box_groups = box_required, .clipped_absolute_enabled = clipped_required, .image_occurrences = occurrence_required, .audio_controls = audio_required, .text_flow = pending_features & 16 != 0, .inline_media_catalog = if (inline_catalog) |*catalog| catalog else null };
+    var encoder: Encoder = .{ .a = a, .version = version, .rule_styles = rule_styles, .inline_styles = inline_styles, .capability_p = s_required or r_required or q_required or pending_features != 0, .capability_q = s_required or r_required or q_required, .capability_r = s_required or r_required, .capability_s = s_required, .capability_t = t_required, .capability_u = u_required, .capability_v = v_required or a_required, .capability_w = w_required, .positioned_containers_enabled = positioned_required, .table_min_width_enabled = table_min_width_required, .column_layout_enabled = columns_required, .resolved_style_borders_enabled = resolved_style_borders_required, .ruby_annotation_margins_enabled = ruby_annotation_margins_required, .responsive_container_flow_enabled = responsive_flow_required, .source_anchors_enabled = source_anchors_required, .inline_destinations_enabled = inline_destinations_required, .responsive_caption_tables_enabled = caption_tables_required, .body_typography_enabled = body_required, .inline_box_groups = box_required, .clipped_absolute_enabled = clipped_required, .image_occurrences = occurrence_required, .audio_controls = audio_required, .text_flow = pending_features & 16 != 0, .inline_media_catalog = if (inline_catalog) |*catalog| catalog else null };
     defer encoder.deinit();
     try encoder.out.appendSlice(a, if (a_required) resolved_style_borders_magic else if (z_required) positioned_containers_magic else if (y_required) owner_geometry_magic else if (v_required) inline_action_groups_magic else if (u_required) inline_padding_groups_magic else if (t_required) deep_tables_magic else if (s_required) ruby_magic else if (r_required) intrinsic_table_magic else if (q_required) table_corners_magic else if (pending_features != 0) body_adjoining_magic else if (inline_styles) inline_styles_magic else if (rule_styles) rule_styles_magic else versionMagic(version));
     if (a_required) try encoder.writeU32(@as(u32, y_features) |
         (if (resolved_style_borders_required) resolved_style_borders_feature else @as(u32, 0)) |
         (if (ruby_annotation_margins_required) ruby_annotation_margins_feature else @as(u32, 0)) |
         (if (responsive_flow_required) responsive_container_flow_feature else @as(u32, 0)) |
+        (if (source_anchors_required) source_anchor_feature else @as(u32, 0)) |
+        (if (inline_destinations_required) inline_destination_feature else @as(u32, 0)) |
+        (if (caption_tables_required) responsive_caption_table_feature else @as(u32, 0)) |
         (if (positioned_required) @as(u32, positioned_containers_feature) else 0) |
         (if (table_min_width_required) @as(u32, table_min_width_feature) else 0) |
         (if (columns_required) @as(u32, column_layout_feature) else 0) |
@@ -4576,18 +4736,24 @@ pub fn encodeBuildWithBodyTypographyAlloc(
     const positioned_required = container_layouts.positioned;
     const columns_required = container_layouts.column_layout;
     const responsive_flow_required = container_layouts.responsive_flow;
+    const source_anchors_required = container_layouts.source_anchor;
+    const inline_destinations_required = container_layouts.inline_destination;
+    const caption_tables_required = container_layouts.responsive_caption_table;
     const table_min_width_required = DeepTableWork.hasTableMinWidths(display_title, sections, @as([]const types.Span, &.{}), references_value);
     const audio_required = DeepTableWork.hasAudioControls(display_title, sections, @as([]const types.Span, &.{}), references_value);
     const resolved_style_borders_required = DeepTableWork.hasResolvedStyleBorders(display_title, sections, @as([]const types.Span, &.{}), references_value);
-    const z_required = responsive_flow_required or resolved_style_borders_required or positioned_required or table_min_width_required or columns_required or audio_required;
+    const z_required = caption_tables_required or inline_destinations_required or responsive_flow_required or source_anchors_required or resolved_style_borders_required or positioned_required or table_min_width_required or columns_required or audio_required;
     const v_required = z_required or y_required or DeepTableWork.hasInlineActionGroups(display_title, sections, @as([]const types.Span, &.{}), references_value);
     const u_required = v_required or DeepTableWork.hasInlinePaddingOrRubyMargins(display_title, sections, @as([]const types.Span, &.{}), references_value);
     const t_required = !u_required and hasDeepTables(sections, references_value);
-    var work: DeepTableWork = .{};
+    var ids = types.SourceAnchorDestinations.init(a);
+    defer ids.deinit();
+    var work: DeepTableWork = .{ .destinations = if (source_anchors_required or inline_destinations_required) &ids else null };
     if (body_typography) |body| try work.bodyTypography(body);
     if (u_required or t_required) try work.entry(display_title, sections, @as([]const types.Span, &.{}), references_value);
+    try ids.finish();
     const ruby_annotation_margins_required = work.ruby_annotation_margins_found;
-    const a_required = responsive_flow_required or resolved_style_borders_required or ruby_annotation_margins_required;
+    const a_required = caption_tables_required or inline_destinations_required or responsive_flow_required or source_anchors_required or resolved_style_borders_required or ruby_annotation_margins_required;
     const y_features: u8 = (if (work.container_owner_font_found) owner_font_feature else @as(u8, 0)) |
         (if (body_required) body_typography_feature else @as(u8, 0)) |
         (if (work.inline_box_group_found) inline_box_feature else @as(u8, 0)) |
@@ -4596,6 +4762,9 @@ pub fn encodeBuildWithBodyTypographyAlloc(
     if (y_required != (y_features != 0) or w_required != work.container_owner_font_found or box_required != work.inline_box_group_found or
         positioned_required != work.positioned_container_found or columns_required != work.column_layout_found or
         responsive_flow_required != work.responsive_container_flow_found or
+        source_anchors_required != work.source_anchor_found or
+        inline_destinations_required != work.inline_destination_found or
+        caption_tables_required != work.responsive_caption_table_found or
         table_min_width_required != work.table_min_width_found or occurrence_required != work.image_occurrence_found or audio_required != work.audio_control_found or
         clipped_required != work.clipped_absolute_found or resolved_style_borders_required != work.resolved_style_border_found) return error.InvalidPresentation;
     if (layoutHasPaths(layout_value) and !buildLayoutPathsValid(layout_value, sections)) return error.InvalidPresentation;
@@ -4613,13 +4782,16 @@ pub fn encodeBuildWithBodyTypographyAlloc(
     var inline_catalog: ?types.ImageCatalogIndex = null;
     defer if (inline_catalog) |*catalog| catalog.deinit(a);
     if (audio_required or hasInlineTableMedia(sections, references_value)) inline_catalog = try types.ImageCatalogIndex.init(a, media_value);
-    var encoder: Encoder = .{ .a = a, .version = version, .rule_styles = rule_styles, .inline_styles = inline_styles, .capability_p = s_required or r_required or q_required or pending_features != 0, .capability_q = s_required or r_required or q_required, .capability_r = s_required or r_required, .capability_s = s_required, .capability_t = t_required, .capability_u = u_required, .capability_v = v_required or a_required, .capability_w = w_required, .positioned_containers_enabled = positioned_required, .table_min_width_enabled = table_min_width_required, .column_layout_enabled = columns_required, .resolved_style_borders_enabled = resolved_style_borders_required, .ruby_annotation_margins_enabled = ruby_annotation_margins_required, .responsive_container_flow_enabled = responsive_flow_required, .body_typography_enabled = body_required, .inline_box_groups = box_required, .clipped_absolute_enabled = clipped_required, .image_occurrences = occurrence_required, .audio_controls = audio_required, .text_flow = pending_features & 16 != 0, .inline_media_catalog = if (inline_catalog) |*catalog| catalog else null };
+    var encoder: Encoder = .{ .a = a, .version = version, .rule_styles = rule_styles, .inline_styles = inline_styles, .capability_p = s_required or r_required or q_required or pending_features != 0, .capability_q = s_required or r_required or q_required, .capability_r = s_required or r_required, .capability_s = s_required, .capability_t = t_required, .capability_u = u_required, .capability_v = v_required or a_required, .capability_w = w_required, .positioned_containers_enabled = positioned_required, .table_min_width_enabled = table_min_width_required, .column_layout_enabled = columns_required, .resolved_style_borders_enabled = resolved_style_borders_required, .ruby_annotation_margins_enabled = ruby_annotation_margins_required, .responsive_container_flow_enabled = responsive_flow_required, .source_anchors_enabled = source_anchors_required, .inline_destinations_enabled = inline_destinations_required, .responsive_caption_tables_enabled = caption_tables_required, .body_typography_enabled = body_required, .inline_box_groups = box_required, .clipped_absolute_enabled = clipped_required, .image_occurrences = occurrence_required, .audio_controls = audio_required, .text_flow = pending_features & 16 != 0, .inline_media_catalog = if (inline_catalog) |*catalog| catalog else null };
     defer encoder.deinit();
     try encoder.out.appendSlice(a, if (a_required) resolved_style_borders_magic else if (z_required) positioned_containers_magic else if (y_required) owner_geometry_magic else if (v_required) inline_action_groups_magic else if (u_required) inline_padding_groups_magic else if (t_required) deep_tables_magic else if (s_required) ruby_magic else if (r_required) intrinsic_table_magic else if (q_required) table_corners_magic else if (pending_features != 0) body_adjoining_magic else if (inline_styles) inline_styles_magic else if (rule_styles) rule_styles_magic else versionMagic(version));
     if (a_required) try encoder.writeU32(@as(u32, y_features) |
         (if (resolved_style_borders_required) resolved_style_borders_feature else @as(u32, 0)) |
         (if (ruby_annotation_margins_required) ruby_annotation_margins_feature else @as(u32, 0)) |
         (if (responsive_flow_required) responsive_container_flow_feature else @as(u32, 0)) |
+        (if (source_anchors_required) source_anchor_feature else @as(u32, 0)) |
+        (if (inline_destinations_required) inline_destination_feature else @as(u32, 0)) |
+        (if (caption_tables_required) responsive_caption_table_feature else @as(u32, 0)) |
         (if (positioned_required) @as(u32, positioned_containers_feature) else 0) |
         (if (table_min_width_required) @as(u32, table_min_width_feature) else 0) |
         (if (columns_required) @as(u32, column_layout_feature) else 0) |
@@ -4707,6 +4879,9 @@ fn decodeImpl(
     const resolved_style_borders_enabled = a_header and z_features & resolved_style_borders_feature != 0;
     const ruby_annotation_margins_enabled = a_header and z_features & ruby_annotation_margins_feature != 0;
     const responsive_container_flow_enabled = a_header and z_features & responsive_container_flow_feature != 0;
+    const source_anchors_enabled = a_header and z_features & source_anchor_feature != 0;
+    const inline_destinations_enabled = a_header and z_features & inline_destination_feature != 0;
+    const responsive_caption_tables_enabled = a_header and z_features & responsive_caption_table_feature != 0;
     const owner_fonts_header = y_features & owner_font_feature != 0;
     const body_typography_header = y_features & body_typography_feature != 0;
     const inline_box_header = y_features & inline_box_feature != 0;
@@ -4727,7 +4902,7 @@ fn decodeImpl(
         if (std.mem.eql(u8, payload[0..3], "DPR")) return error.UnsupportedPresentationVersion;
         return error.InvalidPresentation;
     };
-    var reader: Reader = .{ .a = a, .version = version, .rule_styles = rule_styles, .inline_styles = inline_styles, .capability_p = body_adjoining_header, .capability_q = ruby_header or intrinsic_header or table_corners_header, .capability_r = ruby_header or intrinsic_header, .capability_s = ruby_header, .capability_t = deep_tables_header, .capability_u = inline_groups_header, .capability_v = action_groups_header, .capability_w = owner_fonts_header, .positioned_containers_enabled = positioned_header, .table_min_width_enabled = table_min_width_header, .column_layout_enabled = column_layout_header, .resolved_style_borders_enabled = resolved_style_borders_enabled, .ruby_annotation_margins_enabled = ruby_annotation_margins_enabled, .responsive_container_flow_enabled = responsive_container_flow_enabled, .body_typography_enabled = body_typography_header, .inline_box_groups = inline_box_header, .clipped_absolute_enabled = clipped_absolute_header, .image_occurrences = image_occurrence_header, .audio_controls = audio_control_header, .bytes = payload, .pos = magic.len + (if (a_header) @as(usize, 4) else if (z_header) @as(usize, 2) else @as(usize, @intFromBool(owner_geometry_header))), .metrics = metrics };
+    var reader: Reader = .{ .a = a, .version = version, .rule_styles = rule_styles, .inline_styles = inline_styles, .capability_p = body_adjoining_header, .capability_q = ruby_header or intrinsic_header or table_corners_header, .capability_r = ruby_header or intrinsic_header, .capability_s = ruby_header, .capability_t = deep_tables_header, .capability_u = inline_groups_header, .capability_v = action_groups_header, .capability_w = owner_fonts_header, .positioned_containers_enabled = positioned_header, .table_min_width_enabled = table_min_width_header, .column_layout_enabled = column_layout_header, .resolved_style_borders_enabled = resolved_style_borders_enabled, .ruby_annotation_margins_enabled = ruby_annotation_margins_enabled, .responsive_container_flow_enabled = responsive_container_flow_enabled, .source_anchors_enabled = source_anchors_enabled, .inline_destinations_enabled = inline_destinations_enabled, .responsive_caption_tables_enabled = responsive_caption_tables_enabled, .body_typography_enabled = body_typography_header, .inline_box_groups = inline_box_header, .clipped_absolute_enabled = clipped_absolute_header, .image_occurrences = image_occurrence_header, .audio_controls = audio_control_header, .bytes = payload, .pos = magic.len + (if (a_header) @as(usize, 4) else if (z_header) @as(usize, 2) else @as(usize, @intFromBool(owner_geometry_header))), .metrics = metrics };
     const display_title = try reader.spans();
     const sections = try reader.sections();
     const preamble = try reader.spans();
@@ -4755,6 +4930,9 @@ fn decodeImpl(
                 resolved_style_borders_enabled != inline_work.resolved_style_border_found or
                 ruby_annotation_margins_enabled != inline_work.ruby_annotation_margins_found or
                 responsive_container_flow_enabled != inline_work.responsive_container_flow_found or
+                source_anchors_enabled != inline_work.source_anchor_found or
+                inline_destinations_enabled != inline_work.inline_destination_found or
+                responsive_caption_tables_enabled != inline_work.responsive_caption_table_found or
                 body_typography_header != (body_typography != null)) return error.InvalidPresentation;
         } else if (action_groups_header) {
             if (!inline_work.inline_action_group_found) return error.InvalidPresentation;
@@ -19015,6 +19193,156 @@ test "DPRZ selected column gap and axis clipped dashed sibling retain distinct f
     try std.testing.expectEqualSlices(u8,raw,try encodeAlloc(a,after));
 }
 
+
+test "DPRZ clipped max-content border box preserves intrinsic keyword before the width clamp" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const T = PositionedContainerZCodecTest;
+    const style: types.ContainerStyle = .{ .width = .max_content, .max_width = .{ .length = .{ .unit = .percent, .value = 100 } }, .box_sizing = .border_box, .overflow = .hidden };
+    const leaf: types.Block = .{ .kind = .paragraph, .spans = &.{.{ .text = "Original intrinsic width" }} };
+    const owner: types.Block = .{ .kind = .container, .container = .{ .style = style, .blocks = &.{leaf} } };
+    const stored = T.stored(&.{.{ .level = 2, .title = "body", .blocks = &.{owner} }});
+    const bytes = try encodeAlloc(a, stored);
+    try std.testing.expectEqualStrings(positioned_containers_magic, bytes[0..4]);
+    try std.testing.expectEqualDeep(stored, try decodeAlloc(a, bytes, "positioned", .supplemental, null));
+    var regular = T.encoder(a); defer regular.deinit();
+    try regular.containerStyleWithDisclosure(style, null);
+    try std.testing.expectEqual(@as(u8, 3), regular.out.items[4]);
+    var generic = T.reader(a, regular.out.items);
+    try std.testing.expectError(error.InvalidPresentation, generic.containerStyle());
+    var old = ContainerOwnerWTest.encoder(a); defer old.deinit();
+    try std.testing.expectError(error.InvalidPresentation, old.containerStyleWithDisclosure(style, null));
+    var invalid = style; invalid.overflow = .visible;
+    try std.testing.expect(!types.validContainerStyle(invalid));
+    invalid = style; invalid.max_width.?.length.value = 90;
+    try std.testing.expect(!types.validContainerStyle(invalid));
+    invalid = style; invalid.box_sizing = .content_box;
+    try std.testing.expect(!types.validContainerStyle(invalid));
+    invalid = style; invalid.positioning = .relative_auto;
+    try std.testing.expect(!types.validContainerStyle(invalid));
+}
+
+test "definition fragment capability is owed by a numbered definition and round trips through both writers" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var blocks = [_]types.Block{.{ .kind = .definition, .list_path = "#", .depth = 1, .number = "1",
+        .spans = &.{ .{ .text = "The " }, .{ .kind = .link, .text = "Americas", .target = "Americas" }, .{ .text = "." } } }};
+    const stored: types.Stored = .{ .entry = .{ .title = "America", .kind = .supplemental,
+        .sections = &.{.{ .level = 2, .title = "Body", .blocks = &blocks }} } };
+    const legacy = try encodeAlloc(a, stored);
+    blocks[0].anchor = "Енглески:_Q828";
+    const bytes = try encodeAlloc(a, stored);
+    try std.testing.expectEqualStrings(resolved_style_borders_magic, bytes[0..4]);
+    try std.testing.expectEqual(source_anchor_feature, std.mem.readInt(u32, bytes[4..8], .little));
+    try std.testing.expectEqualDeep(stored, try decodeAlloc(a, bytes, "America", .supplemental, null));
+    try std.testing.expectEqualSlices(u8, bytes, try encodeBuildAlloc(a, stored.entry.display_title,
+        stored.entry.sections, stored.entry.organization, stored.entry.references, stored.entry.media));
+    const changed = try a.dupe(u8, bytes);
+    std.mem.writeInt(u32, changed[4..8], resolved_style_borders_feature, .little);
+    try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, changed, "America", .supplemental, null));
+    std.mem.writeInt(u32, changed[4..8], source_anchor_feature | resolved_style_borders_feature, .little);
+    try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, changed, "America", .supplemental, null));
+    blocks[0].anchor_fallback = "Translations-Q828";
+    try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, stored));
+    blocks[0].anchor_fallback = "";
+    blocks[0].anchor = "Translations-Q828";
+    try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, stored));
+    blocks[0].anchor = "";
+    try std.testing.expectEqualSlices(u8, legacy, try encodeAlloc(a, stored));
+}
+
+test "source anchor capability binds a root NavHead paragraph to its exact outgoing action" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const fixture = struct {
+        fn spans(comptime label: []const u8, comptime id: []const u8) [5]types.Span {
+            var result = [_]types.Span{
+                .{ .text = label ++ " ", .bold = true }, .{ .text = "— " }, .{ .text = "see", .italic = true },
+                .{ .text = " ", .bold = true }, .{ .kind = .link, .text = label, .target = label ++ "#" ++ id, .bold = true },
+            };
+            for (&result) |*span| {
+                span.classes = "pseudo NavFrame NavHead";
+                span.font_scale = 0.95;
+                span.font_scale_basis = .normal_body;
+            }
+            return result;
+        }
+        fn reject(allocator: A, stored: types.Stored) !void {
+            const e = stored.entry;
+            try std.testing.expectError(error.InvalidPresentation, types.validateStored(allocator, stored, e.title, e.kind, null));
+            try std.testing.expectError(error.InvalidPresentation, encodeAlloc(allocator, stored));
+            try std.testing.expectError(error.InvalidPresentation, encodeBuildAlloc(allocator, e.display_title, e.sections, e.organization, e.references, e.media));
+        }
+    };
+    const us_id = "Translations-Q30";
+    const americas_id = "Translations-Q828";
+    const us = fixture.spans("United States of America", us_id);
+    var americas = fixture.spans("Americas", americas_id);
+    var blocks = [_]types.Block{
+        .{ .kind = .paragraph, .text_align = .left, .spans = &us },
+        .{ .kind = .paragraph, .text_align = .left, .spans = &americas },
+    };
+    const stored: types.Stored = .{ .entry = .{ .title = "America", .kind = .supplemental,
+        .sections = &.{.{ .level = 4, .title = "Translations", .anchor = "Translations", .blocks = &blocks }} } };
+    const e = stored.entry;
+    const legacy = try encodeAlloc(a, stored);
+    try std.testing.expect(!std.mem.eql(u8, resolved_style_borders_magic, legacy[0..4]));
+    blocks[0].anchor = us_id;
+    blocks[1].anchor = americas_id;
+    const bytes = try encodeAlloc(a, stored);
+    try std.testing.expectEqualStrings(resolved_style_borders_magic, bytes[0..4]);
+    try std.testing.expectEqual(source_anchor_feature, std.mem.readInt(u32, bytes[4..8], .little));
+    try std.testing.expectEqualSlices(u8, bytes, try encodeBuildAlloc(a, e.display_title, e.sections, e.organization, e.references, e.media));
+    try std.testing.expectEqualDeep(stored, try decodeAlloc(a, bytes, e.title, e.kind, null));
+    var metrics: DecodeMetrics = .{};
+    try std.testing.expectEqualDeep(stored, try decodeWithMetricsAlloc(a, bytes, e.title, e.kind, null, &metrics));
+
+    // Cross the two paragraph IDs while keeping both original bodies and actions.
+    std.mem.swap([]const u8, &blocks[0].anchor, &blocks[1].anchor);
+    try fixture.reject(a, stored);
+    std.mem.swap([]const u8, &blocks[0].anchor, &blocks[1].anchor);
+    // Preserve the fragment and five-span shape, but cross the outgoing page.
+    const action = americas[4];
+    americas[4].target = "United States of America#Translations-Q828";
+    try fixture.reject(a, stored);
+    americas[4] = action;
+    const lead = americas[0];
+    americas[0] = us[0];
+    try fixture.reject(a, stored);
+    americas[0] = lead;
+    blocks[1].anchor_fallback = americas_id;
+    try fixture.reject(a, stored);
+    blocks[1].anchor_fallback = "";
+    var in_reference = stored;
+    in_reference.entry.references = &.{.{ .number = 1, .group_number = 1, .blocks = blocks[1..] }};
+    try fixture.reject(a, in_reference);
+
+    const damaged = try a.dupe(u8, bytes);
+    const offset = std.mem.indexOf(u8, bytes, action.target).?;
+    damaged[offset + action.target.len - 1] = '9';
+    try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, damaged, e.title, e.kind, null));
+    @memcpy(damaged, bytes);
+    std.mem.writeInt(u32, damaged[4..8], resolved_style_borders_feature, .little);
+    try std.testing.expectError(error.InvalidPresentation, decodeWithMetricsAlloc(a, damaged, e.title, e.kind, null, &metrics));
+
+    // Clear the sole remaining anchor on wire, retaining the bit and framing.
+    blocks[0].anchor = "";
+    const single = try encodeAlloc(a, stored);
+    const start = std.mem.lastIndexOf(u8, single, americas_id).?;
+    try std.testing.expectEqual(@as(u32, americas_id.len), std.mem.readInt(u32, single[start - 4 ..][0..4], .little));
+    const unowed = try a.alloc(u8, single.len - americas_id.len);
+    @memcpy(unowed[0..start], single[0..start]);
+    @memset(unowed[start - 4 .. start], 0);
+    @memcpy(unowed[start..], single[start + americas_id.len ..]);
+    try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, unowed, e.title, e.kind, null));
+    blocks[1].anchor = "";
+    try std.testing.expectEqualSlices(u8, legacy, try encodeAlloc(a, stored));
+    try std.testing.expectEqualSlices(u8, legacy, try encodeBuildAlloc(a, e.display_title, e.sections, e.organization, e.references, e.media));
+}
+
 test "ordered list owns each source item marker and original example path with exact DPRZ domain" {
     var arena=std.heap.ArenaAllocator.init(std.testing.allocator);defer arena.deinit();const a=arena.allocator();
     const T=PositionedContainerZCodecTest;
@@ -19160,4 +19488,414 @@ test "DPRa responsive container flow checks the whole record and advertised cens
     const legacy = try encodeAlloc(a, stored);
     try std.testing.expect(!std.mem.eql(u8, resolved_style_borders_magic, legacy[0..4]));
     try std.testing.expectEqualDeep(stored, try decodeAlloc(a, legacy, stored.entry.title, stored.entry.kind, null));
+}
+
+test "DPRa source anchors and responsive flow retain independent owners and reject ambiguous destinations" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const leaf = [_]types.Block{.{ .kind = .paragraph, .spans = &.{.{ .text = "Retained child" }} }};
+    const inner = [_]types.Block{.{ .kind = .container, .container = .{ .style = .{}, .blocks = &leaf } }};
+    const following = [_]types.ContainerScreenMaxWidth{.{ .max_width_px = 400, .clear = .none }};
+    const id = "Енглески:_Q828";
+    var blocks = [_]types.Block{
+        .{ .kind = .definition, .depth = 1, .list_path = "#", .number = "1", .spans = &.{.{ .text = "The Americas." }} },
+        .{ .kind = .definition, .depth = 1, .list_path = "#", .number = "2", .spans = &.{.{ .text = "The US." }} },
+        .{ .kind = .container, .container = .{
+            .style = .{ .layout = .flex_row, .screen_max_width = .{ .max_width_px = 720, .width = .auto, .layout = .flow, .following_rules = &following } },
+            .blocks = &inner,
+        } },
+    };
+    var sections = [_]types.Section{.{ .level = 2, .title = "Body", .anchor = "Body", .blocks = &blocks }};
+    const stored: types.Stored = .{ .entry = .{ .title = "America", .kind = .supplemental, .sections = &sections } };
+    const ordinary = try encodeAlloc(a, stored);
+    try std.testing.expectEqual(@as(u32, 0x01000000), std.mem.readInt(u32, ordinary[4..8], .little));
+    blocks[0].anchor = id;
+    blocks[1].anchor = "Енглески:_Q830";
+    const e = stored.entry;
+    const mixed = try encodeAlloc(a, stored);
+    try std.testing.expectEqual(@as(u32, 0x09000000), std.mem.readInt(u32, mixed[4..8], .little));
+    try std.testing.expectEqualSlices(u8, mixed, try encodeBuildAlloc(a, e.display_title, e.sections, e.organization, e.references, e.media));
+    try std.testing.expectEqualDeep(stored, try decodeAlloc(a, mixed, e.title, e.kind, null));
+
+    const crossed = try a.dupe(u8, mixed);
+    // Cross just the second source ID in an otherwise valid dual-feature wire record.
+    const second = std.mem.indexOf(u8, crossed, blocks[1].anchor) orelse return error.TestExpectedSecondAnchor;
+    @memcpy(crossed[second..][0..id.len], id);
+    try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, crossed, e.title, e.kind, null));
+    @memcpy(crossed, mixed);
+    for ([_]u32{ 0x01000000, 0x08000000, 0x09800000 }) |flags| {
+        std.mem.writeInt(u32, crossed[4..8], flags, .little);
+        try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, crossed, e.title, e.kind, null));
+    }
+    for (0..3) |which| {
+        switch (which) {
+            0 => blocks[1].anchor = id,
+            1 => { blocks[1].anchor = ""; sections[0].anchor = id; },
+            2 => { sections[0].anchor = "Body"; sections[0].anchor_fallback = id; },
+            else => unreachable,
+        }
+        try std.testing.expectError(error.InvalidPresentation, types.validateStored(a, stored, e.title, e.kind, null));
+        try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, stored));
+        try std.testing.expectError(error.InvalidPresentation, encodeBuildAlloc(a, e.display_title, e.sections, e.organization, e.references, e.media));
+    }
+    sections[0].anchor_fallback = "";
+    blocks[0].anchor = "";
+    try std.testing.expectEqualSlices(u8, ordinary, try encodeAlloc(a, stored));
+}
+
+test "authentic America rejects a second definition destination and preserves the prior DPRZ" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const meta: format.LanguageMetadata = .{ .heading = "Енглески", .code = "en" };
+    const baseline = @embedFile("testdata/sr-america-source-anchors/baseline.dpr");
+    const historical = try decodeAlloc(a, baseline, "America", .language, meta);
+    try std.testing.expectEqualSlices(u8, baseline, try encodeAlloc(a, historical));
+    const original = @embedFile("testdata/sr-america-source-anchors/candidate.dpr");
+    const record = try decodeAlloc(a, original, "America", .language, meta);
+    try std.testing.expectEqualSlices(u8, original, try encodeAlloc(a, record));
+    const old = "\x16\x00\x00\x00Енглески:_Q828";
+    const replacement = "\x15\x00\x00\x00Енглески:_Q30";
+    const pos = std.mem.indexOf(u8, original, old) orelse return error.TestExpectedSourceAnchor;
+    try std.testing.expect(std.mem.indexOf(u8, original[pos + old.len ..], old) == null);
+    const crossed = try std.mem.concat(a, u8, &.{ original[0..pos], replacement, original[pos + old.len ..] });
+    try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, crossed, "America", .language, meta));
+}
+
+
+// Synthetic wire controls only. They do not assert a captured source grant or
+// actual client LTR/caret/layout evidence for the new plain-heading profile.
+const InlineDestinationWireTest = struct {
+    const spans = [_]types.Span{
+        .{ .text = "Mai (" }, .{ .kind = .link, .text = "Deutsch", .target = "Wiktionary:Deutsch" }, .{ .text = ")" },
+    };
+    const destinations = [_]types.InlineDestination{.{ .id = "Deutsch", .before_run = 2 }};
+    const tail = [_]u8{1, 0, 0, 0, 7, 0, 0, 0, 'D', 'e', 'u', 't', 's', 'c', 'h', 2, 0, 0, 0};
+    fn block() types.Block {
+        return .{ .kind = .heading, .level = 2, .anchor = "Mai_(Deutsch)", .anchor_fallback = "Mai_.28Deutsch.29",
+            .spans = &spans, .inline_destinations = &destinations };
+    }
+    fn section(blocks: []const types.Block) types.Section {
+        return .{ .level = 2, .title = "Mai (Deutsch)", .anchor = "Mai_(Deutsch)", .anchor_fallback = "Mai_.28Deutsch.29", .blocks = blocks };
+    }
+    fn stored(sections: []const types.Section) types.Stored {
+        return .{ .entry = .{ .title = "Mai", .kind = .supplemental, .sections = sections } };
+    }
+};
+
+test "inline destination standalone28 grammar roundtrips both writers and preserves absent bytes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const T = InlineDestinationWireTest;
+    var blocks = [_]types.Block{T.block()};
+    const sections = [_]types.Section{T.section(&blocks)};
+    const stored = T.stored(&sections);
+    blocks[0].inline_destinations = &.{};
+    const old = try encodeAlloc(a, stored);
+    const old_build = try encodeBuildAlloc(a, stored.entry.display_title, stored.entry.sections,
+        stored.entry.organization, stored.entry.references, stored.entry.media);
+    try std.testing.expectEqualSlices(u8, old, old_build);
+    const old_json = try std.json.Stringify.valueAlloc(a, blocks[0], .{});
+    try std.testing.expect(std.mem.indexOf(u8, old_json, "inline_destinations") == null);
+    blocks[0].inline_destinations = &T.destinations;
+    const bytes = try encodeAlloc(a, stored);
+    try std.testing.expectEqualStrings("DPRa", bytes[0..4]);
+    try std.testing.expectEqual(@as(u32, 0x10000000), std.mem.readInt(u32, bytes[4..8], .little));
+    try std.testing.expectEqualDeep(stored, try decodeAlloc(a, bytes, "Mai", .supplemental, null));
+    try std.testing.expectEqualSlices(u8, bytes, try encodeBuildAlloc(a, stored.entry.display_title,
+        stored.entry.sections, stored.entry.organization, stored.entry.references, stored.entry.media));
+    const json = try std.json.Stringify.valueAlloc(a, blocks[0], .{});
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"inline_destinations\":[{\"id\":\"Deutsch\",\"before_run\":2}]") != null);
+    blocks[0].inline_destinations = &.{};
+    try std.testing.expectEqualSlices(u8, old, try encodeAlloc(a, stored));
+}
+
+test "inline destination exact block suffix and declared scale presence are preserved" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const T = InlineDestinationWireTest;
+    var block = T.block(); block.inline_destinations = &.{};
+    var legacy: Encoder = .{ .a = a, .version = .container_fonts }; defer legacy.deinit();
+    try legacy.block(block);
+    block.inline_destinations = &T.destinations;
+    var enc: Encoder = .{ .a = a, .version = .container_fonts, .inline_destinations_enabled = true }; defer enc.deinit();
+    try enc.block(block);
+    try std.testing.expectEqualSlices(u8, legacy.out.items, enc.out.items[0..legacy.out.items.len]);
+    try std.testing.expectEqualSlices(u8, &T.tail, enc.out.items[legacy.out.items.len..]);
+    var dec: Reader = .{ .a = a, .bytes = enc.out.items, .version = .container_fonts, .inline_destinations_enabled = true };
+    try std.testing.expectEqualDeep(block, try dec.block());
+    try std.testing.expectEqual(enc.out.items.len, dec.pos);
+    try std.testing.expectError(error.InvalidPresentation, legacy.block(block));
+    var scaled: Encoder = .{ .a = a, .version = .container_fonts }; defer scaled.deinit();
+    try scaled.span(types.Span{ .text = ")", .font_scale = 2 });
+    const scale_at = std.mem.indexOf(u8, scaled.out.items, &.{0, 0, 0, 0x40}) orelse return error.TestUnexpectedResult;
+    std.mem.writeInt(u32, scaled.out.items[scale_at..][0..4], @bitCast(@as(f32, 1)), .little);
+    var old_reader: Reader = .{ .a = a, .bytes = scaled.out.items, .version = .container_fonts };
+    const old_span = try old_reader.span();
+    try std.testing.expect(old_span.font_scale == null);
+    var new_reader: Reader = .{ .a = a, .bytes = scaled.out.items, .version = .container_fonts, .inline_destinations_enabled = true };
+    const new_span = try new_reader.span();
+    try std.testing.expectEqual(@as(?f32, 1), new_span.font_scale);
+    try std.testing.expect(!types.validInlineDestinationFollowingRun(new_span));
+}
+
+test "inline destination malformed tails flags debt strings boundaries and collisions refuse" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const T = InlineDestinationWireTest;
+    var blocks = [_]types.Block{T.block()}; const sections = [_]types.Section{T.section(&blocks)};
+    const stored = T.stored(&sections); const bytes = try encodeAlloc(a, stored);
+    const tail_at = std.mem.indexOf(u8, bytes, &T.tail) orelse return error.TestUnexpectedResult;
+    const changed = try a.dupe(u8, bytes);
+    inline for (.{ @as(u32, 0), @as(u32, 0x10800000), @as(u32, 0x90000000) }) |flags| {
+        @memcpy(changed, bytes); std.mem.writeInt(u32, changed[4..8], flags, .little);
+        try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, changed, "Mai", .supplemental, null));
+    }
+    inline for (.{ .{ @as(usize, 0), @as(u32, 1048577) }, .{ @as(usize, 4), @as(u32, 256) }, .{ @as(usize, 15), @as(u32, 3) }, .{ @as(usize, 15), @as(u32, 0xffffffff) } }) |bad| {
+        @memcpy(changed, bytes); std.mem.writeInt(u32, changed[tail_at+bad[0]..][0..4], bad[1], .little);
+        try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, changed, "Mai", .supplemental, null));
+    }
+    inline for (.{ @as(u8, 0), @as(u8, 0x20), @as(u8, 0x7f), @as(u8, 0xff) }) |bad| {
+        @memcpy(changed, bytes); changed[tail_at+8] = bad;
+        try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, changed, "Mai", .supplemental, null));
+    }
+    var empty: std.ArrayList(u8) = .empty; defer empty.deinit(a);
+    try empty.appendSlice(a, bytes[0..tail_at]); try empty.appendSlice(a, &.{0,0,0,0});
+    try empty.appendSlice(a, bytes[tail_at+T.tail.len..]);
+    try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, empty.items, "Mai", .supplemental, null));
+    for ([_]usize{tail_at+1, tail_at+4, tail_at+8, tail_at+17, bytes.len-1}) |cut|
+        try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, bytes[0..cut], "Mai", .supplemental, null));
+    const trailing = try std.mem.concat(a, u8, &.{bytes, &.{0}});
+    try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, trailing, "Mai", .supplemental, null));
+    blocks[0].inline_destinations = &.{.{ .id = "Mai_(Deutsch)", .before_run = 2 }};
+    try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, stored));
+    blocks[0].inline_destinations = &.{ .{ .id = "Deutsch", .before_run = 2 }, .{ .id = "Deutsch", .before_run = 2 } };
+    try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, stored));
+    blocks[0].inline_destinations = &.{ .{ .id = "A", .before_run = 2 }, .{ .id = "B", .before_run = 0 } };
+    try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, stored));
+    blocks[0].inline_destinations = &.{ .{ .id = "A", .before_run = 2 }, .{ .id = "B", .before_run = 2 } };
+    _ = try decodeAlloc(a, try encodeAlloc(a, stored), "Mai", .supplemental, null);
+}
+
+test "inline destination rejects unowned and nested carriers and charges aggregate budget" {
+    const T = InlineDestinationWireTest;
+    var blocks = [_]types.Block{T.block()}; var sections = [_]types.Section{T.section(&blocks)};
+    try std.testing.expect(types.validInlineDestinationSection(sections[0]));
+    sections[0].title = "other"; try std.testing.expect(!types.validInlineDestinationSection(sections[0]));
+    sections[0] = T.section(&blocks); blocks[0].level = 3;
+    try std.testing.expect(!types.validInlineDestinationSection(sections[0])); blocks[0] = T.block();
+    var budget: DeepTableWork = .{ .remaining = 5 };
+    try std.testing.expectError(error.PresentationTooLarge, budget.entry(@as([]const types.Span, &.{}), &sections,
+        @as([]const types.Span, &.{}), @as([]const types.Reference, &.{})));
+    blocks[0].inline_destinations = &.{}; budget = .{ .remaining = 5 };
+    try budget.entry(@as([]const types.Span, &.{}), &sections, @as([]const types.Span, &.{}), @as([]const types.Reference, &.{}));
+    blocks[0] = T.block();
+    const late = [_]types.Block{ .{ .kind = .paragraph }, T.block() };
+    const late_sections = [_]types.Section{T.section(&late)};
+    var work: DeepTableWork = .{};
+    try std.testing.expectError(error.InvalidPresentation, work.entry(@as([]const types.Span, &.{}), &late_sections,
+        @as([]const types.Span, &.{}), @as([]const types.Reference, &.{})));
+    blocks[0].kind = .paragraph;
+    try std.testing.expect(!types.validInlineDestinationBlock(blocks[0]));
+    const refs = [_]types.Reference{.{ .number = 1, .group_number = null, .blocks = &.{T.block()} }};
+    work = .{};
+    try std.testing.expectError(error.InvalidPresentation, work.entry(@as([]const types.Span, &.{}), @as([]const types.Section, &.{}),
+        @as([]const types.Span, &.{}), &refs));
+}
+
+// Synthetic wire controls, not original HU content or renderer measurements.
+// Metrics follow the independently reviewed typed-contract control vocabulary.
+const ResponsiveCaptionWireTest = struct {
+    fn wide() types.TableStyle {
+        return .{ .collapse = .separate, .float_side = .right, .clear = .right,
+            .width = .{ .unit = .em, .value = 19.36 },
+            .margins = types.StyleEdges.all(.{ .unit = .em, .value = 0.88 }),
+            .padding = types.StyleEdges.all(.{ .unit = .em, .value = 0.176 }),
+            .line_height = .{ .value = 1.32, .font_scale_basis = .normal_body } };
+    }
+    fn policy() types.ResponsiveCaptionTable {
+        return .{ .max_viewport_width_px = 639,
+            .narrow_box_style = .{ .float_side = .right, .clear = .right,
+                .width = .{ .unit = .percent, .value = 100 },
+                .margins = types.StyleEdges.all(.{ .unit = .em, .value = 0.88 }),
+                .padding = types.StyleEdges.all(.{ .unit = .em, .value = 0.176 }) },
+            .narrow_grid_style = .{ .collapse = .separate,
+                .line_height = .{ .value = 1.32, .font_scale_basis = .normal_body } },
+            .max_width = .{ .unit = .px, .value = 330 },
+            .grid_spacing_x = .{ .unit = .px, .value = 2 }, .grid_spacing_y = .{ .unit = .px, .value = 2 },
+            .caption_box = .{
+                .margins = types.StyleEdges.all(.{ .unit = .em, .value = 0.88 }),
+                .padding = types.StyleEdges.all(.{ .unit = .em, .value = 0.22 }),
+                .line = .{ .strut = .{ .font_scale = 1.1, .font_scale_basis = .normal_body,
+                    .owner_font = .{ .font_scale = 1.1, .font_scale_basis = .normal_body,
+                        .font_family = .sans_serif, .font_features = .normal, .language = "hu" } },
+                    .height = .{ .length = .{ .value = 1.32, .font_scale_basis = .normal_body } } },
+                .text_align = .center },
+            .containing_direction = .ltr, .grid_direction = .rtl, .language = "hu" };
+    }
+    fn table(value: ?*const types.ResponsiveCaptionTable) types.Table {
+        return .{ .style = wide(), .caption_viewport = value,
+            .caption = &.{.{ .kind = .link, .text = "caption", .target = "caption" }},
+            .rows = &.{.{ .cells = &.{.{ .spans = &.{.{ .text = "cell" }} }} }} };
+    }
+    fn stored(sections: []const types.Section) types.Stored {
+        return .{ .entry = .{ .title = "caption-control", .kind = .supplemental, .sections = sections } };
+    }
+    fn rejectTable(a: A, bytes: []const u8) !void {
+        var reader: Reader = .{ .a = a, .bytes = bytes, .version = .container_fonts,
+            .capability_p = true, .responsive_caption_tables_enabled = true };
+        try std.testing.expectError(error.InvalidPresentation, reader.table());
+    }
+    fn exportFixture(a: A, name: []const u8, bytes: []const u8, value: ?types.Stored) !void {
+        // The one guarded native test log retains exact bytes for independent
+        // client parity. Its runner extracts this data into private artifacts.
+        const digits = "0123456789abcdef";
+        const hex = try a.alloc(u8, bytes.len * 2);
+        for (bytes, 0..) |byte, index| {
+            hex[index * 2] = digits[byte >> 4]; hex[index * 2 + 1] = digits[byte & 15];
+        }
+        const record = try std.json.Stringify.valueAlloc(a, .{
+            .schema = "wikidict.synthetic-caption-codec-fixture.v1", .name = name,
+            .expected = if (value != null) "accept" else "reject", .dpr_hex = hex,
+            .stored = value, .original_source_credit = false,
+        }, .{});
+        std.debug.print("HU25_WIRE_FIXTURE {s}\n", .{record});
+    }
+};
+
+test "responsive caption standalone25 roundtrips both writers and preserves old bytes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const T = ResponsiveCaptionWireTest;
+    var policy = T.policy();
+    var blocks = [_]types.Block{.{ .kind = .table, .table = T.table(null) }};
+    const sections = [_]types.Section{.{ .level = 2, .title = "body", .blocks = &blocks }};
+    const stored = T.stored(&sections);
+    const legacy = try encodeAlloc(a, stored);
+    blocks[0].table.?.caption_viewport = &policy;
+    const encoded = try encodeAlloc(a, stored);
+    try std.testing.expectEqualStrings("DPRa", encoded[0..4]);
+    // Full strut uses its genuine legacy pending-font dependency, not 24/27/28.
+    try std.testing.expectEqual(@as(u32, 0x02000000), std.mem.readInt(u32, encoded[4..8], .little));
+    const decoded = try decodeAlloc(a, encoded, "caption-control", .supplemental, null);
+    try std.testing.expectEqualDeep(blocks[0].table.?, decoded.entry.sections[0].blocks[0].table.?);
+    try std.testing.expectEqualSlices(u8, encoded, try encodeBuildAlloc(a, stored.entry.display_title,
+        stored.entry.sections, stored.entry.organization, stored.entry.references, stored.entry.media));
+    // The distinct external direction is not collapsed into source TABLE direction.
+    try std.testing.expectEqual(types.TableContainingDirection.ltr, decoded.entry.sections[0].blocks[0].table.?.caption_viewport.?.containing_direction);
+    try std.testing.expectEqual(types.TableContainingDirection.rtl, decoded.entry.sections[0].blocks[0].table.?.caption_viewport.?.grid_direction);
+    try T.exportFixture(a, "containing-ltr-grid-rtl", encoded, decoded);
+    policy.containing_direction = .rtl; policy.grid_direction = .ltr;
+    const reversed = try encodeAlloc(a, stored);
+    const reverse_decoded = try decodeAlloc(a, reversed, "caption-control", .supplemental, null);
+    try T.exportFixture(a, "containing-rtl-grid-ltr", reversed, reverse_decoded);
+    blocks[0].table.?.caption_viewport = null;
+    try std.testing.expectEqualSlices(u8, legacy, try encodeAlloc(a, stored));
+}
+
+test "responsive caption tail has required styles one strut size and exact owner debit" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const T = ResponsiveCaptionWireTest; const policy = T.policy();
+    var old: Encoder = .{ .a = a, .version = .container_fonts, .capability_p = true }; defer old.deinit();
+    try old.table(@as(?types.Table, T.table(null)));
+    var enc: Encoder = .{ .a = a, .version = .container_fonts, .capability_p = true, .responsive_caption_tables_enabled = true }; defer enc.deinit();
+    try enc.table(@as(?types.Table, T.table(&policy)));
+    try std.testing.expectEqual(@as(u8, 0x81), enc.out.items[0]);
+    try std.testing.expectEqualSlices(u8, old.out.items[1..], enc.out.items[1..old.out.items.len]);
+    try std.testing.expectEqual(old.remaining_items - 1, enc.remaining_items);
+    const tail_at = old.out.items.len;
+    try std.testing.expectEqualSlices(u8, &.{0x7f, 2, 0, 0, 1}, enc.out.items[tail_at..][0..5]);
+    var tail: Reader = .{ .a = a, .bytes = enc.out.items, .pos = tail_at, .version = .container_fonts, .capability_p = true };
+    _ = try tail.readU32(); _ = (try tail.tableStyle()).?;
+    try std.testing.expectEqual(@as(u8, 1), tail.bytes[tail.pos]);
+    _ = (try tail.tableStyle()).?; _ = try tail.styleWidth();
+    _ = try tail.styleLength(); _ = try tail.styleLength(); _ = try tail.styleEdges(); _ = try tail.styleEdges();
+    const strut_at = tail.pos;
+    try std.testing.expectEqual(@as(u8, 2), tail.bytes[strut_at]);
+    try std.testing.expect(tail.bytes[strut_at+6] & 1 == 0);
+    _ = try tail.cellLineHeight();
+    var reader: Reader = .{ .a = a, .bytes = enc.out.items, .version = .container_fonts,
+        .capability_p = true, .responsive_caption_tables_enabled = true };
+    _ = (try reader.table()).?;
+    try std.testing.expectEqual(enc.out.items.len, reader.pos);
+    try std.testing.expectEqual(enc.remaining_items, reader.remaining_items);
+    const changed = try a.dupe(u8, enc.out.items);
+    changed[strut_at+6] |= 1;
+    try T.rejectTable(a, changed);
+    @memcpy(changed, enc.out.items); changed[strut_at] = 1;
+    try T.rejectTable(a, changed);
+    for (0..enc.out.items.len) |cut| try T.rejectTable(a, enc.out.items[0..cut]);
+}
+
+test "responsive caption refuses malformed headers styles focus strings and feature debt" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const T = ResponsiveCaptionWireTest;
+    var policy = T.policy(); policy.focus_paint = .{ .mode = .ua_auto, .color = .{ .kind = .rgb, .value = "#123456" } };
+    const table = T.table(&policy);
+    var enc: Encoder = .{ .a = a, .version = .container_fonts, .capability_p = true, .responsive_caption_tables_enabled = true }; defer enc.deinit();
+    try enc.table(@as(?types.Table, table));
+    const changed = try a.dupe(u8, enc.out.items);
+    for ([_]u8{0x80, 0xa1, 0xc1, 0x41}) |flags| {
+        @memcpy(changed, enc.out.items); changed[0] = flags; try T.rejectTable(a, changed);
+    }
+    var absent: Reader = .{ .a = a, .bytes = enc.out.items, .version = .container_fonts, .capability_p = true };
+    try std.testing.expectError(error.InvalidPresentation, absent.table());
+    var old: Encoder = .{ .a = a, .version = .container_fonts, .capability_p = true }; defer old.deinit();
+    try old.table(@as(?types.Table, T.table(null)));
+    const tail_at = old.out.items.len;
+    for ([_]u8{0, 2, 255}) |presence| {
+        @memcpy(changed, enc.out.items); changed[tail_at+4] = presence; try T.rejectTable(a, changed);
+    }
+    var walk: Reader = .{ .a = a, .bytes = enc.out.items, .pos = tail_at, .version = .container_fonts, .capability_p = true };
+    _ = try walk.readU32(); _ = try walk.tableStyle(); _ = try walk.tableStyle();
+    _ = try walk.styleWidth(); _ = try walk.styleLength(); _ = try walk.styleLength();
+    _ = try walk.styleEdges(); _ = try walk.styleEdges(); _ = try walk.cellLineHeight();
+    const alignment_at = walk.pos;
+    _ = try walk.enumValue(types.CellTextAlign); _ = try walk.enumValue(types.TableContainingDirection); _ = try walk.enumValue(types.TableContainingDirection);
+    const language_at = walk.pos; _ = try walk.string(); const focus_at = walk.pos;
+    for ([_]usize{alignment_at, alignment_at+1, alignment_at+2, focus_at, focus_at+1, focus_at+2}) |at| {
+        @memcpy(changed, enc.out.items); changed[at] = 255; try T.rejectTable(a, changed);
+    }
+    @memcpy(changed, enc.out.items); changed[language_at+4] = 255; try T.rejectTable(a, changed);
+    @memcpy(changed, enc.out.items); std.mem.writeInt(u32, changed[language_at..][0..4], 1025, .little); try T.rejectTable(a, changed);
+    const blocks = [_]types.Block{.{ .kind = .table, .table = table }};
+    const sections = [_]types.Section{.{ .level = 2, .title = "body", .blocks = &blocks }};
+    const payload = try encodeAlloc(a, T.stored(&sections)); const altered = try a.dupe(u8, payload);
+    for ([_]u32{0, 0x80000000, 0x02800000, 0x12000000}) |flags| {
+        @memcpy(altered, payload); std.mem.writeInt(u32, altered[4..8], flags, .little);
+        try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, altered, "caption-control", .supplemental, null));
+        try T.exportFixture(a, try std.fmt.allocPrint(a, "bad-global-{x}", .{flags}), altered, null);
+    }
+    // Advertised25 without a genuine owner in an otherwise valid standalone28.
+    const heading = [_]types.Block{InlineDestinationWireTest.block()};
+    const heading_sections = [_]types.Section{InlineDestinationWireTest.section(&heading)};
+    const no_caption = try encodeAlloc(a, InlineDestinationWireTest.stored(&heading_sections));
+    std.mem.writeInt(u32, no_caption[4..8], 0x12000000, .little);
+    try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, no_caption, "Mai", .supplemental, null));
+    try T.exportFixture(a, "advertised25-without-owner", no_caption, null);
+}
+
+test "responsive caption recursive owner census and finite budgets preserve semantic content once" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const T = ResponsiveCaptionWireTest; const policy = T.policy();
+    const child = T.table(&policy);
+    const parent: types.Table = .{ .rows = &.{.{ .cells = &.{.{ .nested_table = child }} }} };
+    const blocks = [_]types.Block{.{ .kind = .table, .table = parent }};
+    const sections = [_]types.Section{.{ .level = 2, .title = "body", .blocks = &blocks }};
+    const stored = T.stored(&sections);
+    const payload = try encodeAlloc(a, stored);
+    const decoded = try decodeAlloc(a, payload, "caption-control", .supplemental, null);
+    const nested = decoded.entry.sections[0].blocks[0].table.?.rows[0].cells[0].nested_table.?;
+    try std.testing.expect(nested.caption_viewport != null);
+    try std.testing.expectEqual(@as(usize, 1), nested.caption.len);
+    try std.testing.expectEqual(@as(usize, 1), nested.rows.len);
+    try std.testing.expectEqualStrings("caption", nested.caption[0].target);
+    var full: Encoder = .{ .a = a, .version = .container_fonts, .capability_p = true, .responsive_caption_tables_enabled = true }; defer full.deinit();
+    try full.table(@as(?types.Table, child));
+    const used = max_items-full.remaining_items;
+    var short: Encoder = .{ .a = a, .version = .container_fonts, .capability_p = true, .responsive_caption_tables_enabled = true, .remaining_items = used-1 }; defer short.deinit();
+    try std.testing.expectError(error.PresentationTooLarge, short.table(@as(?types.Table, child)));
+    var reader: Reader = .{ .a = a, .bytes = full.out.items, .version = .container_fonts,
+        .capability_p = true, .responsive_caption_tables_enabled = true, .remaining_items = used-1 };
+    try std.testing.expectError(error.InvalidPresentation, reader.table());
+    var too_deep: Reader = .{ .a = a, .bytes = full.out.items, .version = .container_fonts,
+        .capability_p = true, .responsive_caption_tables_enabled = true, .table_depth = types.max_table_depth };
+    try std.testing.expectError(error.InvalidPresentation, too_deep.table());
 }

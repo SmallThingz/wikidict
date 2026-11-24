@@ -2526,6 +2526,7 @@ fn containerText(w: *std.Io.Writer, block: model.Block, color: bool, projection:
     var inner = columns - left - right;
     if (style.width) |width| switch (width) {
         .auto, .fit_content => {},
+        .max_content => return containerSemanticFallback(w, box, color, parent, child),
         .length => |length| {
             const requested = try containerWidth(length, columns);
             inner = if (style.box_sizing == .border_box) requested -| extras else requested;

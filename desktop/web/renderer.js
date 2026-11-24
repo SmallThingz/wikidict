@@ -19,10 +19,14 @@ function darkReadingInk(foreground,background){
 }
 import {safeURL,linkTargetParts,bookSourcesURL,validateDescriptionBody,validateDarkForeground,validateContainerBlock,validateCellMetrics,validateRuby,validateRubyOwner,validateRubySpan,validateActionGroupSpan,validateInlineBoxSpan,validateFigureIntrinsicSize,validateClippedSpan,validateAudioControl,validateWrappedHeading,validateTableDisclosure} from './validate.js';
 import {validateSourceAnchor,validateSourceAnchorDestinations} from './validate.js';
+import {validateInlineDestinationList,validateInlineDestinationEntry} from './validate.js';
+import {validateResponsiveCaptionTable} from './validate.js';
 import {previewBlocks,inlineText} from './preview.js';
 import {figureImageSize,audioControlView} from './media.js';
 const node = (tag, text, cls) => { const el = document.createElement(tag); if (text != null) el.textContent = text; if (cls) el.className = cls; return el; };
 let explanationSequence = 0;
+// Data-only destinations refer to existing text nodes; they add no DOM box or focus target.
+const inlineDestinationOwners=new WeakMap();
 const poemTokens = span => (span.classes || '').split(/[ \t\r\n\v\f]+/).filter(Boolean);
 const isPoem = span => poemTokens(span).includes('wikidict-poem');
 function poemMetadata(span) {
@@ -293,7 +297,7 @@ function connectExteriorBoxes(article,projections){
       if(!visible)continue;
       let dx=0,dy=0;
       for(let ancestor=source.parentElement;ancestor&&ancestor!==article;ancestor=ancestor.parentElement){
-        if(ancestor.classList.contains('table-scroll')){dx+=ancestor.scrollLeft;dy+=ancestor.scrollTop;}
+        if(ancestor.classList.contains('table-scroll')||ancestor.classList.contains('compiled-caption-scroll')){dx+=ancestor.scrollLeft;dy+=ancestor.scrollTop;}
       }
       const anchor=origin.getBoundingClientRect();
       if(rtl)box.style.right=(parent.right-anchor.right-dx)+'px';
@@ -326,7 +330,8 @@ function connectExteriorBoxes(article,projections){
   };
 }
 
-export function spans(values = [], onLink = () => {}, preserve = false, explanations = null, withinSummary = false, cellBackground = null, rubyFontContext = null, darkReadingSurface = null, normalizedEmphasis = false) {
+export function spans(values = [], onLink = () => {}, preserve = false, explanations = null, withinSummary = false, cellBackground = null, rubyFontContext = null, darkReadingSurface = null, normalizedEmphasis = false, runStarts = null) {
+  if(runStarts&&!preserve)throw Error('Inline destination requires complete serialized runs');
   for(const value of values)if(value.target_fragment!=null){if(value.kind!=='link')throw Error('Invalid target fragment kind');linkTargetParts(value.target,value.target_fragment);}
   if (!preserve && values.some(isPoem)) return poemSpans(values,onLink,explanations,withinSummary,cellBackground);
   const fragment = document.createDocumentFragment();
@@ -388,6 +393,7 @@ export function spans(values = [], onLink = () => {}, preserve = false, explanat
       continue;
     }
     let el = node('span', span.text || '');
+    const textStart=el.firstChild;
     if(span.font_family!=null){if(span.font_family!=='sans_serif')throw Error('Unsupported span font family');el.style.fontFamily='sans-serif';}
     if(span.clipped_absolute)el.append(spans(span.clipped_absolute.children,onLink,true,explanations,withinSummary,cellBackground,span));
     if(span.ruby!=null)el.append(rubySpans(span.ruby,onLink,explanations,withinSummary,cellBackground,span));
@@ -462,6 +468,7 @@ export function spans(values = [], onLink = () => {}, preserve = false, explanat
       owner.append(el);el=owner;
     }
     const trail=trailNode(span,i);
+    if(runStarts)runStarts[i]=textStart??(trail.nodeType===3?trail:trail.firstChild);
     const fontSize=semanticFontSize(span,rubyFontContext);
     if(span.clipped_absolute){
       if(fontSize!==null)el.style.fontSize=fontSize;
@@ -480,10 +487,16 @@ export function spans(values = [], onLink = () => {}, preserve = false, explanat
 export function revealFragment(root, fragment) {
   if (!fragment) return false;
   const destinations = [...root.querySelectorAll('[id]')];
-  let matches = destinations.filter(el => el.id === fragment);
+  const inline=[];
+  for(const label of root.querySelectorAll('.heading-label')){
+    const text=inlineDestinationOwners.get(label)?.get(fragment);
+    if(text)inline.push({label,text});
+  }
+  let matches = [...destinations.filter(el => el.id === fragment),...inline];
   if (!matches.length) matches = destinations.filter(el => el.id === fragment.replaceAll(' ','_'));
   if (matches.length !== 1) return false;
   const target = matches[0];
+  if(inline.includes(target))return revealInlineDestination(target.label,target.text);
   for(let el=target;el&&el!==root;el=el.parentElement){
     if(el.tagName==='DETAILS')el.open=true;
     if(el.tagName==='TR'&&el.hidden)revealTableRow.get(el)?.();
@@ -494,6 +507,36 @@ export function revealFragment(root, fragment) {
   const lead=target.tagName==='LI'?target.querySelector(':scope > .definition')??target:target;
   (exteriorBoxes.get(clipped)??lead).scrollIntoView({block:'center'});
   target.focus({preventScroll:true});
+  return true;
+}
+function inlineDestinationRange(label,text){
+  if(!label.isConnected||!label.contains(text)||text.nodeType!==3||!text.length||
+     getComputedStyle(label).direction!=='ltr'||getComputedStyle(text.parentElement).direction!=='ltr')throw Error('Unsupported inline destination layout');
+  // The first character's native rectangle gives downstream line affinity at
+  // a soft wrap. A collapsed boundary can instead report the preceding line.
+  // No heading/ancestor box substitutes for a missing text rectangle.
+  const range=document.createRange();range.setStart(text,0);range.setEnd(text,1);
+  if(!range.getClientRects()[0]||range.getClientRects()[0].height<=0)throw Error('Unsupported inline destination layout');
+  return range;
+}
+export function validateInlineDestinationLayout(root){
+  for(const label of root.querySelectorAll('.heading-label')){
+    const mapped=inlineDestinationOwners.get(label);
+    if(mapped)for(const text of new Set(mapped.values()))inlineDestinationRange(label,text);
+  }
+}
+function revealInlineDestination(label,text){
+  for(let el=label;el;el=el.parentElement)if(el.tagName==='DETAILS')el.open=true;
+  const range=inlineDestinationRange(label,text);
+  const rect=()=>range.getClientRects()[0];
+  for(let el=label.parentElement;el&&el!==document.documentElement&&el!==document.body;el=el.parentElement){
+    const style=getComputedStyle(el),box=el.getBoundingClientRect(),r=rect();
+    const top=/(auto|scroll)/.test(style.overflowY)&&el.scrollHeight>el.clientHeight?r.top+r.height/2-box.top-el.clientTop-el.clientHeight/2:0;
+    const left=/(auto|scroll)/.test(style.overflowX)&&el.scrollWidth>el.clientWidth&&(r.left<box.left||r.right>box.right)?r.left-box.left-el.clientLeft:0;
+    if(top||left)el.scrollBy({top,left,behavior:'instant'});
+  }
+  const r=rect();
+  window.scrollBy({top:r.top+r.height/2-window.innerHeight/2,left:r.left<0||r.right>window.innerWidth?r.left:0,behavior:'instant'});
   return true;
 }
 function destination(el, value, legacy = '') {
@@ -542,6 +585,7 @@ function figureBorder(value){return value.kind==='none'?'none':styleLength(value
 function validateRichEntry(entry){
   let remaining=1<<20,mapStrings=32*1024*1024;
   let sourceAnchors=false;
+  const inlineOwners=[];
   const charge=(n=1)=>{if(!Number.isInteger(n)||n<0||(remaining-=n)<0)richError();};
   const string=value=>{if(typeof value!=='string'||/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(value)||new TextEncoder().encode(value).length>32*1024*1024)richError();};
   const array=value=>{if(!Array.isArray(value))richError();charge(value.length);return value;};
@@ -624,6 +668,12 @@ function validateRichEntry(entry){
   const table=(value,tableDepth,depth,inReference,owner)=>{
     if(tableDepth>16)richError();
     if(value.disclosure!=null){validateTableDisclosure(value);charge(1+value.rows.length);}
+    if(Object.hasOwn(value,'caption_viewport')){
+      if(value.caption_viewport==null||entry.presentation_version!=='DPRa')richError();
+      validateResponsiveCaptionTable(value);charge();
+      const names=value.caption_viewport.caption_box.line.strut.owner_font.font_family?.stack?.names;
+      if(names)charge(names.length);
+    }
     const inline=['inline_block','inline_table'].includes(value.style?.display);
     applyTableStyle(node('table'),value.style);
     if(inline&&(tableDepth!==1||depth!==0||inReference||!owner||!['table','list_item'].includes(owner.kind)||owner.spans?.length||owner.feature!=null||value.caption?.length||value.caption_blocks!=null||value.style?.float_side!=null))richError();
@@ -642,6 +692,8 @@ function validateRichEntry(entry){
   const blocks=(values,tableDepth=0,depth=0,inReference=false,parentStyle=null,sectionRoot=false)=>{
     if(depth>16)richError();
     for(const block of array(values)){
+      const destinations=validateInlineDestinationList(block);charge(destinations.length);
+      if(destinations.length)inlineOwners.push(block);
       spanList(block.spans);const owner=richListKinds.has(block.kind)||(block.kind==='paragraph'&&!(block.depth||0)&&!block.list_path);
       if(entry.presentation_version==='DPRa'&&block.kind!=='heading'&&(block.anchor||block.anchor_fallback)){
         validateSourceAnchor(block,sectionRoot);sourceAnchors=true;
@@ -663,6 +715,7 @@ function validateRichEntry(entry){
   for(const section of array(entry.sections))blocks(section.blocks,0,0,false,null,true);
   for(const ref of entry.references||[]){spanList(ref.spans);if(ref.blocks!=null)blocks(ref.blocks,0,0,true);}
   if(sourceAnchors)validateSourceAnchorDestinations(entry);
+  validateInlineDestinationEntry(entry,inlineOwners);
   return sourceAnchors;
 }
 function richAction(action,onLink,explanations,label=action.label){
@@ -840,6 +893,88 @@ function applyCellStyle(el,value){
   }
 }
 const revealTableRow=new WeakMap();
+let captionTableSequence=0;
+function responsiveCaptionView(table,value){
+  const owner=value.caption_viewport,caption=table.caption;
+  if(!caption)throw Error('Missing responsive table caption');
+  // Preserve one TABLE, CAPTION and row group. Native CSS creates the anonymous
+  // grid when the same table becomes a block; no cloned caption or scroll wrapper.
+  const name='wikidict-caption-table';
+  if(!customElements.get(name))customElements.define(name,class extends HTMLElement{
+    connectedCallback(){this.stopCaption?.();this.stopCaption=this.startCaption?.();}
+    disconnectedCallback(){this.stopCaption?.();this.stopCaption=null;}
+  });
+  const host=node(name),style=node('style'),id='compiled-caption-'+(++captionTableSequence);
+  host.style.display='contents';host.dir=owner.containing_direction;
+  table.classList.add(id,'compiled-caption-scroll');
+  // The source TABLE owns caption/grid direction. The containing direction is
+  // external context, not a replacement caption direction or an inferred LTR.
+  table.dir=owner.grid_direction;table.lang=owner.language;
+  for(const body of table.tBodies)body.dir=owner.grid_direction;
+  const declarations=(typed,narrow)=>{
+    const probe=node('table');
+    probe.style.cssText='box-sizing:border-box;margin:0;padding:0;border:0;background:transparent;min-width:0;';
+    applyTableStyle(probe,typed);
+    probe.style.cssFloat=typed.float_side;
+    probe.style.maxWidth=styleLength(owner.max_width);
+    probe.style.display=narrow?'block':'table';
+    probe.style.overflow=narrow?'auto':'visible';
+    probe.style.borderCollapse='separate';
+    probe.style.borderSpacing=styleLength(owner.grid_spacing_x)+' '+styleLength(owner.grid_spacing_y);
+    const line=narrow?owner.narrow_grid_style.line_height:value.style.line_height;
+    probe.style.lineHeight=`calc(var(--wikidict-normal-body-size) * ${line.value})`;
+    probe.style.fontSize='inherit';
+    return probe.style.cssText;
+  };
+  const wide=declarations(value.style,false),narrow=declarations(owner.narrow_box_style,true);
+  table.removeAttribute('style');
+  let focus='';
+  if(owner.focus_paint){
+    const probe=node('table'),paint=owner.focus_paint;
+    probe.style.outlineStyle=paint.mode==='authored_none'?'none':'auto';
+    if(paint.color)probe.style.outlineColor=figureColor(paint.color,'currentColor');
+    focus='.'+id+':focus{'+probe.style.cssText+'}';
+  }
+  style.textContent='.'+id+'{'+wide+'}@media(max-width:'+owner.max_viewport_width_px+'px){.'+id+'{'+narrow+'}}'+focus;
+  const box=owner.caption_box,font=box.line.strut.owner_font;
+  styleEdges(caption,'margin',box.margins);styleEdges(caption,'padding',box.padding);
+  caption.style.textAlign=box.text_align;
+  caption.style.fontSize=`calc(var(--wikidict-normal-body-size) * ${box.line.strut.font_scale})`;
+  caption.style.lineHeight=`calc(var(--wikidict-normal-body-size) * ${box.line.height.length.value})`;
+  caption.style.fontWeight=font.bold?'bold':'normal';caption.style.fontStyle=font.italic?'italic':'normal';
+  caption.style.fontFeatureSettings=font.font_features==='normal'?'normal':'"liga" 1, "clig" 1, "kern" 1, "ccmp" 1, "dist" 1, "mark" 1, "mkmk" 1';
+  const quote=name=>'"'+name.replaceAll('\\','\\\\').replaceAll('"','\\"')+'"';
+  caption.style.fontFamily=font.font_family==='sans_serif'?'sans-serif':
+    [...font.font_family.stack.names.map(quote),font.font_family.stack.fallback==='serif'?'serif':'sans-serif'].join(',');
+  caption.lang=font.language;
+  for(const block of caption.querySelectorAll('.block'))if(block.closest('table')===table&&!block.classList.contains('heading')){
+    // Ordinary paragraph defaults inherit the caption/nearest typed container.
+    // Independent heading semantics and authored inline typography retain their
+    // authority; the caption strut must not replace a descendant's style.
+    for(const property of ['font-family','font-size','line-height','font-weight','font-style','font-feature-settings'])
+      if(!block.style.getPropertyValue(property))block.style.setProperty(property,'inherit');
+  }
+  host.startCaption=()=>{
+    let connected=true,frame=0;
+    const media=matchMedia('(max-width:'+owner.max_viewport_width_px+'px)');
+    const update=()=>{
+      frame=0;if(!connected||!table.isConnected)return;
+      const scrollable=media.matches&&(table.scrollWidth>table.clientWidth||table.scrollHeight>table.clientHeight);
+      // The existing CAPTION supplies the table's name; do not replace it with
+      // a generic label when the same table becomes keyboard scrollable.
+      if(scrollable)table.tabIndex=0;
+      else table.removeAttribute('tabindex');
+    };
+    const queue=()=>{if(connected&&!frame)frame=requestAnimationFrame(update);};
+    const resize=new ResizeObserver(queue),mutation=new MutationObserver(queue);
+    resize.observe(table);resize.observe(caption);for(const body of table.tBodies)resize.observe(body);
+    mutation.observe(table,{subtree:true,childList:true,characterData:true,attributes:true,attributeFilter:['open','hidden','style','class']});
+    media.addEventListener('change',queue);table.addEventListener('load',queue,true);
+    document.fonts?.addEventListener('loadingdone',queue);document.fonts?.ready.then(queue);queue();
+    return ()=>{connected=false;cancelAnimationFrame(frame);resize.disconnect();mutation.disconnect();media.removeEventListener('change',queue);table.removeEventListener('load',queue,true);document.fonts?.removeEventListener('loadingdone',queue);};
+  };
+  host.append(style,table);return host;
+}
 function tableDisclosureCategory(categories,edition,policy){
   const name=policy.category;
   if(categories.has(name))return categories.get(name);
@@ -921,13 +1056,15 @@ function tableView(value,onLink,explanations,depth=1,inheritedBackground=null){
   const tableBackground=canonicalRGB(value.style?.background)?value.style.background:inheritedBackground;
   if(value.caption_blocks!=null){const caption=node('caption');appendBlocks(caption,value.caption_blocks,block=>blockView(block,onLink,explanations,'',{tableDepth:depth,background:tableBackground,caption:true}),explanations?.sourceAnchors);table.append(caption);}
   else if(value.caption?.length){const caption=node('caption');caption.append(spans(value.caption,onLink,false,explanations,false,tableBackground));table.append(caption);}
-  const group=value.disclosure?table.createTBody():table;
+  const group=value.disclosure||value.caption_viewport?table.createTBody():table;
   for(const row of value.rows){const tr=node('tr');for(const cell of row.cells){
     const td=node(cell.header?'th':'td');td.colSpan=cell.colspan||1;td.rowSpan=cell.rowspan||1;
     if(border!==null)td.style.border=border+'px solid currentColor';if(padding!==null)td.style.padding=padding+'px';
     applyCellStyle(td,cell.style);
     const effectiveBackground=canonicalRGB(cell.background)?cell.background:tableBackground;
-    if(canonicalRGB(effectiveBackground))td.style.backgroundColor=effectiveBackground;
+    // The new owner paints its own wide/narrow background once; retain only
+    // genuinely authored cell backgrounds, not copies of the wide owner paint.
+    if(canonicalRGB(effectiveBackground)&&(!value.caption_viewport||canonicalRGB(cell.background)))td.style.backgroundColor=effectiveBackground;
     if(cell.blocks!=null){
       if(!Array.isArray(cell.blocks)||cell.spans?.length||cell.nested_table!=null)throw Error('Invalid ordered table cell');
       appendBlocks(td,cell.blocks,block=>blockView(block,onLink,explanations,'',{tableDepth:depth,background:effectiveBackground,header:!!cell.header}),explanations?.sourceAnchors);
@@ -936,8 +1073,11 @@ function tableView(value,onLink,explanations,depth=1,inheritedBackground=null){
     tr.append(td);
   }group.append(tr);}
   if(value.disclosure)installTableDisclosure(group,value.disclosure,explanations);
-  if(value.style?.line_height!=null)for(const block of table.querySelectorAll('.block'))block.style.lineHeight='inherit';
-  return table;
+  if(value.style?.line_height!=null)for(const block of table.querySelectorAll('.block')){
+    if(value.caption_viewport&&(block.closest('caption')===table.caption||block.classList.contains('heading')||block.style.lineHeight))continue;
+    block.style.lineHeight='inherit';
+  }
+  return value.caption_viewport?responsiveCaptionView(table,value):table;
 }
 function visibleBlock(block,sourceAnchors){
   return block.kind!=='blank'&&(((sourceAnchors||block.kind==='heading')&&(block.anchor||block.anchor_fallback))||block.description_body||block.container||block.figure||block.flow!=null||block.style||block.table||block.kind==='rule'||block.spans?.some(s=>s.image||s.inline_action_group||s.inline_box_group||s.clipped_absolute||s.text?.trim()||s.trail?.trim())||block.spans?.some(isPoem));
@@ -1133,6 +1273,7 @@ function blockView(block, onLink, explanations, legacy = '', context = {}) {
       return sample;
     }
     const table = tableView(block.table,onLink,explanations,(context.tableDepth||0)+1,context.background);
+    if(block.table.caption_viewport)return table;
     const inline=block.table.style?.display==='inline_block'||block.table.style?.display==='inline_table';
     if(context.tableDepth&&!block.table.style?.float_side){table.style.marginInlineStart=margin;return table;}
     const wrap = node('div', null, 'table-scroll'); wrap.style.marginInlineStart = margin; wrap.tabIndex = 0; wrap.setAttribute('aria-label','Scrollable table');
@@ -1222,6 +1363,7 @@ function sectionHeadingCompanion(section){
   const first=section.blocks?.[0];
   if(!section.title||!first||first.kind!=='heading'||first.level!==section.level)return null;
   if(first.text_align!=null)return null;
+  if(first.inline_destinations?.length)return first; // Already validated exact untrimmed title/run ownership.
   let navigable=false,explained=false,styledText=false,visual=false,label='';
   for(const span of first.spans||[]){
     if(span.kind==='line_break'&&span.trail)return null;
@@ -1252,7 +1394,7 @@ export function renderEntry(entry, onLink, settings = {}, mediaView = () => null
   if(hasTableFloat)fragment.append(root);
   const authoredDestinations = new Set();
   const observeDestination=value=>{for(const id of [value.anchor,value.anchor_fallback,legacy.get(value)])if(id)authoredDestinations.add(id);};
-  const observeBlock=block=>{if(sourceAnchors||block.kind==='heading')observeDestination(block);};
+  const observeBlock=block=>{if(sourceAnchors||block.kind==='heading')observeDestination(block);for(const value of block.inline_destinations||[])authoredDestinations.add(value.id);};
   for(const section of entry.sections){observeDestination(section);visitBlocks(section.blocks,observeBlock);}
   for(const ref of entry.references||[]){
     if(ref.blocks!=null){
@@ -1301,13 +1443,21 @@ export function renderEntry(entry, onLink, settings = {}, mediaView = () => null
   const title = node('h1'); title.append(entry.display_title?.length?spans(entry.display_title,followLink,false,explanations):document.createTextNode(entry.title)); root.append(title);
   if(entry.redirect){const r=entry.redirect;root.append(node('p',(r.followed?'Redirected from '+r.source_title+' to ':'Redirect to ')+r.target_title+(r.fragment?'#'+r.fragment:''),'entry-redirect'));}
   if(entry.alias&&entry.redirect?.followed){const a=entry.alias;root.append(node('p','Redirect to '+a.target_title+(a.fragment?'#'+a.fragment:''),'entry-alias'));}
-  function fold(title, open=false, rich=null, depth=0, level=0, normalizedEmphasis=false) {
+  function fold(title, open=false, rich=null, depth=0, level=0, normalizedEmphasis=false, destinations=[]) {
     const el=node('details'),summary=node('summary',rich?null:title);el.open=open;
     if(rich){const authoredLevel=Number.isInteger(level)&&level>=1&&level<=6;
       const label=node(authoredLevel?'h'+level:'span',null,'heading-label');
       // Preserve the original title spacing when styled leaf runs become separate AX nodes.
       if(authoredLevel)label.setAttribute('aria-label',inlineText(rich,'\n').trim());
-      if(depth>0){label.style.display='inline-block';label.style.marginInlineStart=`${Math.min(depth,8)*.45}rem`;}label.append(spans(rich,followLink,false,explanations,true,null,null,null,normalizedEmphasis));summary.append(label);}
+      if(depth>0){label.style.display='inline-block';label.style.marginInlineStart=`${Math.min(depth,8)*.45}rem`;}
+      const starts=destinations.length?[]:null;
+      label.append(spans(rich,followLink,!!starts,explanations,true,null,null,null,normalizedEmphasis,starts));
+      if(starts){
+        const mapped=new Map();
+        for(const value of destinations){const text=starts[value.before_run];if(!text||text.nodeType!==3||!text.length)throw Error('Missing inline destination run');mapped.set(value.id,text);}
+        inlineDestinationOwners.set(label,mapped);
+      }
+      summary.append(label);}
     el.append(summary);return el;
   }
   if (entry.preamble_spans?.length) { const preamble=fold('About this entry',entry.kind==='alias'||!settings.collapseOtherSections);preamble.append(spans(entry.preamble_spans,followLink,false,explanations));root.append(preamble); }
@@ -1317,7 +1467,7 @@ export function renderEntry(entry, onLink, settings = {}, mediaView = () => null
     const meaning=section.blocks.some(containsDefinition);
     const expanded=meaning || (section.title.startsWith('Pronunciation')?!settings.collapsePronunciation:section.title.startsWith('Etymology')?!settings.collapseEtymology:!settings.collapseOtherSections);
     const companion=sectionHeadingCompanion(section);
-    const el=fold(section.title===entry.language?'Overview':section.title||'Notes',expanded,companion?.spans,companion?.depth,section.level,!!section.heading_style?.font);
+    const el=fold(section.title===entry.language?'Overview':section.title||'Notes',expanded,companion?.spans,companion?.depth,section.level,!!section.heading_style?.font,companion?.inline_destinations);
     if(section.heading_style){
       validateWrappedHeading(section);
       applyWrappedHeading(el.querySelector('summary'),section.heading_style);

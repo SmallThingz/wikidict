@@ -1,0 +1,416 @@
+{{also|America|América|Amèrica|americà}}
+{{-en-}}
+
+===Alternative forms===
+* {{sense|the United States of America}} {{l|en|Merica}}/ {{l|en|'Murica}}/ {{l|en|'murica}} {{qualifier|nonstandard, often jocular or representing dialect}}
+* {{sense|North and South America}} {{l|en|Americas}}
+
+{{-etim-|en}}
+{{etymon|en|id=the Americas|lbor|la-new>America>the Americas|tree=1}}
+{{lbor|en|la-new|America}}, feminine Latinized form of the Italian first name of {{w|Amerigo Vespucci}} (1454–1512). {{m|it|Amerigo}} is an {{der|en|it|-}} name derived from a {{der|en|gem|-}} language and is etymologically related to {{m|en|Henry}} and {{m|en|Emmerich}}. The earliest known use of ''America'' for the (South) American continent is on a 1507 map by {{w|Martin Waldseemüller}};<ref name="MWety">Merriam-Webster Online, [https://www.merriam-webster.com/words-at-play/word-history-america-continent-name Mapping Out the Naming of 'America']</ref><ref>{{cite-web|url=http://memory.loc.gov/cgi-bin/query/h?ammem/gmd:@field%28NUMBER+@band%28g3200+ct000725C%29%29|archiveurl=https://web.archive.org/web/20090109175922/http://memory.loc.gov/cgi-bin/query/h?ammem%2Fgmd%3A%40field%28NUMBER+%40band%28g3200+ct000725C%29%29|archivedate=January 9, 2009|title=Universalis cosmographia secundum Ptholomaei traditionem et Americi Vespucii alioru[m]que lustrationes.|accessdate=September 8, 2014}}; {{cite-web|url=http://lccn.loc.gov/2003626426|title=Universalis cosmographia secundum Ptholomaei traditionem et Americi Vespucii alioru[m]que lustrationes|publisher=Library of Congress|location=Washington, DC| author=Martin Waldseemüller|lccn=2003626426|accessdate=April 18, 2014}}</ref> see {{w|Naming of the Americas}} for more.
+
+Although this is the most widely accepted derivation, it has also been suggested that it could originate from the name of the [[Amerrisque]] mountains in Nicaragua (from {{der|en|myn|-}}), and another disputed theory is that it derives from the surname of {{w|Richard Amerike}} (1440–1503), whose surname is an anglicised form of Welsh {{m|cy|ap Meurig||son of Meurig}}, from {{der|en|owl|Mouric}}, which could be a rendition of {{cog|la|Mauritius}} (compare {{m|en|Maurice}}).<ref>The Oxford Dictionary of Family Names in Britain and Ireland. (2016). United Kingdom: OUP Oxford, p. 1881</ref>
+
+{{-pron-|en}}
+* {{IPA|en|/əˈmɛɹ.ɪ.kə/}}
+* {{IPA|en|/əˈmɛɹ.ə.kə/|/əˈmɛɹ.kə/|a=weak vowel}}
+** {{rhymes|en|ɛɹɪkə|s=4}}
+** {{audio|en|LL-Q1860 (eng)-Vealhurl-America.wav|a=Southern England}}
+** {{audio|en|En-us-America.ogg|a=US}}
+* {{q|nonstandard}} {{IPA|en|/əˈmɚ.ɪ.kə/|/əˈmɚ.ə.kə/}}
+* {{q|obsolete}} {{IPA|en|/əˈmɛɹ.ɪ.keɪ/|/əˈmɛɹ.ɪ.kɔː/}}<ref>{{R:Krapp ELiA|II|49}}</ref>
+
+{{-pnoun-|en}}
+{{en-proper noun|Americas}}
+
+# {{senseid|en|Q828}}The [[Americas]].
+#* {{quote-text|en|year=1847|author=w:Joseph Dalton Hooker|title=On the Vegetation of the Galapagos Archipelago, as compared with that of some other Tropical Islands and of the Continent of '''America'''|pages=235–262|doi=10.1111/j.1096-3642.1846.tb00417.x|passage=The results of my examination ... for the most part allied to plants of the cooler part of '''America''', or the uplands of the tropical latitudes ...}}
+#* {{quote-book|en|year=1890|author=|title=Encyclopaedia Britannica|page=796|passage=the Marsupials or pouched animals, being found throughout the continent of '''America''', from the United States to Patagonia}}
+#* {{quote-book|en|year=2009|author=w:Diarmaid MacCulloch|title=A History of Christianity|publisher=Penguin|year_published=2010|page=691|passage=Franciscan attitudes in the Canaries offered possible precedents for what Europe now came to call ‘the New World’, or, through a somewhat tangled chain of circumstances, ‘'''America'''’.}}
+# {{given name|en|female}}.
+# {{place|en|town|p/Limburg|c/Netherlands}}.
+# {{senseid|en|Q30}} The [[United States of America]].
+#* {{quote-book|en|year=1837| year_published= 1977 |page=237|title= w:Mauprat |author= w:George Sand|tlr=Stanley Young|publisher=Cassandra Editions|url= https://books.google.co.nz/books?id=NTTeAwAAQBAJ |isbn= 9780897338677 |passage= For a long time the dormouse and polecat had seemed to him overfeeble enemies for his restless valour, even as the granary floor seemed to afford too narrow a field. Every day he read the papers of the previous day in the servants' hall of the houses he visited, and it appeared to him that this war in '''America''', which was hailed as the awakening of the spirit of liberty and justice in the New World, ought to produce a revolution in France.}}
+#* {{quote-journal|en|title=No hiding place |date=2013-05-25|volume=407|issue= |page=74|magazine=w:The Economist |url=http://www.economist.com/news/science-and-technology/21578357-plan-assess-peoples-personal-characteristics-their-twitter-streams-no
+|passage=In '''America''' alone, people spent $170 billion on “direct marketing”—junk mail of both the physical and electronic varieties—last year. Yet of those who received unsolicited adverts through the post, only 3% bought anything as a result.}}
+#* {{quote-av|en|date=2014-07-27|actor=w:John Oliver|title=w:Last Week Tonight with John Oliver|season=1|number=12|episode=Nuclear Weapons|network=HBO|text=And once gain, '''America''' is saved from destruction by the heroes in “MEAL Team Six”.}}
+#* '''2022''' April 3, {{w|Roisin Conaty}} & al., Big Fat Quiz of Everything, Channel 4:
+#*: {{w|Captain America}}, how did he get his powers?<br>I think he... he got bitten by '''America'''.
+
+====Usage notes====
+In English, the unqualified term "America" often refers to the United States of America as a [[synecdoche]], with "American" typically referring to people and things from that country. The sense of "the Americas" varies in commonness between regions in contemporary English, but is found in certain circumstances, such as in reference to the [[w:Organization of American States|Organization of American States]].
+
+====Synonyms====
+* {{qualifier|North and South America}} [[Americas]]
+* {{qualifier|United States of America}} ''see'' '''[[United States of America#Synonyms]]'''
+
+====Derived terms====
+{{col4|en|British America
+|Central America
+|Jewmerica
+|'Murica
+|North America
+|South America
+|United States of America
+|Young America|Afro-America|Excited States of America|Ibero-America
+}}
+
+{{-desc-|en}}
+* {{desc|tkl|Amelika|bor=1}}
+
+====Translations====
+{{trans-see|id=Q30|United States of America}}
+
+{{trans-see|id=Q828|Americas}}
+
+===See also===
+* {{list:continents/en}}
+
+===References===
+<references/>
+
+===Further reading===
+* {{pedia}}
+
+[[Category:English eponyms]]
+[[Category:en:America]]
+[[Category:en:Countries in North America]]
+[[Category:en:United States]]
+
+==Dutch==
+
+===Etymology===
+First attested as ''Amerika'' in 1838-1857. Derived from {{der|nl|NL.|America}}. The settlement was named for its remote location.
+
+===Pronunciation===
+* {{IPA|nl|/ɑˈmeː.ri.kaː/}}
+* {{audio|nl|Nl-Amerika.ogg}}
+* {{hyphenation|nl|Ame|ri|ca}}
+* {{homophones|nl|Amerika}}
+
+===Proper noun===
+{{nl-proper noun|n}}
+
+# {{place|nl|village|m/Horst aan de Maas|p/Limburg|c/Netherlands}}.
+#: {{syn|nl|Turftreiersriek<qq:Carnival nickname>}}
+
+===References===
+* {{R:nl:NPV}}
+
+==Italian==
+{{wikipedia|lang=it}}
+
+===Etymology===
+From {{der|it|NL.|America}}.
+
+===Pronunciation===
+{{it-pr|Amèrica}}
+
+===Proper noun===
+{{it-proper noun|f}}
+
+# {{lb|it|continent}} the [[Americas]]
+
+====Derived terms====
+{{der-top}}
+* {{l|it|America Centrale}}
+* {{l|it|America Latina}}
+* {{l|it|americano}}
+* {{l|it|cardellino d'America}}
+* {{l|it|lucherino d'America}}
+* {{l|it|Nord America}} / {{l|it|America del Nord}} / {{l|it|America settentrionale}}
+* {{l|it|Stati Uniti d'America}}
+* {{l|it|Sud America}} / {{l|it|America del Sud}} / {{l|it|America meridionale}}
+{{der-bottom}}
+
+====Descendants====
+* {{desc|svm|Lamerika|bor=1|der=1}}
+
+===Anagrams===
+* {{anagrams|it|a=aaceimr|amicare|camerai|macaire|macerai|rameica}}
+
+{{C|it|America|Continents}}
+
+{{-la-}}
+
+{{-etim-|la}}
+{{etymon|la|id=the Americas|der|it>Amerigo>personal name}}
+Feminine form of ''Americus'', the Latinized form of the forename of Italian explorer [[:w:Amerigo Vespucci|Amerigo Vespucci]] (1454–1512).  {{m|it|Amerigo}} is the {{der|la|it|-}} form of a {{der|la|gem|-}} personal name (see {{m|en|Emmerich}}).
+
+First recorded in 1507 (together with the related term ''Amerigen'') in the ''{{w|Cosmographiae Introductio}}'', apparently written by [[w:Matthias Ringmann|Matthias Ringmann]], in reference to South America;<ref>John R. Hebert, "The Map That Named America: Library Acquires 1507 Waldseemüller Map of the World" ([http://www.loc.gov/loc/lcib/0309/maps.html]), ''Information Bulletin'', Library of Congress</ref> first applied to both North and South America by Mercator in 1538. ''Amerigen'' means "land of Amerigo" and derives from ''Amerigo'' and ''[[gen]]'', the accusative case of Greek ''[[γῆ|gē]]'' "earth". ''America'' accorded with the feminine names of [[Asia]], [[Africa]], and [[Europa]].<ref name=Smiths>Toby Lester, "Putting America on the Map", ''Smithsonian'', 40:9 (December 2009)</ref>
+
+===Pronunciation===
+* {{la-IPA|Amerī̆ca}}
+* Note: the length of the /i/ can be long, and that form is well-attested in Latin literature; for example, {{w|Rafael Landívar|Rafael Landívar's|lang=es}} Rusticatio Mexicana. This form is mostly attested in poetry, and it corresponds more closely to the Italian pronunciation of {{m|it|Amerigo}}.<ref>Gil, J. (2010). "America. Myrtia, 25, 187–194." ([https://revistas.um.es/myrtia/article/view/131651/122081])</ref>
+
+===Proper noun===
+{{la-proper noun|Amerī̆ca<1>}}
+
+# {{lb|la|New Latin}} [[#English|America]] (the continent).
+
+====Declension====
+{{la-ndecl|Amerī̆ca<1>}}
+
+===References===
+* {{R:NLW}}
+<references />
+
+[[Category:la:Continents]]
+
+==Occitan==
+
+===Etymology===
+From {{bor|oc|NL.|America}}.
+
+===Pronunciation===
+* {{IPA|oc|/ameˈɾiko̞/}}
+
+===Proper noun===
+{{oc-proper noun|f}}
+
+# [[#English|America]] {{gloss|the Americas}}
+
+====Derived terms====
+* {{l|oc|America del Nòrd}}
+* {{l|oc|America centrala}}
+* {{l|oc|America del Sud}}
+* {{l|oc|american}}
+
+{{c|oc|Continents}}
+
+==Romanian==
+
+===Etymology===
+{{bor+|ro|la|America}}.
+
+===Pronunciation===
+* {{IPA|ro|[aˈme.ri.ka]}}
+
+===Proper noun===
+{{head|ro|proper noun|g=f|plural|Americi}}
+
+# {{place|ro|two <<continent>>s, [[North America]] and [[South America]]|t=America|t2=the [[America]]s}}
+# {{place|ro|country|cont/North America|t=America|t2=the [[United States of America]]}}
+
+====Declension====
+{{ro-noun-f-ă-i|Americ|voc=America|voc2=Americă}}
+
+====Derived terms====
+{{der-top}}
+* {{l|ro|american}}
+* {{l|ro|americanism}}
+* {{l|ro|americanist}}
+* {{l|ro|americanistică}}
+* {{l|ro|americaniza}}
+* {{l|ro|americanizare}}
+* {{l|ro|americanizat}}
+{{der-bottom}}
+
+====Related terms====
+* {{l|ro|America Centrală}}
+* {{l|ro|America de Nord}}
+* {{l|ro|America de Sud}}
+* {{l|ro|american}}
+
+==Welsh==
+
+===Etymology===
+From {{bor|cy|NL.|America}}.
+
+===Pronunciation===
+* {{IPA|cy|/aˈmɛrɪka/}}
+
+===Proper noun===
+{{cy-proper noun|f}}
+
+# America
+
+====Derived terms====
+* {{l|cy|America Ladin||Latin America}}
+* {{l|cy|Americanaidd||American}}
+* {{l|cy|Americanes||American woman}}
+* {{l|cy|Americanwr||American man}}
+* {{l|cy|Canolbarth America||Central America}}
+* {{l|cy|De America||South America}}
+* {{l|cy|Gogledd America||North America}}
+* {{l|cy|Unol Daleithiau America||United States of America}}
+
+====Related terms====
+* {{l|cy|yr Amerig||the Americas}}
+
+===Mutation===
+{{cy-mut}}
+
+===See also===
+* {{list:continents/cy}}
+
+===References===
+<references/>
+
+{{topics|cy|Countries}}
+
+
+-----
+{{Наслов|Енглески|Именица|ж}}
+{{Слогови|-|-}}
+{{Изговор||America|en}}
+{{Морфолошке варијације|
+:-{ America,}- {{мн}} -
+}}
+{{Значење|
+:[1] женско [[име]]
+}}
+{{Скраћенице|
+:
+}}
+{{Порекло|
+:
+}}
+{{Носиоци имена|
+:
+}}
+<!--
+{{Синоними|
+:
+}}
+{{Супротне речи|
+:
+}}
+-->
+{{Примери|
+:[1] -
+}}
+<!--
+{{Пословице|
+:
+}}
+{{Асоцијације|
+:
+}}
+{{Изведене речи|
+:
+}}
+-->
+{{П-лево}}
+{{П|af|1|}}
+{{П|de|1|}}
+{{П-средина}}
+{{П|nl|1|}}
+{{П|sv|1|}}
+{{П-десно}}
+{{Опширнији примери и информације|
+:[1] [[:w:en:{{PAGENAME}}|{{PAGENAME}}]]
+}}
+{{Сличности|
+:
+}}
+[[Категорија:Енглеско женско име]]
+{{Наслов|Енглески|Именица|м}}
+{{Слогови|-|-}}
+{{Изговор||America|en}}
+{{Морфолошке варијације|
+:-{ America,}- {{мн}} -
+}}
+{{Значење|
+:[1] мушко [[име]]
+}}
+{{Скраћенице|
+:
+}}
+{{Порекло|
+:
+}}
+{{Носиоци имена|
+:
+}}
+<!--
+{{Синоними|
+:
+}}
+{{Супротне речи|
+:
+}}
+-->
+{{Примери|
+:[1] -
+}}
+<!--
+{{Пословице|
+:
+}}
+{{Асоцијације|
+:
+}}
+{{Изведене речи|
+:
+}}
+-->
+{{П-лево}}
+{{П|af|1|}}
+{{П|de|1|}}
+{{П-средина}}
+{{П|nl|1|}}
+{{П|sv|1|}}
+{{П-десно}}
+{{Опширнији примери и информације|
+:[1] [[:w:en:{{PAGENAME}}|{{PAGENAME}}]]
+}}
+{{Сличности|
+:
+}}
+[[Категорија:Енглеско мушко име]]
+
+[[ar:America]]
+[[bn:America]]
+[[co:America]]
+[[cs:America]]
+[[cy:America]]
+[[da:America]]
+[[de:America]]
+[[el:America]]
+[[en:America]]
+[[eo:America]]
+[[es:America]]
+[[et:America]]
+[[fa:America]]
+[[fi:America]]
+[[fr:America]]
+[[fy:America]]
+[[gl:America]]
+[[hi:America]]
+[[hu:America]]
+[[hy:America]]
+[[id:America]]
+[[io:America]]
+[[it:America]]
+[[ja:America]]
+[[kk:America]]
+[[km:America]]
+[[ko:America]]
+[[ku:America]]
+[[la:America]]
+[[li:America]]
+[[lo:America]]
+[[lt:America]]
+[[lv:America]]
+[[mg:America]]
+[[no:America]]
+[[oc:America]]
+[[pl:America]]
+[[pt:America]]
+[[ro:America]]
+[[ru:America]]
+[[simple:America]]
+[[sk:America]]
+[[sm:America]]
+[[sv:America]]
+[[sw:America]]
+[[te:America]]
+[[th:America]]
+[[tr:America]]
+[[tt:America]]
+[[uk:America]]
+[[uz:America]]
+[[vi:America]]
+[[vo:America]]
+[[zh:America]]

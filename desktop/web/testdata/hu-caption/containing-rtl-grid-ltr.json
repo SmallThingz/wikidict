@@ -1,0 +1,293 @@
+{
+  "dpr_hex": "445052610000000200000000010000000204000000626f64790000000000000000010000000c0000000000000000000000000000008100010000000100000700000063617074696f6e0700000063617074696f6e00000000000000000000000000000000000000000000000000000000000100000001000000000100010000010000000000000400000063656c6c00000000000000000000000000000000000000000000000000000000000000000000000001fc040001ae47613f01ae47613f01ae47613f01ae47613f010148e19a41015839343e015839343e015839343e015839343e02c3f5a83f01007f02000001f80001ae47613f01ae47613f01ae47613f01ae47613f01020000c842015839343e015839343e015839343e015839343e0201040400c3f5a83f01000000a5430000000040000000004001ae47613f01ae47613f01ae47613f01ae47613f01ae47613e01ae47613e01ae47613e01ae47613e02cdcc8c3f0100180200000068750000000000000002c3f5a83f0101010002000000687500000000000000000000000000000000000000000000000000000000000000000084",
+  "expected": "accept",
+  "name": "containing-rtl-grid-ltr",
+  "original_source_credit": false,
+  "schema": "wikidict.synthetic-caption-codec-fixture.v1",
+  "stored": {
+    "entry": {
+      "alias": null,
+      "display_title": [],
+      "kind": "supplemental",
+      "language": null,
+      "language_code": "",
+      "media": [],
+      "organization": {
+        "lexemes": [],
+        "other_sections": []
+      },
+      "preamble_spans": [],
+      "redirect": null,
+      "references": [],
+      "sections": [
+        {
+          "anchor": "",
+          "anchor_fallback": "",
+          "blocks": [
+            {
+              "anchor": "",
+              "anchor_fallback": "",
+              "depth": 0,
+              "feature": null,
+              "kind": "table",
+              "level": 0,
+              "list_path": "",
+              "number": "",
+              "spans": [],
+              "table": {
+                "caption": [
+                  {
+                    "bold": false,
+                    "classes": "",
+                    "code": false,
+                    "direction": "",
+                    "explanation": "",
+                    "foreground": null,
+                    "italic": false,
+                    "kind": "link",
+                    "language": "",
+                    "role": "normal",
+                    "small": false,
+                    "strike": false,
+                    "subscript": false,
+                    "superscript": false,
+                    "target": "caption",
+                    "text": "caption",
+                    "tooltip": null,
+                    "trail": "",
+                    "underline": false
+                  }
+                ],
+                "caption_viewport": {
+                  "caption_box": {
+                    "line": {
+                      "height": {
+                        "length": {
+                          "font_scale_basis": "normal_body",
+                          "value": 1.3200000524520874
+                        }
+                      },
+                      "strut": {
+                        "font_scale": 1.100000023841858,
+                        "font_scale_basis": "normal_body",
+                        "owner_font": {
+                          "bold": false,
+                          "classes": "",
+                          "code": false,
+                          "font_family": "sans_serif",
+                          "font_features": "normal",
+                          "font_normalized": false,
+                          "font_scale": 1.100000023841858,
+                          "font_scale_basis": "normal_body",
+                          "italic": false,
+                          "language": "hu",
+                          "role": "normal",
+                          "small": false,
+                          "subscript": false,
+                          "superscript": false
+                        }
+                      }
+                    },
+                    "margins": {
+                      "bottom": {
+                        "unit": "em",
+                        "value": 0.8799999952316284
+                      },
+                      "left": {
+                        "unit": "em",
+                        "value": 0.8799999952316284
+                      },
+                      "right": {
+                        "unit": "em",
+                        "value": 0.8799999952316284
+                      },
+                      "top": {
+                        "unit": "em",
+                        "value": 0.8799999952316284
+                      }
+                    },
+                    "padding": {
+                      "bottom": {
+                        "unit": "em",
+                        "value": 0.2199999988079071
+                      },
+                      "left": {
+                        "unit": "em",
+                        "value": 0.2199999988079071
+                      },
+                      "right": {
+                        "unit": "em",
+                        "value": 0.2199999988079071
+                      },
+                      "top": {
+                        "unit": "em",
+                        "value": 0.2199999988079071
+                      }
+                    },
+                    "text_align": "center"
+                  },
+                  "containing_direction": "rtl",
+                  "focus_paint": null,
+                  "grid_direction": "ltr",
+                  "grid_spacing_x": {
+                    "unit": "px",
+                    "value": 2
+                  },
+                  "grid_spacing_y": {
+                    "unit": "px",
+                    "value": 2
+                  },
+                  "language": "hu",
+                  "max_viewport_width_px": 639,
+                  "max_width": {
+                    "unit": "px",
+                    "value": 330
+                  },
+                  "narrow_box_style": {
+                    "clear": "right",
+                    "float_side": "right",
+                    "margins": {
+                      "bottom": {
+                        "unit": "em",
+                        "value": 0.8799999952316284
+                      },
+                      "left": {
+                        "unit": "em",
+                        "value": 0.8799999952316284
+                      },
+                      "right": {
+                        "unit": "em",
+                        "value": 0.8799999952316284
+                      },
+                      "top": {
+                        "unit": "em",
+                        "value": 0.8799999952316284
+                      }
+                    },
+                    "padding": {
+                      "bottom": {
+                        "unit": "em",
+                        "value": 0.17599999904632568
+                      },
+                      "left": {
+                        "unit": "em",
+                        "value": 0.17599999904632568
+                      },
+                      "right": {
+                        "unit": "em",
+                        "value": 0.17599999904632568
+                      },
+                      "top": {
+                        "unit": "em",
+                        "value": 0.17599999904632568
+                      }
+                    },
+                    "width": {
+                      "unit": "percent",
+                      "value": 100
+                    }
+                  },
+                  "narrow_grid_style": {
+                    "collapse": "separate",
+                    "line_height": {
+                      "font_scale_basis": "normal_body",
+                      "value": 1.3200000524520874
+                    }
+                  }
+                },
+                "rows": [
+                  {
+                    "cells": [
+                      {
+                        "background": null,
+                        "colspan": 1,
+                        "header": false,
+                        "rowspan": 1,
+                        "spans": [
+                          {
+                            "bold": false,
+                            "classes": "",
+                            "code": false,
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "italic": false,
+                            "kind": "text",
+                            "language": "",
+                            "role": "normal",
+                            "small": false,
+                            "strike": false,
+                            "subscript": false,
+                            "superscript": false,
+                            "target": "",
+                            "text": "cell",
+                            "tooltip": null,
+                            "trail": "",
+                            "underline": false
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ],
+                "style": {
+                  "clear": "right",
+                  "collapse": "separate",
+                  "float_side": "right",
+                  "line_height": {
+                    "font_scale_basis": "normal_body",
+                    "value": 1.3200000524520874
+                  },
+                  "margins": {
+                    "bottom": {
+                      "unit": "em",
+                      "value": 0.8799999952316284
+                    },
+                    "left": {
+                      "unit": "em",
+                      "value": 0.8799999952316284
+                    },
+                    "right": {
+                      "unit": "em",
+                      "value": 0.8799999952316284
+                    },
+                    "top": {
+                      "unit": "em",
+                      "value": 0.8799999952316284
+                    }
+                  },
+                  "padding": {
+                    "bottom": {
+                      "unit": "em",
+                      "value": 0.17599999904632568
+                    },
+                    "left": {
+                      "unit": "em",
+                      "value": 0.17599999904632568
+                    },
+                    "right": {
+                      "unit": "em",
+                      "value": 0.17599999904632568
+                    },
+                    "top": {
+                      "unit": "em",
+                      "value": 0.17599999904632568
+                    }
+                  },
+                  "width": {
+                    "unit": "em",
+                    "value": 19.360000610351562
+                  }
+                }
+              }
+            }
+          ],
+          "level": 2,
+          "title": "body"
+        }
+      ],
+      "title": "caption-control"
+    },
+    "schema": "dict.presentation.v3"
+  }
+}

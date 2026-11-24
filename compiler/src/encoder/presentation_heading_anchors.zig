@@ -17,12 +17,27 @@ pub const Registry = struct {
     /// second fallback. Reference blocks share the page's observed namespace.
     pub fn reserveExisting(self: *Registry, a: A, id: []const u8) !void {
         if (id.len == 0) return;
+        _ = try self.insertExisting(a, id);
+    }
+
+    pub fn reserveUniqueExisting(self: *Registry, a: A, id: []const u8) !void {
+        if (id.len == 0 or !try self.insertExisting(a, id)) return error.InvalidPresentation;
+    }
+
+    pub fn containsExisting(self: *Registry, id: []const u8) bool {
+        var keys = self.used.keyIterator();
+        while (keys.next()) |key| if (std.ascii.eqlIgnoreCase(key.*, id)) return true;
+        return false;
+    }
+
+    fn insertExisting(self: *Registry, a: A, id: []const u8) !bool {
         if (!std.unicode.utf8ValidateSlice(id)) return error.InvalidPresentation;
         const key = try a.dupe(u8, id);
         errdefer a.free(key);
         for (key) |*byte| byte.* = std.ascii.toLower(byte.*);
         const result = try self.used.getOrPut(a, key);
         if (result.found_existing) a.free(key);
+        return !result.found_existing;
     }
 
     fn reserve(self: *Registry, a: A, base: []const u8) ![]const u8 {
@@ -215,4 +230,20 @@ test "already observed primary and fallback IDs reserve exact collision keys" {
     try std.testing.expectEqualStrings("repeated_2", try registry.heading(a, "repeated"));
     try std.testing.expectEqualStrings(".C4.8D_2", try registry.authored(a, ".C4.8D"));
     try std.testing.expectError(error.InvalidPresentation, registry.reserveExisting(a, "\xff"));
+}
+
+test "authored block destinations are unique and reserve generated heading identities" {
+    const a = std.testing.allocator;
+    var ids: Registry = .{};
+    defer ids.deinit(a);
+    try ids.reserveUniqueExisting(a, "Translations-Q30");
+    try ids.reserveUniqueExisting(a, "Енглески:_Q30");
+    try std.testing.expect(ids.containsExisting("translations-q30"));
+    try std.testing.expect(ids.containsExisting("Енглески:_q30"));
+    try std.testing.expect(!ids.containsExisting("Translations-Q828"));
+    try std.testing.expectError(error.InvalidPresentation, ids.reserveUniqueExisting(a, "TRANSLATIONS-Q30"));
+    try std.testing.expectError(error.InvalidPresentation, ids.reserveUniqueExisting(a, "Енглески:_q30"));
+    const generated = try ids.heading(a, "Translations-Q30");
+    defer a.free(generated);
+    try std.testing.expectEqualStrings("Translations-Q30_2", generated);
 }

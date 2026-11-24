@@ -1299,8 +1299,26 @@ fn remainingCounterWork(remaining: usize, node_count: usize) ?usize {
     return remaining - node_count * counter_subjects.len;
 }
 
+pub const PageCounterContext = struct {
+    styles: *const Profile,
+    nodes: []const ObservedStyleNode,
+    root: u32,
+};
+
 pub fn observedUnobservedCounterResets(a: std.mem.Allocator, styles: *const Profile, root: *const TextElement,
     source_image: *const PageSourceImage, contexts: []const FigureObservedContext, unique_root_class: []const u8,
+    complete_inline_styles: []const u8) !?UnobservedCounterResetProof
+{
+    if (contexts.len != 2) return null;
+    var pages: [2]PageCounterContext = undefined;
+    for (contexts, &pages) |context, *page| page.* = .{
+        .styles = context.styles, .nodes = context.nodes, .root = context.root,
+    };
+    return observedUnobservedPageCounters(a, styles, root, source_image, &pages, unique_root_class, complete_inline_styles);
+}
+
+pub fn observedUnobservedPageCounters(a: std.mem.Allocator, styles: *const Profile, root: *const TextElement,
+    source_image: *const PageSourceImage, contexts: []const PageCounterContext, unique_root_class: []const u8,
     complete_inline_styles: []const u8) !?UnobservedCounterResetProof
 {
     if (styles.globally_unresolved or source_image.styles != styles or source_image.root != root or
@@ -1351,6 +1369,10 @@ pub fn observedUnobservedCounterResets(a: std.mem.Allocator, styles: *const Prof
             var valid = true;
             for (contexts, inventories) |context, inventory| {
                 const safe_strings = inventory.safe_strings;
+                for (extra_declarations.items) |item| if (counterDeclarationMayUse(item, name, safe_strings)) {
+                    valid = false; break;
+                };
+                if (!valid) break;
                 // Every ordinal below belongs to this role's own complete
                 // inventory. Different API/GET heads are never equated.
                 for (inventory.rules) |parsed| {
@@ -2130,11 +2152,25 @@ pub const SourceWikiCellParentProof = struct {
     body_end: usize,
     header: bool,
 };
+// Build-only source coordinates for an explicitly closed literal HTML
+// TABLE/TR/TD. Each edge and the target DIV body is checked in both heads.
+pub const SourceLiteralHtmlElement = struct {
+    start: usize, opening_end: usize, body_end: usize, end: usize,
+};
+pub const SourceLiteralHtmlCellParent = struct {
+    table: SourceLiteralHtmlElement,
+    row: SourceLiteralHtmlElement,
+    cell: SourceLiteralHtmlElement,
+};
 pub const SourceLiteralDivProof = struct {
     range: SourceRootChildProof,
     parent_start: ?usize,
     restored_ul: ?SourceLiteralUlRestoration = null,
     wiki_cell_parent: ?SourceWikiCellParentProof = null,
+    html_cell_parent: ?SourceLiteralHtmlCellParent = null,
+    // The same literal DIV chain was selected independently from both
+    // authenticated local parser-output graphs.
+    paired_parent_heads: bool = false,
 };
 // Common tag only: no captured ordinal, parent identity or positive edge.
 pub const SourceDivParentTagProof = struct { range: SourceRootChildProof, candidate_count: u16, parent_tag: []const u8 };
@@ -2143,6 +2179,13 @@ pub const TextElement = struct {
     // A current source query owns the subject type. The optional preceding type
     // is refusal-only. Empty means no previous element in the literal parent.
     source_literal_previous: ?struct { tag: ?[]const u8 } = null,
+    // Immediate query only. Each represented parent edge is a paired original
+    // DIV opener. The exterior, sibling ordinals and shell remain unknown.
+    literal_first_div_pair: bool = false,
+    literal_subject_bound: bool = false,
+    // Exact static region census, negative selector checks only.
+    observed_region_classes: ?[]const u8 = null,
+    literal_screen_root_box: ?*const ObservedLiteralScreenBox = null,
     // Query-local negative direct-parent fact; never used for positive matching.
     source_parent_tag_nonmatch: ?[]const u8 = null,
     // Query-local negative facts from a tracked, physically authored SPAN.
@@ -7956,12 +7999,19 @@ const ContainerSelector = struct {
         return self.matchBranch(element, element, page_scoped);
     }
     fn matchBranch(self: @This(), element: *const TextElement, original: *const TextElement, page_scoped: bool) ContainerSelectorMatch {
+        if (element.literal_subject_bound) if (element.observed_region_classes) |classes|
+            if (self.absentFromCompleteClasses(classes)) return .no;
+        if (self.adjacent_sibling) |adjacent| if (element.source_literal_previous) |observed| {
+            if (adjacent.previous.tag) |required| if (observed.tag) |previous|
+                if (!std.ascii.eqlIgnoreCase(previous, required)) return .no;
+        };
         if (self.last_child_adjacent_types) |required| if (element.source_literal_previous) |observed| {
             if (!std.ascii.eqlIgnoreCase(required.subject, element.tag)) return .no;
             if (observed.tag) |previous| if (!std.ascii.eqlIgnoreCase(required.previous, previous)) return .no;
         };
         if (self.terminal_positive_target and element.source_fragment_target_absent) return .no;
-        if (element.source_nonlink_element and (std.ascii.eqlIgnoreCase(element.tag, "span") or std.ascii.eqlIgnoreCase(element.tag, "i")) and
+        if (element.source_nonlink_element and (std.ascii.eqlIgnoreCase(element.tag, "span") or std.ascii.eqlIgnoreCase(element.tag, "i") or
+            std.ascii.eqlIgnoreCase(element.tag, "div") or std.ascii.eqlIgnoreCase(element.tag, "abbr")) and
             self.necessary_chain.len != 0 and
             self.necessary_chain[self.necessary_chain.len - 1].requires_hyperlink) return .no;
         if (element.source_direct_parent_not_li) {
@@ -8178,6 +8228,11 @@ fn containerViewportGroup(prelude: []const u8, parent: ContainerViewportConditio
     if (limit == 0) return .unknown;
     return .{ .screen_max_width_px = if (parent == .screen_max_width_px) @min(limit, parent.screen_max_width_px) else limit };
 }
+
+pub const ObservedLiteralScreenBox = struct {
+    box: ContainerResolution,
+    table_collapse: ?BorderCollapseState,
+};
 
 pub const ContainerResolution = struct {
     positioning_specified: bool = false,
@@ -8486,7 +8541,7 @@ const ContainerValue = union(enum) {
 };
 const ContainerCandidate = struct { value: ContainerValue, priority: Priority };
 const ContainerContextSlot = enum { position, overflow_x, overflow_y, flex_direction, flex_wrap, background_image, background_other, column_fill, inset_top, inset_right, inset_bottom, inset_left, inset_all, z_index };
-const ContainerAxisOverflow = enum { visible, auto, clip };
+const ContainerAxisOverflow = enum { visible, auto, clip, hidden };
 const ContainerContextCandidate = struct { ordinary: bool, priority: Priority, overflow: ?ContainerAxisOverflow = null, column_direction: bool = false };
 fn containerAxisOverflow(value: []const u8) ?ContainerAxisOverflow {
     inline for (@typeInfo(ContainerAxisOverflow).@"enum".field_names) |name| {
@@ -8587,6 +8642,7 @@ const ContainerCascade = struct {
             if (std.ascii.eqlIgnoreCase(name, "width")) {
                 const selected: ContainerValue = if (std.ascii.eqlIgnoreCase(value, "auto")) .{ .width = .auto }
                     else if (std.ascii.eqlIgnoreCase(value, "fit-content")) .{ .width = .fit_content }
+                    else if (std.ascii.eqlIgnoreCase(value, "max-content")) .{ .width = .max_content }
                     else if (styleWidth(value)) |known| .{ .width = .{ .length = known } } else .unknown;
                 self.consider(.width, selected, priority, uncertain_value); continue;
             }
@@ -8844,6 +8900,15 @@ const ContainerCascade = struct {
             resolution.style.overflow = .auto;
             if (!types.containerAutoScrollportStyleSupported(resolution.style)) resolution.unresolved = true;
         }
+        if (x == .hidden and y == .hidden) {
+            // Preserve the prior unknown result for ordinary hidden-overflow
+            // boxes outside the bounded intrinsic-width domain.
+            if (resolution.style.width == null or resolution.style.width.? != .max_content) resolution.unresolved = true
+            else resolution.style.overflow = .hidden;
+        }
+        if (resolution.style.width) |width_value| if (width_value == .max_content and !types.validContainerStyle(resolution.style)) {
+            resolution.unresolved = true;
+        };
         // The current minimum-height contract does not define column balance
         // or flex cross-size interaction on the same owner.
         if (resolution.style.min_height != null and (resolution.style.columns != null or
@@ -9614,8 +9679,9 @@ pub const Profile = struct {
     /// Reuse only complete ancestor-class absence. A present class, parent
     /// pointer or class union never establishes selector matching or adjacency.
     pub fn resolveAlignmentIn(self: *const Profile, a: std.mem.Allocator, element: *const TextElement, legacy_align: ?[]const u8, css: []const u8) std.mem.Allocator.Error!AlignmentResolution {
-        if (self.page_style_parent != null) {
-            if (element.page_style_root == null or css.len > max_css_bytes) return .{ .specified = true, .unresolved = true };
+        if (self.page_style_parent != null or element.literal_subject_bound) {
+            if ((self.page_style_parent != null and element.page_style_root == null) or css.len > max_css_bytes)
+                return .{ .specified = true, .unresolved = true };
             const matched = try self.containerRuleMatchesIn(a, element);
             defer a.free(matched.rules);
             if (matched.unresolved) return .{ .specified = true, .unresolved = true };
@@ -9666,6 +9732,15 @@ pub const Profile = struct {
     fn resolveFontSizeInFor(self: *const Profile, comptime observed_lengths: bool, a: std.mem.Allocator, element: *const TextElement, css: []const u8, attributes: ?AttributePresenceSource) std.mem.Allocator.Error!?(if (observed_lengths) ObservedFontSizeValue else FontSizeValue) {
         if (self.globally_unresolved or (self.page_style_parent != null and element.page_style_root == null) or css.len > max_css_bytes) return .unknown;
         var cascade_value: FontCascadeFor(observed_lengths) = .{};
+        if (element.literal_subject_bound) {
+            const matched = try self.containerRuleMatchesIn(a, element);
+            defer a.free(matched.rules);
+            if (matched.unresolved) return .unknown;
+            for (matched.rules) |rule| try cascade_value.declarations(a, rule.css, rule.specificity, rule.order,
+                rule.match != .known or rule.viewport != .all or rule.rank_unknown, false);
+            try cascade_value.declarations(a, css, 0, max_rules * 1024, false, true);
+            return cascade_value.value;
+        }
         for (self.text_rules) |rule| {
             const matched = rule.selector.matchIn(element, self.page_style_parent != null);
             if (matched == .no) continue;
@@ -10178,6 +10253,15 @@ pub const Profile = struct {
         defer cascade_value.possible_colors.deinit(a);
         defer cascade_value.possible_weights.deinit(a);
         defer cascade_value.possible_font_styles.deinit(a);
+        if (element.literal_subject_bound) {
+            const matched = try self.containerRuleMatchesIn(a, element);
+            defer a.free(matched.rules);
+            if (matched.unresolved) return .{ .color = .unknown, .weight = .unknown, .font_style = .unknown };
+            for (matched.rules) |rule| try cascade_value.declarations(a, rule.css, rule.specificity, rule.order,
+                rule.match != .known or rule.viewport != .all or rule.rank_unknown, false);
+            try cascade_value.declarations(a, css, 0, max_rules * 1024, false, true);
+            return cascade_value.result();
+        }
         for (self.text_rules) |rule| {
             const matched = rule.selector.matchIn(element, self.page_style_parent != null);
             if (matched != .no) try cascade_value.declarations(a, rule.css, rule.selector.specificity, rule.order, rule.selector.uncertain or matched == .unknown, false);
@@ -38320,6 +38404,16 @@ fn inlineBoxDeclarationsIn(a: std.mem.Allocator, declarations: []const ObservedF
         result.radius = (try roundedInlineBoxRadius(a, declarations, environment, true)) orelse return .{ .unresolved = true };
         const background = try observedFigureColor(a, declarations, "background-color", environment, null, null);
         if (background.unresolved or background.value == null or background.value.?.kind != .transparent) return .{ .unresolved = true };
+    } else if (static_decoration and !rtl and result.cursor == null and dottedHelpBorderColor(result.border) != null and
+        (try roundedInlineBoxRadius(a, declarations, environment, true)) != null)
+    {
+        const background = try observedFigureColor(a, declarations, "background-color", environment, null, null);
+        if (background.unresolved or background.value == null or background.value.?.kind != .transparent) return .{ .unresolved = true };
+        for (declarations) |declaration| {
+            if ((std.ascii.eqlIgnoreCase(declaration.name, "border") or std.ascii.startsWithIgnoreCase(declaration.name, "border-")) and
+                observedTableDescendantVariableFunction(declaration.raw)) return .{ .unresolved = true };
+        }
+        result.radius = .{ .unit = .percent, .value = 50 };
     } else {
     inline for (.{ "border-top-left-radius", "border-top-right-radius", "border-bottom-right-radius", "border-bottom-left-radius",
         "border-start-start-radius", "border-start-end-radius", "border-end-start-radius", "border-end-end-radius" }) |corner| {
@@ -41662,6 +41756,36 @@ test "source preceding tag only refutes necessary types in a terminal last-child
         const unsupported = try builder.containerSelector(raw);
         try std.testing.expect(unsupported.last_child_adjacent_types == null);
     }
+}
+
+
+test "literal preceding tag can refute an adjacent selector without proving a previous class" {
+    const a = std.testing.allocator;
+    var profile = try parseForTargetAlloc(a, "div.NavFrame+div.NavFrame{width:31px}style.ready+div.NavFrame{height:42px}", .screen);
+    defer profile.deinit();
+    var node: TextElement = .{ .tag = "div", .classes = "NavFrame", .source_literal_previous = .{ .tag = "style" } };
+    var seen: usize = 0;
+    for (profile.container_rules) |rule| {
+        const pair = rule.selector.adjacent_sibling orelse continue;
+        try std.testing.expectEqual(if (std.mem.eql(u8, pair.previous.tag.?, "div")) ContainerSelectorMatch.no else ContainerSelectorMatch.unknown, rule.selector.matchIn(&node, true));
+        seen += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 2), seen);
+    node.source_literal_previous = null;
+    for (profile.container_rules) |rule| if (rule.selector.adjacent_sibling != null)
+        try std.testing.expectEqual(ContainerSelectorMatch.unknown, rule.selector.matchIn(&node, true));
+}
+
+
+test "clipped intrinsic width retains the complete selected border-box width cascade" {
+    const a = std.testing.allocator;
+    const source = try resolveInlineContainerAlloc(a, "width:max-content;max-width:100%;overflow:hidden;box-sizing:border-box");
+    try std.testing.expect(!source.unresolved and source.style.width.? == .max_content and source.style.overflow == .hidden);
+    try std.testing.expectEqual(@as(f32, 100), source.style.max_width.?.length.value);
+    try std.testing.expect(source.style.max_width.?.length.unit == .percent and types.validContainerStyle(source.style));
+    for ([_][]const u8{ "width:max-content", "width:max-content;max-width:100%;overflow:hidden", "width:fit-content;max-width:100%;overflow:hidden;box-sizing:border-box",
+        "width:max-content;max-width:100%;overflow:hidden;box-sizing:border-box;position:relative", "width:max-content;max-width:100%;overflow:hidden;box-sizing:border-box;overflow-y:auto" }) |invalid|
+        try std.testing.expect((try resolveInlineContainerAlloc(a, invalid)).unresolved);
 }
 
 test "retained English Figure script language font selectors distinguish root direction from actual font matching" {

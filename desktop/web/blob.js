@@ -2,6 +2,8 @@
 // A leading U+FEFF belongs to a compiled title or field, not a file BOM.
 import {validateDescriptionBody,validateDarkForeground,validateContainerBlock,validateCellMetrics,validateRuby,validateRubyOwner,validateRubySpan,validateActionGroupSpan,validateInlineBoxSpan,validateFigureIntrinsicSize,validateClippedSpan,validateAudioControl,validateWrappedHeading,validateTableDisclosure} from './validate.js';
 import {validateSourceAnchor,validateSourceAnchorDestinations} from './validate.js';
+import {validateInlineDestinationList,validateInlineDestinationEntry} from './validate.js';
+import {validateResponsiveCaptionTable} from './validate.js';
 const utf8 = new TextDecoder('utf-8', {fatal:true,ignoreBOM:true});
 const kinds = ['language','thesaurus','citations','reconstruction','rhymes','sign_gloss','supplemental','alias'];
 const blocks = ['paragraph','blank','definition','example','quotation','list_item','list_detail','indent','term','heading','preformatted','rule','table','container'];
@@ -12,10 +14,12 @@ const imageOccurrenceFeature=0x20;
 const containerOwnerFontFeature=1;
 const responsiveFlowFeature=0x01000000;
 const sourceAnchorFeature=0x08000000;
+const inlineDestinationFeature=0x10000000;
+const responsiveCaptionTableFeature=0x02000000;
 const supportedExtendedFeatures=features=>(features&~(0x2184|imageOccurrenceFeature|containerOwnerFontFeature))===0&&
   (features&0x2100)!==0&&(!(features&containerOwnerFontFeature)||!!(features&0x100));
-const supportedWideFeatures=features=>(features&(responsiveFlowFeature|sourceAnchorFeature))!==0&&
-  (features&~(0x2184|imageOccurrenceFeature|containerOwnerFontFeature|responsiveFlowFeature|sourceAnchorFeature))===0&&
+const supportedWideFeatures=features=>(features&(responsiveFlowFeature|sourceAnchorFeature|inlineDestinationFeature|responsiveCaptionTableFeature))!==0&&
+  (features&~(0x2184|imageOccurrenceFeature|containerOwnerFontFeature|responsiveFlowFeature|sourceAnchorFeature|inlineDestinationFeature|responsiveCaptionTableFeature))===0&&
   (!(features&containerOwnerFontFeature)||!!(features&sourceAnchorFeature)&&!!(features&0x100));
 const magicStrings = new Set('23456789ABCDEFGHIJKLMSVYZa'.split('').map(version=>'DPR'+version));
 const require = (ok, message='Invalid compiled dictionary') => { if (!ok) throw Error(message); };
@@ -71,7 +75,7 @@ export function decode(bytes, metadata) {
   };
   const charge=()=>{require(budget>0);budget--;};
   const content=fn=>{require(contentDepth<16,'Content depth exceeds limit');contentDepth++;try{return fn();}finally{contentDepth--;}};
-  const blockMinimum=()=>rich?29:blockGeometry?27:aligned?26:anchored?25:17;
+  const blockMinimum=()=>(rich?29:blockGeometry?27:aligned?26:anchored?25:17)+(inlineDestinationsEnabled?4:0);
   const mapString=()=>{const n=u32();require(n<=32*1024*1024&&n<=mapStringBudget);mapStringBudget-=n;return text(n);};
   const mapAction=()=>{const kind=tag(['internal','external']),target=mapString(),target_fragment=presence()?mapString():null,label=mapString();require(kind==='internal'?(target.length>0||target_fragment!==null):(target.length>0&&target_fragment===null));return {kind,target,target_fragment,label};};
   const imageMap=()=>{
@@ -92,6 +96,10 @@ export function decode(bytes, metadata) {
   let imageOccurrences=false,imageOccurrenceCount=0,responsiveFlowEnabled=false,responsiveFlowCount=0;
   let audioEnabled=false,positionedHeadings=false,positionedBody=false,containerOwnerFonts=false,containerOwnerFontCount=0;
   let sourceAnchorsEnabled=false,sourceAnchorCount=0;
+  let inlineDestinationsEnabled=false;
+  let responsiveCaptionTablesEnabled=false,responsiveCaptionTableCount=0;
+  const inlineDestinationOwners=[];
+  const declaredSpanFontScales=new WeakSet();
   function audioControl() {
     charge();
     const flags=byte(), control={};
@@ -111,7 +119,7 @@ export function decode(bytes, metadata) {
     if(actionGroupDepth||boxActionDepth)require(kind==='text'&&s.target==='','An inline action child cannot own an action');
     const fontFields=scaled?(containerFonts?byte():(presence()?1:0)):0;
     require((fontFields&~(inlineBoxGroups?0x2b:positionedHeadings?0x1b:(audioEnabled||clippedEnabled||imageOccurrences)?0x0b:1))===0,'Unsupported span font policy');
-    if(fontFields&1){const value=f32();require(Number.isFinite(value)&&value>=0,'Invalid semantic font scale');s.font_scale=value;if(based){const basis=tag(containerFonts?['context','normal_body','css_px']:['context','normal_body']);if(basis!=='context')s.font_scale_basis=basis;if(tooltips&&value===1&&basis==='context')delete s.font_scale;}}
+    if(fontFields&1){declaredSpanFontScales.add(s);const value=f32();require(Number.isFinite(value)&&value>=0,'Invalid semantic font scale');s.font_scale=value;if(based){const basis=tag(containerFonts?['context','normal_body','css_px']:['context','normal_body']);if(basis!=='context')s.font_scale_basis=basis;if(tooltips&&value===1&&basis==='context')delete s.font_scale;}}
     if(fontFields&2)s.font_features=tag(['normal','seven_on']);
     if(fontFields&8)s.inline_style=inlineTextStyle();
     if(fontFields&16)s.font_family=tag(['sans_serif']);
@@ -383,8 +391,9 @@ export function decode(bytes, metadata) {
   const tableValue=depth=>{
     const flags=byte();
     if(flags===0)return null;
-    require(flags===1||(containerFonts&&flags===0x41),'Unsupported table flags');
+    require(flags===1||(containerFonts&&flags===0x41)||(responsiveCaptionTablesEnabled&&flags===0x81),'Unsupported table flags');
     require(!nested||depth<=16,'Nested table depth exceeds limit');
+    if(flags===0x81)charge();
     let geometry;
     if(nested){
       const flags=byte();require((flags&~15)===0);
@@ -411,6 +420,35 @@ export function decode(bytes, metadata) {
       result.disclosure={header_row,header_cell,initially_collapsed,expand_label,collapse_label,category,
         row_modes:Array.from({length:n},()=>tag(['always','collapsed','expanded']))};
       validateTableDisclosure(result);
+    }
+    if(flags===0x81){
+      const max_viewport_width_px=u32(),narrow_box_style=typedStyle(true),narrow_grid_style=typedStyle(true);
+      require(narrow_box_style&&narrow_grid_style,'Responsive caption styles are required');
+      const max_width={unit:tag(['px','em','percent']),value:f32()},grid_spacing_x=styleLength(),grid_spacing_y=styleLength();
+      const margins=edges(),padding=edges();
+      // CellLineHeight marker2 already includes its required full font. There
+      // is no extra optional-line byte and no second snapshot size authority.
+      require(byte()===2,'Responsive caption requires a full owner font strut');
+      const font_scale=f32(),font_scale_basis=tag(['context','normal_body','css_px']);
+      require(byte()===0,'Caption font has a second size or unsupported script metrics');
+      const face=byte();require((face&~0x1b)===0&&(face&0x18)===0x18,'Incomplete caption owner font');
+      const font_language=string(),classes=string(),role=tag(roles),font_features=tag(['normal','seven_on']);
+      const family_kind=tag(['sans_serif','stack']);
+      let font_family='sans_serif';
+      if(family_kind==='stack'){
+        const n=count(4);require(n<=16,'Too many caption font families');
+        font_family={stack:{names:Array.from({length:n},()=>string()),fallback:tag(['sans_serif','serif'])}};
+      }
+      const owner_font={font_scale,font_scale_basis,small:false,superscript:false,subscript:false,font_normalized:false,
+        bold:!!(face&1),italic:!!(face&2),code:false,language:font_language,classes,role,font_features,font_family};
+      require(byte()===2,'Caption line must be a computed length');
+      const line={strut:{font_scale,font_scale_basis,owner_font},height:{length:{value:f32(),font_scale_basis:tag(['context','normal_body','css_px'])}}};
+      const text_align=tag(['left','center','right']),containing_direction=tag(['ltr','rtl']),grid_direction=tag(['ltr','rtl']),language=string();
+      const focus_paint=presence()?{mode:tag(['authored_none','ua_auto']),color:presence()?figureColor():null}:null;
+      result.caption_viewport={max_viewport_width_px,narrow_box_style,narrow_grid_style,max_width,grid_spacing_x,grid_spacing_y,
+        caption_box:{margins,padding,line,text_align},containing_direction,grid_direction,language,focus_paint};
+      validateResponsiveCaptionTable(geometry?{...result,geometry}:result);
+      responsiveCaptionTableCount++;
     }
     if(geometry)result.geometry=geometry;return result;
   };
@@ -509,6 +547,17 @@ export function decode(bytes, metadata) {
       require(sourceAnchorsEnabled,'Nonheading anchor without source anchor feature');
       validateSourceAnchor(value,sectionRoot);sourceAnchorCount++;
     }
+    if(inlineDestinationsEnabled){
+      const values=list(9,()=>{
+        const length=u32();require(length>0&&length<=255,'Invalid inline destination ID length');
+        return {id:text(length),before_run:u32()};
+      });
+      if(values.length){
+        value.inline_destinations=values;validateInlineDestinationList(value);
+        for(const destination of values)require(!declaredSpanFontScales.has(value.spans[destination.before_run]),'Declared following-run font scale');
+        inlineDestinationOwners.push(value);
+      }
+    }
     return value;
   };
   const contentContext=value=>['list_item','definition','example','quotation','term','list_detail','indent'].includes(value.kind)||(value.kind==='paragraph'&&value.depth===0&&value.path==='');
@@ -524,6 +573,8 @@ export function decode(bytes, metadata) {
   if(magic==='DPRZ'||magic==='DPRa'){
     responsiveFlowEnabled=!!(features&responsiveFlowFeature);
     sourceAnchorsEnabled=!!(features&sourceAnchorFeature);
+    inlineDestinationsEnabled=!!(features&inlineDestinationFeature);
+    responsiveCaptionTablesEnabled=!!(features&responsiveCaptionTableFeature);
     imageOccurrences=!!(features&imageOccurrenceFeature);
     audioEnabled=!!(features&0x2000);
     clippedEnabled=!!(features&128);
@@ -566,13 +617,20 @@ export function decode(bytes, metadata) {
   entry.media=list(9,()=>({file:string(),kind:tag(['image','audio']),caption:string()}));
   if(rubyEnabled){
     const pending=byte();
+    // The required caption full font owns both legacy pending debts:
+    // cell_owner_fonts(0x80) and extended_font_families(0x04). Count only
+    // validated actual owners; do not mask unknown or unrelated pending bits.
+    const captionPending=responsiveCaptionTableCount>0?0x84:0;
     if(positionedHeadings){
-      if(pending===0x16)readWrappedHeadings(entry.sections);
-      else require(pending===0&&positionedBody,'Unsupported positioned body or heading fields');
-    }else require(pending===0,'Unsupported extended-record body feature');
+      if(pending===(0x16|captionPending))readWrappedHeadings(entry.sections);
+      else require(pending===captionPending&&positionedBody,'Unsupported positioned body or heading fields');
+    }else require(pending===captionPending,'Unsupported extended-record body feature');
     if(responsiveFlowEnabled)require(responsiveFlowCount>0,'Missing responsive flow band');
     require(sourceAnchorsEnabled===(sourceAnchorCount>0),'Invalid source anchor feature census');
     if(sourceAnchorsEnabled)validateSourceAnchorDestinations(entry);
+    require(inlineDestinationsEnabled===(inlineDestinationOwners.length>0),'Invalid inline destination feature census');
+    require(responsiveCaptionTablesEnabled===(responsiveCaptionTableCount>0),'Invalid responsive caption table feature census');
+    validateInlineDestinationEntry(entry,inlineDestinationOwners);
     require(containerOwnerFonts===(containerOwnerFontCount>0),'Invalid container owner font census');
     if(imageOccurrences)require(imageOccurrenceCount>0,'Missing inline image occurrence');
     if(audioEnabled){
@@ -583,7 +641,7 @@ export function decode(bytes, metadata) {
     }
     if(clippedEnabled)require(clipCount>0,'Missing clipped absolute payload');
     if(inlineBoxGroups)require(boxCount>0,'Missing inline box payload');
-    else if(!clippedEnabled&&!audioEnabled&&!positionedHeadings&&!imageOccurrences&&!responsiveFlowEnabled&&!sourceAnchorsEnabled)require(actionGroupsEnabled?actionGroupCount>0:rubyCount>0,actionGroupsEnabled?'DPRV requires inline action payload':'DPRS requires ruby payload');
+    else if(!clippedEnabled&&!audioEnabled&&!positionedHeadings&&!imageOccurrences&&!responsiveFlowEnabled&&!sourceAnchorsEnabled&&!inlineDestinationsEnabled&&!responsiveCaptionTablesEnabled)require(actionGroupsEnabled?actionGroupCount>0:rubyCount>0,actionGroupsEnabled?'DPRV requires inline action payload':'DPRS requires ruby payload');
   }
   const images=[];
   const inspect=values=>{for(const span of values||[])if(span.image)images.push(span.image);};

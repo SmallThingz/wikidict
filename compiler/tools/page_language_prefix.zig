@@ -109,14 +109,23 @@ fn configurationForSelectedPage(a: A, text: []const u8, page_id: u64, revision_i
         if (!std.mem.eql(u8, &std.fmt.bytesToHex(canonical, .lower), "ff0406678d57587b7409bfba7f818a44a9ec8dd418eb27da4b32823b3e19ed0d")) return invalid;
         break :program true;
     } else false;
-    if (sr_wmf5 and at != 952) return invalid;
+    if (sr_wmf5 and at == 0) return invalid;
     if (selected != null and selected.?.is_screen_prelude and at != 956) return invalid;
     if (at != 0) {
         if (!exterior_program and at != 952 and at != 956 and !(selected != null and at == 960)) return invalid;
         var digest: [32]u8 = undefined;
         std.crypto.hash.sha2.Sha256.hash(text[0..at], &digest, .{});
         const hash = std.fmt.bytesToHex(digest, .lower);
-        if (sr_wmf5 and !std.mem.eql(u8, &hash, "ff0406678d57587b7409bfba7f818a44a9ec8dd418eb27da4b32823b3e19ed0d")) return invalid;
+        if (sr_wmf5) {
+            // The captured programs differ only in the literal Vector TOC class.
+            // Both still need to agree with the static HTML root below.
+            const expected = switch (at) {
+                952 => "ff0406678d57587b7409bfba7f818a44a9ec8dd418eb27da4b32823b3e19ed0d",
+                956 => "1a3d0fcd4371047de9a485248822f83026e5d7361fb2e9ec9b547c0093bf1bb0",
+                else => return invalid,
+            };
+            if (!std.mem.eql(u8, &hash, expected)) return invalid;
+        }
         // Complete observed preludes differ only in the literal wiki cookie
         // name (ru/wo/el/sr) and TOC availability class. Each closes the IIFE
         // before RLCONF; unknown programs remain rejected.
@@ -620,6 +629,13 @@ test "selected SR WMF5 oldid prefix retains actual program and refuses crossed o
     try std.testing.expectEqual(@as(usize, 952), marker);
     const html_class = @embedFile("testdata/sr-wmf5-america/get-html-class.txt");
     const selected: SelectedPage = .{ .namespace_id = 0, .title = "America", .sr_wmf5_prelude = true };
+    const unavailable = try std.mem.replaceOwned(u8, a, script, "vector-toc-available", "vector-toc-not-available");
+    const unavailable_class = try std.mem.replaceOwned(u8, a, html_class, "vector-toc-available", "vector-toc-not-available");
+    try std.testing.expect(try configurationForSelectedPage(a, unavailable, 11827, 711271, null, selected, unavailable_class));
+    try std.testing.expectError(invalid, configurationForSelectedPage(a, unavailable, 11827, 711271, null, selected, html_class));
+    try std.testing.expectError(invalid, configurationForSelectedPage(a, script, 11827, 711271, null, selected, unavailable_class));
+    const changed_cookie = try std.mem.replaceOwned(u8, a, unavailable, "srwiktionarymwclientpreferences", "frwiktionarymwclientpreferences");
+    try std.testing.expectError(invalid, configurationForSelectedPage(a, changed_cookie, 11827, 711271, null, selected, unavailable_class));
     try std.testing.expectError(invalid, configurationForSelectedPage(a, script[marker..], 11827, 711271, null, selected, html_class));
     const post = @embedFile("testdata/sr-wmf5-america/post-config.js");
     try std.testing.expectError(invalid, configurationForSelectedPage(a, post, 11827, 711271, null, selected, html_class));

@@ -1,5 +1,5 @@
 import {linkTargetParts,bookSourcesURL,isBookSourcesTitle} from './validate.js';
-import {renderEntry,revealFragment} from './renderer.js';
+import {renderEntry,revealFragment,validateInlineDestinationLayout} from './renderer.js';
 import {entryClue as clue,hitKey as key,refreshSavedClue} from './preview.js';
 import {mediaView,trimMedia,clearMedia,loadInlineImage,inlineImageActionURL} from './media.js';
 const $=id=>document.getElementById(id),panel=$('panel'),entryView=$('entry');
@@ -60,6 +60,7 @@ function renderWord(){
  bookmark.setAttribute('aria-pressed',String(saved));
  actions.append(button('◖','Pronounce word offline',speak),bookmark);
  entryView.append(actions,renderEntry(current,(target,targetFragment)=>performAction(()=>openLink(target,targetFragment)),state.settings,(m,canonicalIdentity)=>mediaView(m,state.settings,current.source_edition,canonicalIdentity),(el,image,occurrence)=>loadInlineImage(el,image,state.settings,current.source_edition,occurrence),(target,targetFragment)=>inlineImageActionURL(target,current.source_edition,targetFragment)));
+ validateInlineDestinationLayout(entryView);
 }
 function search(){title('Find a word');const input=node('input');input.id='query';input.type='search';input.placeholder='Search your dictionaries';input.setAttribute('aria-label','Find a word');const matches=node('div',undefined,'word-list');matches.id='matches';panel.append(input,matches);input.focus();
  const update=async()=>{const version=++searchVersion;const hits=await readForView('search',{query:input.value.trim()},()=>page==='search'&&version===searchVersion);if(page!=='search'||version!==searchVersion)return;matches.replaceChildren(...hits.map(h=>wordButton(h)));status(hits.length?'':libraries.length?'No matches.':'Add a dictionary in Settings.');};input.oninput=()=>{renderVersion++;return performAction(update);};return update();

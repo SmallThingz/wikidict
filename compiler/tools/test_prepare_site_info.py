@@ -147,6 +147,29 @@ class SiteInfoCaptureTests(unittest.TestCase):
                 s.response(modified, 'mnwwiktionary', 'mnw', s.FIGURE_PROFILE, date='20261001',
                            raw_sha=s.evidence.digest(s.evidence.encoded(modified)))
 
+    def test_csb_current_defaults_require_exact_original_and_figure_role(self):
+        fixture = Path(__file__).parent/'testdata/current-imageinfo-defaults/csbwiktionary.json.gz'
+        raw = gzip.decompress(fixture.read_bytes())
+        self.assertEqual(s.evidence.digest(raw), '862b5a0e908b6fba2236583698a9606c53f692090c0aff1ccbe47a87e26269b7')
+        data = s.evidence.decode(raw)
+        def read(value=data, wiki='csbwiktionary', language='csb', profile=s.FIGURE_PROFILE,
+                 date='20261001', digest=s.evidence.digest(raw)):
+            return s.response(value, wiki, language, profile, date=date, raw_sha=digest)
+        observed = read()
+        self.assertEqual(observed, data['query'])
+        self.assertEqual(s.figure_thumbnail_width(observed), 250)
+        self.assertEqual(s.scribunto_reference(s.FIGURE_CSB_CORE), s.FIGURE_WMF5_SCRIBUNTO)
+        for options in ({'wiki': 'enwiktionary'}, {'language': 'en'}, {'profile': s.PROFILE},
+                        {'date': None}, {'date': '20261002'}, {'digest': None},
+                        {'digest': s.evidence.digest(raw+b' ')}):
+            with self.subTest(options=options), self.assertRaises(ValueError): read(**options)
+        for group, key, value in [('general', 'git-hash', s.SEPTEMBER_EN_CORE),
+                                   ('general', 'rtl', True), ('defaultoptions', 'thumbsize', 0)]:
+            changed = copy.deepcopy(data)
+            changed['query'][group][key] = value
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                read(value=changed, digest=s.evidence.digest(s.evidence.encoded(changed)))
+
     def test_revalidation_preserves_original_failed_http_and_observation(self):
         root, data = self.source_refusal()
         saved = {p.name: p.read_bytes() for p in root.iterdir()}

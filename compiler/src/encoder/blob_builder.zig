@@ -5433,6 +5433,7 @@ fn bindOwnerRootTableSource(source: []const u8, original: []const u8, observed: 
 fn bindOwnerSourceElements(source: []const u8, original: []const u8, projection: ?*const presentation_document.SourceElementProjection, fragment: *presentation_document.SourceFragment) void {
     const range = if (fragment.parser_output_range) |*value| value else return;
     range.source_element_projection = null;
+    range.definition_original = if (range.page.ptr == source.ptr and range.page.len == source.len) original else null;
     const issued = projection orelse return;
     if (range.page.ptr != source.ptr or range.page.len != source.len or
         issued.prepared.ptr != source.ptr or issued.prepared.len != source.len or
@@ -7028,7 +7029,19 @@ fn processMain(
     const selected_inline = if (codes.table_styles) |profile|
         profile.selected_phonos.len != 0 or profile.selected_descriptions.len != 0 or profile.selected_terms.len != 0
     else false;
-    const needs_source_fragments = selected_wrapped_heading or selected_inline or native_source_class_proof != null or final_source_projection != null or pre_observation.scopes.len != 0 or
+    const literal_prefix = if (codes.figure_sizing) |sizing| prefix: {
+        const region = sizing.literal_region orelse break :prefix null;
+        break :prefix @import("presentation_compile.zig").ObservedLiteralPrefix.bind(region, raw_missing, source_missing);
+    } else null;
+    const definition_run_start = if (codes.figure_sizing) |sizing| start: {
+        const region = sizing.literal_region orelse break :start null;
+        break :start region.definitionRunStart(raw_missing, source_missing);
+    } else null;
+    const nav_head_run_start = if (codes.figure_sizing) |sizing| start: {
+        const region = sizing.literal_region orelse break :start null;
+        break :start region.navHeadRunStart(raw_missing, source_missing);
+    } else null;
+    const needs_source_fragments = definition_run_start != null or nav_head_run_start != null or literal_prefix != null or selected_wrapped_heading or selected_inline or native_source_class_proof != null or final_source_projection != null or pre_observation.scopes.len != 0 or
         (if (codes.figure_sizing) |sizing| sizing.text_class_scope != null or sizing.resolve_image_map_no_link_fn != null else false) or
         (codes.table_styles != null and (heading_observation.page_root_wiki_table_openings.len != 0 or heading_observation.page_top_level_wiki_table_openings.len != 0 or heading_observation.page_static_paragraph_openings.len != 0 or heading_observation.page_static_example_openings.len != 0));
     const quote_cuts: PageQuoteCuts = if (needs_source_fragments)
@@ -7143,7 +7156,13 @@ fn processMain(
         if (codes.figure_sizing != null or codes.table_styles != null or local_targets_selected) for (fragments) |*fragment| {
             bindOwnerRootTableSource(source, source_raw, heading_observation, fragment);
             if (fragment.parser_output_range) |*range| {
+                range.nav_head_run_start = nav_head_run_start;
+                range.definition_run_start = definition_run_start;
                 range.static_paragraph_original_prefix = paragraph_prefix;
+                if (literal_prefix) |*prefix| {
+                    if (range.page.ptr == prefix.prepared.ptr and range.page.len == prefix.prepared.len)
+                        range.literal_prefix = prefix;
+                }
                 range.static_example_original_prefix = example_prefix;
                 // Only the whole-page renderer can witness a root wiki heading;
                 // opaque/nested headings never enter page_wiki_openings. The

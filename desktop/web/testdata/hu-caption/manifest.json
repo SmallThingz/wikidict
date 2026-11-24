@@ -1,0 +1,260 @@
+{
+  "elf": {
+    "path": "/mnt/downloads/dev/wikidict/.zig-cache/o/7677bb078880f9b446e9c172c2d0bd9a/test",
+    "physical": [
+      66310,
+      826221587,
+      33261,
+      1000,
+      1000,
+      1,
+      16755168,
+      1795556881436950785,
+      1795556881438950804
+    ],
+    "sha256": "07a03ac64f9c370330e668119e48c3d5698f61c411d9cd0d8852dff574e04a75"
+  },
+  "fixtures": [
+    {
+      "binary": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/completion-council/SR-owner/canonical-wire02-execution/hu-caption-native-rd02/native03/parity-fixtures/containing-ltr-grid-rtl.dpr",
+        "physical": [
+          66310,
+          826221588,
+          33188,
+          1000,
+          1000,
+          1,
+          423,
+          1795556882407959946,
+          1795556882407959946
+        ],
+        "sha256": "3b8854a010b12e796e17861c9daec775ca35cc110485b3b38b9b1ad878c4d135"
+      },
+      "expected": "accept",
+      "json": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/completion-council/SR-owner/canonical-wire02-execution/hu-caption-native-rd02/native03/parity-fixtures/containing-ltr-grid-rtl.json",
+        "physical": [
+          66310,
+          826221589,
+          33188,
+          1000,
+          1000,
+          1,
+          10821,
+          1795556882409959965,
+          1795556882409959965
+        ],
+        "sha256": "eafea3be29941e4dc5d7f4abbe64c9554c81e9adec7770085fbb1d141063a00d"
+      },
+      "name": "containing-ltr-grid-rtl"
+    },
+    {
+      "binary": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/completion-council/SR-owner/canonical-wire02-execution/hu-caption-native-rd02/native03/parity-fixtures/containing-rtl-grid-ltr.dpr",
+        "physical": [
+          66310,
+          826221590,
+          33188,
+          1000,
+          1000,
+          1,
+          423,
+          1795556882411930261,
+          1795556882411930261
+        ],
+        "sha256": "1c25278f1b39adc41757396b1a1dccbd475b20b139a11f597c1d6237f6406d7f"
+      },
+      "expected": "accept",
+      "json": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/completion-council/SR-owner/canonical-wire02-execution/hu-caption-native-rd02/native03/parity-fixtures/containing-rtl-grid-ltr.json",
+        "physical": [
+          66310,
+          826221591,
+          33188,
+          1000,
+          1000,
+          1,
+          10821,
+          1795556882412297775,
+          1795556882412297775
+        ],
+        "sha256": "009c43f3aaaca31d44a055c4626e95335697e329a6006d1d5fa6ab69c7d79b28"
+      },
+      "name": "containing-rtl-grid-ltr"
+    },
+    {
+      "binary": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/completion-council/SR-owner/canonical-wire02-execution/hu-caption-native-rd02/native03/parity-fixtures/bad-global-0.dpr",
+        "physical": [
+          66310,
+          826221592,
+          33188,
+          1000,
+          1000,
+          1,
+          437,
+          1795556882414691348,
+          1795556882414691348
+        ],
+        "sha256": "b3a7894a147ed354907d22d8f7d80146decdc12323f3cffcd39f0c45a66d256c"
+      },
+      "expected": "reject",
+      "json": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/completion-council/SR-owner/canonical-wire02-execution/hu-caption-native-rd02/native03/parity-fixtures/bad-global-0.json",
+        "physical": [
+          66310,
+          826221593,
+          33188,
+          1000,
+          1000,
+          1,
+          1056,
+          1795556882418162251,
+          1795556882418162251
+        ],
+        "sha256": "6ee01689f46778c8ff7307d701869c6488f13af81806ddbd9ea40733e3ecff5f"
+      },
+      "name": "bad-global-0"
+    },
+    {
+      "binary": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/completion-council/SR-owner/canonical-wire02-execution/hu-caption-native-rd02/native03/parity-fixtures/bad-global-80000000.dpr",
+        "physical": [
+          66310,
+          826221594,
+          33188,
+          1000,
+          1000,
+          1,
+          437,
+          1795556882418725852,
+          1795556882418725852
+        ],
+        "sha256": "fb18b8495d61f3ee2b4cc217134fdd03cfb3de8ca0392ea9767d6202857f6f49"
+      },
+      "expected": "reject",
+      "json": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/completion-council/SR-owner/canonical-wire02-execution/hu-caption-native-rd02/native03/parity-fixtures/bad-global-80000000.json",
+        "physical": [
+          66310,
+          826221595,
+          33188,
+          1000,
+          1000,
+          1,
+          1063,
+          1795556882418885881,
+          1795556882418885881
+        ],
+        "sha256": "23186b52261d3f2e21399f1ebae936805bae21706d3b4100d4fca05750b5744b"
+      },
+      "name": "bad-global-80000000"
+    },
+    {
+      "binary": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/completion-council/SR-owner/canonical-wire02-execution/hu-caption-native-rd02/native03/parity-fixtures/bad-global-2800000.dpr",
+        "physical": [
+          66310,
+          826221596,
+          33188,
+          1000,
+          1000,
+          1,
+          437,
+          1795556882419152055,
+          1795556882419152055
+        ],
+        "sha256": "7bfb3d897a9db2492d4d22bcb73b648905ca0e5f7fe171ab2e65801d9036510b"
+      },
+      "expected": "reject",
+      "json": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/completion-council/SR-owner/canonical-wire02-execution/hu-caption-native-rd02/native03/parity-fixtures/bad-global-2800000.json",
+        "physical": [
+          66310,
+          826221597,
+          33188,
+          1000,
+          1000,
+          1,
+          1062,
+          1795556882419256566,
+          1795556882419256566
+        ],
+        "sha256": "864640b627a7074aa6f021c59cd02f77106dbabb7261083994a666752f9a7c7c"
+      },
+      "name": "bad-global-2800000"
+    },
+    {
+      "binary": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/completion-council/SR-owner/canonical-wire02-execution/hu-caption-native-rd02/native03/parity-fixtures/bad-global-12000000.dpr",
+        "physical": [
+          66310,
+          826221598,
+          33188,
+          1000,
+          1000,
+          1,
+          437,
+          1795556882419473840,
+          1795556882419473840
+        ],
+        "sha256": "6dd78f931f34a640322589d38c7bf0a8e1b532827dba069972950d7de4f7aa6d"
+      },
+      "expected": "reject",
+      "json": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/completion-council/SR-owner/canonical-wire02-execution/hu-caption-native-rd02/native03/parity-fixtures/bad-global-12000000.json",
+        "physical": [
+          66310,
+          826221599,
+          33188,
+          1000,
+          1000,
+          1,
+          1063,
+          1795556882419960059,
+          1795556882419960059
+        ],
+        "sha256": "a1fb1841b8230739769512511141852ba0aa8f715ec8661db83410cb13b6240d"
+      },
+      "name": "bad-global-12000000"
+    },
+    {
+      "binary": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/completion-council/SR-owner/canonical-wire02-execution/hu-caption-native-rd02/native03/parity-fixtures/advertised25-without-owner.dpr",
+        "physical": [
+          66310,
+          826221600,
+          33188,
+          1000,
+          1000,
+          1,
+          326,
+          1795556882422231869,
+          1795556882422231869
+        ],
+        "sha256": "ad595f7ed2414cbe85f3ce592f9393015deff06d890732b7de13e3359c79a6c6"
+      },
+      "expected": "reject",
+      "json": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/completion-council/SR-owner/canonical-wire02-execution/hu-caption-native-rd02/native03/parity-fixtures/advertised25-without-owner.json",
+        "physical": [
+          66310,
+          826221601,
+          33188,
+          1000,
+          1000,
+          1,
+          848,
+          1795556882422506672,
+          1795556882422506672
+        ],
+        "sha256": "cc9c921726d991dd713b80683c4c2b0d37d636926247db1a9a9f2a702bdf0978"
+      },
+      "name": "advertised25-without-owner"
+    }
+  ],
+  "original_credit": false,
+  "source_stage": "0cce46b3e2a6d433535af9b14b266380de39923de143f287b16b0527f776b100",
+  "synthetic": true
+}

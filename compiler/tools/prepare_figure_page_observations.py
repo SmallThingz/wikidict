@@ -995,10 +995,15 @@ def selected_full_get_view(value, page, parsed):
     return dict(parsed, text=html[parts.root_start:parts.root_end], headhtml=html[:parts.body_end])
 
 
-def validate_outer_context(value, page, wiki, parsed):
+def validate_outer_context(value, page, wiki, parsed, *, literal_region=False):
     if isinstance(value, dict) and value.get('selected_body') == 'current_get_literal':
         _, selected = current_get_literal_view(page, wiki)
         return selected
+    generator = OUTER_CONTEXT_GENERATORS.get(value.get('profile')) if isinstance(value, dict) and isinstance(value.get('profile'), str) else None
+    if (generator is None and literal_region and isinstance(value, dict) and
+            value.get('profile') == 'mediawiki-vector-2022-1.48.0-wmf.5' and
+            wiki == 'srwiktionary' and page['namespace_id'] == 0):
+        generator = 'MediaWiki 1.48.0-wmf.5'
     # Default transport does not substitute roots. Explicit selection below
     # validates a whole GET view without rewriting either captured payload.
     expected_fields = {'profile', 'receipt', 'response'}
@@ -1007,7 +1012,7 @@ def validate_outer_context(value, page, wiki, parsed):
     if isinstance(value, dict) and 'current_identity' in value:
         expected_fields.add('current_identity')
     if (not isinstance(value, dict) or set(value) != expected_fields or
-            not isinstance(value.get('profile'), str) or value['profile'] not in OUTER_CONTEXT_GENERATORS or
+            generator is None or
             any(not isinstance(value.get(key), str) or not 0 < len(value[key].encode()) <= MAX_RESPONSE
                 for key in ('receipt', 'response'))):
         raise ValueError('Invalid observed outer context')
@@ -1076,9 +1081,8 @@ def validate_outer_context(value, page, wiki, parsed):
             any(len(head[key]) != 1 for key in ('html', 'body', 'generator')) or
             head['root'] or len(body['root']) != 1 or any(body[key] for key in ('html', 'body', 'generator'))):
         raise ValueError('Ambiguous outer-context HTML roots')
-    expected_generator = OUTER_CONTEXT_GENERATORS[value['profile']]
-    if (full['generator'][0][1].get('content') != expected_generator or
-            head['generator'][0][1].get('content') != expected_generator or
+    if (full['generator'][0][1].get('content') != generator or
+            head['generator'][0][1].get('content') != generator or
             full['body'] != head['body'] or
             'skin-vector-2022' not in full['body'][0][1].get('class', '').split()):
         raise ValueError('Changed outer-context generator or body')
@@ -1089,7 +1093,7 @@ def validate_outer_context(value, page, wiki, parsed):
                 actual.get('dir') not in ('ltr', 'rtl') or actual.get('dir') != expected_attrs.get('dir') or
                 not actual.get('lang') or (key == 'root' and actual.get('class') != expected_attrs.get('class'))):
             raise ValueError('Changed outer-context language, direction or parser root')
-    if 'selected_body' in value:
+    if 'selected_body' in value and not literal_region:
         return selected_full_get_view(value, page, parsed)
     # Native Book additionally proves the exact prefix, six middle wrappers and
     # allowed HTML class difference before deriving any ancestor absence fact.
@@ -2085,6 +2089,124 @@ def expanded_operation_prefix(prefix, page):
     return parsed.body_end
 
 
+def validate_supplied_page(page, wiki):
+    request, receipt, response = (decode(page[name]) for name in ('request', 'receipt', 'response'))
+    form = page['form_body'].encode('ascii')
+    if not 1 <= len(form) <= 262144 or re.search(rb'%(?![0-9a-fA-F]{2})', form):
+        raise ValueError('Invalid observation form body')
+    if any(len(page[name].encode()) > MAX_RESPONSE for name in ('request', 'receipt', 'response')):
+        raise ValueError('Oversized embedded observation')
+    descriptor(form, request['form'])
+    descriptor(page['request'].encode(), receipt['request'])
+    descriptor(page['response'].encode(), receipt['response'])
+    endpoint = 'https://' + wiki[:-len('wiktionary')].replace('_', '-') + '.wiktionary.org/w/api.php'
+    if (request.get('schema') != 'wikidict.supplied-expanded-page-request.v1' or
+            request.get('method') != 'POST' or request.get('url') != endpoint or
+            request.get('content_type') != 'application/x-www-form-urlencoded; charset=utf-8' or
+            request.get('page_id') != page['page_id'] or request.get('requested_revision_id') != page['revision_id'] or
+            request.get('request_count') != 1 or request.get('controlled_single_token') is not False or
+            request.get('full_supplied_expanded_page') is not True or request.get('historical_transclusions') is not False or
+            request.get('parse_core_binding_proven') is not False or receipt.get('accepted') is not True or
+            receipt.get('request_count') != 1 or receipt.get('status') != 200):
+        raise ValueError('Unsupported supplied-page observation contract')
+    expected = dict(action='parse', format='json', formatversion='2', title=page['title'],
+                    revid=str(page['revision_id']), contentmodel='wikitext',
+                    prop='text|wikitext|revid|displaytitle', parser='legacy', usearticle='1', maxlag='5')
+    if (page.get('text_class_scope') is True or page.get('image_map_no_link') is not None) and page.get('missing_head_context') is None and page.get('authored_head_context') is None:
+        # Carry the explicit request only; Zig derives the bounded class
+        # inventory from complete authenticated HTML after normal selection.
+        expected.update(prop='text|wikitext|revid|displaytitle|headhtml|modules|jsconfigvars', useskin='vector-2022')
+    if request.get('parameters_except_text') != expected:
+        raise ValueError('Changed supplied-page parse parameters')
+    pairs = urllib.parse.parse_qsl(form.decode('ascii'), keep_blank_values=True,
+                                  strict_parsing=True, encoding='utf-8', errors='strict')
+    params = dict(pairs)
+    if len(pairs) != len(expected) + 1 or len(params) != len(expected) + 1 or {k: v for k, v in params.items() if k != 'text'} != expected:
+        raise ValueError('Changed or duplicate form parameters')
+    source = params['text'].encode()
+    descriptor(source, request['text_source'])
+    if 'error' in response or 'warnings' in response:
+        raise ValueError('Parse error or warning retained; no fact may be selected')
+    parsed = response.get('parse', {})
+    if (parsed.get('title') != page['title'] or parsed.get('pageid') != page['page_id'] or
+            parsed.get('wikitext') != params['text'] or not isinstance(parsed.get('text'), str) or
+            not parsed['text'] or len(parsed['text'].encode()) > MAX_RESPONSE or
+            parsed.get('revid') not in (None, page['revision_id'])):
+        raise ValueError('Incomplete supplied-page echo/HTML/page identity')
+    if 'missing_head_context' in page:
+        parsed = validate_missing_head_context(page, parsed, wiki, source)
+    if 'authored_head_context' in page:
+        parsed = validate_authored_head_context(page, parsed, wiki, source)
+    return source, parsed
+
+
+def validate_literal_regions(regions, served, doc, defaults):
+    # The native Book also checks the selected DIV in both rendered trees,
+    # the preceding TemplateStyles and the exact live Worker source bytes.
+    if not isinstance(regions, list) or not 1 <= len(regions) <= 256:
+        raise ValueError('Invalid literal region inventory')
+    sheets = {} if served is None else validate_observed_missing_style_set({
+        'profile': MISSING_OBSERVED_SET_PROFILE,
+        'defaults': defaults.decode(),
+        'served_set': served,
+    }, defaults, doc['wiki'])
+    ordered_urls = list(sheets)
+    used = set()
+    seen_ids, seen_titles = set(), set()
+    for region in regions:
+        if (not isinstance(region, dict) or
+                set(region) - {'screen_sheets'} != {'page', 'source_start', 'source_bytes', 'source_sha256', 'rendered_sha256'}):
+            raise ValueError('Invalid literal region record')
+        page = region['page']
+        if (not isinstance(page, dict) or set(page) != {
+                'namespace_id', 'page_id', 'revision_id', 'title', 'raw_sha256',
+                'request', 'form_body', 'receipt', 'response', 'text_class_scope', 'occurrences', 'outer_context'} or
+                type(page['namespace_id']) is not int or type(page['page_id']) is not int or page['page_id'] <= 0 or
+                type(page['revision_id']) is not int or page['revision_id'] <= 0 or
+                not isinstance(page['title'], str) or not page['title'] or
+                page['text_class_scope'] is not True or page['occurrences'] != [] or
+                not isinstance(page['outer_context'], dict) or page['outer_context'].get('selected_body') != 'full_get_root' or
+                'current_identity' in page['outer_context'] or
+                not all(isinstance(page[key], str) for key in ('request', 'form_body', 'receipt', 'response', 'raw_sha256')) or
+                not re.fullmatch('[0-9a-f]{64}', page['raw_sha256'])):
+            raise ValueError('Invalid literal region page identity')
+        title = page['namespace_id'], page['title']
+        if page['page_id'] in seen_ids or title in seen_titles:
+            raise ValueError('Duplicate literal region page')
+        seen_ids.add(page['page_id'])
+        seen_titles.add(title)
+        source, parsed = validate_supplied_page(page, doc['wiki'])
+        start, size = region['source_start'], region['source_bytes']
+        if (type(start) is not int or type(size) is not int or not 1 <= size <= 65536 or
+                not 0 <= start <= len(source) - size or
+                not isinstance(region['rendered_sha256'], str) or not re.fullmatch('[0-9a-f]{64}', region['rendered_sha256'])):
+            raise ValueError('Invalid literal region source range or rendered identity')
+        literal = source[start:start + size]
+        if (digest(literal) != region['source_sha256'] or source.count(literal) != 1 or
+                re.match(br'<div(?:[ \t\r\n]|>)', literal, re.I) is None or re.search(br'</div\s*>$', literal, re.I) is None):
+            raise ValueError('Literal region differs from its unique supplied source')
+        outer = page['outer_context']
+        validate_outer_context(outer, page, doc['wiki'], parsed, literal_region=True)
+        if 'screen_sheets' not in region:
+            continue
+        bindings = region['screen_sheets']
+        if not isinstance(bindings, dict) or set(bindings) != {'get', 'supplied'}:
+            raise ValueError('Invalid literal region stylesheet bindings')
+        heads = {
+            'get': figure_asset_get_head_urls(outer['response'], sheets, doc['wiki']),
+            'supplied': validate_observed_style_head(parsed, sheets, doc['wiki']),
+        }
+        for arm, emitted in heads.items():
+            order = bindings[arm]
+            if (not isinstance(order, list) or
+                    any(type(index) is not int or not 0 <= index < len(ordered_urls) for index in order) or
+                    [ordered_urls[index] for index in order] != emitted):
+                raise ValueError('Literal region stylesheet order differs from its emitted head')
+            used.update(order)
+    if used != set(range(len(ordered_urls))):
+        raise ValueError('Unused literal region stylesheet response')
+
+
 def validate_document(raw, namespace, defaults):
     if not 0 < len(raw) <= MAX_INPUT:
         raise ValueError('Invalid observation document size')
@@ -2101,6 +2223,10 @@ def validate_document(raw, namespace, defaults):
     class_contract = combined_contract or poster_contract or doc.get('schema') == 'wikidict.figure-page-observations.v4'
     class_scope_contract = class_contract or svg_language_contract
     expected_fields = {'schema', 'wiki', 'date', 'namespace_sha256', 'defaults_sha256', 'pages'}
+    if image_map_contract and 'literal_regions' in doc:
+        expected_fields.add('literal_regions')
+        if 'literal_screen_resources' in doc:
+            expected_fields.add('literal_screen_resources')
     if image_map_contract and 'current_get_expanded_operations' in doc:
         expected_fields.add('current_get_expanded_operations')
     if (image_map_contract or relation_style_contract) and 'table_roots' in doc:
@@ -2116,8 +2242,12 @@ def validate_document(raw, namespace, defaults):
             doc.get('namespace_sha256') != digest(namespace) or
             doc.get('defaults_sha256') != digest(defaults) or
             not isinstance(doc.get('pages'), list) or len(doc['pages']) > 256 or
-            (not doc['pages'] and not doc.get('table_roots') and not doc.get('current_get_expanded_operations'))):
+            (not doc['pages'] and not doc.get('table_roots') and not doc.get('current_get_expanded_operations') and not doc.get('literal_regions'))):
         raise ValueError('Invalid observation document identity')
+    if 'literal_regions' in doc:
+        if 'literal_screen_resources' in doc and not isinstance(doc['literal_screen_resources'], dict):
+            raise ValueError('Invalid literal region stylesheet resources')
+        validate_literal_regions(doc['literal_regions'], doc.get('literal_screen_resources'), doc, defaults)
     if 'current_get_expanded_operations' in doc:
         validate_current_expanded_operations(doc['current_get_expanded_operations'], doc, defaults)
     if 'table_roots' in doc:
@@ -2185,53 +2315,7 @@ def validate_document(raw, namespace, defaults):
         if current_literal:
             source, parsed = current_get_literal_view(page, doc['wiki'])
         else:
-            request, receipt, response = (decode(page[name]) for name in ('request', 'receipt', 'response'))
-            form = page['form_body'].encode('ascii')
-            if not 1 <= len(form) <= 262144 or re.search(rb'%(?![0-9a-fA-F]{2})', form):
-                raise ValueError('Invalid observation form body')
-            if any(len(page[name].encode()) > MAX_RESPONSE for name in ('request', 'receipt', 'response')):
-                raise ValueError('Oversized embedded observation')
-            descriptor(form, request['form'])
-            descriptor(page['request'].encode(), receipt['request'])
-            descriptor(page['response'].encode(), receipt['response'])
-            endpoint = 'https://' + doc['wiki'][:-len('wiktionary')].replace('_', '-') + '.wiktionary.org/w/api.php'
-            if (request.get('schema') != 'wikidict.supplied-expanded-page-request.v1' or
-                    request.get('method') != 'POST' or request.get('url') != endpoint or
-                    request.get('content_type') != 'application/x-www-form-urlencoded; charset=utf-8' or
-                    request.get('page_id') != page['page_id'] or request.get('requested_revision_id') != page['revision_id'] or
-                    request.get('request_count') != 1 or request.get('controlled_single_token') is not False or
-                    request.get('full_supplied_expanded_page') is not True or request.get('historical_transclusions') is not False or
-                    request.get('parse_core_binding_proven') is not False or receipt.get('accepted') is not True or
-                    receipt.get('request_count') != 1 or receipt.get('status') != 200):
-                raise ValueError('Unsupported supplied-page observation contract')
-            expected = dict(action='parse', format='json', formatversion='2', title=page['title'],
-                            revid=str(page['revision_id']), contentmodel='wikitext',
-                            prop='text|wikitext|revid|displaytitle', parser='legacy', usearticle='1', maxlag='5')
-            if (text_scope or page.get('image_map_no_link') is not None) and page.get('missing_head_context') is None and page.get('authored_head_context') is None:
-                # Carry the explicit request only; Zig derives the bounded class
-                # inventory from complete authenticated HTML after normal selection.
-                expected.update(prop='text|wikitext|revid|displaytitle|headhtml|modules|jsconfigvars', useskin='vector-2022')
-            if request.get('parameters_except_text') != expected:
-                raise ValueError('Changed supplied-page parse parameters')
-            pairs = urllib.parse.parse_qsl(form.decode('ascii'), keep_blank_values=True,
-                                          strict_parsing=True, encoding='utf-8', errors='strict')
-            params = dict(pairs)
-            if len(pairs) != len(expected) + 1 or len(params) != len(expected) + 1 or {k: v for k, v in params.items() if k != 'text'} != expected:
-                raise ValueError('Changed or duplicate form parameters')
-            source = params['text'].encode()
-            descriptor(source, request['text_source'])
-            if 'error' in response or 'warnings' in response:
-                raise ValueError('Parse error or warning retained; no fact may be selected')
-            parsed = response.get('parse', {})
-            if (parsed.get('title') != page['title'] or parsed.get('pageid') != page['page_id'] or
-                    parsed.get('wikitext') != params['text'] or not isinstance(parsed.get('text'), str) or
-                    not parsed['text'] or len(parsed['text'].encode()) > MAX_RESPONSE or
-                    parsed.get('revid') not in (None, page['revision_id'])):
-                raise ValueError('Incomplete supplied-page echo/HTML/page identity')
-            if 'missing_head_context' in page:
-                parsed = validate_missing_head_context(page, parsed, doc['wiki'], source)
-            if 'authored_head_context' in page:
-                parsed = validate_authored_head_context(page, parsed, doc['wiki'], source)
+            source, parsed = validate_supplied_page(page, doc['wiki'])
         # Authored-only context carries its own page styles, never the inherited Missing paint policy.
         page_styles = None if 'authored_head_context' in page else page_missing_style_set(doc, page, defaults, observed_styles)
         if page.get('outer_context') is not None:
@@ -2392,6 +2476,8 @@ def observation_source_contract(doc):
         contracts.append('Exact supplied full expansion/current parse; requested revision context; no parse-core or historical-transclusion inference')
     if any('current_get_literal' in page for page in doc['pages']):
         contracts.append('Canonical-current literal occurrence observations from authenticated full GETs; exact raw/expanded literal and selected frame; no supplied-parse response or full-expansion equivalence claimed')
+    if doc.get('literal_regions'):
+        contracts.append('Paired oldid and supplied literal region captures with ordered stylesheet receipts; native Book validates exact rooted source, rendered regions and live Writer custody')
     if doc.get('table_roots'):
         contracts.append('Independent canonical-current table roots with retained source; exact live source selection remains required by the native consumer; no supplied-parse response or current-expansion equivalence claimed for table roots')
     return ' | '.join(contracts)

@@ -50,6 +50,10 @@ pub const nativeSourceClassProofWithExteriorAlloc = compiler.nativeSourceClassPr
 pub const nativeSourceClassProofAlloc = compiler.nativeSourceClassProofAlloc;
 pub const nativeSourceClassRangeCurrent = compiler.nativeSourceClassRangeCurrent;
 pub const ParserOutputRange = struct {
+    definition_original: ?[]const u8 = null,
+    nav_head_run_start: ?usize = null,
+    definition_run_start: ?usize = null,
+    literal_prefix: ?*const compiler.ObservedLiteralPrefix = null,
     static_paragraph_openings: []const usize = &.{},
     static_paragraph_original_prefix: []const u8 = "",
     static_example_openings: []const usize = &.{},
@@ -1135,6 +1139,7 @@ const AssignHeadings = struct {
 
 const ValidateCompilerSpans = struct {
     a: A,
+    source_anchors: ?*heading_ids.Registry = null,
     fallbacks: ?*Fallbacks,
     fn figure(self: *@This(), value: compiler.Figure) anyerror!void {
         errdefer if (self.fallbacks) |report| { report.unrepresented_figure = true; };
@@ -1169,6 +1174,10 @@ const ValidateCompilerSpans = struct {
     }
     fn block(self: *@This(), value: *compiler.Block) anyerror!void {
         const kind = std.meta.stringToEnum(types.BlockKind, @tagName(value.kind)) orelse return error.UncompiledPresentation;
+        if (self.source_anchors) |anchors| {
+            if (kind != .heading and value.anchor.len != 0)
+                try anchors.reserveUniqueExisting(self.a, value.anchor);
+        }
         if (value.figure) |figure_value| {
             errdefer if (self.fallbacks) |report| { report.unrepresented_figure = true; };
             if (value.spans.len != 0 or value.flow != null or !types.validFigureContext(kind, value.depth, value.table != null, value.feature != null, value.style != null, value.list_path)) return error.UncompiledPresentation;
@@ -1340,7 +1349,69 @@ fn selectedFragmentOccurrence(fragment: SourceFragment, tracked: MissingText, so
     return if (std.mem.eql(u8, piece, source)) piece else null;
 }
 
+fn bindDefinitionLines(renderer: *compiler.Renderer, fragment: SourceFragment, tracked: MissingText) void {
+    renderer.definition_lines = .{ null, null };
+    const sizing = renderer.context.figure_sizing orelse return;
+    const region = sizing.literal_region orelse return;
+    if (region.definition_ids.len == 0 or region.definition_ids.len > renderer.definition_lines.len or
+        tracked.generated_source != null or tracked.lost_missing_range or fragmentContentRoot(fragment, tracked) != .parser_output) return;
+    const range = fragment.parser_output_range.?;
+    const original = range.definition_original orelse return;
+    if (original.ptr != region.page.ptr or original.len != region.page.len) return;
+    for (region.definition_ids, 0..) |proof, i| {
+        const n = proof.line.len;
+        if (proof.start > original.len or n > original.len - proof.start or
+            !std.mem.eql(u8, original[proof.start..][0..n], proof.line)) continue;
+        const start = mapped: {
+            if (range.source_element_projection) |projection| {
+                if (projection.original.bytes.ptr != original.ptr or projection.original.bytes.len != original.len or
+                    projection.prepared.ptr != range.page.ptr or projection.prepared.len != range.page.len) continue;
+                break :mapped projection.preparedRange(proof.start, n) orelse continue;
+            }
+            if (range.definition_run_start) |first| {
+                if (region.definition_ids.len != 2 or proof.start < region.definition_ids[0].start) continue;
+                break :mapped std.math.add(usize, first, proof.start - region.definition_ids[0].start) catch continue;
+            }
+            continue;
+        };
+        if (start < range.start or start - range.start > tracked.bytes.len or n > tracked.bytes.len - (start - range.start)) continue;
+        const line = tracked.bytes[start - range.start ..][0..n];
+        if (std.mem.eql(u8, line, proof.line)) renderer.definition_lines[i] = .{ .line = line, .id = proof.id, .label = proof.label };
+    }
+}
+
+fn bindNavHeads(renderer: *compiler.Renderer, fragment: SourceFragment, tracked: MissingText) void {
+    renderer.nav_heads = .{ null, null };
+    const sizing = renderer.context.figure_sizing orelse return;
+    const region = sizing.literal_region orelse return;
+    if (region.nav_heads.len != 2 or tracked.generated_source != null or tracked.lost_missing_range or
+        fragmentContentRoot(fragment, tracked) != .parser_output) return;
+    const range = fragment.parser_output_range orelse return;
+    const original = range.definition_original orelse return;
+    if (original.ptr != region.page.ptr or original.len != region.page.len) return;
+    for (region.nav_heads, 0..) |proof, i| {
+        const n = proof.frame.len;
+        if (proof.start > original.len or n > original.len - proof.start or
+            !std.mem.eql(u8, original[proof.start..][0..n], proof.frame)) continue;
+        const from_projection = if (range.source_element_projection) |projection| projected: {
+            if (projection.original.bytes.ptr != original.ptr or projection.original.bytes.len != original.len or
+                projection.prepared.ptr != range.page.ptr or projection.prepared.len != range.page.len) break :projected null;
+            break :projected projection.preparedRange(proof.start, n);
+        } else null;
+        const start = from_projection orelse projected: {
+            const first = range.nav_head_run_start orelse continue;
+            const delta = std.math.sub(usize, proof.start, region.nav_heads[0].start) catch continue;
+            break :projected std.math.add(usize, first, delta) catch continue;
+        };
+        if (start < range.start or start - range.start > tracked.bytes.len or n > tracked.bytes.len - (start - range.start)) continue;
+        const frame = tracked.bytes[start - range.start ..][0..n];
+        if (std.mem.eql(u8, frame, proof.frame)) renderer.nav_heads[i] = .{ .frame = frame, .id = proof.id, .label = proof.label };
+    }
+}
+
 fn bindFragmentTextClassScope(renderer: *compiler.Renderer, fragment: SourceFragment, tracked: MissingText) void {
+    bindNavHeads(renderer, fragment, tracked);
+    bindDefinitionLines(renderer, fragment, tracked);
     renderer.wrapped_heading_source = null;
     renderer.selected_inline_fragment = null;
     if (renderer.context.table_styles) |styles| {
@@ -1467,7 +1538,7 @@ const NativeArticleRenderScope = struct {
             const proof = part.parser_output_range.?;
             const starts_page = proof.start == 0 and std.mem.eql(u8, tracked.bytes, part.source) and
                 (if (proof.original_page) |original| std.mem.eql(u8, original, proof.page) else true);
-            value.active_fragment = .{ .page = proof.page, .original_page = proof.original_page,
+            value.active_fragment = .{ .page = proof.page, .original_page = proof.original_page, .literal_prefix = proof.literal_prefix,
                 .start = proof.start, .prepared = proof.prepared, .starts_page = starts_page,
                 .static_paragraph_openings = proof.static_paragraph_openings, .static_paragraph_original_prefix = proof.static_paragraph_original_prefix,
                 .static_example_openings = proof.static_example_openings, .static_example_original_prefix = proof.static_example_original_prefix,
@@ -2230,7 +2301,14 @@ pub fn compileClassifiedWithHeadingAnchorsAndSourceMediaRootAlloc(
     if (work.fallbacks.unrepresented_inline_geometry) return error.UncompiledPresentation;
     const display_spans = early_display orelse try displayTitleSpansAlloc(a, display_title, language orelse "", link_trail, namespace_catalog, behavior_switches, image_options, fallbacks, poem_phase);
     try validatePublishedSpans(a, display_spans, fallbacks);
-    var validate: ValidateCompilerSpans = .{ .a = a, .fallbacks = fallbacks };
+    var heading_registry: heading_ids.Registry = .{};
+    defer heading_registry.deinit(a);
+    const bind_source_ids = if (figure_sizing) |sizing| enabled: {
+        const region = sizing.literal_region orelse break :enabled false;
+        break :enabled region.definition_ids.len != 0 or region.nav_heads.len != 0;
+    } else false;
+    var validate: ValidateCompilerSpans = .{ .a = a, .fallbacks = fallbacks,
+        .source_anchors = if (bind_source_ids) &heading_registry else null };
     var validation_walk: CompilerWalk = .{ .require_native_inline_boxes = true };
     for (@constCast(work.sections)) |*section| {
         if (section.title_spans.len != 0) {
@@ -2244,8 +2322,12 @@ pub fn compileClassifiedWithHeadingAnchorsAndSourceMediaRootAlloc(
         try validatePublishedSpans(a, caption_spans, fallbacks);
         @constCast(work.media)[index].caption = try compiler.plainText(a, caption_spans);
     }
-    var heading_registry: heading_ids.Registry = .{};
-    defer heading_registry.deinit(a);
+    if (bind_source_ids) if (heading_observation) |observation| {
+        for (observation.items) |item| {
+            if (heading_registry.containsExisting(item.anchor) or heading_registry.containsExisting(item.anchor_fallback))
+                return error.UncompiledPresentation;
+        }
+    };
     var assign: AssignHeadings = .{ .a = a, .registry = &heading_registry, .observation = heading_observation, .projection = heading_projection };
     var heading_walk: CompilerWalk = .{};
     for (@constCast(work.sections)) |*section| {

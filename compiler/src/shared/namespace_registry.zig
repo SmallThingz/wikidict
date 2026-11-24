@@ -232,6 +232,24 @@ pub const Registry = struct {
         return false;
     }
 
+    pub const csb_current_figure_core = "7fb9c913ca612a2e6176762b3eb4d0301166e88e";
+
+    pub fn isCurrentCsbFigureDefaults(self: *const Registry, digest: [32]u8) bool {
+        return std.mem.eql(u8, self.wiki, "csbwiktionary") and std.mem.eql(u8, self.content_language, "csb") and
+            std.mem.eql(u8, self.dump_date, "20261001") and
+            std.mem.eql(u8, &std.fmt.bytesToHex(self.source_sha256, .lower), "817b2a6f3db419adfb78d2ca0a0a4c18c8e0a31918324b93dfa265f76262d8f8") and
+            std.mem.eql(u8, &std.fmt.bytesToHex(digest, .lower), "9f52df7706435edde4a72d7ba32c75993206b125c0c2eab07fc540ce3e3e62bf");
+    }
+
+    /// Preserve the exact observed core without granting File handler authority.
+    pub fn currentFigureDefaultsCore(self: *const Registry, digest: [32]u8, include_sql: bool) ?[]const u8 {
+        if (self.isCurrentMonFigureDefaults(digest)) return mon_current_figure_core;
+        if (!include_sql) return null;
+        if (self.isCurrentSqlFigureDefaults(digest)) return mon_current_figure_core;
+        if (self.isCurrentCsbFigureDefaults(digest)) return csb_current_figure_core;
+        return null;
+    }
+
     /// The ordinary Figure input role may consume this selected current
     /// observation. It does not grant the main-page or conversion role.
     pub fn loadCurrentMonFigureDefaults(self: *const Registry, raw: []const u8) !?FigureSourceDefaults {
@@ -242,8 +260,7 @@ pub const Registry = struct {
         if (raw.len > 1024 * 1024) return null;
         var digest: [32]u8 = undefined;
         std.crypto.hash.sha2.Sha256.hash(raw, &digest, .{});
-        if (!self.isCurrentMonFigureDefaults(digest) and
-            !(include_sql and self.isCurrentSqlFigureDefaults(digest))) return null;
+        if (self.currentFigureDefaultsCore(digest, include_sql) == null) return null;
         const parsed = try std.json.parseFromSlice(std.json.Value, self.arena.child_allocator, raw, .{});
         defer parsed.deinit();
         if (parsed.value != .object) return null;

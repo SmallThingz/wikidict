@@ -41,6 +41,11 @@ CORE_PROFILES = (CORE, '79b81ba96674efc8a803fc956bc501d347d440d2',
 SCRIBUNTO = 'b109cb6e5866c13871e308859ef78249b1bd3ea2'
 FIGURE_WMF5_CORE = '87f311882d8c84ec21e288d0bde8aa289df8dc56'
 FIGURE_WMF5_SCRIBUNTO = '25f7cdefa45a3b8417d7fa296f86b76537927f43'
+# Retained CSB response: current Figure defaults only, never main site-info.
+# This core changes only DatabaseMySQL.php from the reviewed EN core;
+# the complete ApiQuerySiteinfo source remains SOURCE_PINS-identical.
+FIGURE_CSB_CORE = '7fb9c913ca612a2e6176762b3eb4d0301166e88e'
+FIGURE_CSB_DEFAULTS = ('20261001', '862b5a0e908b6fba2236583698a9606c53f692090c0aff1ccbe47a87e26269b7')
 FIGURE_MON_CORE = '57f2a6bfacc3c5cecc269214a8d726b0b6faa596'
 FIGURE_MON_DEFAULTS = ('20261001', 'da834f0e0f84cc57b24bfc1ca633fb0969f8c046cd99d8837fbcb91dcf53394a')
 SEPTEMBER_EN_CORE = 'db332802a5f05525b779baadbf8d3394bc7d989e'
@@ -171,7 +176,8 @@ def response(data, wiki, language, profile=PROFILE, *, raw_sha=None, date=None):
     binding = file_defaults_observation(core, wiki)
     if binding is not None:
         reviewed_date, reviewed_sha = binding
-        if raw_sha != reviewed_sha or (date is not None and date != reviewed_date):
+        if (raw_sha != reviewed_sha or (date is not None and date != reviewed_date)
+                or (core == FIGURE_CSB_CORE and date is None)):
             raise ValueError('Unreviewed Figure default-options observation')
     legacy.validate_server(general.get('server'))
     stamp(general.get('time'))
@@ -186,6 +192,8 @@ def response(data, wiki, language, profile=PROFILE, *, raw_sha=None, date=None):
 
 
 def file_defaults_observation(core, wiki):
+    if core == FIGURE_CSB_CORE and wiki == 'csbwiktionary':
+        return FIGURE_CSB_DEFAULTS
     if core == FIGURE_WMF5_CORE and isinstance(wiki, str):
         return FIGURE_WMF5_DEFAULTS.get(wiki)
     if core == FIGURE_MON_CORE and isinstance(wiki, str):
@@ -201,7 +209,7 @@ def reviewed_source(core, profile, wiki):
 
 def scribunto_reference(core):
     # These observed core revisions select Scribunto with the same pinned library leaves.
-    return FIGURE_WMF5_SCRIBUNTO if core in (FIGURE_WMF5_CORE, FIGURE_MON_CORE, SEPTEMBER_EN_CORE) else SCRIBUNTO
+    return FIGURE_WMF5_SCRIBUNTO if core in (FIGURE_WMF5_CORE, FIGURE_MON_CORE, SEPTEMBER_EN_CORE, FIGURE_CSB_CORE) else SCRIBUNTO
 
 
 def render(data, config, retrieved, raw_sha):
