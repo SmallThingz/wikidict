@@ -247,7 +247,7 @@ pub const Expander = struct {
     invoke_reuse: ?*InvokeReuseStats = null,
     script_cpu_budget: rt.execution_budget.Budget = .{},
     host: host_api.Host = .{},
-    missing_commons_data: bool = false,
+    missing_provider_input: ?error{ CommonsDataSnapshotMissing, InterfaceMessageSnapshotMissing } = null,
     current_source: ?[]const u8 = null,
     normal_page_format_context: bool = false,
     page_allocator: ?std.mem.Allocator = null,
@@ -332,7 +332,7 @@ pub const Expander = struct {
         self.host.current_page = null;
         self.host.page_identity_failure = null;
         self.host.now_unix = now_unix;
-        self.missing_commons_data = false;
+        self.missing_provider_input = null;
         self.current_source = source;
         self.normal_page_format_context = false;
         self.page_allocator = self.runtime.allocator;
@@ -485,11 +485,11 @@ pub const Expander = struct {
         const self: *Expander = @ptrCast(@alignCast(raw orelse return error.MissingWikitextHost));
         const get = self.provider.external_data orelse {
             work_stats.logLine("warning: Commons data snapshot missing: title={s}\n", .{title});
-            self.missing_commons_data = true;
+            self.missing_provider_input = self.missing_provider_input orelse error.CommonsDataSnapshotMissing;
             return error.CommonsDataSnapshotMissing;
         };
         return get(self.provider.ctx, title) catch |err| {
-            if (err == error.CommonsDataSnapshotMissing) self.missing_commons_data = true;
+            if (err == error.CommonsDataSnapshotMissing) self.missing_provider_input = self.missing_provider_input orelse error.CommonsDataSnapshotMissing;
             return err;
         };
     }
@@ -503,7 +503,10 @@ pub const Expander = struct {
     fn hostInterfaceMessage(raw: ?*anyopaque, a: std.mem.Allocator, language: []const u8, key: []const u8) anyerror!?host_api.InterfaceMessage {
         const self: *Expander = @ptrCast(@alignCast(raw orelse return error.MissingWikitextHost));
         const get = self.provider.interface_message orelse return null;
-        return get(self.provider.ctx, a, language, key);
+        return get(self.provider.ctx, a, language, key) catch |err| {
+            if (err == error.InterfaceMessageSnapshotMissing) self.missing_provider_input = self.missing_provider_input orelse error.InterfaceMessageSnapshotMissing;
+            return err;
+        };
     }
 
     fn hostFileMetadata(raw: ?*anyopaque, title: []const u8) anyerror!host_api.FileMetadata {
@@ -628,9 +631,9 @@ pub const Expander = struct {
         }
         // A Lua pcall may have caught an unavailable compiler dependency.
         // A captured negative never sets this page-local flag.
-        if (self.missing_commons_data) {
+        if (self.missing_provider_input) |missing| {
             self.runtime.allocator.free(output_text.bytes);
-            return error.CommonsDataSnapshotMissing;
+            return missing;
         }
         // Native evaluation has finished. Escape only exact source-literal
         // curly ranges before any final normalizer can discard copy metadata.
@@ -6143,10 +6146,23 @@ test "uncaptured Cantonese character data cannot become rendered Lua errors or p
             const response = try ctx.callValue(ctx.getGlobal(16), &.{ get, .{ .string = key } });
             defer rt.freeResults(response);
             if (response.len != 2 or response[0] != .boolean) return error.UnexpectedData;
-            if (response[0].boolean and (response[1] != .boolean or response[1].boolean)) return error.UnexpectedData;
+            if (response[0].boolean and response[1] != .table and (response[1] != .boolean or response[1].boolean)) return error.UnexpectedData;
             const result = try std.heap.smp_allocator.alloc(Value, 1);
-            result[0] = .{ .string = if (response[0].boolean) "observed missing" else "caught lookup" };
+            result[0] = .{ .string = if (!response[0].boolean) "caught lookup" else if (response[1] == .table) "observed data" else "observed missing" };
             return result;
+        }
+        fn tableData(_: ?*anyopaque, title: []const u8) !?host_api.ExternalData {
+            try std.testing.expectEqualStrings(key, title);
+            return .{ .content_model = "Tabular.JsonConfig", .source =
+                \\{"license":"CC-BY-SA-4.0","schema":{"fields":[{"name":"key","type":"string"}]},"data":[["0x002B"]]}
+            };
+        }
+        fn license(raw: ?*anyopaque, _: std.mem.Allocator, _: []const u8, name: []const u8) !?host_api.InterfaceMessage {
+            const captured: *bool = @ptrCast(@alignCast(raw.?));
+            if (!captured.*) return error.InterfaceMessageSnapshotMissing;
+            if (std.mem.eql(u8, name, "jsonconfig-license-name-CC-BY-SA-4.0")) return .{ .source = "Creative Commons Attribution-Share Alike 4.0" };
+            if (std.mem.eql(u8, name, "jsonconfig-license-url-CC-BY-SA-4.0")) return .{ .source = "https://creativecommons.org/licenses/by-sa/4.0/" };
+            return error.UnexpectedData;
         }
         fn missing(raw: ?*anyopaque, title: []const u8) !?host_api.ExternalData {
             try std.testing.expectEqualStrings(key, title);
@@ -6173,6 +6189,13 @@ test "uncaptured Cantonese character data cannot become rendered Lua errors or p
     observed = true;
     try std.testing.expectEqualStrings("observed missing", try expander.expandFragment("+", source, 1_670_803_200));
     try std.testing.expectEqualStrings("CommonsDataSnapshotMissing", try expander.expandFragment("0", "CommonsDataSnapshotMissing", 1_670_803_200));
+    expander.provider.external_data = Probe.tableData;
+    expander.provider.interface_message = Probe.license;
+    observed = false;
+    try std.testing.expectError(error.InterfaceMessageSnapshotMissing, expander.expandFragment("+", source, 1_670_803_200));
+    observed = true;
+    try std.testing.expectEqualStrings("observed data", try expander.expandFragment("0", source, 1_670_803_200));
+    try std.testing.expectEqualStrings("InterfaceMessageSnapshotMissing", try expander.expandFragment("+", "InterfaceMessageSnapshotMissing", 1_670_803_200));
 }
 
 test "invoke export recovery preserves unrelated runtime and host errors" {
