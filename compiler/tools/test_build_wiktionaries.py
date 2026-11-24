@@ -18607,6 +18607,63 @@ class StagePartOrderTests(unittest.TestCase):
             root=Path(td);items,_=self.fixture(root);work=root/'work';(work/'expander').mkdir(parents=True);keep=work/'expander/keep';keep.write_bytes(b'worker');before=keep.stat()
             with self.assertRaisesRegex(ValueError,'restore'):b.normal_repack_selection(items,work)
             self.assertEqual(keep.read_bytes(),b'worker');self.assertEqual(keep.stat(),before);self.assertFalse((work/'input').exists())
+    def test_owner_marker_alone_allows_first_repack_after_workspace_setup(self):
+        with tempfile.TemporaryDirectory() as td:
+            root=Path(td)
+            items,_=self.fixture(root)
+            workspace=root/'edition.shards'
+            raw=root/'raw'
+            registry=root/'registry'
+            registry.write_text('x')
+            order,checked=b.normal_repack_selection(items,workspace)
+            self.assertEqual((order,checked),(None,None))
+            with patch.object(b,'_source_fingerprints',return_value=('a'*64,'b'*64)):
+                state=b.shard_state(items,registry)
+            b.prepare_shard_workspace(workspace,state,1,raw_shards_path=raw)
+            marker=raw/b.RAW_SHARD_OWNER
+            identity=(marker.read_bytes(),marker.stat())
+            self.assertEqual(list(raw.iterdir()),[marker])
+            self.assertEqual(b.normal_repack_selection(items,workspace),(order,None))
+            dump=b.cached_shard_dump(items,root,workspace,workers=1,part_order=order,_validated=checked)
+            record,stamps=b.validated_staged_dump(items,workspace/'input')
+            self.assertIn(dump,stamps)
+            self.assertEqual(record['source_pages'],3)
+            self.assertIsNone(b.stage_part_order(record))
+            self.assertEqual((marker.read_bytes(),marker.stat()),identity)
+
+    def test_marker_or_payload_unrelated_to_raw_workspace_preserves_refusal(self):
+        for kind in ('foreign','malformed','symlink','payload','unexpected'):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as td:
+                root=Path(td)
+                items,_=self.fixture(root)
+                workspace=root/'edition.shards'
+                workspace.mkdir()
+                raw=root/'raw'
+                b.external_raw_shards(workspace,raw,create=True)
+                marker=raw/b.RAW_SHARD_OWNER
+                if kind=='foreign':
+                    owner=json.loads(marker.read_text())
+                    owner['workspace']=str(root/'other.shards')
+                    marker.write_text(json.dumps(owner))
+                elif kind=='malformed':
+                    marker.write_text('{')
+                elif kind=='symlink':
+                    saved=root/'owner.json'
+                    marker.rename(saved)
+                    marker.symlink_to(saved)
+                elif kind=='payload':
+                    (raw/'00000000').mkdir()
+                else:
+                    marker.rename(raw/'note.json')
+                (workspace/'state.json').write_text(json.dumps({'raw_shards_path':str(raw)}))
+                before={member.name:member.lstat() for member in raw.iterdir()}
+                for call in (lambda:b.normal_repack_selection(items,workspace),
+                             lambda:b.cached_shard_dump(items,root,workspace)):
+                    with self.assertRaisesRegex(ValueError,'authenticated staged dump'):
+                        call()
+                self.assertEqual({member.name:member.lstat() for member in raw.iterdir()},before)
+                self.assertFalse((workspace/'input').exists())
+
     def test_same_order_old_workspace_keeps_stock_selection(self):
         with tempfile.TemporaryDirectory()as td:
             root=Path(td);items,_=self.fixture(root);items=items[:1];work=root/'work';work.mkdir();(work/'expander').write_text('old');(work/'state.json').write_text('invalid')

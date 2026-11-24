@@ -7167,8 +7167,17 @@ def _repack_has_consumers(workspace,state=None):
     if raw is not None:
         if not isinstance(raw,str) or not Path(raw).is_absolute():return True
         path=Path(raw)
-        if os.path.lexists(path) and (path.is_symlink() or not path.is_dir()
-                                     or next(path.iterdir(),None) is not None):return True
+        if os.path.lexists(path):
+            if path.is_symlink() or not path.is_dir():return True
+            try:
+                members=path.iterdir()
+                member=next(members,None)
+                if member is not None:
+                    if member.name!=RAW_SHARD_OWNER or next(members,None) is not None:return True
+                    # A verified custody marker has no shard offsets and may
+                    # already exist when the ordinary first repack starts.
+                    external_raw_shards(workspace,path)
+            except (OSError,ValueError):return True
     return any(path.name not in ('input','state.json','state.part') for path in workspace.iterdir())
 
 
