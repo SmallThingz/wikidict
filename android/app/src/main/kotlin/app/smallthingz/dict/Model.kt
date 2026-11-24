@@ -469,8 +469,14 @@ data class InlineBoxGroup(val padding: StyleEdges, val border: InlineBoxBorderEd
     val atomicLayout: InlineBoxAtomicLayout? = null, val atomicAutoLayout: InlineBoxAtomicAutoLayout? = null,
     val intrinsicLinesLayout: InlineBoxIntrinsicLinesLayout? = null,
     val verticalAlign: InlineBoxGroupVerticalAlign? = null) {
+    internal val isEmptyTopEdge: Boolean get() = spans.isEmpty() && overlays.isEmpty() && radius == null &&
+        atomicLayout == null && atomicAutoLayout == null && intrinsicLinesLayout == null && verticalAlign == null &&
+        listOf(padding.top, padding.right, padding.bottom, padding.left).all { it.value == 0f } &&
+        border.top == InlineBoxBorderEdge.Solid(StyleLength(StyleLengthUnit.Px, 1f), InlineBoxColor.CurrentColor) &&
+        listOf(border.right, border.bottom, border.left).all { it == InlineBoxBorderEdge.None }
+
     init {
-        require(spans.isNotEmpty()) { "Inline box requires a child" }
+        require(spans.isNotEmpty() || isEmptyTopEdge) { "Inline box requires a child or an exact empty top edge" }
         PresentationSpanVisitor { _, _ -> }.inlineBoxGroup(this)
     }
 }
@@ -1538,6 +1544,9 @@ internal class PresentationSpanVisitor(private val visit: (List<Span>, Boolean) 
             }
             span.inlineActionGroup?.let { inlineActionGroup(it, contentDepth, actionOwner ?: span) }
             span.inlineBoxGroup?.let {
+                if (it.spans.isEmpty()) require(!rubyChild && !boxChild && !clippedChild && actionOwner == null &&
+                    span.kind == "text" && span.target.isEmpty() && span.targetFragment == null && span.tooltip == null &&
+                    span.explanation.isEmpty() && span.inlineStyle == null) { "Empty inline top edge needs its own plain source position" }
                 inlineBoxGroup(it, contentDepth, actionOwner ?: span.takeIf { it.kind in setOf("link", "external_link") },
                     strictBody = rubyChild, owner = span)
             }
@@ -1631,7 +1640,7 @@ internal class PresentationSpanVisitor(private val visit: (List<Span>, Boolean) 
         val before = actualTextLeaves
         spanList(value.spans, false, depth, display = false, rubyChild = strictBody, boxChild = true,
             actionOwner = actionOwner)
-        require(actualTextLeaves != before) { "Inline box requires actual child text or trail" }
+        require(actualTextLeaves != before || value.isEmptyTopEdge) { "Inline box requires actual child text or an empty top edge" }
     }
     fun inlinePaddingGroup(value: InlinePaddingGroup, contentDepth: Int = 0, actionOwner: Span? = null) {
         spanList(value.spans, false, descend(contentDepth), display = false, rubyChild = true,

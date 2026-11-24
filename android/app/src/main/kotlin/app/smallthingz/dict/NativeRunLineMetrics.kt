@@ -90,9 +90,9 @@ internal fun nativeRunLineMetrics(source: Spanned, start: Int, end: Int,
     val independentPoints = if (!explicitHeight) emptyList() else authored.filter { run ->
         val offset = source.getSpanStart(run)
         run.policy == NativeLineHeightPolicy.Normal && offset == source.getSpanEnd(run) &&
-            source.getSpans(offset, offset, NativeInlineActionPoint::class.java).any { point ->
+            (run.emptyBoxStrut || source.getSpans(offset, offset, NativeInlineActionPoint::class.java).any { point ->
                 point.metrics === run && source.getSpanStart(point) == offset && source.getSpanEnd(point) == offset
-            }
+            })
     }
     fun independentPoint(run: NativeAuthoredInlineMetrics): Boolean = independentPoints.any { it === run }
     // A V strut has no painted fallback text. Its primary font is independent of

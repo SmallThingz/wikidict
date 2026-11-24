@@ -975,6 +975,15 @@ internal class NativeRubyPlacedProjection(val compiled: NativeRubyLayout,
         val scope = compiled.boxScopes.singleOrNull {
             it.format.box?.owner === owner && it.start == start && it.end == end
         } ?: return null
+        if (owner.span.inlineBoxGroup?.isEmptyTopEdge == true) {
+            val ownLine = raw.nativeLineAt(scope.nativeStart)
+            if (line != null && line != ownLine) return emptyList()
+            val x = raw.caretRect(scope.nativeStart).left
+            val baseline = raw.nativeRubyLineBaseline(ownLine) + scope.shift
+            val primary = NativePrimaryFontMetrics.from(scope.format.paint)
+            val border = checkNotNull(scope.format.box).border.top.width
+            return listOf(RectF(x, baseline + primary.ascent - border, x, baseline + primary.descent))
+        }
         return raw.nativeInlineBoxRects(owner, scope.nativeStart, scope.nativeEnd, line)
     }
 
@@ -3270,6 +3279,13 @@ private class NativeRubyCompiler(private val original: Spanned, private val pain
         }
         boxScopes.forEach { scope ->
             val primary = NativePrimaryFontMetrics.from(scope.format.paint).copy(baselineShift = scope.shift)
+            if (scope.format.box?.owner?.span?.inlineBoxGroup?.isEmptyTopEdge == true) {
+                check(scope.start == scope.end && scope.nativeStart == scope.nativeEnd)
+                // A zero-width border has no ink. The declaring font still supplies its in-flow strut.
+                target.setSpan(NativeAuthoredInlineMetrics(primary, scope.format.lineHeight, primary, emptyBoxStrut = true),
+                    scope.nativeStart, scope.nativeEnd, Spanned.SPAN_MARK_MARK)
+                return@forEach
+            }
             if (scope.format.actionOwner == null && scope.format.box?.verticalAlign != InlineBoxGroupVerticalAlign.Bottom)
                 target.setSpan(NativeRunLineMetrics(primary, scope.format.lineHeight,
                 strut = true, includePrimaryInNormal = true, independentNormalStrut = true),

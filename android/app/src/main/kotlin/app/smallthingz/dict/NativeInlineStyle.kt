@@ -20,6 +20,7 @@ internal data class NativeAuthoredInlineMetrics(
     val policy: NativeLineHeightPolicy,
     val declaringPrimary: NativePrimaryFontMetrics? = null,
     val clippedVisiblePoint: NativeClippedVisibleMetricPoint? = null,
+    val emptyBoxStrut: Boolean = false,
 )
 
 /** Physical downward displacement; the source's positive raise is negated by lowering. */
