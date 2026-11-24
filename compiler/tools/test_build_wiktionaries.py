@@ -18712,4 +18712,57 @@ class StagePartOrderTests(unittest.TestCase):
                 self.assertEqual((cache/'.complete.json').read_bytes(),before)
 
 
+class CompiledExpansionBoundaryTests(unittest.TestCase):
+    def test_final_worker_observation_holds_late_inputs_and_releases_renderer(self):
+        import extraction_cache as cache
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workspace = root/'out/toy/dated.shards'
+            directory = workspace/'native-blob-tools/bin'
+            directory.mkdir(parents=True)
+            for name in ('dict-bundle-build', *b.BLOB_TOOL_NAMES):
+                (directory/name).write_bytes(b'controlled native bytes')
+                (directory/name).chmod(0o555)
+            names = ('build.zig', *('compiler/' + name for name in (*cache.PIPELINE_POLICY_FILES,
+                       *cache.ABI_FILES, *cache.LIVE_LEAF_SOURCE_PATHS)))
+            inventory = {'head':'original', 'files':{}, 'modes':{}}
+            for name in names:
+                path=root/name
+                path.parent.mkdir(parents=True,exist_ok=True)
+                path.write_text('# original')
+                inventory['files'][name]={'sha256':b.sha256_file(path)}
+                inventory['modes'][name]=stat.S_IMODE(path.stat().st_mode)
+            unrelated = root/'renderer/src/format/presentation_codec.zig'
+            unrelated.parent.mkdir(parents=True)
+            unrelated.write_text('old')
+            relative = unrelated.relative_to(root).as_posix()
+            inventory['files'][relative] = {'sha256': b.sha256_file(unrelated)}
+            inventory['modes'][relative] = stat.S_IMODE(unrelated.stat().st_mode)
+            ref=b.write_prepared_metadata(root/'inventory.json', inventory)
+            driver_inputs={name:str(root/name) for name in ('extractor','llvm','runtime','leaf','main_c','zig')}
+            for path in driver_inputs.values(): Path(path).write_text('compiled')
+            driver_inputs.update(project_root=str(root),clang='clang',writer=str(directory/'dict-blob-build'))
+            cfg=dict(output=str(root/'out'),date='dated',prepared_source_custody=True,
+                     compiler={'path':driver_inputs['zig'],'sha256':b.sha256_file(Path(driver_inputs['zig']))},
+                     source={'head':'original','inventory':ref})
+            def compiled(graph):
+                files={k:Path(v) for k,v in graph.items() if k not in ('project_root','clang')}
+                return ({'zig':{'tool_sha256':b.sha256_file(files['zig'])}},
+                        {k:cache._full_stamp(v.stat()) for k,v in files.items()})
+            with patch.object(b,'PROJECT',root), patch.object(b.subprocess,'check_output',return_value=json.dumps(driver_inputs)), \
+                    patch.object(cache,'completed_producer_identity',side_effect=compiled), \
+                    patch.object(cache,'tool_identity',side_effect=lambda p:{'extractor_sha256':b.sha256_file(p),'libraries':[]}):
+                def observe():return b.compiled_input_observation(cfg,{'edition':'toy'},workspace)
+                original=observe()
+                self.assertEqual(original,json.loads(json.dumps(original)))
+                unrelated.write_text('next')
+                self.assertEqual(observe(),original)
+                Path(driver_inputs['main_c']).write_text('changed C entry')
+                self.assertNotEqual(observe(),original)
+                for name in (names[0],*names[-2:],'compiler/tools/extraction_cache.py'):
+                    path=root/name;path.write_text('# changed')
+                    with self.assertRaises(ValueError):observe()
+                    path.write_text('# original')
+
+
 if __name__=='__main__':unittest.main()

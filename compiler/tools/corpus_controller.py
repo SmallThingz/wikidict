@@ -1055,7 +1055,37 @@ def prepared_source_observation(cfg, binding):
         native_generation_retired=retired,prepared_authorization=binding)
 
 
-def authorize_prepared_source(cfg,start,start_ref,launch_path,generation_ref,*,process,inherited=None):
+def compiled_source_observation(cfg, start, start_ref, inputs_ref):
+    import build_wiktionaries as builder
+    require(Path(inputs_ref['path']) == Path(start_ref['path']).parent / 'compiled-inputs.json'
+            and builder.prepared_metadata(start_ref) == start, 'Compiled inputs belong to another attempt')
+    require(descriptor(cfg['manifest']['path']) == cfg['manifest'], 'Input manifest changed during expansion')
+    record = builder.prepared_metadata(inputs_ref)
+    current = builder.compiled_input_observation(cfg, start, record['workspace'])
+    require(dict(current, attempt_start=start_ref) == record, 'Compiled expansion inputs changed')
+    return record
+
+
+def authorize_compiled_source(cfg, start, start_ref, launch_path, process):
+    inputs = descriptor(launch_path.parent / 'compiled-inputs.json')
+    launch = read_json(launch_path)
+    require(set(launch) == {'identity','private_session'} and start['prepared_source_control']['configuration'] == cfg
+            and launch['private_session'] == process.pid and process.pid == launch['identity']['pid']
+            and process.poll() is None and process_identity(process.pid) == launch['identity'],
+            'Fresh compilation does not belong to this launch')
+    original = source_guard(cfg)
+    original['immutable_source'] = prepared_git_source_authority(cfg)
+    compiled_source_observation(cfg, start, start_ref, inputs)
+    require(read_json(launch_path) == launch and process.poll() is None
+            and process.pid == launch['identity']['pid'] and process_identity(process.pid) == launch['identity'],
+            'Compiled preparation process changed')
+    decision = dict(inputs=inputs, attempt_start=start_ref, original_source_observation=original)
+    launch['compiled_source_authorization'] = decision
+    write_json(launch_path, launch, replace=True)
+    return decision
+
+
+def authorize_prepared_source(cfg,start,start_ref,launch_path,generation_ref,*,process,inherited=None,compiled_decision=None):
     """Run while the tracked child/edition and controller locks remain owned."""
     import build_wiktionaries as builder
     require(cfg.get('prepared_source_custody') is True, 'Prepared source custody was not selected')
@@ -1101,7 +1131,19 @@ def authorize_prepared_source(cfg,start,start_ref,launch_path,generation_ref,*,p
         build_identity=record['build_identity'],now_unix=cfg['now_unix'],context=start['context'],
         **({'_authenticated_roles':authenticated_roles} if authenticated_roles is not None else {}))
     if inherited is None:
-        original_observation=source_guard(cfg)
+        compiled = launch.get('compiled_source_authorization')
+        require(compiled == compiled_decision, 'Compiled source decision is not the one issued by this parent')
+        if compiled is None:
+            require('compiled_inputs' not in record, 'Fresh generation has no compiled source authority')
+            original_observation=source_guard(cfg)
+        else:
+            require(compiled['attempt_start'] == start_ref and record.get('compiled_inputs') == compiled['inputs'],
+                    'Final generation does not match the compiled source authorization')
+            inputs = compiled_source_observation(cfg, start, start_ref, compiled['inputs'])
+            sealed = builder.prepared_metadata(record['seal_archive'])
+            require(sealed['origin_graph'] == inputs['graph'] and sealed['identity']['producer'] == inputs['producer'],
+                    'Finished worker seal differs from the authorized production inputs')
+            original_observation = compiled['original_source_observation']
         if cfg.get('retained_native_roles') is not None:
             require(original_observation.get('current_head')==cfg['source']['head'],
                     'Prepared retained adoption requires the original qualified HEAD')
@@ -1119,7 +1161,10 @@ def authorize_prepared_source(cfg,start,start_ref,launch_path,generation_ref,*,p
     recheck={'full_context':False} if authenticated_roles is not None else {}
     generation.require_unchanged(**recheck)
     if inherited is None:
-        original_observation['immutable_source']=prepared_git_source_authority(cfg)
+        if compiled is None:
+            original_observation['immutable_source'] = prepared_git_source_authority(cfg)
+        else:
+            prepared_git_source_authority(cfg, retained=original_observation['immutable_source'])
         generation.require_unchanged(**recheck)
     require(read_json(launch_path)==launch, 'Tracked launch changed during source authentication')
     require(process.pid==launch['identity']['pid'] and process.poll() is None
@@ -3601,6 +3646,7 @@ def execute(cfg, edition, workers, folder, sequence, context, locks, memory_limi
     write_json(folder / 'start.json', start)
     start_ref=descriptor(folder/'start.json') if cfg.get('prepared_source_custody') is True else None
     active_prepared=None
+    compiled=None
     started = time.monotonic()
     error, process, rc = None, None, None
     interrupted = False
@@ -3637,9 +3683,11 @@ def execute(cfg, edition, workers, folder, sequence, context, locks, memory_limi
                     handles.callback(os.close, pidfd)
                     child_exit.register(pidfd, select.POLLIN)
             while process.poll() is None:
+                if start_ref is not None and active_prepared is None and compiled is None and (folder/'compiled-inputs.json').is_file():
+                    compiled = authorize_compiled_source(cfg, start, start_ref, folder/'launch.json', process)
                 if start_ref is not None and active_prepared is None and (folder/'prepared-generation.json').is_file():
                     active_prepared=authorize_prepared_source(cfg,start,start_ref,folder/'launch.json',
-                        descriptor(folder/'prepared-generation.json'),process=process)
+                        descriptor(folder/'prepared-generation.json'),process=process,compiled_decision=compiled)
                 for lock in locks:
                     lock.check()
                 child_exit.poll(1000)
@@ -3673,6 +3721,13 @@ def execute(cfg, edition, workers, folder, sequence, context, locks, memory_limi
             final_path=folder/'prepared-finalization.json'
             if final_path.is_file():active_prepared=dict(active_prepared,finalization=descriptor(final_path))
             observed_source=source_guard(cfg,prepared_authorization=active_prepared)
+        elif compiled is not None:
+            compiled_source_observation(cfg, start, start_ref, compiled['inputs'])
+            original = compiled['original_source_observation']
+            immutable = prepared_git_source_authority(cfg, retained=original['immutable_source'])
+            observed_source = dict(original, current_head=None, immutable_source=immutable,
+                source_mode='parent-authorized-compiled-expansion', compiled_inputs=compiled['inputs'])
+            require(rc != 0, 'Fresh expansion finished without a verified worker generation')
         else:
             observed_source = source_guard(cfg)
         source_observation = observed_source if isinstance(observed_source, dict) else None

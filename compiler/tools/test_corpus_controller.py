@@ -4995,6 +4995,38 @@ class PreparedSourceParentTests(unittest.TestCase):
             self.assertEqual(f.cfg['source']['head'],observed['qualified_head'])
             self.assertFalse(observed['current_canonical_zig_read_after_preparation'])
 
+    def test_compiled_release_is_attempt_local_and_final_worker_must_match(self):
+        with self.parent_fixture() as f:
+            import sys
+            f.start['prepared_source_control'] = {'configuration': f.cfg}
+            start_path = Path(f.start_ref['path'])
+            start_path.write_text(json.dumps(f.start))
+            start_ref = controller.descriptor(start_path)
+            info = dict(workspace=str(f.root), graph={'runtime':'original object'}, producer={'leaf':'original bitcode'})
+            early_path=f.root/'compiled-inputs.json'
+            controller.write_json(early_path, dict(info, attempt_start=start_ref))
+            with mock.patch.object(sys.modules['build_wiktionaries'],'compiled_input_observation',return_value=info,create=True), mock.patch.object(controller,'source_guard',side_effect=f.source_guard):
+                decision=controller.authorize_compiled_source(f.cfg,f.start,start_ref,f.launch,f.process)
+                self.assertEqual(f.events,['full-source'])
+                record=dict(f.record,prepared_by_start=start_ref,compiled_inputs=decision['inputs'])
+                generation=Path(f.generation_ref['path'])
+                archive=Path(record['seal_archive']['path'])
+                def bind(sealed):
+                    archive.write_text(json.dumps(sealed))
+                    record['seal_archive']=controller.descriptor(archive)
+                    record['seal_sha256']=record['seal_archive']['sha256']
+                    generation.write_text(json.dumps(record))
+                    return controller.descriptor(generation)
+                reference=bind(dict(origin_graph=info['graph'],identity={'producer':{'leaf':'another leaf'}}))
+                with self.assertRaisesRegex(ValueError,'not the one issued'):
+                    controller.authorize_prepared_source(f.cfg,f.start,start_ref,f.launch,reference,process=f.process)
+                with self.assertRaisesRegex(ValueError,'worker seal differs'):
+                    controller.authorize_prepared_source(f.cfg,f.start,start_ref,f.launch,reference,process=f.process,compiled_decision=decision)
+                with mock.patch.object(controller,'source_guard',side_effect=AssertionError('renderer is released')):
+                    reference=bind(dict(origin_graph=info['graph'],identity={'producer':info['producer']}))
+                    controller.authorize_prepared_source(f.cfg,f.start,start_ref,f.launch,reference,process=f.process,compiled_decision=decision)
+                self.assertEqual(f.events.count('full-source'),1)
+
     def test_generation_drift_during_full_source_authentication_leaves_no_authorization(self):
         with self.parent_fixture() as f:
             def mutate(cfg):f.source_guard(cfg);f.drift[0]=True

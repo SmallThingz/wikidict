@@ -421,8 +421,10 @@ class EnglishMaterializedWidthTests(unittest.TestCase):
                     'size': paths[role].stat().st_size, 'sha256': figure.digest(paths[role].read_bytes())})
                 self.assertEqual(hashes[role], verified['artifacts'][paths[role].name]['sha256'])
             (root/'pin').mkdir()
-            with figure.bind_inventory_downloads(root):
+            with figure.bind_inventory_downloads(root), patch.object(figure,'verify_tuple',wraps=figure.verify_tuple) as replay:
                 pinned = builder.pinned_auxiliary_snapshots(paths, hashes, root/'pin')
+                replay.assert_not_called()
+                self.assertEqual(builder.validated_figure_tuple(pinned), resolved)
             for role in ('figure-sizing-raw', *packed_names):
                 self.assertEqual(pinned[role].read_bytes(), paths[role].read_bytes())
             for role in packed_names:

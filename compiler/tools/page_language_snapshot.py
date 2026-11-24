@@ -241,10 +241,138 @@ def _direct_records(index):
     return len(rows)
 
 
+def _revision_exteriors(index):
+    """Authenticate revision-selected full GETs without granting page language or styles."""
+    rows = index.get('revision_exteriors', [])
+    if not isinstance(rows, list) or len(rows) > 256:
+        _fail('invalid revision exterior inventory')
+    if not rows:
+        return 0
+
+    from html.parser import HTMLParser
+    from urllib.parse import urlencode
+    import prepare_stylesheet_imports as styles
+
+    # These complete static head bytes were checked against the previously
+    # reviewed Vector client-class prelude, including this wiki's cookie key.
+    preludes = {'hywiktionary': 'f75a242bbdc78afaa77f287450173346b5f14e9563c37c96d1470829d91eedcf'}
+    wiki = index['wiki']
+    if wiki not in preludes:
+        _fail('unreviewed revision exterior source')
+    language = wiki.removesuffix('wiktionary').replace('_', '-')
+
+    class ServedDocument(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.in_head = False
+            self.script = False
+            self.programs = []
+            self.generators = []
+            self.roots = []
+            self.bodies = []
+            self.parser_roots = 0
+
+        def handle_starttag(self, tag, attributes):
+            attrs = dict(attributes)
+            if tag == 'html':
+                self.roots.append(attrs)
+            elif tag == 'body':
+                self.bodies.append(attrs)
+            elif tag == 'head':
+                self.in_head = True
+            elif self.in_head and tag == 'script':
+                self.script = not attributes
+            elif self.in_head and tag == 'meta' and attrs.get('name') == 'generator':
+                self.generators.append(attrs.get('content'))
+            if 'mw-parser-output' in (attrs.get('class') or '').split():
+                self.parser_roots += 1
+
+        def handle_endtag(self, tag):
+            if tag == 'head':
+                self.in_head = False
+            elif tag == 'script':
+                self.script = False
+
+        def handle_data(self, data):
+            if self.in_head and self.script and 'RLCONF=' in data:
+                self.programs.append(data)
+
+    existing_pages = [entry['page'] for entry in index['records'] + index.get('direct_get_contexts', [])]
+    by_id = {page['id']: page for page in existing_pages}
+    by_title = {page['title']: page for page in existing_pages}
+    previous = 0
+    titles = set()
+    for row in rows:
+        if not _keys(row, ('page', 'request', 'receipt', 'response', 'prefix_bytes')):
+            _fail('invalid revision exterior record')
+        page = row['page']
+        if (not _keys(page, ('id', 'revision', 'namespace', 'title', 'model', 'raw_sha256', 'expanded_sha256')) or
+                not _integer(page['id'], 1) or page['id'] <= previous or not _integer(page['revision'], 1) or
+                type(page['namespace']) is not int or page['namespace'] != 0 or page['model'] != 'wikitext' or
+                not isinstance(page['title'], str) or not page['title'] or page['title'] in titles or
+                any(c in page['title'] for c in '\x00\r\n\t') or
+                not _hash_string(page['raw_sha256']) or not _hash_string(page['expanded_sha256'])):
+            _fail('invalid revision exterior page')
+        for existing in (by_id.get(page['id']), by_title.get(page['title'])):
+            if existing and any(page[key] != value for key, value in existing.items() if value is not None):
+                _fail('revision exterior conflicts with existing page identity')
+        previous = page['id']
+        titles.add(page['title'])
+        if not all(isinstance(row[key], str) for key in ('response', 'request', 'receipt')):
+            _fail('invalid revision exterior sources')
+        raw = row['response'].encode()
+        prefix = row['prefix_bytes']
+        if (not 0 < len(raw) <= styles.MAX_BYTES or b'\0' in raw or
+                not _integer(prefix, 1) or prefix > min(MAX_PREFIX, len(raw)) or
+                not raw.rstrip().endswith(b'</html>')):
+            _fail('incomplete revision exterior response')
+        url = ('https://' + language + '.wiktionary.org/w/index.php?' +
+               urlencode(dict(title=page['title'], oldid=page['revision'], useskin='vector-2022')))
+        spec, receipt_bytes = row['request'].encode(), row['receipt'].encode()
+        request, receipt = _json(spec), _json(receipt_bytes)
+        if (not _keys(request, ('url', 'accept', 'method', 'retry')) or request['retry'] is not False or
+                not _keys(receipt, ('accepted', 'ended_utc', 'final_url', 'headers', 'request', 'response',
+                                    'response_bytes', 'response_sha256', 'started_utc', 'status')) or
+                type(receipt['status']) is not int or type(receipt['response_bytes']) is not int or
+                not isinstance(receipt['headers'], dict) or
+                not all(isinstance(value, str) for value in receipt['headers'].values()) or
+                len({name.lower() for name in receipt['headers']}) != len(receipt['headers'])):
+            _fail('invalid revision exterior transport')
+        styles.replay_request(spec, receipt_bytes, raw, 2, url, 'text/html')
+        parsed, skin, _ = styles.custom_page_context(raw[:prefix], url)
+        if skin != 'vector-2022' or parsed.ancestors[-1]['end'] != prefix:
+            _fail('revision exterior prefix boundary differs')
+        head = ServedDocument()
+        head.feed(row['response'])
+        head.close()
+        if (head.generators != ['MediaWiki 1.48.0-wmf.5'] or len(head.programs) != 1 or
+                len(head.roots) != 1 or head.roots[0].get('lang') != language or
+                len(head.bodies) != 1 or 'skin-vector-2022' not in (head.bodies[0].get('class') or '').split() or
+                head.parser_roots != 1):
+            _fail('unproved revision exterior document')
+        prelude, _, payload = head.programs[0].partition('RLCONF=')
+        classes = head.roots[0].get('class', '')
+        if (_hash(prelude.encode()) != preludes[wiki] or not classes.startswith('client-nojs ') or
+                not prelude.startswith('(function(){var className="client-js ' + classes.removeprefix('client-nojs ') + '";var cookie=')):
+            _fail('revision exterior static root or head script differs')
+        _, end = json.JSONDecoder().raw_decode(payload)
+        if not payload[end:].startswith(';') or 'RLCONF' in payload[end:]:
+            _fail('ambiguous revision exterior page configuration')
+        config = _json(payload[:end].encode())
+        expected = dict(wgArticleId=page['id'], wgRevisionId=page['revision'], wgCurRevisionId=page['revision'],
+                        wgNamespaceNumber=0, wgPageName=page['title'].replace(' ', '_'), wgTitle=page['title'],
+                        wgAction='view', wgIsArticle=True, wgIsRedirect=False, wgUserName=None,
+                        wgPageContentLanguage=language, wgPageContentModel='wikitext')
+        if (not isinstance(config, dict) or any(key not in config or type(config[key]) != type(value) or
+                config[key] != value for key, value in expected.items())):
+            _fail('revision exterior differs from selected page')
+    return len(rows)
+
+
 def _validated_payload(payload, wiki, namespace_sha256):
     index = _json(payload[SNAPSHOT])
     keys = {'schema', 'wiki', 'core_revision', 'namespace_registry_sha256', 'historical_page_language_proven', 'source_profile', 'responses', 'records'}
-    if (not isinstance(index, dict) or set(index) not in (keys, keys | {'direct_get_contexts'}) or
+    if (not isinstance(index, dict) or set(index) - {'direct_get_contexts', 'revision_exteriors'} != keys or
             index['schema'] != 'wikidict.page-language-index.v1' or index['wiki'] != wiki or
             index['namespace_registry_sha256'] != namespace_sha256 or index['historical_page_language_proven'] is not False or
             not isinstance(index['records'], list)):
@@ -256,7 +384,7 @@ def _validated_payload(payload, wiki, namespace_sha256):
     elif (index['responses'] != [] or payload[RAW] != b'' or HTML in payload or
           index['core_revision'] is not None or index['source_profile'] is not None):
         _fail('direct-only packet has API payload or authority')
-    count = len(index['records']) + _direct_records(index)
+    count = len(index['records']) + _direct_records(index) + _revision_exteriors(index)
     if not 0 < count <= MAX_RECORDS:
         _fail('empty or oversized record inventory')
     return index, count

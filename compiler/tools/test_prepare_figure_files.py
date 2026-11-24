@@ -6634,17 +6634,57 @@ class MaterializedFigureConsumerTests(unittest.TestCase):
             original=builder.validated_figure_tuple(paths,self.fixture.wiki,self.fixture.date)
             self.assertEqual(replay.call_count,1)
             self.assertEqual(set(builder._FIGURE_TUPLE_REPLAYS),{key(paths)})
-            pinned=builder.pinned_auxiliary_snapshots(paths,
-                {role:builder.sha256_file(path) for role,path in paths.items()},self.root/'normal-stage')
+            validate=builder.validated_figure_tuple
+            first=[]
+            def inspect_result(*args,**kwargs):
+                result=validate(*args,**kwargs)
+                if kwargs.get('parent_snapshots'):
+                    first.append(result)
+                return result
+            with patch.object(builder,'validated_figure_tuple',side_effect=inspect_result):
+                pinned=builder.pinned_auxiliary_snapshots(paths,
+                    {role:builder.sha256_file(path) for role,path in paths.items()},self.root/'normal-stage')
+            self.assertEqual(first,[original])
+            self.assertTrue(all(isinstance(row,tuple) for row in first[0].values()))
             staged=next(iter(pinned.values())).parent
             self.assertNotEqual(staged,output)
-            self.assertEqual(replay.call_count,2)
+            self.assertEqual(replay.call_count,1)
             self.assertEqual(copied.call_count,len(members))
             self.assertEqual(set(figure.capture_member_paths(staged,include_markers=True)[0]),set(members))
             for name,path in members.items():self.assertEqual((staged/name).read_bytes(),path.read_bytes())
             self.assertEqual(set(builder._FIGURE_TUPLE_REPLAYS),{key(paths),key(pinned)})
             output.rename(self.root/'materialized-source-unavailable')
             self.assertEqual(builder.validated_figure_tuple(pinned,self.fixture.wiki,self.fixture.date),original)
+            self.assertEqual(replay.call_count,1)
+
+    def test_copied_materialized_member_change_or_alias_before_destination_verification(self):
+        args=self.complete();output,_=self.materialize(args)
+        paths=self.paths(output); hashes={role:builder.sha256_file(path) for role,path in paths.items()}
+        original=builder.validated_figure_tuple
+        for mode in ('mutate','hardlink'):
+            with self.subTest(mode=mode), patch.object(builder,'_FIGURE_TUPLE_REPLAYS',{}):
+                def change(pinned,*args,**kwargs):
+                    if kwargs.get('parent_snapshots'):
+                        target=pinned['file-metadata']
+                        if mode == 'hardlink':
+                            outside=self.root/'outside-provider.tsv'
+                            outside.write_bytes(target.read_bytes());target.unlink();os.link(outside,target)
+                        else:
+                            data=target.read_bytes();target.write_bytes(bytes([data[0]^1])+data[1:])
+                    return original(pinned,*args,**kwargs)
+                with patch.object(builder,'validated_figure_tuple',side_effect=change), self.assertRaises(ValueError):
+                    builder.pinned_auxiliary_snapshots(paths,hashes,self.root/('stage-'+mode))
+                self.assertEqual(len(builder._FIGURE_TUPLE_REPLAYS),1)
+
+    def test_external_sql_lexical_alias_retains_separate_destination_replay(self):
+        args=self.complete();output,_=self.materialize(args)
+        paths=self.paths(output);hashes={role:builder.sha256_file(path) for role,path in paths.items()}
+        alias=self.root/'sql-alias';alias.symlink_to(Path(args.sql[0]).parent,target_is_directory=True)
+        def aliased(row,wiki,date):
+            return alias/Path(row['path']).name
+        with (figure.bind_inventory_downloads(self.root), patch.object(figure,'inventory_sql_path',side_effect=aliased),
+              patch.object(builder,'_FIGURE_TUPLE_REPLAYS',{}),patch.object(figure,'verify_tuple',wraps=figure.verify_tuple) as replay):
+            builder.pinned_auxiliary_snapshots(paths,hashes,self.root/'aliased-sql-stage')
             self.assertEqual(replay.call_count,2)
 
     def test_normal_staging_refuses_contained_destination_symlink_without_external_writes(self):

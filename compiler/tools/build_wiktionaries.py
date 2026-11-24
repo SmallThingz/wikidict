@@ -507,7 +507,15 @@ class PreparedSourceRequest:
             self.generation=self.await_authorization(self.generation.generation_reference)
             _PREPARED_SOURCE.value=self.generation
 
-    def await_authorization(self, reference):
+    def offer_compiled(self, workspace, tools):
+        cfg = self.configuration
+        record = compiled_input_observation(cfg, self.start, workspace, tools)
+        record['attempt_start'] = self.reference
+        reference = write_prepared_metadata(self.folder / 'compiled-inputs.json', record)
+        self.await_authorization(reference, compiled=True)
+        return record
+
+    def await_authorization(self, reference, *, compiled=False):
         from build_resource_limits import MAX_WATCHDOG_WALL_SECONDS
         timeout=self.configuration['build_timeout_seconds']
         if type(timeout) not in (int,float) or not 0<timeout<=MAX_WATCHDOG_WALL_SECONDS:
@@ -528,6 +536,12 @@ class PreparedSourceRequest:
                 stamp = (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
                 if stamp != pending_stamp:
                     launch_ref, launch = _read_prepared_metadata(launch_path.absolute())
+                    if compiled:
+                        decision = launch.get('compiled_source_authorization')
+                        if decision is not None:
+                            if decision['inputs'] != reference or decision['attempt_start'] != self.reference:
+                                raise ValueError('Parent authorized different compiled inputs')
+                            return
                     auth=launch.get('prepared_source_authorization')
                     if auth is not None:
                         if auth.get('generation')!=reference:
@@ -637,6 +651,14 @@ class PreparedSourceRequest:
                         record['figure_validation']=compact
                         if len(json.dumps(record,sort_keys=True,ensure_ascii=True))+1>64*1024*1024:
                             del record['figure_validation']
+        launch = prepared_metadata(prepared_metadata_ref(self.folder / 'launch.json'))
+        compiled = launch.get('compiled_source_authorization')
+        if compiled is not None:
+            early = prepared_metadata(compiled['inputs'])
+            sealed = prepared_metadata(archive_ref)
+            if early['graph'] != sealed['origin_graph'] or early['producer'] != sealed['identity']['producer']:
+                raise ValueError('Completed worker was produced by different compiled inputs')
+            record['compiled_inputs'] = compiled['inputs']
         # This is a request, not authority. The parent validates these bindings
         # and original source before authorizing, then the child reopens them.
         reference=write_prepared_metadata(self.folder/'prepared-generation.json',record)
@@ -1965,6 +1987,61 @@ def _decode_cached_figure_result(value):
     return result
 
 
+def _copied_materialized_figure(helper, paths, parent_paths, source, guard, deferred):
+    """Recognize a byte-identical copy of this interpreter's verified self-contained capture."""
+    if not (source and deferred and getattr(helper, 'MATERIALIZED_HTTP_MODE', None) == 'materialized-http-origins-v1' and
+            isinstance(guard, _FigureReadsetGuard) and
+            isinstance(source[0], _FigureReadsetGuard) and guard[0] == source[0][0] and
+            guard.sql_downloads == source[0].sql_downloads and set(parent_paths) == set(paths)):
+        return None
+    names = {**helper.ROLES, 'file-metadata': helper.PROVIDER}
+    if set(names) != set(paths) or any(Path(path).name != names[role] or
+            Path(parent_paths[role]).name != names[role] for role, path in paths.items()):
+        return None
+    root, parent = Path(guard._root), Path(source[0]._root)
+    if (root.is_relative_to(parent) or parent.is_relative_to(root) or root.resolve() != root or
+            parent.resolve() != parent):
+        return None
+    def contained_dirs(base, readset):
+        result = set()
+        for name in readset[2]:
+            directory = Path(name)
+            if directory == base:
+                continue
+            if directory.parent != base or not re.fullmatch('figure-origin-[0-9a-f]{64}', directory.name):
+                return None
+            result.add(directory.name)
+        return result
+    # The strict capture enumerator admits these directories only for materialized
+    # HTTP plans. Other capture formats retain their own destination replay.
+    origins = contained_dirs(parent, source[0])
+    if not origins or origins != contained_dirs(root, guard):
+        return None
+    old_files = source[0][1]
+    contained = {Path(name).relative_to(parent) for name in old_files if Path(name).is_relative_to(parent)}
+    if contained != {path.relative_to(root) for path in deferred}:
+        return None
+    old_external = {name: row for name, row in old_files.items() if not Path(name).is_relative_to(parent)}
+    external = {name: row for name, row in guard[1].items() if not Path(name).is_relative_to(root)}
+    if (old_external != external or any(name != stamp[0] or Path(name).is_relative_to(root) or
+            Path(name).is_relative_to(parent) for name, (stamp, _) in external.items())):
+        return None
+    seen = {row[0][1][:2] for row in old_files.values()}
+    for path in deferred:
+        stamp, _ = guard[1][str(path)]
+        inode = stamp[1][:2]
+        if inode in seen or stamp[0] != str(path) or stamp[1][5] != 1:
+            raise ValueError('Aliased materialized Figure staging member')
+        seen.add(inode)
+        original = old_files[str(parent/path.relative_to(root))][1]
+        if stamp[1][6] != original['size'] or sha256_file(path) != original['sha256']:
+            raise ValueError('Copied materialized Figure member differs from verified source')
+    if figure_tuple_guard(helper, parent, authenticated=source[0]) != source[0]:
+        raise ValueError('Figure parent changed during staged copy verification')
+    return {role: (manifest, inventory) for role, (manifest, inventory) in
+            _decode_cached_figure_result(source[1]).items()}
+
+
 def verified_figure_tuple(helper, paths, edition=None, date=None, *, parent_paths=None):
     """Reuse only this interpreter's completed replay under fresh identity guards."""
     key = tuple(sorted((role, str(Path(path).absolute())) for role, path in paths.items()))
@@ -2003,7 +2080,8 @@ def verified_figure_tuple(helper, paths, edition=None, date=None, *, parent_path
         (inspect.Parameter.KEYWORD_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
         for name in ('retained_cache', 'inventory_cache'))
     proofs = None
-    if guard is not None and supports_parents and parent_paths:
+    source = None
+    if guard is not None and parent_paths:
         parent_key = tuple(sorted((role, str(Path(path).absolute())) for role, path in parent_paths.items()))
         parent_roots = {Path(path).parent for path in parent_paths.values()}
         if len(parent_roots) == 1:
@@ -2015,21 +2093,28 @@ def verified_figure_tuple(helper, paths, edition=None, date=None, *, parent_path
                 if source is not None and _FIGURE_TUPLE_REPLAYS.get(parent_key) is source:
                     if parent_guard is None or parent_guard != source[0]:
                         raise ValueError('Figure parent inputs changed before pinning replay')
-                    if len(source) == 3:
+                    if supports_parents and len(source) == 3:
                         # The resolver publishes completed proof on the main
                         # thread; one build worker exclusively claims it here.
                         proofs = source[2]
                         _FIGURE_TUPLE_REPLAYS[parent_key] = source[:2]
                         proofs['owner'] = threading.current_thread()
+                else:
+                    source = None
     release_figure_parent_replays()
     if guard is not None and supports_parents and proofs is None:
         proofs = {'owner': threading.current_thread(), 'retained': {}, 'inventory': {}}
     retained = False
     try:
         kwargs = {} if proofs is None else {'retained_cache': proofs['retained'], 'inventory_cache': proofs['inventory']}
-        # This always replays the destination itself. Only exact absolute
-        # external-parent and SQL keys can hit the helper's existing caches.
-        result = helper.verify_tuple(paths, edition, date, **kwargs)
+        result = _copied_materialized_figure(helper, paths, parent_paths, source, guard, deferred)
+        if result is None:
+            result = helper.verify_tuple(paths, edition, date, **kwargs)
+        else:
+            record = next(iter(result.values()))[0]
+            if ((edition is not None and record['wiki'] != edition) or
+                    (date is not None and record['date'] != date)):
+                raise ValueError('Figure capture edition/date mismatch')
         if guard is not None and deferred:
             # The complete tuple validator authenticated the destination bytes.
             # Use its exact inventory only after the original stamps survive the
@@ -8735,6 +8820,77 @@ class RetainedNativeToolRoles:
         return {name: self.tools[name] for name in BLOB_TOOL_NAMES}
 
 
+def compiled_input_observation(cfg, start, workspace, tools=None):
+    """Observe only the inputs still consumed by the installed fresh expansion driver."""
+    import extraction_cache as cache
+    workspace = Path(workspace)
+    if (cfg.get('prepared_source_custody') is not True or cfg.get('retained_native_roles') is not None
+            or workspace != Path(cfg['output']) / start['edition'] / (cfg['date'] + '.shards')):
+        raise ValueError('Compiled inputs belong to another preparation')
+    directory = workspace / 'native-blob-tools' / 'bin'
+    driver = directory / 'dict-bundle-build'
+    stamp = native_tool_stamp(driver)
+    graph = json.loads(subprocess.check_output([str(driver), '--prepared-build-inputs'], timeout=30, cwd=PROJECT))
+    writer = PROJECT / graph.pop('writer')
+    # Zig options are relative to the project's ordinary build-dictionary cwd.
+    # Retain the wire spelling for comparison with the original worker seal.
+    resolved = {name:(value if name == 'clang' else str(PROJECT / value)) for name,value in graph.items()}
+    if (resolved.get('project_root') != str(PROJECT) or resolved.get('zig') != cfg['compiler']['path']
+            or graph.get('clang') != 'clang' or native_tool_stamp(driver) != stamp):
+        raise ValueError('Installed driver has a different source root or toolchain')
+    producer, graph_stamps = cache.completed_producer_identity(resolved)
+    inventory = prepared_metadata(cfg['source']['inventory'])
+    if inventory['head'] != cfg['source']['head']:
+        raise ValueError('Compiled source inventory belongs to another commit')
+    python = {name: dict(sha256=row['sha256'], mode=inventory['modes'][name])
+              for name, row in inventory['files'].items() if _python_tool_source(name)}
+    guard = object.__new__(PreparedSourceGeneration)
+    guard.record = dict(python=python, python_tooling=cfg.get('python_tooling'))
+    guard.require_python(force=True)
+    late = {}
+    for name in ('build.zig', *('compiler/' + name for name in (*cache.PIPELINE_POLICY_FILES,
+            *cache.ABI_FILES, *cache.LIVE_LEAF_SOURCE_PATHS))):
+        path = PROJECT / name
+        saved = inventory['files'][name]
+        before = cache._full_stamp(path.stat())
+        if (path.resolve() != path or saved['sha256'] != sha256_file(path)
+                or before != cache._full_stamp(path.stat()) or stat.S_IMODE(before[2]) != inventory['modes'][name]):
+            raise ValueError('Late expansion source changed: ' + name)
+        late[name] = list(before)
+    installed = {}
+    for name in ('dict-bundle-build', *BLOB_TOOL_NAMES):
+        path = directory / name
+        before = native_tool_stamp(path)
+        try:
+            identity = cache.tool_identity(path)
+        except subprocess.CalledProcessError as exc:
+            if name != 'dict-bundle-build' or exc.cmd[0] != 'ldd' or exc.returncode != 1:
+                raise
+            # The normal Zig driver is a static executable on Linux. Verify its
+            # actual program headers before accepting an empty loader set.
+            headers = subprocess.check_output(['readelf', '-lW', path], text=True,
+                                              env=dict(os.environ, LC_ALL='C'), timeout=cache.identity_probe_timeout(30))
+            if ('Elf file type is EXEC' not in headers or not re.search(r'(?m)^  LOAD +', headers)
+                    or re.search(r'(?m)^  (?:DYNAMIC|INTERP) +', headers)):
+                raise ValueError('Cannot establish the expansion driver loader identity') from exc
+            identity = dict(extractor_sha256=cache.stable_file_digest(path)[1], libraries=[])
+        if native_tool_stamp(path) != before:
+            raise ValueError('Installed expansion tool changed')
+        if tools is not None and name in BLOB_TOOL_NAMES:
+            tools[name].require_unchanged()
+            if identity['extractor_sha256'] != tools[name].sha256:
+                raise ValueError('Installed Writer tools differ from preparation')
+        installed[name] = dict(stamp=list(before), identity=identity)
+    writer_digest = cache.stable_file_digest(writer)
+    if (writer_digest[1] != installed['dict-blob-build']['identity']['extractor_sha256']
+            or producer['zig']['tool_sha256'] != cfg['compiler']['sha256']):
+        raise ValueError('Embedded Writer or compiler differs from original preparation')
+    return dict(workspace=str(workspace), graph=graph, producer=producer,
+                graph_stamps={name:list(value) for name,value in graph_stamps.items()},
+                writer=dict(path=str(writer), digest=writer_digest, stamp=list(cache._full_stamp(writer.stat()))),
+                installed=installed, late=late, python_stamps={name:list(stamp) for name,stamp in guard._python_stamps.items()})
+
+
 def prepare_blob_tools(workspace, zig, edition, date, build_identity=None, *, expander_args=None, figure_inputs=None, retained_roles=None):
     """Use the existing Zig graph once, then bind its private installed outputs."""
     if getattr(_PREPARED_SOURCE,'value',None) is not None:
@@ -8801,7 +8957,12 @@ def prepare_blob_tools(workspace, zig, edition, date, build_identity=None, *, ex
             build_env = os.environ.copy()
             build_env.setdefault('ZIG_GLOBAL_CACHE_DIR', str(PROJECT / '.zig-cache' / 'global'))
             command=[str(compiler),'build','-j1','-Doptimize=fast','--prefix',str(prefix),'prepare-blob-tools']
-            if expander_args is not None and figure_inputs is None:
+            request = getattr(_PREPARED_SOURCE, 'request', None)
+            early = (isinstance(request, PreparedSourceRequest) and expander_args is not None
+                     and '--seal-prepared-source' in expander_args and '--expander-only' in expander_args)
+            if early:
+                command.extend(['prepare-bundle-driver', '--summary', 'all'])
+            elif expander_args is not None and figure_inputs is None:
                 command.extend(['--summary','all','build-dictionary','--',*expander_args])
             else:
                 command[-1:] = ['--summary','all','prepare-blob-tools']
@@ -8822,7 +8983,18 @@ def prepare_blob_tools(workspace, zig, edition, date, build_identity=None, *, ex
                 path.chmod(stat.S_IMODE(info.st_mode)&~0o222)
                 tools[name]=PreparedBlobTool(path)
             check_figure_compatibility(tools['dict-blob-build'],figure_inputs,edition,date)
-            if expander_args is not None and figure_inputs is not None:
+            if early:
+                driver = prefix / 'bin' / 'dict-bundle-build'
+                info = require_private_native_tool(driver)
+                driver.chmod(stat.S_IMODE(info.st_mode) & ~0o222)
+                evidence = request.offer_compiled(workspace, tools)
+                timed_run([str(driver), *expander_args], edition, date, 'prepared_bundle_driver',
+                          env=build_env, measure_reaped_children=True)
+                post_started = time.monotonic()
+                current = compiled_input_observation(request.configuration, request.start, workspace, tools)
+                if current != {k:v for k,v in evidence.items() if k != 'attempt_start'}:
+                    raise ValueError('Bound expansion inputs changed before worker sealing')
+            elif expander_args is not None and figure_inputs is not None:
                 # The normal build graph may reuse its prepared tools, but it
                 # must not execute the expensive expander before this check.
                 post_started=None
