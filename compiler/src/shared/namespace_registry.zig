@@ -218,13 +218,32 @@ pub const Registry = struct {
             std.mem.eql(u8, &std.fmt.bytesToHex(digest, .lower), "4835a6193e22b52a58ad189058ccc887b4d76a34065d3c016b4968fb4755aa8b");
     }
 
+    pub fn isCurrentSqlFigureDefaults(self: *const Registry, digest: [32]u8) bool {
+        if (!std.mem.eql(u8, self.dump_date, "20261001")) return false;
+        const profiles = .{
+            .{ "sawiktionary", "sa", "44a33628d02c7db96752bedd8b11e0d6ff3442a4bd0a80a7517674787325a48f", "bab7b6aa50e3918cca7f3207f6fa11fbd470c4dd28e24e16494412cf5c6d918b" },
+            .{ "shwiktionary", "sh", "a62703e254bd8dcc7606016d69db5a1e55bb96389681acaa05317e6056b8a57a", "589f4f7e434f6c3d3841b36d4d89b33e25a8a502b9e098dd17733dda37b89e2f" },
+        };
+        inline for (profiles) |profile| {
+            if (std.mem.eql(u8, self.wiki, profile[0]) and std.mem.eql(u8, self.content_language, profile[1]) and
+                std.mem.eql(u8, &std.fmt.bytesToHex(self.source_sha256, .lower), profile[2]) and
+                std.mem.eql(u8, &std.fmt.bytesToHex(digest, .lower), profile[3])) return true;
+        }
+        return false;
+    }
+
     /// The ordinary Figure input role may consume this selected current
     /// observation. It does not grant the main-page or conversion role.
     pub fn loadCurrentMonFigureDefaults(self: *const Registry, raw: []const u8) !?FigureSourceDefaults {
+        return self.loadCurrentFigureDefaults(raw, false);
+    }
+
+    pub fn loadCurrentFigureDefaults(self: *const Registry, raw: []const u8, include_sql: bool) !?FigureSourceDefaults {
         if (raw.len > 1024 * 1024) return null;
         var digest: [32]u8 = undefined;
         std.crypto.hash.sha2.Sha256.hash(raw, &digest, .{});
-        if (!self.isCurrentMonFigureDefaults(digest)) return null;
+        if (!self.isCurrentMonFigureDefaults(digest) and
+            !(include_sql and self.isCurrentSqlFigureDefaults(digest))) return null;
         const parsed = try std.json.parseFromSlice(std.json.Value, self.arena.child_allocator, raw, .{});
         defer parsed.deinit();
         if (parsed.value != .object) return null;

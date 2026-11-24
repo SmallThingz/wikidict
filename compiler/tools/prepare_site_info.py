@@ -43,6 +43,11 @@ FIGURE_WMF5_CORE = '87f311882d8c84ec21e288d0bde8aa289df8dc56'
 FIGURE_WMF5_SCRIBUNTO = '25f7cdefa45a3b8417d7fa296f86b76537927f43'
 FIGURE_MON_CORE = '57f2a6bfacc3c5cecc269214a8d726b0b6faa596'
 FIGURE_MON_DEFAULTS = ('20261001', 'da834f0e0f84cc57b24bfc1ca633fb0969f8c046cd99d8837fbcb91dcf53394a')
+FIGURE_CURRENT_DEFAULTS = {
+    'mnwwiktionary': FIGURE_MON_DEFAULTS,
+    'sawiktionary': ('20261001', '6a84129b4f0ccfb7f4909e3b3e19303718715fe204b3ead69172379e1513d4ec'),
+    'shwiktionary': ('20261001', '7d2c6464848edc6a27d77d9267d96d5b263ef4cc6429b9444d7fa49bc8894d2d'),
+}
 FIGURE_WMF5_SR_RAW = '9755bd766754d1d6e0ede764ca11eb351c4da75363cb6297c70668dba657b31f'
 FIGURE_WMF5_DEFAULTS = {
     'thwiktionary': ('20261001', '424f330eb29ae006d684238cf2d8dedc254af22f49d4a01e2224224212e85ac2'),
@@ -173,8 +178,8 @@ def response(data, wiki, language, profile=PROFILE, *, raw_sha=None, date=None):
 def file_defaults_observation(core, wiki):
     if core == FIGURE_WMF5_CORE and isinstance(wiki, str):
         return FIGURE_WMF5_DEFAULTS.get(wiki)
-    if core == FIGURE_MON_CORE and wiki == 'mnwwiktionary':
-        return FIGURE_MON_DEFAULTS
+    if core == FIGURE_MON_CORE and isinstance(wiki, str):
+        return FIGURE_CURRENT_DEFAULTS.get(wiki)
     return None
 
 

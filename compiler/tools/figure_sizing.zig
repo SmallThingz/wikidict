@@ -706,7 +706,7 @@ fn officialServer(a: A, wiki: []const u8) ![]u8 {
 fn general(value: Value, wiki: []const u8, language: []const u8, server: []const u8, core: []const u8) !Value {
     return generalWithEpoch(value, wiki, language, server, core, false, .ordinary);
 }
-const ImageInfoScope = enum { ordinary, rollout_base, mon_current, svg_width, french_jpeg, hungarian_missing_ogg, greek_audio_ogg, vietnamese_svg };
+const ImageInfoScope = enum { ordinary, rollout_base, mon_current, sql_current, svg_width, french_jpeg, hungarian_missing_ogg, greek_audio_ogg, vietnamese_svg };
 
 // These roles use only the file state or explicit thumbnail returned by
 // ImageInfo. The deployment does not supply general file or parser authority.
@@ -738,7 +738,10 @@ fn generalWithEpoch(value: Value, wiki: []const u8, language: []const u8, server
         !equal(try string(item, "git-hash"), core) or !equal(bare, server)) return invalid;
     if (scope == .mon_current and (!equal(core, wmf5_rollout_core) or !equal(wiki, "mnwwiktionary") or
         !equal(try string(item, "generator"), "MediaWiki 1.48.0-wmf.5"))) return invalid;
-    if (scope == .rollout_base or scope == .mon_current or equal(core, wmf5_imageinfo_core)) {
+    if (scope == .sql_current and (!equal(core, wmf5_rollout_core) or
+        (!equal(wiki, "sawiktionary") and !equal(wiki, "shwiktionary")) or
+        !equal(try string(item, "generator"), "MediaWiki 1.48.0-wmf.5"))) return invalid;
+    if (scope == .rollout_base or scope == .mon_current or scope == .sql_current or equal(core, wmf5_imageinfo_core)) {
         if (scope == .rollout_base and (!equal(core, wmf5_rollout_core) or
             (!equal(wiki, "dewiktionary") and !equal(wiki, "ruwiktionary") and !equal(wiki, "thwiktionary")) or
             !equal(try string(item, "generator"), "MediaWiki 1.48.0-wmf.5"))) return invalid;
@@ -1192,9 +1195,18 @@ fn validateFileSource(a: A, doc: anytype, records_count: u64, batch_count: u64, 
     const ns_digest = std.fmt.bytesToHex(ns.source_sha256, .lower);
     const source_core = defaults.core orelse return invalid;
     const binding = if (equal(doc.core_revision, wmf5_imageinfo_core)) ordinaryImageInfoDefaults(ns.wiki) orelse return invalid else null;
-    const mon_current = equal(doc.core_revision, wmf5_rollout_core);
-    if (mon_current and (!contract or !epochs or records_count == 0 or
-        !equal(source_core, wmf5_rollout_core) or !ns.isCurrentMonFigureDefaults(defaults.sha256 orelse return invalid))) return invalid;
+    const current = equal(doc.core_revision, wmf5_rollout_core);
+    var current_scope: ImageInfoScope = .ordinary;
+    if (current) {
+        if (!contract or !epochs or records_count == 0 or !equal(source_core, wmf5_rollout_core)) return invalid;
+        const digest = defaults.sha256 orelse return invalid;
+        if (ns.isCurrentMonFigureDefaults(digest)) {
+            current_scope = .mon_current;
+        } else if (ns.isCurrentSqlFigureDefaults(digest)) {
+            if (!gifProfile(doc.source_profile) or webpProfile(doc.source_profile)) return invalid;
+            current_scope = .sql_current;
+        } else return invalid;
+    }
     if (binding) |bound| {
         // The selected Book defaults and the independently captured ImageInfo
         // defaults belong to this edition and date. Neither supplies parser rules.
@@ -1221,15 +1233,15 @@ fn validateFileSource(a: A, doc: anytype, records_count: u64, batch_count: u64, 
             !equal(try string(empty_general, "git-hash"), doc.core_revision)) return invalid;
         return null;
     }
-    if ((binding == null and !mon_current and !acceptedResponseCore(doc.core_revision, epochs)) or !d191Profile(source_core, doc.source_profile)) return invalid;
+    if ((binding == null and !current and !acceptedResponseCore(doc.core_revision, epochs)) or !d191Profile(source_core, doc.source_profile)) return invalid;
     try profile(doc.source_profile, site, doc.core_revision, binding);
     if (webpProfile(doc.source_profile) and (!contract or !epochs)) return invalid;
     const gif = gifProfile(doc.source_profile);
     if ((equal(doc.core_revision, response_core) or registrationEpoch(doc.core_revision) or wmf4Epoch(doc.core_revision)) and !gif) return invalid;
-    if (gif and (!(binding != null or mon_current or equal(doc.core_revision, current_core) or (epochs and responseEpoch(doc.core_revision))) or (!contract and !svgOccurrenceGenerator(doc.generator_sha256) and
+    if (gif and (!(binding != null or current or equal(doc.core_revision, current_core) or (epochs and responseEpoch(doc.core_revision))) or (!contract and !svgOccurrenceGenerator(doc.generator_sha256) and
         !equal(doc.generator_sha256, "7bce7ec0bd0acdf6a9d726ed50c1e85a64bc089731d0347d048f1787003d4c0b")))) return invalid;
     const server = try officialServer(a, ns.wiki);
-    const site_query = try generalWithEpoch(registration, ns.wiki, ns.content_language, server, doc.core_revision, epochs, if (mon_current) .mon_current else .ordinary);
+    const site_query = try generalWithEpoch(registration, ns.wiki, ns.content_language, server, doc.core_revision, epochs, current_scope);
     _ = try mediaRegistration(site_query, try mediaProfileSet(try field(doc.source_profile, "media_extensions")));
     if ((try timestamp(try string(registration, "curtimestamp"))).fraction.len != 0) return invalid;
     return server;
@@ -2016,9 +2028,11 @@ pub const Registry = struct {
             // rows may use the new core. The first authenticated registration, defaults
             // and every supplemental observation retain their original source rules.
             const scope: ImageInfoScope = if (equal(doc.core_revision, wmf5_rollout_core)) scope: {
-                // validateFileSource already bound the exact Mon defaults.
+                // validateFileSource already bound this exact Book defaults observation.
                 if (!batches.streamed_v6 or !equal(batch_core, wmf5_rollout_core) or supplement) return invalid;
-                break :scope .mon_current;
+                if (equal(ns.wiki, "mnwwiktionary")) break :scope .mon_current;
+                if (batch.tiff_metadata_response != null) return invalid;
+                break :scope .sql_current;
             } else if (equal(batch_core, wmf5_rollout_core)) scope: {
                 if (batch_index == 0 or !batches.streamed_v6 or !equal(doc.core_revision, wmf5_imageinfo_core) or supplement) return invalid;
                 break :scope .rollout_base;

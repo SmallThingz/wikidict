@@ -661,17 +661,17 @@ fn loadFigureSiteAt(io: std.Io, a: std.mem.Allocator, namespace_path: []const u8
     const site = try parseSiteMainPage(a, mapped.bytes, &isolated);
     defer a.free(site.title);
     try isolated.attachLanguageConversion(mapped.bytes);
-    const mon_defaults = if (isolated.figure_source_defaults == null)
-        try isolated.loadCurrentMonFigureDefaults(mapped.bytes) else null;
+    const current_defaults = if (isolated.figure_source_defaults == null)
+        try isolated.loadCurrentFigureDefaults(mapped.bytes, true) else null;
     return .{
         .source_context = .{ .namespace_sha256 = namespaces.source_sha256,
-            .defaults = isolated.figure_source_defaults orelse mon_defaults orelse return error.InvalidFigureSizingSource,
+            .defaults = isolated.figure_source_defaults orelse current_defaults orelse return error.InvalidFigureSizingSource,
             // The six MissingMedia dependencies are byte-identical at these
             // exact cores. This tag identifies their implementation semantics;
             // core_revision and the original source/default digest stay intact.
             .missing_media_profile = if (std.mem.eql(u8, site.figure_core_revision orelse "", "f45897451256aa3799aecc5d7ee320ade22beaec") or
                 std.mem.eql(u8, site.figure_core_revision orelse "", "0470f6c99a6456a366635bf25a517a1f951de6f5")) .f45897 else null },
-        .core_revision = site.figure_core_revision orelse if (mon_defaults != null)
+        .core_revision = site.figure_core_revision orelse if (current_defaults != null)
             namespace_registry.Registry.mon_current_figure_core else return error.InvalidFigureSizingSource,
         .source_sha256 = site.digest,
     };
@@ -71294,5 +71294,34 @@ test "Sanskrit paired H1 source banner binds its first region only" {
             };
             try std.testing.expectEqual(if (is_sanskrit) [3]usize{ 1, 1, 0 } else [3]usize{ 0, 0, 1 }, words);
         }
+    }
+}
+
+test "normal Figure loader accepts exact SH and SA current57 dated File authority" {
+    const io = std.testing.io;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    inline for (.{ "shwiktionary", "sawiktionary" }) |wiki| {
+        const paths = "compiler/tools/sh-sa-current57/" ++ wiki ++ "/";
+        const ns_path = try std.Io.Dir.cwd().realPathFileAlloc(io, paths ++ "namespace-registry.tsv", a);
+        const default_path = try std.Io.Dir.cwd().realPathFileAlloc(io, paths ++ "figure-siteinfo.raw.json", a);
+        const ns_raw = try std.Io.Dir.cwd().readFileAlloc(io, ns_path, a, .limited(1024 * 1024));
+        var ns = try namespace_registry.Registry.init(a, ns_raw);
+        defer ns.deinit();
+        const defaults = (try loadFigureSiteAt(io, a, ns_path, default_path, &ns)) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualStrings(namespace_registry.Registry.mon_current_figure_core, defaults.core_revision);
+        try std.testing.expectEqual(@as(?u32, 250), defaults.source_context.defaults.default_thumbnail_width);
+        try std.testing.expect(ns.isCurrentSqlFigureDefaults(defaults.source_sha256));
+        try std.testing.expect(!ns.isCurrentMonFigureDefaults(defaults.source_sha256));
+        const projection = try std.Io.Dir.cwd().realPathFileAlloc(io, paths ++ "figure-sizing.json", a);
+        const raw = try std.Io.Dir.cwd().realPathFileAlloc(io, paths ++ "figure-sizing.raw.json", a);
+        const site = try std.Io.Dir.cwd().realPathFileAlloc(io, paths ++ "figure-sizing.site.json", a);
+        var registry = (try loadFigureSizingAt(io, a, .{ projection, raw, site }, &ns, defaults)) orelse return error.TestUnexpectedResult;
+        defer registry.deinit();
+        var forged = defaults;
+        forged.source_sha256[0] ^= 1;
+        try std.testing.expectError(error.InvalidFigureSizingSource,
+            loadFigureSizingAt(io, a, .{ projection, raw, site }, &ns, forged));
     }
 }
