@@ -22,7 +22,7 @@
 +endif()
 --- a/tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp
 +++ b/tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp
-@@ -3,24 +3,15990 @@
+@@ -3,24 +3,15992 @@
  
  
  #include <QTest>
@@ -1920,9 +1920,11 @@
 +    void rubyAlternatingLevelsUseMeasuredBoxes();
 +    void rubyEmptyReadingHasOwnerMetricsWithoutLogicalText();
 +    void rubyFlatShapingPreservesOwnerAndScalarBoundaries();
++    void rubyMixedChildKeepsDeclaringFontBox();
 +    void rubyFlatShapingUsesNativeDirectionWithoutControlText();
 +    void actionlessBoxesKeepChildLinkContentHitsAndFocus();
 +    void actionlessChildLinksRefuseForeignPolicyAndRecover();
++    void tableCellIndicesSurviveStructuralEdits();
 +    void ownedTableVisibleRowsPreservePaintAndAnchor();
 +    void formatAtPreservesOverlappingPreeditOwnership();
 +    void sourceBoxTreeKeepsCoincidentPaintAndIndependentAdvances();
@@ -16013,7 +16015,7 @@
      void init();
      void cleanup();
      void cleanupTestCase();
-@@ -648,5 +16614,3585 @@
+@@ -648,5 +16616,3682 @@
      }
  }
  
@@ -16423,6 +16425,58 @@
 +    QVERIFY(!empty->hasInk);
 +    QVERIFY(empty->layout->text().isEmpty());
 +    QCOMPARE(empty->layout->lineCount(), 0);
++}
++
++void tst_QTextDocumentLayout::rubyMixedChildKeepsDeclaringFontBox()
++{
++    QImage image(256, 256, QImage::Format_ARGB32_Premultiplied);
++    image.fill(Qt::white);
++    QTextDocument document;
++    document.documentLayout()->setPaintDevice(&image);
++    QFont small = document.defaultFont();
++    small.setPixelSize(12);
++    QFont owner = small;
++    owner.setPixelSize(80);
++    QTextCharFormat format;
++    format.setFont(small);
++    QTextCursor cursor(&document);
++    const QString text = QStringLiteral("\u05d0A1\u05d1B2\u05d2");
++    cursor.insertText(text, format);
++    const auto child = [&](int first, int last, const QFont &font) {
++        QTextRubyLayout::Child result;
++        result.source = {first, last};
++        result.ownerFont = font;
++        result.option.setTextDirection(Qt::RightToLeft);
++        return result;
++    };
++    const auto nested = [&](int at) {
++        auto description = std::make_shared<QTextRubyLayout::Description>();
++        description->bases.append(child(at, at + 1, small));
++        description->readings.append({child(at + 1, at + 2, small), 0, 1, 0});
++        description->gaps = {0};
++        return QTextRubyLayout::NestedPart{{at, at + 2}, description};
++    };
++    auto base = child(0, int(text.size()), owner);
++    base.background = QColor(Qt::yellow);
++    base.nestedParts = {nested(1), nested(4)};
++    QTextRubyLayout::Description description;
++    description.bases = {base};
++    description.gaps = {0};
++    description.direction = Qt::RightToLeft;
++    const auto ruby = QTextRubyLayout::create(&document, description);
++    QVERIFY(ruby);
++    const QFontMetricsF metrics(owner, &image);
++    QVERIFY(ruby->metrics().occupiedTop.toReal() <= -metrics.ascent() + 1.0 / 64);
++    QVERIFY(ruby->metrics().occupiedBottom.toReal() >= metrics.descent() - 1.0 / 64);
++    QCOMPARE(document.toRawText(), text);
++    const QPointF baseline(10, 128);
++    QPainter painter(&image);
++    ruby->draw(&painter, baseline, {});
++    painter.end();
++    // All glyph runs are small. Both samples lie in the declaring background.
++    const int x = qRound(baseline.x()) + 1;
++    QCOMPARE(image.pixelColor(x, qCeil(baseline.y() - metrics.ascent()) + 1), QColor(Qt::yellow));
++    QCOMPARE(image.pixelColor(x, qFloor(baseline.y() + metrics.descent()) - 2), QColor(Qt::yellow));
 +}
 +
 +void tst_QTextDocumentLayout::rubyFlatShapingUsesNativeDirectionWithoutControlText()
@@ -17026,6 +17080,51 @@
 +    clonedLayout->boundsQueries = 0;
 +    QCOMPARE(clonedLayout->anchorAt(point), QStringLiteral("dict:second"));
 +    QCOMPARE(clonedLayout->boundsQueries, 0);
++}
++
++void tst_QTextDocumentLayout::tableCellIndicesSurviveStructuralEdits()
++{
++    QTextDocument doc;
++    QTextCursor cursor(&doc);
++    auto *table = cursor.insertTable(5, 4);
++    for (int row = 0; row < 5; ++row)
++        for (int col = 0; col < 4; ++col)
++            table->cellAt(row, col).firstCursorPosition().insertText(QString::number(row * 4 + col));
++
++    const auto check = [&](int row, int col, int anchorRow, int anchorCol) {
++        const auto cell = table->cellAt(row, col);
++        QCOMPARE(cell.row(), anchorRow);
++        QCOMPARE(cell.column(), anchorCol);
++        QCOMPARE(table->cellAt(cell.firstCursorPosition()), cell);
++        QCOMPARE(table->cellAt(cell.lastCursorPosition()), cell);
++    };
++    check(4, 3, 4, 3);
++    const auto retained = table->cellAt(1, 2);
++    table->insertRows(0, 1);
++    table->insertColumns(0, 1);
++    QCOMPARE(retained.row(), 2);
++    QCOMPARE(retained.column(), 3);
++    QCOMPARE(retained.firstCursorPosition().block().text(), QStringLiteral("6"));
++    table->mergeCells(1, 1, 2, 2);
++    check(2, 2, 1, 1);
++    check(1, 2, 1, 1);
++    table->splitCell(1, 1, 1, 1);
++    check(2, 2, 2, 2);
++    doc.undo();
++    check(2, 2, 1, 1);
++    doc.redo();
++    check(2, 2, 2, 2);
++    check(5, 4, 5, 4);
++    table->removeRows(3, 3);
++    table->removeColumns(3, 2);
++    for (int row = table->rows() - 1; row >= 0; --row)
++        for (int col = table->columns() - 1; col >= 0; --col)
++            check(row, col, row, col);
++    cursor.movePosition(QTextCursor::End);
++    auto *other = cursor.insertTable(2, 2);
++    QCOMPARE(other->cellAt(1, 1).row(), 1);
++    QVERIFY(!table->cellAt(other->firstPosition()).isValid());
++    check(0, 0, 0, 0);
 +}
 +
 +void tst_QTextDocumentLayout::ownedTableVisibleRowsPreservePaintAndAnchor()

@@ -16033,7 +16033,7 @@
          eng->shapeLine(line);
 --- /dev/null
 +++ b/src/gui/text/qtextlogicalflow_p.h
-@@ -0,0 +1,1061 @@
+@@ -0,0 +1,1069 @@
 +// Copyright (C) 2026 wikidict contributors
 +// SPDX-License-Identifier: LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
 +#ifndef QTEXTLOGICALFLOW_P_H
@@ -16123,14 +16123,22 @@
 +            {"direction", int(child.option.textDirection())}, {"parts", parts}, {"joins", QVariantList{}}};
 +        QString error;
 +        if (!projection->initialize(descriptor, &error) || !projection->preparedRuby.isEmpty()) return {};
-+        auto *layout = projection->textLayout(); layout->setFont(child.ownerFont);
-+        auto option = child.option; option.setWrapMode(QTextOption::NoWrap); layout->setTextOption(option);
++        auto *layout = projection->textLayout();
++        QFont declaring = child.ownerFont;
++        declaring.setUnderline(false);
++        declaring.setStrikeOut(false);
++        layout->setFont(declaring);
++        auto option = child.option;
++        option.setWrapMode(QTextOption::NoWrap);
++        option.setAlignment(Qt::AlignLeft);
++        layout->setTextOption(option);
 +        layout->setCacheEnabled(true);
 +        if (!projection->refreshRubyMetrics()) return {};
 +        layout->beginLayout(); auto line = layout->createLine();
 +        if (line.isValid()) line.setNumColumns(int(projection->projectedText().size()));
 +        layout->endLayout();
-+        if (!line.isValid() || layout->lineCount() != 1 || !projection->current()) return {};
++        if (!line.isValid() || line.textStart() != 0 || line.textLength() != projection->projectedText().size()
++            || layout->lineCount() != 1 || !projection->current()) return {};
 +        return projection;
 +    }
 +    const QList<RubyObject> &measuredRubyObjects() const { return rubyObjects; }
@@ -18418,7 +18426,7 @@
 +#endif
 --- /dev/null
 +++ b/src/gui/text/qtextrubylayout_p.h
-@@ -0,0 +1,935 @@
+@@ -0,0 +1,936 @@
 +// Copyright (C) 2026 wikidict contributors
 +// SPDX-License-Identifier: LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
 +#ifndef QTEXTRUBYLAYOUT_P_H
@@ -18962,8 +18970,9 @@
 +            if (!result->composite) return false;
 +            result->shaped = std::make_unique<QTextRubyGeometry::ShapedChild>();
 +            result->shaped->advance = result->composite->advance();
-+            result->shaped->fontTop = result->composite->top();
-+            result->shaped->fontBottom = result->composite->bottom();
++            const QFontMetricsF declaring(description.ownerFont, paintDevice);
++            result->shaped->fontTop = qMin(-declaring.ascent(), result->composite->top());
++            result->shaped->fontBottom = qMax(declaring.descent(), result->composite->bottom());
 +        } else {
 +            QString text;
 +            QList<QTextLayout::FormatRange> formats;
@@ -20985,3 +20994,41 @@
      QTextDocumentPrivate::FragmentIterator it = pieceTable->find(cursorPos);
      return pieceTable->formatCollection()->format(it->format);
  }
+--- a/src/gui/text/qtexttable.cpp
++++ b/src/gui/text/qtexttable.cpp
+@@ -350,12 +350,22 @@
+ 
+ int QTextTablePrivate::findCellIndex(int fragment) const
+ {
++    // The cell array may have changed since the last call. Verify the actual
++    // fragment before reusing an index, including after a merge or undo.
++    if (lastCellIndex >= 0 && lastCellIndex < cells.size()) {
++        if (cells.at(lastCellIndex) == fragment) {
++            return lastCellIndex;
++        }
++        const qsizetype next = qsizetype(lastCellIndex) + 1;
++        if (next < cells.size() && cells.at(next) == fragment) {
++            return ++lastCellIndex;
++        }
++    }
+     QFragmentFindHelper helper(pieceTable->fragmentMap().position(fragment),
+                               pieceTable->fragmentMap());
+     const auto it = std::lower_bound(cells.constBegin(), cells.constEnd(), helper);
+-    if ((it == cells.constEnd()) || (helper < *it))
+-        return -1;
+-    return it - cells.constBegin();
++    lastCellIndex = it == cells.constEnd() || helper < *it ? -1 : int(it - cells.constBegin());
++    return lastCellIndex;
+ }
+ 
+ void QTextTablePrivate::fragmentAdded(QChar type, uint fragment)
+--- a/src/gui/text/qtexttable_p.h
++++ b/src/gui/text/qtexttable_p.h
+@@ -42,6 +42,7 @@
+     // used for fast-lookup for row/column by fragment
+     mutable QList<int> cellIndices;
+     mutable std::vector<int> grid;
++    mutable int lastCellIndex = -1;
+     mutable int nRows;
+     mutable int nCols;
+     mutable bool dirty;
