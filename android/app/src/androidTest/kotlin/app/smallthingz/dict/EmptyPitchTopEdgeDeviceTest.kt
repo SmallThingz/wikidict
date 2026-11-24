@@ -24,6 +24,93 @@ import org.junit.Test
 class EmptyPitchTopEdgeDeviceTest {
     @get:Rule val compose = createPhysicalContentRule()
 
+    @Test fun originalJapanesePronunciationKeepsTheEmptyEdgeBetweenKanaAndItsSeparateLinks() {
+        val inst = InstrumentationRegistry.getInstrumentation()
+        val temp = java.nio.file.Files.createTempDirectory(inst.targetContext.cacheDir.toPath(), "sr-ji-").toFile()
+        try {
+            val shard = temp.resolve("original-ja.wikblb.xz")
+            inst.context.assets.open("sr-empty/original-ja.wikblb.xz").use { input ->
+                shard.outputStream().use { input.copyTo(it) }
+            }
+            val data = BlobSource(shard).use {
+                check(it.compressed && it.length == 275981L)
+                it.read(36, 275945)
+            }
+            assertEquals("b0523e821b9a6fb1410fc5f1971b288ef98e4d03738abbab62dd12a07f0cd721",
+                MessageDigest.getInstance("SHA-256").digest(data).joinToString("") { "%02x".format(it) })
+            val entry = BlobDecoder.decode(data, "日", "language", "Јапански", "ja")
+            val section = entry.sections[19]
+            val block = section.blocks.first()
+            assertEquals("Pronunciation", section.title)
+            assertEquals("list_item", block.kind)
+            val edge = block.spans[4]
+            assertEquals("ひ", block.spans[3].text)
+            assertEquals("", edge.text)
+            assertEquals("ja", edge.language)
+            assertEquals("Jpan", edge.classes)
+            assertEquals(1.2f, checkNotNull(edge.fontScale), .00001f)
+            assertTrue(checkNotNull(edge.inlineBoxGroup).isEmptyTopEdge)
+            val links = block.spans.filter { it.kind == "link" }
+            assertEquals(listOf("平板型", "#reference-1"), links.map { it.target })
+            assertEquals("Pronunciation_6", section.anchor)
+            val request = EntryAnchorRequest(entry.key, "#" + section.anchor)
+            var consumed = false
+            val projection = rubyGraphicalProjection(block.spans)
+            val edgeRange = projection.ranges.single { it.role == RubyTextRole.BoxGroup && it.span === edge }
+            val edgeOffset = edgeRange.start
+            assertEquals(edgeOffset, edgeRange.end)
+            assertEquals('ひ', projection.text[edgeOffset - 1])
+            val calls = mutableListOf<EntryLink>()
+            var navigations = 0
+            compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+                DictTheme("light") { Surface {
+                    EntryView(entry, false, {}, onLink = { calls += it }, anchorRequest = request,
+                        onAnchorConsumed = { consumed = it === request },
+                        settings = AppSettings(collapseOtherSections = false, collapseDetails = false),
+                        onNavigate = { navigations++ })
+                } }
+            } }
+            compose.waitUntil(10000) { consumed }
+            compose.waitForIdle()
+            compose.runOnIdle {
+                assertPhysicalActivity(compose.activity)
+                val visible = mutableListOf<NativeFloatTextView>()
+                fun visit(view: View) {
+                    if (view is NativeFloatTextView && view.isShown) visible += view
+                    if (view is ViewGroup) repeat(view.childCount) { visit(view.getChildAt(it)) }
+                }
+                visit(compose.activity.window.decorView)
+                val owners = visible.filter { projection.text in it.logicalText }
+                assertEquals("Visible owners after #${section.anchor}: ${visible.map { it.logicalText.take(90) }}", 1, owners.size)
+                val view = owners.single()
+                val geometry = checkNotNull(view.currentMeasuredGeometry)
+                val first = geometry.text.indexOf(projection.text)
+                assertEquals(first, geometry.text.lastIndexOf(projection.text))
+                val end = first + projection.text.length
+                val at = first + edgeOffset
+                val kana = checkNotNull(geometry.characterRects(at - 1, 1).single())
+                assertTrue(kana.width() > 0 && kana.height() > 0)
+                assertEquals(kana.right, geometry.caretRect(NativeTextCaret(at, NativeTextAffinity.Upstream)).left, 1f)
+                view.setSelection(first, end)
+                assertEquals(projection.text, view.selectedTextForCopy())
+                val actions = geometry.nodes.filter { it.kind == FloatInteractionKind.LINK && it.onClick != null &&
+                    it.start >= first && it.end <= end }
+                assertEquals(2, actions.size)
+                for (link in links) {
+                    val node = actions.single { geometry.text.subSequence(it.start, it.end).toString() == link.text }
+                    assertTrue(node.start >= at && node.bounds.any { !it.isEmpty })
+                    assertTrue(view.accessibilityNodeProvider.performAction(node.id, AccessibilityNodeInfo.ACTION_CLICK, null))
+                }
+                assertEquals(2, navigations)
+                assertEquals(listOf(links.first().entryLink()), calls)
+            }
+        } finally {
+            compose.runOnIdle { compose.activity.setContent {} }
+            compose.waitForIdle()
+            temp.deleteRecursively()
+        }
+    }
+
     @Test fun historicalEmptyEdgePreservesCaretFontStrutInkAndSingleFollowingAction() {
         val data = InstrumentationRegistry.getInstrumentation().context.assets.open("sr-empty/typed-empty-top.dpry")
             .use { it.readBytes() }
