@@ -3842,7 +3842,11 @@ pub fn validResolvedStyleBorderTableDomain(value: anytype) bool {
         if (comptime @hasField(@TypeOf(cell), "style")) if (cell.style) |style| {
             if (styleBorderHasResolvedEdges(style.border)) resolved = true;
         };
-        if (cell.rowspan != 1 or cell.colspan != 1) unit_spans = false;
+        if (comptime @hasField(@TypeOf(cell), "rowspan") and @hasField(@TypeOf(cell), "colspan")) {
+            if (cell.rowspan != 1 or cell.colspan != 1) unit_spans = false;
+        } else {
+            unit_spans = false;
+        }
     };
     // Decide only after the full direct-cell census: a later cell may carry
     // the new variant while an earlier, otherwise legacy cell spans tracks.
@@ -10689,6 +10693,13 @@ test "AN resolved StyleBorder belongs to an ordinary table or its direct cell ow
     try std.testing.expect(validResolvedStyleBorderTableDomain(ordinary));
     const LegacyShape = struct { style: ?TableStyle = null, rows: []const Row };
     try std.testing.expect(validResolvedStyleBorderTableDomain(LegacyShape{ .rows = &rows }));
+    // A generic cell with no track spans supplies no unit-span proof.
+    const Lean = struct { style: ?TableStyle, rows: []const struct { cells: []const struct {} } };
+    const lean_rows: Lean = .{ .style = null, .rows = &.{.{ .cells = &.{.{}} }} };
+    try std.testing.expect(validResolvedStyleBorderTableDomain(lean_rows));
+    var unproven = lean_rows;
+    unproven.style = .{ .border = border };
+    try std.testing.expect(!validResolvedStyleBorderTableDomain(unproven));
     for ([_]TableStyle{
         .{ .display = .inline_table, .border = .none },
         .{ .display = .inline_block, .border = .none },
