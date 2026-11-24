@@ -753,7 +753,7 @@ def shard_page_options(value):
 SHARD_RETRIES = 3
 SHARD_STATE_VERSION = 3
 MISSING_EXPANSION_INPUT_ERRORS = (
-    'FileMetadataSnapshotMissing', 'InterfaceMessageSnapshotMissing', 'LanguageNameSnapshotMissing',
+    'FileMetadataSnapshotMissing', 'InterfaceMessageSnapshotMissing', 'LanguageNameSnapshotMissing', 'CommonsDataSnapshotMissing',
 )
 AUXILIARY_SNAPSHOT_NAMES = (
     'stylesheet-imports', 'site-info', 'site-statistics-format', 'category-statistics-format', 'commons-data', 'category-stats', 'interface-messages', 'category-tree',

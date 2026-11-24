@@ -373,7 +373,7 @@ fn writeMissingBuildInputFailure(context: FailureReceiptContext, job: ExpansionJ
 }
 
 fn recordExpansionFailure(err: anyerror, job: ExpansionJob, failure: ?bundle_expander.Failure) anyerror {
-    if (err != error.InterfaceMessageSnapshotMissing and err != error.FileMetadataSnapshotMissing and err != error.LanguageNameSnapshotMissing) return err;
+    if (err != error.InterfaceMessageSnapshotMissing and err != error.FileMetadataSnapshotMissing and err != error.LanguageNameSnapshotMissing and err != error.CommonsDataSnapshotMissing) return err;
     const precise = failure orelse return err;
     if (!std.mem.eql(u8, precise.stage, "expand") or !std.mem.eql(u8, precise.error_name, @errorName(err))) return err;
     const context = failure_receipt_context orelse return err;
@@ -2923,7 +2923,7 @@ fn auditablePresentationError(err: anyerror) bool {
 }
 
 fn auditableExpansionInputFailure(err: anyerror, failure: ?bundle_expander.Failure) bool {
-    if (err != error.FileMetadataSnapshotMissing and err != error.InterfaceMessageSnapshotMissing and err != error.LanguageNameSnapshotMissing) return false;
+    if (err != error.FileMetadataSnapshotMissing and err != error.InterfaceMessageSnapshotMissing and err != error.LanguageNameSnapshotMissing and err != error.CommonsDataSnapshotMissing) return false;
     const reply = failure orelse return false;
     return std.mem.eql(u8, reply.stage, "expand") and std.mem.eql(u8, reply.error_name, @errorName(err));
 }
@@ -4437,7 +4437,7 @@ test "presentation failure receipt round trips exact invocation and page identit
 }
 
 test "missing interface input receipt preserves exact source and worker evidence without replacing the error" {
-    inline for (.{ error.InterfaceMessageSnapshotMissing, error.FileMetadataSnapshotMissing, error.LanguageNameSnapshotMissing }) |expected_error| {
+    inline for (.{ error.InterfaceMessageSnapshotMissing, error.FileMetadataSnapshotMissing, error.LanguageNameSnapshotMissing, error.CommonsDataSnapshotMissing }) |expected_error| {
         const a = std.testing.allocator;
         const io = std.testing.io;
         var tmp = std.testing.tmpDir(.{});
@@ -4446,7 +4446,7 @@ test "missing interface input receipt preserves exact source and worker evidence
         defer a.free(path);
         const args = [_][]const u8{ "dump", "out", "--failure-receipt", path, "--invocation-id", "0123456789abcdef0123456789abcdef" };
         const context: FailureReceiptContext = .{ .io = io, .a = a, .path = path, .invocation_id = args[args.len - 1], .invocation_args = &args };
-        const job: ExpansionJob = .{ .index_offset = 7, .ordinal = 12, .ns = .{ .id = 0, .kind = .language }, .title = "quoted \"input\"", .source = if (expected_error == error.InterfaceMessageSnapshotMissing) "{{int:Show}}\n" else if (expected_error == error.FileMetadataSnapshotMissing) "{{#tag:phonos|Keep|file=Uncaptured.ogg}}" else "{{#language:en|tpi}}", .page_id = 34, .revision_id = 56 };
+        const job: ExpansionJob = .{ .index_offset = 7, .ordinal = 12, .ns = .{ .id = 0, .kind = .language }, .title = "quoted \"input\"", .source = if (expected_error == error.InterfaceMessageSnapshotMissing) "{{int:Show}}\n" else if (expected_error == error.FileMetadataSnapshotMissing) "{{#tag:phonos|Keep|file=Uncaptured.ogg}}" else if (expected_error == error.CommonsDataSnapshotMissing) "{{character info}}" else "{{#language:en|tpi}}", .page_id = 34, .revision_id = 56 };
         const failure: bundle_expander.Failure = .{ .stage = "expand", .error_name = @errorName(expected_error), .detail = "retained worker detail\n" };
         failure_receipt_context = context;
         defer failure_receipt_context = null;
@@ -5804,7 +5804,7 @@ test "operational expansion timeouts cannot become successful empty pages" {
     try std.testing.expect((try expansionFallbackReasonAlloc(a, error.InterfaceMessageSnapshotMissing, null)) == null);
     try std.testing.expect((try expansionFallbackReasonAlloc(a, error.FileMetadataSnapshotMissing, null)) == null);
     try std.testing.expect((try expansionFallbackReasonAlloc(a, error.LanguageNameSnapshotMissing, null)) == null);
-    inline for (.{ "OutOfMemory", "Timeout", "InterfaceMessageSnapshotMissing", "FileMetadataSnapshotMissing", "LanguageNameSnapshotMissing" }) |name| {
+    inline for (.{ "OutOfMemory", "Timeout", "InterfaceMessageSnapshotMissing", "FileMetadataSnapshotMissing", "LanguageNameSnapshotMissing", "CommonsDataSnapshotMissing" }) |name| {
         try std.testing.expect((try expansionFallbackReasonAlloc(a, error.ExpansionFailed, .{
             .stage = "expand",
             .error_name = name,

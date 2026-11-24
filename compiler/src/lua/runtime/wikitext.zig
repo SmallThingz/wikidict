@@ -247,6 +247,7 @@ pub const Expander = struct {
     invoke_reuse: ?*InvokeReuseStats = null,
     script_cpu_budget: rt.execution_budget.Budget = .{},
     host: host_api.Host = .{},
+    missing_commons_data: bool = false,
     current_source: ?[]const u8 = null,
     normal_page_format_context: bool = false,
     page_allocator: ?std.mem.Allocator = null,
@@ -331,6 +332,7 @@ pub const Expander = struct {
         self.host.current_page = null;
         self.host.page_identity_failure = null;
         self.host.now_unix = now_unix;
+        self.missing_commons_data = false;
         self.current_source = source;
         self.normal_page_format_context = false;
         self.page_allocator = self.runtime.allocator;
@@ -481,8 +483,15 @@ pub const Expander = struct {
 
     fn hostExternalData(raw: ?*anyopaque, title: []const u8) anyerror!?host_api.ExternalData {
         const self: *Expander = @ptrCast(@alignCast(raw orelse return error.MissingWikitextHost));
-        const get = self.provider.external_data orelse return error.NotImplemented;
-        return get(self.provider.ctx, title);
+        const get = self.provider.external_data orelse {
+            work_stats.logLine("warning: Commons data snapshot missing: title={s}\n", .{title});
+            self.missing_commons_data = true;
+            return error.CommonsDataSnapshotMissing;
+        };
+        return get(self.provider.ctx, title) catch |err| {
+            if (err == error.CommonsDataSnapshotMissing) self.missing_commons_data = true;
+            return err;
+        };
     }
 
     fn hostCategoryStats(raw: ?*anyopaque, db_key: []const u8) anyerror!?host_api.CategoryStats {
@@ -616,6 +625,12 @@ pub const Expander = struct {
         if (self.host.page_identity_failure) |failure| {
             self.runtime.allocator.free(output_text.bytes);
             return failure;
+        }
+        // A Lua pcall may have caught an unavailable compiler dependency.
+        // A captured negative never sets this page-local flag.
+        if (self.missing_commons_data) {
+            self.runtime.allocator.free(output_text.bytes);
+            return error.CommonsDataSnapshotMissing;
         }
         // Native evaluation has finished. Escape only exact source-literal
         // curly ranges before any final normalizer can discard copy metadata.
@@ -6104,6 +6119,60 @@ test "AOT invoke allocation failures propagate to the worker instead of renderin
         }
         try std.testing.expect(runtime.current_frame == null);
     }
+}
+
+test "uncaptured Cantonese character data cannot become rendered Lua errors or protected misses" {
+    const Probe = struct {
+        const key = "Unicode data/images/000.tab";
+        fn install(_: *?*anyopaque, _: ?*anyopaque, _: std.mem.Allocator, ctx: *rt.Context, _: u32, str: u32, mw: u32) !void {
+            try installTestHost(ctx, str, mw);
+            try message_lib.install(ctx, ctx.getGlobal(mw).table);
+        }
+        fn root(ctx: *rt.Context, _: rt.Captures, _: []const Value) ![]const Value {
+            const exports = try ctx.newTable();
+            try exports.rawSet(ctx.allocator, .{ .string = "show" }, try ctx.makeFunctionKnown(1, read, &.{}));
+            const result = try std.heap.smp_allocator.alloc(Value, 1);
+            result[0] = .{ .table = exports };
+            return result;
+        }
+        fn read(ctx: *rt.Context, _: rt.Captures, _: []const Value) ![]const Value {
+            const ext = try ctx.getIndex(ctx.getGlobal(23), .{ .string = "ext" });
+            const data = try ctx.getIndex(ext, .{ .string = "data" });
+            const get = try ctx.getIndex(data, .{ .string = "get" });
+            // The dated lookup_image call uses this exact key at U+002B and U+0030.
+            const response = try ctx.callValue(ctx.getGlobal(16), &.{ get, .{ .string = key } });
+            defer rt.freeResults(response);
+            if (response.len != 2 or response[0] != .boolean) return error.UnexpectedData;
+            if (response[0].boolean and (response[1] != .boolean or response[1].boolean)) return error.UnexpectedData;
+            const result = try std.heap.smp_allocator.alloc(Value, 1);
+            result[0] = .{ .string = if (response[0].boolean) "observed missing" else "caught lookup" };
+            return result;
+        }
+        fn missing(raw: ?*anyopaque, title: []const u8) !?host_api.ExternalData {
+            try std.testing.expectEqualStrings(key, title);
+            const observed: *bool = @ptrCast(@alignCast(raw.?));
+            return if (observed.*) null else error.CommonsDataSnapshotMissing;
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.initProgram(arena.allocator(), 24, 1);
+    defer runtime.deinit();
+    const functions = [_]rt.FunctionFn{rt.stabilize(Probe.root)};
+    runtime.module_root_entries = &functions;
+    runtime.configureModules(null, TestModule.lookup, TestModule.name);
+    try rt.bindGlobalTable(&runtime, null, 0);
+    try stdlib.install(&runtime);
+    var observed = false;
+    var expander: Expander = .{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23,
+        .provider = .{ .get = TestProvider.get, .exists = TestProvider.exists, .ctx = &observed }, .install_scribunto = Probe.install };
+    const source = "{{#invoke:Test|show}}";
+    try std.testing.expectError(error.CommonsDataSnapshotMissing, expander.expandFragment("+", source, 1_670_803_200));
+    expander.provider.external_data = Probe.missing;
+    try std.testing.expectError(error.CommonsDataSnapshotMissing, expander.expandFragment("0", source, 1_670_803_200));
+    observed = true;
+    try std.testing.expectEqualStrings("observed missing", try expander.expandFragment("+", source, 1_670_803_200));
+    try std.testing.expectEqualStrings("CommonsDataSnapshotMissing", try expander.expandFragment("0", "CommonsDataSnapshotMissing", 1_670_803_200));
 }
 
 test "invoke export recovery preserves unrelated runtime and host errors" {

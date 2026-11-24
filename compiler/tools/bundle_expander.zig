@@ -88,13 +88,14 @@ pub fn operationalFailure(failure: Failure) ?anyerror {
     // An absent snapshot or uncaptured file is not a captured exists=false fact.
     if (std.mem.eql(u8, failure.error_name, "FileMetadataSnapshotMissing")) return error.FileMetadataSnapshotMissing;
     if (std.mem.eql(u8, failure.error_name, "LanguageNameSnapshotMissing")) return error.LanguageNameSnapshotMissing;
+    if (std.mem.eql(u8, failure.error_name, "CommonsDataSnapshotMissing")) return error.CommonsDataSnapshotMissing;
     inline for (&.{ "BundleRootChanged", "BundleDumpChanged", "BundleTimeChanged", "InvalidPageIndex", "InvalidPageTitleIndex", "NamespaceTitleCollision", "NamespaceTitleMismatch", "InvalidNamespace", "UnsupportedStoredInterwikiNamespace", "UnsupportedStoredLocalInterwiki", "InvalidStoredRedirectTarget", "PageIndexChanged", "InvalidProgramMetadata", "InvalidPoemMetadata", "MissingPoemMetadata", "OrphanPoemMarker", "FrameTooLarge" }) |name|
         if (std.mem.eql(u8, failure.error_name, name)) return error.BundleInfrastructureFailed;
     return null;
 }
 
 fn coldRetryFailure(err: anyerror, remote_oom: bool) anyerror {
-    if (err == error.InterfaceMessageSnapshotMissing or err == error.FileMetadataSnapshotMissing or err == error.LanguageNameSnapshotMissing) return err;
+    if (err == error.InterfaceMessageSnapshotMissing or err == error.FileMetadataSnapshotMissing or err == error.LanguageNameSnapshotMissing or err == error.CommonsDataSnapshotMissing) return err;
     return if (remote_oom and err == error.OutOfMemory) error.OutOfMemory else error.ColdRetryFailed;
 }
 
@@ -444,7 +445,7 @@ pub const Worker = struct {
 };
 
 test "remote operational failures retain their error identity" {
-    inline for (.{ error.InterfaceMessageSnapshotMissing, error.FileMetadataSnapshotMissing, error.LanguageNameSnapshotMissing }) |err| {
+    inline for (.{ error.InterfaceMessageSnapshotMissing, error.FileMetadataSnapshotMissing, error.LanguageNameSnapshotMissing, error.CommonsDataSnapshotMissing }) |err| {
         try std.testing.expectEqual(err, coldRetryFailure(err, false));
         try std.testing.expectEqual(err, coldRetryFailure(err, true));
     }
@@ -454,6 +455,8 @@ test "remote operational failures retain their error identity" {
 
     try std.testing.expectEqual(error.InterfaceMessageSnapshotMissing, operationalFailure(.{ .stage = "expand", .error_name = "InterfaceMessageSnapshotMissing", .detail = "" }).?);
     try std.testing.expectEqual(error.FileMetadataSnapshotMissing, operationalFailure(.{ .stage = "expand", .error_name = "FileMetadataSnapshotMissing", .detail = "File:Uncaptured.ogg" }).?);
+    try std.testing.expectEqual(error.CommonsDataSnapshotMissing, operationalFailure(.{ .stage = "expand", .error_name = "CommonsDataSnapshotMissing", .detail = "Unicode data/images/000.tab" }).?);
+    try std.testing.expect(operationalFailure(.{ .stage = "expand", .error_name = "LuaRaised", .detail = "CommonsDataSnapshotMissing" }) == null);
     try std.testing.expectEqual(error.LanguageNameSnapshotMissing, operationalFailure(.{ .stage = "expand", .error_name = "LanguageNameSnapshotMissing", .detail = "autonym" }).?);
     try std.testing.expectEqual(error.OutOfMemory, operationalFailure(.{ .stage = "expand", .error_name = "OutOfMemory", .detail = "" }).?);
     try std.testing.expectEqual(error.Timeout, operationalFailure(.{ .stage = "assets", .error_name = "Timeout", .detail = "" }).?);
