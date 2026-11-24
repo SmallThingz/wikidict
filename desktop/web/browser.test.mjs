@@ -324,9 +324,56 @@ try{
  assert.ok(renderedLists.indents[2]>renderedLists.indents[1] && renderedLists.indents[1]>renderedLists.indents[0]);
  assert.equal(renderedLists.definitions,1);assert.deepEqual(renderedLists.meaningSections,['Meaning']);
  assert.ok(renderedLists.text.includes('{{example}} [[literal]]'));assert.equal(renderedLists.literalLinks,0);
- assert.deepEqual(renderedLists.hierarchy,{roots:['OL'],outerItems:7,parentNumber:3,explicitNumber:8,childList:'UL',childOwner:true,grandchildList:'OL',grandchildOwner:true,continuationOwner:true,continuationAfterChildren:true,siblingOwner:true,namedLists:true,decorativeHidden:true,authoredLabelsVisible:true,itemCount:9,definitionHasItem:false});
+ assert.deepEqual(renderedLists.hierarchy,{roots:['OL'],outerItems:7,parentNumber:3,explicitNumber:8,childList:'UL',childOwner:true,grandchildList:'OL',grandchildOwner:true,continuationOwner:true,continuationAfterChildren:true,siblingOwner:true,namedLists:true,decorativeHidden:true,authoredLabelsVisible:true,itemCount:10,definitionHasItem:true});
  const listAccessibility=await rendererPage.locator('details > .compiled-list').first().ariaSnapshot();
  assert.ok(listAccessibility.includes('list:')&&listAccessibility.includes('listitem:'),'Semantic lists and items must reach the accessibility tree');
+ // The original casă source has consecutive numbered senses and occasional attached examples in both noun sections.
+ const casFile=new URL('../../compiler/src/encoder/testdata/ro-casa-etymology83/reader.json',import.meta.url);
+ const casBytes=await readFile(casFile);
+ assert.equal(createHash('sha256').update(casBytes).digest('hex'),'d7086f12204989b8d122111342b81d86c398dfedc8cd9ba1ab101cab03ad8a0e');
+ const casEntry=JSON.parse(casBytes).entries.find(entry=>entry.title==='casă'&&entry.language==='română');
+ assert.ok(casEntry);
+ const casLists=await rendererPage.evaluate(entry=>{
+   const host=document.getElementById('compiled-renderer-fixture');
+   window.casFollowed=null;
+   host.replaceChildren(WikidictRendererQA.renderEntry(entry,(target)=>window.casFollowed=target,{collapseOtherSections:false}));
+   return [...host.querySelectorAll('details')].filter(el=>el.querySelector(':scope>summary')?.textContent==='Substantiv').map(section=>{
+     const lists=section.querySelectorAll(':scope>ol.compiled-sense-list');
+     return {listCount:lists.length,items:[...lists[0].children].map(item=>({number:item.value,text:item.querySelector(':scope>.definition>.body').textContent,
+       marker:getComputedStyle(item).listStyleType,examples:[...item.querySelectorAll(':scope>dl>dd .example>.body')].map(el=>el.textContent)}))};
+   });
+ },casEntry);
+ assert.deepEqual(casLists.map(s=>[s.listCount,s.items.length]),[[1,10],[1,4]]);
+ for(const section of casLists){
+   assert.deepEqual(section.items.map(i=>i.number),section.items.map((_,index)=>index+1));
+   assert.ok(section.items.every(i=>i.marker==='decimal'));
+ }
+ assert.ok(casLists[0].items[6].text.includes('dinastie'));
+ assert.deepEqual(casLists[0].items.map(i=>i.examples),Array.from({length:10},(_,i)=>i===6?['Casa de Habsburg.']:[]));
+ assert.deepEqual(casLists[1].items.map(i=>i.examples),[['Casă de fier.','Casă de bani.'],[],[],[]]);
+ const casSection=rendererPage.locator('details').filter({has:rendererPage.locator(':scope>summary',{hasText:/^Substantiv$/})}).first();
+ const casList=casSection.locator(':scope>ol.compiled-sense-list');
+ assert.equal(await casList.getByRole('listitem').count(),10);
+ const casAX=await casList.ariaSnapshot();
+ assert.equal((casAX.match(/^\s*- listitem\b/gm)||[]).length,10);
+ const casLink=casList.getByRole('link',{name:'dinastie',exact:true});
+ await casLink.focus();await casLink.press('Enter');
+ assert.equal(await rendererPage.evaluate(()=>window.casFollowed),'dinastie');
+ const nestedSenses=await rendererPage.evaluate(()=>{
+   const host=document.getElementById('compiled-renderer-fixture');
+   const row=(kind,path,number,text)=>({kind,path,number,depth:path.length,spans:[{kind:'text',text}]});
+   const blocks=[row('definition','#','3','Outer'),row('definition','##','3.1','Inner'),row('example','##:','','Inner example'),
+     row('quotation','#*','','Outer quote'),row('definition','#','8','Next'),row('definition','','9','No path'),row('example','#:','','Orphan')];
+   host.replaceChildren(WikidictRendererQA.renderEntry({title:'Nested senses',sections:[{title:'Meaning',blocks}]},()=>{},{}));
+   const [outer,inner,next,plain]=host.querySelectorAll('.definition');
+   const [attached,orphan]=host.querySelectorAll('.example'),item=el=>el.closest('li');
+   return {outer:item(outer).value,compound:inner.querySelector('.prefix').textContent,compoundMarker:getComputedStyle(item(inner)).listStyleType,
+     innerOwner:item(inner).parentElement.parentElement===item(outer),exampleOwner:attached.closest('dd')?.closest('li')===item(inner),
+     quoteOwner:item(host.querySelector('.quotation')).parentElement.parentElement===item(outer),next:item(next).value,
+     sameList:item(next).parentElement===item(outer).parentElement,plain:!!item(plain),orphan:!!item(orphan)};
+ });
+ assert.deepEqual(nestedSenses,{outer:3,compound:'3.1.',compoundMarker:'none',innerOwner:true,exampleOwner:true,quoteOwner:true,next:8,sameList:true,plain:false,orphan:false});
+
  const cellLists=await rendererPage.evaluate(()=>{
   const host=document.getElementById('compiled-renderer-fixture'),text=value=>[{kind:'text',text:value}],item=(label,path)=>({kind:'list_item',path,depth:path.length,spans:text(label)});
   const first=[item('Cell parent','*'),item('Cell child','**'),{kind:'list_detail',path:'*:',depth:2,spans:text('Cell continuation')}];
@@ -360,10 +407,11 @@ try{
   items=[...host.querySelector('td > ul').children];
   const cell={items:items.length,firstText:items[0].textContent,tailOwner:row('Cell tail').closest('li')===items[1],emptyRow:!!items[1].querySelector(':scope > .list_item')};
   render([block('list_item','*',null)]);const onlyEmptySections=host.querySelectorAll('details').length;
-  render([block('definition','#','Meaning'),block('list_item','*',null),block('term',';',null)]);const onlyEmptyLists=host.querySelectorAll('ul,ol').length;
-  return {emptyThenTail,emptyThenChild,termBoundary,emptyContinuation,cell,onlyEmptySections,onlyEmptyLists};
+  render([block('definition','#','Meaning'),block('list_item','*',null),block('term',';',null)]);const onlyEmptyLists=host.querySelectorAll('ul.compiled-list,ol.compiled-list').length;
+  const survivingSense=[...host.querySelectorAll('ol.compiled-sense-list>li')].map(li=>li.textContent);
+  return {emptyThenTail,emptyThenChild,termBoundary,emptyContinuation,cell,onlyEmptySections,onlyEmptyLists,survivingSense};
  });
- assert.deepEqual(emptyFurniture,{emptyThenTail:{items:2,firstText:'•First',tailOwner:true,emptyRow:false},emptyThenChild:{rootItems:1,childOwner:true,parentRow:false},termBoundary:{items:1,tailOutside:true,emptyTermRows:0},emptyContinuation:{nestedLists:2,childOwners:true,emptyDetailRows:0},cell:{items:2,firstText:'•Cell first',tailOwner:true,emptyRow:false},onlyEmptySections:0,onlyEmptyLists:0});
+ assert.deepEqual(emptyFurniture,{emptyThenTail:{items:2,firstText:'•First',tailOwner:true,emptyRow:false},emptyThenChild:{rootItems:1,childOwner:true,parentRow:false},termBoundary:{items:1,tailOutside:true,emptyTermRows:0},emptyContinuation:{nestedLists:2,childOwners:true,emptyDetailRows:0},cell:{items:2,firstText:'•Cell first',tailOwner:true,emptyRow:false},onlyEmptySections:0,onlyEmptyLists:0,survivingSense:['Meaning']});
  const renderedTables=await rendererPage.evaluate(()=>{
   const table=(depth,caption)=>({kind:'table',depth,path:depth?'#:':'',spans:[],table:{caption:[{kind:'text',text:caption}],rows:[{cells:[{header:false,colspan:1,rowspan:1,spans:[{kind:'text',text:'Cell'}]}]}]}});
   const host=document.getElementById('compiled-renderer-fixture');

@@ -776,13 +776,12 @@ function visibleBlock(block){
 function appendBlocks(parent,values,render){
   const created=[];
   let lists=[];
-  for(const [index,block] of values.entries()){
+  for(const block of values){
     const visible=visibleBlock(block);
     const path=block.list_path??block.path??'';
-    const next=values[index+1],nextPath=next?.list_path??next?.path??'';
-    const hasChild=nextPath.length>path.length&&nextPath.startsWith(path)&&['definition','example','quotation','list_item','list_detail'].includes(next.kind);
-    const sense=block.kind==='definition'&&hasChild&&/^[*#:;]*#$/.test(path)&&/^[1-9]\d*$/.test(block.number||'')&&Number(block.number)<=2147483647;
-    if(block.kind==='list_item'||sense){
+    const sense=block.kind==='definition'&&/^[*#:;]*#$/.test(path);
+    const quotationItem=block.kind==='quotation'&&/^[*#:;]+\*$/.test(path)&&lists.some(list=>list.sense&&path.startsWith(list.path));
+    if(block.kind==='list_item'||sense||quotationItem){
       const key=/^[*#:;]*[*#]$/.test(path)?path:(block.number?'#':'*');
       let at=lists.findIndex(list=>list.path===key&&list.sense===sense);
       if(at<0){
@@ -801,7 +800,9 @@ function appendBlocks(parent,values,render){
       if(visible){
         const view=render(block);
         if(sense){
-          view.querySelector(':scope > .prefix')?.remove();
+          // The native marker carries integer ordinals. Keep authored compound labels verbatim.
+          if(block.number&&String(item.value)!==block.number)item.style.listStyleType='none';
+          else view.querySelector(':scope > .prefix')?.remove();
           if(!block.style?.margins)view.style.removeProperty('margin-inline-start');
         }
         if(!block.number)view.querySelector(':scope > .prefix')?.setAttribute('aria-hidden','true');
@@ -816,7 +817,7 @@ function appendBlocks(parent,values,render){
         if(visible){
           const view=render(block),item=lists[at].item;
           view.querySelector(':scope > .prefix')?.setAttribute('aria-hidden','true');
-          if(lists[at].sense&&block.description_body){
+          if(lists[at].sense&&(block.description_body||block.kind==='example'||block.kind==='quotation')){
             let details=item.lastElementChild;
             if(details?.tagName!=='DL'){details=node('dl',null,'compiled-sense-details');item.append(details);}
             const description=node('dd');description.append(view);details.append(description);
