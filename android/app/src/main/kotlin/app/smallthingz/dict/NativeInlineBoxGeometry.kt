@@ -75,6 +75,8 @@ internal class NativeInlineBoxGeometry(
     }
     private fun ownerRtl(range: NativeInlineRange<NativeInlineBoxSpan>, line: Int): Boolean =
         range.value.parentRtl ?: (raw.nativeRubyLineDirection(line) < 0)
+    private fun sliceRtl(range: NativeInlineRange<NativeInlineBoxSpan>, line: Int): Boolean =
+        range.value.isolatedRtl ?: ownerRtl(range, line)
     private fun firstLine(range: NativeInlineRange<NativeInlineBoxSpan>): Int = raw.nativeLineAt(range.start)
     private fun lastLine(range: NativeInlineRange<NativeInlineBoxSpan>): Int = raw.nativeLineAt(range.end - 1)
     private fun selectedOwner(owner: NativeInlineBoxOwner, start: Int, end: Int): Owner? =
@@ -130,7 +132,7 @@ internal class NativeInlineBoxGeometry(
                     throw UnsupportedFloatLayout("Nested inline decoration requires actual LTR native runs")
                 val parts = visual(captured)
                 if (parts.isEmpty()) throw UnsupportedFloatLayout("Inline box zero-advance fragment allocation is unavailable")
-                val rtl = ownerRtl(owner, line)
+                val rtl = sliceRtl(owner, line)
                 fun addEdge(leftSide: Boolean, amount: Float, fragment: VisualFragment, sourceBoundary: Int) {
                     if (amount == 0f) return
                     val token = edge(capture, fragment, leftSide)
@@ -194,7 +196,7 @@ internal class NativeInlineBoxGeometry(
                     NativeInlineRunPiece(at, at, false, placed.left, placed.right, -1)
                 }
                 val parts = visual(ownPieces + childEdges)
-                val rtl = ownerRtl(owner, line)
+                val rtl = sliceRtl(owner, line)
                 parts.forEachIndexed { index, part ->
                     val hasLeft = (line == firstLine(owner) && !rtl && index == 0) ||
                         (line == lastLine(owner) && rtl && index == 0)
@@ -227,7 +229,7 @@ internal class NativeInlineBoxGeometry(
         owners = this.spans.map { range ->
             val own = fragments.filter { it.owner === range }
             range.value.box.radius?.takeIf { it > 0f || range.value.box.border.top.dotted }?.let { radius ->
-                val rtl = ownerRtl(range, firstLine(range))
+                val rtl = sliceRtl(range, firstLine(range))
                 val visualOrder = own.groupBy { it.line }.toSortedMap().values.flatMap {
                     if (rtl) it.asReversed() else it
                 }
@@ -249,8 +251,8 @@ internal class NativeInlineBoxGeometry(
                     }
                 }
             }
-            val first = own.filter { it.line == firstLine(range) }.let { if (ownerRtl(range, firstLine(range))) it.last() else it.first() }
-            val last = own.filter { it.line == lastLine(range) }.let { if (ownerRtl(range, lastLine(range))) it.first() else it.last() }
+            val first = own.filter { it.line == firstLine(range) }.let { if (sliceRtl(range, firstLine(range))) it.last() else it.first() }
+            val last = own.filter { it.line == lastLine(range) }.let { if (sliceRtl(range, lastLine(range))) it.first() else it.last() }
             // The newly admitted pitch indicator follows the same measured LTR
             // first/last padding-box contract as positioned inline content.
             val containing = if (range.value.overlaySources.isEmpty() && spanIndices.getValue(range) !in pitchOwners)

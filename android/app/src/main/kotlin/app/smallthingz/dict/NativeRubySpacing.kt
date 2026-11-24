@@ -1129,6 +1129,11 @@ private fun inlineCoordinate(value: Double): Float {
         throw UnsupportedFloatLayout("Inline edge exceeds native coordinates")
     return value.toFloat()
 }
+/** Optional observation carried by this exact instrumented source, with no global hook. */
+internal fun interface NativeInlineZeroAdvanceObservation {
+    fun accepted(source: CharSequence, line: Int, start: Int, end: Int, paint: Paint, shape: NativeRubyGlyphRun)
+}
+
 private fun inlineSilent(source: CharSequence, start: Int, end: Int): Boolean =
     (start until end).all { android.icu.lang.UCharacter.hasBinaryProperty(source[it].code,
         android.icu.lang.UProperty.BIDI_CONTROL) }
@@ -1251,8 +1256,23 @@ internal class NativeInlineLineCapture private constructor(
             val bounded = rubyShape(source, a, b, contextStart, contextEnd, run.rtl, run.paint)
             if (!rubyClose(original.advance, bounded.advance) || !rubyGlyphsEqual(original.glyphs, bounded.glyphs, original.advance))
                 throw UnsupportedFloatLayout("Inline edge changes required native boundary shaping")
-            if (bounded.advance == 0f && (!silentCharacters(a, b) || bounded.glyphs.isNotEmpty()))
-                throw UnsupportedFloatLayout("Inline edge has an unproved zero-advance source piece")
+            if (bounded.advance == 0f) {
+                // Android can retain a font glyph for a bidi control. Replay skips
+                // zero-width pieces, so every such glyph must have no painted area.
+                val inkless = silentCharacters(a, b) && bounded.glyphs.all { glyph ->
+                    if (glyph.id == 0) return@all false // OpenType .notdef cannot establish native coverage.
+                    val font = glyph.font as? android.graphics.fonts.Font ?: return@all false
+                    val bounds = RectF()
+                    font.getGlyphBounds(glyph.id, run.paint, bounds)
+                    run.paint.style == Paint.Style.FILL && bounds.left.isFinite() && bounds.top.isFinite() &&
+                        bounds.right.isFinite() && bounds.bottom.isFinite() && bounds.isEmpty
+                }
+                if (!inkless) throw UnsupportedFloatLayout("Inline edge has an unproved zero-advance source piece " +
+                    "line=$line range=[$a,$b) first=U+${source[a].code.toString(16)} " +
+                    "visibleEnd=${raw.nativeInlineVisibleEnd(line)} glyphs=${bounded.glyphs.size}")
+                source.getSpans(0, source.length, NativeInlineZeroAdvanceObservation::class.java)
+                    .forEach { it.accepted(source, line, a, b, run.paint, bounded) }
+            }
             val prefix = if (a == run.start) 0f else rubyShape(source, run.start, a,
                 run.contextStart, run.contextEnd, run.rtl, run.paint).advance
             val left = if (run.rtl) run.shape.advance - prefix - bounded.advance else prefix

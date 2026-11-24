@@ -12,6 +12,7 @@ import android.text.style.ForegroundColorSpan
 import android.text.style.RelativeSizeSpan
 import android.view.View
 import android.view.accessibility.AccessibilityNodeInfo
+import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.height
@@ -38,7 +39,7 @@ import org.junit.Rule
 import org.junit.Test
 
 class NativeContainerColumnsDeviceTest {
-    @get:Rule val compose = createPhysicalComposeRule()
+    @get:Rule val compose = createPhysicalContentRule()
 
     @Test fun nativeLineFragmentsRetainBidiSpansCaretsRangesAndOneMarkerOwner() {
         val text = "Wide words אבג\t12\nsecond paragraph text\nthird line words\nfourth line words"
@@ -241,7 +242,7 @@ class NativeContainerColumnsDeviceTest {
         val opened = mutableListOf<String>()
         val failures = mutableListOf<String>()
         var rootWindow = androidx.compose.ui.geometry.Rect.Zero
-        var activity: MainActivity? = null
+        var activity: ComponentActivity? = null
         fun px(value: Float) = StyleLength(StyleLengthUnit.Px, value)
         fun em(value: Float) = StyleLength(StyleLengthUnit.Em, value)
         fun text(value: String, scale: Float) = Span("text", value, code = true,

@@ -77,7 +77,8 @@ internal class NativeInlineBoxFormat(val owner: NativeInlineBoxOwner, val paddin
 /** Installed over only this owner's private native child interval, without inserted characters.
  * Null parentRtl uses the actual paragraph line; an enclosing directional group supplies its flow. */
 internal class NativeInlineBoxSpan(val format: NativeRubyGroupFormat, val shift: Float,
-    val parentRtl: Boolean?, val overlaySources: List<NativeInlineBoxOverlaySource> = emptyList()) {
+    val parentRtl: Boolean?, val overlaySources: List<NativeInlineBoxOverlaySource> = emptyList(),
+    val isolatedRtl: Boolean? = null) {
     init { require(format.box != null); nativeInlineBoxCoordinates(shift) }
     val box: NativeInlineBoxFormat get() = checkNotNull(format.box)
 }
@@ -102,7 +103,7 @@ internal fun nativeInlineBoxParagraphRtl(source: CharSequence,
 internal fun nativeInlineBoxRequiredBreaks(source: Spanned, parentRtl: (Int) -> Boolean): Set<Int> = buildSet {
     nativeInlineRanges(source, NativeInlineBoxSpan::class.java).forEach { range ->
         val box = range.value.box
-        val rtl = range.value.parentRtl ?: parentRtl(range.start)
+        val rtl = range.value.isolatedRtl ?: range.value.parentRtl ?: parentRtl(range.start)
         if ((if (rtl) box.rightAdvance else box.leftAdvance) > 0f) add(range.start)
         if ((if (rtl) box.leftAdvance else box.rightAdvance) > 0f) add(range.end)
     }

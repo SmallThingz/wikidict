@@ -73,7 +73,7 @@ internal class NativeInlineBoxWidths(source: Spanned, private val paint: TextPai
     }
     fun edges(start: Int, end: Int): Float = nativeInlineBoxCoordinate(boxes.sumOf { range ->
         val box = range.value.box
-        val rtl = parentRtl(range.value, range.start)
+        val rtl = range.value.isolatedRtl ?: parentRtl(range.value, range.start)
         (if (range.start >= start && range.start < end) (if (rtl) box.rightAdvance else box.leftAdvance).toDouble() else 0.0) +
             (if (range.end > start && range.end <= end) (if (rtl) box.leftAdvance else box.rightAdvance).toDouble() else 0.0)
     })

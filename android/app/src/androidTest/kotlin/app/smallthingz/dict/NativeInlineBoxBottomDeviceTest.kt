@@ -33,7 +33,7 @@ import org.junit.runner.RunWith
 /** Device controls are compiled on the host; only actual device execution earns paint evidence. */
 @RunWith(AndroidJUnit4::class)
 class NativeInlineBoxBottomDeviceTest {
-    @get:Rule val compose = createPhysicalComposeRule()
+    @get:Rule val compose = createPhysicalContentRule()
     private fun owner(body: String, scale: Float = 1f): Span {
         val zero = StyleLength(StyleLengthUnit.Px, 0f)
         val pad = StyleLength(StyleLengthUnit.Px, 3f)
@@ -172,14 +172,51 @@ class NativeInlineBoxBottomDeviceTest {
     }
 
     @Test fun wrappedOwnersRetainPerLineAlignmentAndBidiCaretOrderingWithATallerSibling() = compose.runOnIdle {
+        val witnesses = mutableSetOf<String>()
+        val fonts = mutableMapOf<android.graphics.fonts.Font, String>()
         for (rtl in listOf(false, true)) {
             val value = fixture("pesemise vahend pikk tekst", ownerScale = .8f, siblingScale = 2f, rtl = rtl)
-            val geometry = build(value, 180)
+            val withWitness = SpannableString(value.source)
+            val observer = NativeInlineZeroAdvanceObservation { source, line, first, last, paint, shape ->
+                assertEquals(0f, shape.advance, 0f)
+                val codepoints = (first until last).map { source[it].code }
+                val glyphs = shape.glyphs.map { glyph ->
+                    assertTrue("Original control resolved to .notdef", glyph.id > 0)
+                    val font = glyph.font as android.graphics.fonts.Font
+                    val bounds = android.graphics.RectF()
+                    font.getGlyphBounds(glyph.id, paint, bounds)
+                    assertTrue(bounds.isEmpty)
+                    val digest = fonts.getOrPut(font) {
+                        val sha = java.security.MessageDigest.getInstance("SHA-256")
+                        sha.update(font.buffer.duplicate().apply { position(0) })
+                        sha.digest().joinToString("") { "%02x".format(it) }
+                    }
+                    "$digest:${font.ttcIndex}/${glyph.id}@$bounds"
+                }
+                // An empty array was already accepted before this repair. Only a
+                // retained font glyph with independently empty bounds proves it.
+                if (glyphs.isNotEmpty()) {
+                    assertTrue(codepoints.all { android.icu.lang.UCharacter.hasBinaryProperty(it,
+                        android.icu.lang.UProperty.BIDI_CONTROL) || it == '\n'.code })
+                    val witness = "rtl=$rtl line=$line fitted=[$first,$last) " +
+                        "codepoints=${codepoints.map { it.toString(16) }} fontGlyphBounds=$glyphs"
+                    if (witnesses.add(witness)) androidx.test.platform.app.InstrumentationRegistry.getInstrumentation()
+                        .sendStatus(0, android.os.Bundle().apply { putString("stream", "\nINLINE_ZERO_ADVANCE_SLICE $witness\n") })
+                }
+            }
+            withWitness.setSpan(observer, 0, withWitness.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            val geometry = build(value.copy(source = withWitness), 180)
             val rects = checkNotNull(geometry.inlineBoxGroupRects(value.key, value.range.start, value.range.end))
             assertTrue(rects.size > 1)
             val own = value.ownPaint.fontMetrics
             val lines = (value.range.start until value.range.end).groupBy { geometry.lineRange(it) }
             assertTrue(lines.size > 1)
+            // The explicit LTR owner starts on its left and ends on its right, even
+            // when the paragraph positions its wrapped fragments in the opposite flow.
+            val firstGlyph = geometry.rectsForRange(value.range.start, value.range.start + 1).single()
+            val lastGlyph = geometry.rectsForRange(value.range.end - 1, value.range.end).single()
+            assertEquals(firstGlyph.left - 4f, rects.first().left, .05f)
+            assertEquals(lastGlyph.right + 4f, rects.last().right, .05f)
             lines.values.forEach { offsets ->
                 val first = offsets.first()
                 val baseline = geometry.baselineForOffset(first)
@@ -195,6 +232,9 @@ class NativeInlineBoxBottomDeviceTest {
             assertEquals(geometry.text.toString(), value.source.toString())
             assertTrue(geometry.caretRect(0).height() > geometry.caretRect(value.range.start + 1).height())
         }
+        assertTrue("Missing accepted inkless native glyph on the wrapped owner", witnesses.isNotEmpty())
+        androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().sendStatus(0,
+            android.os.Bundle().apply { putString("stream", witnesses.joinToString("\n", "INLINE_ZERO_ADVANCE ", "\n")) })
     }
 
     @Test fun customParentLineHeightRefusesInsteadOfUsingTheOldBaselineUnion() = compose.runOnIdle {

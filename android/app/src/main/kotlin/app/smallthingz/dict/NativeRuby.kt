@@ -618,7 +618,7 @@ internal data class NativeRubyOverlayScope(val start: Int, val end: Int,
     val owner: NativeInlineBoxOwner, val body: NativeInlineBoxOverlaySource)
 internal data class NativeRubyBoxScope(val start: Int, val end: Int, val nativeStart: Int,
     val nativeEnd: Int, val format: NativeRubyGroupFormat, val shift: Float, val parentRtl: Boolean?,
-    val overlays: List<NativeRubyOverlayScope> = emptyList())
+    val overlays: List<NativeRubyOverlayScope> = emptyList(), val isolatedRtl: Boolean? = null)
 
 /** The actual declaring metric point is the authority for an empty no-wrap line. */
 internal class NativeInlineActionPoint(val owner: NativeInlineActionOwner,
@@ -2335,7 +2335,8 @@ private class NativeRubyCompiler(private val original: Spanned, private val pain
             emitPrepared(prepared, sourceStart, ActionContext(range, format, placement.state, shift, rtl, styled))
             bodyEnd = native.length
         }
-        if (checkNotNull(range.span).usesInlineDirectionIsolate()) isolate(rtl, emit) else emit()
+        val isolated = checkNotNull(range.span).usesInlineDirectionIsolate()
+        if (isolated) isolate(rtl, emit) else emit()
         val padding = prepared.projection.ranges.filter { it.role == RubyTextRole.PaddingGroup &&
             it.path.startsWith(range.path + "/") }.map {
             NativeRubyActionPadding(checkNotNull(it.span), sourceStart + it.start, sourceStart + it.end)
@@ -2350,7 +2351,8 @@ private class NativeRubyCompiler(private val original: Spanned, private val pain
                 throw UnsupportedFloatLayout("Inline box edge is inside a source grapheme")
             boxScopes += NativeRubyBoxScope(firstSource, lastSource, point, bodyEnd, format, shift,
                 parent?.rtl ?: enclosingScopeDirection?.let { it == BidiResolvedDirection.Rtl },
-                overlayScopes.filter { it.owner === box.owner && it.start >= firstSource && it.end <= lastSource })
+                overlayScopes.filter { it.owner === box.owner && it.start >= firstSource && it.end <= lastSource },
+                isolatedRtl = rtl.takeIf { isolated })
         }
         if (key != null) {
             val boxes = prepared.projection.ranges.filter { it.role == RubyTextRole.BoxGroup &&
@@ -3290,7 +3292,7 @@ private class NativeRubyCompiler(private val original: Spanned, private val pain
                 target.setSpan(NativeRunLineMetrics(primary, scope.format.lineHeight,
                 strut = true, includePrimaryInNormal = true, independentNormalStrut = true),
                 scope.nativeStart, scope.nativeEnd, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-            target.setSpan(NativeInlineBoxSpan(scope.format, scope.shift, scope.parentRtl, scope.overlays.map { it.body }),
+            target.setSpan(NativeInlineBoxSpan(scope.format, scope.shift, scope.parentRtl, scope.overlays.map { it.body }, scope.isolatedRtl),
                 scope.nativeStart, scope.nativeEnd, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
         }
         pieces.filterIsInstance<NativeRubyPiece.Text>().filter { it.collapsed && it.nativeStart < it.nativeEnd }.forEach { piece ->
