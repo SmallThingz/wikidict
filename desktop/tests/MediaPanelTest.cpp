@@ -1862,7 +1862,8 @@ stream.properties = { adapter.auto-port-config = { mode = dsp monitor = false co
             {QStringLiteral("file"), QStringLiteral("File:owned.wav")}, {QStringLiteral("caption"), QStringLiteral("Owned recording")}}};
         panel.resize(360, 700);
         panel.setEntry(word); panel.show();
-        auto *player = panel.findChild<QMediaPlayer *>(); QVERIFY(player);
+        QMediaPlayer *player = nullptr;
+        QVERIFY(!panel.findChild<QMediaPlayer *>());
         auto *action = QAccessible::queryAccessibleInterface(loadButton(panel)); QVERIFY(action);
         auto *button = loadButton(panel);
         auto *position = button->parentWidget()->findChild<QSlider *>();
@@ -1910,6 +1911,7 @@ stream.properties = { adapter.auto-port-config = { mode = dsp monitor = false co
         };
         QTest::mouseClick(panel.findChild<QCheckBox *>(QStringLiteral("mediaAllowAudio")), Qt::LeftButton);
         QTest::mouseClick(loadButton(panel), Qt::LeftButton);
+        QTRY_VERIFY_WITH_TIMEOUT((player = panel.findChild<QMediaPlayer *>()), 5000);
         bool graphCaptured = false;
         const auto captureOwnedGraph = [&] {
             if (graphCaptured) return;
