@@ -70,8 +70,10 @@ export async function readTableDisclosure(asset=defaultAsset){
 }
 
 export async function verifyTableDisclosureBrowser(page,bundle,entry,css){
-  await page.route('**/*',route=>route.abort());
-  await page.setContent('<main></main>');
+  const url='https://reader.test/table-disclosure';
+  await page.route('**/*',route=>route.request().url()===url?route.fulfill({contentType:'text/html',body:'<main></main>'}):route.abort());
+  await page.goto(url);
+  const mount=async original=>{
   await page.addStyleTag({content:css});
   await page.addScriptTag({content:bundle});
   await page.evaluate(entry=>{
@@ -85,15 +87,20 @@ export async function verifyTableDisclosureBrowser(page,bundle,entry,css){
       if(row!==window.physicalRows[i][n])throw Error('Physical row was replaced');
       return row.getClientRects().length?[n]:[];
     }));
-  },entry);
+  },original);
+  };
+  await mount(entry);
+  const category=page.getByRole('navigation',{name:'Visibility'}).getByRole('button');
   const [first,second]=[0,1].map(i=>page.locator('.table-disclosure-header button').nth(i));
   const collapsed=[[0,1,2],[0]],expandedFirst=[0,...Array.from({length:9},(_,i)=>i+3)];
   assert.deepEqual(await page.evaluate(()=>window.currentRows()),collapsed);
   assert.equal(await page.getByRole('button',{name:'more ▼',exact:true}).count(),2);
+  assert.equal(await category.textContent(),'Show inflection');
   await first.focus();
   await first.press('Space');
   assert.deepEqual(await page.evaluate(()=>window.currentRows()),[expandedFirst,[0]]);
   assert.equal(await first.getAttribute('aria-expanded'),'true');
+  assert.equal(await category.textContent(),'Show inflection');
   assert.equal(await first.textContent(),'less ▲');
   const overlap=await first.evaluate(button=>{
     const table=button.closest('table'),separator=table.rows[3].cells[2],foot=table.rows[11].cells[0];
@@ -116,13 +123,35 @@ export async function verifyTableDisclosureBrowser(page,bundle,entry,css){
   assert.deepEqual(await page.evaluate(()=>window.currentRows()),[expandedFirst,[0]]);
   await second.press('Enter');
   assert.deepEqual(await page.evaluate(()=>window.currentRows()),[expandedFirst,[0,1,2,3,4,5]]);
+  assert.equal(await category.textContent(),'Hide inflection');
+  assert.equal(await page.evaluate(()=>localStorage.length),0);
   const table=page.locator('.table-disclosure-header').nth(1).locator('xpath=ancestor::table[1]');
   assert.equal(await table.getByRole('link',{name:'ए',exact:true}).count(),1);
   assert.equal(await table.getByRole('link',{name:'अ',exact:true}).count(),1);
   await first.press('Enter');
   assert.deepEqual(await page.evaluate(()=>window.currentRows()),[[0,1,2],[0,1,2,3,4,5]]);
+  assert.equal(await category.textContent(),'Hide inflection');
   await second.press('Space');
   assert.deepEqual(await page.evaluate(()=>window.currentRows()),collapsed);
+  assert.equal(await category.textContent(),'Show inflection');
+  assert.equal(await page.evaluate(()=>localStorage.length),0);
+  await category.press('Enter');
+  const expanded=[expandedFirst,[0,1,2,3,4,5]];
+  assert.deepEqual(await page.evaluate(()=>window.currentRows()),expanded);
+  assert.equal(await category.textContent(),'Hide inflection');
+  await first.press('Space');await second.press('Space');
+  assert.equal(await category.textContent(),'Show inflection');
+  // Fresh navigation sees only the explicit category preference, scoped to its source edition.
+  await page.reload();await mount(entry);
+  assert.deepEqual(await page.evaluate(()=>window.currentRows()),expanded);
+  assert.equal(await category.textContent(),'Hide inflection');
+  await page.reload();await mount({...entry,source_edition:'otherwiktionary'});
+  assert.deepEqual(await page.evaluate(()=>window.currentRows()),collapsed);
+  await page.reload();await mount(entry);await category.press('Space');
+  assert.deepEqual(await page.evaluate(()=>window.currentRows()),collapsed);
+  await page.reload();await mount(entry);
+  assert.deepEqual(await page.evaluate(()=>window.currentRows()),collapsed);
+  assert.equal(await category.textContent(),'Show inflection');
 }
 if(process.argv[1]&&pathToFileURL(process.argv[1]).href===import.meta.url){
   const {entry}=await readTableDisclosure();

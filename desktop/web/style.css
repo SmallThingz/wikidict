@@ -64,3 +64,6 @@ summary:has(>.compiled-heading-outer)::after {position:absolute;inset-inline-end
 summary .heading-label {font:inherit;color:inherit;margin:0}
 .compiled-sense-list,.compiled-sense-details {margin-block:0}
 .compiled-sense-details>dd {margin:0}
+
+.table-visibility {display:flex;flex-wrap:wrap;gap:.5em;margin-block:.5em}
+.table-visibility button {padding:.25em .5em;color:var(--accent)}

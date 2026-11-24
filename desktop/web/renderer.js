@@ -698,7 +698,34 @@ function applyCellStyle(el,value){
   }
 }
 const revealTableRow=new WeakMap();
-function installTableDisclosure(group,policy){
+function tableDisclosureCategory(categories,edition,policy){
+  const name=policy.category;
+  if(categories.has(name))return categories.get(name);
+  const button=node('button');button.type='button';
+  const key=edition?'wikidict.visibility.'+JSON.stringify([edition,name]):null;
+  let collapsed=policy.initially_collapsed;
+  if(key){
+    try{
+      const saved=localStorage.getItem(key);
+      if(saved==='true'||saved==='false')collapsed=saved==='false';
+    }catch{/* A blocked store still permits changing the current page. */}
+  }
+  const members=new Map();
+  function label(){button.textContent=(collapsed?'Show ':'Hide ')+name;}
+  const category={button,add(show){members.set(show,collapsed);show(collapsed);},change(show,next){
+    members.set(show,next);show(next);
+    if(next!==collapsed&&[...members.values()].every(value=>value===next)){collapsed=next;label();}
+  }};
+  button.addEventListener('click',()=>{
+    collapsed=!collapsed;label();
+    for(const show of members.keys()){members.set(show,collapsed);show(collapsed);}
+    if(key){try{localStorage.setItem(key,String(!collapsed));}catch{/* Retain the current page state. */}}
+  });
+  label();categories.set(name,category);return category;
+}
+
+function installTableDisclosure(group,policy,explanations){
+  const category=tableDisclosureCategory(explanations.tableCategories,explanations.sourceEdition,policy);
   const rows=Array.from(group.rows),header=rows[policy.header_row].cells[policy.header_cell];
   const control=node('span',null,'table-disclosure'),button=node('button');
   button.type='button';
@@ -726,16 +753,16 @@ function installTableDisclosure(group,policy){
     const mode=policy.row_modes[index];
     if(mode==='always')continue;
     controlled.push(row);
-    revealTableRow.set(row,()=>show(mode==='collapsed'));
+    revealTableRow.set(row,()=>category.change(show,mode==='collapsed'));
   }
   // Associate the existing physical rows without manufacturing public fragment IDs.
   if('ariaControlsElements' in button)button.ariaControlsElements=controlled;
-  button.addEventListener('click',()=>show(!collapsed));
+  button.addEventListener('click',()=>category.change(show,!collapsed));
   header.addEventListener('click',event=>{
     if(event.target.closest('th,td')!==header||event.target.closest('a,button,input,select,textarea,summary,audio,[role="link"]'))return;
-    show(!collapsed);
+    category.change(show,!collapsed);
   });
-  show(collapsed);
+  category.add(show);
 }
 
 function tableView(value,onLink,explanations,depth=1,inheritedBackground=null){
@@ -766,7 +793,7 @@ function tableView(value,onLink,explanations,depth=1,inheritedBackground=null){
     else td.append(spans(cell.spans,onLink,false,explanations,false,effectiveBackground));
     tr.append(td);
   }group.append(tr);}
-  if(value.disclosure)installTableDisclosure(group,value.disclosure);
+  if(value.disclosure)installTableDisclosure(group,value.disclosure,explanations);
   if(value.style?.line_height!=null)for(const block of table.querySelectorAll('.block'))block.style.lineHeight='inherit';
   return table;
 }
@@ -1036,7 +1063,7 @@ export function renderEntry(entry, onLink, settings = {}, mediaView = () => null
     mediaOwners.set(mediaOwnerPrefix+hex,media.file);
   }
   const darkSurface=globalThis.getComputedStyle?.(document.documentElement).getPropertyValue('--wikidict-dark-reading-surface').trim();
-  const explanations={inlineImage,imageActionURL,audioControl:(span,label)=>audioControlView(span,label,settings,entry.source_edition),sourceEdition:entry.source_edition,darkReadingSurface:canonicalRGB(darkSurface)?darkSurface:null,isMediaExplanation(span){
+  const explanations={tableCategories:new Map(),inlineImage,imageActionURL,audioControl:(span,label)=>audioControlView(span,label,settings,entry.source_edition),sourceEdition:entry.source_edition,darkReadingSurface:canonicalRGB(darkSurface)?darkSurface:null,isMediaExplanation(span){
     if(span.kind!=='link'||span.image)return false;
     const tokens=poemTokens(span),owners=tokens.filter(token=>token.startsWith(mediaOwnerPrefix));
     // Match the compiled media catalog, not an ordinary File link or a legacy abbreviation.
@@ -1112,6 +1139,11 @@ export function renderEntry(entry, onLink, settings = {}, mediaView = () => null
       section.append(p);
     }
     root.append(section);
+  }
+  if(explanations.tableCategories.size){
+    const visibility=node('nav',null,'table-visibility');visibility.setAttribute('aria-label','Visibility');
+    for(const category of explanations.tableCategories.values())visibility.append(category.button);
+    title.after(visibility);
   }
   const canonicalImageFiles=new Set();
   const imageSpans=values=>{for(const span of values||[])if(span.image)canonicalImageFiles.add(span.image.file);};
