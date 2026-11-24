@@ -5,8 +5,8 @@
   "patches": [
     {
       "file": "0001-logical-flow-renderer.patch",
-      "sha256": "b5a6be6dea8e781b4268ed010e0828868f4467af73df05f26dc3012a9eb51de7",
-      "bytes": 1198710,
+      "sha256": "1d68d835791d2fc286710721c962e6d7344295642b7058b09005b7f0c2da9426",
+      "bytes": 1266114,
       "files": [
         {
           "path": "src/gui/accessible/qaccessible.cpp",
@@ -54,8 +54,8 @@
           "path": "src/gui/text/qtextdocumentlayout.cpp",
           "new_file": false,
           "upstream_sha256": "26c75b9708bcfca3f2ffb387e59e648d816c689453644f91eff36e373de5adc7",
-          "qualified_sha256": "f92347e818a2547341b9f9dd3bdbb88d86f0a17fb934cd818084a5d1b29cf32d",
-          "bytes": 905703
+          "qualified_sha256": "984c4a653f568f6417e990ab326c00aefb7c98623d20cc8bbf728213fd2d3e57",
+          "bytes": 928483
         },
         {
           "path": "src/gui/text/qtextdocumentlayout_p.h",
@@ -68,8 +68,8 @@
           "path": "src/gui/text/qtextengine.cpp",
           "new_file": false,
           "upstream_sha256": "e072b6ce45339b39d1f352f12d49294877bd10cc597d87d1163e0b49dc363e56",
-          "qualified_sha256": "64f93c46f5fa6dea7b0bf8567665b949813e7aad0e5c21ca95790a8f8a9608bf",
-          "bytes": 171186
+          "qualified_sha256": "e3dd515c3317293690a779d0490dd3fef2e43e305572bd4c3f583c5f5940b758",
+          "bytes": 175330
         },
         {
           "path": "src/gui/text/qtextengine_p.h",
@@ -89,15 +89,15 @@
           "path": "src/gui/text/qtextlayout.cpp",
           "new_file": false,
           "upstream_sha256": "a6b8d41c3b4f0d81777edbc84ca53037940ddf3066fa95223fb95cd56ee9c2a8",
-          "qualified_sha256": "f15ef15194f52e54bc106864d7aae58adfb2e9d278949d0747565582fb7066b3",
-          "bytes": 158179
+          "qualified_sha256": "4e2ee56a94925bb10776c79cfadd1f5091a8048cf12fe63c9acf89e1d54f5d55",
+          "bytes": 160302
         },
         {
           "path": "src/gui/text/qtextlogicalflow_p.h",
           "new_file": true,
           "upstream_sha256": null,
-          "qualified_sha256": "eaf3f2fe6debbc09cfc83ac7e07771401a4ad33e0967fe55835c4d55f5103d66",
-          "bytes": 51388
+          "qualified_sha256": "6821ac6ff67c279238a2f858b83e1a1f8553f0871d4c9cf4245c2a15675587a9",
+          "bytes": 54164
         },
         {
           "path": "src/gui/text/qtextsourceprovenance_p.h",
@@ -180,8 +180,8 @@
           "path": "src/gui/text/qtextrubylayout_p.h",
           "new_file": true,
           "upstream_sha256": null,
-          "qualified_sha256": "cec7d002305d27596d486a45555eb0006eeacd12d166ffc3f20f8fc85d31b8b2",
-          "bytes": 47061
+          "qualified_sha256": "82c6dd061666aaec825b8a63a1995919366bd085f4cb362d793c0063f7440cf5",
+          "bytes": 54148
         },
         {
           "path": "src/gui/text/qtextrubyrangemap_p.h",
@@ -201,15 +201,36 @@
           "path": "src/gui/text/qtextinlinebox_p.h",
           "new_file": true,
           "upstream_sha256": null,
-          "bytes": 46539,
-          "qualified_sha256": "31c8e90757d46f478eb1f23de2c9f798e94f6cec1cb981799d56134413e7b48e"
+          "bytes": 67828,
+          "qualified_sha256": "2db10b19734e798b8e193310b462c8a77a5ee371f3042a9ff57e3cd1b0aa85e0"
+        },
+        {
+          "path": "src/gui/text/qfontengine.cpp",
+          "new_file": false,
+          "upstream_sha256": "23c3d96b6d05a817f82697596bffca89d92b3cde1f8c4b8d43a71c056cece389",
+          "qualified_sha256": "7bf030229bb2fc1877a8b07c5c8292a968907656fa44774baaf3bfa1d907be39",
+          "bytes": 89263
+        },
+        {
+          "path": "src/gui/text/qtextdocument_p.h",
+          "new_file": false,
+          "upstream_sha256": "8f79c3a295f83eaa674c7c77d55fb269df33631a97492d4be1a180d7be452c42",
+          "qualified_sha256": "a3fa153b4fa5b5ae1c2d813fef5d0e5a6c92c28352b46671f2c78c256db04677",
+          "bytes": 13763
+        },
+        {
+          "path": "src/gui/text/qabstracttextdocumentlayout.cpp",
+          "new_file": false,
+          "upstream_sha256": "92074f43760546d16349639170cb2067d542ea76c64b0b1576ef444a974e5a5f",
+          "qualified_sha256": "449927c4dbea6f2512e849c21c42e81eb9d6949bb5a14dc2505c8ca3f767c07d",
+          "bytes": 23625
         }
       ]
     },
     {
       "file": "0002-layout-regressions.patch",
-      "sha256": "ef4a7a2f574185ce40a19a2f4baf745a8c3853cb0ecc97a647fda15e01a703c4",
-      "bytes": 1525055,
+      "sha256": "aac07f828469a221fe434915293acde8975a32faceb216cf954c65d195d40b73",
+      "bytes": 1556000,
       "files": [
         {
           "path": "tests/auto/gui/text/qtextdocumentlayout/CMakeLists.txt",
@@ -222,8 +243,8 @@
           "path": "tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp",
           "new_file": false,
           "upstream_sha256": "aeca9826b762034d580c7024cb22641c6f9eafc04501a0099ca57af8d0770d14",
-          "qualified_sha256": "f7fb9b7045b3b96c459ce13823dd8a37cd3f8a1991ea64abaff396e8dfc7a23b",
-          "bytes": 1526185
+          "qualified_sha256": "5721ea098c0a4e97bdbf72325ba4d9f62917d7d7513bd658ba0d3663559afdc4",
+          "bytes": 1556677
         }
       ]
     },
@@ -401,8 +422,8 @@
       "reader": 176,
       "ffi": 177,
       "app": 190,
-      "title": "\u305f\u3073\u3062",
-      "language": "\u65e5\u8a9e",
+      "title": "たびぢ",
+      "language": "日語",
       "wide": [
         900,
         700
@@ -411,7 +432,7 @@
         640,
         600
       ],
-      "internal_missing_target": "\u65c5\u8def#\u65e5\u8a9e",
+      "internal_missing_target": "旅路#日語",
       "successful_destination_record": false,
       "whole_frontend": false
     },
@@ -4771,10 +4792,10 @@
           "bytes": 51901,
           "sha256": "fefd0c0528902e3abd1bf4959559d9bb1e20700fd16bee792a3ba8a3cc55eb6b"
         },
-        "source_title": "\u1010\u1019\u103d\u1014\u103a\u108f",
+        "source_title": "တမွန်ႏ",
         "source_owner": "Pa'o Karen/blk",
         "source_page": "7195/r15998",
-        "target_title": "\u1019\u103e\u1014\u103a",
+        "target_title": "မှန်",
         "target_owner": "Burmese/my",
         "target_page": "7196/r15999",
         "selection": {
@@ -5192,7 +5213,7 @@
         "notice_initial_limit": "First postReturn snapshot still Search, so initial notice paint/width transition unobserved. Earlier offscreen Find SetFocus refused; corrected viaCtrl+L before valid language selection. Stale Thai272 intermediate MG-labeled reads retained and not accepted as MG.",
         "restart_limits": {
           "actual_startup": "Reading153 normal search prompt, Findword empty. SavedlastWord not automatically opened or prefilled.",
-          "window_limit": "Saved640\u00d7600geometry exists, but new fullscreenCage display opens1280\u00d7720. A later controlled640 resize is not a restored-viewport pass."
+          "window_limit": "Saved640×600geometry exists, but new fullscreenCage display opens1280×720. A later controlled640 resize is not a restored-viewport pass."
         }
       },
       "pegasus_failure": {
@@ -5668,7 +5689,7 @@
         "accessibility_scope": "All21 source actions expose native link role/name/target/Press/Set Focus; three media links and two footer links are separate. No exhaustive activation or external/media launch.",
         "keyboard": {
           "notice": "Set Focus then real Space opened Media and speech; images/audio unchecked; normal Reading return succeeded. One list guard transiently failed before input, current lease reconciled once, then successful guarded key.",
-          "missing_target": "Focused \u30da\u30fc\u30ac\u30bd\u30b9 then real Return: explicit No exact entry label, full711 Reading retained.",
+          "missing_target": "Focused ペーガソス then real Return: explicit No exact entry label, full711 Reading retained.",
           "recovery": "Ordinary Library imported exact genuine Thai04 blob, normal language selection/search/Return opened272-character Thai body; real AltLeft restored full711 Pegasus."
         },
         "limits": [
@@ -6076,7 +6097,7 @@
             "et-wide-frame.png",
             "et-compact-frame.png"
           ],
-          "observed": "Three-cell authored audio table fits between H\u00e4\u00e4ldus and Kohanimi; all labels/links and definition1Albaania visible, no crop/overlap observed.",
+          "observed": "Three-cell authored audio table fits between Hääldus and Kohanimi; all labels/links and definition1Albaania visible, no crop/overlap observed.",
           "source_contract": "Authenticated page03d280 has table.style.vertical_align=bottom, source-scoped comparison64a477ec. Actual visual acceptance is source-bound and no numeric baseline/pixel equivalence claim.",
           "remaining_semantics": "Proper-name lexical organization remains zero lexemes; original whole comparator record_count mismatch retained. No whole edition grant.",
           "keyboard": "Albaania native focus+Return gives explicit missing-target label; no audio link activated. Same-process recovery after SS final real AltLeft restored exact210-character Albania."
@@ -6084,14 +6105,14 @@
         "fr": {
           "title": "kobliha",
           "source_edition": "frwiktionary",
-          "stored_heading": "tch\u00e8que",
+          "stored_heading": "tchèque",
           "language_code": "cs",
           "actual_reading_characters": 958,
           "frames": [
             "fr-compact-frame.png",
             "fr-wide-frame.png"
           ],
-          "observed": "Continuous styled (P\u00e2tisserie) Beignet tch\u00e8que. retained, Czech example/declension/image-off layout legible. No new clipping/overlap. Captionless emptyalt250image intentionally blank offline; source contract unchanged.",
+          "observed": "Continuous styled (Pâtisserie) Beignet tchèque. retained, Czech example/declension/image-off layout legible. No new clipping/overlap. Captionless emptyalt250image intentionally blank offline; source contract unchanged.",
           "accessibility": {
             "compact_focused": "fr-image-focused-tree.json was captured while output640, BEFORE fr-wide-output. Doughnuts cz.jpg link showing/visible/focused with exact media-source:File%3ADoughnuts%20cz.jpg target. fr-compact-tree precedes focus and lacksComponent; preserved honestly.",
             "wide": "fr-wide-tree.json names same rawtarget with readablefilename.",
@@ -6124,7 +6145,7 @@
               "zu-wide-frame.png",
               "zu-compact-frame.png"
             ],
-            "observed": "Source S\u00edZulu heading with authored siSwati:sawubona definition visible; stored Unclassified and source-owner disagreement preserved. Native root changed through ordinary LibraryChooseFolder to a separate emptyownedss-library, then authentic5788Barchive imported; no source/metadata rename.",
+            "observed": "Source SíZulu heading with authored siSwati:sawubona definition visible; stored Unclassified and source-owner disagreement preserved. Native root changed through ordinary LibraryChooseFolder to a separate emptyownedss-library, then authentic5788Barchive imported; no source/metadata rename.",
             "limits": "No sourceinternalactions in this region; no new crossrootBack/history success claimed."
           }
         },

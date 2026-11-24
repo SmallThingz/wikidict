@@ -75,7 +75,7 @@ set_target_properties(wikidict-product PROPERTIES
 # their compile definitions to the existing test-driver translation units.
 target_link_libraries(wikidict-product PRIVATE Qt6::Core Qt6::Gui Qt6::GuiPrivate Qt6::Widgets Qt6::Concurrent Qt6::Network Qt6::Multimedia Qt6::Svg "${DICT_FFI_LIBRARY}")
 
-target_link_libraries(wikidict-gui PRIVATE wikidict-product Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Concurrent Qt6::Network Qt6::Multimedia Qt6::Svg "${DICT_FFI_LIBRARY}")
+target_link_libraries(wikidict-gui PRIVATE wikidict-product Qt6::Core Qt6::Gui Qt6::GuiPrivate Qt6::Widgets Qt6::Concurrent Qt6::Network Qt6::Multimedia Qt6::Svg "${DICT_FFI_LIBRARY}")
 get_filename_component(dict_ffi_directory "${DICT_FFI_LIBRARY}" DIRECTORY)
 if(APPLE)
     set(gui_install_rpath "@loader_path")
@@ -188,7 +188,7 @@ if(BUILD_TESTING)
     target_compile_definitions(dict-media-tests PRIVATE DICT_FAKE_VOICE_PATH="$<TARGET_FILE:dict-fake-voice>")
     target_compile_features(dict-media-tests PRIVATE cxx_std_20)
     target_include_directories(dict-media-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
-    target_link_libraries(dict-media-tests PRIVATE Qt6::Widgets Qt6::Network Qt6::Multimedia Qt6::Svg Qt6::Test)
+    target_link_libraries(dict-media-tests PRIVATE Qt6::Widgets Qt6::GuiPrivate Qt6::Network Qt6::Multimedia Qt6::Svg Qt6::Test)
     add_test(NAME native-media-ux COMMAND dict-media-tests)
     set_tests_properties(native-media-ux PROPERTIES WORKING_DIRECTORY "${CMAKE_BINARY_DIR}" ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
     add_executable(dict-library-tests ../tests/LibraryStoreTests.cpp)

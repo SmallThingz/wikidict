@@ -35,9 +35,19 @@ inline void requireCapability(QTextDocument *document) {
 inline void requireExtendedCapability(QTextDocument *document, const QJsonObject &span) {
     requireCapability(document);
     const auto group = CompiledContent::inlineBoxGroup(span);
+    if (CompiledContent::nonbreakingSwatch(span, group))
+        require(document->documentLayout()->property("_wikidictNonbreakingSwatchCapability").toString()
+            == QString::fromLatin1(QCompiledInlineBox::NonbreakingSwatchCapability));
+    if (QCompiledInlineBox::sourceRangeRecipe(span)) {
+        require(document->documentLayout()->property("_wikidictInlineBoxSourceTreeCapability").toString()
+            == QString::fromLatin1(QCompiledInlineBox::SourceTreeCapability));
+        return;
+    }
     if (CompiledContent::hasNestedPitchChildren(span))
         require(document->documentLayout()->property("_wikidictInlineBoxNestedPitchCapability").toString()
             == QString::fromLatin1(QCompiledInlineBox::NestedPitchCapability));
+    if (CompiledContent::dottedBottomLabel(span)) require(document->documentLayout()->property("_wikidictDottedBottomLabelCapability").toString()
+        == QStringLiteral("wikidict.inline-box-dotted-bottom-label/1"));
     if (childLink(span)) require(document->documentLayout()->property("_wikidictInlineBoxChildLinkCapability").toString()
         == QString::fromLatin1(childLinkCapability));
     if (CompiledContent::inlineBoxUsesBorderSource(span))
@@ -62,9 +72,10 @@ inline QVariant actionIdentity(const QTextCharFormat &format) {
     return raw;
 }
 inline QString marker(const QJsonObject &span, const QString &childrenHtml,
-                      const QString &ownerHtml, qreal basePoints, int sourceRun) {
+                      const QString &ownerHtml, qreal basePoints, int sourceRun, const QJsonArray &probes = {}) {
     CompiledContent::inlineBoxGroup(span);
-    const QJsonObject data{{"span", span}, {"html", childrenHtml}, {"owner_html", ownerHtml}, {"base_points", basePoints}};
+    QJsonObject data{{"span", span}, {"html", childrenHtml}, {"owner_html", ownerHtml}, {"base_points", basePoints}};
+    if (!probes.isEmpty()) data.insert("probes", probes);
     const auto bytes = QJsonDocument(data).toJson(QJsonDocument::Compact);
     require(bytes.size() <= 16 * 1024 * 1024 && basePoints > 0 && std::isfinite(basePoints));
     QString html = QStringLiteral("<img src=\"%1%2\" />")
@@ -79,8 +90,9 @@ struct Owner {
     QString source;
     QVariantList padding, widths, colors;
     QVariant radius;
-    bool percentRadius = false, dottedBorder = false;
-    QVariantMap action, childAction;
+    bool percentRadius = false, dottedBorder = false, nonbreakingSwatch = false;
+    QVariant childItalic;
+    QVariantMap action, childAction, sourceTree;
     QByteArray borderSource;
     QVariantList currentColors, overlays;
     QList<QPair<int, QJsonObject>> nested;
@@ -126,7 +138,7 @@ inline Expansion expand(QTextDocument *document) {
             const auto parsed = QJsonDocument::fromJson(QByteArray::fromBase64(encoded, QByteArray::Base64UrlEncoding), &error);
             require(error.error == QJsonParseError::NoError && parsed.isObject());
             const auto data = CompiledContent::containerObject(parsed.object(),
-                {"span", "html", "owner_html", "base_points"}, {"span", "html", "owner_html", "base_points"});
+                {"span", "html", "owner_html", "base_points", "probes"}, {"span", "html", "owner_html", "base_points"});
             for (int i = 0; i < fragment.length(); ++i) {
                 require(fragment.text().at(i) == QChar::ObjectReplacementCharacter && markers.size() < (1 << 20));
                 QTextCursor range(document); range.setPosition(fragment.position() + i);
@@ -145,8 +157,13 @@ inline Expansion expand(QTextDocument *document) {
         const bool sourceBound = CompiledContent::inlineBoxUsesBorderSource(span);
         QJsonArray leaves = group.value("spans").toArray();
         QList<QPair<int, QJsonObject>> nested;
-        if (CompiledContent::hasNestedPitchChildren(span))
+        QCompiledInlineBox::SourceRangeRecipe recipe;
+        const bool sourceTree = QCompiledInlineBox::sourceRangeRecipe(span, &recipe);
+        if (sourceTree) {
+            leaves = {}; for (const auto &leaf : recipe.leaves) leaves.append(leaf.span);
+        } else if (CompiledContent::hasNestedPitchChildren(span))
             require(CompiledContent::nestedPitchSource(span, &leaves, &nested));
+        require(sourceTree == item.data.contains("probes"));
         QString source;
         for (const auto &raw : leaves)
             source += raw.toObject().value("text").toString() + raw.toObject().value("trail").toString();
@@ -185,9 +202,41 @@ inline Expansion expand(QTextDocument *document) {
         child.documentLayout()->setPaintDevice(result.layout->paintDevice());
         SemanticHtml::setHtml(&child, item.data.value("html").toString());
         current();
-        require(child.blockCount() == 1 && child.rootFrame()->childFrames().isEmpty() && child.toPlainText() == source);
+        require(child.blockCount() == 1 && child.rootFrame()->childFrames().isEmpty() && child.toRawText() == source);
         const QFont font = declaring.font().resolve(base);
         require(font.pointSizeF() > 0);
+        const bool dottedLabel = CompiledContent::dottedBottomLabel(span);
+        QFont childFont = font;
+        if (dottedLabel) childFont.setItalic(leaves.first().toObject().value("italic").toBool());
+        QCompiledInlineBox::DecodedSourceRanges decoded;
+        QVariantMap packet;
+        if (sourceTree) {
+            const auto probes = item.data.value("probes").toArray();
+            require(probes.size() == recipe.owners.size() + recipe.leaves.size());
+            QVariantList ownerFonts, leafFonts;
+            int position = 0;
+            const auto snapshot = [&](const QJsonObject &original) {
+                require(probes.at(position).isString());
+                const auto f = SemanticHtml::inlineSnapshotFormat(&ownerContext, CompiledRuby::spanFont(original),
+                    probes.at(position++).toString(), points);
+                current();
+                require(f.verticalAlignment() == QTextCharFormat::AlignNormal && f.font().pointSizeF() > 0);
+                return f;
+            };
+            for (const auto &node : recipe.owners) {
+                const auto f = snapshot(node.span);
+                if (node.span.value("background").isString())
+                    require(f.background().style() == Qt::SolidPattern && f.background().color() == SemanticHtml::styleColor(node.span.value("background")));
+                else require(f.background().style() == Qt::NoBrush);
+                ownerFonts.append(f.font());
+            }
+            require(QCompiledInlineBox::sameMetricFont(ownerFonts.first().value<QFont>(), font));
+            decoded.recipe = recipe;
+            for (const auto &leaf : recipe.leaves) {
+                const auto f = snapshot(leaf.span); decoded.leafFonts.append(f.font()); leafFonts.append(f.font());
+            }
+            packet = {{"span", QJsonDocument(span).toJson(QJsonDocument::Compact)}, {"ownerFonts", ownerFonts}, {"leafFonts", leafFonts}};
+        }
         // Normalize only inherited font resolution and original provenance. The
         // renderer's child colors, anchor URLs and decorations remain intact.
         struct Run { int first, length; QTextCharFormat format; };
@@ -204,7 +253,9 @@ inline Expansion expand(QTextDocument *document) {
                 && format.verticalAlignment() == QTextCharFormat::AlignNormal
                 && (!format.hasProperty(QCompiledInline::Property)
                     || QCompiledInlineBox::helpOnly(format.property(QCompiledInline::Property)))
-                && QCompiledInlineBox::sameMetricFont(format.font(), font));
+                && (sourceTree ? QCompiledInlineBox::sourceRangeFormat(decoded, fragment.position(), fragment.position() + fragment.length(),
+                    format, base, QCompiledInlineBox::helpOnly(format.property(QCompiledInline::Property)))
+                    : QCompiledInlineBox::sameMetricFont(format.font(), childFont)));
             // Keep the ordinary link renderer's resolved ink/decoration/focus
             // authority. The child contributes its unchanged original characters.
             if (wholeLink) format = declaring;
@@ -221,9 +272,9 @@ inline Expansion expand(QTextDocument *document) {
                 // not a second glyph-run rectangle over its sliced border.
                 format.clearProperty(QTextFormat::BackgroundBrush);
             }
-            if (!format.hasProperty(QCompiledInline::Property) && declaring.hasProperty(QCompiledInline::Property))
+            if (!sourceTree && !format.hasProperty(QCompiledInline::Property) && declaring.hasProperty(QCompiledInline::Property))
                 format.setProperty(QCompiledInline::Property, declaring.property(QCompiledInline::Property));
-            if (!format.hasProperty(QTextFormat::TextToolTip)
+            if (!sourceTree && !format.hasProperty(QTextFormat::TextToolTip)
                 && declaring.hasProperty(QTextFormat::TextToolTip))
                 format.setToolTip(declaring.toolTip());
             runs.append({fragment.position(), fragment.length(), format});
@@ -239,6 +290,9 @@ inline Expansion expand(QTextDocument *document) {
             format.setAnchor(true); format.setAnchorNames(names); first.setCharFormat(format);
         }
         Owner owner; owner.font = font; owner.source = source; owner.nested = nested;
+        owner.nonbreakingSwatch = CompiledContent::nonbreakingSwatch(span, group);
+        owner.sourceTree = packet;
+        if (!sourceTree && dottedLabel) owner.childItalic = childFont.italic();
         if (childLink(span)) {
             const auto original = group.value("spans").toArray().first().toObject();
             const QString href = QStringLiteral("dict:") + QString::fromLatin1(QUrl::toPercentEncoding(original.value("target").toString()));
@@ -326,7 +380,7 @@ inline void finalize(const Expansion &result) {
             const bool fixedCircle = owner.percentRadius && owner.dottedBorder
                 && owner.radius == QVariant(50.0) && !owner.background.isValid()
                 && owner.action.isEmpty() && owner.childAction.isEmpty() && owner.nested.isEmpty();
-            require((!owner.borderSource.isEmpty() || fixedCircle) && table
+            require((!owner.borderSource.isEmpty() || fixedCircle || owner.nonbreakingSwatch) && table
                 && table->parentFrame() == result.document->rootFrame()
                 && table->frameFormat().position() == QTextFrameFormat::InFlow
                 && !QTextLogicalFlowProjection::inlineTable(table)
@@ -343,6 +397,8 @@ inline void finalize(const Expansion &result) {
             {"font", owner.font}, {"padding", owner.padding}, {"widths", owner.widths}, {"colors", owner.colors}};
         if (owner.background.isValid()) metadata.insert("background", owner.background);
         if (owner.radius.isValid()) metadata.insert("radius", owner.radius);
+        if (!owner.sourceTree.isEmpty()) metadata.insert("sourceTree", owner.sourceTree);
+        if (owner.childItalic.isValid()) metadata.insert("dottedBottomChildItalic", owner.childItalic);
         if (owner.percentRadius) metadata.insert("radiusUnit", QStringLiteral("percent"));
         if (owner.dottedBorder) metadata.insert("borderStyle", QStringLiteral("dotted"));
         if (!owner.action.isEmpty()) metadata.insert("action", owner.action);

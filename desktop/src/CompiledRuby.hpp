@@ -30,7 +30,9 @@ struct TrackedRange {
     QTextRubyLayout::Range native() const { return {first.position(), last.position()}; }
     QTextRubyRangeMap::Range logical() const { return {first.position(), last.position()}; }
 };
+struct ImportedOwner;
 struct ImportedChild {
+    QList<std::shared_ptr<ImportedOwner>> nested;
     TrackedRange range;
     QTextRubyLayout::Child native;
 };
@@ -164,15 +166,34 @@ inline QString gapText(const QJsonValue &value) {
     }
     return result;
 }
-inline QString plain(const QJsonArray &spans, int depth = 0) {
+inline QString plain(const QJsonArray &spans, int depth = 0, bool textContent = false) {
     if (depth > 16) throw std::runtime_error("inline group content depth exceeded");
     QString result;
     for (const auto &value : spans) {
         if (!value.isObject()) throw std::runtime_error("invalid Ruby child");
         const auto span = value.toObject();
-        if (SemanticHtml::present(span.value("ruby"))) throw std::runtime_error("nested Ruby importer not yet installed");
+        if (SemanticHtml::present(span.value("ruby"))) {
+            for (const auto &part : array(span.value("ruby").toObject().value("segments"))) {
+                const auto segment = part.toObject();
+                result += gapText(segment.value("gap_before"));
+                for (const auto &item : array(segment.value("bases"))) {
+                    const auto base = item.toObject();
+                    result += gapText(base.value("gap_before"));
+                    result += plain(array(base.value("spans")), depth + 1, textContent);
+                }
+                if (textContent) for (const auto &item : array(segment.value("annotations"))) {
+                    const auto annotation = item.toObject();
+                    result += gapText(annotation.value("gap_before"));
+                    const bool rp = annotation.value("explicit_fallback").toBool();
+                    if (rp) result += plain(array(annotation.value("fallback_before")), depth + 1, true);
+                    result += plain(array(annotation.value("spans")), depth + 1, true);
+                    if (rp) result += plain(array(annotation.value("fallback_after")), depth + 1, true);
+                }
+            }
+            continue;
+        }
         if (hasPadding(span)) {
-            result += plain(array(paddingGroup(span).value("spans")), depth + 1);
+            result += plain(array(paddingGroup(span).value("spans")), depth + 1, textContent);
             continue;
         }
         if (!span.value("text").isString() || !span.value("trail").isString()) throw std::runtime_error("invalid Ruby text");
@@ -225,10 +246,11 @@ inline void requireOwnerPolicy(const QJsonObject &owner, bool outer = false) {
     if (outer && SemanticHtml::present(style.value("line_height")))
         throw std::runtime_error("outer Ruby used line-height owner not yet installed");
 }
+using NestedImporter = std::function<std::shared_ptr<ImportedOwner>(const QJsonObject &, const Context &)>;
 inline ImportedChild insertChild(QTextCursor &cursor, const QJsonObject &owner,
         const QJsonArray &spans, const Context &context, const ResolvedOwner &outer,
         const Placement &outerPlacement, bool underline, bool strike, const QTextCharFormat &provenance,
-        bool reading = false) {
+        bool reading = false, const NestedImporter &importNested = {}) {
     requireOwnerPolicy(owner);
     const ResolvedOwner resolved = resolveOwner(owner, context);
     const auto placement = place(resolved, &outerPlacement);
@@ -277,8 +299,21 @@ inline ImportedChild insertChild(QTextCursor &cursor, const QJsonObject &owner,
         if (plain(children).trimmed().isEmpty()) throw std::runtime_error("empty inline padding group");
     }
     const int first = cursor.position();
+    ImportedChild result;
     for (const auto &value : children) {
-        const auto span = value.toObject(); validateLeaf(span);
+        const auto span = value.toObject();
+        if (SemanticHtml::present(span.value("ruby"))) {
+            if (!importNested || padding
+                || hasPadding(span) || SemanticHtml::present(span.value("image")) || SemanticHtml::present(span.value("link_paint"))
+                || SemanticHtml::present(span.value("inline_action_group")) || SemanticHtml::present(span.value("inline_box")))
+                throw std::runtime_error("unsupported nested Ruby owner combination");
+            Context inherited = context;
+            inherited.foreground = inheritedInk;
+            inherited.option.setTextDirection(direction(owner.value("direction").toString(), plain(spans), context.option.textDirection()));
+            result.nested.append(importNested(span, inherited));
+            continue;
+        }
+        validateLeaf(span);
         if (padding && plain(QJsonArray{span}).isEmpty())
             throw std::runtime_error("empty inline padding child metrics not yet supported");
         QJsonObject childOwner{{"font", spanFont(span)}, {"direction", ""},
@@ -311,7 +346,6 @@ inline ImportedChild insertChild(QTextCursor &cursor, const QJsonObject &owner,
         auto policy = QCompiledInline::policy(format); policy.remove("wrap"); format.setProperty(QCompiledInline::Property, policy);
         cursor.insertText(span.value("trail").toString(), format);
     }
-    ImportedChild result;
     result.range = TrackedRange(cursor.document(), first, cursor.position());
     result.native.ownerFont = resolved.font;
     result.native.option = context.option;
@@ -420,18 +454,11 @@ inline Expansion expand(QTextDocument *document,
             }
         }
     qint64 nextActionOwner = 0;
-    for (auto &marker : markers) {
-        const auto span = marker.data.value("span").toObject();
-        if (SemanticHtml::present(span.value("background")))
-            throw std::runtime_error("whole Ruby container background not yet installed");
-        Context context{marker.provenance.font().resolve(document->defaultFont()), marker.data.value("body_points").toDouble(),
-            document->documentLayout()->paintDevice(), document->defaultTextOption(), marker.provenance.foreground()};
-        context.actionOwnerCounter = &nextActionOwner;
-        context.egyptianFamily = marker.data.value("egyptian_family").toString();
-        context.option.setTextDirection(marker.cursor.blockFormat().layoutDirection());
-        const qreal points = marker.data.value("context_points").toDouble();
-        if (!std::isfinite(points) || points < 0) throw std::runtime_error("Ruby original context is missing");
-        if (points > 0) context.originalFont.setPointSizeF(points);
+    const auto insertOwner = [&](auto &&self, QTextCursor &cursor, const QJsonObject &span, const Context &context,
+                                 const QTextCharFormat &provenance, int depth) -> ImportedOwner {
+        if (depth >= 16 || span.value("kind") != "text" || !span.value("text").toString().isEmpty()
+            || !span.value("trail").toString().isEmpty() || !span.value("target").toString().isEmpty()
+            || SemanticHtml::present(span.value("background"))) throw std::runtime_error("invalid Ruby owner");
         QJsonObject outerOwner{{"font", spanFont(span)}, {"direction", span.value("direction")},
             {"inline_style", span.value("inline_style")}, {"foreground", span.value("foreground")}, {"background", span.value("background")}};
         requireOwnerPolicy(outerOwner, true);
@@ -451,8 +478,11 @@ inline Expansion expand(QTextDocument *document,
                 if (hasGap) throw std::runtime_error("Ruby decoration across allocated gaps not yet supported");
             }
         }
-        marker.cursor.removeSelectedText();
-        ImportedOwner imported; const int ownerFirst = marker.cursor.position();
+        const NestedImporter importNested = [&](const QJsonObject &nestedSpan, const Context &inherited) {
+            auto nested = std::make_shared<ImportedOwner>(self(self, cursor, nestedSpan, inherited, provenance, depth + 1));
+            return nested;
+        };
+        ImportedOwner imported; const int ownerFirst = cursor.position();
         QString previousSegmentBases;
         for (const auto &raw : segments) {
             const auto segment = SemanticHtml::inlineObject(raw, {"gap_before", "bases", "annotations"}, {"gap_before", "bases", "annotations"});
@@ -469,18 +499,18 @@ inline Expansion expand(QTextDocument *document,
             }
             if (imported.segments.isEmpty() && !gapText(segment.value("gap_before")).isEmpty())
                 throw std::runtime_error("leading Ruby segment gap");
-            output.gap = insertGap(marker.cursor, segment.value("gap_before"), previousSegmentBases,
-                segmentBases, context, outer, outerPlacement, marker.provenance, true);
-            const int segmentFirst = marker.cursor.position();
+            output.gap = insertGap(cursor, segment.value("gap_before"), previousSegmentBases,
+                segmentBases, context, outer, outerPlacement, provenance, true);
+            const int segmentFirst = cursor.position();
             for (const auto &rawBase : bases) {
                 const auto base = SemanticHtml::inlineObject(rawBase, {"owner", "gap_before", "spans"}, {"owner", "gap_before", "spans"});
                 const int index = output.bases.size();
                 if (!index && !baseGapText[index].isEmpty()) throw std::runtime_error("leading Ruby base gap");
-                output.baseGaps.append(insertGap(marker.cursor, base.value("gap_before"), index ? baseText[index - 1] : QString(),
-                    baseText[index], context, outer, outerPlacement, marker.provenance));
+                output.baseGaps.append(insertGap(cursor, base.value("gap_before"), index ? baseText[index - 1] : QString(),
+                    baseText[index], context, outer, outerPlacement, provenance));
                 const auto body = array(base.value("spans"));
-                output.bases.append(insertChild(marker.cursor, base.value("owner").toObject(), body, context, outer,
-                    outerPlacement, span.value("underline").toBool(), span.value("strike").toBool(), marker.provenance));
+                output.bases.append(insertChild(cursor, base.value("owner").toObject(), body, context, outer,
+                    outerPlacement, span.value("underline").toBool(), span.value("strike").toBool(), provenance, false, importNested));
             }
             int previousLevel = -1, previousEnd = 0;
             QString previousReading;
@@ -497,35 +527,61 @@ inline Expansion expand(QTextDocument *document,
                 }
                 if (start < previousEnd) throw std::runtime_error("overlapping Ruby associations");
                 previousLevel = level; previousEnd = start + count;
-                QString covered;
-                for (int i = start; i < start + count; ++i) covered += (i == start ? QString() : baseGapText[i]) + baseText[i];
                 const auto body = array(reading.value("spans"));
                 const auto readingText = plain(body);
-                const bool hidden = readingText == covered;
+                QString coveredContent;
+                for (int i = start; i < start + count; ++i) {
+                    if (i > start) coveredContent += baseGapText[i];
+                    coveredContent += plain(array(bases[i].toObject().value("spans")), 0, true);
+                }
+                // CSS Ruby 2.4 compares textContent, including a nested annotation.
+                const bool hidden = plain(body, 0, true) == coveredContent;
                 if (!reading.value("explicit_fallback").isBool()) throw std::runtime_error("invalid Ruby fallback flag");
                 for (const auto &key : {"fallback_before", "fallback_after"})
                     for (const auto &leaf : array(reading.value(key))) validateLeaf(leaf.toObject());
-                const auto gap = insertGap(marker.cursor, reading.value("gap_before"), previousReading,
-                    readingText, context, outer, outerPlacement, marker.provenance, false, hidden);
+                const auto gap = insertGap(cursor, reading.value("gap_before"), previousReading,
+                    readingText, context, outer, outerPlacement, provenance, false, hidden);
                 ImportedChild child;
                 if (hidden) {
                     // Validate hidden payload and declaring owner without inventing glyphs/actions.
-                    for (const auto &leaf : body) validateLeaf(leaf.toObject());
-                    child = insertChild(marker.cursor, reading.value("owner").toObject(), {}, context, outer,
-                        outerPlacement, false, false, marker.provenance);
-                } else child = insertChild(marker.cursor, reading.value("owner").toObject(), body, context, outer,
-                    outerPlacement, false, false, marker.provenance, true);
+                    if (std::any_of(body.begin(), body.end(), [](const QJsonValue &v) { return SemanticHtml::present(v.toObject().value("ruby")); })) {
+                        const int first = cursor.position();
+                        insertChild(cursor, reading.value("owner").toObject(), body, context, outer,
+                            outerPlacement, false, false, provenance, true, importNested);
+                        cursor.setPosition(first, QTextCursor::KeepAnchor);
+                        cursor.removeSelectedText();
+                    } else for (const auto &leaf : body) validateLeaf(leaf.toObject());
+                    child = insertChild(cursor, reading.value("owner").toObject(), {}, context, outer,
+                        outerPlacement, false, false, provenance);
+                } else child = insertChild(cursor, reading.value("owner").toObject(), body, context, outer,
+                    outerPlacement, false, false, provenance, true, importNested);
                 output.readings.append({child, start, count, level, hidden, gap});
                 previousReading = hidden ? QString() : readingText;
             }
-            output.range = TrackedRange(document, segmentFirst, marker.cursor.position());
+            output.range = TrackedRange(document, segmentFirst, cursor.position());
             output.direction = direction(span.value("direction").toString(), baseText.join(QString()), context.option.textDirection());
             output.baselineOrigin = outerPlacement.shift;
             imported.segments.append(output);
             previousSegmentBases = segmentBases;
         }
-        if (marker.cursor.position() == ownerFirst) throw std::runtime_error("empty complete Ruby owner not yet installed");
-        imported.range = TrackedRange(document, ownerFirst, marker.cursor.position()); result.owners.append(imported);
+        if (cursor.position() == ownerFirst) throw std::runtime_error("empty complete Ruby owner not yet installed");
+        imported.range = TrackedRange(document, ownerFirst, cursor.position()); return imported;
+    };
+    for (auto &marker : markers) {
+        const auto span = marker.data.value("span").toObject();
+        if (SemanticHtml::present(span.value("background")))
+            throw std::runtime_error("whole Ruby container background not yet installed");
+        Context context{marker.provenance.font().resolve(document->defaultFont()), marker.data.value("body_points").toDouble(),
+            document->documentLayout()->paintDevice(), document->defaultTextOption(), marker.provenance.foreground()};
+        context.actionOwnerCounter = &nextActionOwner;
+        context.egyptianFamily = marker.data.value("egyptian_family").toString();
+        context.option.setTextDirection(marker.cursor.blockFormat().layoutDirection());
+        const qreal points = marker.data.value("context_points").toDouble();
+        if (!std::isfinite(points) || points < 0) throw std::runtime_error("Ruby original context is missing");
+        if (points > 0) context.originalFont.setPointSizeF(points);
+        marker.cursor.removeSelectedText();
+        const int ownerFirst = marker.cursor.position();
+        result.owners.append(insertOwner(insertOwner, marker.cursor, span, context, marker.provenance, 0));
         if (replaced) replaced(ownerFirst, 1, marker.cursor.position() - ownerFirst);
     }
     return result;
@@ -568,8 +624,22 @@ inline Finalized finalize(const Expansion &expansion, QVariantList descriptors) 
     QList<QTextRubyRangeMap::Owner> roots;
     struct Part { int first, last; QVariantMap value; bool used = false; };
     QList<Part> replacements;
-    for (const auto &owner : expansion.owners) {
-        ordinary(documentPosition, owner.range.first.position());
+    const auto mapOwner = [&](auto &&self, const ImportedOwner &owner, QList<QTextRubyLayout::NestedPart> *nested) -> QTextRubyRangeMap::Owner {
+        if (documentPosition != owner.range.first.position()) throw std::runtime_error("invalid nested Ruby start");
+        const auto content = [&](const ImportedChild &source, QTextRubyLayout::Child &child) {
+            QTextRubyRangeMap::Content body;
+            body.range.first = semantic.size();
+            int storage = child.source.first;
+            for (const auto &owner : source.nested) {
+                ordinary(storage, owner->range.first.position());
+                const auto mapped = std::make_shared<QTextRubyRangeMap::Owner>(self(self, *owner, &child.nestedParts));
+                body.nested.append(mapped);
+                storage = owner->range.last.position();
+            }
+            ordinary(storage, child.source.last);
+            body.range.last = semantic.size();
+            return body;
+        };
         QTextRubyRangeMap::Owner root; root.range.first = semantic.size();
         for (const auto &segment : owner.segments) {
             QTextRubyRangeMap::Segment logical;
@@ -580,34 +650,38 @@ inline Finalized finalize(const Expansion &expansion, QVariantList descriptors) 
                 const auto &base = segment.bases[index];
                 const auto &gap = segment.baseGaps[index];
                 const auto logicalGap = gapRange(gap);
-                auto child = base.native; child.source = base.range.native(); native.bases.append(child); native.gaps.append(0);
+                auto child = base.native; child.source = base.range.native(); native.gaps.append(0);
                 if (gap.child.range.first.position() != gap.child.range.last.position()) {
                     auto gapChild = gap.child.native; gapChild.source = gap.child.range.native();
                     native.gapSources.append({gapChild, index, -1});
                 }
-                const auto range = ordinary(child.source.first, child.source.last);
-                logical.bases.append({logicalGap, {range, {}}});
+                logical.bases.append({logicalGap, content(base, child)});
+                native.bases.append(child);
             }
             for (int index = 0; index < segment.readings.size(); ++index) {
                 const auto &reading = segment.readings[index];
                 const auto logicalGap = gapRange(reading.gap);
                 auto child = reading.child.native; child.source = reading.child.range.native();
-                native.readings.append({child, reading.start, reading.count, reading.level, reading.hidden});
                 if (reading.gap.child.range.first.position() != reading.gap.child.range.last.position()) {
                     auto gapChild = reading.gap.child.native; gapChild.source = reading.gap.child.range.native();
                     native.gapSources.append({gapChild, -1, index});
                 }
-                const auto range = ordinary(child.source.first, child.source.last);
                 logical.annotations.append({reading.start, reading.count, reading.level, reading.hidden,
-                    logicalGap, {range, {}}});
+                    logicalGap, content(reading.child, child)});
+                native.readings.append({child, reading.start, reading.count, reading.level, reading.hidden});
             }
             root.segments.append(logical);
             const int first = segment.range.first.position(), last = segment.range.last.position();
-            replacements.append({first, last, {{"kind", "ruby"}, {"anchor", first}, {"value", QVariant::fromValue(native)}}, false});
+            if (nested) nested->append({{first, last}, std::make_shared<QTextRubyLayout::Description>(std::move(native))});
+            else replacements.append({first, last, {{"kind", "ruby"}, {"anchor", first}, {"value", QVariant::fromValue(native)}}, false});
         }
         if (documentPosition != owner.range.last.position()) throw std::runtime_error("Ruby owner lost its complete extent");
         root.range.last = semantic.size();
-        roots.append(root);
+        return root;
+    };
+    for (const auto &owner : expansion.owners) {
+        ordinary(documentPosition, owner.range.first.position());
+        roots.append(mapOwner(mapOwner, owner, nullptr));
     }
     std::sort(replacements.begin(), replacements.end(), [](const auto &a, const auto &b) { return a.first < b.first; });
     const auto splice = [&](auto &&self, const QVariantList &parts) -> QVariantList {

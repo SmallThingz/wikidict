@@ -3143,6 +3143,136 @@ private slots:
                     {"fallback_before", QJsonArray{}}, {"fallback_after", QJsonArray{}}, {"explicit_fallback", false}}}}}}}});
             return span;
         };
+        // The producer stores inner Ruby as the first span of the outer annotation.
+        // Vary the outer base to catch auto-hiding a distinct nested reading.
+        for (const QString &outerBase : {QStringLiteral("outer"), QStringLiteral("inner"), QStringLiteral("innerinside")}) {
+            auto outer = ruby(outerBase, "unused");
+            auto nestedValue = outer.value("ruby").toObject();
+            auto segment = nestedValue.value("segments").toArray().first().toObject();
+            auto reading = segment.value("annotations").toArray().first().toObject();
+            reading.insert("spans", QJsonArray{ruby("inner", "inside")});
+            segment.insert("annotations", QJsonArray{reading});
+            nestedValue.insert("segments", QJsonArray{segment});
+            outer.insert("ruby", nestedValue);
+            const QJsonObject paragraph{{"kind", "paragraph"}, {"spans", QJsonArray{leaf("<"), outer, leaf(">")}}};
+            QVERIFY(composeReadingBlocks(window, QJsonArray{paragraph}));
+            auto *browser = window.reading_;
+            auto *document = browser->document();
+            document->documentLayout()->documentSize();
+            if (outerBase == QStringLiteral("innerinside")) {
+                QVERIFY(document->toRawText().contains("<" + outerBase + ">"));
+                continue;
+            }
+            const QString expected = outerBase + QStringLiteral("innerinside");
+            const int first = document->toRawText().indexOf(expected);
+            QVERIFY(first >= 0);
+            auto *accessible = QAccessible::queryAccessibleInterface(browser);
+            QVERIFY(accessible && accessible->textInterface());
+            QCOMPARE(accessible->textInterface()->text(first, first + expected.size()), expected);
+            const int inner = first + outerBase.size(), annotation = inner + 5;
+            const auto glyph = [&](int offset) {
+                return LogicalFlow::position(document, offset).values.value("characterRect").toRectF();
+            };
+            const auto outerRect = glyph(first), innerRect = glyph(inner), readingRect = glyph(annotation);
+            QVERIFY(!outerRect.isEmpty() && !innerRect.isEmpty() && !readingRect.isEmpty());
+            QVERIFY(innerRect.bottom() <= outerRect.top() + 1);
+            QVERIFY(readingRect.bottom() <= innerRect.top() + 1);
+            QSet<QPair<int,int>> linkedRanges;
+            for (int i = 0; i < accessible->childCount(); ++i) {
+                auto *child = accessible->child(i);
+                if (!child || child->role() != QAccessible::Link) continue;
+                auto *link = child->hyperlinkInterface(); QVERIFY(link);
+                linkedRanges.insert({link->startIndex(), link->endIndex()});
+            }
+            QVERIFY(linkedRanges.contains({first, inner}));
+            QVERIFY(linkedRanges.contains({inner, annotation}));
+            QVERIFY(linkedRanges.contains({annotation, int(first + expected.size())}));
+        }
+        // Ordinary siblings and nested segments share one native bidi line.
+        // Source indices and link hit regions stay in document order even when
+        // the nested objects are reordered by the surrounding RTL paragraph.
+        {
+            const auto tintRubyLeaf = [](QJsonObject span, const QString &role, const QString &ink) {
+                auto value = span.value("ruby").toObject();
+                auto segment = value.value("segments").toArray().first().toObject();
+                auto child = segment.value(role).toArray().first().toObject();
+                auto leaf = child.value("spans").toArray().first().toObject();
+                leaf.insert("foreground", ink);
+                child.insert("spans", QJsonArray{leaf});
+                segment.insert(role, QJsonArray{child});
+                value.insert("segments", QJsonArray{segment});
+                span.insert("ruby", value);
+                return span;
+            };
+            auto middle = tintRubyLeaf(ruby("一", "いち"), "bases", "#008000");
+            middle = tintRubyLeaf(middle, "annotations", "#0040b0");
+            auto middleValue = middle.value("ruby").toObject();
+            auto segments = middleValue.value("segments").toArray();
+            auto second = ruby("二", "に").value("ruby").toObject().value("segments").toArray().first().toObject();
+            second.insert("gap_before", QJsonArray{leaf(" ")}); segments.append(second);
+            middleValue.insert("segments", segments); middle.insert("ruby", middleValue);
+            auto outer = tintRubyLeaf(ruby("外", QString()), "bases", "#b00000");
+            auto value = outer.value("ruby").toObject();
+            auto segment = value.value("segments").toArray().first().toObject();
+            auto reading = segment.value("annotations").toArray().first().toObject();
+            auto declaring = reading.value("owner").toObject(); declaring.insert("direction", "rtl");
+            reading.insert("owner", declaring);
+            reading.insert("spans", QJsonArray{leaf("אב", true), middle, leaf("גד", true), ruby("三", "さん"), leaf("הו", true)});
+            segment.insert("annotations", QJsonArray{reading}); value.insert("segments", QJsonArray{segment}); outer.insert("ruby", value);
+            QVERIFY(composeReadingBlocks(window, QJsonArray{QJsonObject{{"kind", "paragraph"}, {"spans", QJsonArray{outer}}}}));
+            window.readingPaneAction_->trigger();
+            auto *doc = window.reading_->document(); doc->documentLayout()->documentSize();
+            const QString expected = QStringLiteral("外אב一いち 二にגד三さんהו");
+            const int first = doc->toRawText().indexOf(expected); QVERIFY(first >= 0);
+            auto *ax = QAccessible::queryAccessibleInterface(window.reading_); QVERIFY(ax && ax->textInterface());
+            QCOMPARE(ax->textInterface()->text(first, first + expected.size()), expected);
+            const auto rect = [&](QString text) {
+                const auto offset = expected.indexOf(text); return LogicalFlow::position(doc, first + offset).values.value("characterRect").toRectF();
+            };
+            for (const auto &label : {QStringLiteral("אב"), QStringLiteral("גד"), QStringLiteral("הו"), QStringLiteral("一"), QStringLiteral("二"), QStringLiteral("三"), QStringLiteral("に")}) QVERIFY(!rect(label).isEmpty());
+            QVERIFY(rect("אב").center().x() > rect("הו").center().x());
+            QVERIFY(rect("に").bottom() <= rect("二").top() + 1);
+            QVERIFY(rect("さん").bottom() <= rect("三").top() + 1);
+            const QRectF outerBase = rect("外");
+            const QRectF innerBase = rect("一");
+            const QRectF innerReading = rect("い").united(rect("ち"));
+            QVERIFY(innerReading.bottom() <= innerBase.top() + 1);
+            QVERIFY(innerBase.bottom() <= outerBase.top() + 1);
+            const QRect bounds = outerBase.united(innerBase).united(innerReading).toAlignedRect().adjusted(-2, -2, 2, 2);
+            QVERIFY(!bounds.isEmpty() && bounds.width() < 4096 && bounds.height() < 4096);
+            QImage raster(bounds.size(), QImage::Format_ARGB32_Premultiplied);
+            raster.fill(Qt::white);
+            {
+                QPainter painter(&raster);
+                painter.translate(-bounds.topLeft());
+                doc->drawContents(&painter);
+            }
+            const auto hasInk = [&](const QRectF &band, int channel) {
+                const QRect pixels = band.toAlignedRect().translated(-bounds.topLeft()).intersected(raster.rect());
+                for (int y = pixels.top(); y <= pixels.bottom(); ++y) {
+                    for (int x = pixels.left(); x <= pixels.right(); ++x) {
+                        const QColor pixel = raster.pixelColor(x, y);
+                        const int channels[] = {pixel.red(), pixel.green(), pixel.blue()};
+                        if (channels[channel] > qMax(channels[(channel + 1) % 3], channels[(channel + 2) % 3]) + 40)
+                            return true;
+                    }
+                }
+                return false;
+            };
+            QVERIFY2(hasInk(outerBase, 0), "outer base has no authored red ink");
+            QVERIFY2(hasInk(innerBase, 1), "nested base has no authored green ink");
+            QVERIFY2(hasInk(innerReading, 2), "nested annotation has no authored blue ink");
+            QSet<QPair<int,int>> links;
+            for (int i = 0; i < ax->childCount(); ++i) {
+                auto *child = ax->child(i); if (!child || child->role() != QAccessible::Link) continue;
+                auto *link = child->hyperlinkInterface(); QVERIFY(link); links.insert({link->startIndex(), link->endIndex()});
+            }
+            for (const auto &label : {QStringLiteral("אב"), QStringLiteral("一"), QStringLiteral("いち"),
+                                      QStringLiteral("二"), QStringLiteral("に"), QStringLiteral("גד"),
+                                      QStringLiteral("三"), QStringLiteral("さん"), QStringLiteral("הו")}) {
+                const int start = first + expected.indexOf(label); QVERIFY(links.contains({start, int(start + label.size())}));
+            }
+        }
         // Real imported child formats may split a Ruby's logical text into
         // adjacent parts. They may not bridge a scope, structural event or hole.
         {
@@ -4543,7 +4673,9 @@ private slots:
         const auto authoredEmpty = table->cellAt(0, 3); const auto authoredFormat = authoredEmpty.format().toTableCellFormat();
         QVERIFY(!authoredFormat.hasProperty(SemanticHtml::tableFloatViewportFillerProperty));
         QVERIFY(!authoredFormat.hasProperty(QTextFormat::TableCellLeftPadding)); QCOMPARE(table->format().cellPadding(), 5.0);
-        QCOMPARE(authoredFormat.leftBorder(), 1.0); QCOMPARE(authoredFormat.leftBorderStyle(), QTextFrameFormat::BorderStyle_Solid);
+        QCOMPARE(authoredFormat.leftBorder(), 0.0);
+        QVERIFY(authoredFormat.hasProperty(QTextFormat::TableCellLeftBorder));
+        QCOMPARE(authoredFormat.leftBorderStyle(), QTextFrameFormat::BorderStyle_Solid);
         QCOMPARE(authoredEmpty.firstPosition(), authoredEmpty.lastPosition()); QVERIFY(authoredEmpty.firstCursorPosition().block().layout()->lineCount() > 0);
         for (int column=4; column<7; ++column) {
             const auto filler = table->cellAt(0,column); QVERIFY(filler.format().boolProperty(SemanticHtml::tableFloatViewportFillerProperty));
@@ -12993,6 +13125,141 @@ private slots:
         QCOMPARE(document->documentLayout()->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
     }
 
+    void ordinarySourceTreeInstallsMeasuredOwnersAndOriginalLeafActions() {
+        const auto text = [](const QString &value) {
+            return QJsonObject{{"kind", "text"}, {"text", value}, {"trail", ""}, {"target", ""}, {"font_scale", .8}};
+        };
+        const auto length = [](double value) { return QJsonObject{{"unit", "px"}, {"value", value}}; };
+        const auto group = [&](QJsonArray children, double left, double right, bool dotted = false) {
+            const QJsonObject none{{"none", QJsonObject{}}};
+            const QJsonObject edge{{"dotted", QJsonObject{{"width", length(1)}, {"color", QJsonObject{{"rgb", "#000000"}}}}}};
+            auto owner = text({});
+            owner.insert("inline_box_group", QJsonObject{{"padding", QJsonObject{{"top", length(0)}, {"right", length(right)},
+                {"bottom", length(0)}, {"left", length(left)}}}, {"border", QJsonObject{{"top", none}, {"right", none},
+                {"bottom", dotted ? edge : none}, {"left", none}}}, {"overlays", QJsonArray{}}, {"spans", children}});
+            return owner;
+        };
+        auto italic = text("c"); italic.insert("italic", true);
+        auto tip = group({italic}, 0, 0, true); tip.insert("tooltip", "Cantonese");
+        tip.insert("inline_style", QJsonObject{{"cursor", "help"}});
+        const auto link = [&](QString value, QString language, QString klass) {
+            auto leaf = text(value); leaf.insert("kind", "link"); leaf.insert("target", value + "#Chinese");
+            leaf.insert("language", language); leaf.insert("classes", klass); return leaf;
+        };
+        auto label = text(QStringLiteral("Класификатор")); label.insert("italic", true);
+        const auto separator = group({text(QString(QChar::Nbsp))}, 4, 4);
+        auto fill = group({text("("), label, text(": "), link(QStringLiteral("隻"), "zh-Hant", "Hant"), text(QStringLiteral("／")),
+            link(QStringLiteral("只"), "zh", "Hani"), text(" "), tip, text(";"), separator,
+            link(QStringLiteral("個"), "zh-Hant", "Hant"), text(QStringLiteral("／")), link(QStringLiteral("个"), "zh-Hans", "Hans"), text(" "), tip, text(")")}, 0, 0);
+        fill.insert("background", "#edffff"); const auto outer = group({fill}, 15, 0);
+        QCompiledInlineBox::SourceRangeRecipe recipe; QVERIFY(QCompiledInlineBox::sourceRangeRecipe(outer, &recipe));
+        QCOMPARE(recipe.owners.size(), 5);
+        const auto source = QStringLiteral("(Класификатор: 隻／只 c;\u00a0個／个 c)"); QCOMPARE(recipe.text, source);
+        MainWindow window{QString()}; window.show(); QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 30000);
+        window.readingPointSize_ = 12;
+        const auto blocks = QJsonArray{QJsonObject{{"kind", "paragraph"}, {"spans", QJsonArray{text("Before "), outer, text(" after")}}}};
+        for (const int width : {900, 420, 800}) {
+            window.resize(width, 500); QCoreApplication::processEvents(); QVERIFY(composeReadingBlocks(window, blocks));
+            window.readingPaneAction_->trigger(); QTRY_VERIFY(window.reading_->isVisible());
+            auto *doc = window.reading_->document(); doc->documentLayout()->documentSize();
+            QCOMPARE(doc->documentLayout()->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+            const auto at = doc->toRawText().indexOf(source); QVERIFY(at >= 0);
+            QTextCursor glyph(doc); glyph.setPosition(at); glyph.setPosition(at + 1, QTextCursor::KeepAnchor);
+            const auto raw = glyph.charFormat().property(QCompiledInlineBox::Property);
+            QCompiledInlineBox::Box root; QVERIFY(QCompiledInlineBox::parse(raw, &root)); QVERIFY(root.sourceRanges);
+            QCOMPARE(root.sourceRanges->recipe.text, source); QCOMPARE(root.first, at); QCOMPARE(root.last, at + source.size());
+            QCOMPARE(doc->toRawText().count(QStringLiteral("Cantonese")), 0);
+            window.reading_->setTextCursor(glyph); window.reading_->ensureCursorVisible();
+            auto *accessible = QAccessible::queryAccessibleInterface(window.reading_);
+            QVERIFY(accessible && accessible->textInterface()); auto *ax = accessible->textInterface();
+            const QString spoken = ax->text(0, -1); QCOMPARE(spoken.count(source), 1);
+            const int spokenAt = spoken.indexOf(source); QVERIFY(!spoken.contains(QStringLiteral("Cantonese")));
+            int actions = 0, labels = 0;
+            for (const auto &leaf : recipe.leaves) {
+                QTextCursor run(doc); run.setPosition(at + leaf.begin); run.setPosition(at + leaf.end, QTextCursor::KeepAnchor);
+                QCOMPARE(run.selectedText(), source.mid(leaf.begin, leaf.end - leaf.begin));
+                QCOMPARE(run.charFormat().anchorHref(), leaf.href); QCOMPARE(run.charFormat().toolTip(), leaf.tip);
+                if (!leaf.href.isEmpty() || !leaf.tip.isEmpty()) {
+                    const int offset = spokenAt + leaf.begin;
+                    QCOMPARE(ax->text(offset, offset + 1), source.mid(leaf.begin, 1));
+                    const QRect screen = ax->characterRect(offset); QVERIFY(!screen.isEmpty());
+                    const QPoint point = window.reading_->viewport()->mapFromGlobal(screen.center());
+                    QVERIFY(window.reading_->viewport()->rect().contains(point));
+                    QCOMPARE(window.reading_->anchorAt(point), leaf.href);
+                    if (!leaf.href.isEmpty()) ++actions;
+                }
+                if (!leaf.tip.isEmpty()) { QVERIFY(run.charFormat().fontItalic()); ++labels; }
+            }
+            QCOMPARE(actions, 4); QCOMPARE(labels, 2);
+            const auto advice = window.readingAdvisories();
+            QCOMPARE(advice.count(qMakePair(QStringLiteral("c"), QStringLiteral("Cantonese"))), 2);
+            // Source positions below address the logical paragraph that draws these glyphs.
+            // Its backing storage block intentionally has no laid-out visual lines.
+            const int zoom = 4;
+            const QSize size = doc->documentLayout()->documentSize().toSize() + QSize(1, 1);
+            QImage image(size * zoom, QImage::Format_ARGB32_Premultiplied); image.fill(Qt::white);
+            { QPainter painter(&image); painter.scale(zoom, zoom); doc->drawContents(&painter); }
+            const auto *device = doc->documentLayout()->paintDevice();
+            const QColor background("#edffff");
+            const auto &nodes = root.sourceRanges->nodes; QCOMPARE(nodes.size(), 5);
+            QCOMPARE(nodes[0].box.first, nodes[1].box.first); QCOMPARE(nodes[0].box.last, nodes[1].box.last);
+            QCOMPARE(nodes[0].box.padding[3], 15.0); QCOMPARE(nodes[1].box.identity.value("background").value<QColor>(), background);
+            int paintedLabels = 0, paddedSeparators = 0;
+            for (const auto &node : nodes) {
+                const auto &box = node.box;
+                const auto first = LogicalFlow::position(doc, box.first); QCOMPARE(first.status, LogicalFlow::Status::Handled);
+                QVERIFY(first.values.contains("lineBaseline"));
+                const auto caret = first.values.value("cursorRect").toRectF(); QVERIFY(!caret.isEmpty());
+                const qreal x = caret.left(), baseline = first.values.value("lineBaseline").toReal();
+                const QFont font = device ? QFont(box.font, device) : box.font;
+                const QFontMetricsF fm(font, device);
+                const qreal unit = QCompiledInline::deviceScale(font);
+                if (box.padding[3] == 15) {
+                    // Find the first actual fill pixel. The transparent outer owns the leading pad.
+                    int firstPaint = -1;
+                    for (int px = qCeil(x * zoom); px < (x + 17 * unit) * zoom && firstPaint < 0; ++px)
+                        for (int py = qCeil((baseline - fm.ascent()) * zoom); py < (baseline + fm.descent()) * zoom; ++py)
+                            if (image.rect().contains(px, py) && image.pixelColor(px, py) == background) { firstPaint = px; break; }
+                    QVERIFY(firstPaint >= 0); QVERIFY(qAbs(qreal(firstPaint) / zoom - x - 15 * unit) <= 0.75);
+                } else if (box.source == QString(QChar::Nbsp)) {
+                    QCOMPARE(box.padding[3], 4.0); QCOMPARE(box.padding[1], 4.0);
+                    const auto after = LogicalFlow::position(doc, box.last); QCOMPARE(after.status, LogicalFlow::Status::Handled);
+                    QCOMPARE(after.values.value("lineNumber"), first.values.value("lineNumber"));
+                    const qreal right = after.values.value("cursorRect").toRectF().left();
+                    QVERIFY(qAbs(right - x - fm.horizontalAdvance(box.source) - 8 * unit) < 0.125);
+                    const int py = qFloor((baseline - fm.ascent() / 2) * zoom);
+                    for (int px = qCeil(x * zoom) + 1; px < qFloor(right * zoom) - 1; ++px) {
+                        QVERIFY(image.rect().contains(px, py)); QCOMPARE(image.pixelColor(px, py), background);
+                    }
+                    ++paddedSeparators;
+                } else if (box.widths[2] > 0) {
+                    QCOMPARE(box.source, QStringLiteral("c")); QVERIFY(!box.font.italic());
+                    QCOMPARE(box.widths[2], 1.0); QCOMPARE(box.colors[2], QColor(Qt::black));
+                    const auto leaf = std::find_if(recipe.leaves.cbegin(), recipe.leaves.cend(), [&](const auto &item) {
+                        return at + item.begin == box.first && at + item.end == box.last;
+                    });
+                    QVERIFY(leaf != recipe.leaves.cend()); const auto italicFont = root.sourceRanges->leafFonts.at(leaf - recipe.leaves.cbegin());
+                    QVERIFY(italicFont.italic()); const qreal advance = QFontMetricsF(italicFont, device).horizontalAdvance(box.source);
+                    bool dotted = false;
+                    for (int py = qFloor((baseline + fm.descent()) * zoom); py <= qCeil((baseline + fm.descent() + unit) * zoom); ++py) {
+                        bool ink = false, gap = false;
+                        for (int px = qCeil(x * zoom) + 1; px < qFloor((x + advance) * zoom) - 1; ++px) {
+                            QVERIFY(image.rect().contains(px, py)); const int lightness = image.pixelColor(px, py).lightness();
+                            ink |= lightness < 96; gap |= lightness > 200;
+                        }
+                        dotted |= ink && gap;
+                    }
+                    QVERIFY(dotted); ++paintedLabels;
+                }
+            }
+            QCOMPARE(paintedLabels, 2); QCOMPARE(paddedSeparators, 1);
+            auto stale = raw.toMap(); auto packet = stale.value("sourceTree").toMap();
+            auto fonts = packet.value("ownerFonts").toList(); fonts.removeLast(); packet.insert("ownerFonts", fonts);
+            stale.insert("sourceTree", packet); QVERIFY(!QCompiledInlineBox::parse(stale, nullptr));
+
+        }
+    }
+
     void nestedPitchReaderKeepsAncestorChildGeometryAndActions() {
         QFile file(QFINDTESTDATA("fixtures/mg-horoscope-reader.json")); QVERIFY(file.open(QIODevice::ReadOnly));
         const QByteArray bytes=file.readAll();
@@ -14129,6 +14396,53 @@ private slots:
         QVERIFY(composeReadingBlocks(window, QJsonArray{QJsonObject{{"kind", "paragraph"}, {"spans", QJsonArray{owner}}}}));
         QCOMPARE(document->documentLayout()->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
         QCOMPARE(document->find("original label").charFormat().anchorHref(), QStringLiteral("dict:target"));
+    }
+
+    void nonbreakingSwatchInCellPreservesOriginalTextAndNeighborLink() {
+        // Controlled reconstruction of the white swatch and its following link in SR green.
+        const auto leaf = [](const QString &text) { return QJsonObject{{"kind", "text"},
+            {"text", text}, {"trail", ""}, {"target", ""}}; };
+        const auto edges = [](const QJsonObject &edge) { return QJsonObject{{"top", edge},
+            {"right", edge}, {"bottom", edge}, {"left", edge}}; };
+        const QString source(4, QChar::Nbsp);
+        const QJsonObject zero{{"unit", "px"}, {"value", 0}};
+        const QJsonObject stroke{{"solid", QJsonObject{{"width", QJsonObject{{"unit", "px"}, {"value", 1}}},
+            {"color", QJsonObject{{"rgb", "#000000"}}}}}};
+        const QJsonObject group{{"padding", edges(zero)}, {"border", edges(stroke)},
+            {"overlays", QJsonArray{}}, {"spans", QJsonArray{leaf(source)}}};
+        auto owner = leaf(QString()); owner["background"] = "#ffffff";
+        owner["tooltip"] = "rgb(255,255,255)"; owner["inline_box_group"] = group;
+        QCOMPARE(CompiledContent::inlineBoxGroup(owner), group);
+        for (const QString &badText : {QStringLiteral("    "), QStringLiteral("\u00a0x"), QStringLiteral("x\u00a0")}) {
+            auto bad = owner; auto modified = group; modified["spans"] = QJsonArray{leaf(badText)};
+            bad["inline_box_group"] = modified;
+            QVERIFY_EXCEPTION_THROWN(CompiledContent::inlineBoxGroup(bad), std::runtime_error);
+        }
+        auto link = leaf(QStringLiteral("white")); link["kind"] = "link"; link["target"] = "white";
+        const QString fragment = QStringLiteral("\u0415\u043d\u0433\u043b\u0435\u0441\u043a\u0438");
+        link["target_fragment"] = fragment;
+        const QString href = QStringLiteral("dict:white#") + QString::fromLatin1(QUrl::toPercentEncoding(fragment));
+        const QJsonObject cell{{"spans", QJsonArray{owner, leaf(QStringLiteral(" ")), link}}};
+        const QJsonObject row{{"cells", QJsonArray{cell}}};
+        const QJsonObject table{{"rows", QJsonArray{row}}};
+        const QJsonArray blocks{QJsonObject{{"kind", "table"}, {"spans", QJsonArray{}}, {"table", table}}};
+        MainWindow window{QString()}; window.show(); QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 30000);
+        for (int width : {900, 640, 900}) {
+            window.resize(width, 700); QCoreApplication::processEvents();
+            QVERIFY(composeReadingBlocks(window, blocks));
+            auto *doc = window.reading_->document(); doc->documentLayout()->documentSize();
+            QCOMPARE(doc->documentLayout()->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+            const auto label = doc->find(QStringLiteral("white")); QVERIFY(!label.isNull());
+            QCOMPARE(label.charFormat().anchorHref(), href);
+            auto *nativeTable = label.currentTable(); QVERIFY(nativeTable);
+            auto swatch = nativeTable->cellAt(label.selectionStart()).firstCursorPosition();
+            swatch.setPosition(swatch.position() + source.size(), QTextCursor::KeepAnchor);
+            QCOMPARE(swatch.selectedText(), source); QVERIFY(swatch.charFormat().anchorHref().isEmpty());
+            const auto parts = QCompiledInlineBox::slices(swatch.block().layout()); QCOMPARE(parts.size(), 1);
+            QCOMPARE(parts.first().box.source, source);
+            QCOMPARE(parts.first().box.identity.value("background").value<QColor>(), QColor(Qt::white));
+            QVERIFY(parts.first().geometry.content.width() > 0);
+        }
     }
 
     void borderOnlyPitchOverlayKeepsInheritedInkInRealTable() {
@@ -17547,7 +17861,7 @@ private slots:
         QVERIFY2(observe(nullWidth, 640, legacyNull), qPrintable(legacyNull.error));
         QVERIFY2(observe(absentWidth, 640, legacyAbsent), qPrintable(legacyAbsent.error));
         QVERIFY(legacyNull.painted.isValid());
-        QVERIFY(qAbs(legacyNull.painted.width() - 320) <= 2);
+        QVERIFY2(qAbs(legacyNull.painted.width() - 320) <= 2, qPrintable(QStringLiteral("legacy HTML width=320 painted=%1 format width=%2 type=%3").arg(legacyNull.painted.width()).arg(legacyNull.tableFormat.width().rawValue()).arg(int(legacyNull.tableFormat.width().type()))));
         QCOMPARE(legacyNull.painted, legacyAbsent.painted);
         QCOMPARE(legacyNull.source, legacyAbsent.source);
         auto percent = style; percent.insert("width", length("percent", 150));
@@ -18855,8 +19169,9 @@ private slots:
             for (int i = 0; i < 5; ++i) children.append(container(QJsonArray{paragraph(QStringLiteral("A%1").arg(i))},
                 QJsonObject{{"width", QJsonObject{{"length", length(2.1, "em")}}}, {"float_side", side}, {"text_align", "center"}}));
             const auto wrapper = container(children, QJsonObject{{"text_align", "center"}});
+            const QJsonObject cellBorder{{"solid", QJsonObject{{"width", length(1, "px")}, {"color", "#202122"}}}};
             const auto cell = [&](const QJsonArray &blocks) { return QJsonObject{{"spans", QJsonArray{}}, {"blocks", blocks},
-                {"style", QJsonObject{{"padding", zero}, {"width", length(50, "percent")}}}}; };
+                {"style", QJsonObject{{"padding", zero}, {"width", length(50, "percent")}, {"border", cellBorder}}}}; };
             const QJsonObject table{{"style", QJsonObject{{"width", length(70, "percent")}, {"clear", "none"}, {"margin_values", tableMargins},
                 {"containing_direction", direction == Qt::LeftToRight ? "ltr" : "rtl"},
                 {"padding", zero}, {"border", QJsonObject{{"none", QJsonObject{}}}}, {"collapse", "separate"}}},
@@ -18878,8 +19193,7 @@ private slots:
             QVERIFY(!actual->cellAt(first).format().hasProperty(SemanticHtml::cellLineHeightProperty));
             auto *actualWrapper = first.currentFrame()->parentFrame(); QVERIFY(actualWrapper); QCOMPARE(actualWrapper->parentFrame(), actual);
             QCOMPARE(QJsonDocument::fromJson(actualWrapper->frameFormat().property(FlowConstruction::containerSourceProperty).toByteArray()).object(), wrapper);
-            // The table has no outer border, but the existing HTML defaults keep
-            // each cell's own 1px solid border. Floats start at its content edge.
+            // The cell owns its authored border. Floats start at its content edge.
             QVERIFY(!actual->format().borderCollapse());
             const auto cellFormat = actual->cellAt(0, 0).format().toTableCellFormat();
             QCOMPARE(actual->format().border(), qreal(0));
@@ -33646,6 +33960,61 @@ private slots:
                         for (quint32 glyph : run.glyphIndexes()) QVERIFY(glyph != 0);
                     }
                 }
+                // GPOS mark lookup 1 anchors U+07B0 to U+0790 by +360/1000 em.
+                // Both glyphs exist even without positioning. Compare the shaped
+                // offsets in the same fallback face and keep the base advance.
+                const QString pair = QString::fromUtf8("ސް");
+                const auto nominal = bundled.glyphIndexesForString(pair);
+                QCOMPARE(nominal.size(), 2);
+                QByteArray selectedPositioning;
+                qreal expectedShift = 14.4;
+                qreal separation[2] = {};
+                qreal advance[3] = {};
+                for (int variant = 0; variant < 3; ++variant) {
+                    QFont probeFont = font;
+                    probeFont.setPixelSize(40);
+                    if (variant == 1) probeFont.setFeature(QFont::Tag("mark"), 0);
+                    QTextLayout marked(variant == 2 ? pair.left(1) : pair, probeFont);
+                    marked.beginLayout();
+                    auto markLine = marked.createLine();
+                    QVERIFY(markLine.isValid());
+                    markLine.setLineWidth(200);
+                    marked.endLayout();
+                    advance[variant] = markLine.horizontalAdvance();
+                    const auto runs = marked.glyphRuns();
+                    QCOMPARE(runs.size(), 1);
+                    const auto &run = runs.first();
+                    QCOMPARE(run.rawFont().familyName(), family);
+                    const QByteArray positioning = run.rawFont().fontTable("GPOS");
+                    if (variant == 0) {
+                        selectedPositioning = positioning;
+                        if (positioning != bundled.fontTable("GPOS")) {
+                            // The genuine Noto Bold face has its own 391-unit
+                            // attachment. Synthetic bold uses the bundled 360.
+                            QVERIFY(bold);
+                            QVERIFY(run.rawFont().weight() >= QFont::DemiBold);
+                            QCOMPARE(QCryptographicHash::hash(positioning, QCryptographicHash::Sha256).toHex(),
+                                     QByteArray("06514755ad90bdc3263911474e825585ad6d735e6566ccd15428e66a9ba02a7a"));
+                            expectedShift = 15.64;
+                        }
+                    } else {
+                        QCOMPARE(positioning, selectedPositioning);
+                    }
+                    QCOMPARE(run.rawFont().fontTable("cmap"), bundled.fontTable("cmap"));
+                    const auto glyphs = run.glyphIndexes();
+                    const auto positions = run.positions();
+                    QCOMPARE(glyphs.size(), variant == 2 ? 1 : 2);
+                    QCOMPARE(positions.size(), glyphs.size());
+                    const auto baseIndex = glyphs.indexOf(nominal[0]);
+                    QVERIFY(baseIndex >= 0);
+                    if (variant == 2) continue;
+                    const auto markIndex = glyphs.indexOf(nominal[1]);
+                    QVERIFY(markIndex >= 0 && markIndex != baseIndex);
+                    separation[variant] = positions[markIndex].x() - positions[baseIndex].x();
+                }
+                QVERIFY(qAbs(separation[0] - separation[1] - expectedShift) <= 1.0);
+                QVERIFY(qAbs(advance[0] - advance[1]) <= 0.5);
+                QVERIFY(qAbs(advance[0] - advance[2]) <= 0.5);
                 QTextLayout latin(QStringLiteral("A12"), font);
                 latin.beginLayout(); auto latinLine = latin.createLine(); QVERIFY(latinLine.isValid());
                 latinLine.setLineWidth(100); latin.endLayout();

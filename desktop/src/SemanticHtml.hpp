@@ -333,6 +333,7 @@ inline constexpr int generatedParentStrutProperty = QTextFormat::UserProperty + 
 inline constexpr int cellStylePolicyProperty = QTextFormat::UserProperty + 0x57da;
 inline constexpr int cellWidthProperty = QTextFormat::UserProperty + 0x57db;
 inline constexpr int cellMinimumWidthProperty = QTextFormat::UserProperty + 0x57dc;
+inline constexpr int cellOpacityProperty = QTextFormat::UserProperty + 0x58f0;
 inline constexpr int cellLineHeightProperty = QTextFormat::UserProperty + 0x57dd;
 inline constexpr int cellOwnerFontProperty = QTextFormat::UserProperty + 0x57f0;
 inline constexpr int tablePhysicalEdgesProperty = QTextFormat::UserProperty + 0x57de;
@@ -428,7 +429,8 @@ inline bool emptyCompiledCell(const QJsonObject &cell) {
     return cell.value(QStringLiteral("spans")).isArray() && cell.value(QStringLiteral("spans")).toArray().isEmpty();
 }
 inline bool hasExtendedCellStyle(const QJsonObject &style) {
-    return style.value(QStringLiteral("border")).toObject().contains(QStringLiteral("edges"))
+    return present(style.value(QStringLiteral("opacity")))
+        || style.value(QStringLiteral("border")).toObject().contains(QStringLiteral("edges"))
          || hasResolvedBorder(style)
          || present(style.value(QStringLiteral("border_edges")))
         || present(style.value(QStringLiteral("letter_spacing")))
@@ -1408,7 +1410,8 @@ inline QString tableStyleMarker(const QJsonObject &table, qreal containerPoints,
                 shape.insert(QStringLiteral("resolved_owner_ink"), inks.at(cells.size()));
             }
             if (present(cell.value(QStringLiteral("style")))) { shape.insert(QStringLiteral("style"), cell.value(QStringLiteral("style"))); styled = true; }
-            if (!viewport.isEmpty() || present(table.value(QStringLiteral("style")).toObject().value(QStringLiteral("corner_radii"))))
+            if (!viewport.isEmpty() || present(table.value(QStringLiteral("style")).toObject().value(QStringLiteral("corner_radii")))
+                || present(cell.value(QStringLiteral("style")).toObject().value(QStringLiteral("opacity"))))
                 shape.insert(QStringLiteral("background"), cell.value(QStringLiteral("background")).isUndefined()
                 ? QJsonValue(QJsonValue::Null) : cell.value(QStringLiteral("background")));
             if (present(cell.value(QStringLiteral("style")).toObject().value(QStringLiteral("line_height")))) {
@@ -2284,6 +2287,13 @@ inline void normalizeTables(QTextDocument *document, const QVector<TableInfo> &r
         }
         applyTableAutoMargins(format, style, points, indent);
         applyTableBoxStyle(format, style, points);
+        const auto geometry = record.value.value(QStringLiteral("empty_geometry")).toObject();
+        const auto legacyWidth = geometry.value(QStringLiteral("width"));
+        if (table && hasTableBoxStyle(style) && !present(style.value(QStringLiteral("width"))) && present(legacyWidth)) {
+            // A legacy width is the requested table border box. Keep its HTML
+            // frame field and use the same grid allocation as a CSS width.
+            format.setProperty(tableBoxWidthProperty, tableBoxLength(legacyWidth, points, true));
+        }
         const auto minimumSource = record.value.value(QStringLiteral("minimum_source"));
         if (present(style.value(QStringLiteral("min_width")))) {
             if (!table || !minimumSource.isObject() || minimumSource.toObject().value(QStringLiteral("style")) != QJsonValue(style)
@@ -2377,7 +2387,8 @@ inline void normalizeTables(QTextDocument *document, const QVector<TableInfo> &r
             before.setBlockCharFormat(font);
         }
         const auto legacyCellBorder = record.value.value(QStringLiteral("empty_geometry")).toObject().value(QStringLiteral("border"));
-        const bool generatedZeroCellBorder = (format.hasProperty(tablePhysicalEdgesProperty) || format.hasProperty(resolvedBorderEdgesProperty))
+        const bool generatedZeroCellBorder = (present(style.value(QStringLiteral("border")))
+            || format.hasProperty(tablePhysicalEdgesProperty) || format.hasProperty(resolvedBorderEdgesProperty))
             && (!present(legacyCellBorder) || (legacyCellBorder.isDouble() && legacyCellBorder.toDouble() == 0));
         bool cellFormatsChanged = false;
         const auto materializeZeroCellBorder = [&](QTextTableCell cell) {
@@ -2460,9 +2471,21 @@ inline void normalizeTables(QTextDocument *document, const QVector<TableInfo> &r
                     cell.setFormat(cellFormat);
                 }
                 if (generatedZeroCellBorder) materializeZeroCellBorder(cell);
-                const QJsonObject cellStyle = typedStyle(expected.value(QStringLiteral("style")), {"border", "padding", "text_align", "border_edges", "letter_spacing", "width", "min_width", "vertical_align", "line_height"});
+                const QJsonObject cellStyle = typedStyle(expected.value(QStringLiteral("style")), {"border", "padding", "text_align", "border_edges", "letter_spacing", "width", "min_width", "vertical_align", "line_height", "opacity"});
                 if (cellStyle.isEmpty()) continue;
                 QTextTableCellFormat cellFormat = cell.format().toTableCellFormat();
+                const auto opacity = cellStyle.value(QStringLiteral("opacity"));
+                if (present(opacity)) {
+                    if (!opacity.isDouble() || !std::isfinite(opacity.toDouble()) || opacity.toDouble() < 0 || opacity.toDouble() > 1
+                        || document->documentLayout()->property("_wikidictCellOpacityCapability").toString() != QStringLiteral("wikidict.cell-opacity/1"))
+                        throw std::runtime_error("invalid or unsupported cell opacity");
+                    if (!expected.contains(QStringLiteral("background"))) throw std::runtime_error("missing cell background ownership");
+                    if (opacity.toDouble() < 1) {
+                        const auto source = expected.value(QStringLiteral("background"));
+                        if (present(source)) cellFormat.setBackground(styleColor(source)); else cellFormat.clearBackground();
+                    }
+                    cellFormat.setProperty(cellOpacityProperty, opacity.toDouble());
+                }
                 const auto line = cellLineHeight(cellStyle.value(QStringLiteral("line_height")), points, document);
                 if (line.present) {
                     const auto capability = document->documentLayout()->property("_wikidictCellLineHeightCapability");

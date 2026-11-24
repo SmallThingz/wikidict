@@ -603,17 +603,19 @@
  #if QT_CONFIG(cssparser)
  #include "private/qcssutil_p.h"
  #endif
-@@ -16,6 +22,9 @@
+@@ -16,6 +22,11 @@
  #include "qcssparser_p.h"
  
  #include <qpainter.h>
++#include <qpaintengine.h>
++#include <qimage.h>
 +#include <qpainterpath.h>
 +#include <qpolygon.h>
 +#include <QtGui/qglyphrun.h>
  #include <qmath.h>
  #include <qrect.h>
  #include <qpalette.h>
-@@ -28,17 +37,668 @@
+@@ -28,17 +39,776 @@
  #include <QtCore/qpointer.h>
  
  #include <algorithm>
@@ -629,6 +631,113 @@
 +#include <QtCore/qurl.h>
  
  QT_BEGIN_NAMESPACE
++
++// Single-line child shaped by the same source-mapped Qt engine used for the
++// containing logical flow. All positions crossing this boundary are document UTF-16.
++class QTextRubyChildFlow final : public QTextRubyLayout::Composite {
++public:
++    QTextRubyChildFlow(QTextDocument *doc, std::unique_ptr<QTextLogicalFlowProjection> projection)
++        : document(doc), flow(std::move(projection)) {}
++    QTextLayout *textLayout() const override { return flow->textLayout(); }
++    int documentOffset(int projected) const override {
++        return projected >= 0 && projected < flow->sourceMap().size() ? flow->sourceMap().at(projected).first : -1;
++    }
++    qreal advance() const override { return line().horizontalAdvance(); }
++    qreal top() const override {
++        qreal result = -line().ascent();
++        for (const auto &ruby : flow->measuredRubyObjects())
++            result = qMin(result, ruby.measured->metrics().occupiedTop.toReal());
++        return result;
++    }
++    qreal bottom() const override {
++        qreal result = line().descent();
++        for (const auto &ruby : flow->measuredRubyObjects())
++            result = qMax(result, ruby.measured->metrics().occupiedBottom.toReal());
++        return result;
++    }
++    void draw(QPainter *painter, QPointF baseline, const QList<QTextRubyLayout::PaintSelection> &selections) const override {
++        const QPointF origin = baseline - QPointF(0, line().ascent());
++        QList<QTextLayout::FormatRange> local;
++        QAbstractTextDocumentLayout::PaintContext context;
++        for (const auto &selection : selections) {
++            for (const auto &range : flow->selectionRanges(selection.source.first, selection.source.last))
++                local.append({range.start, range.length, selection.format});
++            QTextCursor cursor(document);
++            cursor.setPosition(selection.source.first); cursor.setPosition(selection.source.last, QTextCursor::KeepAnchor);
++            context.selections.append({cursor, selection.format});
++        }
++        flow->textLayout()->draw(painter, origin, local);
++        flow->drawRuby(painter, origin, context, 0);
++    }
++    int hitTest(QPointF point, Qt::HitTestAccuracy accuracy) const override {
++        return flow->hitTest(point + QPointF(0, line().ascent()), accuracy);
++    }
++    QRectF cursorRect(int position, qreal width) const override {
++        return relative(flow->cursorRect(position, width));
++    }
++    QRectF characterRect(int position) const override {
++        if (flow->isRubyPosition(position)) return relative(flow->rubyCharacterRect(position));
++        const auto *layout = flow->textLayout();
++        const int index = flow->toProjected(position);
++        if (index < 0 || index >= layout->text().size()) return {};
++        const int start = layout->isValidCursorPosition(index) ? index : layout->previousCursorPosition(index);
++        const int end = layout->nextCursorPosition(start);
++        const auto rects = projectedRects(start, end);
++        QRectF result; for (const auto &rect : rects) result = result.united(rect);
++        return result;
++    }
++    int visualMove(int pos, bool right) const override { return flow->visualMove(pos, right); }
++    int logicalMove(int pos, bool forward) const override { return flow->logicalMove(pos, forward); }
++    QList<QRectF> selectionRects(int first, int last) const override {
++        QList<QRectF> result;
++        for (const auto &r : flow->rubySelectionRects(first, last)) result.append(relative(r));
++        for (const auto &r : flow->selectionRanges(first, last)) result.append(projectedRects(r.start, r.start + r.length));
++        return result;
++    }
++    QRectF actionRect(int position) const override { return relative(flow->rubyActionRect(position)); }
++    QList<QTextRubyLayout::LinkBox> linkBoxes() const override {
++        auto result = flow->rubyLinkBoxes();
++        for (auto &box : result) box.rect = relative(box.rect);
++        const auto *priv = QTextDocumentPrivate::get(document);
++        const auto &units = flow->sourceMap();
++        for (int i = 0; i < units.size();) {
++            if (units[i].kind != QTextLogicalFlowProjection::Kind::Text) { ++i; continue; }
++            const auto fragment = priv->find(units[i].first);
++            const auto format = priv->formatCollection()->charFormat(fragment.value()->format);
++            const int start = i++;
++            while (i < units.size() && units[i].kind == QTextLogicalFlowProjection::Kind::Text
++                   && units[i].first == units[i - 1].last && priv->find(units[i].first) == fragment) ++i;
++            if (!format.isAnchor() || format.anchorHref().isEmpty()) continue;
++            for (const auto &r : projectedRects(start, i)) result.append({r, format});
++        }
++        return result;
++    }
++private:
++    QTextLine line() const { return flow->textLayout()->lineAt(0); }
++    QRectF relative(QRectF r) const { return r.isEmpty() ? QRectF() : r.translated(0, -line().ascent()); }
++    QList<QRectF> projectedRects(int start, int end) const {
++        QList<QRectF> result;
++        for (const auto &run : line().glyphRuns(start, end - start)) {
++            const auto r = relative(run.boundingRect()); if (!r.isEmpty()) result.append(r);
++        }
++        if (result.isEmpty() && start < end) {
++            const qreal a = line().cursorToX(start), b = line().cursorToX(end);
++            result.append(QRectF(qMin(a,b), -line().ascent(), qAbs(a-b), line().height()));
++        }
++        return result;
++    }
++    QPointer<QTextDocument> document;
++    std::unique_ptr<QTextLogicalFlowProjection> flow;
++};
++
++std::shared_ptr<QTextRubyLayout::Composite> QTextRubyLayout::Composite::create(QTextDocument *document,
++        const Child &description, const QList<std::shared_ptr<QTextRubyLayout>> &measured)
++{
++    auto projection = QTextLogicalFlowProjection::createRubyChild(document, description, measured);
++    if (!projection) return {};
++    return std::make_shared<QTextRubyChildFlow>(document, std::move(projection));
++}
++
 +using namespace Qt::StringLiterals;
 +
 +// Private implementation bridge; no public QTextLine API or engine state change.
@@ -705,6 +814,7 @@
 +static constexpr int WikidictPlainContainerClear = QTextFormat::UserProperty + 0x57e1;
 +static constexpr int WikidictContainerTypography = QTextFormat::UserProperty + 0x57e4;
 +static constexpr int WikidictBodyTypography = QTextFormat::UserProperty + 0x5830;
++static constexpr int WikidictCellOpacity = QTextFormat::UserProperty + 0x58f0;
 +static constexpr int WikidictCellLineHeight = QTextFormat::UserProperty + 0x57dd;
 +static constexpr int WikidictContainerMinimumHeight = QTextFormat::UserProperty + 0x57e7;
 +static constexpr int WikidictContainerPhysicalEdges = QTextFormat::UserProperty + 0x57e8;
@@ -1282,7 +1392,7 @@
  
  class QTextFrameData : public QTextFrameLayoutData
  {
-@@ -56,10 +716,23 @@
+@@ -56,10 +826,23 @@
      QFixed rightMargin;
      QFixed border;
      QFixed padding;
@@ -1306,7 +1416,7 @@
  
      // accumulated margins
      QFixed effectiveTopMargin;
-@@ -74,6 +747,22 @@
+@@ -74,6 +857,22 @@
      bool layoutDirty;
  
      QList<QPointer<QTextFrame>> floats;
@@ -1329,7 +1439,7 @@
  };
  
  QTextFrameData::QTextFrameData()
-@@ -81,6 +770,164 @@
+@@ -81,6 +880,164 @@
        currentLayoutStruct(nullptr), sizeDirty(true), layoutDirty(true)
  {
  }
@@ -1494,7 +1604,7 @@
  
  struct QTextLayoutStruct {
      QTextLayoutStruct() : maximumWidth(QFIXED_MAX), fullLayout(false)
-@@ -94,7 +941,16 @@
+@@ -94,7 +1051,16 @@
      QFixed minimumWidth;
      QFixed maximumWidth;
      bool fullLayout;
@@ -1511,7 +1621,7 @@
      QFixed pageHeight;
      QFixed pageBottom;
      QFixed pageTopMargin;
-@@ -109,6 +965,13 @@
+@@ -109,6 +1075,13 @@
              updateRectForFloats = rect;
      }
  
@@ -1525,7 +1635,7 @@
      inline QFixed absoluteY() const
      { return frameY + y; }
  
-@@ -121,6 +984,108 @@
+@@ -121,6 +1094,108 @@
      inline void newPage()
      { if (pageHeight == QFIXED_MAX) return; pageBottom += pageHeight; y = qMax(y, pageBottom - pageHeight + pageBottomMargin + pageTopMargin - frameY); }
  };
@@ -1634,7 +1744,7 @@
  
  #ifndef QT_NO_CSSPARSER
  // helper struct to collect edge data and priorize edges for border-collapse mode
-@@ -142,13 +1107,23 @@
+@@ -142,13 +1217,23 @@
  
      // used for priorization with qMax
      bool operator< (const EdgeData &other) const {
@@ -1659,7 +1769,7 @@
          return false;
      }
      bool operator> (const EdgeData &other) const {
-@@ -159,17 +1134,102 @@
+@@ -159,17 +1244,102 @@
      QTextTableCell cell;
      QCss::Edge edge;
      EdgeClass edgeClass;
@@ -1678,7 +1788,7 @@
  // axisEdgeData is referenced by QTextTableData's inline methods, so predeclare
  class QTextTableData;
  static inline EdgeData axisEdgeData(QTextTable *table, const QTextTableData *td, const QTextTableCell &cell, QCss::Edge edge);
-+static bool wikidictResolvedTablePaint(const QTextDocumentLayoutPrivate *, QTextTable *, const QTextTableData *, QPainter *, const QPointF &);
++static bool wikidictResolvedTablePaint(const QTextDocumentLayoutPrivate *, QTextTable *, const QTextTableData *, QPainter *, const QPointF &, const QTextTableCell *onlyCell = nullptr);
  #endif
 +
 +static constexpr int WikidictTableBoxOwner = QTextFormat::UserProperty + 0x57d0;
@@ -1762,7 +1872,17 @@
      qreal deviceScale;
      QList<QFixed> minWidths;
      QList<QFixed> maxWidths;
-@@ -309,6 +1369,42 @@
+@@ -177,6 +1347,9 @@
+     QList<QFixed> heights;
+     QList<QFixed> columnPositions;
+     QList<QFixed> rowPositions;
++    int rowWindowRevision = -1;
++    bool rowWindowReady = false;
++    qreal rowReachAbove = 0, rowReachBelow = 0;
+ 
+     QList<QFixed> cellVerticalOffsets;
+ 
+@@ -309,6 +1482,42 @@
      return data;
  }
  
@@ -1805,7 +1925,7 @@
  static bool isFrameFromInlineObject(QTextFrame *f)
  {
      return f->firstPosition() > f->lastPosition();
-@@ -316,12 +1412,12 @@
+@@ -316,12 +1525,12 @@
  
  void QTextTableData::updateTableSize()
  {
@@ -1823,7 +1943,7 @@
                     : effectiveTopMargin + contentsHeight + effectiveBottomMargin;
      size.width = effectiveLeftMargin + contentsWidth + effectiveRightMargin;
  }
-@@ -346,6 +1442,7 @@
+@@ -346,6 +1555,7 @@
             && block.isValid()
             && block.length() == 1
             && !format.hasProperty(QTextFormat::BlockTrailingHorizontalRulerWidth)
@@ -1831,7 +1951,7 @@
             && !format.hasProperty(QTextFormat::BackgroundBrush)
             && nextIt.currentFrame()->firstPosition() == block.position() + 1
             ;
-@@ -365,8 +1462,52 @@
+@@ -365,8 +1575,52 @@
      return qobject_cast<const QTextTable *>(previousFrame)
             && block.isValid()
             && block.length() == 1
@@ -1884,7 +2004,7 @@
  }
  
  static inline bool isLineSeparatorBlockAfterTable(const QTextBlock &block, const QTextFrame *previousFrame)
-@@ -473,6 +1614,99 @@
+@@ -473,6 +1727,99 @@
      p->restore();
  }
  
@@ -1984,7 +2104,7 @@
  class QTextDocumentLayoutPrivate : public QAbstractTextDocumentLayoutPrivate
  {
      Q_DECLARE_PUBLIC(QTextDocumentLayout)
-@@ -483,6 +1717,38 @@
+@@ -483,6 +1830,39 @@
  #ifdef LAYOUT_DEBUG
      mutable QString debug_indent;
  #endif
@@ -2009,6 +2129,7 @@
 +    QSet<int> tableIntrinsicImagePositions;
 +    TableIntrinsicEpoch *tableIntrinsicEpoch = nullptr;
 +    quint64 tableIntrinsicEpochs = 0, tableLayoutEntries = 0;
++    mutable quint64 rowWindowQueries = 0, rowWindowCandidates = 0;
 +    quint64 tableIntrinsicHits = 0, tableIntrinsicMisses = 0, tableIntrinsicBypasses = 0;
 +    quint64 tableIntrinsicInvalidations = 0;
 +    mutable bool publishingTableWork = false;
@@ -2023,7 +2144,7 @@
  
      int fixedColumnWidth;
      int cursorWidth;
-@@ -501,31 +1767,98 @@
+@@ -501,31 +1881,98 @@
      int lastPageCount;
      qreal idealWidth;
      bool contentHasAlignment;
@@ -2110,7 +2231,7 @@
                         QTextTable *table, QTextTableData *td, int r, int c,
 -                       QTextBlock *cursorBlockNeedingRepaint, QPointF *cursorBlockOffset) const;
 +                       QTextBlock *cursorBlockNeedingRepaint, QPointF *cursorBlockOffset,
-+                       QList<WikidictPositionedPaint> *positioned, WikidictPaintPhase phase) const;
++                       QList<WikidictPositionedPaint> *positioned, WikidictPaintPhase phase, bool insideOpacityGroup = false) const;
      void drawBorder(QPainter *painter, const QRectF &rect, qreal topMargin, qreal bottomMargin, qreal border,
                      const QBrush &brush, QTextFrameFormat::BorderStyle style) const;
 -    void drawFrameDecoration(QPainter *painter, QTextFrame *frame, QTextFrameData *fd, const QRectF &clip, const QRectF &rect) const;
@@ -2127,7 +2248,12 @@
      HitPoint hitTest(QTextFrame *frame, const QFixedPoint &point, int *position, QTextLayout **l, Qt::HitTestAccuracy accuracy) const;
      HitPoint hitTest(QTextFrame::Iterator it, HitPoint hit, const QFixedPoint &p,
                       int *position, QTextLayout **l, Qt::HitTestAccuracy accuracy) const;
-@@ -540,16 +1873,51 @@
+@@ -536,20 +1983,56 @@
+                                  int layoutFrom, int layoutTo, QTextTableData *tableData, QFixed absoluteTableY,
+                                  bool withPageBreaks);
+     void setCellPosition(QTextTable *t, const QTextTableCell &cell, const QPointF &pos);
++    std::pair<int, int> visibleOwnedRows(QTextTable *table, QTextTableData *td, qreal top, qreal bottom) const;
+     QRectF layoutTable(QTextTable *t, int layoutFrom, int layoutTo, QFixed parentY);
  
      void positionFloat(QTextFrame *frame, QTextLine *currentLine = nullptr);
  
@@ -2182,7 +2308,7 @@
  
      QList<QCheckPoint> checkPoints;
  
-@@ -563,10 +1931,1679 @@
+@@ -563,10 +2046,1683 @@
      void layoutStep() const;
  
      QRectF frameBoundingRectInternal(QTextFrame *frame) const;
@@ -3236,6 +3362,10 @@
 +    for (int i = parts.size() - 1; i >= 0; --i) {
 +        const auto &part = parts.at(i);
 +        if (!part.geometry.border.contains(point)) continue;
++        // Source-tree edges carry decoration, not the nearest glyph's link.
++        // Vertical label edges still resolve to the original tooltip character.
++        if (part.box.identity.value("sourceRange").toBool()
++            && (point.x() < part.geometry.content.left() || point.x() > part.geometry.content.right())) return -1;
 +        // A child link retains ordinary glyph hit testing. The surrounding
 +        // actionless box must never lend its added advances to that anchor.
 +        if (QCompiledInlineBox::childAction(part.box)) {
@@ -3862,7 +3992,7 @@
  
  QTextDocumentLayoutPrivate::QTextDocumentLayoutPrivate()
      : fixedColumnWidth(-1),
-@@ -636,22 +3673,82 @@
+@@ -636,22 +3792,82 @@
          return PointAfter;
      Q_ASSERT(!fd->layoutDirty);
      Q_ASSERT(!fd->sizeDirty);
@@ -3948,7 +4078,7 @@
      }
  
      if (isFrameFromInlineObject(frame)) {
-@@ -677,7 +3774,7 @@
+@@ -677,7 +3893,7 @@
  
                      const QList<QTextFrame *> childFrames = td->childFrameMap.values(r + c * rows);
                      for (int i = 0; i < childFrames.size(); ++i) {
@@ -3957,7 +4087,7 @@
                          if (isFrameFromInlineObject(child)
                              && child->frameFormat().position() != QTextFrameFormat::InFlow
                              && hitTest(child, pointInCell, position, l, accuracy) == PointExact)
-@@ -694,8 +3791,8 @@
+@@ -694,8 +3910,8 @@
  
      const QList<QTextFrame *> childFrames = frame->childFrames();
      for (int i = 0; i < childFrames.size(); ++i) {
@@ -3968,7 +4098,7 @@
              && child->frameFormat().position() != QTextFrameFormat::InFlow
              && hitTest(child, relativePoint, position, l, accuracy) == PointExact)
          {
-@@ -705,7 +3802,7 @@
+@@ -705,7 +3921,7 @@
  
      QTextFrame::Iterator it = frame->begin();
  
@@ -3977,7 +4107,7 @@
          it = frameIteratorForYPosition(relativePoint.y);
  
          Q_ASSERT(it.parentFrame() == frame);
-@@ -719,10 +3816,117 @@
+@@ -719,10 +3935,117 @@
      return hitTest(it, PointBefore, relativePoint, position, l, accuracy);
  }
  
@@ -4095,13 +4225,94 @@
      for (; !it.atEnd(); ++it) {
          QTextFrame *c = it.currentFrame();
          HitPoint hp;
-@@ -757,6 +3961,28 @@
+@@ -752,11 +4075,109 @@
+     return hit;
+ }
+ 
++// Offscreen owner traversal normally includes every cell, since child frames can
++// overflow their source row. A flat, unpaginated text grid can instead bound each
++// anchor's text and decoration with the same native geometry as drawBlock/hitTest.
++// Store only the maximum signed reach from row starts. An unusually tall anchor
++// widens all searches without losing its original forward/reverse paint order.
++std::pair<int, int> QTextDocumentLayoutPrivate::visibleOwnedRows(QTextTable *table, QTextTableData *td,
++                                                               qreal top, qreal bottom) const
++{
++    const int rows = table->rows();
++    const std::pair<int, int> all{0, rows};
++    if (rows < 64 || td->layoutDirty || td->sizeDirty || td->rowPositions.size() != rows
++        || document->pageSize().height() > 0 || q_func()->property("_wikidictDisableTableRowIndex").toBool())
++        return all;
++    if (td->rowWindowRevision != document->revision()) {
++        td->rowWindowRevision = document->revision();
++        td->rowWindowReady = false;
++        // Typed layering, shaped owners and independently positioned objects
++        // keep their original traversal until their full paint is accounted for.
++        const auto format = table->format();
++        if (!table->childFrames().isEmpty() || wikidictHasTableBorderEdges(format) || format.hasProperty(WikidictResolvedTableBorders)
++            || format.hasProperty(WikidictCellStylePolicy) || format.headerRowCount() || referenceTraversalPresent
++            || !std::is_sorted(td->rowPositions.cbegin(), td->rowPositions.cend())) return all;
++        qreal above = 0, below = 0;
++        // Remaining table/grid edges use only the table border or the 1px legacy
++        // grid. Both join and centered-band offsets round their half-widths.
++        const qreal edge = qCeil(scaleToDevice(qMax(qreal(1), format.border())) / 2) * 2 + 1;
++        for (int row = 0; row < rows; ++row) for (int col = 0; col < table->columns(); ++col) {
++            const auto cell = table->cellAt(row, col);
++            if (!cell.isValid() || cell.rowSpan() != 1 || cell.columnSpan() != 1) return all;
++            const auto cf = cell.format().toTableCellFormat();
++            // The legacy cell grid can explicitly repeat its 1px solid hint.
++            // No competing edge then exceeds the grid width included above.
++            const auto zeroEdge = [&](QTextFormat::Property width, QTextFormat::Property style) {
++                return cf.hasProperty(width) ? cf.doubleProperty(width) == 0 : !cf.hasProperty(style);
++            };
++            const bool borderless = zeroEdge(QTextFormat::TableCellTopBorder, QTextFormat::TableCellTopBorderStyle)
++                && zeroEdge(QTextFormat::TableCellBottomBorder, QTextFormat::TableCellBottomBorderStyle)
++                && zeroEdge(QTextFormat::TableCellLeftBorder, QTextFormat::TableCellLeftBorderStyle)
++                && zeroEdge(QTextFormat::TableCellRightBorder, QTextFormat::TableCellRightBorderStyle);
++            const bool legacyGrid = format.border() == 0
++                && cf.topBorder() == 1 && cf.bottomBorder() == 1 && cf.leftBorder() == 1 && cf.rightBorder() == 1
++                && cf.topBorderStyle() == QTextFrameFormat::BorderStyle_Solid && cf.bottomBorderStyle() == QTextFrameFormat::BorderStyle_Solid
++                && cf.leftBorderStyle() == QTextFrameFormat::BorderStyle_Solid && cf.rightBorderStyle() == QTextFrameFormat::BorderStyle_Solid;
++            if (cf.hasProperty(WikidictCellOpacity) || (!borderless && !legacyGrid)) return all;
++            const auto block = cell.firstCursorPosition().block();
++            if (!block.isValid() || cell.lastCursorPosition().block() != block || block.textList()
++                || block.blockFormat().hasProperty(WikidictAuthoredRule) || logicalFlowAt(block.position())) return all;
++            const auto *layout = block.layout();
++            if (!layout || !layout->lineCount() || layout->engine()->hasInlineBoxes()) return all;
++            for (auto it = block.begin(); !it.atEnd(); ++it)
++                if (it.fragment().charFormat().objectType() != QTextFormat::NoObject) return all;
++            const QRectF rect = td->cellRect(cell);
++            const qreal y = td->cellPosition(table, cell).y.toReal() + layout->position().y();
++            const QRectF text = usesGlyphInkBounds() ? wikidictTextTraversal(layout) : layout->boundingRect();
++            const QRectF outline = wikidictFigureLinkTraversal(block, layout, scaleToDevice(1));
++            qreal first = qMin(qFloor(rect.top()) - edge, y + text.top() - qMax(qreal(0), block.blockFormat().topMargin()));
++            qreal last = qMax(qCeil(rect.bottom()) + edge, y + text.bottom());
++            if (outline.isValid()) { first = qMin(first, y + outline.top()); last = qMax(last, y + outline.bottom()); }
++            if (!qIsFinite(first) || !qIsFinite(last) || first > last) return all;
++            const qreal start = td->rowPositions.at(row).toReal();
++            above = qMax(above, start - first);
++            below = qMax(below, last - start);
++        }
++        td->rowReachAbove = above; td->rowReachBelow = below; td->rowWindowReady = true;
++    }
++    if (!td->rowWindowReady) return all;
++    const auto begin = td->rowPositions.cbegin(), end = td->rowPositions.cend();
++    const auto lo = std::lower_bound(begin, end, top - td->rowReachBelow,
++        [](QFixed y, qreal limit) { return y.toReal() < limit; });
++    const auto hi = std::upper_bound(lo, end, bottom + td->rowReachAbove,
++        [](qreal limit, QFixed y) { return limit < y.toReal(); });
++    ++rowWindowQueries; rowWindowCandidates += hi - lo;
++    return {int(lo - begin), int(hi - begin)};
++}
++
+ QTextDocumentLayoutPrivate::HitPoint
+ QTextDocumentLayoutPrivate::hitTest(QTextTable *table, const QFixedPoint &point,
                                      int *position, QTextLayout **l, Qt::HitTestAccuracy accuracy) const
  {
      QTextTableData *td = static_cast<QTextTableData *>(data(table));
 +    if (adjoiningContainersPresent || td->wikidictOwnedTableTraversal) {
 +        bool paintedOwner = false;
-+        for (int row = table->rows() - 1; row >= 0 && !paintedOwner; --row) for (int column = table->columns() - 1; column >= 0; --column) {
++        const auto [first, end] = visibleOwnedRows(table, td, point.y.toReal(), point.y.toReal());
++        for (int row = end - 1; row >= first && !paintedOwner; --row) for (int column = table->columns() - 1; column >= 0; --column) {
 +            const auto cell = table->cellAt(row, column);
 +            if (cell.row() != row || cell.column() != column) continue;
 +            int found = cell.firstPosition(); QTextLayout *layout = nullptr;
@@ -4124,7 +4335,7 @@
  
      auto rowIt = std::lower_bound(td->rowPositions.constBegin(), td->rowPositions.constEnd(), point.y);
      if (rowIt == td->rowPositions.constEnd()) {
-@@ -781,8 +4007,40 @@
+@@ -781,8 +4202,40 @@
  
      HitPoint hp = hitTest(cell.begin(), PointInside, point - td->cellPosition(table, cell), position, l, accuracy);
  
@@ -4166,7 +4377,7 @@
      if (hp == PointAfter)
          *position = cell.lastPosition();
      return PointInside;
-@@ -792,8 +4050,83 @@
+@@ -792,8 +4245,83 @@
  QTextDocumentLayoutPrivate::hitTest(const QTextBlock &bl, const QFixedPoint &point, int *position, QTextLayout **l,
                                      Qt::HitTestAccuracy accuracy) const
  {
@@ -4251,7 +4462,7 @@
      textrect.translate(tl->position());
      qCDebug(lcHit) << "    checking block" << bl.position() << "point=" << point.toPointF() << "    tlrect" << textrect;
      *position = bl.position();
-@@ -823,15 +4156,22 @@
+@@ -823,15 +4351,22 @@
          } else {
              if (lr.left() <= pos.x() && lr.right() >= pos.x())
                  hit = PointExact;
@@ -4279,7 +4490,7 @@
      *position += off;
  
      qCDebug(lcHit) << "    inside=" << hit << " pos=" << *position;
-@@ -932,16 +4272,99 @@
+@@ -932,16 +4467,99 @@
          painter->setRenderHint(QPainter::Antialiasing, false);
  }
  
@@ -4387,7 +4598,7 @@
  
          QRectF gradientRect; // invalid makes it default to bgRect
          QPointF origin = bgRect.topLeft();
-@@ -952,7 +4375,31 @@
+@@ -952,7 +4570,31 @@
          }
          fillBackground(painter, bgRect, bg, origin, gradientRect);
      }
@@ -4420,7 +4631,7 @@
          painter->save();
          painter->setBrush(Qt::lightGray);
          painter->setPen(Qt::NoPen);
-@@ -1042,8 +4489,10 @@
+@@ -1042,8 +4684,10 @@
  
  void QTextDocumentLayoutPrivate::drawFrame(const QPointF &offset, QPainter *painter,
                                             const QAbstractTextDocumentLayout::PaintContext &context,
@@ -4433,7 +4644,7 @@
      QTextFrameData *fd = data(frame);
      // #######
      if (fd->layoutDirty)
-@@ -1051,13 +4500,51 @@
+@@ -1051,13 +4695,51 @@
      Q_ASSERT(!fd->sizeDirty);
      Q_ASSERT(!fd->layoutDirty);
  
@@ -4489,7 +4700,7 @@
          return;
  
       qCDebug(lcDraw) << "drawFrame" << frame->firstPosition() << "--" << frame->lastPosition() << "at" << offset;
-@@ -1074,6 +4561,7 @@
+@@ -1074,6 +4756,7 @@
          const int rows = table->rows();
          const int columns = table->columns();
          QTextTableData *td = static_cast<QTextTableData *>(data(table));
@@ -4497,7 +4708,7 @@
  
          QVarLengthArray<int> selectedTableCells(context.selections.size() * 4);
          for (int i = 0; i < context.selections.size(); ++i) {
-@@ -1104,8 +4592,8 @@
+@@ -1104,8 +4787,8 @@
  
          // for borderCollapse draw frame decoration by drawing the outermost
          // cell edges with width = td->border
@@ -4508,7 +4719,7 @@
  
          // draw the repeated table headers for table continuation after page breaks
          const int headerRowCount = qMin(table->format().headerRowCount(), rows - 1);
-@@ -1121,11 +4609,11 @@
+@@ -1121,11 +4804,11 @@
                      QRectF cellRect = td->cellRect(cell);
  
                      cellRect.translate(off.x(), headerOffset);
@@ -4522,16 +4733,28 @@
                  }
              }
              ++page;
-@@ -1134,7 +4622,7 @@
+@@ -1134,7 +4817,10 @@
          int firstRow = 0;
          int lastRow = rows;
  
 -        if (context.clip.isValid()) {
++        if (context.clip.isValid() && ownedCellFlow && context.selections.isEmpty()
++            && painter->deviceTransform().type() <= QTransform::TxTranslate)
++            std::tie(firstRow, lastRow) = visibleOwnedRows(table, td, context.clip.top() - off.y(), context.clip.bottom() - off.y());
 +        if (context.clip.isValid() && !ownedCellFlow) {
              auto rowIt = std::lower_bound(td->rowPositions.constBegin(), td->rowPositions.constEnd(), QFixed::fromReal(context.clip.top() - off.y()));
              if (rowIt != td->rowPositions.constEnd() && rowIt != td->rowPositions.constBegin()) {
                  --rowIt;
-@@ -1161,20 +4649,29 @@
+@@ -1148,7 +4834,7 @@
+             }
+         }
+ 
+-        for (int c = 0; c < columns; ++c) {
++        for (int c = 0; firstRow < lastRow && c < columns; ++c) {
+             QTextTableCell cell = table->cellAt(firstRow, c);
+             firstRow = qMin(firstRow, cell.row());
+         }
+@@ -1161,20 +4847,29 @@
                  QRectF cellRect = td->cellRect(cell);
  
                  cellRect.translate(off);
@@ -4567,7 +4790,7 @@
              it = frameIteratorForYPosition(QFixed::fromReal(context.clip.top()));
  
          QList<QTextFrame *> floats;
-@@ -1183,10 +4680,66 @@
+@@ -1183,10 +4878,66 @@
          for (int i = 0; i < numFloats; ++i)
              floats.append(fd->floats.at(i));
  
@@ -4638,7 +4861,7 @@
          const QPen oldPen = painter->pen();
          painter->setPen(context.palette.color(QPalette::Text));
          const int cursorPos = context.cursorPosition - cursorBlockNeedingRepaint.position();
-@@ -1338,13 +4891,66 @@
+@@ -1338,13 +5089,66 @@
          return EdgeData();
      }
  
@@ -4706,7 +4929,7 @@
      } else if (td->drawGrid) {
          const bool outermost =
                  (edge == QCss::LeftEdge && cell.column() == 0) ||
-@@ -1356,14 +4962,14 @@
+@@ -1356,14 +5160,14 @@
              qreal border = table->format().border();
              if (border > 1.0) {
                  // table border
@@ -4724,7 +4947,7 @@
      }
  }
  
-@@ -1416,6 +5022,135 @@
+@@ -1416,6 +5220,141 @@
          result = qMax(result, cellEdgeData(table, td, adjacentCell(table, ac, adjacentEdge(edge)), edge));
  
      return result;
@@ -4733,7 +4956,7 @@
 +// Resolved borders are painted once, after every cell background. The winning
 +// raw style/owner is retained until paint; collapse only maps inset/outset here.
 +static bool wikidictResolvedTablePaint(const QTextDocumentLayoutPrivate *p, QTextTable *table,
-+                                      const QTextTableData *td, QPainter *painter, const QPointF &offset)
++                                      const QTextTableData *td, QPainter *painter, const QPointF &offset, const QTextTableCell *onlyCell)
 +{
 +    const int rows = table->rows(), columns = table->columns();
 +    if (rows <= 0 || columns <= 0) return false;
@@ -4784,8 +5007,14 @@
 +        return true;
 +    };
 +    if (!td->borderCollapse) {
-+        for (int row = 0; row < rows; ++row) for (int column = 0; column < columns; ++column) {
++        const int firstRow = onlyCell ? onlyCell->row() : 0, endRow = onlyCell ? firstRow + 1 : rows;
++        const int firstCol = onlyCell ? onlyCell->column() : 0, endCol = onlyCell ? firstCol + 1 : columns;
++        for (int row = firstRow; row < endRow; ++row) for (int column = firstCol; column < endCol; ++column) {
 +            const auto cell = table->cellAt(row, column);
++            // The fading cell's separate border was painted into its completed group.
++            // Geometry validation still visits every cell regardless of opacity.
++            if (painter && !onlyCell && cell.format().hasProperty(WikidictCellOpacity)
++                && cell.format().doubleProperty(WikidictCellOpacity) < 1) continue;
 +            const QRectF box = td->cellRect(cell).translated(offset);
 +            const QCss::Edge sides[] = {QCss::TopEdge, QCss::RightEdge, QCss::BottomEdge, QCss::LeftEdge};
 +            EdgeData edges[4]; qreal widths[4];
@@ -4860,7 +5089,7 @@
  }
  
  // checks an edge's joined competing edge according to priority rules and
-@@ -1577,7 +5312,14 @@
+@@ -1577,7 +5516,14 @@
      QTextFrameFormat::BorderStyle borderStyle = QTextFrameFormat::BorderStyle_None;
      QBrush brush;
  
@@ -4876,19 +5105,130 @@
          borderStyle = table->format().borderStyle();
          brush = table->format().borderBrush();
      }
-@@ -1792,7 +5534,8 @@
+@@ -1792,7 +5738,8 @@
  
  void QTextDocumentLayoutPrivate::drawTableCell(const QRectF &cellRect, QPainter *painter, const QAbstractTextDocumentLayout::PaintContext &cell_context,
                                                 QTextTable *table, QTextTableData *td, int r, int c,
 -                                               QTextBlock *cursorBlockNeedingRepaint, QPointF *cursorBlockOffset) const
 +                                               QTextBlock *cursorBlockNeedingRepaint, QPointF *cursorBlockOffset,
-+                                               QList<WikidictPositionedPaint> *positioned, WikidictPaintPhase phase) const
++                                               QList<WikidictPositionedPaint> *positioned, WikidictPaintPhase phase, bool insideOpacityGroup) const
  {
      QTextTableCell cell = table->cellAt(r, c);
      int rspan = cell.rowSpan();
-@@ -1825,7 +5568,8 @@
+@@ -1808,24 +5755,109 @@
+             return;
+     }
+ 
+-    const QFixed leftPadding = td->leftPadding(table, cell);
+-    const QFixed topPadding = td->topPadding(table, cell);
+-
+-    qreal topMargin = (td->effectiveTopMargin + td->cellSpacing + td->border).toReal();
+-    qreal bottomMargin = (td->effectiveBottomMargin + td->cellSpacing + td->border).toReal();
+-
+-    const int headerRowCount = qMin(table->format().headerRowCount(), table->rows() - 1);
+-    if (r >= headerRowCount)
+-        topMargin += td->headerHeight.toReal();
+-
+     // If cell border configured, don't draw default border for cells. It will be taken care later by
+     // drawTableCellBorder().
+     bool cellBorderConfigured = (cell.format().hasProperty(QTextFormat::TableCellLeftBorder) ||
+                                  cell.format().hasProperty(QTextFormat::TableCellTopBorder) ||
                                   cell.format().hasProperty(QTextFormat::TableCellRightBorder) ||
                                   cell.format().hasProperty(QTextFormat::TableCellBottomBorder));
++
++    if (!insideOpacityGroup && cell.format().hasProperty(WikidictCellOpacity)) {
++        const qreal opacity = cell.format().doubleProperty(WikidictCellOpacity);
++        // Collapsed tables normally expose their fill through cloned cell brushes. A
++        // fading cell instead needs that table paint below the group's own background.
++        if (td->borderCollapse && (phase == WikidictPaintPhase::Legacy || phase == WikidictPaintPhase::Decoration)
++            && table->format().background().style() != Qt::NoBrush)
++            fillBackground(painter, cellRect, table->format().background(), cellRect.topLeft());
++        if (opacity < 1) {
++            // A cell with opacity is one stacking context. Repaint all of its
++            // ordinary leaf content into each visible device tile at full alpha.
++            if (phase != WikidictPaintPhase::Legacy && phase != WikidictPaintPhase::Content) return;
++            // Collapsed winners form the table's grid, even when this cell supplied the winning color.
++            // The separately resolved grid already has its own table-wide paint pass.
++            const auto paintSharedEdges = qScopeGuard([&] {
++                if (td->borderCollapse && !table->format().hasProperty(WikidictResolvedTableBorders)
++                    && (cellBorderConfigured || td->border != 0))
++                    drawTableCellBorder(cellRect, painter, table, td, cell);
++            });
++            if (opacity == 0) return;
++            const QTransform deviceTransform = painter->deviceTransform();
++            if (!deviceTransform.isInvertible()) return;
++            const QPaintDevice *device = painter->paintEngine()->paintDevice();
++            if (!device) device = painter->device();
++            const qreal dpr = device->devType() == QInternal::Widget ? device->devicePixelRatioF() : 1;
++            QRect bounds(0, 0, qCeil(device->width() * dpr), qCeil(device->height() * dpr));
++            // Ordinary nonbreaking swatches use the same glyph and box traversal extents
++            // as native painting. Other inline or selection families keep the full clip.
++            bool swatchesOnly = cell_context.selections.isEmpty() && cell_context.cursorPosition == -1;
++            QRectF ink = cellRect;
++            if (!td->borderCollapse && td->border != 0) ink |= cellRect.adjusted(-1, -1, 0, 0);
++            const QPointF textOrigin(cellRect.left() + td->leftPadding(table, cell).toReal(), cellRect.top()
++                + (td->topPadding(table, cell) + td->cellVerticalOffsets.at(c + r * table->columns())).toReal());
++            for (auto it = cell.begin(); swatchesOnly && !it.atEnd(); ++it) {
++                const auto block = it.currentBlock();
++                if (!block.isValid() || block.textList() || logicalFlowAt(block.position())
++                    || block.blockFormat().hasProperty(QTextFormat::BlockTrailingHorizontalRulerWidth)
++                    || !block.layout()->preeditAreaText().isEmpty()) { swatchesOnly = false; break; }
++                for (auto run = block.begin(); !run.atEnd(); ++run) {
++                    const auto fragment = run.fragment(); const auto format = fragment.charFormat();
++                    if (format.isAnchor() || format.objectType() != QTextFormat::NoObject
++                        || format.hasProperty(QCompiledInline::Property)) { swatchesOnly = false; break; }
++                    for (const auto ch : fragment.text())
++                        if (ch != QChar::Nbsp && ch != QChar::Space) { swatchesOnly = false; break; }
++                    if (!swatchesOnly) break;
++                }
++                if (swatchesOnly) ink |= wikidictTextTraversal(block.layout()).translated(textOrigin + block.layout()->position());
++            }
++            if (swatchesOnly) bounds &= deviceTransform.mapRect(ink).toAlignedRect();
++            if (cell_context.clip.isValid()) bounds &= deviceTransform.mapRect(cell_context.clip).toAlignedRect();
++            if (painter->hasClipping()) bounds &= deviceTransform.mapRect(painter->clipBoundingRect()).toAlignedRect();
++            const auto systemClip = painter->paintEngine()->systemClip();
++            if (!systemClip.isEmpty()) bounds &= systemClip.boundingRect();
++            for (int y = bounds.top(); y <= bounds.bottom(); y += 256) {
++                for (int x = bounds.left(); x <= bounds.right(); x += 256) {
++                    QImage tile(qMin(256, bounds.right() - x + 1), qMin(256, bounds.bottom() - y + 1), QImage::Format_ARGB32_Premultiplied);
++                    tile.setDotsPerMeterX(qRound(device->logicalDpiX() / .0254));
++                    tile.setDotsPerMeterY(qRound(device->logicalDpiY() / .0254));
++                    tile.fill(Qt::transparent);
++                    QPainter layer(&tile); layer.setRenderHints(painter->renderHints());
++                    layer.setWorldTransform(deviceTransform * QTransform::fromTranslate(-x, -y));
++                    layer.setPen(painter->pen()); layer.setBrush(painter->brush()); layer.setFont(painter->font());
++                    layer.setBrushOrigin(painter->brushOriginF()); layer.setBackground(painter->background());
++                    layer.setBackgroundMode(painter->backgroundMode()); layer.setLayoutDirection(painter->layoutDirection());
++                    QTextBlock cursor; QPointF cursorOffset;
++                    drawTableCell(cellRect, &layer, cell_context, table, td, r, c, &cursor, &cursorOffset,
++                                  nullptr, WikidictPaintPhase::Legacy, true);
++#ifndef QT_NO_CSSPARSER
++                    if (!td->borderCollapse && table->format().hasProperty(WikidictResolvedTableBorders))
++                        wikidictResolvedTablePaint(this, table, td, &layer, cellRect.topLeft() - td->cellRect(cell).topLeft(), &cell);
++#endif
++                    if (cursor.isValid()) {
++                        layer.setPen(cell_context.palette.color(QPalette::Text));
++                        cursor.layout()->drawCursor(&layer, cursorOffset, cell_context.cursorPosition - cursor.position(), cursorWidth);
++                    }
++                    layer.end();
++                    painter->save(); painter->setOpacity(painter->opacity() * opacity);
++                    painter->setWorldTransform(QTransform()); painter->setWorldTransform(painter->deviceTransform().inverted());
++                    painter->drawImage(QPoint(x, y), tile); painter->restore();
++                }
++            }
++            return;
++        }
++    }
++
++    const QFixed leftPadding = td->leftPadding(table, cell);
++    const QFixed topPadding = td->topPadding(table, cell);
++
++    qreal topMargin = (td->effectiveTopMargin + td->cellSpacing + td->border).toReal();
++    qreal bottomMargin = (td->effectiveBottomMargin + td->cellSpacing + td->border).toReal();
++
++    const int headerRowCount = qMin(table->format().headerRowCount(), table->rows() - 1);
++    if (r >= headerRowCount)
++        topMargin += td->headerHeight.toReal();
  
 -    if (!td->borderCollapse && td->border != 0 && !cellBorderConfigured) {
 +    const bool decoration = phase == WikidictPaintPhase::Legacy || phase == WikidictPaintPhase::Decoration;
@@ -4896,7 +5236,7 @@
          const QBrush oldBrush = painter->brush();
          const QPen oldPen = painter->pen();
  
-@@ -1863,7 +5607,7 @@
+@@ -1863,7 +5895,7 @@
  
      const QBrush bg = cell.format().background();
      const QPointF brushOrigin = painter->brushOriginF();
@@ -4905,17 +5245,17 @@
          const qreal pageHeight = document->pageSize().height();
          const int topPage = pageHeight > 0 ? static_cast<int>(cellRect.top() / pageHeight) : 0;
          const int bottomPage = pageHeight > 0 ? static_cast<int>((cellRect.bottom()) / pageHeight) : 0;
-@@ -1894,7 +5638,8 @@
+@@ -1894,7 +5926,8 @@
      }
  
      // paint over the background - otherwise we would have to adjust the background paint cellRect for the border values
 -    if (cellBorderConfigured || (td->borderCollapse && td->border != 0))
-+    if (decoration && !table->format().hasProperty(WikidictResolvedTableBorders)
++    if (decoration && !(insideOpacityGroup && td->borderCollapse) && !table->format().hasProperty(WikidictResolvedTableBorders)
 +        && (cellBorderConfigured || (td->borderCollapse && td->border != 0)))
          drawTableCellBorder(cellRect, painter, table, td, cell);
  
      const QFixed verticalOffset = td->cellVerticalOffsets.at(c + r * table->columns());
-@@ -1905,7 +5650,7 @@
+@@ -1905,7 +5938,7 @@
      QTextBlock repaintBlock;
      drawFlow(cellPos, painter, cell_context, cell.begin(),
               td->childFrameMap.values(r + c * table->rows()),
@@ -4924,7 +5264,7 @@
      if (repaintBlock.isValid()) {
          *cursorBlockNeedingRepaint = repaintBlock;
          *cursorBlockOffset = cellPos;
-@@ -1916,13 +5661,14 @@
+@@ -1916,13 +5949,14 @@
  }
  
  void QTextDocumentLayoutPrivate::drawFlow(const QPointF &offset, QPainter *painter, const QAbstractTextDocumentLayout::PaintContext &context,
@@ -4941,7 +5281,7 @@
          lastVisibleCheckPoint = std::lower_bound(checkPoints.begin(), checkPoints.end(), QFixed::fromReal(context.clip.bottom()));
      }
  
-@@ -1932,7 +5678,7 @@
+@@ -1932,7 +5966,7 @@
      for (; !it.atEnd(); ++it) {
          QTextFrame *c = it.currentFrame();
  
@@ -4950,7 +5290,7 @@
              int currentPosInDoc;
              if (c)
                  currentPosInDoc = c->firstPosition();
-@@ -1951,13 +5697,23 @@
+@@ -1951,13 +5985,23 @@
                  break;
          }
  
@@ -4978,7 +5318,7 @@
          }
  
          // when entering a table and the previous block is empty
-@@ -1966,7 +5722,8 @@
+@@ -1966,7 +6010,8 @@
          // draw that block before the table itself the decoration
          // 'overpaints' the cursor and we need to paint it afterwards
          // again
@@ -4988,7 +5328,7 @@
              && previousBlock.contains(context.cursorPosition)
             ) {
              *cursorBlockNeedingRepaint = previousBlock;
-@@ -1976,6 +5733,8 @@
+@@ -1976,6 +6021,8 @@
          previousFrame = c;
      }
  
@@ -4997,7 +5337,7 @@
      for (int i = 0; i < floats.size(); ++i) {
          QTextFrame *frame = floats.at(i);
          if (!isFrameFromInlineObject(frame)
-@@ -1994,19 +5753,54 @@
+@@ -1994,19 +6041,54 @@
  
  void QTextDocumentLayoutPrivate::drawBlock(const QPointF &offset, QPainter *painter,
                                             const QAbstractTextDocumentLayout::PaintContext &context,
@@ -5056,7 +5396,7 @@
          QRectF rect = r;
  
          // extend the background rectangle if we're in the root frame with NoWrap,
-@@ -2022,6 +5816,7 @@
+@@ -2022,6 +6104,7 @@
              fillBackground(painter, rect, bg, r.topLeft());
      }
  
@@ -5064,7 +5404,7 @@
      QList<QTextLayout::FormatRange> selections;
      int blpos = bl.position();
      int bllen = bl.length();
-@@ -2061,7 +5856,18 @@
+@@ -2061,7 +6144,18 @@
      QPen oldPen = painter->pen();
      painter->setPen(context.palette.color(QPalette::Text));
  
@@ -5084,7 +5424,7 @@
  
      // if the block is empty and it precedes a table, do not draw the cursor.
      // the cursor is drawn later after the table has been drawn so no need
-@@ -2116,11 +5922,24 @@
+@@ -2116,11 +6210,24 @@
      if (blockFormat.hasProperty(QTextFormat::ListStyle))
          style = QTextListFormat::Style(blockFormat.intProperty(QTextFormat::ListStyle));
  
@@ -5110,7 +5450,7 @@
      QPointF pos = (offset + layout->position()).toPoint();
      // Every marker style is placed relative to the top of the first line, using the
      // metrics of the block's own font. But the marker belongs on that line's baseline.
-@@ -2270,12 +6089,258 @@
+@@ -2270,12 +6377,258 @@
      return flowPosition(f->begin());
  }
  
@@ -5369,7 +5709,7 @@
      layoutStruct.frame = t;
      layoutStruct.minimumWidth = 0;
      layoutStruct.maximumWidth = QFIXED_MAX;
-@@ -2283,6 +6348,9 @@
+@@ -2283,6 +6636,9 @@
  
      const QFixed topPadding = td->topPadding(t, cell);
      if (withPageBreaks) {
@@ -5379,7 +5719,7 @@
          layoutStruct.frameY = absoluteTableY + td->rowPositions.at(cell.row()) + topPadding;
      }
      layoutStruct.x_left = 0;
-@@ -2319,16 +6387,59 @@
+@@ -2319,16 +6675,59 @@
  
      layoutStruct.fullLayout = true;
  
@@ -5449,7 +5789,7 @@
      layoutFlow(cell.begin(), &layoutStruct, layoutFrom, layoutTo, width);
  
      QFixed floatMinWidth;
-@@ -2341,10 +6452,37 @@
+@@ -2341,10 +6740,37 @@
          QTextFrame *frame = childFrames.at(i);
          QTextFrameData *cd = data(frame);
  
@@ -5489,7 +5829,7 @@
      }
  
      // constraint the maximum/minimumWidth by the minimum width of the fixed size floats,
-@@ -2374,6 +6512,25 @@
+@@ -2374,8 +6800,28 @@
  
  QRectF QTextDocumentLayoutPrivate::layoutTable(QTextTable *table, int layoutFrom, int layoutTo, QFixed parentY)
  {
@@ -5514,8 +5854,11 @@
 +    ++tableLayoutEntries;
      qCDebug(lcTable) << "layoutTable from" << layoutFrom << "to" << layoutTo << "parentY" << parentY;
      QTextTableData *td = static_cast<QTextTableData *>(data(table));
++    td->rowWindowRevision = -1;
      Q_ASSERT(td->sizeDirty);
-@@ -2392,6 +6549,9 @@
+     const int rows = table->rows();
+     const int columns = table->columns();
+@@ -2392,6 +6838,9 @@
          }
      }
  
@@ -5525,7 +5868,7 @@
      QList<QTextLength> columnWidthConstraints = fmt.columnWidthConstraints();
      if (columnWidthConstraints.size() != columns)
          columnWidthConstraints.resize(columns);
-@@ -2408,6 +6568,16 @@
+@@ -2408,6 +6857,16 @@
      td->drawGrid = (td->borderCollapse && fmt.border() >= 1);
  
      td->effectiveTopBorder = td->effectiveBottomBorder = td->effectiveLeftBorder = td->effectiveRightBorder = td->border;
@@ -5542,7 +5885,7 @@
  
  #ifndef QT_NO_CSSPARSER
      if (td->borderCollapse) {
-@@ -2437,16 +6607,68 @@
+@@ -2437,16 +6896,68 @@
  
      td->deviceScale = scaleToDevice(qreal(1));
      td->cellPadding = QFixed::fromReal(scaleToDevice(fmt.cellPadding()));
@@ -5616,7 +5959,7 @@
      QFixed remainingWidth = td->contentsWidth;
      // two (vertical) borders per cell per column
      remainingWidth -= columns * 2 * td->borderCell;
-@@ -2470,7 +6692,19 @@
+@@ -2470,7 +6981,19 @@
      // start with a minimum width of 0. totally empty
      // cells of default created tables are invisible otherwise
      // and therefore hardly editable
@@ -5637,7 +5980,7 @@
  
      td->maxWidths.resize(columns);
      td->maxWidths.fill(QFIXED_MAX);
-@@ -2491,12 +6725,92 @@
+@@ -2491,12 +7014,92 @@
              // to figure out the min and the max width lay out the cell at
              // maximum width. otherwise the maxwidth calculation sometimes
              // returns wrong values
@@ -5736,7 +6079,7 @@
              for (int n = 0; n < cspan; ++n) {
                  const int col = i + n;
                  QFixed w = widthToDistribute / (cspan - n);
-@@ -2509,10 +6823,11 @@
+@@ -2509,10 +7112,11 @@
  
              QFixed maxW = td->maxWidths.at(i);
              if (layoutStruct.maximumWidth != QFIXED_MAX) {
@@ -5750,7 +6093,7 @@
              }
              if (maxW == QFIXED_MAX)
                  continue;
-@@ -2535,6 +6850,49 @@
+@@ -2535,6 +7139,49 @@
                      break;
              }
          }
@@ -5800,7 +6143,7 @@
      }
  
      // set fixed values, figure out total percentages used and number of
-@@ -2549,7 +6907,8 @@
+@@ -2549,7 +7196,8 @@
              remainingWidth -= td->widths.at(i);
              qCDebug(lcTable) << "column" << i << "has width constraint" << td->minWidths.at(i) << "px, remaining width now" << remainingWidth;
          } else if (length.type() == QTextLength::PercentageLength) {
@@ -5810,7 +6153,7 @@
          } else if (length.type() == QTextLength::VariableLength) {
              variableCols++;
  
-@@ -2557,19 +6916,23 @@
+@@ -2557,19 +7205,23 @@
              remainingWidth -= td->minWidths.at(i);
              qCDebug(lcTable) << "column" << i << "has variable width, min" << td->minWidths.at(i) << "remaining width now" << remainingWidth;
          }
@@ -5838,7 +6181,7 @@
                  QFixed maxWidth = remainingWidth - remainingMinWidths;
                  if (percentWidth >= td->minWidths.at(i) && maxWidth > td->minWidths.at(i)) {
                      td->widths[i] = qBound(td->minWidths.at(i), percentWidth, maxWidth);
-@@ -2583,6 +6946,9 @@
+@@ -2583,6 +7235,9 @@
          }
      }
  
@@ -5848,7 +6191,7 @@
      // for variable columns distribute the remaining space
      if (variableCols > 0 && remainingWidth > 0) {
          QVarLengthArray<int> columnsWithProperMaxSize;
-@@ -2607,12 +6973,53 @@
+@@ -2607,12 +7262,53 @@
  
          if (remainingWidth > 0
              // don't unnecessarily grow variable length sized tables
@@ -5905,7 +6248,7 @@
          }
      }
  
-@@ -2621,6 +7028,16 @@
+@@ -2621,6 +7317,16 @@
      // values here.
      // to minimize the total rounding error we propagate the rounding error for each width
      // to its successor.
@@ -5922,7 +6265,7 @@
      QFixed error = 0;
      for (int i = 0; i < columns; ++i) {
          QFixed orig = td->widths[i];
-@@ -2628,19 +7045,70 @@
+@@ -2628,19 +7334,70 @@
          error = td->widths[i] - orig;
      }
  
@@ -5996,7 +6339,7 @@
          docPrivate->defaultTextOption.setWrapMode(QTextOption::WrapAnywhere);
          // go back to the top of the function
          goto recalc_minmax_widths;
-@@ -2648,7 +7116,7 @@
+@@ -2648,7 +7405,7 @@
  
      td->contentsWidth = contentsWidth;
  
@@ -6005,7 +6348,7 @@
  
      td->heights.resize(rows);
      td->heights.fill(0);
-@@ -2679,7 +7147,12 @@
+@@ -2679,7 +7436,12 @@
      //
      // ### this could be made faster by iterating over the cells array of QTextTable
      for (int r = 0; r < rows; ++r) {
@@ -6018,7 +6361,7 @@
  
          const int tableStartPage = (absoluteTableY / pageHeight).truncate();
          const int currentPage = ((td->rowPositions.at(r) + absoluteTableY) / pageHeight).truncate();
-@@ -2687,10 +7160,17 @@
+@@ -2687,10 +7449,17 @@
          const QFixed pageTop = currentPage * pageHeight + td->effectiveTopMargin - absoluteTableY + cellSpacing + td->border;
          const QFixed nextPageTop = pageTop + pageHeight;
  
@@ -6040,7 +6383,7 @@
  
          bool dropRowToNextPage = true;
          int cellCountBeforeRow = cellHeights.size();
-@@ -2746,6 +7226,16 @@
+@@ -2746,6 +7515,16 @@
                                                         layoutFrom, layoutTo,
                                                         td, absoluteTableY,
                                                         /*withPageBreaks =*/true);
@@ -6057,7 +6400,7 @@
  
              const QFixed height = (layoutStruct.y + bottomPadding + topPadding).round();
  
-@@ -2756,7 +7246,14 @@
+@@ -2756,7 +7535,14 @@
  
              cellHeights.append(layoutStruct.y);
  
@@ -6073,7 +6416,7 @@
              if (childPos < pageBottom)
                  dropRowToNextPage = false;
          }
-@@ -2773,6 +7270,9 @@
+@@ -2773,6 +7559,9 @@
          }
  
          if (haveRowSpannedCells) {
@@ -6083,7 +6426,7 @@
              const QFixed effectiveHeight = td->heights.at(r) + td->borderCell + cellSpacing + td->borderCell;
              for (int c = 0; c < columns; ++c)
                  heightToDistribute[c] = qMax(heightToDistribute.at(c) - effectiveHeight - dropDistance, QFixed(0));
-@@ -2835,26 +7335,136 @@
+@@ -2835,26 +7624,136 @@
  
      td->minimumWidth = td->columnPositions.at(0);
      for (int i = 0; i < columns; ++i) {
@@ -6222,7 +6565,7 @@
      QTextFrameData *fd = data(frame);
  
      QTextFrame *parent = frame->parentFrame();
-@@ -2863,6 +7473,9 @@
+@@ -2863,6 +7762,9 @@
      Q_ASSERT(pd && pd->currentLayoutStruct);
  
      QTextLayoutStruct *layoutStruct = pd->currentLayoutStruct;
@@ -6232,7 +6575,7 @@
  
      if (!pd->floats.contains(frame))
          pd->floats.append(frame);
-@@ -2873,7 +7486,7 @@
+@@ -2873,7 +7775,7 @@
      QFixed y = layoutStruct->y;
      if (currentLine) {
          QFixed left, right;
@@ -6241,7 +6584,7 @@
  //         qDebug() << "have line: right=" << right << "left=" << left << "textWidth=" << currentLine->width();
          if (right - left < QFixed::fromReal(currentLine->naturalTextWidth()) + fd->size.width) {
              layoutStruct->pendingFloats.append(frame);
-@@ -2882,6 +7495,9 @@
+@@ -2882,6 +7784,9 @@
          }
      }
  
@@ -6251,7 +6594,7 @@
      bool frameSpansIntoNextPage = (y + layoutStruct->frameY + fd->size.height > layoutStruct->pageBottom);
      if (frameSpansIntoNextPage && fd->size.height <= layoutStruct->pageHeight) {
          layoutStruct->newPage();
-@@ -2890,12 +7506,17 @@
+@@ -2890,12 +7795,17 @@
          frameSpansIntoNextPage = false;
      }
  
@@ -6273,7 +6616,7 @@
          fd->position.x = left;
          fd->position.y = y;
      } else {
-@@ -2915,6 +7536,1429 @@
+@@ -2915,6 +7825,1450 @@
          fd->sizeDirty = frameSpansIntoNextPage;
  }
  
@@ -6829,6 +7172,27 @@
 +    if (resolvedTable) {
 +        for (int row = 0; row < resolvedTable->rows(); ++row) for (int column = 0; column < resolvedTable->columns(); ++column) {
 +            const auto cellFormat = resolvedTable->cellAt(row, column).format();
++            if (cellFormat.hasProperty(WikidictCellOpacity)) {
++                const auto alpha = cellFormat.property(WikidictCellOpacity);
++                const auto cell = resolvedTable->cellAt(row, column);
++                if (alpha.metaType().id() != QMetaType::Double || !qIsFinite(alpha.toDouble())
++                    || alpha.toDouble() < 0 || alpha.toDouble() > 1) {
++                    refuseParagraphBox(1, cell.firstPosition()); return false;
++                }
++                if (alpha.toDouble() < 1) {
++                    // Only direct ordinary leaf cells have a self-contained paint pass.
++                    // Escaped descendants require an independent position and stacking scope.
++                    if (frame->parentFrame() != document->rootFrame() || format.position() != QTextFrameFormat::InFlow
++                        || format.intProperty(WikidictTableDisplay) != 0
++                        || format.hasProperty(WikidictTableCornerRadii)
++                        || format.hasProperty(WikidictTableViewportGrid) || format.hasProperty(WikidictTableFloatViewport)) {
++                        refuseParagraphBox(1, cell.firstPosition()); return false;
++                    }
++                    for (auto it = cell.begin(); !it.atEnd(); ++it) {
++                        if (it.currentFrame()) { refuseParagraphBox(1, cell.firstPosition()); return false; }
++                    }
++                }
++            }
 +            resolvedPresent |= cellFormat.hasProperty(WikidictResolvedBorderEdges);
 +            resolvedCellMetadata |= cellFormat.hasProperty(WikidictResolvedBorderOwnerInk)
 +                || cellFormat.hasProperty(WikidictResolvedTableBorders);
@@ -7703,7 +8067,7 @@
  QRectF QTextDocumentLayoutPrivate::layoutFrame(QTextFrame *f, int layoutFrom, int layoutTo, QFixed parentY)
  {
      qCDebug(lcLayout, "layoutFrame (%d--%d), parent=%p", f->firstPosition(), f->lastPosition(), f->parentFrame());
-@@ -2922,46 +8966,166 @@
+@@ -2922,46 +9276,166 @@
  
      QTextFrameFormat fformat = f->frameFormat();
  
@@ -7881,7 +8245,7 @@
          QFixed b = QFixed::fromReal(scaleToDevice(fformat.border())).round();
          if (b != fd->border) {
              fd->border = b;
-@@ -2973,13 +9137,42 @@
+@@ -2973,13 +9447,42 @@
              fullLayout = true;
          }
  
@@ -7926,7 +8290,7 @@
  
              if (qobject_cast<QTextTable *>(parent)) {
                  const QTextTableData *td = static_cast<const QTextTableData *>(pd);
-@@ -2987,16 +9180,102 @@
+@@ -2987,16 +9490,102 @@
                  fd->effectiveBottomMargin += td->cellSpacing + td->border + td->cellPadding;
              }
          } else {
@@ -8036,7 +8400,7 @@
          } else {
              fd->contentsHeight = frameHeight;
          }
-@@ -3018,15 +9297,74 @@
+@@ -3018,15 +9607,74 @@
      fd->contentsWidth = newContentsWidth;
  
      QTextLayoutStruct layoutStruct;
@@ -8114,7 +8478,7 @@
      layoutStruct.updateRect = QRectF(QPointF(0, 0), QSizeF(qreal(INT_MAX), qreal(INT_MAX)));
      qCDebug(lcLayout) << "layoutStruct: x_left" << layoutStruct.x_left << "x_right" << layoutStruct.x_right
                        << "fullLayout" << layoutStruct.fullLayout;
-@@ -3045,48 +9383,561 @@
+@@ -3045,48 +9693,561 @@
          idealWidth = 0; // reset
  
      QTextFrame::Iterator it = f->begin();
@@ -8683,7 +9047,7 @@
  
      QTextFrame::Iterator previousIt;
  
-@@ -3137,9 +9988,46 @@
+@@ -3137,9 +10298,46 @@
      }
  
      QTextBlockFormat previousBlockFormat = previousIt.currentBlock().blockFormat();
@@ -8732,7 +9096,7 @@
          QTextFrame *c = it.currentFrame();
  
          int docPos;
-@@ -3148,7 +10036,39 @@
+@@ -3148,7 +10346,39 @@
          else
              docPos = it.currentBlock().position();
  
@@ -8773,7 +9137,7 @@
              if (qAbs(layoutStruct->y - checkPoints.constLast().y) > 2000) {
                  QFixed left, right;
                  floatMargins(layoutStruct->y, layoutStruct, &left, &right);
-@@ -3171,26 +10091,272 @@
+@@ -3171,26 +10401,272 @@
          }
  
          if (c) {
@@ -9054,7 +9418,7 @@
  
                  Qt::Alignment align = Qt::AlignLeft;
  
-@@ -3198,6 +10364,10 @@
+@@ -3198,6 +10674,10 @@
  
                  if (table)
                      align = table->format().alignment() & Qt::AlignHorizontal_Mask;
@@ -9065,7 +9429,7 @@
  
                  // detect whether we have any alignment in the document that disallows optimizations,
                  // such as not laying out the document again in a textedit with wrapping disabled.
-@@ -3210,44 +10380,139 @@
+@@ -3210,44 +10690,139 @@
                      cd->sizeDirty = true;
  
                  if (cd->sizeDirty) {
@@ -9224,7 +9588,7 @@
  
                  if (c->frameFormat().pageBreakPolicy() & QTextFormat::PageBreak_AlwaysAfter)
                      layoutStruct->newPage();
-@@ -3255,14 +10520,36 @@
+@@ -3255,14 +10830,36 @@
                  QRectF oldFrameRect(cd->position.toPointF(), cd->size.toSizeF());
                  QRectF updateRect;
  
@@ -9263,7 +9627,7 @@
  
                  QRectF frameRect(cd->position.toPointF(), cd->size.toSizeF());
  
-@@ -3290,6 +10577,61 @@
+@@ -3290,6 +10887,61 @@
              ++it;
  
              const QTextBlockFormat blockFormat = block.blockFormat();
@@ -9325,7 +9689,7 @@
  
              if (blockFormat.pageBreakPolicy() & QTextFormat::PageBreak_AlwaysBefore)
                  layoutStruct->newPage();
-@@ -3300,11 +10642,95 @@
+@@ -3300,11 +10952,95 @@
              layoutStruct->maximumWidth = 0;
  
              const QTextBlockFormat *previousBlockFormatPtr = nullptr;
@@ -9422,7 +9786,7 @@
  
              // detect whether we have any alignment in the document that disallows optimizations,
              // such as not laying out the document again in a textedit with wrapping disabled.
-@@ -3313,14 +10739,14 @@
+@@ -3313,14 +11049,14 @@
  
              // if the block right before a table is empty 'hide' it by
              // positioning it into the table border
@@ -9439,7 +9803,7 @@
                      QTextTableData *td = static_cast<QTextTableData *>(data(lastIt.currentFrame()));
                      QTextLayout *layout = block.layout();
  
-@@ -3333,7 +10759,7 @@
+@@ -3333,7 +11069,7 @@
                  }
  
                  // if the block right after a table starts with a line separator, shift it up by one line
@@ -9448,7 +9812,7 @@
                      QTextTableData *td = static_cast<QTextTableData *>(data(lastIt.currentFrame()));
                      QTextLayout *layout = block.layout();
  
-@@ -3364,8 +10790,27 @@
+@@ -3364,8 +11100,27 @@
              maximumBlockWidth = qMax(maximumBlockWidth, layoutStruct->maximumWidth);
              layoutStruct->maximumWidth = origMaximumWidth;
              previousBlockFormat = blockFormat;
@@ -9478,7 +9842,7 @@
      if (layoutStruct->maximumWidth == QFIXED_MAX && maximumBlockWidth > 0)
          layoutStruct->maximumWidth = maximumBlockWidth;
      else
-@@ -3374,12 +10819,37 @@
+@@ -3374,12 +11129,37 @@
      // a float at the bottom of a frame may make it taller, hence the qMax() for layoutStruct->y.
      // we don't need to do it for tables though because floats in tables are per table
      // and not per cell and layoutCell already takes care of doing the same as we do here
@@ -9522,7 +9886,7 @@
          }
      }
  
-@@ -3389,7 +10859,7 @@
+@@ -3389,7 +11169,7 @@
          if (!fd->floats.isEmpty())
              contentHasAlignment = true;
  
@@ -9531,7 +9895,7 @@
              //qDebug("layout done!");
              currentLazyLayoutPosition = -1;
              QCheckPoint cp;
-@@ -3411,10 +10881,450 @@
+@@ -3411,10 +11191,450 @@
      fd->currentLayoutStruct = nullptr;
  }
  
@@ -9985,7 +10349,7 @@
      const int lineHeightType = blockFormat.lineHeightType();
      qreal rawHeight = qCeil(line.ascent() + line.descent() + line.leading());
      *lineHeight = QFixed::fromReal(blockFormat.lineHeight(rawHeight, scaling));
-@@ -3431,32 +11341,601 @@
+@@ -3431,32 +11651,608 @@
          *lineBreakHeight = QFixed::fromReal(height);
          *lineAdjustment = 0;
      }
@@ -10116,7 +10480,7 @@
 +                && box.identity.value("borderStyle") == QVariant(QStringLiteral("dotted"))
 +                && !box.identity.contains("background") && !box.identity.contains("nestedChildren")
 +                && !QCompiledInlineBox::hasAction(box);
-+            if (!fixedCircle || !qobject_cast<QTextTable *>(frame)) return false;
++            if ((!fixedCircle && box.source.front() != QChar::Nbsp) || !qobject_cast<QTextTable *>(frame)) return false;
 +        }
 +        while (frame && !qobject_cast<QTextTable *>(frame)) {
 +            const auto f = frame->frameFormat();
@@ -10170,7 +10534,14 @@
 +                }
 +                if (!QCompiledInlineBox::borderFormat(borderSources.value(box.first), character)) return fail(box.first);
 +            }
-+            if (!QCompiledInlineBox::sameMetricFont(character.font().resolve(document->defaultFont()), box.font)
++            auto childFont = box.font;
++            if (box.identity.contains("dottedBottomChildItalic")) childFont.setItalic(box.identity.value("dottedBottomChildItalic").toBool());
++            const bool metrics = box.sourceRanges
++                ? QCompiledInlineBox::sourceRangeFormat(*box.sourceRanges, fragment.position() - box.first,
++                    fragment.position() + fragment.length() - box.first, character, document->defaultFont(),
++                    QCompiledInlineBox::helpOnly(character.property(QCompiledInline::Property)))
++                : QCompiledInlineBox::sameMetricFont(character.font().resolve(document->defaultFont()), childFont);
++            if (!metrics
 +                || character.verticalAlignment() != QTextCharFormat::AlignNormal
 +                || (character.hasProperty(QCompiledInline::Property)
 +                    && !QCompiledInlineBox::helpOnly(character.property(QCompiledInline::Property)))) return fail(fragment.position());
@@ -10186,7 +10557,7 @@
 +            if (QCompiledInlineBox::hasAction(box)) {
 +                if (!character.isAnchor() || character.anchorHref() != QCompiledInlineBox::actionHref(box))
 +                    return fail(box.first);
-+            } else if(!fragment.charFormat().anchorHref().isEmpty()
++            } else if(!box.sourceRanges && !fragment.charFormat().anchorHref().isEmpty()
 +                &&(fragment.position()==box.first||fragment.position()+fragment.length()==box.last)) return fail(box.first);
 +            covered[box.first]+=fragment.length();
 +        }
@@ -10594,7 +10965,7 @@
  
      QFixed extraMargin;
      if (docPrivate->defaultTextOption.flags() & QTextOption::AddSpaceForLineAndParagraphSeparators) {
-@@ -3465,9 +11944,24 @@
+@@ -3465,9 +12261,24 @@
      }
  
      const QFixed indent = this->blockIndent(blockFormat);
@@ -10619,7 +10990,7 @@
      const QPointF oldPosition = tl->position();
      tl->setPosition(QPointF(layoutStruct->x_left.toReal(), layoutStruct->y.toReal()));
  
-@@ -3486,7 +11980,9 @@
+@@ -3486,7 +12297,9 @@
              align = blockFormat.alignment();
          option.setAlignment(QGuiApplicationPrivate::visualAlignment(dir, align)); // for paragraph that are RTL, alignment is auto-reversed;
  
@@ -10630,7 +11001,7 @@
              option.setWrapMode(QTextOption::ManualWrap);
          }
  
-@@ -3498,9 +11994,12 @@
+@@ -3498,9 +12311,12 @@
          const QFixed cy = layoutStruct->y;
          const QFixed l = layoutStruct->x_left  + totalLeftMargin;
          const QFixed r = layoutStruct->x_right - totalRightMargin;
@@ -10643,7 +11014,7 @@
          bool firstLine = true;
          while (1) {
              QTextLine line = tl->createLine();
-@@ -3528,6 +12027,61 @@
+@@ -3528,6 +12344,61 @@
              else
                  line.setLineWidth((right - left).toReal());
  
@@ -10705,7 +11076,7 @@
  //        qDebug() << "layoutBlock; layouting line with width" << right - left << "->textWidth" << line.textWidth();
              floatMargins(layoutStruct->y, layoutStruct, &left, &right);
              left = qMax(left, l);
-@@ -3542,7 +12096,9 @@
+@@ -3542,7 +12413,9 @@
                  layoutStruct->pendingFloats.clear();
  
                  line.setLineWidth((right-left).toReal());
@@ -10716,7 +11087,7 @@
                      if (haveWordOrAnyWrapMode) {
                          option.setWrapMode(QTextOption::WrapAnywhere);
                          tl->setTextOption(option);
-@@ -3550,7 +12106,18 @@
+@@ -3550,7 +12423,18 @@
  
                      layoutStruct->pendingFloats.clear();
                      // lines min width more than what we have
@@ -10735,7 +11106,7 @@
                      floatMargins(layoutStruct->y, layoutStruct, &left, &right);
                      left = qMax(left, l);
                      right = qMin(right, r);
-@@ -3566,12 +12133,53 @@
+@@ -3566,12 +12450,53 @@
                      }
                  }
  
@@ -10790,7 +11161,7 @@
  
              while (layoutStruct->pageHeight > 0 && layoutStruct->absoluteY() + lineBreakHeight > layoutStruct->pageBottom &&
                  layoutStruct->contentHeight() >= lineBreakHeight) {
-@@ -3591,16 +12199,142 @@
+@@ -3591,16 +12516,142 @@
                      right -= text_indent;
              }
  
@@ -10933,7 +11304,7 @@
              }
              layoutStruct->pendingFloats.clear();
          }
-@@ -3618,12 +12352,34 @@
+@@ -3618,12 +12669,34 @@
              QFixed lineBreakHeight, lineHeight, lineAdjustment, lineBottom;
              qreal scaling = (q->paintDevice() && q->paintDevice()->logicalDpiY() != qt_defaultDpi()) ?
                              qreal(q->paintDevice()->logicalDpiY()) / qreal(qt_defaultDpi()) : 1;
@@ -10969,7 +11340,7 @@
              }
              bottom = layoutStruct->y + lineBottom;
              layoutStruct->y += lineHeight;
-@@ -3649,7 +12405,30 @@
+@@ -3649,7 +12722,30 @@
          }
      }
  
@@ -11000,7 +11371,7 @@
      const QFixed margins = totalLeftMargin + totalRightMargin;
      layoutStruct->minimumWidth = qMax(layoutStruct->minimumWidth, QFixed::fromReal(tl->minimumWidth()) + margins);
  
-@@ -3663,49 +12442,1934 @@
+@@ -3663,49 +12759,1934 @@
      }
  }
  
@@ -12963,7 +13334,7 @@
          }
          if (newY == QFIXED_MAX)
              break;
-@@ -3717,9 +14381,108 @@
+@@ -3717,9 +14698,114 @@
  QTextDocumentLayout::QTextDocumentLayout(QTextDocument *doc)
      : QAbstractTextDocumentLayout(*new QTextDocumentLayoutPrivate, doc)
  {
@@ -12998,6 +13369,7 @@
 +    setProperty("_wikidictContainerFixedFloatCapability", QStringLiteral("wikidict.container-fixed-float/1"));
 +#ifndef QT_NO_CSSPARSER
 +    setProperty("_wikidictPhysicalBorderCapability", QStringLiteral("wikidict.physical-border/1"));
++    setProperty("_wikidictCellOpacityCapability", QStringLiteral("wikidict.cell-opacity/1"));
 +    setProperty("_wikidictResolvedTableBordersCapability", QStringLiteral("wikidict.resolved-table-border/1"));
 +#endif
 +    setProperty("_wikidictContainerColumnsCapability", QStringLiteral("wikidict.container-columns/1"));
@@ -13014,7 +13386,12 @@
 +    setProperty("_wikidictInlineBoxCapability", QString::fromLatin1(QCompiledInlineBox::Capability));
 +    setProperty("_wikidictInlineBoxRoundedLinkCapability", QString::fromLatin1(QCompiledInlineBox::RoundedLinkCapability));
 +    setProperty("_wikidictInlineBoxPercentDottedCapability", QString::fromLatin1(QCompiledInlineBox::PercentDottedCapability));
++    setProperty("_wikidictNonbreakingSwatchCapability", QString::fromLatin1(QCompiledInlineBox::NonbreakingSwatchCapability));
 +    setProperty("_wikidictInlineBoxNestedPitchCapability", QString::fromLatin1(QCompiledInlineBox::NestedPitchCapability));
++#ifndef QT_NO_CSSPARSER
++    setProperty("_wikidictDottedBottomLabelCapability", QStringLiteral("wikidict.inline-box-dotted-bottom-label/1"));
++    setProperty("_wikidictInlineBoxSourceTreeCapability", QString::fromLatin1(QCompiledInlineBox::SourceTreeCapability));
++#endif
 +    setProperty("_wikidictInlineBoxOverlayCapability", QString::fromLatin1(QCompiledInlineBox::OverlayCapability));
 +    setProperty("_wikidictInlineBoxChildLinkCapability", QStringLiteral("wikidict.inline-box-child-link/1"));
 +#endif
@@ -13075,7 +13452,7 @@
  
  void QTextDocumentLayout::draw(QPainter *painter, const PaintContext &context)
  {
-@@ -3730,8 +14493,36 @@
+@@ -3730,8 +14816,36 @@
      if (fd->sizeDirty)
          return;
  
@@ -13114,7 +13491,7 @@
      } else {
          d->ensureLayoutFinished();
      }
-@@ -3745,7 +14536,37 @@
+@@ -3745,7 +14859,37 @@
  
      // Make sure we conform to the root frames bounds when drawing.
      d->clipRect = QRectF(fd->position.toPointF(), fd->size.toSizeF()).adjusted(fd->leftMargin.toReal(), 0, -fd->rightMargin.toReal(), 0);
@@ -13153,7 +13530,7 @@
      fd->size.width = width;
  }
  
-@@ -3778,6 +14599,14 @@
+@@ -3778,6 +14922,14 @@
  void QTextDocumentLayout::documentChanged(int from, int oldLength, int length)
  {
      Q_D(QTextDocumentLayout);
@@ -13168,7 +13545,7 @@
  
      QTextBlock blockIt = document()->findBlock(from);
      QTextBlock endIt = document()->findBlock(qMax(0, from + length - 1));
-@@ -3796,6 +14625,40 @@
+@@ -3796,6 +14948,40 @@
      d->insideDocumentChange = true;
  
      const int documentLength = d->docPrivate->length();
@@ -13209,7 +13586,7 @@
      const bool fullLayout = (oldLength == 0 && length == documentLength);
      const bool smallChange = documentLength > 0
                               && (qMax(length, oldLength) * 100 / documentLength) < 5;
-@@ -3847,6 +14710,147 @@
+@@ -3847,6 +15033,147 @@
  
  //     qDebug("documentChange: from=%d, oldLength=%d, length=%d", from, oldLength, length);
  
@@ -13357,7 +13734,7 @@
      // mark all frames between f_start and f_end as dirty
      markFrames(d->docPrivate->rootFrame(), from, oldLength, length);
  
-@@ -3862,6 +14866,9 @@
+@@ -3862,6 +15189,9 @@
      else if (d->showLayoutProgress)
          d->sizeChangedTimer.start(0, this);
  
@@ -13367,7 +13744,7 @@
      return updateRect;
  }
  
-@@ -3875,7 +14882,50 @@
+@@ -3875,7 +15205,50 @@
      QFixedPoint pointf;
      pointf.x = QFixed::fromReal(point.x());
      pointf.y = QFixed::fromReal(point.y());
@@ -13419,7 +13796,7 @@
      if (accuracy == Qt::ExactHit && p < QTextDocumentLayoutPrivate::PointExact)
          return -1;
  
-@@ -3913,6 +14963,47 @@
+@@ -3913,6 +15286,47 @@
      }
  
      QSizeF inlineSize = (pos == QTextFrameFormat::InFlow ? intrinsic : QSizeF(0, 0));
@@ -13467,7 +13844,7 @@
      item.setWidth(inlineSize.width());
  
      switch (f.verticalAlignment()) {
-@@ -3957,7 +15048,10 @@
+@@ -3957,7 +15371,10 @@
  
      QTextBlock b = d->document->findBlock(frame->firstPosition());
      QTextLine line;
@@ -13479,7 +13856,7 @@
          line = b.layout()->lineAt(b.layout()->lineCount()-1);
  //     qDebug() << "layoutObject: line.isValid" << line.isValid() << b.position() << b.length() <<
  //         frame->firstPosition() << frame->lastPosition();
-@@ -3990,7 +15084,14 @@
+@@ -3990,7 +15407,14 @@
  QSizeF QTextDocumentLayout::dynamicDocumentSize() const
  {
      Q_D(const QTextDocumentLayout);
@@ -13495,7 +13872,7 @@
  }
  
  int QTextDocumentLayout::pageCount() const
-@@ -4004,7 +15105,26 @@
+@@ -4004,7 +15428,28 @@
  {
      Q_D(const QTextDocumentLayout);
      d->ensureLayoutFinished();
@@ -13511,6 +13888,8 @@
 +        auto positions = d->tableIntrinsicImagePositions.values(); std::sort(positions.begin(), positions.end());
 +        QVariantList images; for (int position : positions) images.append(position);
 +        const QVariantMap work{{QStringLiteral("image_positions"), images},
++            {QStringLiteral("row_window_queries"), QVariant::fromValue(d->rowWindowQueries)},
++            {QStringLiteral("row_window_candidates"), QVariant::fromValue(d->rowWindowCandidates)},
 +            {QStringLiteral("invalidations"), QVariant::fromValue(d->tableIntrinsicInvalidations)},
 +            {QStringLiteral("epochs"), QVariant::fromValue(d->tableIntrinsicEpochs)},
 +            {QStringLiteral("tables"), QVariant::fromValue(d->tableLayoutEntries)},
@@ -13523,7 +13902,7 @@
  }
  
  void QTextDocumentLayoutPrivate::ensureLayouted(QFixed y) const
-@@ -4078,13 +15198,18 @@
+@@ -4078,13 +15523,18 @@
      if (!d->docPrivate->canLayout())
          return QRectF();
      d->ensureLayoutFinished();
@@ -13543,7 +13922,7 @@
  
          if (f != table) {
              if (QTextTable *table = qobject_cast<QTextTable *>(f)) {
-@@ -4116,6 +15241,7 @@
+@@ -4116,6 +15566,7 @@
      while (f) {
          QTextFrameData *fd = data(f);
          pos += fd->position.toPointF();
@@ -13551,7 +13930,7 @@
  
          if (QTextTable *table = qobject_cast<QTextTable *>(f)) {
              QTextTableCell cell = table->cellAt(framePos);
-@@ -4140,7 +15266,7 @@
+@@ -4140,7 +15591,7 @@
  
      while (frame) {
          QTextFrameData *fd = data(frame);
@@ -13560,7 +13939,7 @@
  
          if (QTextTable *table = qobject_cast<QTextTable *>(frame)) {
              QTextTableCell cell = table->cellAt(blockPos);
-@@ -4151,7 +15277,12 @@
+@@ -4151,7 +15602,12 @@
          frame = frame->parentFrame();
      }
  
@@ -13664,7 +14043,7 @@
      // split up the item into parts that come from different font engines
      // k * 3 entries, array[k] == index in string, array[k + 1] == index in glyphs, array[k + 2] == engine index
      QVarLengthArray<uint, 24> itemBoundaries;
-@@ -1595,6 +1607,68 @@
+@@ -1595,6 +1607,125 @@
          }
      }
  
@@ -13678,6 +14057,63 @@
 +            const auto sourceAt = [&](int p) {
 +                return projectedDocument ? projectedSourcePositions.value(p, -1) : block.position()+p;
 +            };
++            if (box.sourceRanges) {
++                const auto *device = doc->documentLayout()->paintDevice();
++                QCompiledInlineBox::SourceBoxTree tree;
++                if (!QCompiledInlineBox::SourceBoxTree::build(box.sourceRanges->nodes, device,
++                    [](const QFont &f) { return QCompiledInline::deviceScale(f); }, &tree)) return false;
++                struct Charge { int first, last; QFixed left, right; };
++                QList<Charge> charges;
++                const ushort *clusters = logClusters(&si);
++                int low = box.last, high = box.first;
++                for (int start = 0; start < itemLength;) {
++                    const int glyph = clusters[start]; int end = start + 1;
++                    while (end < itemLength && clusters[end] == glyph) ++end;
++                    const int after = end < itemLength ? clusters[end] : si.num_glyphs;
++                    if (glyph < 0 || after <= glyph || after > si.num_glyphs) return false;
++                    const int source = sourceAt(si.position + start);
++                    for (int k = start; k < end; ++k) {
++                        const int at = sourceAt(si.position + k);
++                        if (source < 0) { if (at >= 0) return false; continue; }
++                        if (at < box.first || at >= box.last || at != source + (k - start)
++                            || layoutData->string.at(si.position + k) != box.source.at(at - box.first)) return false;
++                    }
++                    if (source >= 0) {
++                        const int finish = source + (end - start);
++                        if (high != box.first && source != high) return false;
++                        low = qMin(low, source); high = finish;
++                        qreal left = 0, right = 0;
++                        if (!tree.clusterEdges(source, finish, false, &left, &right)) return false;
++                        if (left || right) {
++                            if ((left && glyphs.attributes[glyph].dontPrint) || (right && glyphs.attributes[after - 1].dontPrint)
++                                || !QCompiledInlineBox::finite(glyphs.offsets[glyph].x.toReal() + left)
++                                || !QCompiledInlineBox::finite(glyphs.advances[glyph].toReal() + left + (after == glyph + 1 ? right : 0))
++                                || !QCompiledInlineBox::finite(glyphs.advances[after - 1].toReal() + right)) return false;
++                            charges.append({glyph, after - 1, QFixed::fromReal(left), QFixed::fromReal(right)});
++                        }
++                    }
++                    start = end;
++                }
++                QFixed ascent = si.ascent, descent = si.descent, leading = si.leading;
++                for (const auto &node : box.sourceRanges->nodes) {
++                    if (low >= high || node.box.last <= low || node.box.first >= high) continue;
++                    const QFontMetricsF fm(device ? QFont(node.box.font, device) : node.box.font, device);
++                    for (const auto v : {fm.ascent(), fm.descent(), fm.leading()}) if (!QCompiledInlineBox::finite(v)) return false;
++                    if ((node.box.first > low || node.box.last < high) &&
++                        (QFixed::fromReal(fm.ascent()) > si.ascent || QFixed::fromReal(fm.descent()) > si.descent
++                         || QFixed::fromReal(fm.leading()) > si.leading)) return false;
++                    ascent = qMax(ascent, QFixed::fromReal(fm.ascent()));
++                    descent = qMax(descent, QFixed::fromReal(fm.descent()));
++                    leading = qMax(leading, QFixed::fromReal(fm.leading()));
++                }
++                for (const auto &charge : charges) {
++                    glyphs.offsets[charge.first].x += charge.left;
++                    glyphs.advances[charge.first] += charge.left;
++                    glyphs.advances[charge.last] += charge.right;
++                }
++                si.ascent = ascent; si.descent = descent; si.leading = leading;
++                return true;
++            }
 +            QList<QCompiledInlineBox::Box> children;
 +            if (!QCompiledInlineBox::nestedBoxes(box, &children)) return false;
 +            children.prepend(box);
@@ -13733,7 +14169,7 @@
      for (int i = 0; i < si.num_glyphs; ++i)
          si.width += glyphs.advances[i] * !glyphs.attributes[i].dontPrint;
  }
-@@ -1634,8 +1708,11 @@
+@@ -1634,8 +1765,11 @@
                                 : QChar::Script_Common;
      props.script = hb_qt_script_to_script(script);
  
@@ -13747,7 +14183,7 @@
      const hb_language_t hb_language = hb_language_from_string(localeBcp47.constData(), localeBcp47.size());
      if (hb_language == HB_LANGUAGE_INVALID)
          props.language = hb_language_get_default();
-@@ -1870,14 +1947,99 @@
+@@ -1870,14 +2004,99 @@
      return (QCharAttributes *) layoutData->memory;
  }
  
@@ -13849,7 +14285,7 @@
                                              format(&li));
          } else {
              // Standalone QTextLayout (no QTextDocument): read the
-@@ -1893,7 +2055,11 @@
+@@ -1893,7 +2112,11 @@
                      // Mirror QTextDocumentLayout::resizeInlineObject()
                      // vertical alignment logic.
                      const QFontMetricsF fm(fnt);
@@ -13862,7 +14298,7 @@
                      case QTextCharFormat::AlignMiddle: {
                          const qreal halfX = fm.xHeight() / 2.0;
                          obj.setAscent((h + halfX) / 2.0);
-@@ -1914,6 +2080,20 @@
+@@ -1914,6 +2137,20 @@
                  }
              }
          }
@@ -13883,7 +14319,7 @@
          // fix log clusters to point to the previous glyph, as the object doesn't have a glyph of it's own.
          // This is required so that all entries in the array get initialized and are ordered correctly.
          if (layoutData->logClustersPtr) {
-@@ -1948,6 +2128,8 @@
+@@ -1948,6 +2185,8 @@
  
  void QTextEngine::invalidate()
  {
@@ -13892,7 +14328,7 @@
      freeMemory();
      minWidth = 0;
      maxWidth = 0;
-@@ -2009,6 +2191,12 @@
+@@ -2009,6 +2248,12 @@
      #include "../../3rdparty/emoji-segmenter/emoji_presentation_scanner.c"
  }
  #endif
@@ -13905,7 +14341,7 @@
  
  void QTextEngine::itemize() const
  {
-@@ -2129,19 +2317,28 @@
+@@ -2129,19 +2374,28 @@
          case QChar::ObjectReplacementCharacter:
              {
                  const QTextDocumentPrivate *doc_p = QTextDocumentPrivate::get(block);
@@ -13938,7 +14374,7 @@
                              analysis->flags = QScriptAnalysis::Object;
                              break;
                          }
-@@ -2206,6 +2403,73 @@
+@@ -2206,6 +2460,73 @@
  
      Itemizer itemizer(layoutData->string, scriptAnalysis.data(), layoutData->items);
  
@@ -14012,7 +14448,7 @@
      const QTextDocumentPrivate *p = QTextDocumentPrivate::get(block);
      if (p) {
          SpecialData *s = specialData;
-@@ -2219,7 +2483,9 @@
+@@ -2219,7 +2540,9 @@
          int position = prevPosition;
          while (1) {
              const QTextFragmentData * const frag = it.value();
@@ -14023,7 +14459,7 @@
                  if (s && position >= preeditPosition) {
                      position += s->preeditText.size();
                      preeditPosition = INT_MAX;
-@@ -2454,13 +2720,7 @@
+@@ -2454,13 +2777,7 @@
          } else {
              font = font.resolve(fnt);
          }
@@ -14038,7 +14474,7 @@
      }
  
      if (si.analysis.flags == QScriptAnalysis::SmallCaps)
-@@ -2545,11 +2805,8 @@
+@@ -2545,11 +2862,8 @@
                  engine->ref.ref();
  
                  QTextCharFormat::VerticalAlignment valign = f.verticalAlignment();
@@ -14052,7 +14488,7 @@
                      scaledEngine = font.d->engineForScript(script);
                      if (scaledEngine)
                          scaledEngine->ref.ref();
-@@ -3040,6 +3297,49 @@
+@@ -3040,6 +3354,49 @@
      if (const QTextFormatCollection *collection = formatCollection())
          return collection->charFormat(formatIndex(si));
      return QTextCharFormat();
@@ -14102,7 +14538,7 @@
  }
  
  void QTextEngine::addRequiredBoundaries() const
-@@ -3101,7 +3401,8 @@
+@@ -3101,7 +3458,8 @@
      if (preeditText.isEmpty()) {
          if (!specialData)
              return;
@@ -14112,7 +14548,16 @@
              delete specialData;
              specialData = nullptr;
          } else {
-@@ -3123,7 +3424,8 @@
+@@ -3111,6 +3469,8 @@
+     } else {
+         if (!specialData)
+             specialData = new SpecialData;
++        if (block.isValid())
++            QTextDocumentPrivate::get(block)->recordBlockPreedit();
+         specialData->preeditPosition = position;
+         specialData->preeditText = preeditText;
+     }
+@@ -3123,7 +3483,8 @@
      if (formats.isEmpty()) {
          if (!specialData)
              return;
@@ -14301,16 +14746,17 @@
              node->parseStyleAttribute(value, resourceProvider);
 --- a/src/gui/text/qtextlayout.cpp
 +++ b/src/gui/text/qtextlayout.cpp
-@@ -4,6 +4,8 @@
+@@ -4,6 +4,9 @@
  
  #include "qtextlayout.h"
  #include "qtextengine_p.h"
 +#include "qtextinlinestyle_p.h"
 +#include "qtextinlinebox_p.h"
++#include <private/qcssutil_p.h>
  
  #include <qthread.h>
  #include <qfont.h>
-@@ -12,8 +14,10 @@
+@@ -12,8 +15,10 @@
  #include <qimage.h>
  #include <qvarlengtharray.h>
  #include <qtextformat.h>
@@ -14321,7 +14767,7 @@
  #include "qtextformat_p.h"
  #include "qpainterpath.h"
  #include "qglyphrun.h"
-@@ -28,6 +32,7 @@
+@@ -28,6 +33,7 @@
  #include <private/qpainter_p.h>
  
  QT_BEGIN_NAMESPACE
@@ -14329,7 +14775,7 @@
  
  #define ObjectSelectionBrush (QTextFormat::ForegroundBrush + 1)
  #define SuppressText 0x5012
-@@ -875,6 +880,129 @@
+@@ -875,6 +881,153 @@
  /*!
      The smallest rectangle that contains all the lines in the layout.
  */
@@ -14374,6 +14820,30 @@
 +    }
 +    const auto *device=document && document->documentLayout() ? document->documentLayout()->paintDevice() : nullptr;
 +    for(const auto &part:parts) {
++        if (part.box.sourceRanges) {
++            QCompiledInlineBox::SourceBoxTree tree;
++            if (!QCompiledInlineBox::SourceBoxTree::build(part.box.sourceRanges->nodes, device,
++                [](const QFont &f) { return QCompiledInline::deviceScale(f); }, &tree)) return fail();
++            QList<int> positions; positions.reserve(part.sourceLast - part.sourceFirst + 1);
++            for (int at = part.first; at <= part.last; ++at) {
++                const int source = sourceAt(at);
++                if (source < 0) continue;
++                if (source != part.sourceFirst + positions.size()) return fail();
++                positions.append(at);
++            }
++            if (positions.size() != part.sourceLast - part.sourceFirst + 1) return fail();
++            const auto visual = [&](int first, int last, QCompiledInlineBox::SourceBoxVisualRun *run) {
++                if (first < part.sourceFirst || last > part.sourceLast + 1 || last <= first) return false;
++                const int begin = positions.at(first - part.sourceFirst), end = positions.at(last - 1 - part.sourceFirst) + 1;
++                const auto x = line.cursorToX(begin), y = line.cursorToX(end);
++                *run = {x, y, false}; return x <= y;
++            };
++            QList<QCompiledInlineBox::SourceBoxLineSlice> slices;
++            if (!tree.lineSlices(part.sourceFirst, part.sourceLast + 1, line.lineNumber(), line.y() + line.ascent(), visual, &slices)
++                || engine->inlineBoxInvalid()) return fail();
++            for (const auto &slice : slices) result.append(slice.paint);
++            continue;
++        }
 +        QFont font=device ? QFont(part.box.font,device) : part.box.font;
 +        const qreal scale=QCompiledInline::deviceScale(font);
 +        QCompiledInlineBox::Slice geometry;
@@ -14459,7 +14929,7 @@
  QRectF QTextLayout::boundingRect() const
  {
      if (d->lines.isEmpty())
-@@ -1118,14 +1246,55 @@
+@@ -1118,14 +1271,55 @@
          }
      }
  
@@ -14515,7 +14985,7 @@
          const QRectF selectionClip = hasOutline ? QRectF() : clip;
          QPainterPath region;
          region.setFillRule(Qt::WindingFill);
-@@ -1179,16 +1348,34 @@
+@@ -1179,16 +1373,34 @@
              }
  
          }
@@ -14554,7 +15024,7 @@
              p->setBrush(selection.format.brushProperty(QTextFormat::BackgroundBrush));
              p->drawPath(region);
  
-@@ -1222,7 +1409,7 @@
+@@ -1222,7 +1434,7 @@
  
          for (int line = firstLine; line < lastLine; ++line) {
              QTextLine l(line, d);
@@ -14563,7 +15033,7 @@
          }
          p->restore();
  
-@@ -1246,7 +1433,7 @@
+@@ -1246,7 +1458,7 @@
          selection.format.setProperty(SuppressBackground, true);
          for (int line = firstLine; line < lastLine; ++line) {
              QTextLine l(line, d);
@@ -14572,7 +15042,7 @@
          }
          p->restore();
      }
-@@ -1254,7 +1441,39 @@
+@@ -1254,7 +1466,39 @@
      if (!excludedRegion.isEmpty()) {
          p->save();
          QPainterPath path;
@@ -14613,7 +15083,7 @@
          br.setRight(QFIXED_MAX);
          if (!clip.isNull())
              br = br.intersected(clip);
-@@ -1265,11 +1484,20 @@
+@@ -1265,11 +1509,20 @@
  
      for (int i = firstLine; i < lastLine; ++i) {
          QTextLine l(i, d);
@@ -14635,7 +15105,7 @@
  
      if (!d->cacheGlyphs)
          d->freeMemory();
-@@ -1295,6 +1523,109 @@
+@@ -1295,6 +1548,109 @@
      \a painter specified.
      The corresponding position within the text is specified by \a cursorPosition.
  */
@@ -14745,7 +15215,7 @@
  void QTextLayout::drawCursor(QPainter *p, const QPointF &pos, int cursorPosition, int width) const
  {
      if (d->lines.isEmpty())
-@@ -1357,6 +1688,11 @@
+@@ -1357,6 +1713,11 @@
          rightToLeft = si->analysis.bidiLevel % 2;
      }
      qreal y = position.y() + (sl.y + sl.base() - base).toReal();
@@ -14757,7 +15227,7 @@
      bool toggleAntialiasing = !(p->renderHints() & QPainter::Antialiasing)
                                && (p->transform().type() > QTransform::TxTranslate);
      if (toggleAntialiasing)
-@@ -1844,7 +2180,13 @@
+@@ -1844,7 +2205,13 @@
  // fill QScriptLine
  void QTextLine::layout_helper(int maxGlyphs)
  {
@@ -14771,7 +15241,7 @@
      line.length = 0;
      line.trailingSpaces = 0;
      line.textWidth = 0;
-@@ -1862,8 +2204,6 @@
+@@ -1862,8 +2229,6 @@
      lbh.maxGlyphs = maxGlyphs;
  
      QTextOption::WrapMode wrapMode = eng->option.wrapMode();
@@ -14780,7 +15250,7 @@
      lbh.manualWrap = (wrapMode == QTextOption::ManualWrap || wrapMode == QTextOption::NoWrap);
  
      int item = -1;
-@@ -1882,6 +2222,17 @@
+@@ -1882,6 +2247,17 @@
      lbh.logClusters = eng->layoutData->logClustersPtr;
      lbh.previousGlyph = 0;
  
@@ -14798,7 +15268,7 @@
      bool manuallyWrapped = false;
      bool hasInlineObject = false;
      bool reachedEndOfLine = false;
-@@ -1912,12 +2263,43 @@
+@@ -1912,12 +2288,43 @@
              }
          }
          const QScriptItem &current = eng->layoutData->items.at(item);
@@ -14848,7 +15318,7 @@
              // Objects with a QTextDocument may need special vertical alignment
              // or floating treatment handled later, so skip the ascent/descent
              // update for them here.  Standalone objects (no document) are
-@@ -1967,14 +2349,33 @@
+@@ -1967,14 +2374,33 @@
              line += lbh.tmpData;
              manuallyWrapped = true;
              goto found;
@@ -14884,7 +15354,7 @@
                  QTextCharFormat::VerticalAlignment valign = f.toCharFormat().verticalAlignment();
                  if (valign != QTextCharFormat::AlignTop && valign != QTextCharFormat::AlignBottom) {
                      lbh.tmpData.ascent = qMax(lbh.tmpData.ascent, current.ascent);
-@@ -1993,6 +2394,7 @@
+@@ -1993,6 +2419,7 @@
              maxInlineObjectHeight = qMax(maxInlineObjectHeight, current.ascent + current.descent);
  
          } else if (attributes[lbh.currentPosition].whiteSpace
@@ -14892,7 +15362,7 @@
                     && eng->layoutData->string.at(lbh.currentPosition).decompositionTag() != QChar::NoBreak) {
              // If we are adding a space block, we save the last non-whitespace glyph for calculating
              // the right bearing later
-@@ -2001,6 +2403,7 @@
+@@ -2001,6 +2428,7 @@
              lbh.whiteSpaceOrObject = true;
              while (lbh.currentPosition < end
                     && attributes[lbh.currentPosition].whiteSpace
@@ -14900,7 +15370,7 @@
                     && eng->layoutData->string.at(lbh.currentPosition).decompositionTag() != QChar::NoBreak) {
                  addNextCluster(lbh.currentPosition, end, lbh.spaceData, lbh.glyphCount,
                                 current, lbh.logClusters, lbh.glyphs);
-@@ -2011,6 +2414,7 @@
+@@ -2011,6 +2439,7 @@
  
              lbh.whiteSpaceOrObject = false;
              bool sb_or_ws = false;
@@ -14908,7 +15378,7 @@
              // We save the previous glyph so we can use it for calculating the right bearing
              // later. If we are trimming trailing spaces, the previous glyph is whitespace
              // and we have already recorded a non-whitespace glyph, we keep that one instead.
-@@ -2020,10 +2424,32 @@
+@@ -2020,10 +2449,32 @@
                  || !attributes[lbh.currentPosition - 1].whiteSpace) {
                  lbh.saveCurrentGlyph();
              }
@@ -14943,7 +15413,7 @@
  
                  // This is a hack to fix a regression caused by the introduction of the
                  // whitespace flag to non-breakable spaces and will cause the non-breakable
-@@ -2034,24 +2460,31 @@
+@@ -2034,24 +2485,31 @@
                                          && attributes[lbh.currentPosition].whiteSpace
                                          && eng->layoutData->string.at(lbh.currentPosition).decompositionTag() != QChar::NoBreak;
  
@@ -14983,7 +15453,7 @@
                  && (lbh.currentPosition == end || attributes[lbh.currentPosition].lineBreak)
                  && eng->layoutData->string.at(lbh.currentPosition - 1) == QChar::SoftHyphen) {
                  // if we are splitting up a word because of
-@@ -2073,7 +2506,7 @@
+@@ -2073,7 +2531,7 @@
                  lbh.currentSoftHyphenWidth = lbh.glyphs.advances[lbh.logClusters[lbh.currentPosition - 1]];
              }
  
@@ -14992,7 +15462,7 @@
                  // To compute the final width of the text we need to take negative right bearing
                  // into account (negative right bearing means the glyph has pixel data past the
                  // advance length). Note that the negative right bearing is an absolute number,
-@@ -2137,13 +2570,26 @@
+@@ -2137,13 +2595,26 @@
          line += lbh.tmpData;
      }
  
@@ -15024,7 +15494,7 @@
          }
          int startItem = eng->findItem(line.from);
          int endItem = eng->findItem(line.from + line.length);
-@@ -2165,14 +2611,14 @@
+@@ -2165,14 +2636,14 @@
                      current.descent = height - line.ascent;
                      break;
                  case QTextCharFormat::AlignBottom:
@@ -15042,7 +15512,7 @@
              }
          }
      }
-@@ -2183,22 +2629,42 @@
+@@ -2183,22 +2654,42 @@
      LB_DEBUG("        : '%s'", eng->layoutData->string.mid(line.from, line.length).toUtf8().data());
  
      const QFixed trailingSpace = (includeTrailingSpaces ? lbh.spaceData.textWidth : QFixed(0));
@@ -15098,7 +15568,7 @@
  
          const QFixed actualTextWidth = manuallyWrapped || reachedEndOfLine
                                             ? line.textWidth
-@@ -2303,26 +2769,35 @@
+@@ -2303,26 +2794,35 @@
                                    int textLength)
  {
      Q_ASSERT(logClusters != nullptr);
@@ -15149,7 +15619,7 @@
  
      // Make a font for this particular engine
      QRawFont font;
-@@ -2359,25 +2834,34 @@
+@@ -2359,25 +2859,34 @@
      if (retrievalFlags & QTextLayout::RetrieveStringIndexes)
          stringIndexes.reserve(glyphsArray.size());
  
@@ -15202,7 +15672,7 @@
  
          if (retrievalFlags & QTextLayout::RetrieveGlyphIndexes) {
              glyph_t glyphIndex = glyphsArray.at(i) & 0xffffff;
-@@ -2672,7 +3156,8 @@
+@@ -2672,7 +3181,8 @@
  }
  
  void QTextLine::draw_internal(QPainter *p, const QPointF &origPos,
@@ -15212,7 +15682,7 @@
  {
  #ifndef QT_NO_RAWFONT
      // Not intended to work with rawfont
-@@ -2727,6 +3212,60 @@
+@@ -2727,6 +3237,60 @@
              format.merge(selection->format);
      };
  
@@ -15273,7 +15743,7 @@
      {
          QTextLineItemIterator iterator(eng, index, pos, selection);
          while (!iterator.atEnd()) {
-@@ -2743,7 +3282,19 @@
+@@ -2743,7 +3307,27 @@
          }
      }
  
@@ -15285,6 +15755,14 @@
 +        }
 +        auto geometry=part.geometry;
 +        geometry.border.translate(pos);geometry.padding.translate(pos);geometry.content.translate(pos);
++#ifndef QT_NO_CSSPARSER
++        if (part.box.identity.contains("dottedBottomChildItalic")) {
++            // The glyph retains its actual italic shaping. The declaring upright font owns the border box.
++            p->save(); qDrawEdge(p, geometry.border.left(), geometry.padding.bottom(), geometry.border.right(),
++                geometry.border.bottom(), 0, 0, QCss::BottomEdge, QCss::BorderStyle_Dotted, part.box.colors[2]); p->restore();
++            continue;
++        }
++#endif
 +        QCompiledInlineBox::paint(p,part.box,geometry,QCompiledInlineBox::hasBorderSource(part.box) ? declaringInk(part.box) : QBrush());
 +    }
      QPen pen = p->pen();
@@ -15293,7 +15771,7 @@
      {
          QTextLineItemIterator iterator(eng, index, pos, selection);
          while (!iterator.atEnd()) {
-@@ -2766,48 +3317,22 @@
+@@ -2766,48 +3350,22 @@
                  prepareFormat(format, &si);
                  setPen(p, pen, format);
  
@@ -15349,7 +15827,7 @@
                                                             format);
                          if (selection) {
                              QBrush bg = format.brushProperty(ObjectSelectionBrush);
-@@ -2901,6 +3426,26 @@
+@@ -2901,6 +3459,26 @@
                  QPainterPrivate::get(p)->drawTextItem(pos, gf, eng);
              }
  
@@ -15376,7 +15854,7 @@
              if ((si.analysis.flags == QScriptAnalysis::Space
                   || si.analysis.flags == QScriptAnalysis::Nbsp)
                  && (eng->option.flags() & QTextOption::ShowTabsAndSpaces)) {
-@@ -2917,12 +3462,54 @@
+@@ -2917,12 +3495,54 @@
          }
      }
      eng->drawDecorations(p);
@@ -15431,7 +15909,7 @@
  }
  
  /*!
-@@ -2946,7 +3533,8 @@
+@@ -2946,7 +3566,8 @@
      const QScriptLine &line = eng->lines[index];
      bool lastLine = index >= eng->lines.size() - 1;
  
@@ -15441,7 +15919,7 @@
  
      if (!eng->layoutData)
          eng->itemize();
-@@ -2998,6 +3586,22 @@
+@@ -2998,6 +3619,22 @@
  
      const int l = eng->length(itm);
      pos = qBound(0, pos - scriptItem->position, l);
@@ -15464,7 +15942,7 @@
  
      QGlyphLayout glyphs = eng->shapedGlyphs(scriptItem);
      unsigned short *logClusters = eng->logClusters(scriptItem);
-@@ -3087,12 +3691,31 @@
+@@ -3087,12 +3724,31 @@
  
      if (eng->option.wrapMode() != QTextOption::NoWrap && x > line.x + line.width)
          x = line.x + line.width;
@@ -15498,7 +15976,7 @@
  
  /*!
      \fn int QTextLine::xToCursor(qreal x, CursorPosition cpos) const
-@@ -3103,8 +3726,26 @@
+@@ -3103,8 +3759,26 @@
  
      \sa cursorToX()
  */
@@ -15527,7 +16005,7 @@
      QFixed x = QFixed::fromReal(_x);
      const QScriptLine &line = eng->lines[index];
      bool lastLine = index >= eng->lines.size() - 1;
-@@ -3113,7 +3754,11 @@
+@@ -3113,7 +3787,11 @@
      if (!eng->layoutData)
          eng->itemize();
  
@@ -15540,7 +16018,7 @@
  
      if (!line_length)
          return line.from;
-@@ -3143,7 +3788,11 @@
+@@ -3143,7 +3821,11 @@
          return line.from;
      }   else if (x < line.textWidth || (line.justified && x < line.width)) {
          // has to be in one of the runs
@@ -15555,7 +16033,7 @@
          eng->shapeLine(line);
 --- /dev/null
 +++ b/src/gui/text/qtextlogicalflow_p.h
-@@ -0,0 +1,1018 @@
+@@ -0,0 +1,1061 @@
 +// Copyright (C) 2026 wikidict contributors
 +// SPDX-License-Identifier: LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
 +#ifndef QTEXTLOGICALFLOW_P_H
@@ -15620,6 +16098,45 @@
 +        return result;
 +    }
 +
++    // Private subrange of a single Ruby base or annotation; the paragraph
++    // registration path retains its complete-storage-block contract.
++    static std::unique_ptr<QTextLogicalFlowProjection> createRubyChild(QTextDocument *doc,
++            const QTextRubyLayout::Child &child, const QList<std::shared_ptr<QTextRubyLayout>> &measured)
++    {
++        if (!doc || measured.size() != child.nestedParts.size() || measured.isEmpty()) return {};
++        auto projection = std::unique_ptr<QTextLogicalFlowProjection>(new QTextLogicalFlowProjection(doc));
++        projection->rubySubrange = true;
++        QVariantList parts;
++        int pos = child.source.first;
++        const auto textPart = [&](int end) {
++            if (pos != end) parts.append(QVariantMap{{"kind", "text"}, {"first", pos}, {"last", end}});
++        };
++        for (int i = 0; i < measured.size(); ++i) {
++            const auto &part = child.nestedParts[i];
++            textPart(part.source.first);
++            projection->preparedRuby.insert(part.source.first, measured[i]);
++            parts.append(QVariantMap{{"kind", "ruby"}, {"anchor", part.source.first}, {"value", QVariant::fromValue(*part.description)}});
++            pos = part.source.last;
++        }
++        textPart(child.source.last);
++        const QVariantMap descriptor{{"first", child.source.first}, {"last", child.source.last},
++            {"direction", int(child.option.textDirection())}, {"parts", parts}, {"joins", QVariantList{}}};
++        QString error;
++        if (!projection->initialize(descriptor, &error) || !projection->preparedRuby.isEmpty()) return {};
++        auto *layout = projection->textLayout(); layout->setFont(child.ownerFont);
++        auto option = child.option; option.setWrapMode(QTextOption::NoWrap); layout->setTextOption(option);
++        layout->setCacheEnabled(true);
++        if (!projection->refreshRubyMetrics()) return {};
++        layout->beginLayout(); auto line = layout->createLine();
++        if (line.isValid()) line.setNumColumns(int(projection->projectedText().size()));
++        layout->endLayout();
++        if (!line.isValid() || layout->lineCount() != 1 || !projection->current()) return {};
++        return projection;
++    }
++    const QList<RubyObject> &measuredRubyObjects() const { return rubyObjects; }
++    QPointF rubyOrigin(const RubyObject &ruby) const {
++        return rubyBaseline(ruby, layout->lineForTextPosition(ruby.projectedPosition));
++    }
 +    // Authored paragraph separators are real layout boundaries. A registration
 +    // owner may span them, but each paragraph keeps its original block format
 +    // and its own native layout; frame-created storage joins remain intra-line.
@@ -15905,7 +16422,8 @@
 +        engine->setProjectedRubyMetricsInvalid(false);
 +        for (auto &ruby : rubyObjects) {
 +            if (ruby.measured && !ruby.measured->current()) rubyWidth = -1;
-+            auto measured = QTextRubyLayout::create(document, ruby.description);
++            auto measured = rubySubrange ? ruby.measured
++                : std::shared_ptr<QTextRubyLayout>(QTextRubyLayout::create(document, ruby.description));
 +            if (!measured || !measured->metrics().valid()) {
 +                engine->setProjectedRubyMetricsInvalid(true);
 +                return false;
@@ -16353,12 +16871,12 @@
 +        parent = documentPrivate->frameAt(first);
 +        if (auto *table = qobject_cast<QTextTable *>(parent.data()))
 +            ownerCell = table->cellAt(first);
-+        if (document->findBlock(first).position() != first)
++        if (!rubySubrange && document->findBlock(first).position() != first)
 +            return refuse(error, "owner must start at its first native storage block");
 +        const QTextBlock lastBlock = document->findBlock(last);
 +        if (documentPrivate->frameAt(last) != parent
 +            || (ownerCell.isValid() && qobject_cast<QTextTable *>(parent.data())->cellAt(last) != ownerCell)
-+            || last != lastBlock.position() + lastBlock.length() - 1)
++            || (rubySubrange ? document->findBlock(first) != lastBlock : last != lastBlock.position() + lastBlock.length() - 1))
 +            return refuse(error, "owner must end at its last native storage block");
 +        groupFirst = first; groupLast = last;
 +        baseDirection = Qt::LayoutDirection(directionValue);
@@ -16486,7 +17004,8 @@
 +                    || anchor < first || anchor > last)
 +                    return refuse(error, "Ruby requires a typed native description and anchor");
 +                const auto description = value.value<QTextRubyLayout::Description>();
-+                auto measured = QTextRubyLayout::create(document, description);
++                auto measured = rubySubrange ? preparedRuby.take(anchor)
++                    : std::shared_ptr<QTextRubyLayout>(QTextRubyLayout::create(document, description));
 +                if (!measured) return refuse(error, "invalid Ruby source/shape description");
 +                const auto *priv = QTextDocumentPrivate::get(document);
 +                const auto block = document->findBlock(anchor);
@@ -16543,6 +17062,8 @@
 +        return {qMin(firstEdge, lastEdge), line.y() + line.ascent()};
 +    }
 +
++    bool rubySubrange = false;
++    QMap<int, std::shared_ptr<QTextRubyLayout>> preparedRuby;
 +    QPointer<QTextDocument> document;
 +    QPointer<QTextFrame> parent;
 +    QTextTableCell ownerCell;
@@ -17897,7 +18418,7 @@
 +#endif
 --- /dev/null
 +++ b/src/gui/text/qtextrubylayout_p.h
-@@ -0,0 +1,830 @@
+@@ -0,0 +1,935 @@
 +// Copyright (C) 2026 wikidict contributors
 +// SPDX-License-Identifier: LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
 +#ifndef QTEXTRUBYLAYOUT_P_H
@@ -17931,6 +18452,8 @@
 +        QFont ownerFont;
 +        QTextCharFormat ownerFormat;
 +    };
++    struct Description;
++    struct NestedPart { Range source; std::shared_ptr<const Description> description; };
 +    struct Child {
 +        Range source;
 +        QFont ownerFont;
@@ -17943,6 +18466,7 @@
 +        QTextCharFormat actionDecoration;
 +        // A complete semantic inline group in this child, without added text.
 +        std::optional<InlinePadding> inlinePadding;
++        QList<NestedPart> nestedParts;
 +    };
 +    struct Reading {
 +        Child child;
@@ -17967,14 +18491,44 @@
 +    struct PaintSelection { Range source; QTextCharFormat format; };
 +    struct LinkBox { QRectF rect; QTextCharFormat format; };
 +
++    struct Q_GUI_EXPORT Composite {
++        static std::shared_ptr<Composite> create(QTextDocument *, const Child &, const QList<std::shared_ptr<QTextRubyLayout>> &);
++        virtual ~Composite() = default;
++        virtual QTextLayout *textLayout() const = 0;
++        virtual int documentOffset(int projected) const = 0;
++        virtual qreal advance() const = 0;
++        virtual qreal top() const = 0;
++        virtual qreal bottom() const = 0;
++        virtual void draw(QPainter *, QPointF, const QList<PaintSelection> &) const = 0;
++        virtual int hitTest(QPointF, Qt::HitTestAccuracy) const = 0;
++        virtual QRectF cursorRect(int, qreal) const = 0;
++        virtual QRectF characterRect(int) const = 0;
++        virtual int visualMove(int, bool) const = 0;
++        virtual int logicalMove(int, bool) const = 0;
++        virtual QList<QRectF> selectionRects(int, int) const = 0;
++        virtual QRectF actionRect(int) const = 0;
++        virtual QList<LinkBox> linkBoxes() const = 0;
++    };
 +    static std::unique_ptr<QTextRubyLayout> create(QTextDocument *document,
 +            const Description &description)
 +    {
++        qsizetype budget = 1 << 20;
++        return createAtDepth(document, description, 0, budget);
++    }
++
++private:
++    static std::unique_ptr<QTextRubyLayout> createAtDepth(QTextDocument *document, const Description &description, int depth, qsizetype &budget)
++    {
++        const qsizetype children = description.bases.size() + description.readings.size() + description.gapSources.size();
++        if (depth >= 16 || children >= budget) return {};
++        budget -= children + 1;
 +        auto result = std::unique_ptr<QTextRubyLayout>(new QTextRubyLayout(document));
-+        if (!result->initialize(description)) return {};
++        result->depth = depth;
++        if (!result->initialize(description, budget)) return {};
 +        return result;
 +    }
 +
++public:
 +    // Joint splitting is supported here for a single base with parallel
 +    // readings. Every cut is an ordinary, intact-cluster interior opportunity
 +    // in EVERY visible box. Empty readings and unbreakable readings keep the
@@ -17995,15 +18549,19 @@
 +                QList<int> cuts;
 +                if (box.hidden) { opportunities.append(cuts); continue; }
 +                if (!box.allowInternalBreak) { opportunities.append(cuts); continue; }
-+                const auto text = box.shaped->layout->text();
++                auto *layout = box.composite ? box.composite->textLayout() : box.shaped->layout.get();
++                const auto text = layout->text();
 +                QTextBoundaryFinder boundaries(QTextBoundaryFinder::Line, text);
 +                QSet<int> clusters;
-+                for (const auto &run : box.shaped->layout->glyphRuns(0, text.size(), QTextLayout::RetrieveStringIndexes))
++                for (const auto &run : layout->glyphRuns(0, text.size(), QTextLayout::RetrieveStringIndexes))
 +                    for (auto index : run.stringIndexes()) clusters.insert(int(index));
 +                for (int cut = 1; cut < text.size(); ++cut) {
 +                    boundaries.setPosition(cut);
-+                    if ((boundaries.boundaryReasons() & QTextBoundaryFinder::BreakOpportunity)
-+                        && box.shaped->layout->isValidCursorPosition(cut) && clusters.contains(cut)) cuts.append(cut);
++                    if (!(boundaries.boundaryReasons() & QTextBoundaryFinder::BreakOpportunity)
++                        || !layout->isValidCursorPosition(cut) || !layout->engine()->projectedRubyBoundaryAllowed(cut)) continue;
++                    if (!clusters.contains(cut) && !layout->engine()->projectedRubyMetrics().contains(cut)) continue;
++                    const int offset = box.composite ? box.composite->documentOffset(cut) - box.source.first : cut;
++                    if (offset > 0 && offset < box.source.last - box.source.first) cuts.append(offset);
 +                }
 +                opportunities.append(cuts);
 +            }
@@ -18030,6 +18588,20 @@
 +                    prefix.readings[i].child.source.last = range.first + *nearest;
 +                    suffix.readings[i].child.source.first = range.first + *nearest;
 +                }
++                const auto retainCompleteParts = [](Child &child) {
++                    QList<NestedPart> selected;
++                    for (const auto &part : child.nestedParts) {
++                        if (part.source.last <= child.source.first || part.source.first >= child.source.last) continue;
++                        if (part.source.first < child.source.first || part.source.last > child.source.last) return false;
++                        selected.append(part);
++                    }
++                    child.nestedParts = std::move(selected);
++                    return true;
++                };
++                bool complete = retainCompleteParts(prefix.bases[0]) && retainCompleteParts(suffix.bases[0]);
++                for (int i = 0; i < prefix.readings.size() && complete; ++i)
++                    complete = retainCompleteParts(prefix.readings[i].child) && retainCompleteParts(suffix.readings[i].child);
++                if (!complete) continue;
 +                prefix.breakAfter = true; suffix.breakBefore = true;
 +                auto measuredPrefix = create(document, prefix);
 +                if (!measuredPrefix) return std::nullopt;
@@ -18111,7 +18683,8 @@
 +                        QPointF(rect.right(), baseline.y() + box.y - metrics.strikeOutPos()));
 +                painter->restore();
 +            }
-+            box.shaped->layout->draw(painter,
++            if (box.composite) box.composite->draw(painter, baseline + box.origin(), selections);
++            else box.shaped->layout->draw(painter,
 +                baseline + QPointF(box.x + box.edge, box.y - box.shaped->baseline), local);
 +            // Whole-owner decorations span allocated base width once. Reading
 +            // owner decorations and explicit inner decorations stay separate.
@@ -18137,7 +18710,12 @@
 +        qreal best = std::numeric_limits<qreal>::infinity();
 +        for (const auto &box : boxes) {
 +            if (box.source.first == box.source.last) continue;
-+            const auto line = box.shaped->layout->lineAt(0);
++            if (box.composite && accuracy == Qt::ExactHit) {
++                const int hit = box.composite->hitTest(point - box.origin(), accuracy);
++                if (hit >= 0) return hit;
++                continue;
++            }
++            const auto line = box.composite ? QTextLine() : box.shaped->layout->lineAt(0);
 +            if (accuracy == Qt::ExactHit && box.inlinePadding
 +                && box.inlinePadding->ownerFormat.isAnchor()) {
 +                const auto group = paddingRect(box);
@@ -18160,6 +18738,7 @@
 +            if (distance < best) { best = distance; closest = &box; }
 +        }
 +        if (!closest) return -1;
++        if (closest->composite) return closest->composite->hitTest(point - closest->origin(), accuracy);
 +        const auto line = closest->shaped->layout->lineAt(0);
 +        const int position = line.xToCursor(point.x() - closest->x - closest->edge,
 +            accuracy == Qt::ExactHit ? QTextLine::CursorOnCharacter : QTextLine::CursorBetweenCharacters);
@@ -18178,6 +18757,7 @@
 +                if (box.hidden || box.source.first == box.source.last
 +                    || (terminal ? position != box.source.last
 +                        : position < box.source.first || position >= box.source.last)) continue;
++                if (box.composite) return box.composite->cursorRect(position, width).translated(box.origin());
 +                const auto line = box.shaped->layout->lineAt(0);
 +                const qreal x = box.x + box.edge + line.cursorToX(position - box.source.first);
 +                return {x, box.y + box.shaped->fontTop, width,
@@ -18191,6 +18771,7 @@
 +        if (!current()) return -1;
 +        for (const auto &box : boxes) {
 +            if (position < box.source.first || position > box.source.last) continue;
++            if (box.composite) { const int moved = box.composite->visualMove(position, right); if (moved >= 0 && moved != position) return moved; continue; }
 +            const int local = position - box.source.first;
 +            const int next = right ? box.shaped->layout->rightCursorPosition(local)
 +                                   : box.shaped->layout->leftCursorPosition(local);
@@ -18204,6 +18785,7 @@
 +        if (!current()) return -1;
 +        for (const auto &box : boxes) {
 +            if (position < box.source.first || position > box.source.last) continue;
++            if (box.composite) { const int moved = box.composite->logicalMove(position, forward); if (moved >= 0 && moved != position) return moved; continue; }
 +            const int local = position - box.source.first;
 +            const int next = forward ? box.shaped->layout->nextCursorPosition(local)
 +                                     : box.shaped->layout->previousCursorPosition(local);
@@ -18223,6 +18805,7 @@
 +        if (!current()) return {};
 +        for (const auto &box : boxes) {
 +            if (position < box.source.first || position >= box.source.last) continue;
++            if (box.composite) return box.composite->characterRect(position).translated(box.origin());
 +            const auto *text = box.shaped->layout.get();
 +            const auto line = text->lineAt(0);
 +            const int local = position - box.source.first;
@@ -18254,6 +18837,7 @@
 +        for (const auto &box : boxes) {
 +            const int begin = qMax(first, box.source.first), end = qMin(last, box.source.last);
 +            if (end <= begin) continue;
++            if (box.composite) { for (const auto &rect : box.composite->selectionRects(begin, end)) result.append(rect.translated(box.origin())); continue; }
 +            const auto line = box.shaped->layout->lineAt(0);
 +            bool measuredGlyph = false;
 +            for (const auto &run : line.glyphRuns(begin - box.source.first, end - begin)) {
@@ -18276,10 +18860,14 @@
 +    QRectF actionRect(int position) const
 +    {
 +        if (!current()) return {};
-+        for (const auto &box : boxes)
++        for (const auto &box : boxes) {
++            if (box.composite && position >= box.source.first && position < box.source.last) {
++                const auto r = box.composite->actionRect(position); if (!r.isEmpty()) return r.translated(box.origin());
++            }
 +            if (box.inlinePadding && box.inlinePadding->ownerFormat.isAnchor()
 +                && position >= box.source.first && position < box.source.last)
 +                return paddingRect(box);
++        }
 +        return {};
 +    }
 +
@@ -18288,6 +18876,10 @@
 +        QList<LinkBox> result;
 +        if (!current()) return result;
 +        for (const auto &box : boxes) {
++            if (box.composite) {
++                for (auto link : box.composite->linkBoxes()) { link.rect.translate(box.origin()); result.append(link); }
++                continue;
++            }
 +            if (box.inlinePadding && box.inlinePadding->ownerFormat.isAnchor()) {
 +                result.append({paddingRect(box), box.inlinePadding->ownerFormat});
 +                continue;
@@ -18302,7 +18894,11 @@
 +    }
 +
 +private:
++    int depth = 0;
++    bool hasNestedAnnotation = false;
 +    struct Box {
++        std::shared_ptr<Composite> composite;
++        QPointF origin() const { return {x + edge, y}; }
 +        Range source;
 +        QFont ownerFont;
 +        QBrush foreground, background;
@@ -18331,7 +18927,7 @@
 +          dpiY(paintDevice ? paintDevice->logicalDpiY() : 0),
 +          originalDefaultFont(doc ? doc->defaultFont() : QFont()) {}
 +
-+    bool child(const Child &description, Box *result)
++    bool child(const Child &description, Box *result, qsizetype &budget)
 +    {
 +        if (!current() || description.source.first < 0
 +            || description.source.last < description.source.first
@@ -18343,80 +18939,107 @@
 +        const auto firstBlock = document->findBlock(description.source.first);
 +        if (description.source.last > description.source.first
 +            && document->findBlock(description.source.last - 1) != firstBlock) return false;
-+        QString text;
-+        QList<QTextLayout::FormatRange> formats;
-+        const auto *priv = QTextDocumentPrivate::get(document);
-+        for (int position = description.source.first; position < description.source.last; ++position) {
-+            const auto fragment = priv->find(position);
-+            auto format = priv->formatCollection()->charFormat(fragment.value()->format);
-+            format.clearProperty(QTextFormat::ObjectIndex);
-+            if (format.objectType() != QTextFormat::NoObject) return false;
-+            const int start = text.size(); text += document->characterAt(position);
-+            if (!formats.isEmpty() && formats.last().format == format) ++formats.last().length;
-+            else formats.append({start, 1, format});
-+        }
-+        QFont declaring = description.ownerFont;
-+        declaring.setUnderline(false); declaring.setStrikeOut(false);
-+        result->shaped = QTextRubyGeometry::measureFlatChild(text, declaring,
-+            formats, description.option, paintDevice);
-+        if (!result->shaped || !current()) return false;
-+        if (description.inlinePadding) {
-+            const auto &group = *description.inlinePadding;
-+            if (text.isEmpty() || text.trimmed() != text || text.isRightToLeft()
-+                || description.option.textDirection() != Qt::LeftToRight
-+                || !(group.ownerFont.pointSizeF() > 0)
-+                || !QTextRubyGeometry::finite(group.ownerFont.pointSizeF())) return false;
-+            for (qsizetype i = 0; i < text.size(); ++i) {
-+                const QChar first = text.at(i);
-+                char32_t scalar = first.unicode();
-+                if (first.isHighSurrogate()) {
-+                    if (i + 1 == text.size() || !text.at(i + 1).isLowSurrogate()) return false;
-+                    scalar = QChar::surrogateToUcs4(first, text.at(++i));
-+                } else if (first.isLowSurrogate()) return false;
-+                const auto direction = QChar::direction(scalar);
-+                if (direction == QChar::DirR || direction == QChar::DirAL || direction == QChar::DirAN
-+                    || QChar::category(scalar) == QChar::Other_Control
-+                    || scalar == 0x061c || scalar == 0x200e || scalar == 0x200f
-+                    || (scalar >= 0x202a && scalar <= 0x202e) || (scalar >= 0x2066 && scalar <= 0x2069)) return false;
++        if (!description.nestedParts.isEmpty()) {
++            if (description.inlinePadding || !description.actionDecoration.isEmpty()) return false;
++            QList<std::shared_ptr<QTextRubyLayout>> measuredParts;
++            int pos = description.source.first;
++            for (const auto &part : description.nestedParts) {
++                if (!part.description || part.source.first < pos || part.source.last <= part.source.first
++                    || part.source.last > description.source.last) return false;
++                auto nested = createAtDepth(document, *part.description, depth + 1, budget);
++                if (!nested) return false;
++                int covered = part.source.first;
++                for (const auto &range : nested->sourceRanges()) {
++                    if (range.first != covered) return false;
++                    covered = range.last;
++                }
++                if (covered != part.source.last) return false;
++                pos = covered;
++                hasNestedAnnotation |= nested->metrics().visibleAnnotation;
++                measuredParts.append(std::shared_ptr<QTextRubyLayout>(std::move(nested)));
 +            }
-+            // This initial inline boundary has one native fragment. Prove it
-+            // from ordinary opportunities; never change the source wrap policy.
-+            QTextBoundaryFinder boundaries(QTextBoundaryFinder::Line, text);
-+            for (int cut = 1; cut < text.size(); ++cut) {
-+                boundaries.setPosition(cut);
-+                if ((boundaries.boundaryReasons() & QTextBoundaryFinder::BreakOpportunity)
-+                    && result->shaped->layout->isValidCursorPosition(cut)) return false;
++            result->composite = Composite::create(document, description, measuredParts);
++            if (!result->composite) return false;
++            result->shaped = std::make_unique<QTextRubyGeometry::ShapedChild>();
++            result->shaped->advance = result->composite->advance();
++            result->shaped->fontTop = result->composite->top();
++            result->shaped->fontBottom = result->composite->bottom();
++        } else {
++            QString text;
++            QList<QTextLayout::FormatRange> formats;
++            const auto *priv = QTextDocumentPrivate::get(document);
++            for (int position = description.source.first; position < description.source.last; ++position) {
++                const auto fragment = priv->find(position);
++                auto format = priv->formatCollection()->charFormat(fragment.value()->format);
++                format.clearProperty(QTextFormat::ObjectIndex);
++                if (format.objectType() != QTextFormat::NoObject) return false;
++                const int start = text.size(); text += document->characterAt(position);
++                if (!formats.isEmpty() && formats.last().format == format) ++formats.last().length;
++                else formats.append({start, 1, format});
 +            }
-+            const auto &owner = group.ownerFormat;
-+            const auto identity = [](const QTextCharFormat &format) {
-+                const auto action = QCompiledInline::actionOwner(format);
-+                return action.isValid() ? action : QCompiledInline::rubyAnchorOwner(format);
-+            };
-+            if (owner.isAnchor() != !owner.anchorHref().isEmpty()
-+                || (owner.isAnchor() && !identity(owner).isValid())
-+                || (owner.hasProperty(QCompiledInline::ActionOwnerProperty) && !QCompiledInline::actionMetric(owner))) return false;
-+            for (const auto &run : formats) {
-+                if (owner.isAnchor() && (!run.format.isAnchor()
-+                    || run.format.anchorHref() != owner.anchorHref()
-+                    || identity(run.format) != identity(owner))) return false;
++            QFont declaring = description.ownerFont;
++            declaring.setUnderline(false); declaring.setStrikeOut(false);
++            result->shaped = QTextRubyGeometry::measureFlatChild(text, declaring,
++                formats, description.option, paintDevice);
++            if (!result->shaped || !current()) return false;
++            if (description.inlinePadding) {
++                const auto &group = *description.inlinePadding;
++                if (text.isEmpty() || text.trimmed() != text || text.isRightToLeft()
++                    || description.option.textDirection() != Qt::LeftToRight
++                    || !(group.ownerFont.pointSizeF() > 0)
++                    || !QTextRubyGeometry::finite(group.ownerFont.pointSizeF())) return false;
++                for (qsizetype i = 0; i < text.size(); ++i) {
++                    const QChar first = text.at(i);
++                    char32_t scalar = first.unicode();
++                    if (first.isHighSurrogate()) {
++                        if (i + 1 == text.size() || !text.at(i + 1).isLowSurrogate()) return false;
++                        scalar = QChar::surrogateToUcs4(first, text.at(++i));
++                    } else if (first.isLowSurrogate()) return false;
++                    const auto direction = QChar::direction(scalar);
++                    if (direction == QChar::DirR || direction == QChar::DirAL || direction == QChar::DirAN
++                        || QChar::category(scalar) == QChar::Other_Control
++                        || scalar == 0x061c || scalar == 0x200e || scalar == 0x200f
++                        || (scalar >= 0x202a && scalar <= 0x202e) || (scalar >= 0x2066 && scalar <= 0x2069)) return false;
++                }
++                // This initial inline boundary has one native fragment. Prove it
++                // from ordinary opportunities; never change the source wrap policy.
++                QTextBoundaryFinder boundaries(QTextBoundaryFinder::Line, text);
++                for (int cut = 1; cut < text.size(); ++cut) {
++                    boundaries.setPosition(cut);
++                    if ((boundaries.boundaryReasons() & QTextBoundaryFinder::BreakOpportunity)
++                        && result->shaped->layout->isValidCursorPosition(cut)) return false;
++                }
++                const auto &owner = group.ownerFormat;
++                const auto identity = [](const QTextCharFormat &format) {
++                    const auto action = QCompiledInline::actionOwner(format);
++                    return action.isValid() ? action : QCompiledInline::rubyAnchorOwner(format);
++                };
++                if (owner.isAnchor() != !owner.anchorHref().isEmpty()
++                    || (owner.isAnchor() && !identity(owner).isValid())
++                    || (owner.hasProperty(QCompiledInline::ActionOwnerProperty) && !QCompiledInline::actionMetric(owner))) return false;
++                for (const auto &run : formats) {
++                    if (owner.isAnchor() && (!run.format.isAnchor()
++                        || run.format.anchorHref() != owner.anchorHref()
++                        || identity(run.format) != identity(owner))) return false;
++                }
++                const qreal defaultDpi = QFontMetricsF(QFont()).fontDpi();
++                const qreal dpi = QFontMetricsF(group.ownerFont, paintDevice).fontDpi();
++                if (!(defaultDpi > 0) || !(dpi > 0)) return false;
++                const auto resolve = [&](const InlinePadding::Edge &edge) {
++                    return edge.value * (edge.em ? group.ownerFont.pointSizeF() * dpi / 72 : dpi / defaultDpi);
++                };
++                if (!QTextRubyGeometry::length(group.left.value) || !QTextRubyGeometry::length(group.right.value)
++                    || (group.left.value == 0 && group.right.value == 0)) return false;
++                result->paddingLeft = resolve(group.left); result->paddingRight = resolve(group.right);
++                if (!QTextRubyGeometry::length(result->paddingLeft) || !QTextRubyGeometry::length(result->paddingRight)) return false;
++                result->shaped->advance += result->paddingLeft + result->paddingRight;
++                if (!QTextRubyGeometry::length(result->shaped->advance)
++                    || result->shaped->advance >= qreal(QFIXED_MAX)) return false;
++                const QFontMetricsF metrics(group.ownerFont, paintDevice);
++                result->shaped->fontTop = qMin(result->shaped->fontTop, -metrics.ascent());
++                result->shaped->fontBottom = qMax(result->shaped->fontBottom, metrics.descent());
++                result->inlinePadding = group;
 +            }
-+            const qreal defaultDpi = QFontMetricsF(QFont()).fontDpi();
-+            const qreal dpi = QFontMetricsF(group.ownerFont, paintDevice).fontDpi();
-+            if (!(defaultDpi > 0) || !(dpi > 0)) return false;
-+            const auto resolve = [&](const InlinePadding::Edge &edge) {
-+                return edge.value * (edge.em ? group.ownerFont.pointSizeF() * dpi / 72 : dpi / defaultDpi);
-+            };
-+            if (!QTextRubyGeometry::length(group.left.value) || !QTextRubyGeometry::length(group.right.value)
-+                || (group.left.value == 0 && group.right.value == 0)) return false;
-+            result->paddingLeft = resolve(group.left); result->paddingRight = resolve(group.right);
-+            if (!QTextRubyGeometry::length(result->paddingLeft) || !QTextRubyGeometry::length(result->paddingRight)) return false;
-+            result->shaped->advance += result->paddingLeft + result->paddingRight;
-+            if (!QTextRubyGeometry::length(result->shaped->advance)
-+                || result->shaped->advance >= qreal(QFIXED_MAX)) return false;
-+            const QFontMetricsF metrics(group.ownerFont, paintDevice);
-+            result->shaped->fontTop = qMin(result->shaped->fontTop, -metrics.ascent());
-+            result->shaped->fontBottom = qMax(result->shaped->fontBottom, metrics.descent());
-+            result->inlinePadding = group;
 +        }
 +        result->source = description.source; result->ownerFont = description.ownerFont;
 +        result->foreground = description.foreground; result->background = description.background;
@@ -18429,7 +19052,7 @@
 +        return true;
 +    }
 +
-+    bool initialize(const Description &description)
++    bool initialize(const Description &description, qsizetype &budget)
 +    {
 +        using namespace QTextRubyGeometry;
 +        if (!current() || !QTextRubyGeometry::finite(description.baselineOrigin) || description.bases.isEmpty() || description.bases.size() > 65536
@@ -18483,7 +19106,7 @@
 +        boxes.reserve(size_t(description.bases.size() + description.readings.size()));
 +        for (const auto &base : description.bases) {
 +            Box box;
-+            if (base.inlinePadding || !child(base, &box)) return false;
++            if (base.inlinePadding || !child(base, &box, budget)) return false;
 +            advances.append(box.shaped->advance);
 +            usedAbove = qMax(usedAbove, base.usedAbove - box.y);
 +            usedBelow = qMax(usedBelow, base.usedBelow + box.y);
@@ -18502,7 +19125,7 @@
 +            if (reading.firstBase < lastEnd) return false;
 +            lastLevel = reading.level; lastEnd = reading.firstBase + reading.baseCount;
 +            Box box;
-+            if (!child(reading.child, &box)) return false;
++            if (!child(reading.child, &box, budget)) return false;
 +            if (reading.hidden && box.source.first != box.source.last) return false;
 +            box.hidden = reading.hidden;
 +            box.y -= description.baselineOrigin;
@@ -18528,7 +19151,7 @@
 +            Box box;
 +            auto gapDescription = gap.child;
 +            gapDescription.option.setFlags(gapDescription.option.flags() | QTextOption::IncludeTrailingSpaces);
-+            if (gapDescription.inlinePadding || !child(gapDescription, &box)) return false;
++            if (!gapDescription.nestedParts.isEmpty() || gapDescription.inlinePadding || !child(gapDescription, &box, budget)) return false;
 +            if (box.source.first != box.source.last) {
 +                auto *gapEngine = box.shaped->layout->engine();
 +                box.shaped->advance = gapEngine->width(0, box.source.last - box.source.first).toReal();
@@ -18640,7 +19263,7 @@
 +        measured.baseLeading = QFixed();
 +        measured.occupiedTop = QFixed::fromReal(stacked->top);
 +        measured.occupiedBottom = QFixed::fromReal(stacked->bottom);
-+        measured.visibleAnnotation = std::any_of(description.readings.cbegin(), description.readings.cend(),
++        measured.visibleAnnotation = hasNestedAnnotation || std::any_of(description.readings.cbegin(), description.readings.cend(),
 +            [](const auto &reading) { return !reading.hidden; });
 +        measured.breakBefore = description.breakBefore;
 +        measured.breakAfter = description.breakAfter;
@@ -18650,12 +19273,13 @@
 +    static bool distribute(Box *box)
 +    {
 +        auto &child = *box->shaped;
-+        const auto text = child.layout->text();
-+        auto *engine = child.layout->engine();
++        auto *layout = box->composite ? box->composite->textLayout() : child.layout.get();
++        const auto text = layout->text();
++        auto *engine = layout->engine();
 +        struct Opportunity { int item, glyph; };
 +        QList<Opportunity> opportunities;
 +        QSet<int> clusters;
-+        for (const auto &run : child.layout->glyphRuns(0, text.size(), QTextLayout::RetrieveStringIndexes))
++        for (const auto &run : layout->glyphRuns(0, text.size(), QTextLayout::RetrieveStringIndexes))
 +            for (auto index : run.stringIndexes()) clusters.insert(int(index));
 +        const auto scalarAt = [&](int position) {
 +            const auto high = text.at(position);
@@ -18667,6 +19291,8 @@
 +        // policy deliberately excludes separator/Bopomofo/cursive expansion;
 +        // never use Qt's generic LetterOrNumber justification set here.
 +        const auto eligible = [&](int position) {
++            // An inner measured Ruby segment has its own native distribution.
++            if (engine->projectedRubyMetrics().contains(position)) return false;
 +            const char32_t scalar = scalarAt(position);
 +            if (QChar::isSpace(scalar) || scalar == 0x2014 || scalar == 0x2026) return false;
 +            const int index = engine->findItem(position);
@@ -18677,7 +19303,7 @@
 +                || script == QChar::Script_Katakana || script == QChar::Script_Hangul;
 +        };
 +        for (int boundary = 1; boundary < text.size(); ++boundary) {
-+            if (!child.layout->isValidCursorPosition(boundary) || !clusters.contains(boundary)) continue;
++            if (!layout->isValidCursorPosition(boundary) || !clusters.contains(boundary)) continue;
 +            int previous = boundary - 1;
 +            if (text[previous].isLowSurrogate() && previous > 0 && text[previous - 1].isHighSurrogate()) --previous;
 +            if (!eligible(previous) || !eligible(boundary)) continue;
@@ -19226,7 +19852,7 @@
 +#endif
 --- /dev/null
 +++ b/src/gui/text/qtextinlinebox_p.h
-@@ -0,0 +1,723 @@
+@@ -0,0 +1,1052 @@
 +// Private native ordinary inline-box protocol. No text or object replacement.
 +#ifndef QTEXTINLINEBOX_P_H
 +#define QTEXTINLINEBOX_P_H
@@ -19243,7 +19869,11 @@
 +#include <QtCore/qjsonarray.h>
 +#include <QtCore/qurl.h>
 +#include <private/qfixed_p.h>
++#include <algorithm>
++#include <QtCore/qsharedpointer.h>
++#include <algorithm>
 +#include <array>
++#include <utility>
 +#include <cmath>
 +QT_BEGIN_NAMESPACE
 +class QTextLayout;
@@ -19253,7 +19883,10 @@
 +inline constexpr char RoundedLinkCapability[] = "wikidict.inline-box-rounded-link/1";
 +inline constexpr char PercentDottedCapability[] = "wikidict.inline-box-percent-dotted/1";
 +inline constexpr char NestedPitchCapability[] = "wikidict.inline-box-nested-pitch/1";
++inline constexpr char NonbreakingSwatchCapability[] = "wikidict.inline-box-nonbreaking-swatch/1";
++struct DecodedSourceRanges;
 +struct Box {
++    QSharedPointer<const DecodedSourceRanges> sourceRanges;
 +    QObject *document = nullptr;
 +    int first = -1, last = -1;
 +    QString source;
@@ -19640,13 +20273,172 @@
 +    return format.foreground().style() == Qt::SolidPattern && format.foreground().color() == QColor(owner.value("foreground").toString());
 +}
 +
++// A source-tree packet represents horizontal inline decorations over original
++// ordinary UTF-16 text. The reader JSON supplies every range, color and action.
++struct SourceRangeOwner { int parent, begin, end; QJsonObject span; };
++struct SourceRangeLeaf { int begin, end; QJsonObject span; QString href, tip; bool help; };
++struct SourceRangeRecipe {
++    QString text;
++    QList<SourceRangeOwner> owners;
++    QList<SourceRangeLeaf> leaves;
++};
++inline constexpr char SourceTreeCapability[] = "wikidict.inline-box-source-tree/1";
++inline bool sourceRangeRecipe(const QJsonObject &root, SourceRangeRecipe *out = nullptr)
++{
++    const auto present = [](const QJsonValue &v) { return !v.isNull() && !v.isUndefined(); };
++    const auto px = [](const QJsonValue &v, double *n) {
++        const auto o = v.toObject(); const auto value = o.value("value");
++        if (o.size() != 2 || o.value("unit") != QStringLiteral("px") || !value.isDouble()
++            || !finite(value.toDouble()) || value.toDouble() < 0) return false;
++        *n = value.toDouble(); return true;
++    };
++    const auto rgb = [](const QJsonValue &v) {
++        const auto s = v.toString();
++        if (s.size() != 7 || s.front() != QLatin1Char('#')) return false;
++        for (const QChar c : QStringView(s).sliced(1))
++            if (!(c >= '0' && c <= '9') && !(c >= 'a' && c <= 'f')) return false;
++        return true;
++    };
++    SourceRangeRecipe r;
++    auto visit = [&](auto &&self, const QJsonObject &s, int parent, int depth, QString tip, bool help) -> bool {
++        if (depth > 16 || r.owners.size() + r.leaves.size() >= 256) return false;
++        for (const char *key : {"image", "ruby", "inline_padding_group", "inline_action_group", "inline_box",
++             "clipped_absolute", "citation_marker", "audio_control", "audio", "link_paint"}) if (present(s.value(key))) return false;
++        if (!s.value("text").isString() || !s.value("trail").isString() || !s.value("target").isString()
++            || !s.value("direction").toString().isEmpty() || !s.value("explanation").toString().isEmpty()
++            || s.value("superscript").toBool() || s.value("subscript").toBool()) return false;
++        if (present(s.value("tooltip"))) { if (!s.value("tooltip").isString()) return false; tip = s.value("tooltip").toString(); }
++        if (present(s.value("inline_style"))) {
++            const auto style = s.value("inline_style").toObject();
++            if (style.value("cursor") != QStringLiteral("help")) return false;
++            for (auto it = style.begin(); it != style.end(); ++it) {
++                if (it.key() == QStringLiteral("cursor")) continue;
++                if (it.key() == QStringLiteral("font_normalized")) { if (it.value() != QJsonValue(false)) return false; }
++                else if (!QStringList{"decoration", "line_height", "baseline_shift", "wrap"}.contains(it.key()) || present(it.value())) return false;
++            }
++            help = true;
++        }
++        const auto g = s.value("inline_box_group"); const int first = int(r.text.size());
++        if (!present(g)) {
++            if (parent < 0 || present(s.value("background"))) return false;
++            QString href; const auto target = s.value("target").toString();
++            if (s.value("kind") == QStringLiteral("link")) {
++                if (target.isEmpty()) return false;
++                href = QStringLiteral("dict:") + QString::fromLatin1(QUrl::toPercentEncoding(target));
++                if (present(s.value("target_fragment"))) {
++                    if (!s.value("target_fragment").isString()) return false;
++                    href += QLatin1Char('#') + QString::fromLatin1(QUrl::toPercentEncoding(s.value("target_fragment").toString()));
++                }
++            } else if (s.value("kind") != QStringLiteral("text") || !target.isEmpty() || present(s.value("target_fragment"))) return false;
++            const QString text = s.value("text").toString() + s.value("trail").toString();
++            if (text.isEmpty() || !ordinaryText(text) || text.size() > (1 << 20) - first) return false;
++            r.text += text; r.leaves.append({first, int(r.text.size()), s, href, tip, help}); return true;
++        }
++        if (!g.isObject() || s.value("kind") != QStringLiteral("text") || !s.value("text").toString().isEmpty()
++            || !s.value("trail").toString().isEmpty() || !s.value("target").toString().isEmpty() || present(s.value("target_fragment"))
++            || (present(s.value("background")) && !rgb(s.value("background")))) return false;
++        const auto box = g.toObject(); const auto edges = box.value("border").toObject(), padding = box.value("padding").toObject();
++        for (const auto &key : box.keys()) if (!QStringList{"border", "padding", "radius", "overlays", "spans"}.contains(key)) return false;
++        if (present(box.value("radius")) || !box.value("overlays").isArray() || !box.value("overlays").toArray().isEmpty()
++            || !box.value("spans").isArray() || box.value("spans").toArray().isEmpty() || edges.size() != 4 || padding.size() != 4) return false;
++        double horizontal = 0; bool dotted = false;
++        for (const auto *key : {"top", "right", "bottom", "left"}) {
++            const QLatin1StringView side(key); double val = 0;
++            if (!px(padding.value(side), &val) || ((side == "top" || side == "bottom") && val != 0)) return false;
++            horizontal += val;
++            const auto edge = edges.value(side).toObject();
++            if (edge == QJsonObject{{"none", QJsonObject{}}}) continue;
++            const auto stroke = edge.value("dotted").toObject(), color = stroke.value("color").toObject();
++            if (edge.size() != 1 || side != "bottom" || stroke.size() != 2 || !px(stroke.value("width"), &val)
++                || val <= 0 || color.size() != 1 || !rgb(color.value("rgb"))) return false;
++            dotted = true;
++        }
++        const auto children = box.value("spans").toArray();
++        if (!dotted && horizontal == 0 && !s.value("background").isString()) return false;
++        if (dotted && (horizontal != 0 || children.size() != 1 || children.first().toObject().value("kind") != QStringLiteral("text")
++            || present(children.first().toObject().value("inline_box_group")))) return false;
++        const int i = int(r.owners.size()); r.owners.append({parent, first, first, s});
++        for (const auto &child : children) if (!child.isObject() || !self(self, child.toObject(), i, depth + 1, tip, help)) return false;
++        r.owners[i].end = int(r.text.size()); return true;
++    };
++    if (!visit(visit, root, -1, 0, {}, false)) return false;
++    const bool nested = r.owners.size() > 1;
++    const auto pad = root.value("inline_box_group").toObject().value("padding").toObject();
++    const bool paddedNbsp = r.text == QString(QChar(0xa0)) && (pad.value("left").toObject().value("value").toDouble() > 0
++        || pad.value("right").toObject().value("value").toDouble() > 0);
++    if ((!nested && !paddedNbsp) || (!paddedNbsp && (r.text.front().isSpace() || r.text.back().isSpace()))) return false;
++    if (out) *out = std::move(r);
++    return true;
++}
++
++struct SourceBoxNode { int parent = -1; Box box; };
++struct DecodedSourceRanges {
++    SourceRangeRecipe recipe;
++    QList<SourceBoxNode> nodes;
++    QList<QFont> leafFonts;
++};
++inline bool decodeSourceRanges(Box *root)
++{
++    const auto &m = root->identity;
++    const auto raw = m.value("sourceTree"); const auto p = raw.toMap();
++    if (raw.metaType().id() != QMetaType::QVariantMap || p.size() != 3 || m.size() != 10 + int(m.contains("background"))
++        || p.value("span").metaType().id() != QMetaType::QByteArray || p.value("span").toByteArray().size() > 16 * 1024 * 1024
++        || p.value("ownerFonts").metaType().id() != QMetaType::QVariantList || p.value("leafFonts").metaType().id() != QMetaType::QVariantList) return false;
++    const auto json = QJsonDocument::fromJson(p.value("span").toByteArray());
++    auto out = QSharedPointer<DecodedSourceRanges>::create();
++    const auto owners = p.value("ownerFonts").toList(), leaves = p.value("leafFonts").toList();
++    if (!json.isObject() || !sourceRangeRecipe(json.object(), &out->recipe) || out->recipe.text != root->source
++        || out->recipe.owners.size() != owners.size() || out->recipe.leaves.size() != leaves.size()) return false;
++    const auto validFont = [](const QVariant &v) { return v.metaType().id() == QMetaType::QFont
++        && finite(v.value<QFont>().pointSizeF()) && v.value<QFont>().pointSizeF() > 0; };
++    for (int i = 0; i < owners.size(); ++i) {
++        if (!validFont(owners[i])) return false;
++        const auto &owner = out->recipe.owners[i]; const auto group = owner.span.value("inline_box_group").toObject();
++        Box b; b.document = root->document; b.first = root->first + owner.begin; b.last = root->first + owner.end;
++        b.identity.insert("sourceRange", true);
++        b.source = root->source.mid(owner.begin, owner.end - owner.begin); b.font = owners[i].value<QFont>();
++        if (owner.span.value("background").isString()) b.identity.insert("background", QColor(owner.span.value("background").toString()));
++        int side = 0;
++        for (const auto key : {"top", "right", "bottom", "left"}) {
++            b.padding[side] = group.value("padding").toObject().value(key).toObject().value("value").toDouble();
++            const auto edge = group.value("border").toObject().value(key).toObject();
++            b.colors[side] = QColor(Qt::transparent);
++            if (edge.contains("dotted")) {
++                const auto stroke = edge.value("dotted").toObject();
++                b.widths[side] = stroke.value("width").toObject().value("value").toDouble();
++                b.colors[side] = QColor(stroke.value("color").toObject().value("rgb").toString());
++                b.identity.insert("dottedBottomChildItalic", group.value("spans").toArray().first().toObject().value("italic").toBool());
++            }
++            ++side;
++        }
++        if (i == 0 && (b.padding != root->padding || b.widths != root->widths || b.colors != root->colors
++            || b.font != root->font || b.identity.value("background") != m.value("background"))) return false;
++        out->nodes.append({owner.parent, std::move(b)});
++    }
++    for (const auto &v : leaves) { if (!validFont(v)) return false; out->leafFonts.append(v.value<QFont>()); }
++    root->sourceRanges = std::move(out); return true;
++}
++inline bool sourceRangeFormat(const DecodedSourceRanges &r, int first, int last, const QTextCharFormat &fmt, const QFont &base, bool help)
++{
++    const auto &leaves = r.recipe.leaves;
++    auto it = std::upper_bound(leaves.cbegin(), leaves.cend(), first,
++        [](int p, const SourceRangeLeaf &l) { return p < l.end; });
++    if (it == leaves.cend() || first < it->begin || first >= last || last > r.recipe.text.size()) return false;
++    const auto font = fmt.font().resolve(base);
++    for (; it != leaves.cend() && it->begin < last; ++it) {
++        if (it->href != fmt.anchorHref() || (!it->href.isEmpty() && !fmt.isAnchor()) || it->tip != fmt.toolTip() || it->help != help
++            || !sameMetricFont(font, r.leafFonts.at(it - leaves.cbegin()))) return false;
++    }
++    return true;
++}
++
 +inline bool nestedBoxes(const Box &box, QList<Box> *out,
 +                        const QList<QPair<int, QJsonObject>> *sourceChildren = nullptr);
 +inline bool parseImpl(const QVariant &raw, Box *out, bool checkBorderSource)
 +{
 +    if (raw.metaType().id() != QMetaType::QVariantMap) return false;
 +    const auto m = raw.toMap();
-+    if (m.size() != 9 + int(m.contains("background")) + int(m.contains("radius"))
++    if (m.size() != 9 + int(m.contains("sourceTree")) + int(m.contains("dottedBottomChildItalic")) + int(m.contains("background")) + int(m.contains("radius"))
 +        + int(m.contains("radiusUnit")) + int(m.contains("borderStyle")) + int(m.contains("nestedChildren")) + int(m.contains("action")) + int(m.contains("childAction")) + 3 * int(m.contains("borderSource")) || m.value("capability") != QVariant(QString::fromLatin1(Capability))
 +        || m.value("document").metaType().id() != QMetaType::QObjectStar
 +        || m.value("first").metaType().id() != QMetaType::Int
@@ -19668,7 +20460,7 @@
 +    b.source = m.value("source").toString(); b.font = m.value("font").value<QFont>();
 +    if (!b.document || b.first < 0 || b.last <= b.first || b.source.size() != b.last-b.first
 +        || b.source.size() > (1<<20) || !(b.font.pointSizeF() > 0) || !finite(b.font.pointSizeF())
-+        || b.source.front().isSpace() || b.source.back().isSpace() || !ordinaryText(b.source)) return false;
++        || !ordinaryText(b.source)) return false;
 +    // Original ordinary LTR text only. Actual shaped edge clusters are
 +    // authenticated by the engine; source offsets remain UTF-16 positions.
 +    for (int k=0; k<3; ++k) {
@@ -19688,6 +20480,20 @@
 +        }
 +    }
 +    for (int i=0;i<4;++i) if (!finite(b.padding[i]+b.widths[i])) return false;
++    if (!m.contains("sourceTree") && (b.source.front().isSpace() || b.source.back().isSpace())) {
++        if (!m.contains("background") || m.contains("radius") || m.contains("borderSource")
++            || m.contains("nestedChildren") || hasAction(b) || b.widths[0] <= 0 || b.colors[0].alpha() != 255) return false;
++        for (const QChar c : b.source) if (c != QChar::Nbsp) return false;
++        for (int side = 0; side < 4; ++side)
++            if (b.padding[side] != 0 || b.widths[side] != b.widths[0] || b.colors[side] != b.colors[0]) return false;
++    }
++    if (m.contains("dottedBottomChildItalic")) {
++        if (m.value("dottedBottomChildItalic").metaType().id() != QMetaType::Bool || hasAction(b)
++            || m.contains("radius") || m.contains("nestedChildren") || m.contains("borderSource")
++            || b.widths[2] <= 0 || b.colors[2].alpha() != 255) return false;
++        for (int side = 0; side < 4; ++side)
++            if (b.padding[side] != 0 || (side != 2 && (b.widths[side] != 0 || b.colors[side].alpha() != 0))) return false;
++    }
 +    if (m.contains("radius"))
 +        for (int i=0;i<4;++i)
 +            if (b.widths[i] != b.widths[0] || b.colors[i] != b.colors[0]
@@ -19695,6 +20501,7 @@
 +    QList<QPair<int, QJsonObject>> sourceChildren;
 +    if (!validWholeAction(b) || (checkBorderSource && (!borderSource(b, nullptr, &sourceChildren) || !validChildAction(b)))
 +        || !nestedBoxes(b, nullptr, checkBorderSource ? &sourceChildren : nullptr)) return false;
++    if (m.contains("sourceTree") && !decodeSourceRanges(&b)) return false;
 +    if (out) *out = std::move(b);
 +    return true;
 +}
@@ -19924,6 +20731,154 @@
 +    for(qreal n:{s.border.left(),s.border.right(),s.border.top(),s.border.bottom()}) if(!finite(n)) return false;
 +    *out=s;return true;
 +}
++// Physical ranges are installed in decoded source preorder. Two owners of the
++// same characters remain distinct through the parent index, including when
++// the inner box changes paint but contributes no additional advance.
++struct SourceBoxLineSlice { int node, first, last; PaintSlice paint; };
++struct SourceBoxVisualRun { qreal firstX, lastX; bool rightToLeft; };
++
++class SourceBoxTree
++{
++    struct Edges { qreal left = 0, right = 0; };
++    struct Boundary { Edges open, close; };
++    struct Measured {
++        SourceBoxNode node;
++        qreal scale;
++        Edges own, ancestorsAtFirst, ancestorsAtLast;
++        int lastChildEnd;
++    };
++    QList<Measured> m_nodes;
++    QMap<int, Boundary> m_boundaries;
++    const QPaintDevice *m_device = nullptr;
++
++    static bool add(Edges *sum, const Edges &edge) {
++        sum->left += edge.left;
++        sum->right += edge.right;
++        return finite(sum->left) && finite(sum->right);
++    }
++    static bool splitsSurrogate(QStringView source, int at) {
++        return at > 0 && at < source.size() && source.at(at - 1).isHighSurrogate() && source.at(at).isLowSurrogate();
++    }
++
++public:
++    // Call after validating the semantic owner, ordinary glyph/action formats,
++    // source revision and installed cursors. This object belongs to the current
++    // layout/device pass. A change to either requires fresh measurements.
++    template <typename PixelScale>
++    static bool build(const QList<SourceBoxNode> &source, const QPaintDevice *device,
++                      PixelScale pixelScale, SourceBoxTree *result) {
++        if (!result || source.isEmpty() || source.size() > (1 << 20)) return false;
++        SourceBoxTree tree;
++        tree.m_device = device;
++        tree.m_nodes.reserve(source.size());
++        QList<int> active;
++        const Box &root = source.first().box;
++        if (!root.document || root.first < 0 || root.last <= root.first || root.source.size() != root.last - root.first
++            || root.source.size() > (1 << 20)) return false;
++        const QStringView original(root.source);
++        for (int index = 0; index < source.size(); ++index) {
++            const auto &node = source.at(index);
++            const auto &box = node.box;
++            if (box.document != root.document || box.first < root.first || box.last > root.last || box.last <= box.first
++                || box.last - box.first != box.source.size() || splitsSurrogate(original, box.first - root.first)
++                || splitsSurrogate(original, box.last - root.first)
++                || original.sliced(box.first - root.first, box.source.size()) != QStringView(box.source)) return false;
++            if ((index == 0) != (node.parent == -1) || node.parent >= index || node.parent < -1) return false;
++            const qreal scale = pixelScale(device ? QFont(box.font, device) : box.font);
++            if (!finite(scale) || scale <= 0) return false;
++            Measured measured{node, scale, {}, {}, {}, box.first};
++            for (int side = 0; side < 4; ++side) {
++                if (!finite(box.padding[side]) || box.padding[side] < 0 || !finite(box.widths[side]) || box.widths[side] < 0
++                    || !finite((box.padding[side] + box.widths[side]) * scale)) return false;
++            }
++            // Use the same 26.6 advance as the native glyph cluster. Each
++            // owner's two ends are quantized once, independent of nesting.
++            measured.own.left = QFixed::fromReal((box.padding[3] + box.widths[3]) * scale).toReal();
++            measured.own.right = QFixed::fromReal((box.padding[1] + box.widths[1]) * scale).toReal();
++            if (node.parent >= 0) {
++                while (!active.isEmpty() && active.last() != node.parent) active.removeLast();
++                if (active.isEmpty() || active.size() >= 16) return false;
++                auto &parent = tree.m_nodes[node.parent];
++                if (box.first < parent.lastChildEnd || box.last > parent.node.box.last) return false;
++                parent.lastChildEnd = box.last;
++                if (box.first == parent.node.box.first) {
++                    measured.ancestorsAtFirst = parent.ancestorsAtFirst;
++                    if (!add(&measured.ancestorsAtFirst, parent.own)) return false;
++                }
++                if (box.last == parent.node.box.last) {
++                    measured.ancestorsAtLast = parent.ancestorsAtLast;
++                    if (!add(&measured.ancestorsAtLast, parent.own)) return false;
++                }
++            }
++            if (!add(&tree.m_boundaries[box.first].open, measured.own)
++                || !add(&tree.m_boundaries[box.last].close, measured.own)) return false;
++            tree.m_nodes.append(std::move(measured));
++            active.append(index);
++        }
++        *result = std::move(tree);
++        return true;
++    }
++
++    // The caller supplies the native shaped cluster's exact half-open source
++    // interval. An owner boundary cutting the cluster needs a shaping break.
++    // A shared end/start at one boundary charges only the participating side.
++    bool clusterEdges(int first, int last, bool rightToLeft, qreal *left, qreal *right) const {
++        if (m_nodes.isEmpty() || !left || !right || last <= first || first < m_nodes.first().node.box.first
++            || last > m_nodes.first().node.box.last) return false;
++        const auto interior = m_boundaries.upperBound(first);
++        if (interior != m_boundaries.cend() && interior.key() < last) return false;
++        const auto opening = m_boundaries.value(first).open;
++        const auto closing = m_boundaries.value(last).close;
++        *left = rightToLeft ? closing.left : opening.left;
++        *right = rightToLeft ? opening.right : closing.right;
++        return true;
++    }
++
++    // Supply only the root's real source intersection with the native line.
++    // visualRun maps that interval to its actual visual edges. It may refuse
++    // noncontiguous bidi projections; reversing raw UTF-16 positions is never
++    // a substitute for the text engine's visual run geometry.
++    template <typename VisualRun>
++    bool lineSlices(int first, int last, int line, qreal baseline, VisualRun visualRun,
++                    QList<SourceBoxLineSlice> *output) const {
++        if (m_nodes.isEmpty() || !output || line < 0 || !finite(baseline) || first >= last
++            || first < m_nodes.first().node.box.first || last > m_nodes.first().node.box.last) return false;
++        QList<SourceBoxLineSlice> slices;
++        const auto append = [&](int index) {
++            const auto &measured = m_nodes.at(index);
++            const Box &box = measured.node.box;
++            const int begin = qMax(first, box.first), end = qMin(last, box.last);
++            SourceBoxVisualRun run{};
++            if (begin >= end || !visualRun(begin, end, &run) || !finite(run.firstX) || !finite(run.lastX)
++                || (run.rightToLeft ? run.firstX < run.lastX : run.firstX > run.lastX)) return false;
++            const bool atFirst = begin == box.first, atLast = end == box.last;
++            const bool hasLeft = run.rightToLeft ? atLast : atFirst;
++            const bool hasRight = run.rightToLeft ? atFirst : atLast;
++            const Edges &outerLeft = run.rightToLeft ? measured.ancestorsAtLast : measured.ancestorsAtFirst;
++            const Edges &outerRight = run.rightToLeft ? measured.ancestorsAtFirst : measured.ancestorsAtLast;
++            const qreal left = qMin(run.firstX, run.lastX) + (hasLeft ? outerLeft.left : 0);
++            const qreal right = qMax(run.firstX, run.lastX) - (hasRight ? outerRight.right : 0);
++            Slice geometry;
++            if (!slice(box, left, right, baseline, measured.scale, m_device, hasLeft, hasRight, &geometry)) return false;
++            slices.append({index, begin, end, {box, geometry, line}});
++            return true;
++        };
++        // Source preorder is nondecreasing in first. Visit only open ancestors
++        // and owners which start on the line, in their original paint order.
++        const auto firstNew = std::lower_bound(m_nodes.cbegin(), m_nodes.cend(), first,
++            [](const Measured &node, int start) { return node.node.box.first < start; });
++        int index = int(firstNew - m_nodes.cbegin());
++        QList<int> carry;
++        for (int prior = index - 1; prior >= 0; prior = m_nodes.at(prior).node.parent)
++            if (m_nodes.at(prior).node.box.last > first) carry.append(prior);
++        for (auto it = carry.crbegin(); it != carry.crend(); ++it) if (!append(*it)) return false;
++        for (; index < m_nodes.size() && m_nodes.at(index).node.box.first < last; ++index)
++            if (!append(index)) return false;
++        *output = std::move(slices);
++        return true;
++    }
++};
++
 +inline void paintBackground(QPainter *p, const Box &b, const Slice &s)
 +{
 +    if (!b.identity.contains("background")) return;
@@ -19950,3 +20905,83 @@
 +}
 +QT_END_NAMESPACE
 +#endif
+--- a/src/gui/text/qfontengine.cpp
++++ b/src/gui/text/qfontengine.cpp
+@@ -208,6 +208,17 @@
+ 
+         if (hb_ot_layout_table_select_script(face, HB_OT_TAG_GSUB, script_count, script_tags, nullptr, nullptr))
+             return true;
++
++        // Thaana letters use combining vowel signs. A face with explicit
++        // Thaana mark positioning can shape these without substituting glyphs.
++        if (script == QChar::Script_Thaana && !hb_ot_layout_has_substitution(face)) {
++            unsigned int scriptIndex, markIndex;
++            if (hb_ot_layout_table_find_script(face, HB_OT_TAG_GPOS, HB_TAG('t','h','a','a'), &scriptIndex)
++                && hb_ot_layout_language_find_feature(face, HB_OT_TAG_GPOS, scriptIndex,
++                    HB_OT_LAYOUT_DEFAULT_LANGUAGE_INDEX, HB_TAG('m','a','r','k'), &markIndex)
++                && hb_ot_layout_feature_get_lookups(face, HB_OT_TAG_GPOS, markIndex, 0, nullptr, nullptr) > 0)
++                return true;
++        }
+     }
+ #endif
+     return false;
+--- a/src/gui/text/qtextdocument_p.h
++++ b/src/gui/text/qtextdocument_p.h
+@@ -141,6 +141,8 @@
+     void clear();
+ 
+     void setLayout(QAbstractTextDocumentLayout *layout);
++    bool hasHadBlockPreedit() const { return everHadBlockPreedit; }
++    void recordBlockPreedit() { everHadBlockPreedit = true; }
+ 
+     void insert(int pos, QStringView text, int format);
+     void insert(int pos, QChar c, int format)
+@@ -312,6 +314,7 @@
+ 
+     QList<QTextUndoCommand> undoStack;
+     bool undoEnabled;
++    bool everHadBlockPreedit = false;
+     int undoState;
+     int revision;
+     // position in undo stack of the last setModified(false) call
+--- a/src/gui/text/qabstracttextdocumentlayout.cpp
++++ b/src/gui/text/qabstracttextdocumentlayout.cpp
+@@ -595,22 +595,25 @@
+     if (cursorPos == -1)
+         return QTextFormat();
+ 
+-    // compensate for preedit in the hit text block
+-    QTextBlock block = document()->firstBlock();
+-    while (block.isValid()) {
+-        QRectF blockBr = blockBoundingRect(block);
+-        if (blockBr.contains(pos)) {
+-            QTextLayout *layout = block.layout();
+-            int relativeCursorPos = cursorPos - block.position();
+-            const int preeditLength = layout ? layout->preeditAreaText().size() : 0;
+-            if (preeditLength > 0 && relativeCursorPos > layout->preeditAreaPosition())
+-                cursorPos -= qMin(cursorPos - layout->preeditAreaPosition(), preeditLength);
+-            break;
++    const QTextDocumentPrivate *pieceTable = QTextDocumentPrivate::get(qobject_cast<const QTextDocument *>(parent()));
++    // A preedit can extend beyond its source block or overlap another block.
++    // Keep the geometric ownership check once any block has used preedit.
++    if (pieceTable->hasHadBlockPreedit()) {
++        QTextBlock block = document()->firstBlock();
++        while (block.isValid()) {
++            QRectF blockBr = blockBoundingRect(block);
++            if (blockBr.contains(pos)) {
++                QTextLayout *layout = block.layout();
++                int relativeCursorPos = cursorPos - block.position();
++                const int preeditLength = layout ? layout->preeditAreaText().size() : 0;
++                if (preeditLength > 0 && relativeCursorPos > layout->preeditAreaPosition())
++                    cursorPos -= qMin(cursorPos - layout->preeditAreaPosition(), preeditLength);
++                break;
++            }
++            block = block.next();
+         }
+-        block = block.next();
+     }
+ 
+-    const QTextDocumentPrivate *pieceTable = QTextDocumentPrivate::get(qobject_cast<const QTextDocument *>(parent()));
+     QTextDocumentPrivate::FragmentIterator it = pieceTable->find(cursorPos);
+     return pieceTable->formatCollection()->format(it->format);
+ }

@@ -5068,15 +5068,13 @@ QVector<QPair<QString, QString>> MainWindow::readingAdvisories() const {
     // fragment (empty text, a break, or an image without an authored alt label).
     const auto collect = [&](const QJsonArray &spans, const CompiledContent::Context &) {
         bool adjacent = false;
-        for (const QJsonValue &value : spans) {
-            const QJsonObject span = value.toObject();
-            QJsonValue advice = span.value(QStringLiteral("tooltip"));
+        const auto appendAdvice = [&](const QJsonObject &span, QJsonValue advice) {
             const QJsonObject image = span.value(QStringLiteral("image")).toObject();
             const QJsonValue imageAdvice = image.value(QStringLiteral("tooltip"));
             if (SemanticHtml::present(imageAdvice)) advice = imageAdvice;
             if (SemanticHtml::present(advice) && !advice.isString())
                 throw DictApiError("invalid semantic advisory text");
-            if (!SemanticHtml::present(advice) || advice.toString().isEmpty()) { adjacent = false; continue; }
+            if (!SemanticHtml::present(advice) || advice.toString().isEmpty()) { adjacent = false; return; }
             const QString label = !image.isEmpty() ? image.value(QStringLiteral("alt")).toString()
                 : (span.value(QStringLiteral("kind")).toString() == QStringLiteral("line_break") ? QString()
                     : span.value(QStringLiteral("text")).toString()) + span.value(QStringLiteral("trail")).toString();
@@ -5084,6 +5082,20 @@ QVector<QPair<QString, QString>> MainWindow::readingAdvisories() const {
                 result.last().first += label;
             else result.append({label, advice.toString()});
             adjacent = true;
+        };
+        for (const QJsonValue &value : spans) {
+            const QJsonObject span = value.toObject();
+            if (CompiledContent::present(span.value(QStringLiteral("inline_box_group")))) {
+                QCompiledInlineBox::SourceRangeRecipe original;
+                if (QCompiledInlineBox::sourceRangeRecipe(span, &original)) {
+                    for (const auto &leaf : original.leaves) {
+                        appendAdvice(leaf.span, leaf.tip.isEmpty()
+                            ? leaf.span.value(QStringLiteral("tooltip")) : QJsonValue(leaf.tip));
+                    }
+                    continue;
+                }
+            }
+            appendAdvice(span, span.value(QStringLiteral("tooltip")));
         }
     };
     CompiledContent::Walker walker(collect, CompiledContent::TableSpans::Stored);
@@ -6033,14 +6045,32 @@ QString MainWindow::spansHtml(const QJsonArray &spans, qreal leftMargin, const Q
                 const QString boxBackground = CompiledContent::present(span.value("background"))
                     ? span.value("background").toString() : cellBackground;
                 QJsonArray childSpans = group.value("spans").toArray();
-                if (CompiledContent::hasNestedPitchChildren(span))
+                QCompiledInlineBox::SourceRangeRecipe original;
+                QJsonArray probes;
+                if (QCompiledInlineBox::sourceRangeRecipe(span, &original)) {
+                    const auto probe = [&](QJsonObject item) {
+                        item.remove("inline_box_group"); item.insert("text", "X"); item.insert("trail", "");
+                        return spansHtml(QJsonArray{item}, 0, {}, cellBackground, basePoints, inheritedInk,
+                            -1, false, true, {}, true, contextFamily);
+                    };
+                    for (const auto &box : original.owners) probes.append(probe(box.span));
+                    childSpans = {};
+                    for (const auto &leaf : original.leaves) {
+                        auto projected = leaf.span;
+                        if (!leaf.tip.isEmpty()) projected.insert("tooltip", leaf.tip);
+                        if (leaf.help && !projected.value("inline_style").isObject())
+                            projected.insert("inline_style", QJsonObject{{"cursor", QStringLiteral("help")}});
+                        probes.append(probe(projected));
+                        childSpans.append(projected);
+                    }
+                } else if (CompiledContent::hasNestedPitchChildren(span))
                     CompiledContent::require(CompiledContent::nestedPitchSource(span, &childSpans));
                 const QString children = QStringLiteral("<style>a{color:%1;text-decoration:none;}</style>")
                     .arg(palette().color(QPalette::Link).name())
                     + spansHtml(childSpans, leftMargin,
                         prefix, boxBackground, basePoints, inheritedInk, sourceRun, false,
                         typedScopeOwnsIsolation, {}, computedCellTraits, contextFamily);
-                out += CompiledInlineBox::marker(span, children, ownerHtml, basePoints, sourceRun);
+                out += CompiledInlineBox::marker(span, children, ownerHtml, basePoints, sourceRun, probes);
                 continue;
             }
             if (CompiledInlineAction::present(span)) {
@@ -6530,12 +6560,12 @@ QString MainWindow::tableHtml(const QJsonObject &table, int depth, int tableDept
             const QString effectiveBackground = canonicalBackground ? background : tableBackground;
             QColor cellOwnerInk = tableOwnerInk;
             if (!effectiveBackground.isEmpty()) {
-                if (canonicalBackground || !roundedTable)
+                if (canonicalBackground || (!roundedTable && cell.value(QStringLiteral("style")).toObject().value(QStringLiteral("opacity")).toDouble(1) >= 1))
                     style += QStringLiteral(";background-color:") + effectiveBackground;
                 style += QStringLiteral(";color:") + backgroundInk(effectiveBackground);
                 cellOwnerInk = QColor(backgroundInk(effectiveBackground));
             }
-            const QJsonObject cellStyle = SemanticHtml::typedStyle(cell.value(QStringLiteral("style")), {"border", "padding", "text_align", "border_edges", "letter_spacing", "width", "min_width", "vertical_align", "line_height"});
+            const QJsonObject cellStyle = SemanticHtml::typedStyle(cell.value(QStringLiteral("style")), {"border", "padding", "text_align", "border_edges", "letter_spacing", "width", "min_width", "vertical_align", "line_height", "opacity"});
             if (context.tableAuthoredInk.isValid() && cellOwnerInk != context.tableAuthoredInk && currentColorBorder(cellStyle))
                 throw DictApiError("unsupported authored cell owner contrast");
             const auto cellLine = SemanticHtml::cellLineHeight(cellStyle.value(QStringLiteral("line_height")), readingPointSize_, reading_->document());
