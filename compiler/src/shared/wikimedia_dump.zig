@@ -1081,15 +1081,28 @@ pub fn buildPageTitleIndex(
     page_index_path: []const u8,
     output_path: []const u8,
 ) !void {
+    return buildPageTitleIndexCounted(io, allocator, page_index_path, output_path, null);
+}
+
+pub fn buildPageTitleIndexCounted(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    page_index_path: []const u8,
+    output_path: []const u8,
+    emitted_rows: ?usize,
+) !void {
     var mapped = try ReadOnlyMap.open(io, page_index_path);
     defer mapped.deinit();
     if (mapped.bytes.len == 0) return error.InvalidPageIndex;
     const kind = pageIndexKind(mapped.bytes);
-    var row_count: usize = 0;
-    var lines_for_count = std.mem.splitScalar(u8, mapped.bytes, '\n');
-    while (lines_for_count.next()) |line| {
-        if (line.len != 0 and line[0] != '#') row_count += 1;
-    }
+    const row_count = emitted_rows orelse count: {
+        var rows: usize = 0;
+        var lines = std.mem.splitScalar(u8, mapped.bytes, '\n');
+        while (lines.next()) |line| {
+            if (line.len != 0 and line[0] != '#') rows += 1;
+        }
+        break :count rows;
+    };
     const capacity = try titleIndexCapacity(row_count);
     const table_len = std.math.mul(usize, capacity, page_title_index_entry_len) catch return error.PageTitleIndexTooLarge;
     const total_len = std.math.add(usize, page_title_index_header_len, table_len) catch return error.PageTitleIndexTooLarge;
@@ -1467,6 +1480,14 @@ test "page title index collision preserves latest duplicate and packed row refer
     try std.testing.expect(!failing.has_induced_failure);
     const bytes = try std.Io.Dir.cwd().readFileAlloc(io, output_path, a, .limited(4096));
     defer a.free(bytes);
+    for ([_]usize{ 2, 4 }) |incorrect_count| {
+        try std.testing.expectError(error.InvalidPageIndex, buildPageTitleIndexCounted(io, a, page_index_path, output_path, incorrect_count));
+        try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(io, output_path, .{}));
+    }
+    try buildPageTitleIndexCounted(io, a, page_index_path, output_path, 3);
+    const counted = try std.Io.Dir.cwd().readFileAlloc(io, output_path, a, .limited(4096));
+    defer a.free(counted);
+    try std.testing.expectEqualSlices(u8, bytes, counted);
     const index = try PageTitleIndex.init(bytes);
     try std.testing.expectEqual(PageIndexKind.multistream_zstd, index.kind);
     try std.testing.expectEqual(@as(usize, 8), index.capacity);

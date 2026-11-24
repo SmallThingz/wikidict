@@ -648,6 +648,7 @@ fn extract(init: struct { io: std.Io, arena: *std.heap.ArenaAllocator }, args: [
     var pages: usize = 0;
     var modules: usize = 0;
     var redirects: usize = 0;
+    var emitted_index_rows: usize = 0;
     var source_bytes: u64 = 0;
     while (try input.next()) |item| {
         const capture = item.capture;
@@ -687,8 +688,8 @@ fn extract(init: struct { io: std.Io, arena: *std.heap.ArenaAllocator }, args: [
             if (std.mem.indexOfAny(u8, title, "\t\r\n") != null) return error.InvalidPageTitle;
             if (redirect) |target| if (std.mem.indexOfAny(u8, target, "\t\r\n") != null) return error.InvalidPageTitle;
             if (content_model.len == 0 or std.mem.indexOfAny(u8, revision_timestamp, "\t\r\n") != null or std.mem.indexOfAny(u8, revision_user, "\t\r\n") != null or std.mem.indexOfAny(u8, content_model, "\t\r\n") != null) return error.InvalidPageMetadata;
-            if (pw) |page_writer| try writePageIndexRow(
-                page_writer,
+            try writePageIndexRow(
+                pw.?,
                 item.source,
                 title,
                 redirect,
@@ -702,9 +703,10 @@ fn extract(init: struct { io: std.Io, arena: *std.heap.ArenaAllocator }, args: [
                 std.mem.indexOfScalar(u8, text_raw, '&') != null,
                 capture.revision_size,
             );
+            emitted_index_rows = try std.math.add(usize, emitted_index_rows, 1);
             if (parsed_ns == 10 and capture.text_raw != null) {
                 if (template_source_writer) |*template_writer|
-                    try template_writer.append(@intCast(pages - 1), page_id, revision_id, text_raw);
+                    try template_writer.append(@intCast(emitted_index_rows - 1), page_id, revision_id, text_raw);
             }
             decoded_title = title;
             decoded_redirect = redirect;
@@ -831,7 +833,7 @@ fn extract(init: struct { io: std.Io, arena: *std.heap.ArenaAllocator }, args: [
     if (emit_page_index) {
         std.debug.print("PAGE_TITLE_INDEX start pages={d}\n", .{pages});
         const title_index_started_ns = std.Io.Clock.awake.now(init.io).toNanoseconds();
-        try wikimedia_dump.buildPageTitleIndex(init.io, std.heap.smp_allocator, page_index_path, title_index_path);
+        try wikimedia_dump.buildPageTitleIndexCounted(init.io, std.heap.smp_allocator, page_index_path, title_index_path, emitted_index_rows);
         const title_index_elapsed_ms = @divTrunc(std.Io.Clock.awake.now(init.io).toNanoseconds() - title_index_started_ns, std.time.ns_per_ms);
         std.debug.print("PAGE_TITLE_INDEX complete pages={d} elapsed_ms={d}\n", .{ pages, title_index_elapsed_ms });
         if (transport_binding) |binding| {
@@ -985,6 +987,9 @@ test "ordinary compressed extraction carries size schema across members into the
     try std.testing.expectEqualStrings("é&amp;", first.capture.text_raw.?);
     var row: std.Io.Writer.Allocating = .init(a); defer row.deinit();
     try writePageIndexRow(&row.writer, first.source, "Page", null, 7, 70, "2026-10-01T00:00:00Z", "", "wikitext", 0, true, true, first.capture.revision_size);
+    var short_buffer: [8]u8 = undefined;
+    var short = std.Io.Writer.fixed(&short_buffer);
+    try std.testing.expectError(error.WriteFailed, writePageIndexRow(&short, first.source, "Page", null, 7, 70, "2026-10-01T00:00:00Z", "", "wikitext", 0, true, true, first.capture.revision_size));
     const written = row.written();
     const indexed = try wikimedia_dump.parsePageIndexLine(.multistream_zstd, written[0 .. written.len - 1]);
     try std.testing.expectEqual(@as(?u64, 3), indexed.revision_size);
@@ -1002,7 +1007,9 @@ const IndexesOnlyFixture = struct {
     const module = "<page><title>Module:Probe</title><ns>828</ns><id>3</id><revision><id>33</id><timestamp>2026-10-01T00:00:00Z</timestamp><model>Scribunto</model><text>return {}</text></revision></page>";
     const redirect = "<page><title>Module:Alias</title><ns>828</ns><id>4</id><redirect title=\"Module:Probe\"/><revision><id>44</id><timestamp>2026-10-01T00:00:00Z</timestamp><model>wikitext</model><text>#REDIRECT [[Module:Probe]]</text></revision></page>";
     const duplicate = "<page><title>word</title><ns>0</ns><id>5</id><revision><id>55</id><timestamp>2026-10-01T00:00:00Z</timestamp><model>wikitext</model><text>last duplicate</text></revision></page>";
-    const first = "<mediawiki>" ++ page ++ template ++ module;
+    // Extraction sees this page but emits no index row for its invalid namespace.
+    const filtered = "<page><title>skip</title><ns>x</ns><id>6</id><revision><id>66</id><timestamp>2026-10-01T00:00:00Z</timestamp><model>wikitext</model><text>ignored</text></revision></page>";
+    const first = "<mediawiki>" ++ page ++ filtered ++ template ++ module;
     const second = redirect ++ duplicate;
     const footer = "\n</mediawiki>";
     const xml = first ++ second ++ footer;
@@ -1087,6 +1094,13 @@ test "indexes-only preserves complete ordinary indexes and retained module templ
     for (IndexesOnlyFixture.preserved, 0..) |name, i| prior[i] = try IndexesOnlyFixture.read(a, full, name);
     const page_before = try IndexesOnlyFixture.read(a, full, "page-index.tsv");
     const title_before = try IndexesOnlyFixture.read(a, full, "page-title-index.bin");
+    const title_index = try wikimedia_dump.PageTitleIndex.init(title_before);
+    const template_ref = (try title_index.lookup(page_before, "Template:Probe")) orelse return error.TestUnexpectedResult;
+    const ordinal = wikimedia_dump.pageRowRefOrdinal(template_ref);
+    try std.testing.expectEqual(@as(usize, 1), ordinal);
+    var templates = (try wikimedia_dump.TemplateSource.open(std.testing.io, a, full, page_before)) orelse return error.TestUnexpectedResult;
+    defer templates.deinit();
+    try std.testing.expectEqualStrings("template body", (try templates.lookup(@intCast(ordinal), 2, 22)) orelse return error.TestUnexpectedResult);
     try IndexesOnlyFixture.run(&arena, dump, only, "--indexes-only");
     try std.testing.expectEqualStrings(page_before, try IndexesOnlyFixture.read(a, only, "page-index.tsv"));
     try std.testing.expectEqualSlices(u8, title_before, try IndexesOnlyFixture.read(a, only, "page-title-index.bin"));
@@ -1118,7 +1132,7 @@ test "indexes-only verifies complete compressed stream and footer with ordinary 
     const completion = try std.json.parseFromSliceLeaky(struct { schema: []const u8, version: u32, expected_stream_count: usize, consumed_stream_count: usize, pages: usize }, a, try IndexesOnlyFixture.read(a, only, "extraction-completion.json"), .{});
     try std.testing.expectEqual(@as(usize, 3), completion.expected_stream_count);
     try std.testing.expectEqual(@as(usize, 3), completion.consumed_stream_count);
-    try std.testing.expectEqual(@as(usize, 5), completion.pages);
+    try std.testing.expectEqual(@as(usize, 6), completion.pages);
     try IndexesOnlyFixture.absent(a, only, "compiler-inputs.ready");
 }
 
@@ -1131,7 +1145,7 @@ test "indexes-only keeps truncation refusal and immutable option boundaries with
     try writeAllFile(std.testing.io, try std.fs.path.join(a, &.{root, "compiler-inputs.ready"}), "complete\n");
     try writeAllFile(std.testing.io, try std.fs.path.join(a, &.{root, "extraction-completion.json"}), "old receipt");
     try std.testing.expectError(error.InvalidZstdMember, IndexesOnlyFixture.run(&arena, dump, root, "--indexes-only"));
-    for ([_][]const u8{ "compiler-inputs.ready", "extraction-completion.json", "extraction-source.json", "manifest.jsonl", "modules" }) |name| try IndexesOnlyFixture.absent(a, root, name);
+    for ([_][]const u8{ "compiler-inputs.ready", "extraction-completion.json", "extraction-source.json", "page-title-index.bin", "manifest.jsonl", "modules" }) |name| try IndexesOnlyFixture.absent(a, root, name);
     try std.testing.expectError(error.Usage, extract(.{ .io = std.testing.io, .arena = &arena }, &.{"extract", dump, root, "--indexes-only", "--page-index"}));
     try std.testing.expectError(error.Usage, IndexesOnlyFixture.run(&arena, dump, root, "--unknown"));
     try writeAllFile(std.testing.io, try std.fs.path.join(a, &.{root, ".complete.json"}), "immutable witness");
