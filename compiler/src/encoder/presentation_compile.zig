@@ -1242,6 +1242,10 @@ pub const FigureSizingSource = struct {
     // Exact selected bare-upright SVG raster/geometry proof. This fallback
     // cannot supply other widths or replace ordinary file sizing authority.
     resolve_observed_svg_upright_fit_fn: ?*const fn (?*const anyopaque, A, []const u8, presentation_types.FigureFormat, []const u8, ?u32, ?u32) A.Error!?presentation_types.FigureSizingPolicy = null,
+    // Populated only by the ordinary dated source issuer. A selected page
+    // inventory, when present, has precedence over this constructor proof.
+    default_thumbnail_file_fn: ?*const fn (?*const anyopaque, A, []const u8) A.Error!bool = null,
+    default_thumbnail_page: ?[]const u8 = null,
     // Complete final-anchor inventory for one selected page and occurrence.
     // Missing page context or a mismatched lookup leaves attributes unknown.
     resolve_anchor_attributes_fn: ?*const fn (?*const anyopaque, A, []const u8, presentation_types.FigureFormat, []const u8) A.Error!?table_style_profile.AttributePresenceSource = null,
@@ -15768,15 +15772,39 @@ pub const Renderer = struct {
         caption: []const u8,
         default_size: bool = false,
         observed_height_options: ?[]const u8 = null,
+        default_anchor_token: ?[]const u8 = null,
         authored_width_height: bool = false,
         page_style_token: ?[]const u8 = null,
         stage_options: []const u8 = "",
     };
     fn observedFigureAnchorAttributes(self: *Renderer, choice: FigureChoice) A.Error!?table_style_profile.AttributePresenceSource {
         const provider = self.context.figure_sizing orelse return null;
-        const page_context = provider.page_observation_ctx orelse return null;
-        const resolve = provider.resolve_anchor_attributes_fn orelse return null;
-        return resolve(page_context, self.a, choice.file, choice.format, choice.stage_options);
+        if (provider.page_observation_ctx) |page_context| {
+            const resolve = provider.resolve_anchor_attributes_fn orelse return null;
+            return resolve(page_context, self.a, choice.file, choice.format, choice.stage_options);
+        }
+        if (choice.format != .thumbnail or choice.content != .image) return null;
+        const token = choice.default_anchor_token orelse return null;
+        const page = provider.default_thumbnail_page orelse return null;
+        const file = provider.default_thumbnail_file_fn orelse return null;
+        if (!uniqueStandaloneThumbnail(page, token) or !try file(provider.ctx, self.a, choice.file)) return null;
+        return .{ .ctx = null, .get = defaultThumbnailAttribute };
+    }
+    fn uniqueStandaloneThumbnail(page: []const u8, token: []const u8) bool {
+        // Both authenticated link-option spellings and manual-thumbnail forms
+        // require '='. Exclude encoded or markup-bearing alternatives too.
+        if (std.mem.indexOfAny(u8, token, "=&<>{}") != null or
+            !std.mem.startsWith(u8, token, "[[") or !std.mem.endsWith(u8, token, "]]") or
+            std.mem.indexOfScalar(u8, token, '\n') != null) return false;
+        const start = std.mem.indexOf(u8, page, token) orelse return false;
+        const end = start + token.len;
+        return (start == 0 or page[start - 1] == '\n') and (end == page.len or page[end] == '\n') and
+            std.mem.indexOfPos(u8, page, start + 1, token) == null;
+    }
+    fn defaultThumbnailAttribute(_: ?*const anyopaque, name: []const u8) table_style_profile.AttributePresence {
+        // Both dated image constructors lack rel on their default description
+        // anchors. Other attributes depend on the actual media/error branch.
+        return if (std.ascii.eqlIgnoreCase(name, "rel")) .absent else .unknown;
     }
     fn observedFigureHeightWidth(self: *Renderer, file: []const u8, format_value: presentation_types.FigureFormat, options: []const u8, height: u32) Error!?u32 {
         const source = self.context.figure_sizing orelse return null;
@@ -38083,6 +38111,7 @@ pub const Renderer = struct {
                             const caption_offset = caption_begin - source_begin;
                             const figure_tracked = try missingSlice(self.a, prepared_missing, source);
                             var bound_choice = figure_choice;
+                            if (link_target == null) bound_choice.default_anchor_token = source;
                             bound_choice.page_style_token = if (self.pageStyleSourceRange(source) or
                                 self.pageStyleCopiedAnchor(prepared_missing, source) != null) source else null;
                             bound_choice.caption = figure_tracked.bytes[caption_offset .. caption_offset + figure_choice.caption.len];
@@ -90166,6 +90195,19 @@ test "complete parser output figure ancestry preserves source direction parents 
     try std.testing.expectEqual(@as(?presentation_types.CellTextAlign, .left), ltr_figure.caption_text_align);
     try FigureProducerTest.roundtrip(a, &rtl_with_ltr, ltr_blocks);
 
+}
+
+test "dated default thumbnail refutes only its own rel on an unambiguous standalone file" {
+    const token = "[[Hình:Latin dictionary.jpg|thumb|từ điển]]";
+    try std.testing.expect(Renderer.uniqueStandaloneThumbnail("first\n" ++ token ++ "\nlast", token));
+    for ([_][]const u8{ "text " ++ token, token ++ " suffix", token ++ "\n" ++ token, "[[Hình:other.jpg|thumb]]" }) |page|
+        try std.testing.expect(!Renderer.uniqueStandaloneThumbnail(page, token));
+    inline for (.{ "[[Hình:Latin dictionary.jpg|thumb|link=]]", "[[Hình:Latin dictionary.jpg|thumb|liên_kết=https://example.org]]",
+        "[[Hình:Latin dictionary.jpg|thumb|link&#61;target]]", "[[Hình:Latin dictionary.jpg|thumbnail=old.jpg]]" }) |custom|
+        try std.testing.expect(!Renderer.uniqueStandaloneThumbnail(custom, custom));
+    try std.testing.expectEqual(table_style_profile.AttributePresence.absent, Renderer.defaultThumbnailAttribute(null, "rel"));
+    inline for (.{ "href", "title", "class", "style", "data-mw" }) |attribute|
+        try std.testing.expectEqual(table_style_profile.AttributePresence.unknown, Renderer.defaultThumbnailAttribute(null, attribute));
 }
 
 test "unknown parser root direction requires complete generated Figure resolution equivalence" {

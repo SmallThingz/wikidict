@@ -1677,6 +1677,7 @@ pub const Registry = struct {
     namespace_catalog: *const namespaces.Registry,
     records: []const Record,
     file_authority: bool = false,
+    reviewed_thumbnail_site: bool = false,
     // Parallel to records; derived only after complete raw file-fact replay.
     resolved_files: []const []const u8 = &.{},
     // Authenticated API missing=true facts only; no geometry or link authority.
@@ -2370,6 +2371,8 @@ pub const Registry = struct {
         return .{ .arena = arena.*, .namespace_catalog = ns, .records = records.items,
             .file_authority = true, .resolved_files = resolved_files, .missing_files = missing_files, .height_bound_records = height_bounds, .height_occurrences = height_occurrences,
             .static_poster_files = static_poster_files, .svg_language_file_models = svg_languages,
+            .reviewed_thumbnail_site = equal(doc.core_revision, current_core) and equal(ns.wiki, "viwiktionary") and
+                equal(ns.dump_date, "20261001") and digestMatches(site, "57cd978150654f7298d9343d8cf6c69d3c1f03b160cbb042589774b17c02b83c"),
             .image_map_no_link_policy = image_map_no_link_policy };
     }
     // This does not authorize an upload destination, placeholder dimensions,
@@ -2417,6 +2420,39 @@ pub const Registry = struct {
         const authority = self.height_occurrences.get(key) orelse return null;
         return authority.width_bound;
     }
+    // The full original index binds the dated namespace-zero source scope.
+    // The selected deployment, hashed source roles and both renderer paths are
+    // identified by the site/profile evidence; a new source stays unqualified.
+    pub fn defaultThumbnailPageIndex(self: *const Registry, page_index: []const u8, defaults_sha256: ?[32]u8) bool {
+        if (!self.reviewed_thumbnail_site or !self.file_authority) return false;
+        const defaults = defaults_sha256 orelse return false;
+        return equal(&std.fmt.bytesToHex(defaults, .lower), "eb0dd59011bfb846be294843217806fa3c2de3eeec75d24fb9960eb083d19efc") and
+            digestMatches(page_index, "c5194890c97c8b6412ba9fb4aee75834c9bd30c29db56c4519d27bbacfb40690");
+    }
+
+    pub fn defaultThumbnailFile(raw: ?*const anyopaque, a: A, file: []const u8) A.Error!bool {
+        const self: *const Registry = @ptrCast(@alignCast(raw orelse return false));
+        if (!self.reviewed_thumbnail_site or !self.file_authority or self.height_bound_records.len != self.records.len) return false;
+        const key = canonicalFile(a, self.namespace_catalog, file) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory, else => return false,
+        };
+        defer a.free(key);
+        var lo: usize = 0;
+        var hi = self.records.len;
+        while (lo < hi) {
+            const mid = lo + (hi - lo) / 2;
+            switch (std.mem.order(u8, self.records[mid].canonical_file, key)) {
+                .lt => lo = mid + 1,
+                .gt => hi = mid,
+                .eq => return switch (self.height_bound_records[mid]) {
+                    .bitmap, .jpeg_unrotated, .png, .gif => true,
+                    else => false,
+                },
+            }
+        }
+        return false;
+    }
+
     pub fn resolveHeightOnlyWidth(raw: ?*const anyopaque, a: A, file: []const u8, format_value: types.FigureFormat, height: u32) A.Error!?u32 {
         const self: *const Registry = @ptrCast(@alignCast(raw orelse return null));
         if (!self.file_authority or format_value != .thumbnail or height == 0) return null;

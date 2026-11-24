@@ -1065,6 +1065,7 @@ fn attachFigurePageObservation(a: std.mem.Allocator, codes: *encoder.blob_builde
         }
     }
     const sizing_source = if (codes.figure_sizing) |*value| value else return;
+    sizing_source.default_thumbnail_page = if (namespace_id == 0 and sizing_source.default_thumbnail_file_fn != null) expanded else null;
     if (sizing_source.table_containing_direction) |direction| {
         if (direction.root_only) sizing_source.table_containing_direction = null;
     }
@@ -4888,6 +4889,7 @@ fn runBlobBuild(io: std.Io, a: std.mem.Allocator, args: []const []const u8, opti
     pool.page_observations = if (page_observations) |*value| value else null;
     pool.figure_defaults_sha256 = if (figure_site) |site| site.source_sha256 else null;
     codes.figure_sizing = if (sizing_authority) |*value| .{ .ctx = value, .resolve_fn = figure_sizing.Registry.resolve,
+        .default_thumbnail_file_fn = if (value.defaultThumbnailPageIndex(page_index.bytes, if (figure_site) |site| site.source_sha256 else null)) figure_sizing.Registry.defaultThumbnailFile else null,
         .resolve_canonical_file_fn = figure_sizing.Registry.resolveCanonicalFile,
         .resolve_svg_explicit_box_fn = figure_sizing.Registry.resolveSvgExplicitBox,
         .resolve_default_tiff_page_fn = figure_sizing.Registry.resolveDefaultTiffPage,
@@ -20765,6 +20767,7 @@ fn capturedWriterRun(io: std.Io, a: std.mem.Allocator, request: CapturedWriterRe
     codes.behavior_switches = if (behavior) |*value| value else null;
     codes.image_options = if (images) |*value| value else null;
     codes.figure_sizing = if (sizing_authority) |value| .{ .ctx = value, .resolve_fn = figure_sizing.Registry.resolve,
+        .default_thumbnail_file_fn = if (value.defaultThumbnailPageIndex(page_index.bytes, if (figure_site) |site| site.source_sha256 else null)) figure_sizing.Registry.defaultThumbnailFile else null,
         .resolve_canonical_file_fn = figure_sizing.Registry.resolveCanonicalFile,
         .resolve_svg_explicit_box_fn = figure_sizing.Registry.resolveSvgExplicitBox,
         .resolve_height_only_width_fn = figure_sizing.Registry.resolveHeightOnlyWidth,
