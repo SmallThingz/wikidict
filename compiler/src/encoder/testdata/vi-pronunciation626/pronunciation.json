@@ -1,0 +1,77 @@
+[
+  [
+    {
+      "text": "Hà Nội",
+      "cols": 1,
+      "header": true
+    },
+    {
+      "text": "Huế",
+      "cols": 2,
+      "header": true
+    },
+    {
+      "text": "Sài Gòn",
+      "cols": 1,
+      "header": true
+    }
+  ],
+  [
+    {
+      "text": "tiəŋ˧˥ viə̰ʔt˨˩",
+      "cols": 1,
+      "header": false
+    },
+    {
+      "text": "tiə̰ŋ˩˧ jiə̰k˨˨",
+      "cols": 2,
+      "header": false
+    },
+    {
+      "text": "tiəŋ˧˥ jiək˨˩˨",
+      "cols": 1,
+      "header": false
+    }
+  ],
+  [
+    {
+      "text": "",
+      "cols": 4,
+      "header": false
+    }
+  ],
+  [
+    {
+      "text": "Vinh",
+      "cols": 1,
+      "header": true
+    },
+    {
+      "text": "Thanh Chương",
+      "cols": 2,
+      "header": true
+    },
+    {
+      "text": "Hà Tĩnh",
+      "cols": 1,
+      "header": true
+    }
+  ],
+  [
+    {
+      "text": "tiəŋ˩˩ viət˨˨",
+      "cols": 1,
+      "header": false
+    },
+    {
+      "text": "tiəŋ˩˩ viə̰t˨˨",
+      "cols": 2,
+      "header": false
+    },
+    {
+      "text": "tiə̰ŋ˩˧ viə̰t˨˨",
+      "cols": 1,
+      "header": false
+    }
+  ]
+]

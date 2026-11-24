@@ -1,0 +1,13 @@
+{| class="wiktvi-vie-pron wikitable" style="text-align: center;"
+|+ [[Wiktionary:IPA|IPA]] theo giọng
+|-
+! class="wiktvi-vie-pron-hn-th" | [[Hà Nội]] !! class="wiktvi-vie-pron-h-th" colspan="2" | [[Huế]] !! class="wiktvi-vie-pron-sg-th" | [[Sài Gòn]]
+|- valign="top"
+| class="wiktvi-vie-pron-hn" colspan="1" | <span class="IPA">tiəŋ<span class='IPA-tone'>˧˥</span> viə̰ʔt<span class='IPA-tone'>˨˩</span></span><td class="wiktvi-vie-pron-h" colspan="2"><span class="IPA">tiə̰ŋ<span class='IPA-tone'>˩˧</span> jiə̰k<span class='IPA-tone'>˨˨</span></span></td><td class="wiktvi-vie-pron-sg"><span class="IPA">tiəŋ<span class='IPA-tone'>˧˥</span> jiək<span class='IPA-tone'>˨˩˨</span></span></td>
+|-
+| colspan="4" style="background-color: var(--wikt-palette-white);color:inherit; border-left-color: var(--wikt-palette-white); border-right-color: var(--wikt-palette-white);" |
+|-
+! class="wiktvi-vie-pron-v-th" | [[Vinh]] !! class="wiktvi-vie-pron-tc-th" colspan="2" | [[Thanh Chương]] !! class="wiktvi-vie-pron-ht-th" | [[Hà Tĩnh]]
+|- valign="top"
+| class="wiktvi-vie-pron-v" colspan="1" | <span class="IPA">tiəŋ<span class='IPA-tone'>˩˩</span> viət<span class='IPA-tone'>˨˨</span></span><td class="wiktvi-vie-pron-tc" colspan="2"><span class="IPA">tiəŋ<span class='IPA-tone'>˩˩</span> viə̰t<span class='IPA-tone'>˨˨</span></span></td><td class="wiktvi-vie-pron-ht"><span class="IPA">tiə̰ŋ<span class='IPA-tone'>˩˧</span> viə̰t<span class='IPA-tone'>˨˨</span></span></td>
+|}
