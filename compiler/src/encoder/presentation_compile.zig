@@ -5841,6 +5841,8 @@ pub const NativeArticleFragment = struct {
     starts_page: bool,
     quoted_paragraph_openings: []const usize = &.{},
     quoted_paragraph_original_prefix: []const u8 = "",
+    static_example_openings: []const usize = &.{},
+    static_example_original_prefix: []const u8 = "",
     observed_box_table_heading_root: bool = false,
 };
 pub const NativeArticleHost = struct {
@@ -6160,6 +6162,12 @@ fn validateInlineBoxRunStructure(values: []const Span) Error!void {
                 continue;
             }
             if (span.flags.superscript or span.flags.subscript) return error.UncompiledPresentation;
+            if (group.spans.len == 0) {
+                // This exact zero-advance top edge has no text to add to the
+                // paragraph's bidi scan. Continue checking all later siblings.
+                if (!presentation_types.validInlineBoxGroupOwner(span)) return error.UncompiledPresentation;
+                continue;
+            }
             if (presentation_types.inlineBoxHasOverlayContent(group.*) and
                 !presentation_types.validInlineBoxGroupOwner(span)) return error.UncompiledPresentation;
             var label: StaticInlineTextScan = .{};
@@ -6253,6 +6261,38 @@ fn scanInlineBoxFlowSiblings(scan: *StaticInlineTextScan, spans: []const Span) E
         if (!staticInlineOrdinarySpan(ordinary) or span.inline_box_group != null or presentation_types.spanHasClippedAbsolute(span) or
             inlineBoxHasAudioControl(span) or span.font_size_unknown) return error.UncompiledPresentation;
         if (span.kind != .line_break) try scan.text(span.text);
+    }
+}
+
+test "static swatch joins only concordant source entity leaves and preserves their provenance" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const swatch: table_style_profile.InlineBoxResolution = .{ .static_decoration = true,
+        .border = .all(.{ .solid = .{ .width = .{ .unit = .px, .value = 1 }, .color = .{ .rgb = "#000000" } } }) };
+    const style: Style = .{ .background = "#ffffff" };
+    const Cases = struct { source: []const u8, accept: bool, unknown: bool = false, lost: bool = false };
+    for ([_]Cases{
+        .{ .source = "&nbsp;&nbsp;&nbsp;&nbsp;", .accept = true },
+        .{ .source = "&#160;&#xA0;", .accept = true },
+        .{ .source = "&nbsp; X", .accept = false },
+        .{ .source = "&nbsp;&bogus;", .accept = false },
+        .{ .source = "&nbsp;", .accept = false, .unknown = true },
+        .{ .source = "&nbsp;", .accept = false, .lost = true },
+    }) |case| {
+        var r: Renderer = .{ .a = a, .context = .{} };
+        try r.inlineTextWithMissing(MissingText.untracked(case.source), style, 0);
+        var tracked = MissingText.untracked(case.source);
+        tracked.unknown = case.unknown;
+        tracked.lost_missing_range = case.lost;
+        try std.testing.expectEqual(case.accept, try r.joinStaticSwatchEntities(tracked, case.source, swatch, style));
+        if (case.accept) {
+            try std.testing.expectEqual(@as(usize, 1), r.spans.items.len);
+            const leaf = r.spans.items[0];
+            try std.testing.expectEqual(Provenance.entity_literal, leaf.provenance);
+            try std.testing.expectEqual(std.mem.count(u8, case.source, "&") * 2, leaf.text.len);
+            try std.testing.expectEqual(leaf.text.len / 2, std.mem.count(u8, leaf.text, "\u{a0}"));
+        }
     }
 }
 
@@ -8990,6 +9030,7 @@ pub const Renderer = struct {
     heading_source: ?[]const u8 = null,
     page_root_wiki_table_openings: ?*std.ArrayList(usize) = null,
     page_quoted_paragraph_openings: ?*std.ArrayList(usize) = null,
+    page_static_example_openings: ?*std.ArrayList(usize) = null,
     dispatched_quoted_paragraph: ?[]const u8 = null,
     page_top_level_wiki_table_openings: ?*std.ArrayList(usize) = null,
     neutral_root_table_prefix: ?NeutralRootTablePrefix = null,
@@ -9022,13 +9063,15 @@ pub const Renderer = struct {
     in_template_literal_scope: bool = false,
     // Borrowed only while an admitted explicit wiki-link label is parsed.
     // Arbitrary inherited action styles and destination strings cannot set it.
+    static_example_line: ?*const OrdinaryBulletLink = null,
     static_numbered_definition: ?*const OrdinaryBulletLink = null,
-    static_numbered_quotes: ?*const StaticNumberedQuotes = null,
+    static_list_quotes: ?*const StaticListQuotes = null,
     static_frame_paint: ?[]const u8 = null,
     inline_box_owner: ?*InlineBoxOwner = null,
     inline_box_quoted_paragraph: ?InlineBoxQuotedParagraph = null,
     // Borrowed only while the document body emits this direct, authored list.
     inline_box_root_list: ?[]const u8 = null,
+    wiki_heading_span_title: ?[]const u8 = null,
     inline_box_native_motion_diagnostic: NativeInlineMotionDeclarationDiagnostic = .none,
     inline_box_native_class_diagnostic: NativeSourceClassQueryDiagnostic.Reason = .not_attempted,
     inline_box_profile_diagnostic: table_style_profile.InlineBoxSourceDiagnostic = .none,
@@ -11857,10 +11900,35 @@ pub const Renderer = struct {
         isolated_geometry_unresolved = 8,
         fn bits(self: @This()) u64 { return @as(u64, @intFromEnum(self)) << 48; }
     };
+    fn directWikiHeadingSpan(self: *const Renderer, line: []const u8, heading: Heading) ?[]const u8 {
+        const tracked = self.body_missing orelse return null;
+        const title = heading.title;
+        if (self.in_reference or self.in_template_literal_scope or self.pre_block or self.parsed_pre or
+            self.poem_depth != 0 or self.table_viewport_cell_source != null or
+            !noLiParentSourceRange(tracked, line) or title.len == 0 or
+            line.len != title.len + 2 * @as(usize, heading.level) or
+            !inlineOverlaySameSourceSlice(title, line[heading.level..][0..title.len])) return null;
+        const opener = syntax.tagAt(title, 0) orelse return null;
+        if (!opener.is("span") or opener.closing or opener.self_closing or
+            !formattingAngleAttributesBalanced(opener.attrs)) return null;
+        const pair = syntax.matchingTag(title, opener) orelse return null;
+        if (pair.end != title.len or pair.inner_end == opener.end or
+            std.mem.indexOfAny(u8, title[opener.end..pair.inner_end], "<>[]{}'\r\n") != null) return null;
+        return title;
+    }
+
     // Transport only local facts about the exact authored SPAN. A clean
     // opening can carry these facts even when missing source elsewhere on the
     // page prevents issuing a complete ancestor class/ID inventory.
     fn inlineBoxAuthoredSelectorFacts(self: *Renderer, tag: syntax.Tag, element: *table_style_profile.TextElement) Error!void {
+        if (self.wiki_heading_span_title) |issued| if (tag.is("span") and element.alternative_ancestry == null and
+            element.source_key == @intFromPtr(tag.name.ptr)) {
+            const tracked = self.inline_missing orelse return;
+            if (localTrackedTagOpening(tracked, tag)) |opening| if (noLiParentSourceRange(tracked, opening))
+                if (self.wikiCellCurrentBodyRange(MissingText.untracked(issued), opening)) |original| {
+                    if (issued.ptr == original.ptr) element.source_direct_parent_not_li = true;
+                };
+        };
         if (!tag.is("span") or self.content_root != .parser_output or self.in_reference or self.in_template_literal_scope or
             self.pre_block or self.parsed_pre or self.poem_depth != 0 or self.media_depth != 0 or self.ruby_depth != 0 or
             self.table_viewport_cell_source != null or self.body_link_target.len != 0 or self.explicit_wiki_label != null or
@@ -12053,7 +12121,15 @@ pub const Renderer = struct {
         else if (profile != null and authored_query.complete_ancestor_classes == null and
             authored_query.source_inline_box_ancestor_classes == null) local: {
             if (self.inline_box_root_list != null) break :local try self.inlineBoxListAncestorClasses(element, style.native_inline_motion);
-            if (self.inline_box_root_table_opening != null) break :local try self.inlineBoxTableAncestorClasses(element, style.native_inline_motion);
+            if (self.inline_box_root_table_opening != null) {
+                const classes = (try self.inlineBoxTableAncestorClasses(element, style.native_inline_motion)) orelse break :local null;
+                // The authenticated single cell line encloses this SPAN directly.
+                // Its class superset can disprove a required direct-parent class,
+                // including when a classless implicit paragraph wraps the text.
+                if (authored_query.source_direct_parent_classes == null)
+                    authored_query.source_direct_parent_classes = classes;
+                break :local classes;
+            }
             if (static_decoration and self.inline_box_quoted_paragraph != null) break :local try self.inlineBoxQuotedParagraphClasses(element, style.native_inline_motion);
             break :local null;
         } else null;
@@ -12065,7 +12141,7 @@ pub const Renderer = struct {
                 authored_query.source_direct_parent_classes = self.inlineBoxListLiteralParent(element, style.native_inline_motion);
         }
         const query_element: *const table_style_profile.TextElement = if (authored_query.source_nonlink_element or authored_query.source_fragment_target_absent or
-            authored_query.source_direct_parent_classes != null or local_classes != null) &authored_query else source_query;
+            authored_query.source_direct_parent_not_li or authored_query.source_direct_parent_classes != null or local_classes != null) &authored_query else source_query;
         if (!static_decoration and query_element != element and self.inline_box_owner == null and
             !try profile.?.hasInlineBoxCandidateIn(self.a, query_element, css)) return .{};
         const use_profile = profile != null and !profile.?.inlineBoxIsolatedProfile();
@@ -12209,7 +12285,9 @@ pub const Renderer = struct {
         return found;
     }
 
-    const StaticNumberedQuotes = struct {
+    const StaticListQuotes = struct {
+        root: *const NativeInlineMotionRoot,
+        epoch: u64,
         operation: *const OrdinaryBulletLink,
         map: *const QuoteSourceMap,
         original: MissingText,
@@ -12249,6 +12327,10 @@ pub const Renderer = struct {
     // An HTML tree builder can reconstruct a misnested I around the next
     // sibling. Only retain straight, closed inline siblings and plain links.
     fn staticNumberedClosedSiblings(bytes: []const u8, comptime quote_input: bool) bool {
+        return staticListClosedSiblings(bytes, quote_input, false);
+    }
+
+    fn staticListClosedSiblings(bytes: []const u8, comptime quote_input: bool, comptime example: bool) bool {
         var stack: [max_depth][]const u8 = undefined;
         var depth: usize = 0;
         var at: usize = 0;
@@ -12274,10 +12356,30 @@ pub const Renderer = struct {
                     const token = it.next() orelse return false;
                     if (token.kind != .link or it.cursor == 0 or token.link_empty_label or token.link_label_restored_close) return false;
                     const raw_link = bytes[at..][0..it.cursor];
-                    if (std.mem.indexOfAny(u8, raw_link, "<>") != null or std.mem.indexOf(u8, raw_link, "''") != null) return false;
+                    if (std.mem.indexOfAny(u8, raw_link, "<>") != null or std.mem.indexOf(u8, raw_link, "''") != null) {
+                        if (!example or !token.link_has_pipe or token.trail.len != 0 or token.text.len == 0 or
+                            !wikiClassContains(raw_link, token.text) or !std.mem.endsWith(u8, raw_link, "]]")) return false;
+                        const label_start = @intFromPtr(token.text.ptr) - @intFromPtr(raw_link.ptr);
+                        if (label_start < 3 or raw_link[label_start - 1] != '|' or label_start + token.text.len != raw_link.len - 2 or
+                            std.mem.indexOfAny(u8, raw_link[0..label_start], "<>'") != null or
+                            std.mem.indexOfAny(u8, token.text, "[]{}") != null or !staticNumberedClosedSiblings(token.text, false)) return false;
+                    }
                     at += it.cursor;
                 },
                 '\'' => {
+                    if (example and starts(bytes[at..], "''")) {
+                        var end = at + 2;
+                        while (end < bytes.len and bytes[end] == '\'') : (end += 1) {}
+                        if (end - at > 3) return false;
+                        const marker = bytes[at..end];
+                        if (depth != 0 and std.mem.eql(u8, stack[depth - 1], marker)) depth -= 1 else {
+                            if (depth == stack.len) return false;
+                            stack[depth] = marker;
+                            depth += 1;
+                        }
+                        at = end;
+                        continue;
+                    }
                     if (!quote_input and starts(bytes[at..], "''")) return false;
                     at += 1;
                 },
@@ -12296,7 +12398,7 @@ pub const Renderer = struct {
         if (std.mem.indexOf(u8, original, "''") == null) return true;
         // Replay the actual emitted B/I boundaries. A source quote count cannot
         // tell which elements opened or closed across an intervening sibling.
-        const held = self.static_numbered_quotes orelse return false;
+        const held = self.static_list_quotes orelse return false;
         const output = held.output.bytes;
         if (!wikiClassContains(output, current_opening)) return false;
         const projected_end = @intFromPtr(current_opening.ptr) - @intFromPtr(output.ptr);
@@ -12394,11 +12496,39 @@ pub const Renderer = struct {
         return try classes.toOwnedSlice(self.a);
     }
 
-    fn staticNumberedQuoteInput(self: *const Renderer, original: MissingText) bool {
-        if (!QuoteSourceMap.cleanLocal(original)) return false;
-        const body = self.currentStaticNumberedBody() orelse return false;
-        const mapped = self.wikiCellCurrentBodyRange(self.native_inline_motion_root.?.source, original.bytes) orelse return false;
-        return inlineOverlaySameSourceSlice(body, mapped);
+    fn staticListQuoteOperation(self: *const Renderer, original: MissingText) ?*const OrdinaryBulletLink {
+        if (!QuoteSourceMap.cleanLocal(original)) return null;
+        const root = self.native_inline_motion_root orelse return null;
+        const current = self.static_numbered_definition orelse self.static_example_line orelse return null;
+        const body = if (self.static_numbered_definition != null)
+            self.currentStaticNumberedBody() orelse return null
+        else body: {
+            const host = self.native_article_host orelse return null;
+            const active = self.body_missing orelse return null;
+            if (self.body_depth != 1 or !self.figure_implicit_list_context or root.reference != null or
+                self.native_inline_motion_epoch == 0 or !host.matchesActive(self, root.source) or
+                !NativeArticleHost.sameSource(root.source, active) or !inlineOverlaySameSourceSlice(current.source, root.source.bytes) or
+                !noLiParentSourceRange(active, current.line) or !starts(current.line, "#: ") or
+                !inlineOverlaySameSourceSlice(wikiListLineBody(current.line[2..]), current.body)) return null;
+            break :body current.body;
+        };
+        const mapped = self.wikiCellCurrentBodyRange(root.source, original.bytes) orelse return null;
+        return if (inlineOverlaySameSourceSlice(body, mapped)) current else null;
+    }
+
+    fn staticListQuoteOriginal(self: *const Renderer, op: *const OrdinaryBulletLink,
+        source: MissingText, token: []const u8, comptime copied: bool) ?[]const u8
+    {
+        const held = self.static_list_quotes orelse return null;
+        if (held.root != self.native_inline_motion_root or held.epoch != self.native_inline_motion_epoch or
+            held.operation != op or self.staticListQuoteOperation(held.original) != op or
+            !noLiParentSourceRange(source, token) or !QuoteSourceMap.cleanLocal(held.output) or
+            !inlineOverlaySameSourceSlice(held.original.bytes, held.map.original) or
+            !inlineOverlaySameSourceSlice(held.output.bytes, held.map.output) or !rootLanguageQuoteMapClean(held.map) or
+            !std.mem.eql(u8, &held.digest, &nativeQuoteMapDigest(held.map))) return null;
+        const original = (if (copied) held.map.copiedOriginal(token) else held.map.coveredOriginal(token, held.original.bytes)) orelse return null;
+        const mapped = self.wikiCellCurrentBodyRange(self.native_inline_motion_root.?.source, original) orelse return null;
+        return if (wikiClassContains(op.body, mapped)) mapped else null;
     }
 
     fn staticNumberedOriginal(self: *const Renderer, source: MissingText, token: []const u8, comptime copied: bool) ?[]const u8 {
@@ -12407,14 +12537,80 @@ pub const Renderer = struct {
         const root = self.native_inline_motion_root.?.source;
         if (self.wikiCellCurrentBodyRange(root, token)) |original|
             return if (wikiClassContains(body, original)) original else null;
-        const held = self.static_numbered_quotes orelse return null;
-        if (held.operation != self.static_numbered_definition.? or !self.staticNumberedQuoteInput(held.original) or
-            !QuoteSourceMap.cleanLocal(held.output) or !inlineOverlaySameSourceSlice(held.original.bytes, held.map.original) or
-            !inlineOverlaySameSourceSlice(held.output.bytes, held.map.output) or !rootLanguageQuoteMapClean(held.map) or
-            !std.mem.eql(u8, &held.digest, &nativeQuoteMapDigest(held.map))) return null;
-        const original = (if (copied) held.map.copiedOriginal(token) else held.map.coveredOriginal(token, held.original.bytes)) orelse return null;
-        const mapped = self.wikiCellCurrentBodyRange(root, original) orelse return null;
-        return if (wikiClassContains(body, mapped)) mapped else null;
+        return self.staticListQuoteOriginal(self.static_numbered_definition.?, source, token, copied);
+    }
+
+    // A literal paint owner at the beginning of an ordinary definition example.
+    // Rejoin the live HTML declaration and paired range to the current list
+    // operation. A closed sibling or later translation cannot contribute an
+    // ancestor class to this first authored child of the ordinary DD.
+    fn examplePaintClasses(self: *Renderer, query: *table_style_profile.TextElement, tag: syntax.Tag,
+        token: []const u8, tracked: MissingText, state: NativeInlineMotionState) Error!?[]const u8
+    {
+        const operation = self.static_example_line orelse return null;
+        const held = switch (state) { .proved => |proof| proof, else => return null };
+        const host = self.native_article_host orelse return null;
+        const declaration = held.last orelse return null;
+        const root = held.root.source;
+        if (self.native_inline_motion_root != held.root or self.native_inline_motion_epoch != held.epoch or held.epoch == 0 or
+            held.root.reference != null or self.body_depth != 1 or !self.figure_implicit_list_context or
+            !host.native_paragraph_css_subjects or !host.matchesActive(self, root) or
+            !NativeArticleHost.sameSource(root, self.body_missing orelse return null) or
+            !inlineOverlaySameSourceSlice(operation.source, root.bytes) or !noLiParentSourceRange(root, operation.line) or
+            !starts(operation.line, "#: ") or !inlineOverlaySameSourceSlice(wikiListLineBody(operation.line[2..]), operation.body) or
+            query.parent != null or query.alternative_ancestry != null or declaration.origin != .html or declaration.previous != null or
+            !tag.is("span") or query.source_key != @intFromPtr(tag.name.ptr) or !std.mem.eql(u8, declaration.opening, declaration.opening_snapshot) or
+            !noLiParentSourceRange(tracked, token) or !noLiParentSourceRange(declaration.source, declaration.opening)) return null;
+        const original = self.wikiCellCurrentBodyRange(root, token) orelse
+            self.staticListQuoteOriginal(operation, tracked, token, true) orelse return null;
+        const opening = self.wikiCellCurrentBodyRange(root, declaration.opening) orelse
+            self.staticListQuoteOriginal(operation, declaration.source, declaration.opening, true) orelse return null;
+        if (original.ptr != operation.body.ptr or !wikiClassContains(operation.body, original) or opening.ptr != original.ptr or
+            !std.mem.eql(u8, opening, declaration.opening) or !std.mem.eql(u8, token, original)) return null;
+        const authored = syntax.tagAt(original, 0) orelse return null;
+        const paired = syntax.matchingTag(original, authored) orelse return null;
+        if (!authored.is("span") or authored.end != opening.len or paired.end != original.len or
+            !tableNestedSourceClose(original, authored.name, paired, false) or htmlOwnAttributePresence(&authored, "dir") != .absent or
+            htmlOwnAttributePresence(&authored, "class") == .unknown or !std.mem.eql(u8, query.classes, (try self.semanticAttribute(authored,"class")) orelse "") or
+            !std.mem.eql(u8, query.id, (try self.semanticAttribute(authored,"id")) orelse "")) return null;
+        const at = @intFromPtr(operation.line.ptr) - @intFromPtr(root.bytes.ptr);
+        if ((at != 0 and root.bytes[at - 1] != '\n') or
+            (at + operation.line.len < root.bytes.len and root.bytes[at + operation.line.len] != '\n')) return null;
+        if (host.active_fragment) |fragment| {
+            if (!inlineOverlaySameSourceSlice(fragment.prepared, root.bytes) or fragment.start > fragment.page.len or
+                root.bytes.len > fragment.page.len - fragment.start or !std.mem.eql(u8, root.bytes, fragment.page[fragment.start..][0..root.bytes.len])) return null;
+            const start = fragment.start + at;
+            if (!containsSortedOffset(fragment.static_example_openings, start)) return null;
+            const original_page = fragment.static_example_original_prefix;
+            if (start > original_page.len or operation.line.len > original_page.len - start or
+                !std.mem.eql(u8, operation.line, original_page[start..][0..operation.line.len])) return null;
+        } else if (!host.active_whole_page or !NativeArticleHost.sameSource(host.source, root)) return null;
+        var cursor = at;
+        while (cursor > 0 and at - cursor < 16 * 1024) {
+            const previous_end = cursor - 1;
+            const previous = if (std.mem.lastIndexOfScalar(u8, root.bytes[0..previous_end], '\n')) |newline| newline + 1 else 0;
+            const line = root.bytes[previous..previous_end];
+            if (line.len < 3 or !noLiParentSourceRange(root, line)) return null;
+            if (starts(line, "# ")) {
+                // The parent definition contains only ordinary text/links. It
+                // cannot leave an explicit HTML ancestor around a later DD.
+                if (std.mem.indexOfAny(u8, line, "<>{}'") != null or !staticNumberedClosedSiblings(line[2..], false)) return null;
+                var classes: std.ArrayList(u8) = .empty;
+                defer classes.deinit(self.a);
+                try classes.appendSlice(self.a, native_source_root_class_tokens);
+                nativeClassAppendTokens(self.a, &classes, query.classes) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory, error.InvalidSourceClassInventory => return null,
+                };
+                query.source_direct_parent_classes = "";
+                query.source_nonlink_element = true;
+                query.source_fragment_target_absent = htmlOwnAttributePresence(&authored, "id") == .absent;
+                return try classes.toOwnedSlice(self.a);
+            }
+            if (!starts(line, "#: ") or !inlineOverlayCellPrefix(root, previous + 3, previous_end) or
+                !staticListClosedSiblings(line[3..], false, true)) return null;
+            cursor = previous;
+        }
+        return null;
     }
 
     fn quotedBulletOwner(map: *const QuoteSourceMap, token: []const u8) ?[]const u8 {
@@ -12487,7 +12683,10 @@ pub const Renderer = struct {
             error.OutOfMemory => return error.OutOfMemory, else => return error.UncompiledPresentation,
         }) orelse return false;
         const element = try self.textElement(tag, inherited.text_element, effective.language);
-        const chain = (try self.nativeInlineMotionDeclarations(effective.native_inline_motion)) orelse return error.UncompiledPresentation;
+        const chain = (try self.nativeInlineMotionDeclarations(effective.native_inline_motion)) orelse {
+            self.tracePresentationRejection("static_inline_frame", "source_chain_absent", tracked.bytes, at, 0, error.UncompiledPresentation);
+            return error.UncompiledPresentation;
+        };
         defer self.a.free(chain);
         var empty: table_style_profile.Profile = undefined;
         const selected = self.textPaintProfile() orelse blk: {
@@ -12500,7 +12699,10 @@ pub const Renderer = struct {
         const issued_query = try self.nativeSourceClassQuery(tag, selected, element, effective.native_inline_motion);
         const query = issued_query orelse element;
         var scoped_query = query.*;
-        const local_classes = try self.staticNumberedAncestorClasses(element, effective.native_inline_motion, &scoped_query);
+        const token = tracked.bytes[at..pair.end];
+        const example = if (ownership.background != null and ownership.padding.left.value == 0 and ownership.padding.right.value == 0)
+            try self.examplePaintClasses(&scoped_query, tag, token, tracked, effective.native_inline_motion) else null;
+        const local_classes = example orelse try self.staticNumberedAncestorClasses(element, effective.native_inline_motion, &scoped_query);
         defer if (local_classes) |owned| self.a.free(owned);
         if (scoped_query.complete_ancestor_classes == null and scoped_query.source_inline_box_ancestor_classes == null)
             scoped_query.source_inline_box_ancestor_classes = local_classes;
@@ -12508,16 +12710,22 @@ pub const Renderer = struct {
             try self.staticQuotedBulletClasses(tracked, tracked.bytes[at..pair.end]) else null;
         defer if (bullet_classes) |owned| self.a.free(owned);
         if (bullet_classes) |classes| scoped_query.source_inline_box_ancestor_classes = classes;
-        const closed = table_style_profile.staticInlineOwnerScope(selected, self.a, &scoped_query, css, self.customParent(effective), chain) catch |err| switch (err) {
+        const font_receipt: ?table_style_profile.StaticInlineFont = if (example != null and !effective.font_size_unknown and !inherited.font_size_unknown and
+            effective.font_scale_basis == .normal_body and inherited.font_scale_basis != .css_px and effective.font_scale != null and
+            !inherited.code and !inherited.heading and !inherited.superscript and !inherited.subscript)
+            .{ .parent = inherited.font_scale orelse 1, .own = effective.font_scale.? } else null;
+        const profile_rejection = table_style_profile.staticInlineOwnerRejection(selected, self.a, &scoped_query, css, self.customParent(effective), chain, font_receipt) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory, else => return error.UncompiledPresentation,
         };
-        if (!closed) return error.UncompiledPresentation;
+        if (profile_rejection != .none) {
+            self.tracePresentationRejection("static_inline_frame", @tagName(profile_rejection), tracked.bytes, at, 0, error.UncompiledPresentation);
+            return error.UncompiledPresentation;
+        }
         // Both the geometry and every character that will enter its range must
         // belong to this complete paired occurrence in the issuing source.
-        const token = tracked.bytes[at..pair.end];
         const frame = self.inline_source_domain orelse return error.UncompiledPresentation;
         const source = frame.tracked orelse return error.UncompiledPresentation;
-        if (((tracked.unknown or source.unknown) and self.staticNumberedOriginal(tracked, token, false) == null) or
+        if (((tracked.unknown or source.unknown) and example == null and self.staticNumberedOriginal(tracked, token, false) == null) or
             source.bytes.ptr != frame.source.ptr or source.bytes.len != frame.source.len or
             !noLiParentSourceRange(tracked, token) or !noLiParentSourceRange(source, token) or depth >= max_depth or
             effective.font_size_unknown or effective.ruby_script_ambiguous or effective.image != null or effective.self_link_target != null or
@@ -12880,13 +13088,14 @@ pub const Renderer = struct {
             if (failure == error.UncompiledPresentation) self.tracePresentationRejection("inline_box", "child_rejection", tracked.bytes, at, 0, error.UncompiledPresentation);
             return failure;
         };
+            const authored_swatch = !inherited_action and try self.joinStaticSwatchEntities(tracked, body, box, effective);
             for (self.spans.items) |span| {
                 if (box.static_decoration and (span.kind != .text or span.target.len != 0 or span.image != null))
                     return error.UncompiledPresentation;
                 if (!presentation_types.validRubyBodyChild(span) or span.ruby != null or span.inline_padding_group != null or
                     span.inline_action_group != null or span.inline_box_group != null or presentation_types.spanHasClippedAbsolute(span) or span.pending_figure != null or span.pending_container != null or
                     span.pending_bidi_scope != null or span.captured_bidi_scope != null or span.font_size_unknown or span.generated_link != null or
-                    span.external_literal_parameter != null or span.generated_diagnostic or span.provenance != .parsed or
+                    span.external_literal_parameter != null or span.generated_diagnostic or (span.provenance != .parsed and !authored_swatch) or
                     (inherited_action and (span.kind != .text or span.target.len != 0))) { self.tracePresentationRejection("inline_box", "unsupported_child", tracked.bytes, at, 0, error.UncompiledPresentation); return error.UncompiledPresentation; }
             }
             if (box.cursor) |cursor| for (self.spans.items) |*child| {
@@ -12894,6 +13103,12 @@ pub const Renderer = struct {
                 child.inline_style = .{ .cursor = cursor };
             };
             children = try self.spans.toOwnedSlice(self.a);
+        }
+        if (children.len == 0 and (body.len != 0 or box.position != .static or !box.static_decoration or
+            inherited_action or self.ruby_depth != 0 or previous_owner != null or !Renderer.htmlNestedAttributes(tag.attrs, &.{"style"})))
+        {
+            self.tracePresentationRejection("inline_box", "empty_group_source", tracked.bytes, at, 0, error.UncompiledPresentation);
+            return error.UncompiledPresentation;
         }
         const group = try self.a.create(presentation_types.InlineBoxGroup(Span));
         group.* = .{ .padding = box.padding, .border = box.border, .overlays = try owner.overlays.toOwnedSlice(self.a), .spans = children, .radius = box.radius };
@@ -12923,6 +13138,46 @@ pub const Renderer = struct {
         return true;
     }
 
+
+    // The ordinary entity parser emits one source-provenance leaf per reference.
+    // A uniformly styled static swatch uses a single native text run. Verify every
+    // original token and its ordinary leaf before joining that run.
+    fn joinStaticSwatchEntities(self: *Renderer, tracked: MissingText, body: []const u8,
+        box: table_style_profile.InlineBoxResolution, style: Style) Error!bool
+    {
+        const spans = self.spans.items;
+        if (!box.static_decoration or box.cursor != null or spans.len == 0 or
+            style.kind != .text or style.target.len != 0 or style.background == null or
+            !noLiParentSourceRange(tracked, body)) return false;
+        if (tracked.unknown) {
+            const held = switch (style.native_inline_motion) { .proved => |value| value, else => return false };
+            const host = self.native_article_host orelse return false;
+            if (self.native_inline_motion_root != held.root or self.native_inline_motion_epoch != held.epoch or
+                held.epoch == 0 or !host.matchesActive(self, held.root.source)) return false;
+            const original = self.wikiCellCurrentBodyRange(held.root.source, body) orelse return false;
+            if (!noLiParentSourceRange(held.root.source, original) or !std.mem.eql(u8, original, body)) return false;
+        }
+        const group: presentation_types.InlineBoxGroup(Span) = .{ .padding = box.padding, .border = box.border,
+            .radius = box.radius, .spans = spans[0..1] };
+        if (!staticInlineNonbreakingSwatch(.{ .text = "", .background = style.background }, group)) return false;
+        var rest = body;
+        for (spans) |leaf| {
+            if (rest.len == 0 or rest[0] != '&' or leaf.provenance != .entity_literal or
+                !std.mem.eql(u8, leaf.text, "\u{a0}") or !sameFigurePreparationValue(leaf, spans[0])) return false;
+            var scratch: [4]u8 = undefined;
+            const token = decodeEntity(rest, &scratch, true) orelse return false;
+            if (!std.mem.eql(u8, token.bytes, leaf.text)) return false;
+            rest = rest[token.consumed..];
+        }
+        if (rest.len != 0) return false;
+        if (spans.len > 1) {
+            const joined = try self.a.alloc(u8, spans.len * "\u{a0}".len);
+            for (0..spans.len) |i| @memcpy(joined[2 * i ..][0..2], "\u{a0}");
+            spans[0].text = joined;
+            self.spans.items.len = 1;
+        }
+        return true;
+    }
 
     fn textRaw(self: *Renderer, value: []const u8, original: Style) Error!void {
         return self.textRawGenerated(value, original, null);
@@ -27275,7 +27530,7 @@ pub const Renderer = struct {
             clippedAbsoluteEnclosurePrefix(source, at, end, true);
     }
 
-    fn inlineOverlayClosedWikiTable(source: MissingText, table_end: usize, cell_end: usize) bool {
+    fn inlineOverlayClosedWikiTable(source: MissingText, table_end: usize, cell_end: usize, category_owner: ?*const Renderer) bool {
         var at = table_end;
         if (at >= source.bytes.len or source.bytes[at] != '\n') return false;
         at += 1;
@@ -27286,8 +27541,15 @@ pub const Renderer = struct {
             if (end < at or end > source.bytes.len) return false;
             const line = trim(source.bytes[at..end]);
             if (wikiTableIndent(line) != null) return false;
-            if (starts(line, "|}")) return at >= cell_end and trim(line[2..]).len == 0 and
-                noLiParentSourceRange(source, line);
+            if (starts(line, "|}")) {
+                if (at < cell_end or !noLiParentSourceRange(source, line)) return false;
+                if (trim(line[2..]).len == 0) return true;
+                // The normal table parser consumes exactly |}. Its already-qualified
+                // category suffix is outside the closed table and remains available
+                // to the ordinary parser. It cannot introduce an ancestor of a cell.
+                const owner = category_owner orelse return false;
+                return owner.context.namespace_catalog != null and owner.wikiFigureFontCloseTail(line[2..]);
+            }
             at = if (end < source.bytes.len) end + 1 else end;
         }
         return false;
@@ -27542,7 +27804,7 @@ pub const Renderer = struct {
                 inlineOverlaySameSourceSlice(selected, self.inline_box_root_table_opening orelse return null) and
                 host.startsBoxTableRoot(self, held.root.source) else clippedAbsoluteEnclosurePrefix(held.root.source, 0, table_at, true)) or
             !inlineOverlayClosedWikiTable(held.root.source, table_at + original_table.len,
-                cell_at + original_cell.len)) return null;
+                cell_at + original_cell.len, if (dispatched_table != null) self else null)) return null;
         // The live cell delimiter owns its full first source line. Every HTML
         // ancestor must be an actually matched descendant in that same cell;
         // omitted PRE/list/foreign wrappers cannot acquire inherited defaults.
@@ -31675,6 +31937,7 @@ pub const Renderer = struct {
             };
             for (0..root.source.bytes.len) |at|
                 if (std.ascii.startsWithIgnoreCase(root.source.bytes[at..], "padding") or
+                    std.ascii.startsWithIgnoreCase(root.source.bytes[at..], "background") or
                     std.ascii.startsWithIgnoreCase(root.source.bytes[at..], "line-height") or
                     std.ascii.startsWithIgnoreCase(root.source.bytes[at..], "position") or
                     std.ascii.startsWithIgnoreCase(root.source.bytes[at..], "border") or
@@ -38593,7 +38856,8 @@ pub const Renderer = struct {
         var table_link_quote_live = false;
         var selected_table_quote_source = false;
         var local_target_quote_live = false;
-        var static_numbered_quote_live = false;
+        var list_quote_operation: ?*const OrdinaryBulletLink = null;
+        var heading_quote_input = false;
         var native_quote_input_live = false;
         var decorated_quote_root: ?*const NativeInlineMotionRoot = null;
         var box_quote_input_live = false;
@@ -38629,14 +38893,20 @@ pub const Renderer = struct {
                         wikiClassContains(scope.source, original) else false) else false);
             local_target_quote_live = ordinary and figure_quote_input_live and
                 self.context.local_link_targets != null and QuoteSourceMap.clean(prepared.source);
-            static_numbered_quote_live = ordinary and figure_quote_input_live and prepared.source.unknown and
-                self.static_numbered_definition != null and
-                (table_style_profile.staticInlineOwnerCandidate(prepared.source.bytes) or std.ascii.findIgnoreCase(prepared.source.bytes, "border") != null) and
-                self.staticNumberedQuoteInput(prepared.source);
+            if (ordinary and figure_quote_input_live and prepared.source.unknown and
+                (self.static_numbered_definition != null or self.static_example_line != null) and
+                (table_style_profile.staticInlineOwnerCandidate(prepared.source.bytes) or std.ascii.findIgnoreCase(prepared.source.bytes, "border") != null))
+                list_quote_operation = self.staticListQuoteOperation(prepared.source);
             native_quote_input_live = ordinary and figure_quote_input_live and self.nativeQuoteInputEligible(prepared.source, previous_source_domain);
             if (!native_quote_input_live and ordinary and figure_quote_input_live and previous_source_domain == null and
                 std.mem.indexOf(u8, prepared.source.bytes, "[[") != null and std.ascii.findIgnoreCase(prepared.source.bytes, "border") != null)
                 decorated_quote_root = self.decoratedQuoteInput(prepared.source);
+            if (self.wiki_heading_span_title) |issued| {
+                if (ordinary and figure_quote_input_live and QuoteSourceMap.cleanLocal(prepared.source)) {
+                    if (self.wikiCellCurrentBodyRange(MissingText.untracked(issued), prepared.source.bytes)) |original|
+                        heading_quote_input = inlineOverlaySameSourceSlice(original, issued);
+                }
+            }
             if (ordinary and figure_quote_input_live) root_language_quote_proof = self.rootLanguageQuoteInputProof(prepared.source);
             const selected_quote_source = ordinary and figure_quote_input_live and QuoteSourceMap.cleanLocal(prepared.source) and
                 self.registeredCaptionOriginal(prepared.source.bytes) != null;
@@ -38647,24 +38917,25 @@ pub const Renderer = struct {
             };
             const output = try normalizeWikiQuotesPreparedMappedInDomain(self.a, prepared.source, 0, false, self.context,
                 if (table_tails.seed) |seed| prepared.forwardSeed(comparisons.forwardSeed(seed)) else null,
-                if (static_numbered_quote_live or quote_scope != null or table_link_quote_live or local_target_quote_live or native_quote_input_live or decorated_quote_root != null or box_quote_input_live or root_language_quote_proof != null or
+                if (heading_quote_input or list_quote_operation != null or quote_scope != null or table_link_quote_live or local_target_quote_live or native_quote_input_live or decorated_quote_root != null or box_quote_input_live or root_language_quote_proof != null or
                     (ordinary and figure_quote_input_live and (figure_source_domain != null or self.context.body_link_continuations != null))) &quote_map else null,
-                static_numbered_quote_live or selected_quote_source or selected_table_quote_source);
+                heading_quote_input or list_quote_operation != null or selected_quote_source or selected_table_quote_source);
             prepared.release(self.a, comparisons.source, output);
             comparisons.release(self.a, table_tails.source, output);
             table_tails.release(self.a, unmatched, output);
             break :quoted output;
         };
-        const previous_numbered_quotes = self.static_numbered_quotes;
-        var numbered_quotes: StaticNumberedQuotes = undefined;
-        if (static_numbered_quote_live and QuoteSourceMap.cleanLocal(unmatched) and QuoteSourceMap.cleanLocal(quoted) and
+        const previous_list_quotes = self.static_list_quotes;
+        var list_quotes: StaticListQuotes = undefined;
+        if (list_quote_operation != null and QuoteSourceMap.cleanLocal(unmatched) and QuoteSourceMap.cleanLocal(quoted) and
             inlineOverlaySameSourceSlice(quote_map.original, unmatched.bytes) and inlineOverlaySameSourceSlice(quote_map.output, quoted.bytes) and
             rootLanguageQuoteMapClean(&quote_map)) {
-            numbered_quotes = .{ .operation = self.static_numbered_definition.?, .map = &quote_map, .original = unmatched,
+            list_quotes = .{ .root = self.native_inline_motion_root.?, .epoch = self.native_inline_motion_epoch,
+                .operation = list_quote_operation.?, .map = &quote_map, .original = unmatched,
                 .output = quoted, .digest = nativeQuoteMapDigest(&quote_map) };
-            self.static_numbered_quotes = &numbered_quotes;
+            self.static_list_quotes = &list_quotes;
         }
-        defer self.static_numbered_quotes = previous_numbered_quotes;
+        defer self.static_list_quotes = previous_list_quotes;
         const previous_box_quotes = self.inline_box_quoted_paragraph;
         self.inline_box_quoted_paragraph = if (box_quote_input_live and inlineBoxPairedBoldMap(&quote_map, unmatched, quoted))
             .{ .root = inherited.native_inline_motion.proved.root, .epoch = inherited.native_inline_motion.proved.epoch, .map = &quote_map } else null;
@@ -38739,7 +39010,24 @@ pub const Renderer = struct {
             self.figure_caption_quote_source = &figure_quote_domain;
         };
         defer self.figure_caption_quote_source = previous_figure_quotes;
-        try self.inlineNormalizedHtml(quoted, inherited, 0, inherited.kind != .link or inherited.poem_independent_parse);
+        {
+            const previous_heading = self.wiki_heading_span_title;
+            defer self.wiki_heading_span_title = previous_heading;
+            if (heading_quote_input) {
+                // Keep this heading's parent fact across the actual quote producer
+                // only when it copied the complete original title in one piece.
+                self.wiki_heading_span_title = null;
+                if (QuoteSourceMap.cleanLocal(quoted) and rootLanguageQuoteMapClean(&quote_map) and
+                    inlineOverlaySameSourceSlice(quote_map.output, quoted.bytes))
+                {
+                    if (quote_map.copiedOriginal(quoted.bytes)) |original| {
+                        if (inlineOverlaySameSourceSlice(original, unmatched.bytes))
+                            self.wiki_heading_span_title = quoted.bytes;
+                    }
+                }
+            }
+            try self.inlineNormalizedHtml(quoted, inherited, 0, inherited.kind != .link or inherited.poem_independent_parse);
+        }
         try separateGeneratedDiagnosticBoundaries(self.a, self.spans.items);
         validateInlineBoxRunStructure(self.spans.items) catch |failure| {
             self.tracePresentationRejection("static_inline_box", "paragraph_domain", tracked.bytes, 0, 0, failure);
@@ -40805,7 +41093,42 @@ pub const Renderer = struct {
         return self.renderBodySlice(tracked.bytes, false, false, 0, null);
     }
 
+    fn classifiedTableSeedLine(source: []const u8, seed: QuoteSeed) ?usize {
+        if (seed.state != .none or seed.correction != null or seed.label_scope or
+            seed.opaque_cut != 0 or seed.line_end >= source.len or source[seed.line_end] != '\n' or
+            std.mem.indexOfScalar(u8, source[0..seed.line_end], '\n') != null) return null;
+        return seed.line_end;
+    }
+
+    // Only the caller's exact full, classified fragment can reborrow its own
+    // tracked source. The normal slice has already validated and rebased every
+    // range. Preserve a changed, clipped, generated or detached domain.
+    fn classifiedBoxTableBody(self: *Renderer, source: []const u8, sliced: MissingText) ?MissingText {
+        const parent = self.body_missing orelse return null;
+        const host = self.native_article_host orelse return null;
+        const root = self.native_inline_motion_root orelse return null;
+        const fragment = host.active_fragment orelse return null;
+        if (self.body_depth != 0 or !fragment.observed_box_table_heading_root or
+            !inlineOverlaySameSourceSlice(parent.bytes, source) or
+            !NativeArticleHost.sameSource(parent, root.source) or !host.startsBoxTableRoot(self, parent) or
+            parent.lost_missing_range or sliced.lost_missing_range or parent.unknown != sliced.unknown or
+            parent.generated_source != null or sliced.generated_source != null or
+            parent.generated_links.len != 0 or sliced.generated_links.len != 0 or
+            parent.ranges.len != sliced.ranges.len or parent.literal_curly_ranges.len != sliced.literal_curly_ranges.len or
+            !std.mem.eql(u8, source, sliced.bytes)) return null;
+        for (parent.ranges, sliced.ranges) |left, right| if (!std.meta.eql(left, right)) return null;
+        for (parent.literal_curly_ranges, sliced.literal_curly_ranges) |left, right| if (!std.meta.eql(left, right)) return null;
+        return parent;
+    }
+
     fn missingSliceWithHeadingSource(self: *Renderer, parent: MissingText, child: []const u8) Error!MissingText {
+        // Preserve the exact final Article's complete source value. An empty
+        // range may be a slice of the page's actual array, even though this
+        // language fragment contains none of those ranges.
+        if (self.body_depth == 0 and self.native_article_host != null and
+            inlineOverlaySameSourceSlice(parent.bytes, child) and
+            parent.ranges.len == 0 and parent.literal_curly_ranges.len == 0 and
+            parent.generated_links.len == 0 and parent.generated_source == null) return parent;
         var tracked = try missingSlice(self.a, parent, child);
         if (self.pre_scope_observer != null and
             (parent.ranges.len != 0 or parent.literal_curly_ranges.len != 0 or parent.generated_links.len != 0) and
@@ -41736,7 +42059,12 @@ pub const Renderer = struct {
         if (self.body_depth == 0) self.figure_source_font_observation = if (self.context.figure_sizing) |sizing|
             sizing.figure_style_ctx != null and sizing.resolve_figure_style_fn != null else false;
         defer self.figure_source_font_observation = previous_figure_observation;
-        const tracked = if (self.body_missing) |parent| try self.missingSliceWithHeadingSource(parent, source) else MissingText.untracked(source);
+        const sliced = if (self.body_missing) |parent| try self.missingSliceWithHeadingSource(parent, source) else MissingText.untracked(source);
+        const classified_seed_line = if (initial_quote) |seed| classifiedTableSeedLine(source, seed) else null;
+        const classified_table_body = if (source_origin == null and !initial_inline and !terminal_inline and
+            (initial_quote == null or classified_seed_line != null) and initial_list == null)
+            self.classifiedBoxTableBody(source, sliced) else null;
+        const tracked = classified_table_body orelse sliced;
         try self.checkPageAncestorEffectsIn(tracked,
             self.bodyFormattingStyle(self.body_language_direction orelse .{}));
         const previous_implicit_list = self.figure_implicit_list_context;
@@ -42685,6 +43013,13 @@ pub const Renderer = struct {
                 continue;
             }
             if (heading) |h| {
+                // A whole literal span dispatched as the heading title has a heading
+                // owner, possibly with a generated headline wrapper. Its immediate
+                // parent cannot be the LI of a stylesheet child combinator.
+                const previous_heading_title = self.wiki_heading_span_title;
+                self.wiki_heading_span_title = if (!anchored_inline and end == physical_end)
+                    self.directWikiHeadingSpan(input[start..end], h) else null;
+                defer self.wiki_heading_span_title = previous_heading_title;
                 try self.bodyRawBlock(&blocks, input, h.title, &body_quotes, .heading, "", "", h.level);
                 if (!anchored_inline and
                     !self.in_reference and !self.pre_block and !self.parsed_pre and
@@ -42785,9 +43120,11 @@ pub const Renderer = struct {
                     // Recursion, indentation, a pending formatting owner, normalized copies
                     // and a detached source fragment cannot certify a root table opening.
                     if (viewport == null and !hidden_table and !anchored_inline and !initial_inline and
-                        !terminal_inline and initial_quote == null and initial_list == null and table_path.len == 0 and
-                        table_open == 0 and table_line.ptr == input[start..].ptr and
-                        (start == 0 or input[start - 1] == '\n') and end == physical_end and origin == 0 and
+                        !terminal_inline and (initial_quote == null or
+                            (classified_table_body != null and start > (classified_seed_line orelse input.len))) and
+                        initial_list == null and table_path.len == 0 and table_open == 0 and table_line.ptr == input[start..].ptr and
+                        (start == 0 or input[start - 1] == '\n') and end == physical_end and
+                        (origin == 0 or classified_table_body != null) and
                         self.body_depth == 1 and self.typed_table_depth == 0 and self.literal_wiki_table_operation == null and
                         self.content_root == .parser_output and !self.figure_implicit_list_context and
                         !self.html_list_item_flow and !self.html_blockquote_flow and parent_table_style.text_element == null and
@@ -43061,6 +43398,23 @@ pub const Renderer = struct {
                     defer self.static_numbered_definition = previous_numbered;
                     const previous_bullet_link = self.ordinary_bullet_link;
                     const bullet_link: OrdinaryBulletLink = .{ .source = input, .line = physical_line, .body = body };
+                    const previous_example = self.static_example_line;
+                    self.static_example_line = null;
+                    defer self.static_example_line = previous_example;
+                    if (self.body_depth == 1 and !anchored_inline and !link_label_scope and !self.rejection_probe_scope and
+                        !self.html_list_item_flow and !self.html_blockquote_flow and !self.in_reference and !self.in_template_literal_scope and
+                        self.typed_table_depth == 0 and self.table_viewport_cell_source == null and !self.parsed_pre and !self.pre_block and
+                        kind == .example and std.mem.eql(u8, path, "#:") and list_prefix.body_start == 2 and labeled_list_opening == null and
+                        inlineOverlaySameSourceSlice(list_line, physical_line) and (start == 0 or input[start - 1] == '\n') and
+                        starts(body, "<span") and table_style_profile.staticInlineOwnerCandidate(body))
+                    {
+                        if (self.page_static_example_openings) |openings| {
+                            // Both witnesses are issued before recursion for the
+                            // entire parser input, including a declared whole copy.
+                            if (wiki_root_source and html_root_source) try openings.append(self.a, start);
+                        }
+                        self.static_example_line = &bullet_link;
+                    }
                     // A numbered definition is a separate source operation. Existing
                     // bullet-only proofs continue to require their original dispatcher.
                     self.static_numbered_definition = if (!anchored_inline and !link_label_scope and kind == .definition and
@@ -47931,6 +48285,55 @@ fn flattened(a: A, spans: []const Span) ![]u8 {
     for (spans) |s| try out.appendSlice(a, s.text);
     return out.toOwnedSlice(a);
 }
+test "literal empty Japanese pitch edge preserves the kana and separate transliteration action through the codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = "<span lang=\"ja\" class=\"Jpan\">ひ<span style=\"border-top:1px solid\"></span></span> " ++
+        "<span class=\"Latn\"><samp>[hì]</samp></span> ([[平板型|Heiban]] – [0])";
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try renderer.renderBody(source);
+    try std.testing.expectEqual(@as(usize, 1), blocks.len);
+    const values = blocks[0].spans;
+    try std.testing.expectEqualStrings("ひ [hì] (Heiban – [0])", try flattened(a, values));
+    var markers: usize = 0;
+    var actions: usize = 0;
+    for (values, 0..) |span, i| {
+        if (span.inline_box_group) |group| {
+            try std.testing.expect(i > 0 and i + 1 < values.len);
+            try std.testing.expectEqualStrings("ひ", values[i - 1].text);
+            try std.testing.expectEqualStrings("ja", span.language);
+            try std.testing.expectEqual(@as(usize, 0), group.spans.len);
+            try std.testing.expectEqual(@as(usize, 0), group.overlays.len);
+            try std.testing.expect(group.border.top == .solid and group.border.top.solid.color == .current_color);
+            try std.testing.expectEqualDeep(presentation_types.StyleLength{ .unit = .px, .value = 1 }, group.border.top.solid.width);
+            markers += 1;
+        }
+        if (span.kind == .link) {
+            try std.testing.expectEqualStrings("平板型", span.target);
+            try std.testing.expectEqualStrings("Heiban", span.text);
+            actions += 1;
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 1), markers);
+    try std.testing.expectEqual(@as(usize, 1), actions);
+    const stored = try FormattingScopeTest.encode(a, &renderer, blocks);
+    const codec = @import("blob_encoder").presentation_codec;
+    const bytes = try codec.encodeAlloc(a, stored);
+    const decoded = try codec.decodeAlloc(a, bytes, stored.entry.title, .language,
+        .{ .heading = stored.entry.language.?, .code = stored.entry.language_code });
+    try std.testing.expectEqualDeep(stored, decoded);
+    for ([_][]const u8{
+        "<span style='border-top:1px solid'><span></span></span>",
+        "<span style='border-top:1px solid' title='meaning'></span>",
+        "<span style='border-top:1px solid;position:relative'></span>",
+        "<span style='border-top:1px solid'></span> עברית",
+    }) |rejected| {
+        var other: Renderer = .{ .a = a, .context = .{} };
+        try std.testing.expectError(error.UncompiledPresentation, other.renderBody(rejected));
+    }
+}
+
 test "native inline box retains Japanese pitch empty child geometry fonts actions and codec" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
     var renderer: Renderer = .{ .a = a, .context = .{} };
@@ -129449,6 +129852,114 @@ test "typed overlay BDI keeps source CSS direction and occurrence barriers" {
     renderer.active_bidi_capture = null; try std.testing.expect(!renderer.bidiBoxSourceCurrent(&proof));
 }
 
+test "classified table body retains the complete original fragment and validated occurrence bounds" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var profile = try table_style_profile.parseForTargetAlloc(a, "", .screen);
+    defer profile.deinit();
+    const value = try InlineOverlayParagraphSource40Test.make(a, &profile);
+    const prefix = "==Earlier language==\n";
+    const page = try std.mem.concat(a, u8, &.{ prefix, value.source });
+    const lf = std.mem.indexOfScalar(u8, value.source, '\n').?;
+    const expired: QuoteSeed = .{ .state = .none, .correction = null, .line_end = lf,
+        .boundaries = QuoteBoundaries.init(value.source), .opaque_cut = 0 };
+    try std.testing.expectEqual(@as(?usize, lf), Renderer.classifiedTableSeedLine(value.source, expired));
+    var seeded = expired; seeded.state = .i;
+    try std.testing.expect(Renderer.classifiedTableSeedLine(value.source, seeded) == null);
+    seeded = expired; seeded.label_scope = true;
+    try std.testing.expect(Renderer.classifiedTableSeedLine(value.source, seeded) == null);
+    seeded = expired; seeded.correction = 0;
+    try std.testing.expect(Renderer.classifiedTableSeedLine(value.source, seeded) == null);
+    seeded = expired; seeded.opaque_cut = 1;
+    try std.testing.expect(Renderer.classifiedTableSeedLine(value.source, seeded) == null);
+    seeded = expired; seeded.line_end = std.mem.indexOfScalarPos(u8, value.source, lf + 1, '\n').?;
+    try std.testing.expect(Renderer.classifiedTableSeedLine(value.source, seeded) == null);
+    const parent: MissingText = .{ .bytes = value.source, .unknown = true,
+        .ranges = &.{.{ .start = 2, .end = 8, .occurrence = 5 }} };
+    value.host.active_fragment = .{ .page = page, .original_page = null, .start = prefix.len, .prepared = value.source,
+        .starts_page = false, .observed_box_table_heading_root = true };
+    value.host.active_whole_page = false;
+    value.host.active_source = parent;
+    value.host.active_snapshot = NativeArticleHost.snapshot(parent);
+    value.root.source = parent;
+    value.renderer.body_missing = parent;
+    value.renderer.body_depth = 0;
+    const copied = try missingSlice(a, parent, value.source);
+    try std.testing.expect(copied.bytes.ptr != parent.bytes.ptr and copied.ranges.ptr != parent.ranges.ptr);
+    const exact = value.renderer.classifiedBoxTableBody(value.source, copied) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(NativeArticleHost.sameSource(exact, parent));
+    try std.testing.expect(!Renderer.noLiParentSourceRange(exact, value.source[2..8]));
+    try std.testing.expect(!value.host.startsPage(&value.renderer, exact));
+    try std.testing.expect(value.renderer.classifiedBoxTableBody(copied.bytes, copied) == null);
+    var changed = copied;
+    changed.ranges = &.{.{ .start = 2, .end = 8, .occurrence = 6 }};
+    try std.testing.expect(value.renderer.classifiedBoxTableBody(value.source, changed) == null);
+    changed = copied; changed.lost_missing_range = true;
+    try std.testing.expect(value.renderer.classifiedBoxTableBody(value.source, changed) == null);
+    changed = copied; changed.unknown = false;
+    try std.testing.expect(value.renderer.classifiedBoxTableBody(value.source, changed) == null);
+    value.renderer.body_depth = 1;
+    try std.testing.expect(value.renderer.classifiedBoxTableBody(value.source, copied) == null);
+    value.renderer.body_depth = 0;
+    value.host.active_fragment.?.observed_box_table_heading_root = false;
+    try std.testing.expect(value.renderer.classifiedBoxTableBody(value.source, copied) == null);
+}
+
+test "dispatched table closure permits only a complete untainted selected category suffix" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const ns = @import("namespace_registry");
+    var registry = try ns.Registry.init(a, ns.french_test_fixture);
+    defer registry.deinit();
+    var r: Renderer = .{ .a = a, .context = .{ .namespace_catalog = &registry } };
+    const prefix = "{|\n|-\n| kept\n";
+    const page = prefix ++ "|}[[Catégorie:Couleurs]]\n";
+    try std.testing.expect(Renderer.inlineOverlayClosedWikiTable(.{ .bytes = page, .unknown = true }, 2, prefix.len - 1, &r));
+    try std.testing.expect(!Renderer.inlineOverlayClosedWikiTable(MissingText.untracked(page), 2, prefix.len - 1, null));
+    for ([_][]const u8{ "[[:Catégorie:Visible]]", "[[Variable:Couleurs]]", "before [[Catégorie:Couleurs]]",
+        "[[Catégorie:Couleurs]] after", "[[Catégorie:Couleurs|sort]]", "[[Catégorie:]]", "[[Catégorie:Couleurs#section]]" }) |tail| {
+        const changed = try std.mem.concat(a, u8, &.{ prefix, "|}", tail, "\n" });
+        try std.testing.expect(!Renderer.inlineOverlayClosedWikiTable(MissingText.untracked(changed), 2, prefix.len - 1, &r));
+    }
+    const tainted: MissingText = .{ .bytes = page, .ranges = &.{.{ .start = prefix.len, .end = page.len - 1, .occurrence = 1 }} };
+    try std.testing.expect(!Renderer.inlineOverlayClosedWikiTable(tainted, 2, prefix.len - 1, &r));
+    r.context.namespace_catalog = null;
+    try std.testing.expect(!Renderer.inlineOverlayClosedWikiTable(MissingText.untracked(page), 2, prefix.len - 1, &r));
+}
+
+test "dispatched table geometry refutes only absent direct parent classes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{ "character-sample", "inflection" }, 0..) |required, index| {
+        const css = try std.fmt.allocPrint(a, ".{s} > :only-child {{ display:block; }}", .{required});
+        var profile = try table_style_profile.parseForTargetAlloc(a, css, .screen);
+        defer profile.deinit();
+        const value = try InlineOverlayParagraphSource40Test.make(a, &profile);
+        value.renderer.inline_box_root_table_opening = value.operation.table_opening;
+        var node = value.element;
+        var state = value.motion;
+        for (0..3) |_| {
+            node = node.parent.?;
+            state.proved.last = state.proved.last.?.previous;
+        }
+        const tag = syntax.tagAt(state.proved.last.?.opening, 0).?;
+        const style: Style = .{ .language = "ja", .native_inline_motion = state };
+        const inherited: Style = .{ .text_element = node.parent };
+        var reason: table_style_profile.InlineBoxSourceDiagnostic = .none;
+        const result = try value.renderer.inlineBoxResolutionMode(tag, style, inherited, null, null, null, &reason, true, false);
+        // "inflection" occurs on the original table. A class superset cannot
+        // refute that selector even though the actual cell itself is unclassed.
+        try std.testing.expectEqual(index == 1, result.unresolved);
+        if (index == 1) try std.testing.expectEqual(table_style_profile.InlineBoxSourceDiagnostic.own_geometry_unresolved, reason);
+        value.renderer.inline_box_root_table_opening = try a.dupe(u8, value.operation.table_opening);
+        const foreign = try value.renderer.inlineBoxResolutionMode(tag, style, inherited, null, null, null, &reason, true, false);
+        try std.testing.expect(foreign.unresolved);
+    }
+}
+
 test "direct table box class inventory preserves the native root and requires all original operation owners" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -129572,8 +130083,8 @@ test "native overlay paragraph table receipt refuses stale source operation and 
     try std.testing.expect(!Renderer.clippedAbsoluteEnclosurePrefix(MissingText.untracked("<pre>before"), 0, 11, true));
     try std.testing.expect(Renderer.inlineOverlayCellPrefix(MissingText.untracked("  kept "), 0, 7));
     try std.testing.expect(!Renderer.inlineOverlayCellPrefix(MissingText.untracked("<pre>kept"), 0, 9));
-    try std.testing.expect(!Renderer.inlineOverlayClosedWikiTable(MissingText.untracked("{|\n|-\n| kept\n"), 2, 12));
-    try std.testing.expect(!Renderer.inlineOverlayClosedWikiTable(MissingText.untracked("{|\n|-\n| kept\n{|\n| nested\n|}\n|}\n"), 2, 12));
+    try std.testing.expect(!Renderer.inlineOverlayClosedWikiTable(MissingText.untracked("{|\n|-\n| kept\n"), 2, 12, null));
+    try std.testing.expect(!Renderer.inlineOverlayClosedWikiTable(MissingText.untracked("{|\n|-\n| kept\n{|\n| nested\n|}\n|}\n"), 2, 12, null));
 }
 
 test "native single bullet overlay paragraph receipt preserves authored and normalized quote copy custody" {
@@ -130397,12 +130908,12 @@ test "Serbian article pitch retains its source list borders kana link and citati
     try ns.attachLanguageConversion(@embedFile("testdata/sr-ri207-padding/namespace-siteinfo.raw.json"));
     try ns.attachInterwikiMap(@embedFile("testdata/sr-ri207-padding/interwiki-map.tsv"));
     var profile = try table_style_profile.parseSourcesForTargetAlloc(a, &.{
-        .{ .css = @embedFile("testdata/sr-ri207-padding/common.css"), .base_url = "" },
         .{ .css = @embedFile("testdata/sr-ri632-list/SubtleUpdatemarker.css"), .base_url = "", .unknown_applicability = true },
         .{ .css = @embedFile("testdata/sr-ri632-list/WatchlistBase.css"), .base_url = "", .unknown_applicability = true },
         .{ .css = @embedFile("testdata/sr-ri632-list/WatchlistGreenIndicators.css"), .base_url = "", .unknown_applicability = true },
         .{ .css = @embedFile("testdata/sr-ri632-list/WatchlistGreenIndicatorsMono.css"), .base_url = "", .unknown_applicability = true },
         .{ .css = @embedFile("testdata/sr-ri632-list/charinsert-styles.css"), .base_url = "" },
+        .{ .css = @embedFile("testdata/sr-ri207-padding/common.css"), .base_url = "" },
     }, .screen);
     defer profile.deinit();
     const context: Context = .{ .title = "日", .namespace_catalog = &ns, .table_styles = &profile, .text_paint_styles = &profile };
@@ -131612,12 +132123,12 @@ test "Serbian numbered mouse classifier retains authenticated unknown coordinate
         \\# <span class="usage-label-sense"><span class="ib-brac">(</span><span class="ib-content">[[w:Hong Kong Cantonese|Hong Kong Cantonese]][[Категорија:Hong Kong Cantonese|MOUSE]]<span class="ib-comma">,</span>&#32;[[computing#Noun|computing]][[Категорија:zh:Computing|MOUSE]]</span><span class="ib-brac">)</span></span> [[#English|mouse]] <span style="padding-left:15px; font-size:80%"><span style="background:#EDFFFF">(''Класификатор'': <span class="Hant" lang="zh-Hant">[[隻#Chinese|隻]]</span><span class="Hani" lang="zh">／</span><span class="Hani" lang="zh">[[只#Chinese|只]]</span> <span style="border-bottom: 1px dotted #000; cursor:help" title="Cantonese"><i>c</i></span>;<span style="padding-left:4px; padding-right:4px">&nbsp;</span><span class="Hant" lang="zh-Hant">[[個#Chinese|個]]</span><span class="Hani" lang="zh">／</span><span class="Hans" lang="zh-Hans">[[个#Chinese|个]]</span> <span style="border-bottom: 1px dotted #000; cursor:help" title="Cantonese"><i>c</i></span>)</span></span>[[Категорија:Кинески именице класификоване по 隻/只|mouse]][[Категорија:Кинески именице класификоване по 個/个|mouse]]
     ;
     const sources = [_]table_style_profile.Source{
-        .{ .css = @embedFile("testdata/sr-ri207-padding/common.css"), .base_url = "" },
         .{ .css = @embedFile("testdata/sr-ri632-list/SubtleUpdatemarker.css"), .base_url = "", .unknown_applicability = true },
         .{ .css = @embedFile("testdata/sr-ri632-list/WatchlistBase.css"), .base_url = "", .unknown_applicability = true },
         .{ .css = @embedFile("testdata/sr-ri632-list/WatchlistGreenIndicators.css"), .base_url = "", .unknown_applicability = true },
         .{ .css = @embedFile("testdata/sr-ri632-list/WatchlistGreenIndicatorsMono.css"), .base_url = "", .unknown_applicability = true },
         .{ .css = @embedFile("testdata/sr-ri632-list/charinsert-styles.css"), .base_url = "" },
+        .{ .css = @embedFile("testdata/sr-ri207-padding/common.css"), .base_url = "" },
     };
     var profile = try table_style_profile.parseSourcesForTargetAlloc(a, &sources, .screen);
     defer profile.deinit();
@@ -131669,7 +132180,7 @@ test "Serbian numbered mouse classifier retains authenticated unknown coordinate
     const encoded = try codec.encodeAlloc(a, stored);
     const decoded = try codec.decodeAlloc(a, encoded, stored.entry.title, .language, .{ .heading = stored.entry.language.?, .code = stored.entry.language_code });
     try std.testing.expectEqualDeep(stored, decoded);
-    try std.testing.expect(prepared.missing.unknown and renderer.static_numbered_quotes == null and renderer.static_numbered_definition == null);
+    try std.testing.expect(prepared.missing.unknown and renderer.static_list_quotes == null and renderer.static_numbered_definition == null);
 }
 
 test "static inline decoration accepts only authored span siblings under the operation's paired wiki bold" {
@@ -131769,5 +132280,218 @@ test "quoted bullet frame maps its declaring span through retained quote operati
             try std.testing.expect(mapped != null and Renderer.inlineOverlaySameSourceSlice(mapped.?, input[prefix.len..]));
             try std.testing.expect(Renderer.quotedBulletOwner(&map, try a.dupe(u8, result.bytes[at..])) == null);
         } else try std.testing.expect(mapped == null);
+    }
+}
+
+test "captured VI Wiktionary heading keeps its genuine language label despite missing templates in the later body" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const label = "<span class=\"lang lang-vie\" data-iso=\"vie\" title=\"Mã ngôn ngữ: vie\">Tiếng Việt</span>";
+    const line = "==" ++ label ++ "==";
+    const page = line ++ "\nLater missing";
+    var profile = try table_style_profile.parseAlloc(a, @embedFile("testdata/vi-dau100/common.css")); defer profile.deinit();
+    const context: Context = .{ .title = "Wiktionary", .table_styles = &profile, .text_paint_styles = &profile };
+    const tracked: MissingText = .{ .bytes = page, .ranges = &.{.{ .start = line.len + 7, .end = page.len, .occurrence = 1 }}, .unknown = true };
+    var renderer: Renderer = .{ .a = a, .context = context };
+    const blocks = try renderer.renderBodyWithHeadingOffsets(tracked);
+    try std.testing.expect(blocks.len >= 1 and blocks[0].kind == .heading and blocks[0].level == 2);
+    try std.testing.expectEqualStrings("Tiếng Việt", try plainText(a, blocks[0].spans));
+    try std.testing.expect(blocks[0].spans.len == 1);
+    const text = blocks[0].spans[0];
+    try std.testing.expect(text.kind == .text and text.target.len == 0 and text.inline_box_group == null and text.provenance == .parsed);
+    try std.testing.expectEqualStrings("Mã ngôn ngữ: vie", text.tooltip orelse return error.TestUnexpectedResult);
+    try std.testing.expectEqualStrings("lang lang-vie", text.classes);
+    try std.testing.expect(renderer.wiki_heading_span_title == null);
+
+    // The final classified fragment receives its paragraph quote seed from
+    // the page scanner. Even the unchanged title flows through a copied buffer.
+    var scan = QuoteBoundaryScan.initWithContext(page, null, context);
+    defer scan.deinit();
+    const seed = try scan.at(a, 0, context.behavior_switches);
+    var fragment: Renderer = .{ .a = a, .context = context };
+    const copied_blocks = try fragment.renderBodyWithFragmentPreAndMissing(tracked, .{ .quote = seed });
+    try std.testing.expect(copied_blocks[0].kind == .heading and copied_blocks[0].level == 2);
+    try std.testing.expectEqualStrings("Tiếng Việt", try plainText(a, copied_blocks[0].spans));
+    try std.testing.expect(copied_blocks[0].spans.len == 1);
+    try std.testing.expectEqualStrings("Mã ngôn ngữ: vie", copied_blocks[0].spans[0].tooltip.?);
+    try std.testing.expect(copied_blocks[0].spans[0].inline_box_group == null and fragment.wiki_heading_span_title == null);
+
+    // The original uncertain selector stays possible for an unowned SPAN, or
+    // a real direct child of LI. Proving the heading does not change the sheet.
+    const el: table_style_profile.TextElement = .{ .tag = "span", .classes = "lang lang-vie" };
+    const uncertain = try profile.resolveInlineBoxSourceDiagnosedIn(a, &el, "", .{}, false, false, null, null);
+    try std.testing.expect(uncertain.unresolved);
+    var parent: table_style_profile.TextElement = .{ .tag = "li" };
+    const tree: table_style_profile.TextElement = .{ .tag = "div", .classes = "etymology" };
+    parent.parent = &tree;
+    var actual = el; actual.parent = &parent;
+    const matched = try profile.containerRuleMatchesIn(a, &actual); defer a.free(matched.rules);
+    for (matched.rules) |rule| {
+        if (rule.match == .known and std.mem.indexOf(u8, rule.css, "hyphens: auto") != null) break;
+    } else return error.TestUnexpectedResult;
+    var dirty = tracked; dirty.ranges = &.{.{ .start = 2, .end = 9, .occurrence = 1 }};
+    renderer.body_missing = dirty;
+    try std.testing.expect(renderer.directWikiHeadingSpan(page[0..line.len], .{ .level = 2, .title = page[2..][0..label.len] }) == null);
+}
+
+
+test "definition example quote-copy custody excludes the other original DD generated intervals and expired epochs" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var input = std.Io.Reader.fixed(@embedFile("testdata/sr-ri632-list/expanded.wikitext.zst"));
+    const window = try a.alloc(u8, 1024 * 1024 + std.compress.zstd.block_size_max);
+    var decoder = std.compress.zstd.Decompress.init(&input, window, .{ .window_len = 1024 * 1024 });
+    const page = try a.alloc(u8, 150900);
+    try decoder.reader.readSliceAll(page);
+    try std.testing.expectError(error.EndOfStream, decoder.reader.takeByte());
+    const whole: MissingText = .{ .bytes = page, .unknown = true };
+    const context: Context = .{ .title = "日" };
+    var renderer: Renderer = .{ .a = a, .context = context, .body_depth = 1, .figure_implicit_list_context = true,
+        .content_root = .parser_output, .native_body_language = "zh", .body_missing = whole, .native_inline_motion_epoch = 1 };
+    var host: NativeArticleHost = .{ .renderer = &renderer, .source = whole, .title = context.title, .language_code = "zh",
+        .active_source = whole, .active_snapshot = NativeArticleHost.snapshot(whole), .native_paragraph_css_subjects = true };
+    const root: NativeInlineMotionRoot = .{ .source = whole };
+    renderer.native_inline_motion_root = &root;
+    renderer.native_article_host = &host;
+    const first: Renderer.OrdinaryBulletLink = .{ .source = page, .line = page[14737..15262], .body = page[14740..15262] };
+    const second: Renderer.OrdinaryBulletLink = .{ .source = page, .line = page[15671..15922], .body = page[15674..15922] };
+    const original: MissingText = .{ .bytes = first.body, .unknown = true };
+    renderer.static_example_line = &first;
+    try std.testing.expect(renderer.staticListQuoteOperation(original) == &first);
+    var scan = QuoteBoundaryScan.initWithContext(page, null, context);
+    defer scan.deinit();
+    const seed = try scan.at(a, 14740, null);
+    var map: QuoteSourceMap = .{};
+    defer map.deinit(a);
+    const quoted = try normalizeWikiQuotesPreparedMappedInDomain(a, original, 0, false, context, seed, &map, true);
+    try std.testing.expect(quoted.bytes.ptr != first.body.ptr);
+    const open = syntax.tagAt(quoted.bytes, 0).?;
+    const owner = quoted.bytes[0..syntax.matchingTag(quoted.bytes, open).?.end];
+    const expected_owner = "<span style=\"background:#FFF2E0\" class=\"defdate\">[[Appendix:Glossary#antonym|Antonyms]]:</span>";
+    try std.testing.expectEqualStrings(expected_owner, first.body[0..expected_owner.len]);
+    try std.testing.expectEqualStrings(expected_owner, owner);
+    var held: Renderer.StaticListQuotes = .{ .operation = &first, .root = &root, .epoch = 1,
+        .map = &map, .original = original, .output = quoted, .digest = Renderer.nativeQuoteMapDigest(&map) };
+    renderer.static_list_quotes = &held;
+    try std.testing.expect(renderer.staticListQuoteOriginal(&first, quoted, owner, true).?.ptr == first.body.ptr);
+    try std.testing.expect(renderer.staticListQuoteOriginal(&first, quoted, quoted.bytes[0..open.end], true).?.ptr == first.body.ptr);
+    try std.testing.expect(renderer.staticListQuoteOriginal(&second, quoted, owner, true) == null);
+    renderer.static_example_line = &second;
+    try std.testing.expect(renderer.staticListQuoteOriginal(&first, quoted, owner, true) == null);
+    renderer.static_example_line = &first;
+    const foreign = try a.dupe(u8, owner);
+    try std.testing.expect(renderer.staticListQuoteOriginal(&first, .{ .bytes = foreign, .unknown = true }, foreign, true) == null);
+    renderer.native_inline_motion_epoch += 1;
+    try std.testing.expect(renderer.staticListQuoteOriginal(&first, quoted, owner, true) == null);
+    renderer.native_inline_motion_epoch = 1;
+    held.digest[0] ^= 1;
+    try std.testing.expect(renderer.staticListQuoteOriginal(&first, quoted, owner, true) == null);
+    held.digest[0] ^= 1;
+    renderer.static_list_quotes = null;
+    try std.testing.expect(renderer.staticListQuoteOriginal(&first, quoted, owner, true) == null);
+
+    const rewritten: MissingText = .{ .bytes = "<span>''label''</span>", .unknown = true };
+    var marked: QuoteSourceMap = .{};
+    defer marked.deinit(a);
+    const normalized = try normalizeWikiQuotesPreparedMappedInDomain(a, rewritten, 0, false, context, null, &marked, true);
+    try std.testing.expect(marked.coveredOriginal(normalized.bytes, rewritten.bytes) != null);
+    try std.testing.expect(marked.copiedOriginal(normalized.bytes) == null);
+}
+
+test "definition example keeps smaller linked paint and records unproved direction at its actual source" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const line =
+        \\# [[daytime]]; [[time]] between [[sunrise]] and [[sunset]]
+        \\#: <span lang="zh-Hant" class="Hant">[[日班#Кинески|<b>日</b>班]]</span>&nbsp; ―&nbsp; <span lang="zh-Latn" style="color:#404D52"><i><b>rì</b>bān</i></span>&nbsp; ―&nbsp; '''day''' shift[[Категорија:Мандарин terms with usage examples]]
+        \\#: <span style="background:#FFF2E0" class="defdate">[[Appendix:Glossary#antonym|Antonyms]]:</span> <small style="font-size:85%;"><span class="Hani" lang="zh">[[夜#Chinese|夜]]</span>, <span class="Hant" lang="zh-Hant">[[夜間#Chinese|夜間]]</span><span class="Hani" lang="zh">／</span><span class="Hans" lang="zh-Hans">[[夜间#Chinese|夜间]]</span>, <span class="Hani" lang="zh">[[夜晚#Chinese|夜晚]]</span>[[Category:Chinese redlinks/zh-l]], <span class="Hani" lang="zh">[[晚上#Chinese|晚上]]</span></small>
+    ;
+    try std.testing.expect(Renderer.staticListClosedSiblings("<span>[[字|<b>字</b>]]</span>", false, true));
+    for ([_][]const u8{ "<span>[[字|</span>]]", "[[字|<b>字]]</b>", "<span class=Hani>", "<b><i>x</b></i>", "''open" }) |crossed|
+        try std.testing.expect(!Renderer.staticListClosedSiblings(crossed, false, true));
+    const sources = [_]table_style_profile.Source{
+        .{ .css = @embedFile("testdata/sr-ri632-list/SubtleUpdatemarker.css"), .base_url = "", .unknown_applicability = true },
+        .{ .css = @embedFile("testdata/sr-ri632-list/WatchlistBase.css"), .base_url = "", .unknown_applicability = true },
+        .{ .css = @embedFile("testdata/sr-ri632-list/WatchlistGreenIndicators.css"), .base_url = "", .unknown_applicability = true },
+        .{ .css = @embedFile("testdata/sr-ri632-list/WatchlistGreenIndicatorsMono.css"), .base_url = "", .unknown_applicability = true },
+        .{ .css = @embedFile("testdata/sr-ri632-list/charinsert-styles.css"), .base_url = "" },
+        .{ .css = @embedFile("testdata/sr-ri207-padding/common.css"), .base_url = "" },
+    };
+    var profile = try table_style_profile.parseSourcesForTargetAlloc(a, &sources, .screen);
+    defer profile.deinit();
+    const NS = @import("namespace_registry");
+    var ns = try NS.Registry.init(a, @embedFile("testdata/sr-ri207-padding/namespace-registry.tsv"));
+    defer ns.deinit();
+    try ns.attachLanguageConversion(@embedFile("testdata/sr-ri207-padding/namespace-siteinfo.raw.json"));
+    try ns.attachInterwikiMap(@embedFile("testdata/sr-ri207-padding/interwiki-map.tsv"));
+    for (0..3) |mode| {
+        const owned = mode != 2;
+        const context: Context = .{ .title = "日", .namespace_catalog = &ns, .table_styles = &profile, .text_paint_styles = &profile };
+        const tracked: MissingText = .{ .bytes = line, .unknown = true };
+        var prepared = try preparePageExternalLinksWithMissingAlloc(a, tracked, context);
+        var page_ranges = [_]missing_dependency.Range{.{ .start = 37042, .end = 37068, .occurrence = 1 }};
+        // The real projected Chinese section lies wholly before this page range.
+        // Preserve the borrowed empty range value through the final entry point.
+        prepared.missing.ranges = page_ranges[0..0];
+        try std.testing.expect(@intFromPtr(prepared.missing.ranges.ptr) == @intFromPtr(&page_ranges));
+        var renderer: Renderer = .{ .a = a, .context = context, .content_root = .parser_output, .native_body_language = "zh" };
+        renderer.context.citations = prepared.citations;
+        renderer.context.poem_phase = prepared.poem_phase;
+        renderer.context.external_links_prepared = true;
+        var host: NativeArticleHost = .{ .renderer = &renderer, .source = prepared.missing, .title = "日", .language_code = "zh",
+            .active_source = prepared.missing, .active_snapshot = NativeArticleHost.snapshot(prepared.missing),
+            .active_whole_page = true, .native_paragraph_css_subjects = true };
+        renderer.native_article_host = &host;
+        const page = try std.mem.concat(a, u8, &.{ "==Chinese==\n", prepared.missing.bytes });
+        const start = std.mem.indexOf(u8, page, "#: <span style=\"background:").?;
+        const openings = [_]usize{start};
+        if (mode != 0) {
+            host.active_whole_page = false;
+            host.active_fragment = .{ .page = page, .original_page = null, .prepared = prepared.missing.bytes,
+                .start = "==Chinese==\n".len, .starts_page = false, .static_example_openings = &openings,
+                .static_example_original_prefix = if (owned) page else page[0..start] };
+        }
+        var capture: RejectedCompilerCapture = .{};
+        const trace = capture.begin();
+        defer trace.deinit();
+        if (!owned) {
+            try std.testing.expectError(error.UncompiledPresentation, renderer.renderBodyWithHeadingOffsets(prepared.missing));
+            const rejection = capture.snapshot(error.UncompiledPresentation) orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqualStrings("static_inline_frame", rejection.operation);
+            try std.testing.expectEqualStrings("static_direction_defaults_rejected", rejection.reason);
+            try std.testing.expectEqual(@as(usize, 0), rejection.local_offset);
+            try std.testing.expectEqual(std.mem.indexOf(u8, line, "<span style=\"background:").? + rejection.fragment_bytes, line.len);
+            continue;
+        }
+        const blocks = try renderer.renderBodyWithHeadingOffsets(prepared.missing);
+        try std.testing.expectEqual(@as(usize, 3), blocks.len);
+        const example = blocks[2];
+        try std.testing.expect(example.kind == .example and std.mem.eql(u8, example.list_path, "#:"));
+        const owner = example.spans[0];
+        const frame = owner.inline_box_group orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualStrings("#fff2e0", owner.background.?);
+        try std.testing.expectEqual(try relative_font.resolveKeyword(1, .smaller), owner.font_scale.?);
+        try std.testing.expectEqual(@as(usize, 2), frame.spans.len);
+        const link = frame.spans[0];
+        try std.testing.expect(link.kind == .link and std.mem.eql(u8, link.text, "Antonyms"));
+        try std.testing.expectEqualStrings("Appendix:Glossary#antonym", link.target);
+        const colon = frame.spans[1];
+        try std.testing.expect(colon.kind == .text and colon.target.len == 0 and std.mem.eql(u8, colon.text, ":"));
+        try std.testing.expectEqual(owner.font_scale, link.font_scale);
+        try std.testing.expectEqual(owner.font_scale, colon.font_scale);
+        var first_translation = false;
+        for (example.spans[1..]) |span| if (std.mem.eql(u8, span.text, "夜")) {
+            try std.testing.expect(span.kind == .link and std.mem.eql(u8, span.target, "夜#Chinese"));
+            try std.testing.expect(span.background == null);
+            first_translation = true;
+        };
+        try std.testing.expect(first_translation);
+        const stored = try FormattingScopeTest.encode(a, &renderer, blocks);
+        const codec = @import("blob_encoder").presentation_codec;
+        const encoded = try codec.encodeAlloc(a, stored);
+        const decoded = try codec.decodeAlloc(a, encoded, stored.entry.title, .language, .{ .heading = stored.entry.language.?, .code = stored.entry.language_code });
+        try std.testing.expectEqualDeep(stored, decoded);
     }
 }

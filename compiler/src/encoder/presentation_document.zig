@@ -51,6 +51,8 @@ pub const nativeSourceClassRangeCurrent = compiler.nativeSourceClassRangeCurrent
 pub const ParserOutputRange = struct {
     quoted_paragraph_openings: []const usize = &.{},
     quoted_paragraph_original_prefix: []const u8 = "",
+    static_example_openings: []const usize = &.{},
+    static_example_original_prefix: []const u8 = "",
     observed_box_table_heading_root: bool = false,
     native_source_class_proof: ?*const NativeSourceClassProof = null,
     // Original full expansion, retained only by the normal exact-byte binder.
@@ -796,6 +798,7 @@ pub const HeadingObservation = struct {
     page_wiki_rule_openings: []const usize = &.{},
     page_root_wiki_table_openings: []const usize = &.{},
     page_quoted_paragraph_openings: []const usize = &.{},
+    page_static_example_openings: []const usize = &.{},
     page_top_level_wiki_table_openings: []const usize = &.{},
     // Opt-in evidence only; ordinary observation grants no wiki-root proof.
     page_wiki_scope_complete: bool = false,
@@ -824,6 +827,7 @@ const Work = struct {
     page_wiki_rule_openings: []const usize = &.{},
     page_root_wiki_table_openings: []const usize = &.{},
     page_quoted_paragraph_openings: []const usize = &.{},
+    page_static_example_openings: []const usize = &.{},
     page_top_level_wiki_table_openings: []const usize = &.{},
     references: []const compiler.Reference,
     media: []const compiler.media_types.Media,
@@ -1428,6 +1432,7 @@ const NativeArticleRenderScope = struct {
             value.active_fragment = .{ .page = proof.page, .original_page = proof.original_page,
                 .start = proof.start, .prepared = proof.prepared, .starts_page = starts_page,
                 .quoted_paragraph_openings = proof.quoted_paragraph_openings, .quoted_paragraph_original_prefix = proof.quoted_paragraph_original_prefix,
+                .static_example_openings = proof.static_example_openings, .static_example_original_prefix = proof.static_example_original_prefix,
                 .observed_box_table_heading_root = proof.observed_box_table_heading_root };
         };
         return scope;
@@ -1570,6 +1575,8 @@ fn workWithHeadingOffsetsAllocIn(a: A, title: []const u8, language: []const u8, 
     defer root_tables.deinit(a);
     var paragraphs: std.ArrayList(usize) = .empty;
     defer paragraphs.deinit(a);
+    var examples: std.ArrayList(usize) = .empty;
+    defer examples.deinit(a);
     var top_level_tables: std.ArrayList(usize) = .empty;
     defer top_level_tables.deinit(a);
     var wiki_openings: std.ArrayList(usize) = .empty;
@@ -1592,7 +1599,10 @@ fn workWithHeadingOffsetsAllocIn(a: A, title: []const u8, language: []const u8, 
     if (fragments.len == 0) {
         renderer.page_html_heading_openings = &html_openings;
         renderer.page_root_wiki_table_openings = &root_tables;
-        if (observe_structure_only and observe_wiki_scope) renderer.page_quoted_paragraph_openings = &paragraphs;
+        if (observe_structure_only and observe_wiki_scope) {
+            renderer.page_quoted_paragraph_openings = &paragraphs;
+            renderer.page_static_example_openings = &examples;
+        }
         renderer.page_top_level_wiki_table_openings = &top_level_tables;
     }
     if (fragments.len == 0 and observe_wiki_scope) {
@@ -1656,7 +1666,7 @@ fn workWithHeadingOffsetsAllocIn(a: A, title: []const u8, language: []const u8, 
     }
     renderer.traceDocumentBody(.end, source, fragments.len, null);
     body_finished = true;
-    var result: Work = .{ .sections = try builder.sections.toOwnedSlice(a), .page_html_openings = try html_openings.toOwnedSlice(a), .page_wiki_openings = try wiki_openings.toOwnedSlice(a), .page_wiki_content_openings = try wiki_content_openings.toOwnedSlice(a), .page_wiki_all_openings = try wiki_all_openings.toOwnedSlice(a), .page_wiki_rule_openings = try wiki_rule_openings.toOwnedSlice(a), .page_root_wiki_table_openings = try root_tables.toOwnedSlice(a), .page_quoted_paragraph_openings = try paragraphs.toOwnedSlice(a), .page_top_level_wiki_table_openings = try top_level_tables.toOwnedSlice(a), .references = try renderer.finishReferences(), .media = try renderer.media.toOwnedSlice(a), .media_caption_spans = try renderer.media_caption_spans.toOwnedSlice(a), .rendered_templates = renderer.rendered_templates, .unresolved_templates = renderer.unresolved_templates, .fallbacks = renderer.fallbacks };
+    var result: Work = .{ .sections = try builder.sections.toOwnedSlice(a), .page_html_openings = try html_openings.toOwnedSlice(a), .page_wiki_openings = try wiki_openings.toOwnedSlice(a), .page_wiki_content_openings = try wiki_content_openings.toOwnedSlice(a), .page_wiki_all_openings = try wiki_all_openings.toOwnedSlice(a), .page_wiki_rule_openings = try wiki_rule_openings.toOwnedSlice(a), .page_root_wiki_table_openings = try root_tables.toOwnedSlice(a), .page_quoted_paragraph_openings = try paragraphs.toOwnedSlice(a), .page_static_example_openings = try examples.toOwnedSlice(a), .page_top_level_wiki_table_openings = try top_level_tables.toOwnedSlice(a), .references = try renderer.finishReferences(), .media = try renderer.media.toOwnedSlice(a), .media_caption_spans = try renderer.media_caption_spans.toOwnedSlice(a), .rendered_templates = renderer.rendered_templates, .unresolved_templates = renderer.unresolved_templates, .fallbacks = renderer.fallbacks };
     try completeActionFocus(&renderer, result);
     result.fallbacks = renderer.fallbacks;
     return result;
@@ -1680,7 +1690,7 @@ pub fn observeHeadingAnchorsWithWikiScopeAlloc(a: A, title: []const u8, source: 
         if (section.is_heading) try observe.add(section.heading_source_offset, section.heading_authored_id, section.title_spans);
         try walk.blocks(&observe, section.blocks, 0);
     }
-    return .{ .items = try result.toOwnedSlice(a), .page_html_openings = work.page_html_openings, .page_wiki_openings = work.page_wiki_openings, .page_wiki_content_openings = work.page_wiki_content_openings, .page_wiki_all_openings = work.page_wiki_all_openings, .page_wiki_rule_openings = work.page_wiki_rule_openings, .page_root_wiki_table_openings = work.page_root_wiki_table_openings, .page_quoted_paragraph_openings = work.page_quoted_paragraph_openings, .page_top_level_wiki_table_openings = work.page_top_level_wiki_table_openings, .page_wiki_scope_complete = observe_wiki_scope and !work.fallbacks.render_limit, .page_html_source = source.bytes };
+    return .{ .items = try result.toOwnedSlice(a), .page_html_openings = work.page_html_openings, .page_wiki_openings = work.page_wiki_openings, .page_wiki_content_openings = work.page_wiki_content_openings, .page_wiki_all_openings = work.page_wiki_all_openings, .page_wiki_rule_openings = work.page_wiki_rule_openings, .page_root_wiki_table_openings = work.page_root_wiki_table_openings, .page_quoted_paragraph_openings = work.page_quoted_paragraph_openings, .page_static_example_openings = work.page_static_example_openings, .page_top_level_wiki_table_openings = work.page_top_level_wiki_table_openings, .page_wiki_scope_complete = observe_wiki_scope and !work.fallbacks.render_limit, .page_html_source = source.bytes };
 }
 
 fn displayTitleSpansAlloc(a: A, display: ?DisplayTitle, language: []const u8, link_trail: ir.LinkTrail, namespace_catalog: ?*const NamespaceRegistry, behavior_switches: ?*const BehaviorRegistry, image_options: ?*const ImageRegistry, fallbacks: ?*Fallbacks, poem_phase: ?*const PoemPhase) ![]const compiler.Span {
@@ -16895,4 +16905,38 @@ test "compiler inline box ownership clone and Stored codec preserve children ove
     @constCast(cloned_body.spans)[0].text = "changed overlay";
     try std.testing.expectEqualStrings("before", children[0].text);
     try std.testing.expectEqualStrings("overlay", body.spans[0].text);
+}
+
+test "definition example whole Serbian page heading observer retains source operations through four known ranges" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var input = std.Io.Reader.fixed(@embedFile("testdata/sr-ri632-list/expanded.wikitext.zst"));
+    const window = try a.alloc(u8, 1024 * 1024 + std.compress.zstd.block_size_max);
+    var decoder = std.compress.zstd.Decompress.init(&input, window, .{ .window_len = 1024 * 1024 });
+    const source = try a.alloc(u8, 150900);
+    try decoder.reader.readSliceAll(source);
+    try std.testing.expectError(error.EndOfStream, decoder.reader.takeByte());
+    var digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(source, &digest, .{});
+    try std.testing.expectEqualStrings("34dec5cb7c43e9171885767d997550694a4fca6a9c48997dab7ebb8763386c3c", &std.fmt.bytesToHex(digest, .lower));
+    const ranges = [_]missing_dependency.Range{
+        .{ .start = 37042, .end = 37068, .occurrence = 1 },
+        .{ .start = 143463, .end = 143495, .occurrence = 3 },
+        .{ .start = 145958, .end = 145990, .occurrence = 4 },
+        .{ .start = 147137, .end = 147169, .occurrence = 5 },
+    };
+    var ns = try NamespaceRegistry.init(a, @embedFile("testdata/sr-ri207-padding/namespace-registry.tsv"));
+    try ns.attachInterwikiMap(@embedFile("testdata/sr-ri207-padding/interwiki-map.tsv"));
+    const tracked: MissingText = .{ .bytes = source, .ranges = &ranges, .unknown = true };
+    const numbered = try compiler.preparePageExternalLinksWithMissingAlloc(a, tracked, .{ .title = "日", .namespace_catalog = &ns });
+    const observer = try observeHeadingAnchorsWithWikiScopeAlloc(a, "日", numbered.missing, .{}, &ns, null, null,
+        .{ .citations = numbered.citations }, numbered.poem_phase, true);
+    const unchanged = std.mem.findDiff(u8, source, numbered.source) orelse source.len;
+    for ([_]usize{14737, 15671}) |at| {
+        const end = std.mem.indexOfScalarPos(u8, source, at, '\n').?;
+        try std.testing.expect(std.mem.startsWith(u8, source[at..], "#: <span style=\"background:#FFF2E0\" class=\"defdate\">"));
+        try std.testing.expect(end <= unchanged and end < ranges[0].start);
+        try std.testing.expect(std.mem.indexOfScalar(usize, observer.page_static_example_openings, at) != null);
+    }
 }

@@ -2094,6 +2094,7 @@ pub const TextElement = struct {
     source_parent_tag_nonmatch: ?[]const u8 = null,
     // Query-local negative facts from a tracked, physically authored SPAN.
     source_direct_parent_classes: ?[]const u8 = null,
+    source_direct_parent_not_li: bool = false,
     source_fragment_target_absent: bool = false,
     source_nonlink_element: bool = false,
     // Immediate query only. These tokens can refute local source rules in inherited box checks.
@@ -7794,6 +7795,12 @@ const ContainerSelector = struct {
         if (element.source_nonlink_element and (std.ascii.eqlIgnoreCase(element.tag, "span") or std.ascii.eqlIgnoreCase(element.tag, "i")) and
             self.necessary_chain.len != 0 and
             self.necessary_chain[self.necessary_chain.len - 1].requires_hyperlink) return .no;
+        if (element.source_direct_parent_not_li) {
+            const necessary = if (self.fallback != null) self.necessary_chain else self.chain;
+            if (necessary.len >= 2 and necessary[necessary.len - 1].direct_parent)
+                if (necessary[necessary.len - 2].compound.tag) |required|
+                    if (std.ascii.eqlIgnoreCase(required, "li")) return .no;
+        }
         if (element.source_direct_parent_classes) |classes| {
             const necessary = if (self.fallback != null) self.necessary_chain else self.chain;
             if (necessary.len >= 2 and necessary[necessary.len - 1].direct_parent)
@@ -38824,31 +38831,51 @@ pub fn staticInlineOwnerValues(a: std.mem.Allocator, css: []const u8, environmen
     return .{ .padding = padding, .background = background };
 }
 
-pub fn staticInlineOwnerScope(profile: *const Profile, a: std.mem.Allocator, element: *const TextElement,
-    css: []const u8, environment: CustomEnvironment, chain: []const []const u8) !bool
+pub const StaticInlineFont = struct {
+    parent: f32,
+    own: f32,
+
+    fn consumes(self: @This(), css: []const u8) bool {
+        const one = std.mem.trimEnd(u8, trim(css), ";");
+        const colon = std.mem.indexOfScalar(u8, one, ':') orelse return false;
+        if (!std.ascii.eqlIgnoreCase(trim(one[0..colon]), "font-size")) return false;
+        const step = cell_font_metrics.relativeKeyword(one[colon + 1 ..]) orelse return false;
+        const selected = cell_font_metrics.resolveKeyword(self.parent, step) catch return false;
+        return selected == self.own;
+    }
+};
+
+pub fn staticInlineOwnerRejection(profile: *const Profile, a: std.mem.Allocator, element: *const TextElement,
+    css: []const u8, environment: CustomEnvironment, chain: []const []const u8, font: ?StaticInlineFont) !InlineBoxSourceDiagnostic
 {
-    if (!std.ascii.eqlIgnoreCase(element.tag, "span") or !Profile.rubySourceDeclarationChainValid(element, css, chain)) return false;
+    if (!std.ascii.eqlIgnoreCase(element.tag, "span") or !Profile.rubySourceDeclarationChainValid(element, css, chain)) return .source_chain_invalid;
     const absent = inlineBoxSourceAbsence(element);
-    if (!try staticInlineDirectionDefaultsWithAbsenceAlloc(a, profile, chain, absent) or
-        !try inlineBoxSourceInheritedDefaultsCarrierIn(profile, a, chain, environment, false, false, absent, null)) return false;
+    if (!try staticInlineDirectionDefaultsWithAbsenceAlloc(a, profile, chain, absent)) return .static_direction_defaults_rejected;
+    if (!try inlineBoxSourceInheritedDefaultsCarrierIn(profile, a, chain, environment, false, false, absent, null)) return .source_inherited_defaults_rejected;
     var current: ?*const Profile = profile;
     var remaining: usize = 16;
     while (current) |sheet| : (current = sheet.page_style_parent) {
-        if (remaining == 0) return false;
+        if (remaining == 0) return .css_limit;
         remaining -= 1;
-        if (!staticInlineOwnerRulesAbsent(sheet, element)) return false;
+        if (!staticInlineOwnerRulesWithFont(sheet, element, font)) return .matched_rules_unresolved;
     }
-    return true;
+    return .none;
 }
 
 // Only a current property-local receipt can refute an otherwise unknown
 // selector. A known matching rule still belongs to this node's cascade.
 pub fn staticInlineOwnerRulesAbsent(profile: *const Profile, element: *const TextElement) bool {
+    return staticInlineOwnerRulesWithFont(profile, element, null);
+}
+
+fn staticInlineOwnerRulesWithFont(profile: *const Profile, element: *const TextElement, font: ?StaticInlineFont) bool {
     if (profile.globally_unresolved or (profile.page_style_parent != null and element.page_style_root == null)) return false;
     for (profile.container_rules) |rule| {
         switch (rule.selector.matchIn(element, profile.page_style_parent != null)) {
             .no => continue,
-            .known => return false,
+            .known => {
+                if (font == null or rule.rank_unknown or !font.?.consumes(rule.css)) return false;
+            },
             .unknown => {
                 if (!staticInlineLocalRuleAbsent(profile, rule, element)) return false;
             },
@@ -38878,7 +38905,7 @@ fn staticInlineOwnerPaintIn(profile: *const Profile, a: std.mem.Allocator, eleme
     css: []const u8, environment: CustomEnvironment, chain: []const []const u8) !?StaticInlineOwnerPaint
 {
     const selected = (try staticInlineOwnerValues(a, css, environment)) orelse return null;
-    return if (try staticInlineOwnerScope(profile, a, element, css, environment, chain)) selected else null;
+    return if (try staticInlineOwnerRejection(profile, a, element, css, environment, chain, null) == .none) selected else null;
 }
 
 test "captured Indonesian gender frame excludes only independently refuted own selectors" {

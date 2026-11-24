@@ -15047,6 +15047,49 @@ test "DPRY exact optional feature census rich inline box body owner font and leg
     try std.testing.expectError(error.InvalidPresentation, old.span(T.owner));
 }
 
+test "DPRY empty inline top edge retains the source position and emits no text or action" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var border = types.InlineBoxBorderEdges.all(.none);
+    border.top = .{ .solid = .{ .width = .{ .unit = .px, .value = 1 }, .color = .current_color } };
+    var group: types.InlineBoxGroup(types.Span) = .{
+        .border = border, .padding = .all(.{ .unit = .px, .value = 0 }), .spans = &.{},
+    };
+    var original = InlineBoxYCodecTest.stored();
+    var spans = [_]types.Span{
+        .{ .text = "ひ" }, .{ .inline_box_group = &group },
+        .{ .text = "[hì]" }, .{ .kind = .link, .target = "平板型", .text = "Heiban" },
+    };
+    original.entry.display_title = &spans;
+    const bytes = try encodeAlloc(a, original);
+    const decoded = try decodeAlloc(a, bytes, "box", .supplemental, null);
+    try std.testing.expectEqualDeep(original, decoded);
+    try std.testing.expectEqualSlices(u8, bytes, try encodeAlloc(a, decoded));
+    const Sink = struct {
+        fn emit(count: *usize, span: types.Span) !void {
+            const expected = [_][]const u8{ "ひ", "[hì]", "Heiban" };
+            try std.testing.expect(count.* < expected.len);
+            try std.testing.expectEqualStrings(expected[count.*], span.text);
+            try std.testing.expectEqualStrings(if (count.* == 2) "平板型" else "", span.target);
+            count.* += 1;
+        }
+    };
+    var count: usize = 0;
+    try types.visitRubyFallback(decoded.entry.display_title, &count, Sink.emit);
+    try std.testing.expectEqual(@as(usize, 3), count);
+    try std.testing.expectError(error.InvalidPresentation, types.validateInlineBoxGroupTree(spans[1], 0, 1));
+    spans[1].kind = .link; spans[1].target = "invented";
+    try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, original));
+    spans[1] = .{ .inline_box_group = &group };
+    group.padding.left.value = 1;
+    try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, original));
+    group.padding.left.value = 0;
+    group.border.left = border.top;
+    try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, original));
+    group.border.left = .none; group.border.top = .none;
+    try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, original));
+}
 test "DPRY inline box refuses absent body unsupported axes invalid paint and shared budget exhaustion" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
     const T = InlineBoxYCodecTest;

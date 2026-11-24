@@ -628,6 +628,13 @@ fn visitRubyFallbackInner(spans: anytype, context: anytype, comptime emit: anyty
         if (comptime @hasField(@TypeOf(span), "inline_box_group")) if (span.inline_box_group) |group| {
             if (gap or content_depth >= max_content_depth or !validInlineBoxGroupOwner(span)) return error.InvalidPresentation;
             try budget.items(group.overlays.len);
+            if (group.spans.len == 0) {
+                // This source box occupies an inline position but contributes
+                // neither semantic text nor an action or a ruby text leaf.
+                if (inherited_action != null or inside_group or ruby_depth != 0 or
+                    budget.inline_box_depth != 0 or budget.action_group_depth != 0) return error.InvalidPresentation;
+                continue;
+            }
             const before_text = budget.actual_text_leaves;
             const own_action = InlinePaddingGroupAction.from(span);
             budget.inline_box_depth += 1;
@@ -957,6 +964,15 @@ pub fn inlineBoxRadius(value: anytype) ?StyleWidth {
 pub fn validInlineBoxRadius(value: StyleWidth) bool {
     return (value.unit == .px or value.unit == .percent) and validStyleWidth(value);
 }
+fn emptyInlineTopEdge(value: anytype) bool {
+    if (value.spans.len != 0 or value.overlays.len != 0 or inlineBoxRadius(value) != null) return false;
+    inline for (.{ "top", "right", "bottom", "left" }) |side| {
+        if (@field(value.padding, side).value != 0) return false;
+    }
+    const edge = switch (value.border.top) { .solid => |line| line, else => return false };
+    return edge.width.unit == .px and edge.width.value == 1 and edge.color == .current_color and
+        value.border.right == .none and value.border.bottom == .none and value.border.left == .none;
+}
 pub fn validInlineBoxGroup(value: anytype) bool {
     if (inlineBoxRadius(value)) |radius| {
         if (!validInlineBoxRadius(radius) or value.overlays.len != 0) return false;
@@ -971,7 +987,7 @@ pub fn validInlineBoxGroup(value: anytype) bool {
         }
     }
     if (!validStyleEdges(value.padding) or !validInlineBoxBorderEdges(value.border) or
-        value.spans.len == 0 or value.spans.len > max_presentation_items or
+        (value.spans.len == 0 and !emptyInlineTopEdge(value)) or value.spans.len > max_presentation_items or
         value.overlays.len > max_presentation_items) return false;
     var previous_boundary: u32 = 0;
     for (value.overlays) |overlay| {
@@ -988,7 +1004,17 @@ pub fn validInlineBoxGroupOwner(span: anytype) bool {
         spanHasRuby(span) or spanHasInlinePaddingGroup(span) or spanHasInlineActionGroup(span) or spanHasClippedAbsolute(span)) return false;
     if (comptime @hasField(@TypeOf(span), "trail")) if (span.trail.len != 0) return false;
     if (comptime @hasField(@TypeOf(span), "image")) if (span.image != null) return false;
-    if (comptime @hasField(@TypeOf(span), "inline_box_group")) return validInlineBoxGroup(span.inline_box_group.?.*);
+    if (comptime @hasField(@TypeOf(span), "inline_box_group")) {
+        const group = span.inline_box_group.?.*;
+        if (group.spans.len == 0) {
+            if (!std.mem.eql(u8, @tagName(span.kind), "text") or span.target.len != 0) return false;
+            if (comptime @hasField(@TypeOf(span), "tooltip")) if (span.tooltip != null) return false;
+            if (comptime @hasField(@TypeOf(span), "explanation")) if (span.explanation.len != 0) return false;
+            if (comptime @hasField(@TypeOf(span), "target_fragment")) if (span.target_fragment != null) return false;
+            if (comptime @hasField(@TypeOf(span), "inline_style")) if (span.inline_style != null) return false;
+        }
+        return validInlineBoxGroup(group);
+    }
     return false;
 }
 pub fn validateInlineBoxGroupTree(owner: anytype, content_depth: usize, ruby_depth: usize) error{InvalidPresentation}!void {

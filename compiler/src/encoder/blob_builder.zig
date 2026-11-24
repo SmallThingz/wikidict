@@ -5521,7 +5521,7 @@ fn bindOwnerContentRoot(source: []const u8, observed: presentation_document.Head
     if (prepared.len != fragment.source.len or !std.mem.eql(u8, prepared, fragment.source)) return;
     // missing is produced above by the ordinary tracked slice operation; this
     // token binds that exact view, not arbitrary future byte-identical copies.
-    fragment.parser_output_range = .{ .page = source, .start = start, .prepared = prepared, .root_wiki_table_openings = observed.page_root_wiki_table_openings, .top_level_wiki_table_openings = observed.page_top_level_wiki_table_openings, .quoted_paragraph_openings = observed.page_quoted_paragraph_openings };
+    fragment.parser_output_range = .{ .page = source, .start = start, .prepared = prepared, .root_wiki_table_openings = observed.page_root_wiki_table_openings, .top_level_wiki_table_openings = observed.page_top_level_wiki_table_openings, .quoted_paragraph_openings = observed.page_quoted_paragraph_openings, .static_example_openings = observed.page_static_example_openings };
 }
 
 fn observedOwnerContentRanges(source: []const u8, observed: presentation_document.HeadingObservation, fragments: []const PageSourceFragment, prefix: []const u8) bool {
@@ -7015,7 +7015,7 @@ fn processMain(
         if (numbered.source_element_projection) |*proof| proof else if (direct_table_projection) |*proof| proof else null;
     const needs_source_fragments = native_source_class_proof != null or final_source_projection != null or pre_observation.scopes.len != 0 or
         (if (codes.figure_sizing) |sizing| sizing.text_class_scope != null or sizing.resolve_image_map_no_link_fn != null else false) or
-        (codes.table_styles != null and (heading_observation.page_root_wiki_table_openings.len != 0 or heading_observation.page_top_level_wiki_table_openings.len != 0 or heading_observation.page_quoted_paragraph_openings.len != 0));
+        (codes.table_styles != null and (heading_observation.page_root_wiki_table_openings.len != 0 or heading_observation.page_top_level_wiki_table_openings.len != 0 or heading_observation.page_quoted_paragraph_openings.len != 0 or heading_observation.page_static_example_openings.len != 0));
     const quote_cuts: PageQuoteCuts = if (needs_source_fragments)
         try pageQuoteCutsAlloc(page_allocator, source, page_sections.items, pre_observation.scopes, .{
             .title = title,
@@ -7096,6 +7096,16 @@ fn processMain(
         !raw_missing.unknown and !raw_missing.lost_missing_range and raw_missing.ranges.len == 0 and
         raw_missing.literal_curly_ranges.len == 0 and raw_missing.generated_links.len == 0 and raw_missing.generated_source == null)
         source_raw[0 .. std.mem.findDiff(u8, source_raw, source) orelse source_raw.len] else "";
+    const example_prefix = if (codes.table_styles != null and heading_observation.page_static_example_openings.len != 0 and
+        !raw_missing.lost_missing_range and raw_missing.generated_links.len == 0 and raw_missing.generated_source == null) prefix: {
+        // A list occurrence may lie before every recorded rewrite and known
+        // nonordinary range on an otherwise uncertain page. Its renderer must
+        // still verify the matching source operation and exact paired SPAN.
+        var end = std.mem.findDiff(u8, source_raw, source) orelse source_raw.len;
+        for (raw_missing.ranges) |range| end = @min(end, range.start);
+        for (raw_missing.literal_curly_ranges) |range| end = @min(end, range.start);
+        break :prefix source_raw[0..end];
+    } else "";
     for (groups.items) |group| {
         // Only expanded source facts inside a real emitted owner range can
         // preserve this exact page-level diagnostic after an ownership cut.
@@ -7119,6 +7129,7 @@ fn processMain(
             bindOwnerRootTableSource(source, source_raw, heading_observation, fragment);
             if (fragment.parser_output_range) |*range| {
                 range.quoted_paragraph_original_prefix = paragraph_prefix;
+                range.static_example_original_prefix = example_prefix;
                 // Only the whole-page renderer can witness a root wiki heading;
                 // opaque/nested headings never enter page_wiki_openings. The
                 // final root dispatcher independently binds the actual table.
