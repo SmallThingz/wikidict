@@ -2398,14 +2398,27 @@ public:
     QAccessibleInterface *child(int) const override { return nullptr; }
     int childCount() const override { return 0; }
     int indexOfChild(const QAccessibleInterface *) const override { return -1; }
-    QAccessible::Role role() const override { return QAccessible::Button; }
+    QAccessible::Role role() const override {
+        return item() && item()->wrappedHeading ? QAccessible::Heading : QAccessible::Button;
+    }
     QString text(QAccessible::Text type) const override {
         const auto *value = item();
         return value && type == QAccessible::Name ? value->name : QString();
     }
     QRect rect() const override {
         const QPointer<SectionDisclosure> value(item());
-        if (!value || !value->current() || value->sourceOwnedHeading) return {};
+        if (!value || !value->current()) return {};
+        if (value->wrappedHeading) {
+            auto *reader = parent();
+            auto *text = reader ? reader->textInterface() : nullptr;
+            if (!text) return {};
+            QRect bounds;
+            const int first = value->browser->semanticOffset(value->position);
+            const int end = value->browser->semanticOffset(value->end);
+            for (int pos = first; pos < end; ++pos) bounds |= text->characterRect(pos);
+            return bounds;
+        }
+        if (value->sourceOwnedHeading) return {};
         const int position = value->position;
         auto *reader = parent();
         // The disclosure glyph is separate from the rich heading's lexical links.
@@ -2416,18 +2429,20 @@ public:
         QAccessible::State state;
         if (!isValid()) { state.invalid = true; state.invisible = true; return state; }
         const auto *value = item();
-        state.focusable = !value->sourceOwnedHeading; state.focused = value->focused(); state.expandable = true;
-        state.expanded = value->expanded; state.collapsed = !value->expanded;
+        state.focusable = !value->sourceOwnedHeading; state.focused = value->focused(); state.expandable = !value->wrappedHeading;
+        state.expanded = state.expandable && value->expanded; state.collapsed = state.expandable && !value->expanded;
         state.disabled = !value->browser->isEnabled(); state.invisible = !value->browser->isVisible();
         const QRect viewport(value->browser->viewport()->mapToGlobal(QPoint()), value->browser->viewport()->size());
-        state.offscreen = !value->sourceOwnedHeading && !viewport.intersects(rect());
+        state.offscreen = (!value->sourceOwnedHeading || value->wrappedHeading) && !viewport.intersects(rect());
         return state;
     }
     void *interface_cast(QAccessible::InterfaceType type) override {
+        if (type == QAccessible::ActionInterface && item() && item()->wrappedHeading) return nullptr;
         if (type == QAccessible::ActionInterface) return static_cast<QAccessibleActionInterface *>(this);
         return QAccessibleObject::interface_cast(type);
     }
     QStringList actionNames() const override {
+        if (item() && item()->wrappedHeading) return {};
         return item() && item()->sourceOwnedHeading ? QStringList{pressAction(), toggleAction()}
             : QStringList{pressAction(), toggleAction(), setFocusAction()};
     }
@@ -2439,7 +2454,7 @@ public:
         const bool activate = action == pressAction() || action == toggleAction();
         if (!activate && action != setFocusAction()) return;
         const QPointer<SectionDisclosure> target(item());
-        if (!target || !target->current()) return;
+        if (!target || !target->current() || target->wrappedHeading) return;
         const QPointer<ReadingBrowser> browser(target->browser);
         if (!browser->isVisible() || !browser->isEnabled()) return;
         const QUrl url = target->url();
@@ -4173,7 +4188,11 @@ void MainWindow::setupUi() {
                 statusBar()->showMessage(QStringLiteral("This dictionary does not identify the source for this file link."));
         }
         else if (url.scheme() == QStringLiteral("section")) {
-            const int index = url.path().toInt();
+            bool valid = false;
+            const int index = url.path().toInt(&valid);
+            const auto sections = currentEntry_.value("sections").toArray();
+            if (!valid || index < 0 || index >= sections.size()
+                || sections.at(index).toObject().value("heading_style").toObject().value("wrappers").isObject()) return;
             if (collapsedSections_.contains(index)) collapsedSections_.remove(index);
             else collapsedSections_.insert(index);
             auto *browser = static_cast<ReadingBrowser *>(reading_);
@@ -7454,7 +7473,10 @@ QString MainWindow::entryHtml(const QJsonObject &entry, bool bodyBoundary) const
             level == 2 && title == entry.value(QStringLiteral("language")).toString();
         const QJsonArray richHeading = sectionHeadingSpans(section);
         const bool renderRichHeading = !richHeading.isEmpty();
-        if (renderRichHeading && !collapsedSections_.contains(index)) out += renderReferencesAt(index, 0);
+        // Wrapped source headings are static. Ignore an old saved fold for one.
+        const bool folded = collapsedSections_.contains(index)
+            && !section.value("heading_style").toObject().value("wrappers").isObject();
+        if (renderRichHeading && !folded) out += renderReferencesAt(index, 0);
         if (SemanticHtml::present(section.value(QStringLiteral("heading_style")))) {
             const auto heading = SectionHeading::validate(section);
             const auto projected = SectionHeading::projection(section);
@@ -7510,7 +7532,7 @@ QString MainWindow::entryHtml(const QJsonObject &entry, bool bodyBoundary) const
             out += QStringLiteral("<h2 class='wikidict-section-heading'><a href='section:%1'>%2 %3</a></h2>").arg(index)
                 .arg(collapsedSections_.contains(index) ? QStringLiteral("▸") : QStringLiteral("▾"), title.toHtmlEscaped());
         }
-        if (!bodyPrefix && collapsedSections_.contains(index)) continue;
+        if (!bodyPrefix && folded) continue;
         const QJsonArray blocks = section.value(QStringLiteral("blocks")).toArray();
         for (qsizetype blockIndex = 0; blockIndex < blocks.size(); ++blockIndex) {
             if (blockIndex == 0 && renderRichHeading) continue;

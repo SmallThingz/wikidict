@@ -23875,10 +23875,17 @@ private slots:
         for (int i = 0; i < readerAccess->childCount(); ++i) {
             auto *child = readerAccess->child(i);
             QVERIFY(child && child->isValid());
-            if (child->role() == QAccessible::Button && child->text(QAccessible::Name) == title)
+            if (child->text(QAccessible::Name) == title) {
+                QCOMPARE(child->role(), QAccessible::Heading);
+                QVERIFY(!child->actionInterface() && !child->state().expandable);
+                QVERIFY(!child->rect().isEmpty());
                 foundHeading = true;
+            }
         }
         QVERIFY(foundHeading);
+        window.collapsedSections_.insert(1);
+        QVERIFY(window.refreshReading());
+        QVERIFY(!doc->find("AFTER HEADING").isNull());
         QVERIFY(hasAnchor(doc, "section-1") && hasAnchor(doc, "block-1-0")); QCOMPARE(window.sections_->findText(title), -1);
     }
 
