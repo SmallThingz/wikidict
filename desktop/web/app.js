@@ -22,12 +22,23 @@ function title(text){panel.append(node('h1',text));}
 function navigate(next){return performAction(()=>{page=next;renderVersion++;panel.replaceChildren();entryView.replaceChildren();status('');$('dock').classList.remove('away');document.querySelectorAll('[data-page]').forEach(b=>{const active=b.dataset.page===next||(next==='reading'&&b.dataset.page==='search')||(next==='dictionaries'&&b.dataset.page==='settings');b.setAttribute('aria-current',active?'page':'false');});window.scrollTo(0,0);speechSynthesis.cancel();
  if(next==='search')return search();else if(next==='history'||next==='saved')return wordList(next);else if(next==='learn')return learn();else if(next==='settings')return settings();else if(next==='dictionaries')return dictionaries();else if(next==='reading')return renderWord();
 });}
-async function open(hit,fragment){if(!hit)return;const version=++renderVersion;status('Opening…');const value=await readForView('read',hit,()=>version===renderVersion);if(version!==renderVersion)return;current=value;currentHit=hit;
+async function open(hit,fragment){if(!hit)return;const version=++renderVersion;status('Opening…');const value=await readForView('read',hit,()=>version===renderVersion);if(version!==renderVersion)return;
  const preview=clue(value),saved=refreshSavedClue(state.saved,hit,preview),savedChanged=saved!==state.saved;state.saved=saved;
- if(state.settings.historyLimit>0){const item={...hit,clue:preview,at:Date.now()};state.history=[item,...state.history.filter(x=>key(x)!==key(hit))].slice(0,state.settings.historyLimit);save();}
+ const remember=state.settings.historyLimit>0;
+ if(remember){const item={...hit,clue:preview,at:Date.now()};state.history=[item,...state.history.filter(x=>key(x)!==key(hit))].slice(0,state.settings.historyLimit);}
+ let historyError;
  if(savedChanged)await flushSave();
- if(version!==renderVersion)return;
+ else if(remember){
+  try{await flushSave();}
+  catch(error){historyError=error.message;}
+ }
+ if(version!==renderVersion){
+  if(historyError)status(historyError,true);
+  return;
+ }
+ current=value;currentHit=hit;
  navigate('reading');
+ if(historyError)status(historyError,true);
  if(!revealFragment(entryView,fragment===undefined?(value.redirect?.followed?value.redirect.fragment:''):fragment)&&entryView.firstElementChild)
   entryView.focus({preventScroll:true});
 }

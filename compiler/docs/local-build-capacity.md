@@ -261,3 +261,28 @@ responsive capability uses DPRa global bit 24. The earlier bit-21 proposal was
 withdrawn because Android already uses bits 21 and 22 for bottom alignment.
 Reserved bit 23 remains rejected. Preserve the allocation and legacy-format
 controls when combining the client candidates. No release is published.
+
+The standalone Web history repair now awaits the worker's completed IndexedDB
+transaction before displaying a newly opened entry. During that wait, the
+current entry and bookmark target remain the visible entry. Superseded opens
+cannot replace the current view; history-only write failures still report an
+error and allow reading, while saved-clue refresh failures retain their existing
+failure behavior. Independent review approved patch `53d1f3ed…` against the
+canonical Web source.
+
+Ten browser controls and cold reopens for all 21 empty-source editions passed
+on that exact candidate. Run 26 stopped at its disk floor after completing the
+controls and six cold cases; only those individually completed checks count.
+Run 27 completed the other 15 cold cases with clean process closure. Earlier
+failures remain preserved. The fresh canonical Web build reproduced both
+qualified bundle hashes exactly. Its Node run passed 108 tests, including six
+new history regressions, with three unrelated optional corpus tests skipped.
+The guard closed in 4.423 seconds at 127,547,392 bytes peak PSS. Receipts are in
+`.tmp/web-history-main-integration/` and
+`.tmp/completion-council/S4-web/receipts/history-standalone-final.json`.
+
+The latest independently joined native scan checkpoint covers 108 generated
+editions and 486,631 attempted layouts, retaining the 306 baseline refusals.
+A separately identified Qt candidate passes 301 of those exact failures;
+four Pa'O cases and Gaelic `attá` still require qualification. These scoped
+repairs do not close all editions or the complete application acceptance gate.
