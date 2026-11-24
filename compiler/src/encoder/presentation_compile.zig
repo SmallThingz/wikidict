@@ -12413,6 +12413,61 @@ pub const Renderer = struct {
         return if (wikiClassContains(body, mapped)) mapped else null;
     }
 
+    fn quotedBulletOwner(map: *const QuoteSourceMap, token: []const u8) ?[]const u8 {
+        if (!rootLanguageQuoteMapClean(map) or !wikiClassContains(map.output, token) or
+            !staticNumberedClosedSiblings(map.output, false)) return null;
+        const opening = syntax.tagAt(token, 0) orelse return null;
+        if (!opening.is("span") or opening.closing or opening.self_closing) return null;
+        const pair = syntax.matchingTag(token, opening) orelse return null;
+        if (pair.end != token.len) return null;
+        const first = map.copiedOriginal(token[0..opening.end]) orelse return null;
+        const last = map.copiedOriginal(token[pair.inner_end..]) orelse return null;
+        const original = map.coveredOriginal(token, map.original) orelse return null;
+        const own_tag = syntax.tagAt(original, 0) orelse return null;
+        const own_pair = syntax.matchingTag(original, own_tag) orelse return null;
+        if (own_pair.end != original.len or !inlineOverlaySameSourceSlice(first, original[0..own_tag.end]) or
+            !inlineOverlaySameSourceSlice(last, original[own_pair.inner_end..])) return null;
+        return original;
+    }
+
+    fn staticQuotedBulletClasses(self: *Renderer, tracked: MissingText, token: []const u8) Error!?[]const u8 {
+        const op = self.ordinary_bullet_link orelse return null;
+        const quote = self.native_quote_source orelse return null;
+        const held = self.body_missing orelse return null;
+        if (!self.figure_implicit_list_context or self.html_list_item_flow or self.html_blockquote_flow or
+            !self.nativeQuoteDomainCurrent(quote) or !QuoteSourceMap.clean(tracked) or
+            !inlineOverlaySameSourceSlice(tracked.bytes, quote.output.bytes) or
+            !inlineOverlaySameSourceSlice(op.source, held.bytes) or !noLiParentSourceRange(held, op.line) or
+            op.line.len < 2 or op.line[0] != '*' or std.mem.indexOfAny(u8, op.line, "\r\n") != null or
+            !inlineOverlaySameSourceSlice(wikiListLineBody(op.line[1..]), op.body)) return null;
+        const body = self.wikiCellCurrentBodyRange(quote.range.prepared, op.body) orelse return null;
+        const original = self.wikiCellCurrentBodyRange(quote.range.prepared, quote.original.bytes) orelse return null;
+        if (!inlineOverlaySameSourceSlice(original, body)) return null;
+        const owner = quotedBulletOwner(quote.map, token) orelse return null;
+        const previous = self.closedBulletPredecessors(quote.range.prepared, op);
+        return self.authoredPrefixClasses(quote.range, owner, previous);
+    }
+
+    // The renderer dispatched this list item from its current block body. Only
+    // exclude earlier complete lines in that same body, with no explicit
+    // formatting elements that HTML may reconstruct on a later line.
+    fn closedBulletPredecessors(self: *Renderer, current: MissingText, op: *const OrdinaryBulletLink) ?[]const u8 {
+        const scope = self.wikiCellCurrentBodyRange(current, op.source) orelse return null;
+        const line = self.wikiCellCurrentBodyRange(current, op.line) orelse return null;
+        if (!wikiClassContains(scope, line)) return null;
+        const start = @intFromPtr(line.ptr) - @intFromPtr(scope.ptr);
+        if (start == 0 or scope[start - 1] != '\n') return null;
+        const prefix = scope[0..start];
+        var lines = std.mem.splitScalar(u8, prefix, '\n');
+        while (lines.next()) |previous| {
+            if (previous.len == 0) continue;
+            if (!starts(previous, "* ") or std.mem.indexOfAny(u8, previous, "{}\r") != null or
+                std.ascii.findIgnoreCase(previous, "<i") != null or std.ascii.findIgnoreCase(previous, "<b") != null or
+                !staticNumberedClosedSiblings(previous[2..], true)) return null;
+        }
+        return prefix;
+    }
+
     fn staticInlineFrameSource(self: *Renderer, tracked: MissingText, at: usize, tag: syntax.Tag, pair: syntax.Pair,
         effective: Style, inherited: Style, depth: usize) Error!bool
     {
@@ -12438,12 +12493,17 @@ pub const Renderer = struct {
             break :blk &empty;
         };
         defer if (self.textPaintProfile() == null) empty.deinit();
-        const query = (try self.nativeSourceClassQuery(tag, selected, element, effective.native_inline_motion)) orelse element;
+        const issued_query = try self.nativeSourceClassQuery(tag, selected, element, effective.native_inline_motion);
+        const query = issued_query orelse element;
         var scoped_query = query.*;
         const local_classes = try self.staticNumberedAncestorClasses(element, effective.native_inline_motion, &scoped_query);
         defer if (local_classes) |owned| self.a.free(owned);
         if (scoped_query.complete_ancestor_classes == null and scoped_query.source_inline_box_ancestor_classes == null)
             scoped_query.source_inline_box_ancestor_classes = local_classes;
+        const bullet_classes = if (issued_query != null and scoped_query.source_inline_box_ancestor_classes == null)
+            try self.staticQuotedBulletClasses(tracked, tracked.bytes[at..pair.end]) else null;
+        defer if (bullet_classes) |owned| self.a.free(owned);
+        if (bullet_classes) |classes| scoped_query.source_inline_box_ancestor_classes = classes;
         const closed = table_style_profile.staticInlineOwnerScope(selected, self.a, &scoped_query, css, self.customParent(effective), chain) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory, else => return error.UncompiledPresentation,
         };
@@ -12542,6 +12602,115 @@ pub const Renderer = struct {
         return true;
     }
 
+    // Retain all classes before this occurrence, including earlier siblings.
+    // A later, properly nested ordinary DIV/SPAN subtree cannot wrap the
+    // already closed element. Keep the full inventory for other selector forms.
+    fn authoredPrefixClasses(self: *Renderer, range: NativeSourceClassRange, token: []const u8, earlier_closed: ?[]const u8) Error!?[]const u8 {
+        const mapped = self.nativeOriginalCopiedRange(range.prepared, token) orelse return null;
+        const end = range.start + (@intFromPtr(mapped.ptr) - @intFromPtr(range.prepared.bytes.ptr)) + mapped.len;
+        const page = range.proof.source.bytes;
+        if (end > page.len or !std.mem.eql(u8, page[end - token.len..end], token)) return null;
+        var stack: [max_depth][]const u8 = undefined;
+        var depth: usize = 0;
+        var cursor = end;
+        while (std.mem.indexOfAnyPos(u8, page, cursor, "<{}")) |next| {
+            const tag = syntax.tagAt(page, next) orelse return null;
+            if (!oneOf(tag.name, &.{ "div", "span", "b", "i" }) or tag.self_closing or !formattingAngleAttributesBalanced(tag.attrs)) return null;
+            if (tag.closing) {
+                if (trim(tag.attrs).len != 0) return null;
+                if (depth == 0) { if (!tag.is("div")) return null; } else {
+                    depth -= 1;
+                    if (!tag.is(stack[depth])) return null;
+                }
+            } else {
+                if (depth == stack.len) return null;
+                stack[depth] = tag.name;
+                depth += 1;
+            }
+            cursor = tag.end;
+        }
+        if (depth != 0) return null;
+        var classes: std.ArrayList(u8) = .empty;
+        defer classes.deinit(self.a);
+        try classes.appendSlice(self.a, native_source_root_class_tokens);
+        var after: usize = 0;
+        if (earlier_closed) |earlier| {
+            if (!wikiClassContains(range.prepared.bytes, earlier)) return null;
+            const begin = range.start + (@intFromPtr(earlier.ptr) - @intFromPtr(range.prepared.bytes.ptr));
+            if (begin > end - token.len or earlier.len > end - token.len - begin or
+                !std.mem.eql(u8, earlier, page[begin..][0..earlier.len])) return null;
+            appendNativeAuthoredSourceClasses(self.a, &classes, page[0..begin]) catch |failure| switch (failure) {
+                error.OutOfMemory => return error.OutOfMemory, error.InvalidSourceClassInventory => return null,
+            };
+            after = begin + earlier.len;
+        }
+        appendNativeAuthoredSourceClasses(self.a, &classes, page[after..end]) catch |failure| switch (failure) {
+            error.OutOfMemory => return error.OutOfMemory, error.InvalidSourceClassInventory => return null,
+        };
+        return try classes.toOwnedSlice(self.a);
+    }
+
+    fn positionedInlineImage(self: *Renderer, tracked: MissingText, at: usize, tag: syntax.Tag, pair: syntax.Pair,
+        effective: Style, inherited: Style, depth: usize, css: []const u8) Error!bool
+    {
+        if (self.inline_box_owner != null or self.ruby_depth != 0 or self.typed_table_depth != 0 or
+            self.table_viewport_cell_source != null or self.bidi_box_source != null or self.in_reference or
+            self.in_template_literal_scope or self.media_depth != 0 or self.pre_block or self.parsed_pre or self.poem_depth != 0 or
+            self.figure_caption_depth != 0 or self.active_bidi_capture != null or self.bidi_scope_depth != 0 or
+            self.explicit_wiki_label != null or self.body_link_target.len != 0 or effective.kind != .text or
+            effective.target.len != 0 or effective.image != null or effective.self_link_target != null or
+            effective.font_size_unknown or effective.superscript or effective.subscript or effective.underline or effective.strike or
+            effective.direction.len != 0 or effective.captured_direction != null or tracked.unknown or
+            !noLiParentSourceRange(tracked, tracked.bytes[at..pair.end]) or depth >= max_depth) return false;
+        const body = tracked.bytes[tag.end..pair.inner_end];
+        var children: ir.InlineIterator = .{ .input = body, .renderer_boundaries = true, .link_trail = self.context.link_trail };
+        const child = children.next() orelse return false;
+        if (child.kind != .link or children.cursor != body.len or child.trail.len != 0 or
+            child.link_label_restored_close or self.namespaceOfTarget(child.target) != 6) return false;
+        if (try self.compiledBidiScope(tag) != null) return false;
+        var no_script = false;
+        const chain = (try self.nativeInlineMotionDeclarationsWithScriptAbsence(effective.native_inline_motion, null, &no_script)) orelse return false;
+        defer self.a.free(chain);
+        const element = try self.textElement(tag, inherited.text_element, effective.language);
+        var empty: table_style_profile.Profile = undefined;
+        const profile = self.textPaintProfile() orelse blk: {
+            empty = table_style_profile.parseAlloc(self.a, "") catch |failure| switch (failure) {
+                error.OutOfMemory => return error.OutOfMemory, else => return error.UncompiledPresentation,
+            };
+            break :blk &empty;
+        };
+        defer if (self.textPaintProfile() == null) empty.deinit();
+        const current = try self.nativeSourceClassQuery(tag, profile, element, effective.native_inline_motion);
+        var query = (current orelse element).*;
+        try self.inlineBoxAuthoredSelectorFacts(tag, &query);
+        const peers = if (current != null) try self.authoredPrefixClasses(self.native_source_class_range.?, tracked.bytes[at..pair.end], null) else null;
+        defer if (peers) |owned| self.a.free(owned);
+        const absence: ?table_style_profile.InlineImageSourceAbsence = if (current) |node| .{
+            .classes = node.complete_ancestor_classes.?, .ids = node.complete_ancestor_ids,
+            .no_sup_sub = no_script, .local_ancestor_classes = peers,
+        } else null;
+        var reason: table_style_profile.InlineBoxSourceDiagnostic = .none;
+        var layout = (profile.relativeImageLayoutIn(self.a, &query, css, self.customParent(effective), chain, absence, &reason) catch |failure| switch (failure) {
+            error.OutOfMemory => return error.OutOfMemory, else => return error.UncompiledPresentation,
+        }) orelse {
+            diagnostics.logLine("presentation positioned_inline_image source_current={any} source_without_script={any} source_path_classes={any}", .{ current != null, no_script, peers != null });
+            self.tracePresentationRejection("positioned_inline_image", @tagName(reason), tracked.bytes, at, 0, error.UncompiledPresentation);
+            return false;
+        };
+        const scale = self.observedFigureNativeFontOrigin(effective);
+        if (!normalizeContainerMarginLength(&layout.x, scale) or !normalizeContainerMarginLength(&layout.y, scale) or
+            !normalizeContainerLength(&layout.padding_left, scale) or !normalizeContainerLength(&layout.padding_right, scale)) return false;
+        const before = self.spans.items.len;
+        try self.inlineTextWithMissing(try self.borrowedInlineHtmlSlice(tracked, body), effective, depth + 1);
+        if (self.spans.items.len != before + 1) return error.UncompiledPresentation;
+        const span = &self.spans.items[before];
+        const image = if (span.image) |*value| value else return error.UncompiledPresentation;
+        if (span.text.len != 0 or !span.image_fields_compiled or span.provenance != .parsed or image.occurrence_layout != null or
+            image.map != null or image.static_poster != null or span.nonfloating_image or span.pending_figure != null) return error.UncompiledPresentation;
+        image.occurrence_layout = layout;
+        return true;
+    }
+
     fn typedInlineBox(self: *Renderer, tracked: MissingText, at: usize, tag: syntax.Tag, pair: syntax.Pair,
         effective: Style, inherited: Style, depth: usize) Error!bool
     {
@@ -12602,6 +12771,7 @@ pub const Renderer = struct {
             return failure;
         };
         if (box.unresolved) {
+            if (!static_candidate and try self.positionedInlineImage(tracked, at, tag, pair, effective, inherited, depth, own_css)) return true;
             const previous_native_reason = self.inline_box_native_motion_diagnostic;
             self.inline_box_native_motion_diagnostic = native_reason;
             defer self.inline_box_native_motion_diagnostic = previous_native_reason;
@@ -27006,7 +27176,7 @@ pub const Renderer = struct {
                     !std.mem.eql(u8, fact.entry.opening, fact.entry.opening_snapshot) or
                     !std.mem.eql(u8, &fact.digest, &inlineOverlayParagraphNodeDigest(node.element, fact.entry.css)) or
                     fact.entry.previous != (if (index + 1 < value.facts.len) value.facts[index + 1].entry else null)) return false;
-                if (value.path.kind == .bullet and renderer.inlineOverlayOriginalOpening(value.source, fact.opening) == null) return false;
+                if (value.path.kind == .bullet and renderer.nativeOriginalCopiedRange(value.source, fact.opening) == null) return false;
             }
             return true;
         }
@@ -27374,10 +27544,10 @@ pub const Renderer = struct {
             tags[0..declarations.len], entries[0..declarations.len], elements[0..declarations.len]);
     }
 
-    // Reuse the maintained native HTML/quote-copy authority, but require an
-    // unchanged authored opener. Generated B/I is not an admitted parent here.
-    fn inlineOverlayOriginalOpening(self: *const Renderer, root: MissingText, opening: []const u8) ?[]const u8 {
-        const mapped = self.nativeHtmlCopiedOpening(opening) orelse return null;
+    // Map one continuous authored range through registered HTML and quote
+    // copies. Generated or reconstructed bytes have no copy record.
+    fn nativeOriginalCopiedRange(self: *const Renderer, root: MissingText, token: []const u8) ?[]const u8 {
+        const mapped = self.nativeHtmlCopiedOpening(token) orelse return null;
         if (self.wikiCellCurrentBodyRange(root, mapped)) |original| return original;
         var cursor = self.native_quote_source;
         var remaining: usize = max_depth + 1;
@@ -27448,7 +27618,7 @@ pub const Renderer = struct {
                 !std.mem.eql(u8, declarations[index], entry.css) or
                 !std.mem.eql(u8, node.classes, (try self.semanticAttribute(tag, "class")) orelse "") or
                 !std.mem.eql(u8, node.id, (try self.semanticAttribute(tag, "id")) orelse "")) return null;
-            const original = self.inlineOverlayOriginalOpening(held.root.source, entry.opening) orelse return null;
+            const original = self.nativeOriginalCopiedRange(held.root.source, entry.opening) orelse return null;
             if (!wikiClassContains(raw_body, original) or !std.mem.eql(u8, original, entry.opening)) return null;
             entries[index] = entry; tags[index] = tag; elements[index] = node; original_openings[index] = original;
             cursor = entry.previous; current = node.parent;
@@ -131520,4 +131690,42 @@ test "ordinary decorated wikilink copy certificate refuses other sources or opaq
     try std.testing.expect(!Renderer.decoratedQuoteMapBound(&map, MissingText.untracked(source), MissingText.untracked(unrelated)));
     map.has_literal_quote_edits = true;
     try std.testing.expect(!Renderer.decoratedQuoteMapBound(&map, MissingText.untracked(source), MissingText.untracked(output)));
+}
+
+
+test "quoted bullet frame maps its declaring span through retained quote operations" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const before = "bahasa Belanda : <span class=\"Latn\" lang=\"nl\">[[:systeem#Bahasa&#95;Belanda|systeem]]</span>[[Category:Istilah dengan terjemahan bahasa Belanda|SISTEM]] ";
+    const own = "<span title=\"jender netral\" style=\"background-color:#d2d2d2;\">''n''</span>";
+    const persian = "* bahasa Persia : <span class=\"Arab fa-Arab\" lang=\"fa\">[[:سامانه#Bahasa&#95;Persia|سامانه]]</span>[[Category:Istilah dengan terjemahan bahasa Persia|SISTEM]] (samaneh)\n";
+    const current = "* bahasa Swedia : " ++ own;
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    inline for (.{ persian, "* <span class=\"Arab\">open\n", "* <b class=\"Arab\">text</b>\n", "* {{uncertain}}\n" }, 0..) |prefix, i| {
+        const input = prefix ++ current;
+        const line = input[prefix.len..];
+        const op: Renderer.OrdinaryBulletLink = .{ .source = input, .line = line, .body = line[2..] };
+        const prior = renderer.closedBulletPredecessors(MissingText.untracked(input), &op);
+        if (i == 0) {
+            try std.testing.expect(prior != null and Renderer.inlineOverlaySameSourceSlice(prior.?, input[0..prefix.len]));
+            const tainted: MissingText = .{ .bytes = input, .ranges = &.{.{ .start = 2, .end = 6, .occurrence = 1 }} };
+            try std.testing.expect(renderer.closedBulletPredecessors(tainted, &op) == null);
+            var borrowed = op;
+            borrowed.line = try a.dupe(u8, line);
+            try std.testing.expect(renderer.closedBulletPredecessors(MissingText.untracked(input), &borrowed) == null);
+        } else try std.testing.expect(prior == null);
+    }
+    inline for (.{ before, "<span><i>crossed</span>", "<span class=\"open\">" }, 0..) |prefix, index| {
+        const input = prefix ++ own;
+        var map: QuoteSourceMap = .{};
+        defer map.deinit(a);
+        const result = try normalizeWikiQuotesPreparedMappedInDomain(a, MissingText.untracked(input), 0, false, .{}, null, &map, true);
+        const at = std.mem.indexOf(u8, result.bytes, "<span title=") orelse return error.TestUnexpectedResult;
+        const mapped = Renderer.quotedBulletOwner(&map, result.bytes[at..]);
+        if (index == 0) {
+            try std.testing.expect(mapped != null and Renderer.inlineOverlaySameSourceSlice(mapped.?, input[prefix.len..]));
+            try std.testing.expect(Renderer.quotedBulletOwner(&map, try a.dupe(u8, result.bytes[at..])) == null);
+        } else try std.testing.expect(mapped == null);
+    }
 }

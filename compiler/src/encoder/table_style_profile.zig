@@ -10678,7 +10678,7 @@ pub const Profile = struct {
         rtl: bool, within_box: bool, source_declarations: ?[]const []const u8,
         diagnostic: ?*InlineBoxSourceDiagnostic) !InlineBoxResolution
     {
-        return self.resolveInlineBoxSourceModeIn(a, element, css, environment, rtl, within_box, source_declarations, diagnostic, false, false);
+        return self.resolveInlineBoxSourceModeIn(a, element, css, environment, rtl, within_box, source_declarations, diagnostic, false, false, false, null);
     }
 
     pub fn resolveStaticInlineDecorationIn(self: *const Profile, a: std.mem.Allocator, element: *const TextElement,
@@ -10729,13 +10729,29 @@ pub const Profile = struct {
         if (!try staticInlineDirectionDefaultsDiagnosedAlloc(a, self, chain, inlineBoxSourceAbsence(element), direction_detail)) {
             inlineBoxSourceRejected(diagnostic, .static_direction_defaults_rejected); return .{ .unresolved = true };
         }
-        return self.resolveInlineBoxSourceModeIn(a, element, css, environment, rtl, false, source_declarations, diagnostic, true, rounded_decoration);
+        return self.resolveInlineBoxSourceModeIn(a, element, css, environment, rtl, false, source_declarations, diagnostic, true, rounded_decoration, false, null);
+    }
+
+    pub fn relativeImageLayoutIn(self: *const Profile, a: std.mem.Allocator, element: *const TextElement,
+        css: []const u8, environment: CustomEnvironment, chain: []const []const u8, absence: ?InlineImageSourceAbsence,
+        diagnostic: ?*InlineBoxSourceDiagnostic) !?types.InlineImageOccurrenceLayout
+    {
+        const box = try self.resolveInlineBoxSourceModeIn(a, element, css, environment, false, false, chain, diagnostic, false, false, true, absence);
+        if (box.unresolved or box.position != .relative or box.insets.right != null or box.insets.bottom != null or
+            box.padding.top.value != 0 or box.padding.bottom.value != 0) return null;
+        inline for (.{ "top", "right", "bottom", "left" }) |side| if (@field(box.border, side) != .none) return null;
+        var layout: types.InlineImageOccurrenceLayout = .{ .x = .{ .unit = .px, .value = 0 }, .y = .{ .unit = .px, .value = 0 },
+            .padding_left = box.padding.left, .padding_right = box.padding.right };
+        inline for (.{ "left", "top" }, .{ "x", "y" }) |side, axis| if (@field(box.insets, side)) |inset| {
+            @field(layout, axis) = .{ .unit = switch (inset.unit) { .px => .px, .em => .em, .percent => return null }, .value = inset.value };
+        };
+        return if (types.validInlineImageOccurrenceLayout(layout)) layout else null;
     }
 
     fn resolveInlineBoxSourceModeIn(self: *const Profile, a: std.mem.Allocator, element: *const TextElement,
         css: []const u8, environment: CustomEnvironment, rtl: bool, within_box: bool,
         source_declarations: ?[]const []const u8, diagnostic: ?*InlineBoxSourceDiagnostic,
-        comptime static_decoration: bool, comptime rounded_decoration: bool) !InlineBoxResolution
+        comptime static_decoration: bool, comptime rounded_decoration: bool, comptime image_relative: bool, image_absence: ?InlineImageSourceAbsence) !InlineBoxResolution
     {
         if (diagnostic) |sink| sink.* = .none;
         if (css.len > max_css_bytes) {
@@ -10757,12 +10773,15 @@ pub const Profile = struct {
         }
         try appendObservedFigureDeclarations(a, &declarations, css,
             .{ .inline_style = true, .order = max_rules * 1024 }, false, false, null, 0);
-        const result = try inlineBoxDeclarationsIn(a, declarations.items, environment, rtl, within_box, false, static_decoration, rounded_decoration);
+        if (image_relative and !try observedInlineBoxPropertiesComplete(a, declarations.items, environment)) {
+            inlineBoxSourceRejected(diagnostic, .own_geometry_unresolved); return .{ .unresolved = true };
+        }
+        const result = try inlineBoxDeclarationsIn(a, declarations.items, environment, rtl, within_box, image_relative, static_decoration, rounded_decoration);
         if (result.unresolved) {
             inlineBoxSourceRejected(diagnostic, .own_geometry_unresolved); return result;
         }
         if (result.position == .static and !static_decoration) return result;
-        if (try inlineBoxInheritedDefaultsIn(self, a, element, css, declarations.items)) return result;
+        if (try inlineBoxInheritedDefaultsModeIn(self, a, element, css, declarations.items, image_relative)) return result;
         const chain = source_declarations orelse {
             inlineBoxSourceRejected(diagnostic, .source_chain_absent); return .{ .unresolved = true };
         };
@@ -10772,9 +10791,9 @@ pub const Profile = struct {
         // The same current source query supplies negative class/ID facts for
         // static decorations and positioned owners. These facts refute only
         // necessary selectors; they do not establish a physical matching path.
-        const source_absence = inlineBoxSourceAbsence(element);
+        const source_absence = if (image_relative) image_absence orelse inlineBoxSourceAbsence(element) else inlineBoxSourceAbsence(element);
         var inherited_detail: InlineImageOccurrenceSourceDetail = .{};
-        const inherited_defaults = try inlineBoxSourceInheritedDefaultsCarrierIn(self, a, chain, environment, false, false,
+        const inherited_defaults = try inlineBoxSourceInheritedDefaultsCarrierIn(self, a, chain, environment, image_relative, false,
             source_absence, if (@import("builtin").is_test and diagnostic != null) &inherited_detail else null);
         if (@import("builtin").is_test and diagnostic != null and !inherited_defaults)
             std.debug.print("INLINE_BOX_INHERITED stage={s} property={s} chain_index={any} chain_count={d} source_absence={any}\n", .{
@@ -36413,18 +36432,27 @@ fn inlineBoxAncestorDefaultsAlloc(a: std.mem.Allocator, css: []const u8, environ
 
 pub const InlineImageSourceAbsence = struct {
     classes: []const u8,
+    local_ancestor_classes: ?[]const u8 = null,
     ids: ?[]const u8 = null,
     no_sup_sub: bool = false,
     local_box: bool = false,
 };
 
 fn inlineBoxSourceAbsence(element: *const TextElement) ?InlineImageSourceAbsence {
-    if (element.complete_ancestor_classes) |classes| return .{ .classes = classes, .ids = element.complete_ancestor_ids };
+    if (element.complete_ancestor_classes) |classes| return .{ .classes = classes, .ids = element.complete_ancestor_ids,
+        .local_ancestor_classes = element.source_inline_box_ancestor_classes };
     if (element.source_inline_box_ancestor_classes) |classes| return .{ .classes = classes, .local_box = true };
     return null;
 }
 
 fn inlineBoxInheritedRuleAbsent(profile: *const Profile, rule: anytype, facts: InlineImageSourceAbsence) bool {
+    if (facts.local_ancestor_classes) |classes| {
+        if (inlineBoxInheritedSelectorAbsent(profile, rule, .{ .classes = classes, .local_box = true })) return true;
+    }
+    return inlineBoxInheritedSelectorAbsent(profile, rule, facts);
+}
+
+fn inlineBoxInheritedSelectorAbsent(profile: *const Profile, rule: anytype, facts: InlineImageSourceAbsence) bool {
     if (@TypeOf(rule) == ContainerRule) {
         if (!inlineImageContainerRuleAbsent(rule.selector, facts)) return false;
         if (!facts.local_box) return true;
@@ -36874,6 +36902,34 @@ fn inlineBoxInheritedDefaultsModeIn(profile: *const Profile, a: std.mem.Allocato
     }
     return visibility != null and writing_mode != null and std.ascii.eqlIgnoreCase(visibility.?, "visible") and
         std.ascii.eqlIgnoreCase(writing_mode.?, "horizontal-tb");
+}
+
+test "positioned single image resolves physical image offsets and refuses unrepresented decoration" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var profile = try parseAlloc(a, "");
+    defer profile.deinit();
+    const element: TextElement = .{ .tag = "span" };
+    const css = "position:relative;top:-1px; padding-right: 0.4em;";
+    const layout = (try profile.relativeImageLayoutIn(a, &element, css, .{}, &.{ css, "font-size:90%" }, null, null)).?;
+    try std.testing.expectEqualDeep(types.StyleLength{ .unit = .px, .value = -1 }, layout.y);
+    try std.testing.expectEqualDeep(types.StyleLength{ .unit = .em, .value = 0.4 }, layout.padding_right);
+    for ([_][]const u8{ "top:10%", "bottom:2px", "border:1px solid red", "padding-top:1em", "transform:rotate(10deg)", "line-height:2" }) |unsupported| {
+        const changed = try std.mem.concat(a, u8, &.{ css, unsupported });
+        try std.testing.expect(try profile.relativeImageLayoutIn(a, &element, changed, .{}, &.{changed}, null, null) == null);
+    }
+    try std.testing.expect(try profile.relativeImageLayoutIn(a, &element, css, .{}, &.{ css, "transform:scale(2)" }, null, null) == null);
+    var scripts = try parseForTargetAlloc(a, "sup,sub{line-height:1em!important}.Jpan{line-height:1}", .screen);
+    defer scripts.deinit();
+    const facts: InlineImageSourceAbsence = .{ .classes = "mw-parser-output Jpan", .local_ancestor_classes = "mw-parser-output", .no_sup_sub = true };
+    try std.testing.expect(try scripts.relativeImageLayoutIn(a, &element, css, .{}, &.{css}, facts, null) != null);
+    var competing = facts;
+    competing.no_sup_sub = false;
+    try std.testing.expect(try scripts.relativeImageLayoutIn(a, &element, css, .{}, &.{css}, competing, null) == null);
+    competing = facts;
+    competing.local_ancestor_classes = facts.classes;
+    try std.testing.expect(try scripts.relativeImageLayoutIn(a, &element, css, .{}, &.{css}, competing, null) == null);
 }
 
 test "native inline box preserves current color padding and empty absolute percent geometry" {
@@ -38789,18 +38845,33 @@ pub fn staticInlineOwnerScope(profile: *const Profile, a: std.mem.Allocator, ele
 // selector. A known matching rule still belongs to this node's cascade.
 pub fn staticInlineOwnerRulesAbsent(profile: *const Profile, element: *const TextElement) bool {
     if (profile.globally_unresolved or (profile.page_style_parent != null and element.page_style_root == null)) return false;
-    const absence = inlineBoxSourceAbsence(element);
     for (profile.container_rules) |rule| {
         switch (rule.selector.matchIn(element, profile.page_style_parent != null)) {
             .no => continue,
             .known => return false,
             .unknown => {
-                const facts = absence orelse return false;
-                if (!facts.local_box or !inlineBoxInheritedRuleAbsent(profile, rule, facts)) return false;
+                if (!staticInlineLocalRuleAbsent(profile, rule, element)) return false;
             },
         }
     }
     return true;
+}
+
+fn staticInlineLocalRuleAbsent(profile: *const Profile, rule: ContainerRule, element: *const TextElement) bool {
+    const classes = element.source_inline_box_ancestor_classes orelse return false;
+    if (element.alternative_ancestry != null) return false;
+    if (inlineBoxInheritedSelectorAbsent(profile, rule, .{ .classes = classes, .local_box = true })) return true;
+    // This owned inline occurrence lives inside the article. A terminal root
+    // condition cannot select it, even when the legacy matcher lacks a root edge.
+    const index = counterResetRuleIndex(profile, rule) orelse return false;
+    const observed = profile.observed_figure_rules[index];
+    const selector = observed.selector orelse return false;
+    if (!selector.syntax_known or observed.list_uncertain or selector.pseudo != null or selector.chain.len == 0 or
+        selector.necessary_previous_sibling or selector.necessary_previous_adjacent != null or
+        selector.necessary_sibling_ancestors.len != 0 or selector.necessary_has_next != null) return false;
+    const own = selector.chain[selector.chain.len - 1];
+    if (own.root_only and (inlineBoxKeyword(element.tag, &.{ "span", "i" }))) return true;
+    return own.ownMatch(element, null) == .no;
 }
 
 fn staticInlineOwnerPaintIn(profile: *const Profile, a: std.mem.Allocator, element: *const TextElement,
@@ -38808,6 +38879,31 @@ fn staticInlineOwnerPaintIn(profile: *const Profile, a: std.mem.Allocator, eleme
 {
     const selected = (try staticInlineOwnerValues(a, css, environment)) orelse return null;
     return if (try staticInlineOwnerScope(profile, a, element, css, environment, chain)) selected else null;
+}
+
+test "captured Indonesian gender frame excludes only independently refuted own selectors" {
+    const a = std.testing.allocator;
+    const css = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, "compiler/tools/testdata/id-swadesh-jawa/common.css", a, .limited(max_css_bytes));
+    defer a.free(css);
+    var actual = try parseForTargetAlloc(a, css, .screen);
+    defer actual.deinit();
+    var span: TextElement = .{ .tag = "span", .complete_ancestor_classes = "mw-parser-output Arab Jpan",
+        .source_inline_box_ancestor_classes = "mw-parser-output trans-content trans-top Latn" };
+    var refusals: usize = 0;
+    for (actual.container_rules) |rule| {
+        const status = rule.selector.matchIn(&span, false);
+        if (status == .no or (status == .unknown and staticInlineLocalRuleAbsent(&actual, rule, &span))) continue;
+        refusals += 1;
+        if (rule.provenance) |p| std.debug.print("ID_GENDER_RULE order={d} status={s} selector={s}\n", .{rule.order,@tagName(status),p.selector});
+    }
+    try std.testing.expectEqual(@as(usize, 0), refusals);
+    var guard = try parseForTargetAlloc(a, ":root {color:black}.Arab span{transform:translateX(2px)}", .screen);
+    defer guard.deinit();
+    try std.testing.expect(staticInlineOwnerRulesAbsent(&guard, &span));
+    span.source_inline_box_ancestor_classes = "mw-parser-output Arab";
+    try std.testing.expect(!staticInlineOwnerRulesAbsent(&guard, &span));
+    span.source_inline_box_ancestor_classes = null;
+    try std.testing.expect(!staticInlineOwnerRulesAbsent(&guard, &span));
 }
 
 test "classifier padding and paint are three independent source-owned inline ranges" {
