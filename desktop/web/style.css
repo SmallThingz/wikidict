@@ -67,3 +67,10 @@ summary .heading-label {font:inherit;color:inherit;margin:0}
 
 .table-visibility {display:flex;flex-wrap:wrap;gap:.5em;margin-block:.5em}
 .table-visibility button {padding:.25em .5em;color:var(--accent)}
+
+wikidict-clipped-article {display:block}
+.compiled-clipped-body,.compiled-clipped-border,.compiled-clipped-origin {position:absolute;inset:auto;clip:rect(0,0,0,0);clip-path:inset(50%);overflow:hidden;white-space:nowrap;border:0;padding:0}
+.compiled-clipped-static {position:relative;display:inline;margin:0;padding:0;border:0}
+.compiled-clipped-origin {width:0;height:0;margin:0}
+.compiled-clipped-plane {display:block;position:relative;width:100%;height:0;margin:0;border:0;padding:0;pointer-events:none}
+.compiled-clipped-border {pointer-events:none}

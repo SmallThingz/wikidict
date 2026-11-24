@@ -17,7 +17,7 @@ function darkReadingInk(foreground,background){
   while(low<high){const mid=(low+high)>>1;if(luminance(mix(mid))>=minimum)high=mid;else low=mid+1;}
   return '#'+mix(low).map(channel=>channel.toString(16).padStart(2,'0')).join('');
 }
-import {safeURL,linkTargetParts,bookSourcesURL,validateDescriptionBody,validateDarkForeground,validateContainerBlock,validateCellMetrics,validateRuby,validateRubyOwner,validateRubySpan,validateActionGroupSpan,validateInlineBoxSpan,validateFigureIntrinsicSize,validateAudioControl,validateWrappedHeading,validateTableDisclosure} from './validate.js';
+import {safeURL,linkTargetParts,bookSourcesURL,validateDescriptionBody,validateDarkForeground,validateContainerBlock,validateCellMetrics,validateRuby,validateRubyOwner,validateRubySpan,validateActionGroupSpan,validateInlineBoxSpan,validateFigureIntrinsicSize,validateClippedSpan,validateAudioControl,validateWrappedHeading,validateTableDisclosure} from './validate.js';
 import {previewBlocks,inlineText} from './preview.js';
 import {figureImageSize,audioControlView} from './media.js';
 const node = (tag, text, cls) => { const el = document.createElement(tag); if (text != null) el.textContent = text; if (cls) el.className = cls; return el; };
@@ -223,20 +223,112 @@ function applyInlineTextStyle(element,span){
     }else element.style.lineHeight=computed({font_scale_basis:basis,value:factor*scale});
   }
 }
+// Source-order semantic bodies never leave their original line. The nonpainting
+// exterior rectangle belongs to the article, beyond any scrollable table.
+const exteriorBoxes=new WeakMap();
+function sizeClippedBox(box,value){
+  box.style.width=styleLength(value.width);
+  box.style.height=styleLength(value.height);
+  for(const side of ['top','right','bottom','left']){
+    const {unit,value:amount}=value.margin[side].length;
+    box.style.setProperty('margin-'+side,unit==='px'?amount+'px':'calc(var(--wikidict-normal-body-size) * '+amount+')');
+  }
+}
+function clippedOccurrence(el,value,projections){
+  el.classList.add('compiled-clipped-body');
+  const exterior=value.containing_block==='article_exterior';
+  el.dataset.clippedOwner=exterior?'article_exterior':'initial';
+  sizeClippedBox(el,value);
+  if(!exterior)return el;
+  if(!projections)throw Error('Clipped absolute requires an article projection');
+  const source=node('span',null,'compiled-clipped-static');
+  source.dir=value.static_parent_direction;
+  const origin=node('span',null,'compiled-clipped-origin');
+  origin.setAttribute('aria-hidden','true');
+  const box=node('span',null,'compiled-clipped-border');
+  box.setAttribute('aria-hidden','true');
+  sizeClippedBox(box,value);
+  source.append(origin,el);
+  exteriorBoxes.set(el,box);
+  projections.push({source,origin,el,box,rtl:value.static_parent_direction==='rtl'});
+  return source;
+}
+function wrapExteriorBoxes(fragment,projections){
+  const name='wikidict-clipped-article';
+  if(!customElements.get(name))customElements.define(name,class extends HTMLElement{
+    connectedCallback(){this.stopProjection=this.startProjection?.();}
+    disconnectedCallback(){this.stopProjection?.();}
+  });
+  const article=document.createElement(name);
+  article.append(fragment);
+  article.startProjection=()=>connectExteriorBoxes(article,projections);
+  fragment.append(article);
+}
+function connectExteriorBoxes(article,projections){
+  const plane=node('div',null,'compiled-clipped-plane');
+  plane.setAttribute('aria-hidden','true');
+  plane.append(...projections.map(item=>item.box));
+  article.append(plane);
+  let frame=0,connected=true;
+  const queue=()=>{if(connected&&!frame)frame=requestAnimationFrame(update);};
+  const resize=new ResizeObserver(queue),mutations=new MutationObserver(queue);
+  function update(){
+    frame=0;
+    if(!article.isConnected)return;
+    const parent=plane.getBoundingClientRect();
+    for(const {source,origin,el,box,rtl} of projections){
+      const visible=source.getClientRects().length>0;
+      if(box.hidden===visible)box.hidden=!visible;
+      if(!visible)continue;
+      let dx=0,dy=0;
+      for(let ancestor=source.parentElement;ancestor&&ancestor!==article;ancestor=ancestor.parentElement){
+        if(ancestor.classList.contains('table-scroll')){dx+=ancestor.scrollLeft;dy+=ancestor.scrollTop;}
+      }
+      const anchor=origin.getBoundingClientRect();
+      if(rtl)box.style.right=(parent.right-anchor.right-dx)+'px';
+      else box.style.left=(anchor.left-parent.left+dx)+'px';
+      box.style.top=(anchor.top-parent.top+dy)+'px';
+      // Keep selectable children at the same projected origin without extending
+      // a table's scroll area or putting a second copy of the text in the DOM.
+      el.style.transform='translate('+dx+'px,'+dy+'px)';
+    }
+  }
+  resize.observe(article);
+  for(const {source} of projections){
+    const table=source.closest('table');if(table)resize.observe(table);
+  }
+  mutations.observe(article,{subtree:true,childList:true,characterData:true,attributes:true,attributeFilter:['open','hidden','class','dir']});
+  article.addEventListener('scroll',queue,true);
+  article.addEventListener('load',queue,true);
+  article.addEventListener('toggle',queue,true);
+  window.addEventListener('resize',queue);
+  document.fonts?.ready.then(queue);
+  queue();
+  return ()=>{
+    connected=false;
+    resize.disconnect();mutations.disconnect();cancelAnimationFrame(frame);
+    article.removeEventListener('scroll',queue,true);
+    article.removeEventListener('load',queue,true);
+    article.removeEventListener('toggle',queue,true);
+    window.removeEventListener('resize',queue);
+    plane.remove();
+  };
+}
+
 export function spans(values = [], onLink = () => {}, preserve = false, explanations = null, withinSummary = false, cellBackground = null, rubyFontContext = null, darkReadingSurface = null, normalizedEmphasis = false) {
   for(const value of values)if(value.target_fragment!=null){if(value.kind!=='link')throw Error('Invalid target fragment kind');linkTargetParts(value.target,value.target_fragment);}
   if (!preserve && values.some(isPoem)) return poemSpans(values,onLink,explanations,withinSummary,cellBackground);
   const fragment = document.createDocumentFragment();
   const compact=[];
   const scaled=span=>semanticFontSize(span,rubyFontContext)!==null;
-  values.forEach(value=>{if(value.inline_action_group!=null)validateActionGroupSpan(value);if(value.inline_box_group!=null)validateInlineBoxSpan(value);semanticFontSize(value,rubyFontContext);if(value.ruby!=null){validateRubySpan(value);validateRuby(value.ruby);}if(value.image&&(value.text!==''||(value.trail??'')!==''||!['text','link','external_link'].includes(value.kind)||(value.kind==='text'?!!value.target:!value.target)))throw Error('Invalid inline image action');});
+  values.forEach(value=>{if(value.clipped_absolute!=null)validateClippedSpan(value);if(value.inline_action_group!=null)validateActionGroupSpan(value);if(value.inline_box_group!=null)validateInlineBoxSpan(value);semanticFontSize(value,rubyFontContext);if(value.ruby!=null){validateRubySpan(value);validateRuby(value.ruby);}if(value.image&&(value.text!==''||(value.trail??'')!==''||!['text','link','external_link'].includes(value.kind)||(value.kind==='text'?!!value.target:!value.target)))throw Error('Invalid inline image action');});
   const blank=value=>!(value||'').includes('\u00a0')&&!(value||'').trim();
   for(const span of values){
     if(span.kind==='line_break' && !span.trail && (!compact.length||compact.at(-1).kind==='line_break'))continue;
-    if(!span.ruby&&!span.image&&!span.inline_box_group&&!scaled(span)&&!canonicalRGB(span.background)&&span.kind==='text'&&blank(span.text)&&blank(span.trail)&&(!compact.length||compact.at(-1).kind==='line_break'))continue;
+    if(!span.clipped_absolute&&!span.ruby&&!span.image&&!span.inline_box_group&&!scaled(span)&&!canonicalRGB(span.background)&&span.kind==='text'&&blank(span.text)&&blank(span.trail)&&(!compact.length||compact.at(-1).kind==='line_break'))continue;
     compact.push(span);
   }
-  while(compact.length&&!compact.at(-1).ruby&&!compact.at(-1).image&&!compact.at(-1).inline_action_group&&!compact.at(-1).inline_box_group&&!scaled(compact.at(-1))&&!canonicalRGB(compact.at(-1).background)&&((compact.at(-1).kind==='line_break'&&blank(compact.at(-1).trail))||(blank(compact.at(-1).text)&&blank(compact.at(-1).trail))))compact.pop();
+  while(compact.length&&!compact.at(-1).clipped_absolute&&!compact.at(-1).ruby&&!compact.at(-1).image&&!compact.at(-1).inline_action_group&&!compact.at(-1).inline_box_group&&!scaled(compact.at(-1))&&!canonicalRGB(compact.at(-1).background)&&((compact.at(-1).kind==='line_break'&&blank(compact.at(-1).trail))||(blank(compact.at(-1).text)&&blank(compact.at(-1).trail))))compact.pop();
   const visible = preserve||explanations?.preserveFlowSpacing?values:compact, described = new Map();
   for (let i=0;i<visible.length;) {
     const explanation=visible[i].explanation;
@@ -286,6 +378,7 @@ export function spans(values = [], onLink = () => {}, preserve = false, explanat
     }
     let el = node('span', span.text || '');
     if(span.font_family!=null){if(span.font_family!=='sans_serif')throw Error('Unsupported span font family');el.style.fontFamily='sans-serif';}
+    if(span.clipped_absolute)el.append(spans(span.clipped_absolute.children,onLink,true,explanations,withinSummary,cellBackground,span));
     if(span.ruby!=null)el.append(rubySpans(span.ruby,onLink,explanations,withinSummary,cellBackground,span));
     if(span.inline_action_group!=null)el.append(spans(span.inline_action_group.spans,onLink,true,explanations,withinSummary,cellBackground,span));
     if(span.inline_box_group!=null){
@@ -332,7 +425,7 @@ export function spans(values = [], onLink = () => {}, preserve = false, explanat
         link.href = '#' + (span.target ? encodeURIComponent(span.target) + '#' : '') + encodeURIComponent(span.target_fragment);
       }
       // Some table and thumbnail links contain only a space. Keep its layout and name the action.
-      if (!span.image && !span.ruby && !inlineText([span]).trim() && !span.tooltip?.trim()) {
+      if (!span.image && !span.ruby && !span.clipped_absolute && !inlineText([span]).trim() && !span.tooltip?.trim()) {
         link.setAttribute('aria-label', span.explanation?.trim() || (span.target_fragment ? `${span.target}#${span.target_fragment}` : span.target));
       }
       link.addEventListener('click', event => { event.preventDefault(); if(withinSummary)event.stopPropagation(); if(span.target_fragment==null)onLink(span.target);else onLink(span.target,span.target_fragment); }); link.append(el); el = link;
@@ -345,6 +438,11 @@ export function spans(values = [], onLink = () => {}, preserve = false, explanat
     const trail=trailNode(span,i);
     const fontSize=semanticFontSize(span,rubyFontContext);
     if(span.tooltip!=null){if(typeof span.tooltip!=='string')throw Error('Invalid compiled tooltip');el.title=span.tooltip;}
+    if(span.clipped_absolute){
+      if(fontSize!==null)el.style.fontSize=fontSize;
+      fragment.append(clippedOccurrence(el,span.clipped_absolute,explanations?.exteriorBoxes),trail);
+      continue;
+    }
     if(fontSize!==null){
       const scaled=node('span');scaled.style.fontSize=fontSize;
       scaled.append(el,trail);fragment.append(scaled);continue;
@@ -366,7 +464,8 @@ export function revealFragment(root, fragment) {
     if(el.tagName==='TR'&&el.hidden)revealTableRow.get(el)?.();
   }
   if (!target.hasAttribute('tabindex')) target.tabIndex = -1;
-  target.scrollIntoView({block:'center'});
+  const clipped=target.closest('.compiled-clipped-body');
+  (exteriorBoxes.get(clipped)??target).scrollIntoView({block:'center'});
   target.focus({preventScroll:true});
   return true;
 }
@@ -427,6 +526,10 @@ function validateRichEntry(entry){
   };
   const span=value=>{
     if(!value||typeof value!=='object')richError();
+    if(value.clipped_absolute!=null){
+      validateClippedSpan(value);charge(value.clipped_absolute.children.length);
+      for(const child of value.clipped_absolute.children)span(child);
+    }
     if(value.tooltip!=null)string(value.tooltip);
     if(value.audio_control!=null)validateAudioControl(value,media);
     if(value.ruby!=null){validateRubySpan(value);validateRuby(value.ruby);}
@@ -798,7 +901,7 @@ function tableView(value,onLink,explanations,depth=1,inheritedBackground=null){
   return table;
 }
 function visibleBlock(block){
-  return block.kind!=='blank'&&(block.description_body||block.container||block.figure||block.flow!=null||block.style||block.table||block.kind==='rule'||block.spans?.some(s=>s.image||s.inline_action_group||s.inline_box_group||s.text?.trim()||s.trail?.trim())||block.spans?.some(isPoem)||(block.kind==='heading'&&(block.anchor||block.anchor_fallback)));
+  return block.kind!=='blank'&&(block.description_body||block.container||block.figure||block.flow!=null||block.style||block.table||block.kind==='rule'||block.spans?.some(s=>s.image||s.inline_action_group||s.inline_box_group||s.clipped_absolute||s.text?.trim()||s.trail?.trim())||block.spans?.some(isPoem)||(block.kind==='heading'&&(block.anchor||block.anchor_fallback)));
 }
 function appendBlocks(parent,values,render){
   const created=[];
@@ -1063,7 +1166,7 @@ export function renderEntry(entry, onLink, settings = {}, mediaView = () => null
     mediaOwners.set(mediaOwnerPrefix+hex,media.file);
   }
   const darkSurface=globalThis.getComputedStyle?.(document.documentElement).getPropertyValue('--wikidict-dark-reading-surface').trim();
-  const explanations={tableCategories:new Map(),inlineImage,imageActionURL,audioControl:(span,label)=>audioControlView(span,label,settings,entry.source_edition),sourceEdition:entry.source_edition,darkReadingSurface:canonicalRGB(darkSurface)?darkSurface:null,isMediaExplanation(span){
+  const explanations={tableCategories:new Map(),exteriorBoxes:[],inlineImage,imageActionURL,audioControl:(span,label)=>audioControlView(span,label,settings,entry.source_edition),sourceEdition:entry.source_edition,darkReadingSurface:canonicalRGB(darkSurface)?darkSurface:null,isMediaExplanation(span){
     if(span.kind!=='link'||span.image)return false;
     const tokens=poemTokens(span),owners=tokens.filter(token=>token.startsWith(mediaOwnerPrefix));
     // Match the compiled media catalog, not an ordinary File link or a legacy abbreviation.
@@ -1164,5 +1267,6 @@ export function renderEntry(entry, onLink, settings = {}, mediaView = () => null
   const edition=/^[a-z0-9_-]+wiktionary$/.test(entry.source_edition||'')?entry.source_edition.slice(0,-10).replaceAll('_','-'):null;
   const source=edition?'https://'+edition+'.wiktionary.org/':'https://www.wiktionary.org/';
   const credit=node('footer');const link=node('a','Wiktionary contributors');link.href=source+(edition&&entry.source_title?'wiki/'+encodeURIComponent(entry.source_title):'');link.target='_blank';link.rel='noopener';credit.append(link,node('span','CC BY-SA 4.0'));root.append(credit);
+  if(explanations.exteriorBoxes.length)wrapExteriorBoxes(fragment,explanations.exteriorBoxes);
   return fragment;
 }

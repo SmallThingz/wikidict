@@ -456,3 +456,40 @@ export function validateTableDisclosure(table){
   if(table.rows_hidden_max_width_px!=null||table.block_viewport!=null||table.float_viewport!=null||
      ['inline_table','inline_block'].includes(table.style?.display))invalid();
 }
+
+export function validateClippedSpan(span) {
+  const fail=()=>{throw Error('Invalid compiled clipped absolute inline');};
+  const value=span.clipped_absolute;
+  containerObject(value,['static_parent_direction','containing_block','width','height','margin','children'],['static_parent_direction','width','height','margin','children']);
+  if(value.containing_block!==undefined&&!['initial','article_exterior'].includes(value.containing_block))fail();
+  if(!['ltr','rtl'].includes(value.static_parent_direction)||
+     (span.direction&&span.direction!==value.static_parent_direction)||span.text!==''||(span.trail??'')!=='')fail();
+  const plain=s=>{
+    if(!['text','link','external_link'].includes(s.kind)||(s.kind==='text'?!!s.target:!s.target))fail();
+    for(const key of ['text','target','trail','language','classes','direction','explanation','tooltip','target_fragment'])
+      if(s[key]!=null)rubyString(s[key]);
+    if(s.target_fragment!=null&&s.kind!=='link')fail();
+    if((s.classes??'').split(/[ \t\r\n\f]+/).some(c=>c==='wikidict-media'||c.startsWith('wikidict-media-file-')))fail();
+    if(!['','ltr','rtl','auto'].includes(s.direction??''))fail();
+    for(const key of ['image','audio_control','ruby','inline_padding_group','inline_action_group','inline_box_group','citation_marker'])
+      if(s[key]!=null)fail();
+  };
+  plain(span);
+  containerLength(value.width);containerLength(value.height);
+  containerObject(value.margin,sides,sides);
+  for(const side of sides){
+    const unit=value.margin[side];
+    containerObject(unit,['length'],['length']);
+    containerObject(unit.length,['unit','value'],['unit','value']);
+    if(!['px','em'].includes(unit.length.unit)||!Number.isFinite(unit.length.value)||Math.abs(unit.length.value)>3.4028234663852886e38)fail();
+  }
+  if(!Array.isArray(value.children)||!value.children.length||value.children.length>1048576)fail();
+  let body=false;
+  for(const child of value.children){
+    plain(child);
+    if(child.clipped_absolute!=null||/[\t\n\r\f]/u.test((child.text||'')+(child.trail||'')))fail();
+    if(span.kind!=='text'&&(child.kind!=='text'||child.target))fail();
+    if(child.text||child.trail)body=true;
+  }
+  if(!body)fail();
+}

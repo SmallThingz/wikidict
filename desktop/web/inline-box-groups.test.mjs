@@ -113,3 +113,32 @@ test('zero-advance current-color top edge between Japanese text and a separately
     run({text:'',box:box([],{borders:cleanBorder})}),
   ])assert.throws(()=>decodeSpans(wire([invalid])));
 });
+
+test('DPRY clipped absolute distinguishes initial and article exterior on each occurrence',()=>{
+  const hidden='Tooltip time to peak concentrations';
+  const clip=(direction,children=[run({text:hidden})])=>cat(run({text:''}).subarray(0,-1),[1,direction],
+    length(1),length(1),...Array.from({length:4},()=>length(-1)),list(children));
+  const stored=values=>wire(values,{flags:128});
+  const before=run({kind:1,text:'Tmax',target:'time to peak concentrations'}),after=run({text:')'});
+  for(const flags of [1,2,5,6]){
+    const values=decodeSpans(stored([before,clip(flags),after]));
+    assert.equal(values[0].target,'time to peak concentrations');
+    assert.equal(values[1].kind,'text');
+    const box=values[1].clipped_absolute;
+    assert.equal(box.static_parent_direction,flags&1?'ltr':'rtl');
+    assert.equal(box.containing_block??'initial',flags&4?'article_exterior':'initial');
+    assert.deepEqual(box.width,{unit:'px',value:1});
+    assert.deepEqual(box.margin.left.length,{unit:'px',value:-1});
+    assert.equal(box.children[0].text,hidden);
+    assert.equal(values[2].text,')');
+  }
+  const mixed=decodeSpans(stored([clip(1),clip(6)]));
+  assert.equal(mixed[0].clipped_absolute.containing_block??'initial','initial');
+  assert.equal(mixed[1].clipped_absolute.containing_block,'article_exterior');
+  for(const flags of [0,3,4,7,8,9,0x81,0xff])assert.throws(()=>decode(stored([clip(flags)]),{}));
+  for(const children of [[],[run({text:''})],[clip(1)],[run({text:'body\nbreak'})]])assert.throws(()=>decode(stored([clip(5,children)]),{}));
+  const valid=stored([clip(5)]),at=valid.indexOf(Buffer.from(hidden));
+  assert.ok(at>0);
+  assert.throws(()=>decode(valid.subarray(0,at+3),{}));
+  assert.throws(()=>decode(stored([before,after]),{}));
+});
