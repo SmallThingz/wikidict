@@ -237,19 +237,20 @@ fn projectionStringField(table: std.json.Value, key: []const u8) !?[]const u8 {
 }
 
 fn readProjectedEntity(runtime: *rt.Context, id: []const u8) !?EntityProjection {
+    return lookupProjectedEntity(runtime, id) catch |err| {
+        if (err == error.WikibaseEntitySnapshotMissing) try snapshotFailure(runtime, id, "entity");
+        return err;
+    };
+}
+
+fn lookupProjectedEntity(runtime: *rt.Context, id: []const u8) !?EntityProjection {
     std.debug.assert(std.mem.indexOfScalar(u8, id, '-') == null);
     const host = host_api.getForStablePageRead(runtime) orelse {
         logSnapshotFailure(id, "entity", "unavailable");
         return error.MissingScribuntoHost;
     };
-    const get = host.wikibase_entity orelse {
-        try snapshotFailure(runtime, id, "entity");
-        unreachable;
-    };
-    const entry = get(host.ctx, id) catch |err| {
-        if (err == error.WikibaseEntitySnapshotMissing) try snapshotFailure(runtime, id, "entity");
-        return err;
-    };
+    const get = host.wikibase_entity orelse return error.WikibaseEntitySnapshotMissing;
+    const entry = try get(host.ctx, id);
     const source = entry.source orelse return null;
     var parsed: EntityProjection = if (entry.parsed) |borrowed| .{ .value = borrowed.* } else blk: {
         const owned = std.json.parseFromSlice(std.json.Value, runtime.allocator, source, .{}) catch |err| switch (err) {
@@ -687,6 +688,20 @@ pub fn getGlobalSiteIdCall(_: ?*anyopaque, runtime: *rt.Context, _: []const Valu
     return one(.{ .string = registry.wiki });
 }
 
+// An uncaptured full entity leaves this single operation answerable by an
+// independently selected (entity, site) projection. A captured absent entity,
+// or an entity without that site's title, was already answered by its record.
+fn sitelinkForUncapturedEntity(runtime: *rt.Context, id: []const u8, site: []const u8) ![]const Value {
+    const host = host_api.getForStablePageRead(runtime) orelse return error.MissingScribuntoHost;
+    if (host.wikibase_entity != null) if (host.wikibase_sitelink) |get| {
+        if (get(host.ctx, id, site)) |title| {
+            return one(if (title) |value| .{ .string = try runtime.allocator.dupe(u8, value) } else .nil);
+        } else |err| if (err != error.WikibaseSitelinkSnapshotMissing) return err;
+    };
+    try snapshotFailure(runtime, id, "entity");
+    unreachable;
+}
+
 pub fn getSitelinkCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
     const id = try entityId(runtime, args);
     const site = if (args.len < 2 or args[1] == .nil)
@@ -697,7 +712,10 @@ pub fn getSitelinkCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value
         return error.StringExpected;
     rt.work_stats.noteSitelink(id, site);
     if (std.mem.indexOfScalar(u8, id, '-') == null) {
-        var parsed = (try readProjectedEntity(runtime, id)) orelse return one(.nil);
+        var parsed = (lookupProjectedEntity(runtime, id) catch |err| switch (err) {
+            error.WikibaseEntitySnapshotMissing => return sitelinkForUncapturedEntity(runtime, id, site),
+            else => return err,
+        }) orelse return one(.nil);
         defer parsed.deinit();
         const sitelinks = (try projectionTableField(parsed.value, "sitelinks")) orelse return one(.nil);
         const sitelink = (try projectionTableField(sitelinks, site)) orelse return one(.nil);
@@ -890,6 +908,60 @@ test "Wikibase best statements select ranks in order and preserve fresh mutable 
     try std.testing.expectEqualStrings("Wikibase entity snapshot missing entity=Q10", runtime.last_error.string);
     try std.testing.expectError(error.AccessDenied, getBestStatementsCall(null, &runtime, &.{ .{ .string = "Q7" }, .{ .string = "P1" } }));
     try std.testing.expectError(error.OutOfMemory, getBestStatementsCall(null, &runtime, &.{ .{ .string = "Q6" }, .{ .string = "P1" } }));
+}
+
+test "Wikibase sitelink uses the selected site pair only for an uncaptured full entity" {
+    const Source = struct {
+        title: ?[]const u8 = "Neo-Latin",
+        pair_reads: usize = 0,
+
+        fn sitelink(raw: ?*anyopaque, id: []const u8, site: []const u8) !?[]const u8 {
+            const self: *@This() = @ptrCast(@alignCast(raw.?));
+            self.pair_reads += 1;
+            if (std.mem.eql(u8, id, "Q1") or std.mem.eql(u8, id, "Q9")) return "conflicting selected title";
+            if (!std.mem.eql(u8, site, "enwiki")) return error.WikibaseSitelinkSnapshotMissing;
+            if (std.mem.eql(u8, id, "Q12")) return error.OutOfMemory;
+            if (std.mem.eql(u8, id, "Q10")) return self.title;
+            return error.WikibaseSitelinkSnapshotMissing;
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 0);
+    defer runtime.deinit();
+    var selected: Source = .{};
+    var host = host_api.Host{ .ctx = &selected, .wikibase_entity = Probe.entity, .wikibase_sitelink = Source.sitelink };
+    host_api.set(&runtime, &host);
+    // A complete entity owns both positive and explicit negative site lookups.
+    const present = try getSitelinkCall(null, &runtime, &.{ .{ .string = "Q1" }, .{ .string = "enwiktionary" } });
+    defer rt.freeResults(present);
+    try std.testing.expectEqualStrings("word", present[0].string);
+    for ([_][]const u8{ "Q1", "Q9" }) |id| {
+        const negative = try getSitelinkCall(null, &runtime, &.{ .{ .string = id }, .{ .string = "otherwiki" } });
+        defer rt.freeResults(negative);
+        try std.testing.expect(negative[0] == .nil);
+    }
+    try std.testing.expectError(error.InvalidWikibaseEntitySnapshot, getSitelinkCall(null, &runtime, &.{ .{ .string = "Q8" }, .{ .string = "enwiki" } }));
+    try std.testing.expectError(error.AccessDenied, getSitelinkCall(null, &runtime, &.{ .{ .string = "Q7" }, .{ .string = "enwiki" } }));
+    try std.testing.expectEqual(@as(usize, 0), selected.pair_reads);
+    const args = [_]Value{ .{ .string = "Q10" }, .{ .string = "enwiki" } };
+    const projected = try getSitelinkCall(null, &runtime, &args);
+    defer rt.freeResults(projected);
+    try std.testing.expectEqualStrings("Neo-Latin", projected[0].string);
+    try std.testing.expect(runtime.last_error == .nil);
+    // A second selected provider view can explicitly have no such site. No
+    // result from the earlier view, or from another site, is borrowed here.
+    var other: Source = .{ .title = null };
+    host.ctx = &other;
+    const absent = try getSitelinkCall(null, &runtime, &args);
+    defer rt.freeResults(absent);
+    try std.testing.expect(absent[0] == .nil);
+    try std.testing.expectError(error.LuaRaised, getSitelinkCall(null, &runtime, &.{ .{ .string = "Q10" }, .{ .string = "srwiki" } }));
+    try std.testing.expectEqualStrings("Wikibase entity snapshot missing entity=Q10", runtime.last_error.string);
+    try std.testing.expectError(error.OutOfMemory, getSitelinkCall(null, &runtime, &.{ .{ .string = "Q12" }, .{ .string = "enwiki" } }));
+    try std.testing.expectEqual(@as(usize, 3), other.pair_reads);
+    try std.testing.expectError(error.LuaRaised, getEntityCall(null, &runtime, &.{.{ .string = "Q10" }}));
+    try std.testing.expectEqual(@as(usize, 3), other.pair_reads);
 }
 
 test "Wikibase entity term overlays leave exact language lookups and sitelinks independent" {
