@@ -3438,7 +3438,7 @@ def replay_source(root, source, batch, wiki, date, namespace, http_files, prefix
         if titles:
             file_records(iter((batch,)), namespace, wiki, date, batch['response'].encode(),
                          has_batches=True, record_limit=50, profile_kind=profile_kind,
-                         allow_compatible_epochs=allow_compatible_epochs)
+                         allow_compatible_epochs=allow_compatible_epochs, _lean_batch_validation=True)
         elif set(batch) != {'requests', 'response'}:
             raise ValueError('Invalid Figure source batch')
         archived = {response_name: identity}
