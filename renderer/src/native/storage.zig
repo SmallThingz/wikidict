@@ -275,7 +275,7 @@ fn save(io: std.Io, a: A, path: []const u8, fingerprint: [32]u8, dir: Directory)
     var digest: [32]u8 = @splat(0);
     std.mem.writeInt(u64, digest[0..8], hash.final(), .little);
     try file.writePositionalAll(io, &digest, 40);
-    try file.sync(io);
+    // The index is disposable. A missing or torn cache after a crash is rebuilt from the blob.
     try std.Io.Dir.cwd().rename(temp, std.Io.Dir.cwd(), path, io);
 }
 /// For raw blobs, payload borrows the open File mapping. Compressed records own
