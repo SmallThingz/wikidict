@@ -1930,6 +1930,8 @@ public:
     int position = -1;
     int end = -1;
     QPointer<QTextFrame> sourceHeading;
+    QPointer<QTextFrame> headingInner, headingOuter;
+    bool wrappedHeading = false;
     bool sourceOwnedHeading = false;
 
     QUrl url() const { return QUrl(QStringLiteral("section:%1").arg(index)); }
@@ -1938,9 +1940,15 @@ public:
         if (sourceOwnedHeading) {
             if (!sourceHeading) return false;
             const auto marker = sourceHeading->frameFormat().property(SectionHeading::property).toMap();
+            auto *root = browser->document()->rootFrame();
+            const bool ownsFrame = wrappedHeading
+                ? headingInner && headingOuter && sourceHeading->parentFrame() == headingInner
+                    && headingInner->parentFrame() == headingOuter && headingOuter->parentFrame() == root
+                    && headingInner->childFrames().size() == 1 && headingOuter->childFrames().size() == 1
+                : sourceHeading->parentFrame() == root;
             return sourceHeading->document() == browser->document()
                 && browser->document()->object(sourceHeading->objectIndex()) == sourceHeading
-                && sourceHeading->parentFrame() == browser->document()->rootFrame()
+                && ownsFrame
                 && marker.value(QStringLiteral("capability")).toString() == QStringLiteral("wikidict.section-heading/1")
                 && marker.value(QStringLiteral("owner")).metaType().id() == QMetaType::Int
                 && marker.value(QStringLiteral("owner")).toInt() == sourceHeading->objectIndex()
@@ -2319,6 +2327,9 @@ void ReadingBrowser::updateDisclosures(const QJsonArray &sections, const QSet<in
         const bool expanded = !collapsed.contains(index);
         if (item->expanded != expanded) changed.append(item);
         item->expanded = expanded; item->name = section.value(QStringLiteral("title")).toString();
+        item->wrappedHeading = section.value("heading_style").toObject().value("wrappers").isObject();
+        item->headingInner = item->wrappedHeading ? frame->parentFrame() : nullptr;
+        item->headingOuter = item->headingInner ? item->headingInner->parentFrame() : nullptr;
         item->sourceHeading = frame; item->sourceOwnedHeading = true; item->position = frame->firstPosition(); item->end = frame->lastPosition();
         disclosures.append(item);
     }

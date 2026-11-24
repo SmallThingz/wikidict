@@ -23869,6 +23869,16 @@ private slots:
         QVERIFY(cursor.blockFormat().rightMargin() > 0); QVERIFY(frame->parentFrame() && frame->parentFrame()->parentFrame());
         QCOMPARE(frame->parentFrame()->parentFrame()->parentFrame(), doc->rootFrame());
         auto body = doc->find("AFTER HEADING"); QVERIFY(!body.isNull()); QVERIFY(body.position() > frame->parentFrame()->parentFrame()->lastPosition());
+        auto *readerAccess = QAccessible::queryAccessibleInterface(window.reading_);
+        QVERIFY(readerAccess);
+        bool foundHeading = false;
+        for (int i = 0; i < readerAccess->childCount(); ++i) {
+            auto *child = readerAccess->child(i);
+            QVERIFY(child && child->isValid());
+            if (child->role() == QAccessible::Button && child->text(QAccessible::Name) == title)
+                foundHeading = true;
+        }
+        QVERIFY(foundHeading);
         QVERIFY(hasAnchor(doc, "section-1") && hasAnchor(doc, "block-1-0")); QCOMPARE(window.sections_->findText(title), -1);
     }
 
