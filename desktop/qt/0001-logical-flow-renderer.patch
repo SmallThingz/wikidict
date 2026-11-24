@@ -11831,7 +11831,7 @@
      const QFixed margins = totalLeftMargin + totalRightMargin;
      layoutStruct->minimumWidth = qMax(layoutStruct->minimumWidth, QFixed::fromReal(tl->minimumWidth()) + margins);
  
-@@ -3663,49 +13219,2323 @@
+@@ -3663,49 +13219,2393 @@
      }
  }
  
@@ -13171,6 +13171,62 @@
 +    return true;
 +}
 +
++// A positioned descendant can be a normal flex item, including an empty
++// connector. Retain the native frame and the original ordinal on every edge.
++static bool wikidictFlexParentSource(QTextFrame *child, const QJsonObject &childSource,
++                                     QTextFrame *parent, QJsonObject *parentSource)
++{
++    if (!parent || parent != child->parentFrame() || parent->document() != child->document()
++        || parent->document()->object(parent->objectIndex()) != parent
++        || parent->document()->object(child->objectIndex()) != child
++        || parent->frameFormat().position() != QTextFrameFormat::InFlow
++        || qobject_cast<QTextTable *>(parent) || !wikidictPlainContainer(parent)
++        || wikidictAbsoluteContainer(parent) || wikidictTableViewport(parent)
++        || parent->frameFormat().hasProperty(WikidictContainerScrollport)
++        || parent->frameFormat().hasProperty(QTextFormat::UserProperty + 0x57e5))
++        return false;
++
++    QJsonObject owner;
++    if (parent->frameFormat().hasProperty(WikidictContainerFlex)) {
++        WikidictFlexStyle parsed;
++        if (!wikidictFlexStyle(parent, &parsed) || (!parsed.row && !wikidictFlexColumn(parent)))
++            return false;
++        owner = parsed.source;
++    } else if (wikidictFlexColumn(parent)) {
++        const auto raw = parent->frameFormat().property(QTextFormat::UserProperty + 0x57e2);
++        QJsonParseError error;
++        const auto parsed = QJsonDocument::fromJson(raw.toByteArray(), &error);
++        if (raw.metaType().id() != QMetaType::QByteArray || error.error != QJsonParseError::NoError || !parsed.isObject())
++            return false;
++        owner = parsed.object();
++    } else {
++        return false;
++    }
++
++    const auto container = owner.value(QStringLiteral("container")).toObject();
++    const auto style = container.value(QStringLiteral("style")).toObject();
++    const auto expectedLayout = wikidictFlexColumn(parent) ? QStringLiteral("flex_column") : QStringLiteral("flex_row");
++    if (owner.value(QStringLiteral("kind")) != QStringLiteral("container")
++        || style.value(QStringLiteral("layout")) != expectedLayout || !container.value(QStringLiteral("blocks")).isArray())
++        return false;
++    const auto blocks = container.value(QStringLiteral("blocks")).toArray();
++    qsizetype index = 0;
++    for (auto it = parent->begin(); !it.atEnd(); ++it) {
++        if (auto *actual = it.currentFrame()) {
++            if (index >= blocks.size())
++                return false;
++            if (actual == child) {
++                if (!blocks[index].isObject() || blocks[index].toObject() != childSource)
++                    return false;
++                *parentSource = owner;
++                return true;
++            }
++            ++index;
++        }
++    }
++    return false;
++}
++
 +bool QTextDocumentLayoutPrivate::validatePlainContainer(QTextFrame *frame)
 +{
 +    const auto format = frame->frameFormat();
@@ -13667,12 +13723,26 @@
 +            return validatePlainContainer(child);
 +        };
 +        for (QTextFrame *child : frame->childFrames()) valid = valid && admitted(admitted, child);
-+        // The represented root is the stacking context. Only actual native
-+        // ordinary visible-overflow frames/tables may intervene in this slice.
-+        for (auto *parent = frame->parentFrame(); parent && parent != document->rootFrame(); parent = parent->parentFrame()) {
++        // Follow the separate source-owned flex path while the real frame
++        // ordinals agree. A broken edge leaves all exterior parents unknown.
++        bool flexPath = !absolute && !hasWrap && !relativeFloatImage && !columns
++            && sourceJson.object().value(QStringLiteral("kind")) == QStringLiteral("container")
++            && (sourceStyle.value(QStringLiteral("positioning")) == QStringLiteral("relative_auto")
++                || sourceStyle.value(QStringLiteral("flex_edge")).isObject());
++        auto flexChildSource = sourceJson.object();
++        auto *child = frame;
++        for (auto *parent = frame->parentFrame(); parent && parent != document->rootFrame(); child = parent, parent = parent->parentFrame()) {
 +            const auto parentFormat = parent->frameFormat();
++            QJsonObject parentSource;
++            if (flexPath) {
++                flexPath = wikidictFlexParentSource(child, flexChildSource, parent, &parentSource);
++                if (flexPath) flexChildSource = parentSource;
++            }
 +            valid = valid && (!parentFormat.hasProperty(QTextFormat::UserProperty + 0x57e6)
-+                    || (extensionScope && wikidictRelativeAuto(parent)))
++                    || (extensionScope && wikidictRelativeAuto(parent))
++                    || (flexPath && wikidictRelativeAuto(parent)
++                        && parentSource.value(QStringLiteral("container")).toObject().value(QStringLiteral("style"))
++                            .toObject().value(QStringLiteral("positioning")) == QStringLiteral("relative_auto")))
 +                && !wikidictAbsoluteContainer(parent)
 +                && !parentFormat.hasProperty(QTextFormat::UserProperty + 0x57e5)
 +                && !parentFormat.hasProperty(QTextFormat::UserProperty + 0x57a0)
@@ -14183,7 +14253,7 @@
          }
          if (newY == QFIXED_MAX)
              break;
-@@ -3717,9 +15547,127 @@
+@@ -3717,9 +15617,127 @@
  QTextDocumentLayout::QTextDocumentLayout(QTextDocument *doc)
      : QAbstractTextDocumentLayout(*new QTextDocumentLayoutPrivate, doc)
  {
@@ -14314,7 +14384,7 @@
  
  void QTextDocumentLayout::draw(QPainter *painter, const PaintContext &context)
  {
-@@ -3730,8 +15678,36 @@
+@@ -3730,8 +15748,36 @@
      if (fd->sizeDirty)
          return;
  
@@ -14353,7 +14423,7 @@
      } else {
          d->ensureLayoutFinished();
      }
-@@ -3745,7 +15721,39 @@
+@@ -3745,7 +15791,39 @@
  
      // Make sure we conform to the root frames bounds when drawing.
      d->clipRect = QRectF(fd->position.toPointF(), fd->size.toSizeF()).adjusted(fd->leftMargin.toReal(), 0, -fd->rightMargin.toReal(), 0);
@@ -14394,7 +14464,7 @@
      fd->size.width = width;
  }
  
-@@ -3778,6 +15786,14 @@
+@@ -3778,6 +15856,14 @@
  void QTextDocumentLayout::documentChanged(int from, int oldLength, int length)
  {
      Q_D(QTextDocumentLayout);
@@ -14409,7 +14479,7 @@
  
      QTextBlock blockIt = document()->findBlock(from);
      QTextBlock endIt = document()->findBlock(qMax(0, from + length - 1));
-@@ -3796,6 +15812,40 @@
+@@ -3796,6 +15882,40 @@
      d->insideDocumentChange = true;
  
      const int documentLength = d->docPrivate->length();
@@ -14450,7 +14520,7 @@
      const bool fullLayout = (oldLength == 0 && length == documentLength);
      const bool smallChange = documentLength > 0
                               && (qMax(length, oldLength) * 100 / documentLength) < 5;
-@@ -3847,6 +15897,148 @@
+@@ -3847,6 +15967,148 @@
  
  //     qDebug("documentChange: from=%d, oldLength=%d, length=%d", from, oldLength, length);
  
@@ -14599,7 +14669,7 @@
      // mark all frames between f_start and f_end as dirty
      markFrames(d->docPrivate->rootFrame(), from, oldLength, length);
  
-@@ -3862,9 +16054,52 @@
+@@ -3862,9 +16124,52 @@
      else if (d->showLayoutProgress)
          d->sizeChangedTimer.start(0, this);
  
@@ -14652,7 +14722,7 @@
  int QTextDocumentLayout::hitTest(const QPointF &point, Qt::HitTestAccuracy accuracy) const
  {
      Q_D(const QTextDocumentLayout);
-@@ -3875,7 +16110,76 @@
+@@ -3875,7 +16180,76 @@
      QFixedPoint pointf;
      pointf.x = QFixed::fromReal(point.x());
      pointf.y = QFixed::fromReal(point.y());
@@ -14730,7 +14800,7 @@
      if (accuracy == Qt::ExactHit && p < QTextDocumentLayoutPrivate::PointExact)
          return -1;
  
-@@ -3913,6 +16217,47 @@
+@@ -3913,6 +16287,47 @@
      }
  
      QSizeF inlineSize = (pos == QTextFrameFormat::InFlow ? intrinsic : QSizeF(0, 0));
@@ -14778,7 +14848,7 @@
      item.setWidth(inlineSize.width());
  
      switch (f.verticalAlignment()) {
-@@ -3957,7 +16302,10 @@
+@@ -3957,7 +16372,10 @@
  
      QTextBlock b = d->document->findBlock(frame->firstPosition());
      QTextLine line;
@@ -14790,7 +14860,7 @@
          line = b.layout()->lineAt(b.layout()->lineCount()-1);
  //     qDebug() << "layoutObject: line.isValid" << line.isValid() << b.position() << b.length() <<
  //         frame->firstPosition() << frame->lastPosition();
-@@ -3990,7 +16338,14 @@
+@@ -3990,7 +16408,14 @@
  QSizeF QTextDocumentLayout::dynamicDocumentSize() const
  {
      Q_D(const QTextDocumentLayout);
@@ -14806,7 +14876,7 @@
  }
  
  int QTextDocumentLayout::pageCount() const
-@@ -4004,7 +16359,28 @@
+@@ -4004,7 +16429,28 @@
  {
      Q_D(const QTextDocumentLayout);
      d->ensureLayoutFinished();
@@ -14836,7 +14906,7 @@
  }
  
  void QTextDocumentLayoutPrivate::ensureLayouted(QFixed y) const
-@@ -4078,13 +16454,18 @@
+@@ -4078,13 +16524,18 @@
      if (!d->docPrivate->canLayout())
          return QRectF();
      d->ensureLayoutFinished();
@@ -14856,7 +14926,7 @@
  
          if (f != table) {
              if (QTextTable *table = qobject_cast<QTextTable *>(f)) {
-@@ -4116,6 +16497,7 @@
+@@ -4116,6 +16567,7 @@
      while (f) {
          QTextFrameData *fd = data(f);
          pos += fd->position.toPointF();
@@ -14864,7 +14934,7 @@
  
          if (QTextTable *table = qobject_cast<QTextTable *>(f)) {
              QTextTableCell cell = table->cellAt(framePos);
-@@ -4140,7 +16522,7 @@
+@@ -4140,7 +16592,7 @@
  
      while (frame) {
          QTextFrameData *fd = data(frame);
@@ -14873,7 +14943,7 @@
  
          if (QTextTable *table = qobject_cast<QTextTable *>(frame)) {
              QTextTableCell cell = table->cellAt(blockPos);
-@@ -4151,7 +16533,12 @@
+@@ -4151,7 +16603,12 @@
          frame = frame->parentFrame();
      }
  

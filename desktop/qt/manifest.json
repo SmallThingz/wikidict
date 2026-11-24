@@ -5,8 +5,8 @@
   "patches": [
     {
       "file": "0001-logical-flow-renderer.patch",
-      "sha256": "a7dc03bd4a09c5a794e5431e4f90155952d1ea39c39a23f758b27d4f503d4549",
-      "bytes": 1348030,
+      "sha256": "518a79c0efbf49cc6711d8da751a71172b0e17281b61bdcecddf223098cf9d04",
+      "bytes": 1351881,
       "files": [
         {
           "path": "src/gui/accessible/qaccessible.cpp",
@@ -54,8 +54,8 @@
           "path": "src/gui/text/qtextdocumentlayout.cpp",
           "new_file": false,
           "upstream_sha256": "26c75b9708bcfca3f2ffb387e59e648d816c689453644f91eff36e373de5adc7",
-          "qualified_sha256": "7986fe25461b6c95da00bde239367c2852e6883e6ad2cf84b310c9e5f5fa8dd7",
-          "bytes": 996251
+          "qualified_sha256": "2eaf5643a66dd213fbaaacef1a8c6c90b51dea7d5c005913087e7395f81f8c72",
+          "bytes": 1000032
         },
         {
           "path": "src/gui/text/qtextdocumentlayout_p.h",

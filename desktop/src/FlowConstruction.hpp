@@ -1417,7 +1417,7 @@ inline QVector<Owner> expand(QTextDocument *document, QVector<QPointer<QTextFram
                     CompiledContent::require(actual.property(containerAbsoluteProperty).toMap().value(QStringLiteral("capability")) == QStringLiteral("wikidict.container-translated-absolute/1"));
                 else CompiledContent::require(actual.stringProperty(containerPositioningProperty) == QStringLiteral("wikidict.relative-auto/1") && actual.hasProperty(containerCornerRadiusProperty));
                 relativeOwner = parent;
-            } else if (absolute || relativeImage || absoluteContainerExtension(owned)) {
+            } else if (absolute || relativeImage || (insertion.currentTable() && absoluteContainerExtension(owned))) {
                 for (auto *ancestor = parent.data(); ancestor; ancestor = ancestor->parentFrame()) {
                     if (ancestor == document->rootFrame() || qobject_cast<QTextTable *>(ancestor)) break;
                     CompiledContent::require(ancestor->document() == document && document->object(ancestor->objectIndex()) == ancestor);

@@ -19433,6 +19433,60 @@ private slots:
                 QVERIFY(QDir().mkpath(frames));
                 QVERIFY(window.grab().save(QDir(frames).filePath(QStringLiteral("valid-rtl-straight-elbow-%1.png").arg(windowWidth))));
             }
+            // The original two-branch tree puts the column item below a
+            // positioned gap row. Its elbow still resolves against the column.
+            auto bodyFont = font;
+            bodyFont["font_scale"] = .95;
+            auto scaledEdge = edge;
+            scaledEdge["width_add"] = len("em", .2375);
+            auto scaledStyle = style;
+            scaledStyle["owner_font"] = bodyFont;
+            scaledStyle["flex_edge"] = scaledEdge;
+            auto scaledStraight = straightStyle;
+            scaledStraight["owner_font"] = bodyFont;
+            const auto branch = box(column, {link, box(scaledStraight, {}), box(scaledStyle, {})});
+            const auto second = box(column, {box({}, {QJsonObject{{"kind", "paragraph"},
+                {"spans", QJsonArray{QJsonObject{{"kind", "text"}, {"text", "Other branch"}}}}}})});
+            const QJsonObject rowStyle{{"positioning", "relative_auto"}, {"layout", "flex_row"},
+                {"align_items", "end"}, {"flex_column_gap", len("em", .475)}, {"owner_font", bodyFont}};
+            QVERIFY(composeReadingBlocks(window, {box(column, {box(rowStyle, {branch, second})})},
+                rtl ? Qt::RightToLeft : Qt::LeftToRight));
+            auto *nestedDoc = window.reading_->document();
+            auto *nestedLayout = nestedDoc->documentLayout();
+            const auto label = nestedDoc->find("Original branch");
+            QVERIFY(!label.isNull());
+            auto *branchFrame = label.currentFrame()->parentFrame();
+            auto *rowFrame = branchFrame->parentFrame();
+            QVERIFY(rowFrame && rowFrame->childFrames().size() == 2 && branchFrame->childFrames().size() == 3);
+            const auto columnBounds = nestedLayout->frameBoundingRect(branchFrame);
+            const auto strokeBounds = nestedLayout->frameBoundingRect(branchFrame->childFrames().last());
+            const auto uprightBounds = nestedLayout->frameBoundingRect(branchFrame->childFrames().at(1));
+            QVERIFY(qAbs(uprightBounds.width() - 2) <= .05 && qAbs(uprightBounds.height() - 20) <= .05);
+            QVERIFY(qAbs(uprightBounds.center().x() - columnBounds.center().x()) <= .05);
+            const qreal start = left != rtl ? columnBounds.left() : columnBounds.right() - strokeBounds.width();
+            QVERIFY(qAbs(strokeBounds.left() - (start + (left ? 1 : -1) * columnBounds.width() / 2)) <= .05);
+            QVERIFY(qAbs(strokeBounds.width() - (columnBounds.width() * .5 + 4.75 + 2)) <= .05);
+            const auto inkHit = LogicalFlow::position(nestedDoc, label.selectionStart());
+            QCOMPARE(inkHit.status, LogicalFlow::Status::Handled);
+            QCOMPARE(nestedLayout->anchorAt(inkHit.values.value("characterRect").toRectF().center()),
+                     QStringLiteral("https://example.test/original"));
+            QVERIFY(nestedLayout->anchorAt(strokeBounds.center()).isEmpty());
+            QCOMPARE(nestedLayout->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+            // Keep every frame and metric. Reordering only the source packet
+            // must still invalidate the existing physical sibling sequence.
+            auto altered = rowFrame->frameFormat();
+            auto originalRow = QJsonDocument::fromJson(altered.property(FlowConstruction::containerSourceProperty).toByteArray()).object();
+            auto alteredOwner = originalRow.value("container").toObject();
+            auto rowItems = alteredOwner.value("blocks").toArray();
+            QCOMPARE(rowItems.size(), 2);
+            rowItems.append(rowItems.takeAt(0));
+            alteredOwner["blocks"] = rowItems;
+            originalRow["container"] = alteredOwner;
+            altered.setProperty(FlowConstruction::containerSourceProperty, QJsonDocument(originalRow).toJson(QJsonDocument::Compact));
+            rowFrame->setFrameFormat(altered);
+            nestedDoc->markContentsDirty(rowFrame->firstPosition(), rowFrame->lastPosition() - rowFrame->firstPosition() + 1);
+            nestedLayout->documentSize();
+            QVERIFY(nestedLayout->property("_wikidictParagraphBoxLayoutError").toInt() != 0);
             auto opposite=style; auto empty=box(opposite,{});
             QVERIFY(!composeReadingBlocks(window,{empty}));
         }
