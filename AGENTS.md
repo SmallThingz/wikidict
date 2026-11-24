@@ -2,6 +2,8 @@
 
 ## Repository rules
 
+- Prefer the current connected Cloud environment for compilation, translation and qualification. Use RD/DC for editions whose measured peak disk or memory needs exceed that environment; reconcile and adopt existing RD jobs before starting replacements. This supersedes the machine-only restriction in the 2026-11-24 handoff.
+- Prioritize end-to-end speed over minimum disk usage while keeping the working set within capacity. Stage selected compressed inputs one edition at a time, reuse compatible caches, and preserve original sources and unique failure evidence on RD. See `compiler/docs/local-build-capacity.md` for capacity checks and existing pipeline commands.
 - `main` is the only local branch. Work directly on it; do not create branches/worktrees unless the user explicitly asks.
 - Push verified source changes to `origin/main` as requested.
 - When using collaboration tools, activate follow-up work on an idle or completed agent with `followup_task`. `send_message` only delivers a message; it does not wake the agent. Check actual owner/task status before waiting for a review or job, and reuse the existing owner instead of starting a duplicate.
