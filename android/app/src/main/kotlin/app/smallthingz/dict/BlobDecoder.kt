@@ -769,7 +769,7 @@ object BlobDecoder {
             if (!imageMaps) return@positionedRoot null
             val tag = byte()
             if (tag == 0) return@positionedRoot null
-            require(tag == 1 || tableFlows && tag == 2 || containerFonts && tag in 5..7) { "Unknown figure content tag" }
+            require(tag == 1 || tag == 8 || tableFlows && tag == 2 || containerFonts && tag in 5..7) { "Unknown figure content tag" }
             require(buffer.remaining() >= 123) { "Truncated figure" }
             val format = FigureFormat.entries.getOrNull(byte()) ?: error("Unknown figure format")
             val placement = FigurePlacement.entries.getOrNull(byte()) ?: error("Unknown figure placement")
@@ -790,11 +790,12 @@ object BlobDecoder {
             val content = missing ?: FigureContent.Image(contentSpan,
                 FigureSizingPolicy.entries.getOrNull(byte()) ?: error("Unknown figure sizing policy"))
             val frameMinWidth = if (presence()) styleLength() else null
+            val intrinsicSize = if (tag == 8) FigureIntrinsicSize(u32(), u32()) else null
             val tableCaption = if (tag == 5 || tag == 6) tableCaptionLayout() else null
             val blockMedia = if (tag == 7) figureBlockMediaLayout() else null
             Figure(content, format, placement, clear, margins, insets, padding, scale, lineHeight,
                 frameBackground, frameBorder, imageBackground, imageBorder, captionForeground, captionBackground,
-                caption, rich, align, frameMinWidth, tableCaption, blockMedia)
+                caption, rich, align, frameMinWidth, tableCaption, blockMedia, intrinsicSize)
         }
         private fun figureBorderEdge(): FigureBorderEdge = when (byte()) {
             0 -> FigureBorderEdge.None

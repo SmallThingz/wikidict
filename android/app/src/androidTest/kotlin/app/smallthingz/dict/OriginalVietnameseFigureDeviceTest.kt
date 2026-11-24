@@ -25,28 +25,37 @@ import org.junit.Test
 class OriginalVietnameseFigureDeviceTest {
     @get:Rule val compose = createPhysicalContentRule()
 
+    @Test fun originalDictionaryParagraphFloatsItsOfflineThumbnailAndOpensItsSource() =
+        verifyOriginal("original.wikblb.xz", 43, 35976,
+            "3a4fa0667a9c0cd986637c6e7d607d633e9892c175f8e91c72973a5176d3da63", null)
+
+    @Test fun originalIntrinsicThumbnailReservesItsSourceAspectRatioOffline() =
+        verifyOriginal("intrinsic.wikblb.xz", 43, 35984,
+            "ffacc5aa2773ac39a31f17e5160c9df68e04d0ecba433c66218fc5e9af91e2c7", FigureIntrinsicSize(1408, 1120))
+
     @Suppress("DEPRECATION")
-    @Test fun originalDictionaryParagraphFloatsItsOfflineThumbnailAndOpensItsSource() {
+    private fun verifyOriginal(asset: String, offset: Long, length: Int, recordSha: String, size: FigureIntrinsicSize?) {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val temp = Files.createTempDirectory(instrumentation.targetContext.cacheDir.toPath(), "vi-figure-").toFile()
-        val shard = temp.resolve("original.wikblb.xz")
+        val shard = temp.resolve(asset)
         val opened = mutableListOf<String>()
         val navigation = mutableListOf<EntryLink>()
         try {
-            instrumentation.context.assets.open("vi1034/original.wikblb.xz").use { input ->
+            instrumentation.context.assets.open("vi1034/$asset").use { input ->
                 shard.outputStream().use { input.copyTo(it) }
             }
             val data = BlobSource(shard).use { blob ->
-                check(blob.compressed && blob.length == 36019L)
-                blob.read(43, 35976)
+                check(blob.compressed && blob.length == offset + length)
+                blob.read(offset, length)
             }
-            assertEquals("3a4fa0667a9c0cd986637c6e7d607d633e9892c175f8e91c72973a5176d3da63",
+            assertEquals(recordSha,
                 MessageDigest.getInstance("SHA-256").digest(data).joinToString("") { "%02x".format(it) })
             val entry = BlobDecoder.decode(data, "từ điển", "language", "Tiếng Việt", "vi")
             val section = entry.sections.single { it.title == "Tiếng Việt" }
             val paragraph = section.blocks[2]
             assertEquals("paragraph", paragraph.kind)
             val figure = checkNotNull(paragraph.figure)
+            assertEquals(size, figure.intrinsicSize)
             val image = figure.content as FigureContent.Image
             assertEquals(FigureFormat.Thumbnail, figure.format)
             assertEquals(FigureSizingPolicy.RequestedFit, image.sizing)
@@ -111,7 +120,8 @@ class OriginalVietnameseFigureDeviceTest {
                 assertEquals(5f * density, bounds.left, .01f)
                 assertEquals(5f * density, bounds.top, .01f)
                 assertEquals(5f * density, frame.width - bounds.right, 1f)
-                assertTrue(bounds.height() > 0f)
+                if (size != null) assertEquals(199f * density, bounds.height(), 1f)
+                else assertTrue(bounds.height() > 0f)
                 assertEquals("Images disabled", imageNode.stateDescription?.toString())
                 val caption = frame.rectsForRange(0, frame.text.length)
                 assertTrue(caption.isNotEmpty() && caption.all { it.width() > 0f && it.top >= bounds.bottom - 1f })

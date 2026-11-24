@@ -992,6 +992,14 @@ private fun validFigureBlockMediaState(wrapper: ContainerStyle, media: FigureMed
         media.positioning == null && media.after == null && media.focusOutline == null &&
         (media.maxWidth == null || media.maxWidth.percent == 100f && media.maxWidth.subtract.value == 0f)
 
+data class FigureIntrinsicSize(val widthPx: Long, val heightPx: Long) {
+    init {
+        require(widthPx in 1L..Int.MAX_VALUE.toLong() && heightPx in 1L..Int.MAX_VALUE.toLong()) {
+            "Invalid intrinsic figure image dimensions"
+        }
+    }
+}
+
 data class Figure(val content: FigureContent, val format: FigureFormat, val placement: FigurePlacement,
     val clear: FigureClear, val margins: StyleEdges, val imageInsets: StyleEdges, val captionPadding: StyleEdges,
     val captionFontScale: Float, val captionLineHeight: StyleLength,
@@ -1000,8 +1008,18 @@ data class Figure(val content: FigureContent, val format: FigureFormat, val plac
     val captionForeground: FigureColor, val captionBackground: FigureColor,
     val caption: List<Span> = emptyList(), val captionBlocks: List<Block>? = null,
     val captionTextAlign: CellTextAlign? = null, val frameMinWidth: StyleLength? = null,
-    val tableCaptionLayout: TableCaptionLayout? = null, val blockMediaLayout: FigureBlockMediaLayout? = null) {
+    val tableCaptionLayout: TableCaptionLayout? = null, val blockMediaLayout: FigureBlockMediaLayout? = null,
+    val intrinsicSize: FigureIntrinsicSize? = null) {
     init {
+        if (intrinsicSize != null) {
+            val image = content.span.image
+            require(content is FigureContent.Image && content.sizing == FigureSizingPolicy.RequestedFit &&
+                format == FigureFormat.Thumbnail && tableCaptionLayout == null && blockMediaLayout == null &&
+                image != null && image.widthPx != null && image.widthPx <= intrinsicSize.widthPx && image.heightPx == null &&
+                image.map == null && image.svgLanguage == null && image.staticPoster == null &&
+                image.file.substringAfterLast('.', "").lowercase(java.util.Locale.ROOT) in
+                    setOf("jpg", "jpeg", "jpe", "png", "gif", "webp")) { "Invalid intrinsic raster thumbnail context" }
+        }
         if (blockMediaLayout != null) {
             require(content is FigureContent.Image && tableCaptionLayout == null &&
                 placement == FigurePlacement.None && clear == FigureClear.None && frameMinWidth == null &&

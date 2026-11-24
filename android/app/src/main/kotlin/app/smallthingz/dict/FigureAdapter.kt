@@ -451,7 +451,7 @@ private fun prepareFigure(event: AnonymousFlowEvent.FigureObject, reader: Figure
         val factory = imageActionText.geometry ?: throw UnsupportedFloatLayout("Missing figure text is not ready")
         factory(width, emptyList(), true)
     } }
-    // Policy/loading/error states are real measured content. They have no intrinsic image axes.
+    // A legacy figure without stored intrinsic axes uses its measured status until media is ready.
     val placeholder = if (image == null || ready != null) null else runCatching {
         val text = inlineImageFallbackText(image, checkNotNull(state)) ?: when (state) {
             InlineImageAssetState.Disabled -> "Images disabled"
@@ -468,6 +468,8 @@ private fun prepareFigure(event: AnonymousFlowEvent.FigureObject, reader: Figure
     val resolved = runCatching {
         val pixels = when {
             missingLabel != null -> missingLabel.getOrThrow().let { figurePlaceholderPixels(it.width, it.height) }
+            figure.intrinsicSize != null -> figureImagePixels(figure, figure.intrinsicSize.widthPx,
+                figure.intrinsicSize.heightPx, density.density)
             ready != null -> figureImagePixels(figure, ready.originalWidth, ready.originalHeight, density.density)
             else -> requireNotNull(placeholder).getOrThrow().let { figurePlaceholderPixels(it.width, it.height) }
         }
