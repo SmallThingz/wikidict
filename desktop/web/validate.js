@@ -133,6 +133,41 @@ export function validateContainerStyle(style,{containerFonts=false}={}){
     if(!containerFonts&&!floating&&vertical)containerError();
   }
 }
+export function validateDarkForeground(span){
+  const dark=span.inline_style?.dark_foreground;
+  if(dark==null)return;
+  if(span.kind!=='text'||!span.text||span.target||span.image||span.ruby||span.inline_padding_group||
+    span.inline_action_group||span.inline_box_group||span.clipped_absolute||dark===span.foreground)
+    throw Error('Invalid paired foreground owner');
+  containerRGB(span.foreground);
+  containerRGB(dark);
+}
+
+export function validateDescriptionBody(block){
+  const path=block.path??block.list_path;
+  if(!((block.kind==='example'&&path==='#:')||(block.kind==='indent'&&path===':'))||
+    path.length!==block.depth||(block.level??0)!==0||block.number||block.anchor||block.anchor_fallback||
+    !Array.isArray(block.spans)||block.spans.length||
+    ['feature','table','container','figure','flow','rule_style','style','text_align','column_break_inside'].some(k=>block[k]!=null))
+    throw Error('Invalid description body owner');
+  const {before,box}=block.description_body;
+  containerObject(block.description_body,['before','box'],['before','box']);
+  containerObject(before,['top','bottom','left','width','fill'],['top','bottom','left','width','fill']);
+  for(const key of ['top','bottom','left','width'])containerLength(before[key]);
+  containerColor(before.fill);
+  if(!before.width.value||before.fill.transparent)containerError();
+  containerObject(box,['style','blocks','disclosure'],['style','blocks']);
+  if(box.disclosure!=null||!Array.isArray(box.blocks)||!box.blocks.length)containerError();
+  const style=box.style;
+  containerObject(style,['positioning','margins','padding','owner_font_scale'],['positioning','margins','padding','owner_font_scale']);
+  containerNumber(style.owner_font_scale);
+  containerEdges(style.padding);containerEdges(style.margins);
+  if(style.positioning!=='relative_auto'||sides.some(side=>style.margins[side].value!==0)||
+    ['top','right','bottom'].some(side=>style.padding[side].value!==0)||style.padding.left.value<=0)containerError();
+  for(const child of box.blocks)if(!child||child.kind==='heading'||child.style?.margins?.top.value||child.style?.margins?.bottom.value)containerError();
+}
+
+
 export function validateContainerBlock(block,options){
   if(block.kind!=='container'||(block.depth??0)!==0||(block.level??0)!==0||!Array.isArray(block.spans)||block.spans.length||
     (block.path??'')!==''||(block.list_path??'')!==''||(block.number??'')!==''||(block.anchor??'')!==''||(block.anchor_fallback??'')!==''||
@@ -392,8 +427,8 @@ export function validateWrappedHeading(section){
   only(outer.border,['edges']);only(outer.border.edges,sides);
   only(outer.border.edges.top,['dashed']);
   const stroke=outer.border.edges.top.dashed;
-  only(stroke,['width','color']);containerLength(stroke.width,['px']);only(stroke.color,['rgb']);
-  if(stroke.width.value<=0||!/^#[0-9a-f]{6}$/.test(stroke.color.rgb))invalid();
+  only(stroke,['width','color']);containerLength(stroke.width,['px']);containerColor(stroke.color);
+  if(stroke.width.value<=0||stroke.color.transparent)invalid();
   for(const side of sides.slice(1)){only(outer.border.edges[side],['none']);only(outer.border.edges[side].none,[]);}
   const first=blocks?.[0];
   if(!first||level<1||level>6||!title||first.kind!=='heading'||first.level!==level||first.depth!==0||

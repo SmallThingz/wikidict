@@ -17,7 +17,7 @@ function darkReadingInk(foreground,background){
   while(low<high){const mid=(low+high)>>1;if(luminance(mix(mid))>=minimum)high=mid;else low=mid+1;}
   return '#'+mix(low).map(channel=>channel.toString(16).padStart(2,'0')).join('');
 }
-import {safeURL,linkTargetParts,bookSourcesURL,validateContainerBlock,validateCellMetrics,validateRuby,validateRubyOwner,validateRubySpan,validateActionGroupSpan,validateInlineBoxSpan,validateFigureIntrinsicSize,validateAudioControl,validateWrappedHeading} from './validate.js';
+import {safeURL,linkTargetParts,bookSourcesURL,validateDescriptionBody,validateDarkForeground,validateContainerBlock,validateCellMetrics,validateRuby,validateRubyOwner,validateRubySpan,validateActionGroupSpan,validateInlineBoxSpan,validateFigureIntrinsicSize,validateAudioControl,validateWrappedHeading} from './validate.js';
 import {previewBlocks,inlineText} from './preview.js';
 import {figureImageSize,audioControlView} from './media.js';
 const node = (tag, text, cls) => { const el = document.createElement(tag); if (text != null) el.textContent = text; if (cls) el.className = cls; return el; };
@@ -255,10 +255,12 @@ export function spans(values = [], onLink = () => {}, preserve = false, explanat
   const inkFor=span=>canonicalRGB(span.foreground)?span.foreground:
     explanations?.captionInk??(canonicalRGB(span.background)?contrastInk(span.background):canonicalRGB(cellBackground)?contrastInk(cellBackground):null);
   const colorSpan=(el,span)=>{
+    validateDarkForeground(span);
     const ink=inkFor(span);
     if(!ink)return;
     el.style.color=ink;
-    if(darkReadingSurface&&span.kind==='text'&&canonicalRGB(span.foreground)&&!span.background){
+    if(span.inline_style?.dark_foreground)el.style.color='light-dark('+ink+', '+span.inline_style.dark_foreground+')';
+    else if(darkReadingSurface&&span.kind==='text'&&canonicalRGB(span.foreground)&&!span.background){
       const dark=darkReadingInk(ink,darkReadingSurface);
       if(dark)el.style.color=`light-dark(${ink}, ${dark})`;
     }
@@ -370,7 +372,7 @@ function destination(el, value, legacy = '') {
   const primary = value.anchor || legacy, fallback = value.anchor_fallback;
   if (primary) el.id = primary;
   if (fallback && fallback !== primary) {
-    const alias = node('span'); alias.id = fallback;
+    const alias = node('span',null,'compiled-fragment-alias'); alias.id = fallback;
     // Keep a details summary first while locating its alias at the heading.
     (el.tagName === 'DETAILS' ? el.firstElementChild : el).prepend(alias);
   }
@@ -505,6 +507,7 @@ function validateRichEntry(entry){
     if(depth>16)richError();
     for(const block of array(values)){
       spanList(block.spans);const owner=richListKinds.has(block.kind)||(block.kind==='paragraph'&&!(block.depth||0)&&!block.list_path);
+      if(block.description_body!=null){validateDescriptionBody(block);blocks(block.description_body.box.blocks,tableDepth,depth+1,inReference);}
       if(block.kind==='container'||block.container!=null){validateContainerBlock(block,{containerFonts:['DPRM','DPRS','DPRV','DPRY','DPRZ'].includes(entry.presentation_version)});blocks(block.container.blocks,tableDepth,depth+1,inReference);}
       if(block.flow!=null){if(!owner||block.spans?.length||block.table!=null||block.feature!=null||block.figure!=null)richError();flow(block.flow,tableDepth,depth+1,inReference);}
       if(block.figure!=null){if(!owner||block.spans?.length||block.table!=null||block.feature!=null||block.style!=null)richError();figure(block.figure,tableDepth,depth,inReference);}
@@ -721,9 +724,10 @@ function tableView(value,onLink,explanations,depth=1,inheritedBackground=null){
   return table;
 }
 function visibleBlock(block){
-  return block.kind!=='blank'&&(block.container||block.figure||block.flow!=null||block.style||block.table||block.kind==='rule'||block.spans?.some(s=>s.image||s.inline_action_group||s.inline_box_group||s.text?.trim()||s.trail?.trim())||block.spans?.some(isPoem)||(block.kind==='heading'&&(block.anchor||block.anchor_fallback)));
+  return block.kind!=='blank'&&(block.description_body||block.container||block.figure||block.flow!=null||block.style||block.table||block.kind==='rule'||block.spans?.some(s=>s.image||s.inline_action_group||s.inline_box_group||s.text?.trim()||s.trail?.trim())||block.spans?.some(isPoem)||(block.kind==='heading'&&(block.anchor||block.anchor_fallback)));
 }
 function appendBlocks(parent,values,render){
+  const created=[];
   let lists=[];
   for(const block of values){
     const visible=visibleBlock(block);
@@ -735,7 +739,7 @@ function appendBlocks(parent,values,render){
         while(lists.length&&!key.startsWith(lists.at(-1).path))lists.pop();
         const owner=lists.at(-1)?.item||parent,list=node(key.endsWith('#')?'ol':'ul',null,'compiled-list');
         // Retain list semantics when custom visible markers suppress native markers.
-        list.setAttribute('role','list');owner.append(list);
+        list.setAttribute('role','list');owner.append(list);created.push(list);
         lists.push({path:key,list,item:null});at=lists.length-1;
       }
       lists.length=at+1;
@@ -759,12 +763,14 @@ function appendBlocks(parent,values,render){
       }else{lists=[];if(visible)parent.append(render(block));}
     }
   }
+  // An empty item can own a later continuation or child list. Remove a list only after all its children are known.
+  for(const list of created.reverse())if([...list.children].every(item=>!item.childElementCount))list.remove();
 }
 function visitBlocks(values,visit){
   const figure=value=>{if(value.caption_blocks!=null)visitBlocks(value.caption_blocks,visit);};
   const flow=parts=>{for(const part of parts){if(part.figure)figure(part.figure);if(part.scope)flow(part.scope.parts);}};
   const table=value=>{if(value.caption_blocks!=null)visitBlocks(value.caption_blocks,visit);for(const row of value.rows||[])for(const cell of row.cells||[]){if(cell.blocks!=null)visitBlocks(cell.blocks,visit);else if(cell.nested_table)table(cell.nested_table);}};
-  for(const block of values||[]){visit(block);if(block.table)table(block.table);if(block.figure)figure(block.figure);if(block.flow)flow(block.flow);if(block.container)visitBlocks(block.container.blocks,visit);}
+  for(const block of values||[]){visit(block);if(block.table)table(block.table);if(block.figure)figure(block.figure);if(block.flow)flow(block.flow);const box=block.description_body?.box??block.container;if(box)visitBlocks(box.blocks,visit);}
 }
 let containerSequence=0;
 const containerWidthCSS=value=>value.length?(value.length.unit==='percent'?value.length.value+'%':styleLength(value.length)):Object.hasOwn(value,'fit_content')?'fit-content':Object.hasOwn(value,'none')?'none':'auto';
@@ -793,7 +799,7 @@ function containerDeclarations(style,dark=false){
   if(style.columns){set('column-count',String(style.columns.count));set('column-gap',styleLength(style.columns.gap));set('column-fill','balance');}
   return css.join(';');
 }
-function containerView(value,onLink,explanations,context){
+function containerView(value,onLink,explanations,context,before=null){
   const cls='compiled-container-'+(++containerSequence),el=node('div',null,'compiled-container '+cls),style=node('style');
   if(!context.container&&!context.tableDepth&&!context.caption)el.classList.add('compiled-container-root');
   // Only validated typed values enter this stylesheet. Rules remain scoped to
@@ -802,6 +808,14 @@ function containerView(value,onLink,explanations,context){
   const screen=value.style.screen_max_width;
   for(const rule of screen?[screen,...(screen.following_rules??[])]:[])
     style.textContent+='@media(max-width:'+rule.max_width_px+'px){.'+cls+'{'+containerDeclarations(rule)+'}:root[data-theme="dark"] .'+cls+'{'+containerDeclarations(rule,true)+'}}';
+  if(before){
+    // The source DD owns a non-interactive pseudo-element in its own padding box.
+    el.classList.add('compiled-description-body');
+    el.setAttribute('role','definition');
+    el.style.position='relative';
+    for(const key of ['top','bottom','left','width'])el.style.setProperty('--description-'+key,styleLength(before[key]));
+    el.style.setProperty('--description-fill','light-dark('+containerColorCSS(before.fill,false)+','+containerColorCSS(before.fill,true)+')');
+  }
   el.append(style);
   if(value.style.overflow==='auto'){el.tabIndex=0;el.setAttribute('aria-label','Scrollable content');}
   appendBlocks(el,value.blocks,block=>blockView(block,onLink,explanations,'',{...context,container:true}));return el;
@@ -809,6 +823,7 @@ function containerView(value,onLink,explanations,context){
 function blockView(block, onLink, explanations, legacy = '', context = {}) {
   if(block.text_align!=null&&!['left','center','right'].includes(block.text_align))throw Error('Invalid block text alignment');
   const margin = `${Math.min(Math.max(block.depth || 0,0),8)*.45}rem`;
+  if(block.description_body){const body=block.description_body;return containerView(body.box,onLink,explanations,context,body.before);}
   if(block.kind==='container')return containerView(block.container,onLink,explanations,context);
   if (block.table) {
     const feature = block.feature;
@@ -892,7 +907,7 @@ function applyWrappedHeading(summary,style){
   shell.style.display='block';
   shell.style.overflowX='visible';
   shell.style.overflowY='clip';
-  shell.style.borderTop=styleLength(width)+' dashed '+color.rgb;
+  shell.style.borderTop=styleLength(width)+' dashed '+(color.rgb??'light-dark('+color.light_dark.light+', '+color.light_dark.dark+')');
   content.style.cssText=containerDeclarations(inner);
   content.style.display='block';
   title.style.cssText=containerDeclarations(style.box);
@@ -1010,13 +1025,8 @@ export function renderEntry(entry, onLink, settings = {}, mediaView = () => null
       applyWrappedHeading(el.querySelector('summary'),section.heading_style);
     }
     el.classList.toggle('meaning',meaning);destination(el,section,legacy.get(section)||'');
-    const main=[],notes=[];
-    for (const block of section.blocks.slice(companion?1:0)) {
-      if(meaning&&!containsDefinition(block))notes.push(block);else main.push(block);
-    }
-    const view=block=>blockView(block,followLink,explanations,legacy.get(block)||'');
-    appendBlocks(el,main,view);
-    if(notes.some(visibleBlock)){const details=fold('Examples & notes',!settings.collapseDetails);details.className='sense-notes';appendBlocks(details,notes,view);el.append(details);}
+    const body=companion?section.blocks.slice(1):section.blocks;
+    appendBlocks(el,body,block=>blockView(block,followLink,explanations,legacy.get(block)||''));
     if(section.blocks.some(visibleBlock)||companion||section.anchor||section.anchor_fallback)root.append(el);
   }
   if (entry.references?.length) {
@@ -1041,7 +1051,7 @@ export function renderEntry(entry, onLink, settings = {}, mediaView = () => null
   const imageFigure=value=>{imageSpans([value.image_span]);if(value.caption_blocks!=null)imageBlocks(value.caption_blocks);else imageSpans(value.caption);};
   const imageFlow=parts=>{for(const part of parts){imageSpans(part.spans);if(part.figure)imageFigure(part.figure);if(part.scope)imageFlow(part.scope.parts);}};
   const imageTable=value=>{if(value.caption_blocks!=null)imageBlocks(value.caption_blocks);else imageSpans(value.caption);for(const row of value.rows||[])for(const cell of row.cells||[]){imageSpans(cell.spans);if(cell.blocks)imageBlocks(cell.blocks);if(cell.nested_table)imageTable(cell.nested_table);}};
-  const imageBlocks=values=>{for(const block of values||[]){imageSpans(block.spans);if(block.table)imageTable(block.table);if(block.figure)imageFigure(block.figure);if(block.flow)imageFlow(block.flow);if(block.container)imageBlocks(block.container.blocks);}};
+  const imageBlocks=values=>{for(const block of values||[]){imageSpans(block.spans);if(block.table)imageTable(block.table);if(block.figure)imageFigure(block.figure);if(block.flow)imageFlow(block.flow);const box=block.description_body?.box??block.container;if(box)imageBlocks(box.blocks);}};
   imageSpans(entry.display_title);imageSpans(entry.preamble_spans);for(const section of entry.sections||[])imageBlocks(section.blocks);for(const ref of entry.references||[]){imageSpans(ref.spans);imageBlocks(ref.blocks);}
   if (entry.media?.length) { const section=fold('Images & sound',!settings.collapseOtherSections);for(const media of entry.media){const view=mediaView(media,canonicalImageFiles.has(media.file));if(view)section.append(view);}root.append(section); }
   if(explanationRows.length){

@@ -28,7 +28,8 @@ export function previewBlocks(values) {
   };
   const descend=(values,onlyContainers=false,depth=0)=>values.flatMap(block=>{
     spend(depth);
-    if(block.container)return descend(block.container.blocks,false,depth+1);
+    const box=block.description_body?.box??block.container;
+    if(box)return descend(box.blocks,false,depth+1);
     // Preserve the older opaque-table preview policy, but discover L owners in
     // every supported host rather than losing their newly represented bodies.
     const result=onlyContainers?[]:[block];

@@ -9,7 +9,7 @@ const credit='Berkas:'+file;
 const findPlay=entry=>entry.sections.flatMap(section=>section.blocks).flatMap(block=>block.spans||[]).find(span=>span.audio_control);
 const digest=bytes=>createHash('sha256').update(bytes).digest('hex');
 
-export async function verifyPhonos(page,bundle,asset,stylesheet) {
+export async function verifyPhonos(page,bundle,asset,stylesheet,description=false) {
   const source=await openSource(new Blob([await readFile(asset)]));
   const {metadata,rows}=await buildIndex(source);
   assert.equal(rows.length,1);
@@ -22,7 +22,14 @@ export async function verifyPhonos(page,bundle,asset,stylesheet) {
   const priorIndex=await buildIndex(prior),priorRow=priorIndex.rows[0];
   const old=decode(await prior.read(priorRow.offset,priorRow.length),meta);
   assert.equal(findPlay(old),undefined);
-  assert.deepEqual(entry.sections.map(s=>s.heading_style),old.sections.map(s=>s.heading_style));
+  const originalHeadings=old.sections.map(s=>s.heading_style);
+  const currentHeadings=structuredClone(entry.sections.map(s=>s.heading_style));
+  if(description){
+    const stroke=currentHeadings[1].wrappers.outer.border.edges.top.dashed;
+    assert.deepEqual(stroke.color,{light_dark:{light:'#a2a9b1',dark:'#72777d'}});
+    stroke.color={rgb:stroke.color.light_dark.light};
+  }
+  assert.deepEqual(currentHeadings,originalHeadings);
   assert.equal(entry.sections.length,2);
   assert.equal(entry.sections[1].blocks.length,6);
   assert.equal(entry.sections[1].anchor,'babua_[bug]');
@@ -165,6 +172,118 @@ export async function verifyPhonos(page,bundle,asset,stylesheet) {
   assert.equal(await link.count(),1);
   assert.deepEqual(refused,[]);
   await page.evaluate(()=>window.remount(false));
-  return {title:row.title,payloadBytes:row.length,payloadSHA256:digest(bytes),features:bytes.readUInt16LE(4),
+  const bodies=description?await verifyDescription(page,bytes,meta):null;
+  const iconPaint=description?await verifyPhonosPaint(page):null;
+  return {bodies,iconPaint,title:row.title,payloadBytes:row.length,payloadSHA256:digest(bytes),features:bytes.readUInt16LE(4),
     flagsAt:at,localFlags:bytes[at],file,credit,geometry,localFetches:await page.evaluate(()=>window.localFetches)};
+}
+
+async function verifyDescription(page,bytes,metadata){
+  assert.equal(digest(bytes),'57612f152e6722cbc444fa2985e4a9a48be4ca5de0bed0bed134d5abe49f37ba');
+  // Dimension and paint oracles from the separately captured original page in both schemes.
+  const states={};
+  for(const theme of ['light','dark']){
+    const result=await page.evaluate(theme=>{
+      document.documentElement.dataset.theme=theme;
+      document.documentElement.style.setProperty('--wikidict-normal-body-size','16px');
+            const frame=document.querySelector('.compiled-heading-outer');
+      const section=frame.closest('details'),summary=frame.closest('summary');
+      const leaves=[...section.querySelectorAll('*')];
+      const leaf=text=>leaves.find(el=>el.childElementCount===0&&el.textContent===text);
+      const targets=[['heading',frame],['audio',section.querySelector('.phonos-control button')],
+        ['info',leaf('ⓘ')],['term',leaf('Nomina')],['definition',leaf('perut')],['example',leaf('Maloppo ')]];
+      const bodyOrder=targets.map(([name,node])=>[name,leaves.indexOf(node)]).filter(([,index])=>index>=0).sort((a,b)=>a[1]-b[1]).map(([name])=>name);
+      const [shell,parent,label]=[frame,summary,leaf('babua')].map(el=>el.getBoundingClientRect());
+      const sourceHeading={left:shell.left,right:shell.right,containerLeft:parent.left,containerRight:parent.right,labelLeft:label.left};
+      const targetsRoot=section.closest('article,main'),anchor=section.id,alias=summary.querySelector('.compiled-fragment-alias');
+      const fragments=anchor==='babua_[bug]'&&alias?.id==='babua_.5Bbug.5D'&&
+        [anchor,alias.id].every(id=>{section.open=false;return Renderer.revealFragment(targetsRoot,id)&&section.open&&document.activeElement.id===id;});
+
+      const bodies=[...document.querySelectorAll('.compiled-description-body')];
+      const description=bodies.map(body=>{
+        const css=getComputedStyle(body),pseudo=getComputedStyle(body,'::before');
+        return {font:parseFloat(css.fontSize),pad:parseFloat(css.paddingLeft),position:css.position,
+          left:parseFloat(pseudo.left),top:parseFloat(pseudo.top),bottom:parseFloat(pseudo.bottom),width:parseFloat(pseudo.width),
+          fill:pseudo.backgroundColor,events:pseudo.pointerEvents,generated:pseudo.content,
+          height:parseFloat(pseudo.height),box:body.getBoundingClientRect().height,text:body.innerText};
+      });
+      const title=document.querySelector('.compiled-heading-title'),nodes=[...title.querySelectorAll('*')];
+      const rgb=text=>getComputedStyle(nodes.find(el=>el.childElementCount===0&&el.textContent.trim()===text)).color;
+      return {bodyOrder,sourceHeading,fragments,description,nested:bodies.length===2&&bodies[0].contains(bodies[1]),word:rgb('babua'),sub:['[','bug',']'].map(rgb),frame:getComputedStyle(document.querySelector('.compiled-heading-outer')).borderTopColor};
+    },theme);
+    const dark=theme==='dark';
+    assert.deepEqual(result.bodyOrder,['heading','audio','info','term','definition','example']);
+    assert.ok(result.fragments);
+    assert.ok(Math.abs(result.sourceHeading.left-result.sourceHeading.containerLeft)<1/64);
+    assert.ok(Math.abs(result.sourceHeading.right-result.sourceHeading.containerRight)<1/64);
+    assert.ok(Math.abs(result.sourceHeading.labelLeft-result.sourceHeading.left)<1/64);
+    assert.equal(result.word,dark?'rgb(224, 224, 224)':'rgb(51, 51, 51)');
+    assert.deepEqual(result.sub,Array(3).fill('rgb(136, 136, 136)'));
+    assert.equal(result.frame,dark?'rgb(114, 119, 125)':'rgb(162, 169, 177)');
+    assert.equal(result.nested,true);
+    result.description.forEach((d,index)=>{
+      const font=index?15.2:16,near=(a,b)=>assert.ok(Math.abs(a-b)<.035,JSON.stringify({a,b,theme,index}));
+      near(d.font,font);near(d.pad,font*.8);
+      assert.equal(d.position,'relative');assert.equal(d.generated,'""');assert.equal(d.events,'none');
+      for(const inset of [d.left,d.top,d.bottom])near(inset,font*.2);
+      near(d.width,1);near(d.height,d.box-d.top-d.bottom);
+      assert.equal(d.fill,dark?'rgb(51, 51, 51)':'rgb(204, 204, 204)');
+    });
+    assert.ok(result.description[0].text.includes('Maloppo babuana amboku.'));
+    assert.equal(result.description[1].text.trim(),'Perut bapak saya besar.');
+    states[theme]=result;
+  }
+  const ink=Buffer.from('#e0e0e0'),at=bytes.indexOf(ink);
+  assert.ok(at>=0);
+  const malformed=Buffer.from(bytes);malformed[at+1]=71;
+  assert.throws(()=>decode(malformed,metadata));
+  const duplicate=Buffer.from(bytes);Buffer.from('#333333').copy(duplicate,at);
+  assert.throws(()=>decode(duplicate,metadata));
+  return states;
+}
+
+
+async function verifyPhonosPaint(page){
+  const button=page.getByRole('button',{name:'Putar audio',exact:true});
+  const icon=button.locator('img');
+  const sample=async()=>{
+    await icon.evaluate(el=>el.decode());
+    const png=await icon.screenshot();
+    return page.evaluate(async bytes=>{
+      const bitmap=await createImageBitmap(new Blob([new Uint8Array(bytes)],{type:'image/png'}));
+      const canvas=new OffscreenCanvas(bitmap.width,bitmap.height),ctx=canvas.getContext('2d');
+      ctx.drawImage(bitmap,0,0);bitmap.close();
+      const rgba=ctx.getImageData(0,0,canvas.width,canvas.height).data,values=[];
+      for(let i=0;i<rgba.length;i+=4)values.push(Math.round((rgba[i]+rgba[i+1]+rgba[i+2])/3));
+      values.sort((a,b)=>a-b);
+      // Use several fully covered source pixels rather than a single antialiased edge.
+      return {darkInk:values[4],lightInk:values.at(-5)};
+    },[...png]);
+  };
+  const states={};
+  for(const theme of ['light','dark']){
+    const night=theme==='dark';
+    await page.evaluate(theme=>{document.documentElement.dataset.theme=theme;window.remount(true);},theme);
+    await page.mouse.move(0,0);
+    const ready=await sample();
+    assert.ok(night?ready.lightInk>=250:ready.darkInk<=5,JSON.stringify({theme,ready}));
+    await button.hover();
+    const hover=await button.evaluate(el=>getComputedStyle(el).backgroundColor);
+    assert.equal(hover,night?'rgb(27, 34, 61)':'rgb(232, 238, 255)');
+    await page.evaluate(()=>{window.releaseAudio=null;window.fetchMode='error';});
+    await button.press('Enter');
+    await page.waitForFunction(()=>typeof window.releaseAudio==='function');
+    await page.evaluate(()=>window.releaseAudio());
+    await page.waitForFunction(()=>document.querySelector('.phonos-control').dataset.mediaState==='error');
+    const error=await button.evaluate(el=>[getComputedStyle(el).backgroundColor,getComputedStyle(el).color]);
+    assert.deepEqual(error,night?['rgb(39, 41, 45)','rgb(234, 236, 240)']:['rgb(234, 236, 240)','rgb(32, 33, 34)']);
+    await page.evaluate(()=>window.remount(false));
+    await page.mouse.move(0,0);
+    assert.ok(await button.isDisabled());
+    const disabled=await sample();
+    assert.ok(night?disabled.lightInk>150&&disabled.lightInk<ready.lightInk:disabled.darkInk<110&&disabled.darkInk>ready.darkInk,
+      JSON.stringify({theme,ready,disabled}));
+    states[theme]={ready,disabled,hover,error};
+  }
+  return states;
 }

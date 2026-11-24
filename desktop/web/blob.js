@@ -1,6 +1,6 @@
 // WIKBLB08 contains compiled semantic pages or typed DAL1 redirect envelopes.
 // A leading U+FEFF belongs to a compiled title or field, not a file BOM.
-import {validateContainerBlock,validateCellMetrics,validateRuby,validateRubyOwner,validateRubySpan,validateActionGroupSpan,validateInlineBoxSpan,validateFigureIntrinsicSize,validateAudioControl,validateWrappedHeading} from './validate.js';
+import {validateDescriptionBody,validateDarkForeground,validateContainerBlock,validateCellMetrics,validateRuby,validateRubyOwner,validateRubySpan,validateActionGroupSpan,validateInlineBoxSpan,validateFigureIntrinsicSize,validateAudioControl,validateWrappedHeading} from './validate.js';
 const utf8 = new TextDecoder('utf-8', {fatal:true,ignoreBOM:true});
 const kinds = ['language','thesaurus','citations','reconstruction','rhymes','sign_gloss','supplemental','alias'];
 const blocks = ['paragraph','blank','definition','example','quotation','list_item','list_detail','indent','term','heading','preformatted','rule','table','container'];
@@ -53,7 +53,7 @@ export function decode(bytes, metadata) {
   const indices=limit=>list(4,()=>index(limit));
   const rgb=()=>{if(!presence())return null;const value=string();require(value.length===7&&/^#[0-9a-f]{6}$/.test(value));return value;};
   const audioSpans=[];
-  let audioEnabled=false,positionedHeadings=false;
+  let audioEnabled=false,positionedHeadings=false,positionedBody=false;
   function audioControl() {
     charge();
     const flags=byte(), control={};
@@ -142,16 +142,19 @@ export function decode(bytes, metadata) {
     require(Number.isFinite(value)&&(signed||value>=0)&&font_scale_basis!=='context');return {value,font_scale_basis};
   };
   const inlineTextStyle=()=>{
-    const flags=byte();require(flags&&(flags&~0x3f)===0);
+    const flags=byte();require(flags&&(flags&~(positionedHeadings?0x7f:0x3f))===0);
     const decoration=flags&1?{style:tag(['solid','dotted']),color:presence()?rgbValue():null,thickness:presence()?styleLength():null}:null;
     const line_height=flags&2?(tag(['computed','font_relative'])==='computed'?{computed:computed()}:{font_relative:{factor:f32(),font:rubyFontSnapshot()}}):null;
     if(line_height?.font_relative)require(Number.isFinite(line_height.font_relative.factor)&&line_height.font_relative.factor>=0);
     const baseline_shift=flags&4?computed(true):null;
     const cursor=flags&16?tag(['help']):null,wrap=flags&32?tag(['normal','break_word']):null;
-    return {decoration,line_height,baseline_shift,font_normalized:!!(flags&8),cursor,wrap};
+    const style={decoration,line_height,baseline_shift,font_normalized:!!(flags&8),cursor,wrap};
+    if(flags&64){style.dark_foreground=rgbValue();positionedBody=true;}
+    return style;
   };
   const checkStyledSpan=s=>{
     const style=s.inline_style,group=s.inline_box_group??s.inline_action_group??s.ruby;
+    validateDarkForeground(s);
     require(!s.image&&s.kind!=='line_break');
     require(s.kind==='text'?s.target===''&&(s.text!==''||group||style.line_height&&style.cursor===null&&style.wrap===null):s.target!==''&&(s.text!==''||group));
     if(style.baseline_shift&&style.line_height?.font_relative){
@@ -207,10 +210,11 @@ export function decode(bytes, metadata) {
     if(flags&128){const n=count(6);require(n>0&&n<16);value.following_rules=Array.from({length:n},()=>containerScreen(true));}
     return value;
   };
-  const containerStyle=()=>{
+  const containerStyle=(description=false)=>{
     const flags=containerFonts?u32():u16(),style={},fields=[['margins',edges],['padding',edges],['width',containerWidth],['float_side',()=>tag(['left','right'])],['clear',()=>tag(['none','left','right','both'])],['max_width',containerMaxWidth],['box_sizing',()=>tag(['content_box','border_box'])],['layout',()=>tag(['flow','flex_row'])],['align_items',()=>tag(['stretch','start','center','end'])],['flex_item',()=>tag(['none'])],['background',containerColor],['border',containerBorder],['line_height',containerLineHeight],['text_align',()=>tag(['left','center','right'])],['screen_max_width',containerScreen],['overflow',()=>tag(['visible','auto'])],['owner_font_scale',f32],['height',styleLength],['columns',()=>({count:u16(),gap:styleLength()})]];
-    require((flags&~0x7ffff)===0,'Unsupported container layout policy');
+    require((flags&~(description?0x80000|0x7ffff:0x7ffff))===0,'Unsupported container layout policy');
     fields.forEach(([key,read],bit)=>{if(flags&(1<<bit))style[key]=read();});
+    if(description&&(flags&0x80000))style.positioning=tag(['relative_auto']);
     if(positionedHeadings)require(byte()===0,'Unsupported positioned container extension');
     return style;
   };
@@ -356,7 +360,17 @@ export function decode(bytes, metadata) {
     if(blockGeometry&&presence()){const flags=byte();require(flags!==0&&(flags&~3)===0);value.style={};if(flags&1)value.style.margins=edges();if(flags&2)value.style.padding=edges();require(kind==='paragraph'&&depth===0&&!value.table&&!value.feature&&value.path==='');}
     if(rich){
       const img=figure(tableDepth);if(img){require(value.spans.length===0&&!value.table&&!value.feature&&!value.style&&contentContext(value));value.figure=img;}
-      if(presence()){require(value.spans.length===0&&!value.table&&!value.feature&&!value.figure&&contentContext(value));value.flow=content(()=>flowParts(tableDepth));}
+      const flowTag=byte();
+      if(flowTag===1){require(value.spans.length===0&&!value.table&&!value.feature&&!value.figure&&contentContext(value));value.flow=content(()=>flowParts(tableDepth));}
+      else if(flowTag===2){
+        require(positionedHeadings&&containerFonts,'Unsupported description body');
+        positionedBody=true;
+        charge();
+        const before={top:styleLength(),bottom:styleLength(),left:styleLength(),width:styleLength(),fill:containerColor()};
+        const box=content(()=>({style:containerStyle(true),blocks:list(blockMinimum(),()=>block(tableDepth))}));
+        value.description_body={before,box};
+        validateDescriptionBody(value);
+      }else require(flowTag===0,'Invalid flow tag');
     }
     if(kind==='container'){
       value.container=content(()=>({style:containerStyle(),blocks:list(blockMinimum(),()=>block(tableDepth))}));
@@ -380,7 +394,7 @@ export function decode(bytes, metadata) {
   const entry={...metadata,presentation_version:magic,display_title:spans(),sections:list(anchored?17:9,()=>({level:byte(),title:string(),anchor:anchored?string():'',anchor_fallback:anchored?string():'',blocks:list(blockMinimum(),()=>block())})),preamble_spans:spans()};
   const childPath=(values,root)=>{
     const n=count(4);require(n<=16);let value=values[root];
-    for(let i=0;i<n;i++){require(value.kind==='container'&&value.container);value=value.container.blocks[index(value.container.blocks.length)];}
+    for(let i=0;i<n;i++){const box=value.description_body?.box??value.container;require(box);value=box.blocks[index(box.blocks.length)];}
     return n;
   };
   const childPaths=(values,roots)=>{
@@ -412,8 +426,8 @@ export function decode(bytes, metadata) {
   if(rubyEnabled){
     const pending=byte();
     if(positionedHeadings){
-      require(pending===0x16,'Unsupported positioned heading fields');
-      readWrappedHeadings(entry.sections);
+      if(pending===0x16)readWrappedHeadings(entry.sections);
+      else require(pending===0&&positionedBody,'Unsupported positioned body or heading fields');
     }else require(pending===0,'Unsupported extended-record body feature');
     if(audioEnabled){
       require(audioSpans.length>0,'DPRZ audio feature requires an audio control');
@@ -429,7 +443,7 @@ export function decode(bytes, metadata) {
   const inspectTable=value=>{inspect(value.caption);if(value.caption_blocks)inspectBlocks(value.caption_blocks);for(const row of value.rows)for(const cell of row.cells){inspect(cell.spans);if(cell.blocks)inspectBlocks(cell.blocks);if(cell.nested_table)inspectTable(cell.nested_table);}};
   const inspectFigure=value=>{inspect([value.image_span]);inspect(value.caption);if(value.caption_blocks)inspectBlocks(value.caption_blocks);};
   const inspectFlow=parts=>{for(const part of parts){inspect(part.spans);if(part.figure)inspectFigure(part.figure);if(part.scope)inspectFlow(part.scope.parts);}};
-  const inspectBlocks=values=>{for(const value of values){inspect(value.spans);if(value.table)inspectTable(value.table);if(value.figure)inspectFigure(value.figure);if(value.flow)inspectFlow(value.flow);if(value.container)inspectBlocks(value.container.blocks);}};
+  const inspectBlocks=values=>{for(const value of values){inspect(value.spans);if(value.table)inspectTable(value.table);if(value.figure)inspectFigure(value.figure);if(value.flow)inspectFlow(value.flow);const box=value.description_body?.box??value.container;if(box)inspectBlocks(box.blocks);}};
   inspect(entry.display_title);inspect(entry.preamble_spans);for(const section of entry.sections)inspectBlocks(section.blocks);for(const ref of entry.references){inspect(ref.spans);if(ref.blocks)inspectBlocks(ref.blocks);}
   if(images.length){
     if(!dynamicCatalogue)require(entry.media.length<=(aligned?256:128));

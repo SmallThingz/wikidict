@@ -9,6 +9,11 @@ const media=await build({entryPoints:[new URL('./media.js',import.meta.url).path
 const browser=await chromium.launch({executablePath:process.env.CHROMIUM||'/opt/brave-bin/brave',headless:true,args:['--no-sandbox']});
 try{
  const page=await browser.newPage();await page.route('**/*',r=>r.abort());await page.setContent('<main></main>');await page.addScriptTag({content:renderer.outputFiles[0].text});await page.addScriptTag({content:media.outputFiles[0].text});
+ if(process.argv.includes('--description-body-only')||process.argv.length===2){
+   const bodyPage=await browser.newPage();
+   try{await verifyPhonos(bodyPage,renderer.outputFiles[0].text,new URL('../../android/app/src/androidTest/assets/babua/description-body.wikblb.xz',import.meta.url),undefined,true);}
+   finally{await bodyPage.close();}
+ }
  if(process.argv.includes('--phonos-only')||process.argv.length===2){
    const phonosPage=await browser.newPage();
    try{await verifyPhonos(phonosPage,renderer.outputFiles[0].text,new URL('../../android/app/src/androidTest/assets/babua/phonos.wikblb.xz',import.meta.url));}
@@ -24,7 +29,7 @@ try{
      await verifyIntrinsicRaster(rasterPage);
    }finally{await rasterPage.close();}
  }
- if(!process.argv.includes('--intrinsic-raster-only')&&!process.argv.includes('--phonos-only')){
+ if(!process.argv.includes('--intrinsic-raster-only')&&!process.argv.includes('--phonos-only')&&!process.argv.includes('--description-body-only')){
  const names = await page.evaluate(() => {
    const main = document.querySelector('main');
    const action = {kind:'link',target:'File:Sugar-485057.jpg',text:' ',trail:''};

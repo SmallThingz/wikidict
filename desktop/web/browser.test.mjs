@@ -333,11 +333,11 @@ try{
   const second=[item('Other cell','*')];
   const entry={title:'Cell list fixture',sections:[{title:'Meaning',blocks:[{kind:'definition',spans:text('Definition')},{kind:'list_item',path:'*',depth:1,spans:text('Note parent')},{kind:'list_item',path:'**',depth:2,spans:text('Note child')},{kind:'table',table:{rows:[{cells:[{spans:[],blocks:first},{spans:[],blocks:second}]}]}}]}]};
   const before=JSON.stringify(entry);host.replaceChildren(WikidictRendererQA.renderEntry(entry,()=>{}, {collapseOtherSections:false,collapseDetails:false}));
-  const cells=[...host.querySelectorAll('td')],parent=cells[0].querySelector('li'),child=cells[0].querySelector('li li'),notes=host.querySelector('.sense-notes');
+  const cells=[...host.querySelectorAll('td')],parent=cells[0].querySelector('li'),child=cells[0].querySelector('li li'),section=host.querySelector('details.meaning');
   return {unchanged:JSON.stringify(entry)===before,cellRoots:cells.map(cell=>cell.querySelectorAll(':scope > .compiled-list').length),
    childOwner:child.parentElement.parentElement===parent,continuationOwner:cells[0].querySelector('.list_detail').closest('li')===parent,
-   cellItems:cells.map(cell=>cell.querySelectorAll('li').length),noteList:notes.querySelector(':scope > .compiled-list')?.tagName,
-   noteChild:!!notes.querySelector(':scope > .compiled-list > li > .compiled-list > li'),definitionOutside:!host.querySelector('.definition').closest('li')};
+   cellItems:cells.map(cell=>cell.querySelectorAll('li').length),noteList:section.querySelector(':scope > .compiled-list')?.tagName,
+   noteChild:!!section.querySelector(':scope > .compiled-list > li > .compiled-list > li'),definitionOutside:!host.querySelector('.definition').closest('li')};
  });
  assert.deepEqual(cellLists,{unchanged:true,cellRoots:[1,1],childOwner:true,continuationOwner:true,cellItems:[2,1],noteList:'UL',noteChild:true,definitionOutside:true});
  const emptyFurniture=await rendererPage.evaluate(()=>{
@@ -360,10 +360,10 @@ try{
   items=[...host.querySelector('td > ul').children];
   const cell={items:items.length,firstText:items[0].textContent,tailOwner:row('Cell tail').closest('li')===items[1],emptyRow:!!items[1].querySelector(':scope > .list_item')};
   render([block('list_item','*',null)]);const onlyEmptySections=host.querySelectorAll('details').length;
-  render([block('definition','#','Meaning'),block('list_item','*',null),block('term',';',null)]);const onlyEmptyNotes=host.querySelectorAll('.sense-notes').length;
-  return {emptyThenTail,emptyThenChild,termBoundary,emptyContinuation,cell,onlyEmptySections,onlyEmptyNotes};
+  render([block('definition','#','Meaning'),block('list_item','*',null),block('term',';',null)]);const onlyEmptyLists=host.querySelectorAll('ul,ol').length;
+  return {emptyThenTail,emptyThenChild,termBoundary,emptyContinuation,cell,onlyEmptySections,onlyEmptyLists};
  });
- assert.deepEqual(emptyFurniture,{emptyThenTail:{items:2,firstText:'•First',tailOwner:true,emptyRow:false},emptyThenChild:{rootItems:1,childOwner:true,parentRow:false},termBoundary:{items:1,tailOutside:true,emptyTermRows:0},emptyContinuation:{nestedLists:2,childOwners:true,emptyDetailRows:0},cell:{items:2,firstText:'•Cell first',tailOwner:true,emptyRow:false},onlyEmptySections:0,onlyEmptyNotes:0});
+ assert.deepEqual(emptyFurniture,{emptyThenTail:{items:2,firstText:'•First',tailOwner:true,emptyRow:false},emptyThenChild:{rootItems:1,childOwner:true,parentRow:false},termBoundary:{items:1,tailOutside:true,emptyTermRows:0},emptyContinuation:{nestedLists:2,childOwners:true,emptyDetailRows:0},cell:{items:2,firstText:'•Cell first',tailOwner:true,emptyRow:false},onlyEmptySections:0,onlyEmptyLists:0});
  const renderedTables=await rendererPage.evaluate(()=>{
   const table=(depth,caption)=>({kind:'table',depth,path:depth?'#:':'',spans:[],table:{caption:[{kind:'text',text:caption}],rows:[{cells:[{header:false,colspan:1,rowspan:1,spans:[{kind:'text',text:'Cell'}]}]}]}});
   const host=document.getElementById('compiled-renderer-fixture');
@@ -398,10 +398,10 @@ try{
   ]};
   const before=JSON.stringify(entry);host.replaceChildren(WikidictRendererQA.renderEntry(entry,()=>{}, {collapseOtherSections:true,collapseDetails:true}));
   const ids=[...host.querySelectorAll('[id]')].map(el=>el.id);
-  const closedBefore=!host.querySelector('.sense-notes').open;
-  host.querySelector('[id="Noun_2"]').open=false;
+  const owner=host.querySelector('[id="Noun_2"]');owner.open=false;
+  const closedBefore=!owner.open;
   const standalone=WikidictRendererQA.revealFragment(host,'Usage.20notes_2');
-  const notesOpen=host.querySelector('.sense-notes').open;
+  const targetInSection=host.querySelector('[id="Usage_notes_2"]').parentElement===owner;
   const sectionOpen=host.querySelector('[id="Noun_2"]').open;
   const unicode=WikidictRendererQA.revealFragment(host,'.C3.A4'),unicodeOpen=host.querySelector('[id="\u00e4"]').open;
   const second=WikidictRendererQA.revealFragment(host,'Noun_2'),focused=document.activeElement.id;
@@ -411,9 +411,9 @@ try{
   const legacy=!!host.querySelector('[id="Legacy_title"]');
   host.replaceChildren(WikidictRendererQA.renderEntry({title:'Anchored',presentation_version:'DPR5',sections:[blank]},()=>{}));
   const noInventedID=!host.querySelector('[id]');
-  return {ids,closedBefore,standalone,notesOpen,sectionOpen,unicode,unicodeOpen,second,focused,scoped,legacy,noInventedID,unchanged:before===JSON.stringify(entry)};
+  return {ids,closedBefore,standalone,targetInSection,sectionOpen,unicode,unicodeOpen,second,focused,scoped,legacy,noInventedID,unchanged:before===JSON.stringify(entry)};
  });
- assert.deepEqual(compiledNavigation,{ids:['Noun','Noun_2','Usage_notes_2','Usage.20notes_2','\u00e4','.C3.A4'],closedBefore:true,standalone:true,notesOpen:true,sectionOpen:true,unicode:true,unicodeOpen:true,second:true,focused:'Noun_2',scoped:true,legacy:true,noInventedID:true,unchanged:true});
+ assert.deepEqual(compiledNavigation,{ids:['Noun','Noun_2','Usage_notes_2','Usage.20notes_2','\u00e4','.C3.A4'],closedBefore:true,standalone:true,targetInSection:true,sectionOpen:true,unicode:true,unicodeOpen:true,second:true,focused:'Noun_2',scoped:true,legacy:true,noInventedID:true,unchanged:true});
 
  const navigationResolution=await rendererPage.evaluate(()=>{
   const host=document.getElementById('compiled-renderer-fixture');

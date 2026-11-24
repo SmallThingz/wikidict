@@ -313,3 +313,32 @@ test('genuine TPI Thesaurus talk columns match complete native graphs',{skip:!pr
  for(const [name,count] of [['Synonyms',8],['Hyponyms',2]])assert.equal(actual.sections.find(s=>s.title===name).blocks[0].container.blocks.length,count);
  console.log(JSON.stringify({scope:'Exact current/frozen TPI English member',records:index.rows.length,before_failures:failures,after_failures:0,native_graphs:compared,native_unique_graphs:comparedTitles.size,column_owners:columns,synonyms:8,hyponyms:2,compressed_bytes:compressed.length}));
 });
+
+test('ordinary description bodies reject forged owner, zero rail, unknown tag and invalid paired paint',async()=>{
+  const {openSource}=await import('./xz.js');
+  const {createHash}=await import('node:crypto');
+  const asset=new URL('../../android/app/src/androidTest/assets/babua/description-body.wikblb.xz',import.meta.url);
+  const source=await openSource(new Blob([await readFile(asset)]));
+  const {rows,metadata}=await buildIndex(source),row=rows[0];
+  const bytes=Buffer.from(await source.read(row.offset,row.length));
+  assert.equal(createHash('sha256').update(bytes).digest('hex'),'57612f152e6722cbc444fa2985e4a9a48be4ca5de0bed0bed134d5abe49f37ba');
+  const entry=decode(bytes,metadata),outer=entry.sections[1].blocks[5];
+  assert.equal(outer.kind,'example');assert.equal(outer.description_body.before.fill.light_dark.dark,'#333333');
+  const mutate=(at,edit)=>{const altered=Buffer.from(bytes);edit(altered,at);assert.throws(()=>decode(altered,metadata));};
+  for(const [inset,ownerPath] of [[.2,'#:'],[.19,':']]){
+    const prefix=cat([2],length(inset,1),length(inset,1),length(inset,1),length(1),[2],s('#cccccc'),s('#333333'));
+    const at=bytes.indexOf(prefix);
+    assert.ok(at>0);assert.equal(bytes.indexOf(prefix,at+1),-1);
+    // The description's original list path ends immediately before the 16 bytes of empty number/table/anchor/geometry fields.
+    const pathEnd=at-16;
+    assert.equal(bytes.subarray(pathEnd-ownerPath.length,pathEnd).toString(),ownerPath);
+    mutate(pathEnd-1,(b,i)=>{b[i]=59;});
+    mutate(at,(b,i)=>{b[i]=3;});
+    mutate(at+17,(b,i)=>b.writeFloatLE(0,i));
+    mutate(at+1,(b,i)=>{b[i]=2;});
+    assert.throws(()=>decode(bytes.subarray(0,at+20),metadata));
+  }
+  const ink=bytes.indexOf('#e0e0e0');assert.ok(ink>0);
+  mutate(ink,(b,i)=>Buffer.from('#333333').copy(b,i));
+  mutate(ink,(b,i)=>Buffer.from('#GGGGGG').copy(b,i));
+});
