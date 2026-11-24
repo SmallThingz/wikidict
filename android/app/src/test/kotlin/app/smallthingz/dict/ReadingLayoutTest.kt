@@ -1327,6 +1327,29 @@ class ReadingLayoutTest {
     }
 
 
+    @Test fun compactPhonosOwnerKeepsItsMediaAndAdjacentDescriptionIndependent() {
+        val media = Media("Tone.ogg", "audio", "Tone")
+        val owners = MediaOwners(listOf(media))
+        val compact = AudioControl(presentation = AudioControlPresentation.PhonosButton)
+        val player = Span("link", "Suara", "File:Tone.ogg", tooltip = "Putar audio",
+            classes = "wikidict-media wikidict-media-file-546f6e652e6f6767", audioControl = compact)
+        val description = Span("link", "ⓘ", "Berkas:Tone.ogg", superscript = true)
+        val spans = listOf(player, description)
+        val block = Block("paragraph", 0, spans)
+        assertEquals(spans, paragraphDisplaySpans(block))
+        assertSame(media, owners.media(player))
+        assertNull(owners.media(description))
+        assertEquals(listOf(EmbeddedMediaControl(media, 0, compact)), owners.embeddedControls(spans))
+        assertFalse(block.hasNativeAudioControlBody())
+        assertTrue(block.copy(spans = listOf(player.copy(audioControl = AudioControl()), description)).hasNativeAudioControlBody())
+        assertThrows(IllegalArgumentException::class.java) { compact.copy(width = StyleWidth(StyleWidthUnit.Px, 1f)) }
+        assertThrows(IllegalArgumentException::class.java) { compact.copy(height = StyleLength(StyleLengthUnit.Em, 1f)) }
+        assertThrows(IllegalArgumentException::class.java) { player.copy(text = "") }
+        assertThrows(IllegalArgumentException::class.java) { player.copy(tooltip = null) }
+        assertThrows(IllegalArgumentException::class.java) { player.copy(target = "File:Other.ogg") }
+        assertThrows(IllegalArgumentException::class.java) { description.copy(audioControl = compact) }
+    }
+
     @Test fun audioControlSlotAllocationUsesOriginalContainingBasisAndStackedMaximum() {
         val media = Media("Tone.ogg", "audio", "Tone")
         val owner = Span("link", "Audio", "File:Tone.ogg",

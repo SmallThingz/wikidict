@@ -523,8 +523,9 @@ private fun AudioPlaybackControls(control: AudioControl, direction: String, cont
 }
 
 @Composable
-fun MediaView(media:Media,settings:AppSettings,showFileName:Boolean=true,edition:String="",showCaption:Boolean=true,cache:MediaCache=LocalInlineImageCache.current ?: MediaCache.get(LocalContext.current),showImage:Boolean=true,audioControl:AudioControl?=null,audioDirection:String="",audioContainingWidthPixels:(()->Float)?=null,audioContainingWidthModifier:Modifier=Modifier,audioOverflowOwned:Boolean=false,recordingLabel:String?=null) {
+fun MediaView(media:Media,settings:AppSettings,showFileName:Boolean=true,edition:String="",showCaption:Boolean=true,cache:MediaCache=LocalInlineImageCache.current ?: MediaCache.get(LocalContext.current),showImage:Boolean=true,audioControl:AudioControl?=null,audioDirection:String="",audioContainingWidthPixels:(()->Float)?=null,audioContainingWidthModifier:Modifier=Modifier,audioOverflowOwned:Boolean=false,recordingLabel:String?=null, phonosSource:Span?=null, phonosStyle:androidx.compose.ui.text.TextStyle?=null) {
     require(audioControl==null||media.kind=="audio")
+    require((audioControl?.presentation == AudioControlPresentation.PhonosButton) == (phonosSource != null))
     val scope=rememberCoroutineScope();val uri=LocalUriHandler.current
     val key=remember(media.kind,media.file,edition){mediaKey(media,edition)}
     val rememberedPlaybackOccurrence=remember(key){Any()}
@@ -592,6 +593,11 @@ fun MediaView(media:Media,settings:AppSettings,showFileName:Boolean=true,edition
                 else if(sharedOwner!=null){if(shownError!=null||shownSource==null)sharedOwner.retry(media.file)else uri.openUri(shownSource)}
                 else if(error!=null || resource==null) retry++ else resource?.source?.let{uri.openUri(it)}
             }
+    if (phonosSource != null) {
+        PhonosPlaybackButton(phonosSource, checkNotNull(phonosStyle), allowed && !shownBusy, shownBusy, playbackActive,
+            progressState?.value, shownError, onMediaClick)
+        return
+    }
     Column(Modifier.fillMaxWidth().animateContentSize()) {
         if(media.kind=="image"&&showImage&&allowed&&(shownError==null||shownBitmap!=null)) Box(Modifier.fillMaxWidth().padding(top=12.dp).height(220.dp),contentAlignment=Alignment.Center) {
             shownBitmap?.let { Image(it.asImageBitmap(),media.caption.ifBlank{media.file},Modifier.fillMaxSize()) }

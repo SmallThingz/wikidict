@@ -58,7 +58,7 @@ internal val nativeBodyTextBlockKinds = setOf("paragraph", "definition", "exampl
 /** Only controls actually rendered by this body leaf enroll its native allocation. */
 internal fun Block.hasNativeAudioControlBody(): Boolean = kind in nativeBodyTextBlockKinds &&
     table == null && figure == null && flow == null && feature == null &&
-    spans.any { it.audioControl != null }
+    spans.any { it.audioControl?.presentation == AudioControlPresentation.Transport }
 
 /** An authored Container needs the same block context even when its active style has no float. */
 internal fun Block.needsNativeBlockContext(): Boolean = ruleStyle != null || container != null || table?.blockViewport != null || table?.let { nativeHasCellOpacity(it) || nativeHasTablePositionedScope(it) } == true || hasBodyFloat() || hasNativeAudioControlBody() ||

@@ -434,7 +434,7 @@ object BlobDecoder {
             require(remainingItems > 0 && buffer.remaining() >= 1) { "Audio control is truncated or exceeds the item budget" }
             remainingItems--
             val fields = byte()
-            require(fields and 7 == fields) { "Unknown audio control fields" }
+            require(fields and 15 == fields) { "Unknown audio control fields" }
             val width = if (fields and 1 != 0) StyleWidth(StyleWidthUnit.entries.getOrNull(byte())
                 ?: error("Unknown audio width unit"), buffer.float) else null
             val height = if (fields and 2 != 0) styleLength() else null
@@ -445,7 +445,8 @@ object BlobDecoder {
                     ?: error("Unknown audio focus mode"), if (presence()) figureColor() else null)
             } else null
             hasAudioControl = true
-            return AudioControl(width, height, focus)
+            return AudioControl(width, height, focus, if (fields and 8 != 0) AudioControlPresentation.PhonosButton
+                else AudioControlPresentation.Transport)
         }
         private fun citationMarker(): CitationMarker {
             require(remainingItems > 0) { "Citation marker exceeds the presentation budget" }

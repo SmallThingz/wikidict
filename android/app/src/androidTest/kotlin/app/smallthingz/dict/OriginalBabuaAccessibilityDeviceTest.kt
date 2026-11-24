@@ -4,7 +4,14 @@ import android.view.accessibility.AccessibilityNodeInfo
 import androidx.activity.compose.setContent
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.*
+import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.*
+import androidx.compose.ui.text.LinkAnnotation
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.test.platform.app.InstrumentationRegistry
 import java.io.File
 import java.security.MessageDigest
@@ -19,8 +26,11 @@ class OriginalBabuaAccessibilityDeviceTest {
     @Test fun publicAccessibilityRecordingNameBindsItsCaptionAndActualAction() = checkOriginal(false)
     @Test fun finalRelativeHeadingAndCompanionKeepTheirPublicActions() = checkOriginal(true)
 
+    @Test fun originalPhonosButtonAndFileDescriptionHaveSeparateActions() = checkOriginal(true, true)
+
+    @OptIn(androidx.compose.ui.text.ExperimentalTextApi::class)
     @Suppress("DEPRECATION")
-    private fun checkOriginal(wrapped: Boolean) {
+    private fun checkOriginal(wrapped: Boolean, phonos: Boolean = false) {
         val inst = InstrumentationRegistry.getInstrumentation()
         val cacheDir = java.nio.file.Files.createTempDirectory(inst.targetContext.cacheDir.toPath(), "babua-public-ax-").toFile()
         val shard = File(cacheDir, "original.wikblb.xz")
@@ -33,7 +43,9 @@ class OriginalBabuaAccessibilityDeviceTest {
             requests.incrementAndGet()
             throw java.io.IOException("Controlled recording transport error")
         })
-        val name = "Play recording: Suara"
+        val name = if (phonos) "Putar audio" else "Play recording: Suara"
+        val navigation = mutableListOf<EntryLink>()
+        val file = "LL-Q33190 (bug)-Iripseudocorus-Babbua.wav"
         fun publicPlayer(action: (AccessibilityNodeInfo) -> Unit): Boolean {
             val window = compose.runOnIdle {
                 assertPhysicalActivity(compose.activity); check(compose.activity.hasWindowFocus())
@@ -58,12 +70,42 @@ class OriginalBabuaAccessibilityDeviceTest {
             } finally { nodes.forEach { it.recycle() } }
         }
         try {
-            val asset = if (wrapped) "babua/heading.wikblb.xz" else "babua/original.wikblb.xz"
-            val size = if (wrapped) 2922 else 2814
-            inst.context.assets.open(asset).use { input -> shard.outputStream().use { input.copyTo(it) } }
-            val data = BlobSource(shard).use { require(it.compressed && it.length == 30L + size); it.read(30, size) }
-            val expected = if (wrapped) "a892d7f33f3dc204696916214139c800832ece195406e7f20829aabb4faa2dcd"
-                else "f3a8306ee905edc288e1bdb5c5b36de8921ce2aef1ae60651286c7edc610d463"
+            val size: Int
+            val expected: String
+            val arguments = InstrumentationRegistry.getArguments()
+            val stagedDigest = if (phonos) arguments.getString("babuaPhonosXzSha") else null
+            val bytes = if (stagedDigest != null) {
+                val shaPattern = Regex("[0-9a-f]{64}")
+                require(shaPattern.matches(stagedDigest))
+                expected = requireNotNull(arguments.getString("babuaPhonosRecordSha")).also { require(shaPattern.matches(it)) }
+                size = requireNotNull(arguments.getString("babuaPhonosRecordBytes")).toInt()
+                require(size in 4..(1024 * 1024))
+                val staged = File(inst.targetContext.cacheDir, "babua-phonos-$stagedDigest.wikblb.xz")
+                require(!java.nio.file.Files.isSymbolicLink(staged.toPath()) && staged.isFile && staged.length() in 1L..(1024L * 1024L))
+                staged.readBytes()
+            } else {
+                val asset = when {
+                    phonos -> "babua/phonos.wikblb.xz"
+                    wrapped -> "babua/heading.wikblb.xz"
+                    else -> "babua/original.wikblb.xz"
+                }
+                if (phonos) require(!arguments.containsKey("babuaPhonosRecordBytes") && !arguments.containsKey("babuaPhonosRecordSha"))
+                size = when { phonos -> 3324; wrapped -> 2922; else -> 2814 }
+                expected = when {
+                    phonos -> "96a94bfa155b1f970dfff316ccf2b8f15ea4fbc486abf8f54d2318c9f7461394"
+                    wrapped -> "a892d7f33f3dc204696916214139c800832ece195406e7f20829aabb4faa2dcd"
+                    else -> "f3a8306ee905edc288e1bdb5c5b36de8921ce2aef1ae60651286c7edc610d463"
+                }
+                inst.context.assets.open(asset).use { it.readBytes() }
+            }
+            if (phonos) assertEquals(stagedDigest ?: "28f456d286e1aa45166b256473a19701615b1c0b04e3efc3ecb903087d1bbd4f",
+                MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) })
+            shard.writeBytes(bytes)
+            val data = BlobSource(shard).use {
+                require(it.compressed && it.length == 30L + size)
+                if (phonos) assertArrayEquals("WIKBLB08".toByteArray(), it.read(0, 8))
+                it.read(30, size)
+            }
             assertEquals(expected, MessageDigest.getInstance("SHA-256").digest(data).joinToString("") { "%02x".format(it) })
             val entry = BlobDecoder.decode(data, "babua", "language", "Buginese", "bug").copy(edition = "idwiktionary-20261001")
             val section = entry.sections.last()
@@ -73,7 +115,7 @@ class OriginalBabuaAccessibilityDeviceTest {
                 val frame = checkNotNull(style.wrappers)
                 assertEquals(.4f, frame.outerMarginTop.value, .00001f)
                 assertEquals(1f, frame.outerTopWidth.value, 0f)
-                assertEquals("#a2a9b1", frame.outerTopColor.value)
+                assertEquals(ContainerColor.Rgb("#a2a9b1"), frame.outerTopColor)
                 assertEquals(1.25f, frame.innerPaddingTop.value, .00001f)
                 assertEquals(3.2f, frame.titlePaddingRight.value, .00001f)
                 assertEquals(ContainerPositioning.RelativeAuto, style.box.positioning)
@@ -82,14 +124,31 @@ class OriginalBabuaAccessibilityDeviceTest {
                 assertTrue(runs.last().subscript)
                 assertTrue(runs.all { it.tooltip == "Penjabaran untuk \"babua\" dalam bahasa Bugis" })
             }
+            if (phonos) {
+                val runs = mutableListOf<List<Span>>()
+                section.blocks.forEach { block -> block.visitSpanRuns { spans, _ -> if (spans.any { it.isPhonosButton }) runs += spans } }
+                val inline = runs.single()
+                val action = inline.single { it.isPhonosButton }
+                assertEquals("Suara", action.text)
+                assertEquals(name, action.tooltip)
+                assertEquals("File:$file", action.target)
+                assertEquals(file, MediaOwners(entry.media).media(action)?.file)
+                val info = inline[inline.indexOf(action) + 1]
+                assertEquals("link", info.kind)
+                assertEquals("ⓘ", info.text)
+                assertTrue(info.superscript)
+                assertNull(info.audioControl)
+                assertEquals("Berkas:$file", info.target)
+                assertNull(MediaOwners(entry.media).media(info))
+            }
             compose.activityRule.scenario.onActivity { activity -> activity.setContent {
                 CompositionLocalProvider(LocalInlineImageCache provides cache,
                     LocalNativeFloatContextFailureObserver provides { layoutFailures += it }) {
-                    DictTheme("light") { Surface { EntryView(entry, false, {}, anchorRequest = request, settings = AppSettings(
+                    DictTheme("light") { Surface { EntryView(entry, false, {}, onLink = { navigation += it }, anchorRequest = request, settings = AppSettings(
                         collapseOtherSections = false, collapseDetails = false, allowImages = false, allowAudio = enabled.value)) } }
                 }
             } }
-            if (wrapped) {
+            if (wrapped && !phonos) {
                 compose.waitForIdle()
                 val band = compose.runOnIdle {
                     val owners = mutableListOf<Pair<NativeFloatTextView, FloatInteractionNode>>()
@@ -139,15 +198,68 @@ class OriginalBabuaAccessibilityDeviceTest {
             val reader = compose.onNodeWithTag("entry-scroll")
             reader.performScrollToNode(hasContentDescription(name))
             compose.waitUntil(5000) { publicPlayer { assertFalse(it.isEnabled) } }
+            if (phonos) {
+                val button = compose.onNode(hasContentDescription(name) and hasText("Suara", substring = true) and
+                    SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Button), useUnmergedTree = true)
+                compose.onAllNodes(SemanticsMatcher.keyIsDefined(SemanticsProperties.ProgressBarRangeInfo)).assertCountEquals(0)
+                val descriptionTarget = "Berkas:$file"
+                val description = compose.onNode(hasText("ⓘ") and SemanticsMatcher("Original file description $descriptionTarget") { node ->
+                    node.config.getOrNull(SemanticsProperties.Text).orEmpty().any { text ->
+                        text.getLinkAnnotations(0, text.length).any { link ->
+                            (link.item as? LinkAnnotation.Clickable)?.tag == descriptionTarget &&
+                                text.text.substring(link.start, link.end) == "ⓘ"
+                        }
+                    }
+                }, useUnmergedTree = true)
+                val frame = button.captureToImage().asAndroidBitmap()
+                val infoGlyph = try {
+                    val image = File(inst.targetContext.cacheDir, "wikidict-babua-phonos.png")
+                    image.outputStream().use { check(frame.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)) }
+                    inst.sendStatus(0, android.os.Bundle().apply { putString("stream",
+                        "\nPHONOS_FRAME ${image.name} bytes=${image.length()}\n") })
+                    val labelLayout = mutableListOf<TextLayoutResult>()
+                    val infoLayout = mutableListOf<TextLayoutResult>()
+                    button.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(labelLayout) }
+                    description.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(infoLayout) }
+                    val drawn = labelLayout.single()
+                    val word = drawn.getBoundingBox(drawn.layoutInput.text.text.indexOf("Suara"))
+                    val icon = checkNotNull(drawn.placeholderRects.single())
+                    val actualLabel = button.fetchSemanticsNode().boundsInRoot
+                    val actualInfo = description.fetchSemanticsNode().boundsInRoot
+                    assertTrue("Icon at $icon and Suara at $word", icon.width > 0 && icon.height > 0 && word.left >= icon.right - 1f)
+                    assertTrue("Separate inline controls $actualLabel and $actualInfo", actualLabel.right <= actualInfo.left + 1f &&
+                        actualInfo.top < actualLabel.bottom && actualInfo.bottom > actualLabel.top)
+                    val colors = mutableSetOf<Int>()
+                    for (y in maxOf(0, icon.top.toInt()) until minOf(frame.height, kotlin.math.ceil(icon.bottom).toInt()))
+                        for (x in maxOf(0, icon.left.toInt()) until minOf(frame.width, kotlin.math.ceil(icon.right).toInt()))
+                            colors += frame.getPixel(x, y)
+                    assertTrue("Original volume icon has visible ink", colors.size >= 3)
+                    val info = infoLayout.single()
+                    val annotated = info.layoutInput.text
+                    val offset = annotated.text.indexOf("ⓘ")
+                    val target = annotated.getLinkAnnotations(offset, offset + 1).single().item as LinkAnnotation.Clickable
+                    assertEquals(descriptionTarget, target.tag)
+                    inst.sendStatus(0, android.os.Bundle().apply { putString("stream", "\nPHONOS_BOUNDS icon=$icon label=$word info=$actualInfo\n") })
+                    info.getBoundingBox(offset)
+                } finally { frame.recycle() }
+                description.performTouchInput { click(infoGlyph.center) }
+                compose.runOnIdle { assertEquals(listOf(EntryLink("Berkas:$file")), navigation) }
+            }
             assertEquals(0, requests.get())
             compose.runOnIdle { enabled.value = true }
             compose.onNodeWithContentDescription(name).assertIsEnabled()
             compose.waitUntil(5000) { publicPlayer { assertTrue(it.isEnabled); assertTrue(it.isClickable) } }
             assertTrue(publicPlayer { assertTrue(it.refresh()); assertTrue(it.performAction(AccessibilityNodeInfo.ACTION_CLICK)) })
-            compose.waitUntil(10000) { compose.onAllNodesWithText("Pronunciation could not be played.").fetchSemanticsNodes().isNotEmpty() }
+            val error = "Pronunciation could not be played."
+            if (phonos) {
+                compose.waitUntil(10000) { publicPlayer { } && compose.onAllNodes(
+                    hasContentDescription(name) and SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, error)
+                ).fetchSemanticsNodes().size == 1 }
+                compose.runOnIdle { assertEquals(listOf(EntryLink("Berkas:$file")), navigation) }
+            } else compose.waitUntil(10000) { compose.onAllNodesWithText(error).fetchSemanticsNodes().isNotEmpty() }
             assertEquals(1, requests.get())
             compose.runOnIdle { assertNull(MediaPlayback.playing) }
-            inst.sendStatus(0, android.os.Bundle().apply { putString("stream", "\nBABUA_AX label=Play recording: Suara disabled=true enabled=true public-click=1 controlled-error=true\n") })
+            inst.sendStatus(0, android.os.Bundle().apply { putString("stream", "\nBABUA_AX label=$name disabled=true enabled=true public-click=1 controlled-error=true\n") })
         } finally {
             compose.runOnIdle { compose.activity.setContent {} }; compose.waitForIdle()
             check(cacheDir.deleteRecursively())

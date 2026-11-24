@@ -2475,6 +2475,10 @@ internal fun StyledText(source: List<Span>, modifier: Modifier = Modifier, weigh
         remember(source, preserveOwner) { if (preserveOwner) source else compactSpans(source) }
     val availableMedia = LocalEntryMedia.current
     val owners = LocalEntryMediaOwners.current
+    if (spans.any { it.isPhonosButton }) {
+        PhonosInlineContent(spans, modifier, weight, renderedStyle, owners, LocalReaderSettings.current, onLink)
+        return
+    }
     val embedded = owners.embeddedControls(spans.filter { it.image == null })
     if (embedded.isNotEmpty()) {
         Column(modifier) {
@@ -2941,7 +2945,8 @@ internal fun NativeFloatBlockContext(blocks: List<Block>, onLink: (EntryLink) ->
                         LocalNativeContainerTextWrap provides leaf.ownerWrap,
                         LocalNativeDelegatedAbsoluteFlow provides occurrence, content = content)
             })
-        } else if (block.kind in nativeBodyTextBlockKinds && block.table == null && block.feature == null) {
+        } else if (block.kind in nativeBodyTextBlockKinds && block.table == null && block.feature == null &&
+            block.spans.none { it.isPhonosButton }) {
             val displayed = referenceParagraph?.spans ?: if (preserveCompiledText) block.spans else paragraphDisplaySpans(block)
             val embedded = mediaOwners.embeddedControls(displayed.filter { it.image == null })
             // StyledText already separates these controls. Keep its text in the shared float owner.

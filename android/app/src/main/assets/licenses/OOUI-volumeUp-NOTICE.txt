@@ -1,0 +1,31 @@
+volumeUp.svg is the unmodified WikimediaUI left-to-right volume icon.
+MediaWiki ResourceLoader served it for Indonesian Wiktionary, Vector 2022,
+in ext.phonos.icons version ak3y4. The CSS observation for Babua at
+revision 1280692 selects this original variant. Its SHA-256 is
+66052ea76d7a8af33585fd70ac00949b9dd0a4b42f06489044a7005a99dd45f7.
+
+The served image matches the upstream Git blob be22eba2846e7be197b70e05afe834f88e820fbe.
+Source and license at the verified MediaWiki commit
+https://github.com/wikimedia/mediawiki/blob/57f2a6bfacc3c5cecc269214a8d726b0b6faa596/resources/lib/ooui/themes/wikimediaui/images/icons/volumeUp-ltr.svg
+https://github.com/wikimedia/mediawiki/blob/57f2a6bfacc3c5cecc269214a8d726b0b6faa596/resources/lib/ooui/LICENSE-MIT
+
+Copyright 2011-2025 OOUI Team and other contributors.
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+"Software"), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
+LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.

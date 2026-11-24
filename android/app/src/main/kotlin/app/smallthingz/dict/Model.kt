@@ -197,15 +197,22 @@ data class AudioControlFocusPaint(val mode: AudioControlFocusMode, val color: Fi
         }
     }
 }
+enum class AudioControlPresentation { Transport, PhonosButton }
 data class AudioControl(val width: StyleWidth? = null, val height: StyleLength? = null,
-    val focus: AudioControlFocusPaint? = null) {
+    val focus: AudioControlFocusPaint? = null, val presentation: AudioControlPresentation = AudioControlPresentation.Transport) {
     init {
+        require(presentation != AudioControlPresentation.PhonosButton || width == null && height == null) {
+            "Compact Phonos buttons require intrinsic sizing"
+        }
         require(width == null || width.value.isFinite() && width.value > 0f) { "Invalid audio control width" }
         require(height == null || height.value.isFinite() && height.value > 0f) { "Invalid audio control height" }
     }
 }
 
+internal val Span.isPhonosButton: Boolean get() = audioControl?.presentation == AudioControlPresentation.PhonosButton
+
 private fun validAudioControlOwner(span: Span): Boolean {
+    if (span.isPhonosButton && (span.text.isEmpty() || span.tooltip.isNullOrEmpty())) return false
     if (span.kind != "link" || !span.target.startsWith("File:") || span.target.length == 5 ||
         span.trail.isNotEmpty() || span.targetFragment != null || span.image != null || span.ruby != null ||
         span.inlinePaddingGroup != null || span.inlineActionGroup != null || span.inlineBoxGroup != null ||
