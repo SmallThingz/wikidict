@@ -1,0 +1,10 @@
+=={{bahasa|bug}}==
+{{kepala|bug}}
+: {{suara|bug|LL-Q33190 (bug)-Iripseudocorus-Babbua.wav }}
+
+{{-n-|bug}}
+# [[perut]]
+#: {{contoh|bug|Maloppo '''babua'''na amboku.|'''Perut''' bapak saya besar.}}
+
+[[Kategori:WikiTutur Daring Umum 11 Februari 2024]]
+[[Kategori:WikiTutur - Bugis]]

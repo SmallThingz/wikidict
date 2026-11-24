@@ -252,7 +252,8 @@ const Encoder = struct {
         self.remaining_items -= 1;
         const fields: u8 = @as(u8, @intFromBool(value.width != null)) |
             (@as(u8, @intFromBool(value.height != null)) << 1) |
-            (@as(u8, @intFromBool(value.focus != null)) << 2);
+            (@as(u8, @intFromBool(value.focus != null)) << 2) |
+            (@as(u8, @intFromBool(value.presentation == .phonos_button)) << 3);
         try self.byte(fields);
         if (value.width) |width| try self.styleWidth(width);
         if (value.height) |height| try self.styleLength(height);
@@ -2065,8 +2066,8 @@ const Reader = struct {
         self.remaining_items -= 1;
         if (self.metrics) |metrics| metrics.total_items = std.math.add(u64, metrics.total_items, 1) catch return error.InvalidPresentation;
         const fields = try self.byte();
-        if (fields & ~@as(u8, 7) != 0) return error.InvalidPresentation;
-        var value: types.AudioControl = .{};
+        if (fields & ~@as(u8, 15) != 0) return error.InvalidPresentation;
+        var value: types.AudioControl = .{ .presentation = if (fields & 8 != 0) .phonos_button else .transport };
         if (fields & 1 != 0) value.width = try self.styleWidth();
         if (fields & 2 != 0) value.height = try self.styleLength();
         if (fields & 4 != 0) {
@@ -16682,10 +16683,47 @@ test "DPRZ audio controls preserve same file distinct occurrence geometry focus 
     var wrong_media = stored; wrong_media.entry.media = &.{.{ .file = T.file, .kind = .image, .caption = "" }};
     try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, wrong_media));
 }
+test "DPRZ compact Phonos switches only its physical play occurrence and leaves transport bytes unchanged" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const T = AudioControlWireTest;
+    const full = T.owner(.{});
+    var play = T.owner(.{ .presentation = .phonos_button });
+    play.text = "Suara";
+    play.tooltip = "Putar audio";
+    const attribution: types.Span = .{ .text = "ⓘ", .kind = .link, .superscript = true, .target = "Berkas:Voice.ogg" };
+    const spans = [_]types.Span{ full, play, attribution };
+    const stored: types.Stored = .{ .entry = .{ .title = "Audio", .kind = .citations,
+        .sections = &.{.{ .title = "Recordings", .level = 2, .blocks = &.{.{ .kind = .paragraph, .spans = &spans }} }},
+        .media = &.{.{ .file = T.file, .kind = .audio, .caption = "shared recording" }} } };
+    const bytes = try encodeAlloc(a, stored);
+    const decoded = try decodeAlloc(a, bytes, "Audio", .citations, null);
+    try std.testing.expectEqualDeep(stored, decoded);
+    try std.testing.expectEqualSlices(u8, bytes, try encodeAlloc(a, decoded));
+    const as_json = try std.json.Stringify.valueAlloc(a, decoded, .{});
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, as_json, "\"presentation\":\"phonos_button\""));
+    try std.testing.expect(std.mem.indexOf(u8, as_json, "\"presentation\":\"transport\"") == null);
+    const roundtrip = try std.json.parseFromSliceLeaky(types.Stored, a, as_json, .{ .ignore_unknown_fields = false });
+    try std.testing.expectEqualDeep(stored, roundtrip);
+    var encoder: Encoder = .{ .a = a, .audio_controls = true };
+    defer encoder.deinit();
+    try encoder.audioControl(.{});
+    try encoder.audioControl(.{ .presentation = .phonos_button });
+    try std.testing.expectEqualSlices(u8, &.{ 0, 8 }, encoder.out.items);
+    var no_label = play;
+    no_label.text = "";
+    try std.testing.expect(!types.validSpanAudioControl(no_label));
+    var no_name = play;
+    no_name.tooltip = null;
+    try std.testing.expect(!types.validSpanAudioControl(no_name));
+    try std.testing.expect(!types.validAudioControl(.{ .presentation = .phonos_button, .width = .{ .unit = .px, .value = 22 } }));
+}
+
 test "DPRZ audio control payload rejects invalid flags lengths focus and item or capability omission" {
     const a = std.testing.allocator;
     for ([_][]const u8{
-        &.{8}, &.{4,2,0}, &.{4,1,2}, &.{4,1,1,0}, &.{4,0,1,1},
+        &.{16}, &.{9}, &.{4,2,0}, &.{4,1,2}, &.{4,1,1,0}, &.{4,0,1,1},
         &.{1,3,0,0,0,0x43}, &.{1,0,0,0,0,0}, &.{2,0,0,0,0x80,0xbf},
         &.{1,0,0,0,0xc0,0x7f}, &.{1,0,0},
     }) |bad| {

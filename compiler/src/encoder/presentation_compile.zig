@@ -1682,6 +1682,7 @@ pub const Span = struct {
     // Build-only proof tied to one parsed source token and exact target slice.
     external_literal_parameter: ?ExternalLiteralParameterProof = null,
     image: ?presentation_types.InlineImage = null,
+    audio_control: ?presentation_types.AudioControl = null,
     // Build-only proof from isolated attribute parsing; never serialized.
     image_fields_compiled: bool = false,
     // Build-only figure boundary from a recognized nonfloating image option.
@@ -2055,6 +2056,7 @@ pub const Block = struct {
     kind: Kind,
     style: ?presentation_types.BlockStyle = null,
     rule_style: ?presentation_types.RuleStyle = null,
+    column_break_inside: ?presentation_types.ColumnBreakInside = null,
     text_align: ?presentation_types.CellTextAlign = null,
     depth: u8 = 0,
     text: []const u8 = "",
@@ -2067,6 +2069,8 @@ pub const Block = struct {
     anchor: []const u8 = "",
     anchor_fallback: []const u8 = "",
     heading_source_offset: ?usize = null,
+    section_heading_style: ?presentation_types.SectionHeadingStyle = null,
+    expected_heading_pair: ?struct { primary: []const u8, fallback: []const u8 } = null,
     heading_authored_id: []const u8 = "",
     // Build-only hint captured while rendering; it is not serialized into DPR2.
     relation_note: bool = false,
@@ -4103,6 +4107,26 @@ fn internalTargetNeedsLiteralBody(target: []const u8) bool {
     return std.mem.indexOfAny(u8, target, "<>") != null or
         std.mem.indexOf(u8, target, "\u{fffd}") != null;
 }
+test "root-relative Container sides require the actual native owner font before normalization" {
+    const a = std.testing.allocator;
+    var sheet = try table_style_profile.parseForTargetAlloc(a, "", .screen); defer sheet.deinit();
+    sheet.selected_root_per_body = 0.5;
+    var renderer: Renderer = .{ .a = a, .body_depth = 1, .context = .{ .title = "sample", .table_styles = &sheet } };
+    const tag = syntax.tagAt("<div style='margin-top:0.4rem;padding-top:1.25rem'>", 0).?;
+    const element: table_style_profile.TextElement = .{ .tag = "div" };
+    const owner: Style = .{ .text_element = &element, .font_scale_basis = .normal_body, .font_scale = 2, .font_scale_set = true };
+    var actual = try renderer.containerResolution(tag, .{}, owner);
+    try std.testing.expect(!actual.unresolved);
+    try std.testing.expectEqual(@as(f32, 0.1), actual.style.margins.?.top.value);
+    try std.testing.expect(try Renderer.normalizeContainerStyleAlloc(a, &actual.style, 2));
+    try std.testing.expectEqual(@as(f32, 0.2), actual.style.margins.?.top.value);
+    try std.testing.expectEqual(@as(f32, 0.625), actual.style.padding.?.top.value);
+    var small = owner; small.small = true;
+    try std.testing.expect((try renderer.containerResolution(tag, .{}, small)).unresolved);
+    renderer.pre_block = true;
+    try std.testing.expect((try renderer.containerResolution(tag, .{}, .{ .text_element = &element })).unresolved);
+}
+
 test "safe internal target ASCII fast path preserves Unicode and control checks" {
     try std.testing.expect(safeInternalTarget("cat#section"));
     try std.testing.expect(safeInternalTarget("caf\xc3\xa9"));
@@ -9034,11 +9058,15 @@ pub const Renderer = struct {
     literal_wiki_table_operation: ?*LiteralWikiTableOperation = null,
     inline_box_root_table_opening: ?[]const u8 = null,
     literal_url_root: ?[]const u8 = null,
+    phonos_fragment: ?struct { original: []const u8, projected: []const u8 } = null,
+    phonos_quote_source: ?*const QuoteSourceMap = null,
+    wrapped_heading_source: ?[]const u8=null,
     heading_source: ?[]const u8 = null,
     page_root_wiki_table_openings: ?*std.ArrayList(usize) = null,
     page_static_paragraph_openings: ?*std.ArrayList(usize) = null,
     page_static_example_openings: ?*std.ArrayList(usize) = null,
     dispatched_static_paragraph: ?[]const u8 = null,
+    paragraph_span_quotes: ?*const InlineBoxQuotedParagraph = null,
     page_top_level_wiki_table_openings: ?*std.ArrayList(usize) = null,
     neutral_root_table_prefix: ?NeutralRootTablePrefix = null,
     root_wiki_table_range: ?RootWikiTableRange = null,
@@ -9063,6 +9091,9 @@ pub const Renderer = struct {
     inline_missing: ?MissingText = null,
     inline_source_domain: ?*const InlineSourceDomain = null,
     ordinary_bullet_link: ?*const OrdinaryBulletLink = null,
+    // Pure asterisk paths issued only by the actual, unjoined wiki list parser.
+    // Nested items cannot acquire other ordinary single-bullet responsibilities.
+    box_bullet_line: ?*const OrdinaryBulletLink = null,
     plain_body_source_copy: ?HeadingSourceAlias = null,
     row_color_copy_owner: ?*const RowColorCopyOwner = null,
     reopened_external_domain: ?*const ReopenedExternalDomain = null,
@@ -11929,6 +11960,23 @@ pub const Renderer = struct {
     // opening can carry these facts even when missing source elsewhere on the
     // page prevents issuing a complete ancestor class/ID inventory.
     fn inlineBoxAuthoredSelectorFacts(self: *Renderer, tag: syntax.Tag, element: *table_style_profile.TextElement) Error!void {
+        if (self.paragraph_span_quotes) |receipt| {
+            if (tag.is("span") and element.alternative_ancestry == null and element.source_key == @intFromPtr(tag.name.ptr) and
+                receipt.root == self.native_inline_motion_root and receipt.epoch == self.native_inline_motion_epoch and
+                self.body_depth == 1 and self.wikiClassOrdinaryState() and self.typed_table_depth == 0 and
+                self.media_depth == 0 and self.ruby_depth == 0 and self.figure_caption_depth == 0)
+            {
+                if (self.dispatched_static_paragraph) |line| if (self.inline_missing) |tracked| {
+                    if (localTrackedTagOpening(tracked, tag)) |opening| {
+                        if (noLiParentSourceRange(tracked, opening)) if (receipt.map.copiedOriginal(opening)) |original| {
+                            if (self.wikiCellCurrentBodyRange(receipt.root.source, original)) |owned| {
+                                if (wikiClassContains(line, owned)) element.source_direct_parent_not_li = true;
+                            }
+                        };
+                    }
+                };
+            }
+        }
         if (self.wiki_heading_span_title) |issued| if (tag.is("span") and element.alternative_ancestry == null and
             element.source_key == @intFromPtr(tag.name.ptr)) {
             const tracked = self.inline_missing orelse return;
@@ -12322,6 +12370,17 @@ pub const Renderer = struct {
     // nor a retained quote copy changes that flag or issues CSS absence facts.
     fn currentStaticListBody(self: *const Renderer) ?[]const u8 {
         const op = self.static_list_item orelse return null;
+        return self.currentSourceListBody(op, 1);
+    }
+
+    fn currentBoxBulletBody(self: *const Renderer) ?[]const u8 {
+        const op = self.box_bullet_line orelse return null;
+        const depth = op.line.len - std.mem.trimStart(u8, op.line, "*").len;
+        if (depth == 0 or depth > max_depth) return null;
+        return self.currentSourceListBody(op, depth);
+    }
+
+    fn currentSourceListBody(self: *const Renderer, op: *const OrdinaryBulletLink, markers: usize) ?[]const u8 {
         const host = self.native_article_host orelse return null;
         const root = self.native_inline_motion_root orelse return null;
         const current = self.body_missing orelse return null;
@@ -12332,13 +12391,13 @@ pub const Renderer = struct {
             self.body_link_target.len != 0 or self.explicit_wiki_label != null or self.context.observe_structure_only or
             root.reference != null or self.native_inline_motion_epoch == 0 or !host.native_paragraph_css_subjects or
             !host.matchesActive(self, root.source) or !inlineOverlaySameSourceSlice(current.bytes, op.source) or
-            !noLiParentSourceRange(current, op.line) or op.line.len < 2 or (op.line[0] != '#' and op.line[0] != '*') or
-            std.mem.indexOfAny(u8, op.line, "\r\n") != null or std.mem.indexOfScalar(u8, "#*:;", op.line[1]) != null or
-            !inlineOverlaySameSourceSlice(wikiListLineBody(op.line[1..]), op.body)) return null;
+            !noLiParentSourceRange(current, op.line) or op.line.len <= markers or (op.line[0] != '#' and op.line[0] != '*') or
+            std.mem.indexOfAny(u8, op.line, "\r\n") != null or std.mem.indexOfScalar(u8, "#*:;", op.line[markers]) != null or
+            !inlineOverlaySameSourceSlice(wikiListLineBody(op.line[markers..]), op.body)) return null;
         const line = self.wikiCellCurrentBodyRange(root.source, op.line) orelse return null;
         const body = self.wikiCellCurrentBodyRange(root.source, op.body) orelse return null;
         if (!noLiParentSourceRange(root.source, line)) return null;
-        if (!inlineOverlaySameSourceSlice(wikiListLineBody(line[1..]), body)) return null;
+        if (!inlineOverlaySameSourceSlice(wikiListLineBody(line[markers..]), body)) return null;
         const at = @intFromPtr(line.ptr) - @intFromPtr(root.source.bytes.ptr);
         if (at != 0 and root.source.bytes[at - 1] != '\n') return null;
         if (at + line.len < root.source.bytes.len and root.source.bytes[at + line.len] != '\n') return null;
@@ -12353,6 +12412,12 @@ pub const Renderer = struct {
     }
 
     fn staticListClosedSiblings(bytes: []const u8, comptime quote_input: bool, comptime example: bool, allow_plain_sup: bool) bool {
+        return closedSourceSiblings(bytes, quote_input, example, allow_plain_sup, null);
+    }
+
+    fn closedSourceSiblings(bytes: []const u8, comptime quote_input: bool, comptime example: bool,
+        allow_plain_sup: bool, ordinary_labels: ?*const Renderer) bool
+    {
         var stack: [max_depth][]const u8 = undefined;
         var depth: usize = 0;
         var at: usize = 0;
@@ -12387,17 +12452,37 @@ pub const Renderer = struct {
                     at = tag.end;
                 },
                 '[' => {
+                    // A paired phonetic transcription or prose gloss remains
+                    // text only when the ordinary inline tokenizer agrees.
+                    if (ordinary_labels != null) {
+                        if (literalSquareGlossEnd(bytes, at)) |end| {
+                            at = end;
+                            continue;
+                        }
+                    }
                     var it: ir.InlineIterator = .{ .input = bytes[at..], .renderer_boundaries = true };
                     const token = it.next() orelse return false;
                     if (token.kind != .link or it.cursor == 0 or token.link_empty_label or token.link_label_restored_close) return false;
                     const raw_link = bytes[at..][0..it.cursor];
                     if (std.mem.indexOfAny(u8, raw_link, "<>") != null or std.mem.indexOf(u8, raw_link, "''") != null) {
-                        if (!example or !token.link_has_pipe or token.trail.len != 0 or token.text.len == 0 or
+                        if ((!example and ordinary_labels == null) or !token.link_has_pipe or token.trail.len != 0 or token.text.len == 0 or
                             !wikiClassContains(raw_link, token.text) or !std.mem.endsWith(u8, raw_link, "]]")) return false;
                         const label_start = @intFromPtr(token.text.ptr) - @intFromPtr(raw_link.ptr);
                         if (label_start < 3 or raw_link[label_start - 1] != '|' or label_start + token.text.len != raw_link.len - 2 or
                             std.mem.indexOfAny(u8, raw_link[0..label_start], "<>'") != null or
                             std.mem.indexOfAny(u8, token.text, "[]{}") != null or !staticNumberedClosedSiblings(token.text, false)) return false;
+                        if (ordinary_labels) |renderer| {
+                            // In an earlier physical list item, a plain link can
+                            // contain balanced literal markup. File options and
+                            // category sort keys are different source grammars.
+                            const catalog = renderer.context.namespace_catalog orelse return false;
+                            const target = raw_link[2 .. label_start - 1];
+                            if (target.len == 0 or target[0] == ':' or !std.mem.eql(u8, trim(target), target) or
+                                !safeInternalTarget(target) or std.mem.indexOfAny(u8, target, "<>{}[]&'|") != null or
+                                std.mem.indexOfScalar(u8, token.text, '|') != null) return false;
+                            const ns = catalog.ofTitle(target).id;
+                            if (ns < 0 or ns == 6 or ns == 14) return false;
+                        }
                     }
                     at += it.cursor;
                 },
@@ -12443,7 +12528,8 @@ pub const Renderer = struct {
         } else 0;
         if (projected_begin >= projected_end) return false;
         const prefix = output[projected_begin..projected_end];
-        const mapped = self.staticListOriginal(held.output, prefix, false) orelse return false;
+        const mapped = (if (allow_plain_sup) self.boxBulletOriginal(held.output, prefix, false)
+            else self.staticListOriginal(held.output, prefix, false)) orelse return false;
         return inlineOverlaySameSourceSlice(original, mapped) and staticListClosedSiblings(prefix, false, false, allow_plain_sup);
     }
 
@@ -12458,7 +12544,8 @@ pub const Renderer = struct {
         const raw_body = if (literal_owner) |p| body: {
             if (p.root != held.root or p.epoch != held.epoch) return null;
             break :body p.body;
-        } else self.currentStaticListBody() orelse return null;
+        } else if (bullet_classes != null) self.currentBoxBulletBody() orelse return null
+        else self.currentStaticListBody() orelse return null;
         const declarations = (try self.nativeInlineMotionDeclarations(state)) orelse return null;
         defer self.a.free(declarations);
         if (declarations.len == 0 or declarations.len > max_depth + 1) return null;
@@ -12490,7 +12577,8 @@ pub const Renderer = struct {
                 // authored copy. Index only into this dispatch's original body.
                 const offset = @intFromPtr(entry.opening.ptr) - @intFromPtr(p.output.ptr);
                 break :source p.body[offset..][0..entry.opening.len];
-            } else self.staticListOriginal(entry.source, entry.opening, true) orelse return null;
+            } else if (bullet_classes != null) self.boxBulletOriginal(entry.source, entry.opening, true) orelse return null
+            else self.staticListOriginal(entry.source, entry.opening, true) orelse return null;
             const original_tag = syntax.tagAt(original, 0) orelse return null;
             if (node.source_key != @intFromPtr(tag.name.ptr) and node.source_key != @intFromPtr(original_tag.name.ptr)) return null;
             if (node.source_key != @intFromPtr(tag.name.ptr)) {
@@ -12553,17 +12641,74 @@ pub const Renderer = struct {
         return try classes.toOwnedSlice(self.a);
     }
 
-    // All source holders before the current root list must close on their own
-    // physical line. Only headings, certified empty behavior controls and whole
-    // namespace-selected file/category links are admitted here.
+    // Validate the complete contents of a preceding physical list item. Refuse
+    // extension output, wiki table syntax, quote reconstruction and split or
+    // fostered table content that could carry a wrapper across item boundaries.
+    fn closedBoxBulletInline(self: *const Renderer, bytes: []const u8) bool {
+        if (std.mem.indexOfAny(u8, bytes, "{}\x7f\r\n") != null or std.mem.indexOf(u8, bytes, "''") != null) return false;
+        return closedSourceSiblings(bytes, false, false, true, self);
+    }
+
+    fn closedBoxTableChild(self: *const Renderer, bytes: []const u8, level: enum { table, row, cell }) ?syntax.Pair {
+        const tag = syntax.tagAt(bytes, 0) orelse return null;
+        if (tag.closing or tag.self_closing or tag.html_pre or !formattingAngleAttributesBalanced(tag.attrs) or
+            std.mem.indexOfAny(u8, tag.attrs, "<>{}\x7f\r\n") != null) return null;
+        switch (level) {
+            .table => if (!tag.is("table")) return null,
+            .row => if (!tag.is("tr")) return null,
+            .cell => if (!tag.is("td") and !tag.is("th")) return null,
+        }
+        const pair = syntax.matchingTag(bytes, tag) orelse return null;
+        if (!tableNestedSourceClose(bytes, tag.name, pair, false)) return null;
+        const inside = bytes[tag.end..pair.inner_end];
+        if (level == .cell) return if (self.closedBoxBulletInline(inside)) pair else null;
+        var children = std.mem.trim(u8, inside, " \t");
+        if (children.len == 0) return null;
+        while (children.len != 0) {
+            const child = self.closedBoxTableChild(children, if (level == .table) .row else .cell) orelse return null;
+            children = std.mem.trimStart(u8, children[child.end..], " \t");
+        }
+        return pair;
+    }
+
+    fn closedBoxBulletLine(self: *const Renderer, line: []const u8) bool {
+        const marked = std.mem.trimStart(u8, line, "*");
+        const depth = line.len - marked.len;
+        if (depth == 0 or depth > max_depth or marked.len == 0 or (marked[0] != ' ' and marked[0] != '\t')) return false;
+        const body = wikiListLineBody(marked);
+        if (body.len == 0 or std.mem.indexOfAny(u8, body, "{}\x7f\r\n") != null) return false;
+        const style = std.mem.indexOf(u8, body, "<templatestyles");
+        const table = std.mem.indexOf(u8, body, "<table") orelse return self.closedBoxBulletInline(body);
+        if (!self.closedBoxBulletInline(body[0 .. style orelse table])) return false;
+        if (style) |at| {
+            if (at >= table) return false;
+            const tag = syntax.tagAt(body, at) orelse return false;
+            if (tag.closing or !tag.self_closing or !tag.is("templatestyles") or tag.end > table or
+                trim(body[tag.end..table]).len != 0) return false;
+            // Only the ordinary explicit, quoted src option is transparent here.
+            const attrs = trim(tag.attrs);
+            if (!starts(attrs, "src=\"") or attrs.len <= 6 or attrs[attrs.len - 1] != '"' or
+                std.mem.indexOfAny(u8, attrs[5 .. attrs.len - 1], "<>{}&\"'\x7f\r\n") != null) return false;
+        }
+        const pair = self.closedBoxTableChild(body[table..], .table) orelse return false;
+        return self.closedBoxBulletInline(body[table + pair.end ..]);
+    }
+
+    // A heading, empty behavior control, standalone file/category or a list of
+    // closed literal siblings cannot leave an unobserved outer element open.
+
     fn ordinaryBulletBoxPrefix(self: *Renderer, prefix: []const u8) bool {
-        if (self.context.namespace_catalog == null or prefix.len > 4096 or
+        if (self.context.namespace_catalog == null or prefix.len > 16 * 1024 or
             (prefix.len != 0 and prefix[prefix.len - 1] != '\n')) return false;
         const matcher = self.behaviorControlMatcher();
         var lines = std.mem.splitScalar(u8, prefix, '\n');
         while (lines.next()) |raw| {
             var line = std.mem.trimEnd(u8, raw, "\r");
             if (line.len == 0) continue;
+            if (line[0] == '*') {
+                if (!self.closedBoxBulletLine(line)) return false;
+                continue;
+            }
             if (headingLineControlled(line, matcher)) |heading| {
                 if (heading.title.len == 0 or !self.neutralRootTableInline(line, 0, true, true)) return false;
                 continue;
@@ -12588,30 +12733,31 @@ pub const Renderer = struct {
     }
 
     fn ordinaryBulletBoxInput(self: *Renderer, source: MissingText) Error!?BulletBoxSource {
-        const op = self.ordinary_bullet_link orelse return null;
-        if (self.static_list_item != op or self.body_depth != 1 or self.rejection_probe_scope or
+        const op = self.box_bullet_line orelse return null;
+        if (self.body_depth != 1 or self.rejection_probe_scope or
             self.static_literal_paragraph != null or self.context.table_styles == null or
-            !starts(source.bytes, "<span") or self.staticListQuoteOperation(source) != op) return null;
+            std.mem.indexOf(u8, source.bytes, "<span") == null or self.staticListQuoteOperation(source) != op) return null;
         const root = self.native_inline_motion_root orelse return null;
         const host = self.native_article_host orelse return null;
         if (!host.startsBoxTableRoot(self, root.source)) return null;
         const line = self.wikiCellCurrentBodyRange(root.source, op.line) orelse return null;
         const local = @intFromPtr(line.ptr) - @intFromPtr(root.source.bytes.ptr);
-        if (local > 4096 or !noLiParentSourceRange(root.source, root.source.bytes[0 .. local + line.len]) or
+        if (local > 16 * 1024 or !noLiParentSourceRange(root.source, root.source.bytes[0 .. local + line.len]) or
             !self.ordinaryBulletBoxPrefix(root.source.bytes[0..local])) return null;
         var classes: std.ArrayList(u8) = .empty;
         defer classes.deinit(self.a);
-        if (host.active_fragment) |fragment| {
-            // Retain all literal classes preceding the observed heading as a
-            // conservative overestimate, including classes on unrelated siblings.
+        const preceding = if (host.active_fragment) |fragment| preceding: {
+            // Include earlier page and local source classes, even those on
+            // closed sibling items and tables, as a conservative overestimate.
             const original = fragment.original_page orelse return null;
             const stop = fragment.start + local + line.len;
             if (fragment.start > 64 * 1024 or stop > original.len or stop > fragment.page.len or
                 !std.mem.eql(u8, original[0..stop], fragment.page[0..stop])) return null;
-            appendNativeAuthoredSourceClasses(self.a, &classes, original[0..fragment.start]) catch |failure| switch (failure) {
-                error.OutOfMemory => return error.OutOfMemory, error.InvalidSourceClassInventory => return null,
-            };
-        }
+            break :preceding original[0 .. fragment.start + local];
+        } else root.source.bytes[0..local];
+        if (preceding.len != 0) appendNativeAuthoredSourceClasses(self.a, &classes, preceding) catch |failure| switch (failure) {
+            error.OutOfMemory => return error.OutOfMemory, error.InvalidSourceClassInventory => return null,
+        };
         return .{ .root = root, .epoch = self.native_inline_motion_epoch, .outer_classes = try classes.toOwnedSlice(self.a) };
     }
 
@@ -12621,7 +12767,7 @@ pub const Renderer = struct {
         const held = switch (state) { .proved => |v| v, else => return null };
         if (proof.root != held.root or held.root != self.native_inline_motion_root or
             proof.epoch != held.epoch or held.epoch == 0 or held.epoch != self.native_inline_motion_epoch or
-            quotes.operation != self.ordinary_bullet_link or quotes.operation != self.static_list_item or
+            quotes.operation != self.box_bullet_line or
             self.static_literal_paragraph != null or self.staticListQuoteOperation(quotes.original) != quotes.operation) return null;
         return proof.outer_classes;
     }
@@ -12629,9 +12775,11 @@ pub const Renderer = struct {
     fn staticListQuoteOperation(self: *const Renderer, original: MissingText) ?*const OrdinaryBulletLink {
         if (!QuoteSourceMap.cleanLocal(original)) return null;
         const root = self.native_inline_motion_root orelse return null;
-        const current = self.static_list_item orelse self.static_example_line orelse return null;
+        const current = self.static_list_item orelse self.static_example_line orelse self.box_bullet_line orelse return null;
         const body = if (self.static_list_item != null)
             self.currentStaticListBody() orelse return null
+        else if (self.static_example_line == null)
+            self.currentBoxBulletBody() orelse return null
         else body: {
             const host = self.native_article_host orelse return null;
             const active = self.body_missing orelse return null;
@@ -12663,11 +12811,22 @@ pub const Renderer = struct {
 
     fn staticListOriginal(self: *const Renderer, source: MissingText, token: []const u8, comptime copied: bool) ?[]const u8 {
         const body = self.currentStaticListBody() orelse return null;
+        return self.sourceListOriginal(self.static_list_item.?, body, source, token, copied);
+    }
+
+    fn boxBulletOriginal(self: *const Renderer, source: MissingText, token: []const u8, comptime copied: bool) ?[]const u8 {
+        const body = self.currentBoxBulletBody() orelse return null;
+        return self.sourceListOriginal(self.box_bullet_line.?, body, source, token, copied);
+    }
+
+    fn sourceListOriginal(self: *const Renderer, op: *const OrdinaryBulletLink, body: []const u8,
+        source: MissingText, token: []const u8, comptime copied: bool) ?[]const u8
+    {
         if (!noLiParentSourceRange(source, token)) return null;
         const root = self.native_inline_motion_root.?.source;
         if (self.wikiCellCurrentBodyRange(root, token)) |original|
             return if (wikiClassContains(body, original)) original else null;
-        return self.staticListQuoteOriginal(self.static_list_item.?, source, token, copied);
+        return self.staticListQuoteOriginal(op, source, token, copied);
     }
 
     // A literal paint owner at the beginning of an ordinary definition example.
@@ -15959,6 +16118,44 @@ pub const Renderer = struct {
             self.fallbacks.unsupported_element = true;
         }
         return pair.end;
+    }
+    // A caption in the catalog remains plain. Only a source-identified inline
+    // occurrence acquires play and attribution actions in the body.
+    fn phonosOccurrence(self: *Renderer, token: []const u8, caption: []const Span, raw_file: []const u8, style: Style) Error!?[]const Span {
+        const fragment = self.phonos_fragment orelse return null;
+        const profile = self.context.table_styles orelse return null;
+        // The quote normalizer can copy an unchanged widget when the enclosing
+        // list line carries a quote seed. Only its actual contiguous copy can
+        // recover this physical occurrence, including repeated identical files.
+        const source = if (self.phonos_quote_source) |map| map.copiedOriginal(token) orelse token else token;
+        const projected = self.registeredOriginalInterval(source, fragment.projected) orelse return null;
+        const start = @intFromPtr(projected.ptr) - @intFromPtr(fragment.projected.ptr);
+        const original = fragment.original[start..][0..projected.len];
+        const owner = table_style_profile.SelectedPhonos.lookup(profile.selected_phonos, original) orelse return null;
+        if (!std.mem.eql(u8, token, original) or self.content_root != .parser_output or self.in_reference or self.parsed_pre or self.pre_block or
+            style.provenance != .parsed or style.kind != .text or style.target.len != 0 or self.body_link_target.len != 0 or
+            style.self_link_target != null or caption.len != 1) return null;
+        const file = (try self.resolvedMediaFile(raw_file)) orelse return null;
+        const index = self.media_indices.get(file) orelse return null;
+        const media = self.media.items[index];
+        const label = caption[0];
+        if (media.kind != .audio or !std.mem.eql(u8, media.file, owner.file) or !std.mem.eql(u8, owner.caption, label.text) or
+            !std.mem.eql(u8, owner.language, label.language) or label.kind != .text or label.target.len != 0 or label.flags.code or
+            label.image != null or label.ruby != null or label.self_link or label.tooltip != null or label.link_paint != null or
+            label.inline_box_group != null or label.inline_padding_group != null or label.inline_action_group != null) return null;
+        const spans = try self.a.alloc(Span, 2);
+        spans[0] = label;
+        spans[0].kind = .link;
+        spans[0].target = try std.mem.concat(self.a, u8, &.{ "File:", file });
+        spans[0].classes = try self.mediaCaptionClasses(try self.mediaClasses(file), label.classes);
+        spans[0].tooltip = owner.accessible_name;
+        spans[0].tooltip_set = true;
+        spans[0].audio_control = .{ .presentation = .phonos_button };
+        if (!presentation_types.validSpanAudioControl(spans[0])) return error.UncompiledPresentation;
+        spans[1] = .{ .kind = .link, .text = owner.attribution_text, .target = owner.attribution_title,
+            .classes = "ext-phonos-attribution noexcerpt navigation-not-searchable", .tooltip = owner.attribution_title,
+            .tooltip_set = true, .flags = .{ .superscript = true } };
+        return spans;
     }
     fn mediaCaptionClasses(self: *Renderer, owner: []const u8, parsed: []const u8) Error![]const u8 {
         var out: std.ArrayList(u8) = .empty;
@@ -19725,11 +19922,13 @@ pub const Renderer = struct {
             else if (provenance != null) (if (self.figureClassSourceDomain()) |domain| domain.selected else null) else null;
         const element = try self.a.create(table_style_profile.TextElement);
         const page_root = self.literalDivPageStyleRootForTag(tag, parent);
+        const own_language = try self.semanticAttribute(tag, "lang");
         element.* = .{ .page_style_root = page_root, .page_style_source = if (page_root != null) self.pageStyleDomain().?.source else null,
             .page_style_anchor = if (page_root != null) (if (quoted_tag) |known| self.pageStyleQuoteAnchor(known)
                 else if (literal_div) |known| known.opening else self.pageStyleCopiedDivRange(tag, false) orelse self.pageStyleWikiOpening(tag) orelse self.pageStyleCopiedWikiCellAttrs(tag) orelse (if (wikiClassContains(self.pageStyleDomain().?.owner, tag.name)) tag.name else tag.attrs)) else null,
             .complete_ancestor_classes = ancestor_classes, .complete_ancestor_ids = ancestor_ids, .ancestor_class_scope = provenance, .ancestor_class_source = provenance_source,
-            .tag = tag.name, .language = (try self.semanticAttribute(tag, "lang")) orelse (if (parent == null) self.pageTextRootLanguage(inherited_language) else null),
+            .tag = tag.name, .own_language_attribute = own_language,
+            .language = own_language orelse (if (parent == null) self.pageTextRootLanguage(inherited_language) else null),
             .classes = (try self.semanticAttribute(tag, "class")) orelse "", .id = (try self.semanticAttribute(tag, "id")) orelse "", .parent = parent,
             .source_key = key, .element_index = element_index };
         element.attribute_presence = try self.rowColorAttributesForTag(tag);
@@ -20264,11 +20463,16 @@ pub const Renderer = struct {
     // Resolve a complete immutable interval through registered copy operations.
     // An offset for its first byte or an equal string does not prove coverage.
     fn registeredCaptionOriginal(self: *const Renderer, part: []const u8) ?[]const u8 {
+        return self.registeredOriginalInterval(part, null);
+    }
+    fn registeredOriginalInterval(self: *const Renderer, part: []const u8, issued: ?[]const u8) ?[]const u8 {
         if (part.len == 0) return null;
         var current = part;
         var depth: usize = 0;
         while (depth < max_depth) : (depth += 1) {
-            if (self.figureClassOriginal(current)) |original| return original;
+            if (issued) |selected| {
+                if (wikiClassContains(selected, current)) return current;
+            } else if (self.figureClassOriginal(current)) |original| return original;
             var mapped: ?[]const u8 = null;
             if (self.plain_body_source_copy) |copy| {
                 if (copy.copied.len == copy.original.len and wikiClassContains(copy.copied, current)) {
@@ -20889,6 +21093,9 @@ pub const Renderer = struct {
         return self.htmlDisplayNoneIn(tag, null);
     }
     fn htmlDisplayNoneIn(self: *Renderer, tag: syntax.Tag, parent: ?*const table_style_profile.TextElement) Error!bool {
+        return self.htmlDisplayNoneWithSource(tag, parent, null);
+    }
+    fn htmlDisplayNoneWithSource(self: *Renderer, tag: syntax.Tag, parent: ?*const table_style_profile.TextElement, inherited: ?Style) Error!bool {
         if (self.tableInlineDisplayVisible(tag, parent)) return false;
         if (self.observedFigureCaptionInlineGeometry(tag)) return false;
         var cascade: table_style_profile.DisplayCascade = .{};
@@ -20907,8 +21114,29 @@ pub const Renderer = struct {
                 try self.negativePaintQueryClasses(scope.complete_ancestor_class_superset, value)
                 else value.complete_ancestor_classes) else null;
             rules.physical_parent_tag = self.physicalDisplayParent(tag);
-            while (rules.next()) |rule|
+            var tried_native_source = false;
+            while (rules.next()) |rule| {
+                // Only an ambiguous rule requiring an ancestor class needs a
+                // fresh source query. Its inventory can refute a match only.
+                if (!tried_native_source and rules.complete_ancestor_classes == null and
+                    rule.uncertain and profile.display_rules[rules.cursor - 1].selector.necessary_ancestor_classes.len != 0)
+                {
+                    tried_native_source = true;
+                    if (inherited) |style| if (self.native_source_class_range != null) {
+                        const element = try self.textElement(tag, parent, style.language);
+                        const motion = try self.nativeInlineMotionEntry(tag, style.native_inline_motion);
+                        var diagnostic: NativeSourceClassQueryDiagnostic = .{};
+                        if (try self.nativeSourceClassQueryTokensDiagnosed(tag, profile, element, motion, &diagnostic, false)) |classes| {
+                            rules.complete_ancestor_classes = classes;
+                            rules.cursor -= 1;
+                            continue;
+                        }
+                        if (self.context.table_viewport_trace and self.document_body_trace)
+                            diagnostics.logLine("presentation display class query tag={s} reason={s}", .{tag.name, @tagName(diagnostic.reason)});
+                    };
+                }
                 try self.applyDisplayCss(&cascade, rule.css, rule.specificity, rule.order, rule.uncertain, false);
+            }
         };
         if (try self.semanticAttribute(tag, "style")) |css|
             try self.applyDisplayCss(&cascade, css, 0, 0, false, true);
@@ -27196,6 +27424,10 @@ pub const Renderer = struct {
         return safe_classes.toOwnedSlice(self.a);
     }
     fn htmlInlineStyle(self: *Renderer, tag: syntax.Tag, style: Style) Error!Style {
+        return self.htmlInlineStyleWithLabelBox(tag, style, false);
+    }
+
+    fn htmlInlineStyleWithLabelBox(self: *Renderer, tag: syntax.Tag, style: Style, label_box: bool) Error!Style {
         var s = style;
         if ((tag.is("sup") or tag.is("sub")) and
             (style.superscript or style.subscript or self.block_formatting.superscript or self.block_formatting.subscript))
@@ -27233,8 +27465,8 @@ pub const Renderer = struct {
             s.explanation = explanation;
             s.explanation_set = true;
         };
-        s = try self.htmlLanguageDirection(tag, s);
-        if (!tag.is("table")) s.background = if (self.observedFigureCaptionTagStyle(tag)) |known|
+        s = try self.htmlLanguageDirectionWithFont(tag, s, label_box);
+        if (label_box) s.background = null else if (!tag.is("table")) s.background = if (self.observedFigureCaptionTagStyle(tag)) |known|
             known.background else (try self.authoredColorIn(tag, "background-color", null, style.background, self.customParent(s))).value;
         return s;
     }
@@ -27463,6 +27695,360 @@ pub const Renderer = struct {
             try self.emitEtymologyTree(blocks, nodes, child, path);
         }
     }
+    const TranslatedCardNode = struct { text: Style, box: presentation_types.ContainerStyle };
+
+    // A closed literal parent in normal flow can refute a sibling selector without
+    // proving the parent's own predecessor or the subject's final sibling index.
+    // Return the last element type, "" for a first child, or null for an opaque edge.
+    fn translatedPreviousElement(line: []const u8, subject: usize) ?[]const u8 {
+        if (subject > line.len or line.len > 65536) return null;
+        const Frame = struct { tag: []const u8, previous: ?[]const u8 = "", quotes: u8 = 0 };
+        var frames: [max_depth + 1]Frame = undefined;
+        var count: usize = 0;
+        var cursor: usize = 0;
+        while (cursor < subject) {
+            const rest = line[cursor..subject];
+            if (starts(rest, "[[")) {
+                const link_bounds = syntax.balanced(rest, 0) orelse return null;
+                const contents = rest[2 .. link_bounds.inner_end];
+                if (std.mem.indexOfAny(u8, contents, "<>[]{}'") != null) {
+                    // An explicitly paired abbreviation in a plain link label cannot
+                    // reopen a formatting element outside that source link.
+                    const bar = std.mem.indexOfScalar(u8, contents, '|') orelse return null;
+                    if (std.mem.indexOfAny(u8, contents[0..bar], "<>[]{}'") != null) return null;
+                    const label = contents[bar + 1 ..];
+                    const abbr = syntax.tagAt(label, 0) orelse return null;
+                    if (!abbr.is("abbr") or abbr.closing or abbr.self_closing or abbr.html_pre or
+                        !formattingAngleAttributesBalanced(abbr.attrs) or std.mem.indexOfAny(u8, abbr.attrs, "<>[]{}") != null) return null;
+                    const pair = syntax.matchingTag(label, abbr) orelse return null;
+                    if (pair.end != label.len or !tableNestedSourceClose(label, abbr.name, pair, false) or
+                        std.mem.indexOfAny(u8, label[abbr.end..pair.inner_end], "<>[]{}'") != null) return null;
+                }
+                if (count != 0) frames[count - 1].previous = null;
+                cursor += link_bounds.end;
+                continue;
+            }
+            if (rest[0] == '<') {
+                const tag = syntax.tagAt(line, cursor) orelse return null;
+                if (tag.end > subject or tag.self_closing or tag.html_pre or
+                    !oneOf(tag.name, &.{ "div", "span", "i", "b", "abbr", "ul", "templatestyles" }) or
+                    !formattingAngleAttributesBalanced(tag.attrs) or std.mem.indexOfAny(u8, tag.attrs, "<>[]{}") != null) return null;
+                if (tag.closing) {
+                    if (count == 0 or !tag.is(frames[count - 1].tag) or frames[count - 1].quotes != 0 or trim(tag.attrs).len != 0) return null;
+                    count -= 1;
+                    if (count != 0) frames[count - 1].previous = tag.name;
+                } else {
+                    if (count == frames.len or (count != 0 and frames[count - 1].quotes != 0)) return null;
+                    if (tag.is("div") and count != 0 and !std.ascii.eqlIgnoreCase(frames[count - 1].tag, "div")) return null;
+                    frames[count] = .{ .tag = tag.name };
+                    count += 1;
+                }
+                cursor = tag.end;
+                continue;
+            }
+            if (rest[0] == '\'' and rest.len >= 2 and rest[1] == '\'') {
+                var end: usize = 2;
+                while (end < rest.len and rest[end] == '\'') : (end += 1) {}
+                if (count == 0 or (end != 2 and end != 3) or
+                    (frames[count - 1].quotes != 0 and frames[count - 1].quotes != end)) return null;
+                frames[count - 1].quotes = if (frames[count - 1].quotes == 0) @intCast(end) else 0;
+                frames[count - 1].previous = null;
+                cursor += end;
+                continue;
+            }
+            if (std.mem.indexOfScalar(u8, "{}[]|\r\n", rest[0]) != null) return null;
+            if (!std.ascii.isWhitespace(rest[0]) and count != 0) frames[count - 1].previous = null;
+            cursor += 1;
+        }
+        if (count == 0 or frames[count - 1].quotes != 0 or !std.ascii.eqlIgnoreCase(frames[count - 1].tag, "div")) return null;
+        return frames[count - 1].previous;
+    }
+
+    // Normal Entry construction binds the current physical opener to the active
+    // page. Every earlier authored class is retained, including unrelated siblings.
+    // Generated parent classes and both native direction variants remain possible.
+    fn translatedCardQuery(self: *Renderer, tag: syntax.Tag, actual: *const table_style_profile.TextElement,
+        parent_state: NativeInlineMotionState, fallback: *const table_style_profile.TextElement) Error!*const table_style_profile.TextElement
+    {
+        const held = switch (parent_state) { .proved => |known| known, else => return fallback };
+        const host = self.native_article_host orelse return fallback;
+        const body = self.body_missing orelse return fallback;
+        if (self.context.table_styles == null or self.context.table_styles.?.page_style_parent != null or !host.native_paragraph_css_subjects or !self.native_inline_motion_active or self.native_inline_motion_root != held.root or
+            self.native_inline_motion_epoch != held.epoch or held.epoch == 0 or held.root.reference != null or
+            !host.matchesActive(self, held.root.source) or self.content_root != .parser_output or
+            self.in_reference or self.media_depth != 0 or self.ruby_depth != 0 or self.figure_caption_depth != 0 or
+            self.typed_table_depth != 0 or self.table_viewport_cell_source != null or self.figure_implicit_list_context or
+            self.html_list_item_flow or self.html_blockquote_flow or self.in_template_literal_scope or
+            self.pre_block or self.parsed_pre or self.poem_depth != 0 or self.context.observe_structure_only or
+            self.rejection_probe_scope or actual.source_key != @intFromPtr(tag.name.ptr)) return fallback;
+        if (!wikiClassContains(body.bytes, tag.name)) return fallback;
+        const name = @intFromPtr(tag.name.ptr) - @intFromPtr(body.bytes.ptr);
+        if (name == 0) return fallback;
+        const parsed = syntax.tagAt(body.bytes, name - 1) orelse return fallback;
+        if (parsed.closing or parsed.self_closing or parsed.html_pre or parsed.name.ptr != tag.name.ptr or
+            parsed.name.len != tag.name.len or parsed.attrs.ptr != tag.attrs.ptr or parsed.attrs.len != tag.attrs.len) return fallback;
+        const current = body.bytes[name - 1 .. parsed.end];
+        if (!noLiParentSourceRange(body, current)) return fallback;
+        const opening = self.nativeOriginalCopiedRange(held.root.source, current) orelse return fallback;
+        const local_end = @intFromPtr(opening.ptr) - @intFromPtr(held.root.source.bytes.ptr) + opening.len;
+        const local_prefix = held.root.source.bytes[0..local_end];
+        if (!noLiParentSourceRange(held.root.source, local_prefix)) return fallback;
+        const prefix = prefix: {
+            if (host.startsPage(self, held.root.source)) break :prefix local_prefix;
+            const f = host.active_fragment orelse return fallback;
+            if (f.prepared.ptr != held.root.source.bytes.ptr or f.prepared.len != held.root.source.bytes.len or
+                f.start > f.page.len or local_end > f.page.len - f.start or
+                !std.mem.eql(u8, local_prefix, f.page[f.start..][0..local_end])) return fallback;
+            const full = f.page[0 .. f.start + local_end];
+            if (f.original_page) |original| {
+                if (!starts(original, full)) return fallback;
+            } else if (!f.observed_box_table_heading_root) {
+                const range = self.native_source_class_range orelse return fallback;
+                if (range.start != f.start or !nativeSourceClassRangeCurrent(range, held.root.source, self.context.table_styles) or
+                    !inlineOverlaySameSourceSlice(range.proof.source.bytes, f.page)) return fallback;
+            }
+            break :prefix full;
+        };
+        if (prefix.len > 65536) return fallback;
+        var inventory: std.ArrayList(u8) = .empty;
+        defer inventory.deinit(self.a);
+        try inventory.appendSlice(self.a, native_source_root_class_tokens);
+        appendNativeAuthoredSourceClasses(self.a, &inventory, prefix) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory, error.InvalidSourceClassInventory => return fallback,
+        };
+        var node: ?*const table_style_profile.TextElement = actual;
+        var budget: usize = max_depth + 1;
+        while (node) |next| : (node = next.parent) {
+            if (budget == 0 or next.alternative_ancestry != null or next.page_style_root != null or
+                next.ancestor_class_scope != null or next.physical_ancestry_complete or next.ancestry_complete or
+                next.observed_custom_environment != null or !self.currentAncestorScope(next)) return fallback;
+            budget -= 1;
+            nativeClassAppendTokens(self.a, &inventory, next.classes) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory, error.InvalidSourceClassInventory => return fallback,
+            };
+        }
+        const source_start = prefix.len - opening.len;
+        const line_start = if (std.mem.lastIndexOfScalar(u8, prefix[0..source_start], '\n')) |start| start + 1 else 0;
+        const projection = try self.a.create(table_style_profile.TextElement);
+        projection.* = fallback.*;
+        projection.complete_ancestor_classes = try inventory.toOwnedSlice(self.a);
+        projection.source_literal_previous = .{ .tag = translatedPreviousElement(prefix[line_start..], source_start - line_start) };
+        return projection;
+    }
+
+    fn translatedCardNode(self: *Renderer, tag: syntax.Tag, parent: Style, role: table_style_profile.TranslatedBoxRole,
+        parent_line_px: ?f32, after_space: bool) Error!?TranslatedCardNode
+    {
+        if (tag.closing or tag.self_closing or tag.html_pre or !htmlNestedAttributes(tag.attrs, switch (role) {
+            .relative_card, .flex_owner, .empty_vertical_edge, .flex_edge => &.{"style"}, .inline_atom => &.{ "class", "style" }, .absolute_label => if (tag.is("abbr")) &.{ "style", "title" } else &.{"style"},
+        })) return null;
+        const css = (try self.semanticAttribute(tag, "style")) orelse return null;
+        const profile = self.textPaintProfile() orelse return null;
+        if (self.context.table_styles) |other| if (other != profile) return null;
+        const base = try self.textElement(tag, parent.text_element, parent.language);
+        const query = try self.a.create(table_style_profile.TextElement);
+        query.* = base.*;
+        query.observed_inline_style = css;
+        const general = (try self.nativeSourceClassQueryDiagnosed(tag, profile, query, parent.native_inline_motion, null)) orelse query;
+        const projected = try self.translatedCardQuery(tag, query, parent.native_inline_motion, general);
+        // The typed label owns the positive pixel strut and its non-inherited
+        // background layer. Descendant ink/tooltip/action still follow the
+        // ordinary HTML path; admission below proves each owning declaration.
+        var label_style = try self.htmlInlineStyleWithLabelBox(tag, parent, role == .absolute_label);
+        var font = self.positionedContainerInheritedFont(label_style) orelse return null;
+        font.bold = label_style.bold;
+        font.italic = label_style.italic;
+        var box = (table_style_profile.translatedContainerStyle(self.a, profile, projected, css, self.customParent(label_style), font,
+            role, parent_line_px, after_space) catch |err| return self.authoredElementQueryError(err)) orelse return null;
+        if (tag.is("abbr")) {
+            if (role != .absolute_label or !hasAuthoredTooltipTitle(tag) or label_style.explanation.len == 0) return null;
+            try self.applyHtmlTooltip(tag, &label_style);
+            box.translated_absolute.?.owns_abbreviation = true;
+        }
+        if ((role == .flex_owner or role == .empty_vertical_edge or role == .flex_edge) and !normalizeContainerStyle(&box,font.font_scale)) return null;
+        // Query-local negative class/ID facts stay on the selected node.
+        // Each descendant must earn its own projection against its source.
+        label_style.text_element = query;
+        label_style.font_scale = box.owner_font.?.font_scale;
+        label_style.font_scale_basis = box.owner_font.?.font_scale_basis;
+        label_style.font_scale_set = true;
+        label_style.font_size_unknown = false;
+        // The Container paints its own background once, including its radius
+        // and colour alpha. The child inputs retain their ordinary ink/actions.
+        label_style.background = null;
+        return .{ .text = label_style, .box = box };
+    }
+
+    fn translatedCardParagraph(self: *Renderer, raw: []const u8, style: Style) Error!Block {
+        const spans = try self.parseBodySpans(raw, style);
+        if (spans.len == 0) return error.UncompiledPresentation;
+        for (spans) |span| if (!presentation_types.validTranslatedTextLeaf(span)) return error.UncompiledPresentation;
+        return .{ .kind = .paragraph, .spans = spans };
+    }
+
+    fn translatedStyledChild(tag: syntax.Tag, raw: []const u8) ?syntax.Pair {
+        const pair = syntax.matchingTag(raw, tag) orelse return null;
+        return if (tableNestedSourceClose(raw, tag.name, pair, false)) pair else null;
+    }
+
+    fn translatedGlossaryBox(self: *Renderer, node: TranslatedCardNode, raw: []const u8) Error!Container {
+        if (!starts(raw, "[[")) return error.UncompiledPresentation;
+        const link_pair = syntax.balanced(raw, 0) orelse return error.UncompiledPresentation;
+        var blocks: std.ArrayList(Block) = .empty;
+        const source_link = raw[0..link_pair.end];
+        var iterator: ir.InlineIterator = .{ .input = source_link, .renderer_boundaries = true, .link_trail = self.context.link_trail };
+        const token = iterator.next() orelse return error.UncompiledPresentation;
+        if (token.kind != .link or iterator.cursor != source_link.len or token.trail.len != 0) return error.UncompiledPresentation;
+        var action_block = try self.translatedCardParagraph(source_link, node.text);
+        const action = action_block.spans[0].target;
+        for (action_block.spans) |span| {
+            if (span.kind != .link or span.self_link or span.target_fragment != null or action.len == 0 or
+                !std.mem.eql(u8, action, span.target)) return error.UncompiledPresentation;
+        }
+        // Ordinary title IR uses spaces for underscores. The physical link in
+        // this glossary label also owns a URI fragment. Retain that fragment's
+        // anchor spelling while keeping the parsed page and every label run.
+        const source_title = try self.internalPercentTitleText(trim(token.target));
+        if (std.mem.indexOfScalar(u8, source_title, '#')) |sep| {
+            const source_fragment = source_title[sep + 1 ..];
+            const hash = std.mem.indexOfScalar(u8, action, '#') orelse return error.UncompiledPresentation;
+            const fragment = action[hash + 1 ..];
+            if (fragment.len != source_fragment.len) return error.UncompiledPresentation;
+            for (source_fragment, fragment) |authored, parsed| {
+                if (authored != parsed and !(authored == '_' and parsed == ' ')) return error.UncompiledPresentation;
+            }
+            if (std.mem.indexOfScalar(u8, fragment, ' ') != null) {
+                const href_target = try self.a.dupe(u8, action);
+                std.mem.replaceScalar(u8, href_target[hash + 1 ..], ' ', '_');
+                const spans = try self.a.dupe(Span, action_block.spans);
+                for (spans) |*span| span.target = href_target;
+                action_block.spans = spans;
+            }
+        }
+        try self.appendBlockBudgeted(&blocks, action_block);
+        if (link_pair.end != raw.len) {
+            const tail = raw[link_pair.end..];
+            const tag = syntax.tagAt(tail, 0) orelse return error.UncompiledPresentation;
+            if (!tag.is("abbr")) return error.UncompiledPresentation;
+            const pair = translatedStyledChild(tag, tail) orelse return error.UncompiledPresentation;
+            if (pair.end != tail.len or !hasAuthoredTooltipTitle(tag)) return error.UncompiledPresentation;
+            const leaf = (try self.translatedCardNode(tag, node.text, .absolute_label, node.box.line_height.?.length.value, false)) orelse return error.UncompiledPresentation;
+            const content = tail[tag.end..pair.inner_end];
+            if (content.len == 0 or std.mem.indexOfAny(u8, content, "<>[]{}\r\n") != null) return error.UncompiledPresentation;
+            const body = try self.a.alloc(Block, 1);
+            body[0] = try self.translatedCardParagraph(content, leaf.text);
+            try self.appendBlockBudgeted(&blocks, .{ .kind = .container, .container = .{ .style = leaf.box, .blocks = body } });
+        }
+        return .{ .style = node.box, .blocks = try blocks.toOwnedSlice(self.a) };
+    }
+
+    fn measuredFlexTreeNode(self: *Renderer, source: []const u8, tag: syntax.Tag, pair: syntax.Pair,
+        parent: Style, parent_layout: ?presentation_types.ContainerLayout, depth: usize) Error!?Container
+    {
+        if (depth >= presentation_types.max_content_depth or pair.end != source.len or
+            !tableNestedSourceClose(source, tag.name, pair, false)) return null;
+        const tracked = self.body_missing orelse return null;
+        if (!noLiParentSourceRange(tracked, source)) return null;
+        if (tag.is("span")) {
+            // CSS blockifies an original direct flex item. Only this exact empty
+            // input role can acquire a frame without any text or artificial line.
+            if (parent_layout != .flex_column or tag.end != pair.inner_end) return null;
+            const role: table_style_profile.TranslatedBoxRole = if (std.ascii.findIgnoreCase(tag.attrs,"align-self") != null)
+                .flex_edge else .empty_vertical_edge;
+            const edge = (try self.translatedCardNode(tag,parent,role,null,false)) orelse return null;
+            return .{ .style = edge.box, .blocks = &.{} };
+        }
+        if (!tag.is("div") or self.positionedContainerOpening(tag) == null) return null;
+        if (std.ascii.findIgnoreCase(tag.attrs, "border-radius") != null)
+            return if (parent_layout == .flex_column) self.translatedCardSourceUnder(source, tag, pair, parent) else null;
+        const box = (try self.translatedCardNode(tag, parent, .flex_owner, null, false)) orelse return null;
+        const layout = box.box.layout orelse return null;
+        if (parent_layout == .flex_row and layout != .flex_column) return null;
+        var items: std.ArrayList(Block) = .empty;
+        var offset = tag.end;
+        while (offset < pair.inner_end) {
+            // An all-whitespace anonymous flex item is suppressed in CSS.
+            while (offset < pair.inner_end and std.ascii.isWhitespace(source[offset])) : (offset += 1) {}
+            if (offset == pair.inner_end) break;
+            const tail = source[offset..pair.inner_end];
+            const child = syntax.tagAt(tail, 0) orelse return error.UncompiledPresentation;
+            if (child.closing or child.self_closing or child.html_pre) return error.UncompiledPresentation;
+            const bounds = translatedStyledChild(child, tail) orelse return error.UncompiledPresentation;
+            const item = (try self.measuredFlexTreeNode(tail[0..bounds.end], child, bounds, box.text, layout, depth + 1)) orelse return error.UncompiledPresentation;
+            try self.appendBlockBudgeted(&items, .{ .kind = .container, .container = item });
+            offset += bounds.end;
+        }
+        if (items.items.len == 0) return null;
+        const result: Container = .{ .style = box.box, .blocks = try items.toOwnedSlice(self.a) };
+        return if (presentation_types.validContainerHeader(result)) result else error.UncompiledPresentation;
+    }
+
+    fn measuredFlexTreeSource(self: *Renderer, source: []const u8, tag: syntax.Tag, pair: syntax.Pair) Error!?Container {
+        // Keep the ordinary flex emitter for its existing content families. The
+        // lexical gate only identifies candidates; every owner and item below
+        // must pass the ranked screen cascade and the original-range check.
+        if (!tag.is("div") or tag.closing or tag.self_closing or tag.html_pre or
+            std.ascii.findIgnoreCase(tag.attrs, "flex") == null or
+            std.ascii.findIgnoreCase(source[tag.end..pair.inner_end], "border-radius") == null or
+            self.context.observe_structure_only or self.rejection_probe_scope or self.in_reference or self.pre_block or self.parsed_pre or
+            self.poem_depth != 0 or self.in_template_literal_scope or self.body_link_target.len != 0 or self.explicit_wiki_label != null or
+            self.navigation_target_probe != null or self.block_formatting.bold or self.block_formatting.italic) return null;
+        return self.measuredFlexTreeNode(source, tag, pair, self.bodyFormattingStyle(self.body_language_direction orelse .{}), null, 0);
+    }
+
+    fn translatedCardSource(self: *Renderer, source: []const u8, tag: syntax.Tag, pair: syntax.Pair) Error!?Container {
+        return self.translatedCardSourceUnder(source, tag, pair, self.bodyFormattingStyle(self.body_language_direction orelse .{}));
+    }
+
+    fn translatedCardSourceUnder(self: *Renderer, source: []const u8, tag: syntax.Tag, pair: syntax.Pair, parent: Style) Error!?Container {
+        if (!tag.is("div") or self.context.observe_structure_only or self.rejection_probe_scope or self.in_reference or self.pre_block or
+            self.parsed_pre or self.poem_depth != 0 or self.in_template_literal_scope or self.body_link_target.len != 0 or
+            self.explicit_wiki_label != null or self.navigation_target_probe != null) return null;
+        // A cheap source candidate only. Both geometry and ancestry are proved
+        // below by the ranked profile, tracked byte range and paired children.
+        if (std.ascii.findIgnoreCase(tag.attrs, "border-radius") == null or std.ascii.findIgnoreCase(tag.attrs, "position") == null) return null;
+        const raw = source[tag.end..pair.inner_end];
+        if (!starts(raw, "<span")) return null;
+        if (self.block_formatting.bold or self.block_formatting.italic) return null;
+        const tracked = self.body_missing orelse return null;
+        if (!noLiParentSourceRange(tracked, source) or !tableNestedSourceClose(source, tag.name, pair, false) or self.positionedContainerOpening(tag) == null) return null;
+        const owner = (try self.translatedCardNode(tag, parent, .relative_card, null, false)) orelse return null;
+        var blocks: std.ArrayList(Block) = .empty;
+        var cursor: usize = 0;
+        var atoms: usize = 0;
+        while (cursor < raw.len) {
+            const after_space = raw[cursor] == ' ';
+            if (after_space) cursor += 1;
+            const rest = raw[cursor..];
+            const child = syntax.tagAt(rest, 0) orelse return error.UncompiledPresentation;
+            if (!child.is("span")) return error.UncompiledPresentation;
+            const pair_child = translatedStyledChild(child, rest) orelse return error.UncompiledPresentation;
+            const content = rest[child.end..pair_child.inner_end];
+            if (content.len == 0 or std.mem.indexOfAny(u8, content, "\r\n") != null) return error.UncompiledPresentation;
+            const css = (try self.semanticAttribute(child, "style")) orelse return error.UncompiledPresentation;
+            const absolute = std.ascii.findIgnoreCase(css, "position") != null;
+            const role: table_style_profile.TranslatedBoxRole = if (absolute) .absolute_label else .inline_atom;
+            const box = (try self.translatedCardNode(child, owner.text, role, null, after_space)) orelse return error.UncompiledPresentation;
+            if (absolute) {
+                // Keep the original source position. This family has a suffix
+                // label, with no intervening parent text or trailing siblings.
+                if (after_space or atoms == 0 or pair_child.end != rest.len) return error.UncompiledPresentation;
+                try self.appendBlockBudgeted(&blocks, .{ .kind = .container, .container = try self.translatedGlossaryBox(box, content) });
+            } else {
+                if (atoms == 0 and after_space) return error.UncompiledPresentation;
+                const body = try self.a.alloc(Block, 1);
+                body[0] = try self.translatedCardParagraph(content, box.text);
+                try self.appendBlockBudgeted(&blocks, .{ .kind = .container, .container = .{ .style = box.box, .blocks = body } });
+                atoms += 1;
+            }
+            cursor += pair_child.end;
+        }
+        if (atoms == 0) return error.UncompiledPresentation;
+        const box: Container = .{ .style = owner.box, .blocks = try blocks.toOwnedSlice(self.a) };
+        if (!presentation_types.validContainerHeader(box)) return error.UncompiledPresentation;
+        return box;
+    }
+
     fn appendEtymologyTree(self: *Renderer, blocks: *std.ArrayList(Block), input: []const u8, tag: syntax.Tag) Error!bool {
         if (!tag.is("div") or self.pre_block or self.parsed_pre) return false;
         var plan: EtymologyTreePlan = .{ .renderer = self };
@@ -32788,7 +33374,7 @@ pub const Renderer = struct {
             (knownInlineHtmlName(tag.name) or oneOf(tag.name, &.{ "tr", "td", "th", "caption" })) and
             !oneOf(tag.name, &.{ "onlyinclude", "noinclude" }) and
             !tag.isOpaque() and !tag.html_pre and !tag.is("nowiki") and
-            try self.htmlDisplayNoneIn(tag, style.text_element))
+            try self.htmlDisplayNoneWithSource(tag, style.text_element, original_style))
         {
             if (syntax.matchingTag(input, tag)) |pair| {
                 try self.consumeHiddenHtml(input[tag.end..pair.inner_end], style, depth);
@@ -33190,7 +33776,12 @@ pub const Renderer = struct {
         };
         var phonos_spans: ?[]const Span = null;
         if (tag.is("span")) if ((try self.semanticAttribute(tag, "data-phonos-audio"))) |raw_file| {
-            phonos_spans = try self.mediaFileKindWithSpans(raw_file, content, .audio, .{ .mode = .inline_body, .style = s, .depth = depth + 1 });
+            const capture: MediaCaptionCapture = .{ .mode = .inline_body, .style = s, .depth = depth + 1 };
+            phonos_spans = try self.mediaFileKindWithSpans(raw_file, content, .audio, capture);
+            if (self.phonos_fragment != null and matched != null) {
+                const caption = phonos_spans orelse try self.captureMediaCaption(content, capture);
+                phonos_spans = (try self.phonosOccurrence(tracked.bytes[at..pair.end], caption, raw_file, s)) orelse caption;
+            }
         };
         if (tag.is("ol") or tag.is("ul") or tag.is("dl")) {
             const previous_suppression = self.image_block_suppressed;
@@ -39070,9 +39661,11 @@ pub const Renderer = struct {
         var figure_quote_input_live = false;
         var table_link_quote_live = false;
         var selected_table_quote_source = false;
+        var phonos_quote_input = false;
         var local_target_quote_live = false;
         var list_quote_operation: ?*const OrdinaryBulletLink = null;
         var heading_quote_input = false;
+        var paragraph_parent_input = false;
         var bullet_box: ?BulletBoxSource = null;
         defer if (bullet_box) |proof| self.a.free(proof.outer_classes);
         var native_quote_input_live = false;
@@ -39122,7 +39715,7 @@ pub const Renderer = struct {
             if (ordinary and figure_quote_input_live and !self.context.observe_structure_only)
                 bullet_box = try self.ordinaryBulletBoxInput(prepared.source);
             if (bullet_box != null) {
-                list_quote_operation = self.ordinary_bullet_link;
+                list_quote_operation = self.box_bullet_line;
             } else if (ordinary and figure_quote_input_live and
                 (self.static_list_item != null or (prepared.source.unknown and self.static_example_line != null)) and
                 (table_style_profile.staticInlineOwnerCandidate(prepared.source.bytes) or std.ascii.findIgnoreCase(prepared.source.bytes, "border") != null))
@@ -39131,6 +39724,8 @@ pub const Renderer = struct {
             if (!native_quote_input_live and ordinary and figure_quote_input_live and previous_source_domain == null and
                 std.mem.indexOf(u8, prepared.source.bytes, "[[") != null and std.ascii.findIgnoreCase(prepared.source.bytes, "border") != null)
                 decorated_quote_root = self.decoratedQuoteInput(prepared.source);
+            if (ordinary and figure_quote_input_live and inherited.text_element == null and self.dispatched_static_paragraph != null)
+                paragraph_parent_input = self.ordinaryParagraphSpanInput(prepared.source);
             if (self.wiki_heading_span_title) |issued| {
                 if (ordinary and figure_quote_input_live and QuoteSourceMap.cleanLocal(prepared.source)) {
                     if (self.wikiCellCurrentBodyRange(MissingText.untracked(issued), prepared.source.bytes)) |original|
@@ -39140,6 +39735,11 @@ pub const Renderer = struct {
             if (ordinary and figure_quote_input_live) root_language_quote_proof = self.rootLanguageQuoteInputProof(prepared.source);
             const selected_quote_source = ordinary and figure_quote_input_live and QuoteSourceMap.cleanLocal(prepared.source) and
                 self.registeredCaptionOriginal(prepared.source.bytes) != null;
+            if (self.phonos_fragment) |fragment| {
+                phonos_quote_input = ordinary and figure_quote_input_live and QuoteSourceMap.cleanLocal(prepared.source) and
+                    std.ascii.findIgnoreCase(prepared.source.bytes, "data-phonos-audio") != null and
+                    self.registeredOriginalInterval(prepared.source.bytes, fragment.projected) != null;
+            }
             if (selected_quote_source and quote_scope == null) if (figure_source_domain) |domain| {
                 const parent_known = if (inherited.text_element) |parent_node|
                     self.currentAncestorScope(parent_node) and parent_node.complete_ancestor_classes != null else true;
@@ -39147,14 +39747,29 @@ pub const Renderer = struct {
             };
             const output = try normalizeWikiQuotesPreparedMappedInDomain(self.a, prepared.source, 0, false, self.context,
                 if (table_tails.seed) |seed| prepared.forwardSeed(comparisons.forwardSeed(seed)) else null,
-                if (heading_quote_input or list_quote_operation != null or quote_scope != null or table_link_quote_live or local_target_quote_live or native_quote_input_live or decorated_quote_root != null or box_quote_input_live or literal_paragraph_live or root_language_quote_proof != null or
+                if (phonos_quote_input or heading_quote_input or paragraph_parent_input or list_quote_operation != null or quote_scope != null or table_link_quote_live or local_target_quote_live or native_quote_input_live or decorated_quote_root != null or box_quote_input_live or literal_paragraph_live or root_language_quote_proof != null or
                     (ordinary and figure_quote_input_live and (figure_source_domain != null or self.context.body_link_continuations != null))) &quote_map else null,
-                heading_quote_input or list_quote_operation != null or selected_quote_source or selected_table_quote_source);
+                phonos_quote_input or heading_quote_input or paragraph_parent_input or list_quote_operation != null or selected_quote_source or selected_table_quote_source);
             prepared.release(self.a, comparisons.source, output);
             comparisons.release(self.a, table_tails.source, output);
             table_tails.release(self.a, unmatched, output);
             break :quoted output;
         };
+        const previous_phonos_quotes = self.phonos_quote_source;
+        self.phonos_quote_source = if (phonos_quote_input and QuoteSourceMap.cleanLocal(quoted) and
+            inlineOverlaySameSourceSlice(quote_map.original, unmatched.bytes) and
+            inlineOverlaySameSourceSlice(quote_map.output, quoted.bytes)) &quote_map else null;
+        defer self.phonos_quote_source = previous_phonos_quotes;
+        const previous_paragraph_parent = self.paragraph_span_quotes;
+        var paragraph_parent: InlineBoxQuotedParagraph = undefined;
+        self.paragraph_span_quotes = null;
+        defer self.paragraph_span_quotes = previous_paragraph_parent;
+        if (paragraph_parent_input and QuoteSourceMap.cleanLocal(quoted) and rootLanguageQuoteMapClean(&quote_map) and
+            inlineOverlaySameSourceSlice(quote_map.original, unmatched.bytes) and inlineOverlaySameSourceSlice(quote_map.output, quoted.bytes) and
+            staticListClosedSiblings(quoted.bytes, false, false, true)) {
+            paragraph_parent = .{ .root = self.native_inline_motion_root.?, .epoch = self.native_inline_motion_epoch, .map = &quote_map };
+            self.paragraph_span_quotes = &paragraph_parent;
+        }
         const previous_list_quotes = self.static_list_quotes;
         var list_quotes: StaticListQuotes = undefined;
         if (list_quote_operation != null and QuoteSourceMap.cleanLocal(unmatched) and QuoteSourceMap.cleanLocal(quoted) and
@@ -41219,9 +41834,58 @@ pub const Renderer = struct {
         return inlineOverlaySameSourceSlice(copied, original.bytes);
     }
 
+    // Both the whole-page parser and the active section must select the same
+    // unjoined physical paragraph. A copied SPAN in its inline-only source
+    // can have a P, formatting element or ordinary link parent, never a LI.
+    fn ordinaryParagraphSpanInput(self: *Renderer, tracked: MissingText) bool {
+        const line = self.dispatched_static_paragraph orelse return false;
+        const root = self.native_inline_motion_root orelse return false;
+        const host = self.native_article_host orelse return false;
+        const fragment = host.active_fragment orelse return false;
+        const original = fragment.original_page orelse return false;
+        const catalog = self.context.namespace_catalog orelse return false;
+        const hints = self.semantic_capture orelse return false;
+        if (!hints.ordinary_paragraph or !host.native_paragraph_css_subjects or !self.wikiClassOrdinaryDomain() or
+            self.context.observe_structure_only or self.rejection_probe_scope or self.body_depth != 1 or
+            self.media_depth != 0 or self.ruby_depth != 0 or self.figure_caption_depth != 0 or self.typed_table_depth != 0 or
+            self.table_viewport_cell_source != null or self.native_inline_motion_epoch == 0 or root.reference != null or
+            !host.matchesActive(self, root.source) or !QuoteSourceMap.cleanLocal(tracked) or
+            !noLiParentSourceRange(root.source, line) or !inlineOverlaySameSourceSlice(fragment.prepared, root.source.bytes) or
+            rootStaticParagraphLine(root.source.bytes, line) != null) return false;
+        const current = self.wikiCellCurrentBodyRange(root.source, tracked.bytes) orelse return false;
+        if (!inlineOverlaySameSourceSlice(current, line)) return false;
+        const local = rootPhysicalParagraphLine(root.source.bytes, line) orelse return false;
+        if (fragment.start > fragment.page.len or root.source.bytes.len > fragment.page.len - fragment.start) return false;
+        const start = fragment.start + local;
+        if (start > original.len or line.len > original.len - start or !containsSortedOffset(fragment.static_paragraph_openings, start) or
+            !std.mem.eql(u8, line, original[start..][0..line.len]) or !std.mem.eql(u8, line, fragment.page[start..][0..line.len])) return false;
+        return ordinaryParagraphInlineLine(catalog, line);
+    }
+
+    fn ordinaryParagraphInlineLine(catalog: *const @import("namespace_registry").Registry, line: []const u8) bool {
+        if (line.len == 0 or line.len > 16 * 1024 or std.ascii.findIgnoreCase(line, "<span") == null or
+            std.mem.indexOfAny(u8, line, "{}\x7f\r\n") != null or !staticListClosedSiblings(line, true, true, true)) return false;
+        var at: usize = 0;
+        while (std.mem.indexOfPos(u8, line, at, "[[")) |opening| {
+            const pair = syntax.balanced(line, opening) orelse return false;
+            const inner = line[opening + 2 .. pair.end - 2];
+            if (std.mem.indexOfAny(u8, inner, "<>[]{}") != null or std.mem.count(u8, inner, "|") > 1) return false;
+            const target = inner[0 .. std.mem.indexOfScalar(u8, inner, '|') orelse inner.len];
+            if (target.len == 0 or target[0] == ':' or !std.mem.eql(u8, target, trim(target)) or !safeInternalTarget(target)) return false;
+            const ns = catalog.ofTitle(target).id;
+            if (ns < 0 or ns == 6) return false;
+            at = pair.end;
+        }
+        return true;
+    }
+
     fn rootStaticParagraphLine(source: []const u8, line: []const u8) ?usize {
+        if (!starts(line, "'''") and !table_style_profile.staticInlineOwnerCandidate(line)) return null;
+        return rootPhysicalParagraphLine(source, line);
+    }
+
+    fn rootPhysicalParagraphLine(source: []const u8, line: []const u8) ?usize {
         if (line.len < 7 or line.len > 16 * 1024 or
-            (!starts(line, "'''") and !table_style_profile.staticInlineOwnerCandidate(line)) or
             std.mem.indexOfScalar(u8, line, '<') == null or std.mem.indexOfAny(u8, line, "\r\n") != null or
             !wikiClassContains(source, line)) return null;
         const start = @intFromPtr(line.ptr) - @intFromPtr(source.ptr);
@@ -41241,21 +41905,34 @@ pub const Renderer = struct {
             !self.in_template_literal_scope and self.body_link_target.len == 0 and self.explicit_wiki_label == null and
             !self.figure_implicit_list_context and !self.html_list_item_flow and !self.html_blockquote_flow;
         const previous_blocks = blocks.items.len;
+        const paint_start = if (unjoined_root) rootStaticParagraphLine(source, parsed) else null;
+        // Paint candidates retain their existing pre-emission registration.
+        // A plain inline paragraph can borrow the same ordered offset vector
+        // only after the whole-page parser has emitted one complete paragraph.
+        const span_start = if (unjoined_root and paint_start == null and
+            (self.page_static_paragraph_openings != null or self.native_inline_motion_root != null) and
+            std.ascii.findIgnoreCase(parsed, "<span") != null) rootPhysicalParagraphLine(source, parsed) else null;
         if (unjoined_root) {
-            if (rootStaticParagraphLine(source, parsed)) |start| {
+            if (paint_start) |start| {
                 if (self.page_static_paragraph_openings) |openings| {
                     const root = self.heading_source;
                     if (self.page_html_heading_openings != null and self.page_wiki_heading_openings != null and
                         root != null and inlineOverlaySameSourceSlice(source, root.?)) try openings.append(self.a, start);
                 }
-                if (self.native_inline_motion_root) |root| if (inlineOverlaySameSourceSlice(source, root.source.bytes)) {
-                    self.dispatched_static_paragraph = parsed;
-                };
             }
+            if (paint_start != null or span_start != null) if (self.native_inline_motion_root) |root| {
+                if (inlineOverlaySameSourceSlice(source, root.source.bytes)) self.dispatched_static_paragraph = parsed;
+            };
         }
         try self.bodyParagraph(blocks, raw, seed, pending_join);
-        if (unjoined_root and pending_join.* == null and blocks.items.len == previous_blocks + 1 and blocks.items[previous_blocks].kind == .paragraph)
+        if (unjoined_root and pending_join.* == null and blocks.items.len == previous_blocks + 1 and blocks.items[previous_blocks].kind == .paragraph) {
+            if (span_start) |start| if (self.page_static_paragraph_openings) |openings| {
+                const whole = self.heading_source;
+                if (self.page_html_heading_openings != null and self.page_wiki_heading_openings != null and
+                    whole != null and inlineOverlaySameSourceSlice(source, whole.?)) try openings.append(self.a, start);
+            };
             self.observeNeutralRootTableParagraph(source, std.mem.trimEnd(u8, raw, "\r\n"));
+        }
     }
     // Primary BlockLevelPass trims prefixed physical-list-line edges, not
     // protected payloads or a logical scope spanning ordinary source lines.
@@ -43141,6 +43818,12 @@ pub const Renderer = struct {
                         self.table_css_ancestor_classes.len == 0) wrapper_source[0..pair.end] else null;
                     defer self.inline_box_root_list = previous_list;
                     try self.htmlList(&blocks, wrapper_source[tag.end..pair.inner_end], tag, "", 0, list_style);
+                } else if (try self.selectedWrappedHeading(wrapper_source[0..pair.end])) |owned_heading| {
+                    try self.appendBlockBudgeted(&blocks,owned_heading);
+                } else if (try self.measuredFlexTreeSource(wrapper_source[0..pair.end], tag, pair)) |flex_tree| {
+                    try self.appendBlockBudgeted(&blocks, .{ .kind = .container, .container = flex_tree });
+                } else if (try self.translatedCardSource(wrapper_source[0..pair.end], tag, pair)) |card| {
+                    try self.appendBlockBudgeted(&blocks, .{ .kind = .container, .container = card });
                 } else if (try self.appendEtymologyTree(&blocks, wrapper_source[tag.end..pair.inner_end], tag)) {
                     // The accepted tree already emitted its data-only nested list.
                 } else {
@@ -43219,7 +43902,7 @@ pub const Renderer = struct {
                     // A flex item is an original child owner even when it has
                     // no independent box declaration. Establish that role before
                     // rendering the children, never reconstruct it from output.
-                    const flex_children = !container_resolution.unresolved and container_resolution.style.layout == .flex_row;
+                    const flex_children = !container_resolution.unresolved and (container_resolution.style.layout == .flex_row or container_resolution.style.layout == .flex_column);
                     if (flex_children) {
                         if (self.container_child_positions == null) container_resolution.unresolved = true
                         else self.container_parent_flex = true;
@@ -43679,6 +44362,13 @@ pub const Renderer = struct {
                         list_line.ptr == physical_line.ptr and list_line.len == physical_line.len and
                         (start == 0 or input[start - 1] == '\n')) &bullet_link else null;
                     defer self.ordinary_bullet_link = previous_bullet_link;
+                    const previous_box_bullet = self.box_bullet_line;
+                    self.box_bullet_line = if (!anchored_inline and !link_label_scope and kind == .list_item and
+                        path.len != 0 and path.len <= max_depth and std.mem.trim(u8, path, "*").len == 0 and
+                        number.len == 0 and list_prefix.body_start == path.len and labeled_list_opening == null and
+                        inlineOverlaySameSourceSlice(list_line, physical_line) and (start == 0 or input[start - 1] == '\n'))
+                        &bullet_link else null;
+                    defer self.box_bullet_line = previous_box_bullet;
                     // Numbering and bullet links keep their own dispatcher checks.
                     // Both complete single-marker operations own a classless LI.
                     self.static_list_item = if (!anchored_inline and !link_label_scope and kind == .definition and
@@ -43781,6 +44471,45 @@ pub const Renderer = struct {
         defer self.body_language_direction = previous;
         return self.cellContentSpans(input, blocks);
     }
+    fn selectedWrappedHeading(self:*Renderer, source:[]const u8) Error!?Block {
+        if(self.body_depth!=1 or self.content_root!=.parser_output or self.in_reference or
+            self.parsed_pre or self.pre_block or self.body_link_target.len!=0) return null;
+        const styles=self.context.table_styles orelse return null;
+        const selected=styles.selected_wrapped_heading orelse return null;
+        if(source.len!=selected.source.len or !std.mem.eql(u8,source,selected.source))return null;
+        const tracked=self.body_missing orelse return null;
+        if(tracked.lost_missing_range or tracked.generated_source!=null) return null;
+        const issued=self.wrapped_heading_source orelse return null;
+        if (issued.ptr!=source.ptr or issued.len!=source.len) return null;
+        if (selected.body_offset >= source.len) return null;
+        // Normal HTML headings register the first byte of their content.
+        // Reuse its source-copy mapping for the exact original H3 opening.
+        const heading_offset = self.headingSourceOffset(source[selected.body_offset..]) orelse return null;
+        const p=selected.recipe;
+        // The source join verifies exactly which wrapper and run attributes
+        // survive from the authored HTML. Preserve its classes and entity
+        // provenance for the ordinary POS/definition ownership pass.
+        const classes = try std.mem.join(self.a, " ", &.{
+            tableViewportNodeAttribute(p.owners[0], "class") orelse return null,
+            tableViewportNodeAttribute(p.owners[1], "class") orelse return null,
+            tableViewportNodeAttribute(p.owners[3], "class") orelse return null,
+        });
+        const spans = try self.a.alloc(Span, 5);
+        const texts = [_][]const u8{ p.title, " ", "[", p.language, "]" };
+        for (spans, texts, 0..) |*span, txt, i| {
+            const run = if (i == 0) p.word else if (i == 1) p.separator else p.sub;
+            span.* = .{ .text = txt, .classes = classes,
+                .provenance = if (i == 1 or i == 2 or i == 4) .entity_literal else .parsed,
+                .font_scale = run.font.font_scale, .font_scale_basis = run.font.font_scale_basis,
+                .font_scale_set = true, .font_family = run.font.font_family, .font_features = run.font.font_features,
+                .language = run.font.language, .foreground = run.ink, .foreground_set = true,
+                .inline_style = .{ .font_normalized = true, .line_height = .{ .computed = run.line_height } },
+                .flags = .{ .bold = run.font.bold, .italic = run.font.italic, .subscript = i >= 2 },
+                .tooltip = p.tooltip, .tooltip_set = true };
+        }
+        return .{.kind=.heading,.level=3,.spans=spans,.heading_source_offset=heading_offset,.section_heading_style=p.style,.expected_heading_pair=.{.primary=p.primary,.fallback=p.fallback}};
+    }
+
     fn htmlHeadingStyle(self: *Renderer, tag: syntax.Tag, inherited: Style) Error!Style {
         var parent = inherited;
         parent.font_scale_basis = .context;
@@ -44755,6 +45484,11 @@ pub const Renderer = struct {
             defer if (ids) |owned| self.a.free(owned);
             const parent_tag = self.containerQueryParentTag(tag, profile, element);
             var query = element.*;
+            if (profile.selected_root_per_body) |ratio| {
+                if (self.observedFigureNativeFontOrigin(scoped)) |scale| if (scale > 0) {
+                    query.container_root_per_owner = ratio / scale;
+                };
+            }
             query.source_parent_tag_nonmatch = parent_tag;
             var alternative: table_style_profile.TextElement = undefined;
             if (classes) |complete| query.complete_ancestor_classes = complete;
@@ -44776,7 +45510,7 @@ pub const Renderer = struct {
     }
 
     fn containerNeedsOwnedBox(value: presentation_types.ContainerStyle) bool {
-        return value.overflow == .auto or !presentation_types.legacyContainerStyleMarginsSupported(value) or value.positioning != null or value.columns != null or value.height != null or value.min_height != null or value.width != null or value.float_side != null or value.clear != null or value.max_width != null or
+        return value.overflow == .auto or value.overflow == .visible_x_clip_y or !presentation_types.legacyContainerStyleMarginsSupported(value) or value.positioning != null or value.columns != null or value.height != null or value.min_height != null or value.width != null or value.float_side != null or value.clear != null or value.max_width != null or
             value.box_sizing != null or value.layout != null or value.align_items != null or value.flex_item != null or
             value.background != null or value.border != null or value.line_height != null or value.screen_max_width != null;
     }
@@ -44870,7 +45604,15 @@ pub const Renderer = struct {
         return normalizeContainerStyle(value, scale);
     }
     fn normalizeContainerStyle(value: *presentation_types.ContainerStyle, scale: ?f32) bool {
-        if (value.columns) |*columns| if (!normalizeContainerLength(&columns.gap, scale)) return false;
+        if (value.flex_edge) |*edge| if (!normalizeContainerLength(&edge.width_add,scale)) return false;
+        if (value.flex_column_gap) |*gap| {
+            if (!normalizeContainerLength(gap, scale)) return false;
+            if (gap.value == 0) value.flex_column_gap = null;
+        }
+        if (value.columns) |*columns| {
+            if (!normalizeContainerLength(&columns.gap, scale)) return false;
+            if (columns.width) |*width| if (!normalizeContainerLength(width, scale)) return false;
+        }
         if (value.height) |*height| if (!normalizeContainerLength(height, scale)) return false;
         if (value.min_height) |*minimum| if (!normalizeContainerLength(minimum, scale)) return false;
         if (!normalizeContainerMarginEdges(&value.margins, scale) or !normalizeContainerScreenMargins(&value.margin_values, scale) or !normalizeBlockEdges(&value.padding, scale) or
@@ -45435,6 +46177,10 @@ pub const Renderer = struct {
     }
 
     fn htmlLanguageDirection(self: *Renderer, tag: syntax.Tag, inherited: Style) Error!Style {
+        return self.htmlLanguageDirectionWithFont(tag, inherited, false);
+    }
+
+    fn htmlLanguageDirectionWithFont(self: *Renderer, tag: syntax.Tag, inherited: Style, own_pixels: bool) Error!Style {
         const motion = try self.nativeInlineMotionEntry(tag, inherited.native_inline_motion);
         if (self.observedFigureCaptionTagStyle(tag)) |known| {
             var result = inherited;
@@ -45486,7 +46232,8 @@ pub const Renderer = struct {
         } else if (if (tag.is("span") or tag.is("b") or tag.is("i")) self.tableNestedFontForTag(tag) else null) |owner| {
             result = tableNestedOwnerStyle(result, owner);
         } else if (!try self.applyObservedCellFont(tag, inherited, &result)) {
-            if (try self.htmlComputedFontSize(tag, inherited)) |resolved| {
+            if (try self.htmlComputedFontSizeWithPixels(tag, inherited, own_pixels)) |resolved| {
+                if (resolved.css_pixels) result.font_scale_basis = .css_px;
                 if (resolved.normal_body) result.font_scale_basis = .normal_body;
                 result.font_scale = if (result.font_scale_basis == .normal_body) resolved.value orelse 1 else resolved.value;
                 result.font_scale_set = true;
@@ -51302,6 +52049,50 @@ test "localized namespace aliases classify media and category membership" {
     try std.testing.expectEqual(@as(u32, 20), headings[2].spans[0].image.?.width_px.?);
 }
 
+test "repeated source Phonos controls keep both localized body actions and one recording" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const caption = "<span class=\"e-audio\">Suara</span>";
+    const token = "<span class=\"ext-phonos ext-phonos-PhonosButton\" lang=\"bug\" data-phonos-audio=\"Recorded.wav\">" ++ caption ++ "</span>";
+    const source = try std.mem.concat(a, u8, &.{ token, " ", token });
+    const detached = try a.dupe(u8, source);
+    const first: table_style_profile.PhonosButton = .{ .file = "Recorded.wav", .language = "bug", .caption_html = caption,
+        .caption = "Suara", .accessible_name = "Putar audio", .attribution_title = "Berkas:Recorded.wav", .attribution_text = "ⓘ" };
+    var second = first;
+    second.accessible_name = "Putar rekaman kedua";
+    const selected = [_]table_style_profile.SelectedPhonos{
+        .{ .source = source[0..token.len], .button = first }, .{ .source = source[token.len+1..], .button = second },
+    };
+    var sheets = try table_style_profile.parseAlloc(a, "");
+    defer sheets.deinit();
+    sheets.selected_phonos = &selected;
+    for ([_][]const u8{ source, detached, source, detached }, 0..) |input, iteration| {
+        var renderer: Renderer = .{ .a = a, .context = .{ .table_styles = &sheets, .external_links_prepared = true },
+            .content_root = .parser_output, .phonos_fragment = .{ .projected = source, .original = source } };
+        if (iteration >= 2) renderer.next_quote_seed = .{ .state = .none, .correction = null,
+            .boundaries = QuoteBoundaries.init(input), .line_end = input.len };
+        const spans = try renderer.parseSpans(input, .{});
+        var play_count: usize = 0;
+        var credit_count: usize = 0;
+        for (spans) |span| {
+            if (span.audio_control) |control| {
+                try std.testing.expect(control.presentation == .phonos_button and play_count < selected.len);
+                try std.testing.expectEqualStrings(selected[play_count].button.accessible_name, span.tooltip.?);
+                try std.testing.expectEqualStrings("Suara", span.text);
+                play_count += 1;
+            } else if (span.kind == .link) {
+                try std.testing.expect(span.flags.superscript and std.mem.eql(u8, "Berkas:Recorded.wav", span.target));
+                credit_count += 1;
+            }
+        }
+        const expected: usize = if (iteration % 2 == 0) 2 else 0;
+        try std.testing.expectEqual(expected, play_count);
+        try std.testing.expectEqual(expected, credit_count);
+        try std.testing.expectEqual(@as(usize, 1), renderer.media.items.len);
+        try std.testing.expectEqualStrings("Suara", renderer.media.items[0].caption);
+    }
+}
 test "Phonos presentation keeps canonical audio caption and language with explicit error flags" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -51995,6 +52786,31 @@ test "file filename fallbacks retain literal decoded title text and authored cap
     try std.testing.expectEqualStrings("A&amp;.jpg", equal_alt[0].image.?.file);
     try std.testing.expectEqualStrings("A&amp;.jpg", equal_heading.media.items[0].file);
     try std.testing.expectEqualStrings("A&amp;.jpg", equal_heading.media.items[0].caption);
+}
+
+test "retained YI image empty nested link preserves caption and file action through codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .content_root = .parser_output, .context = try FigureProducerTest.context(a) };
+    // Substitute the exact IMAGE and TEXT fields of צײַט r16067 into מוסטער:image r5431.
+    const file = "Daylight Map, nonscientific (0600 UTC).jpg";
+    const source = "[[image:" ++ file ++ "||left|thumb|150px|[[]]]]";
+    const blocks = try r.renderBody(source);
+    try std.testing.expectEqual(@as(usize, 1), try FigureProducerTest.countFigures(blocks));
+    const figure = try FigureProducerTest.find(blocks);
+    try std.testing.expectEqual(presentation_types.FigurePlacement.float_left, figure.placement);
+    const span = figure.content.image.span;
+    try std.testing.expectEqualStrings(file, span.image.?.file);
+    try std.testing.expectEqual(@as(?u32, 150), span.image.?.width_px);
+    try std.testing.expectEqualStrings("File:" ++ file, span.target);
+    const caption = if (figure.caption_blocks) |children| try FigureProducerTest.bodySpans(a, children) else figure.caption;
+    try std.testing.expectEqualStrings("[[]]", try flattened(a, caption));
+    for (caption) |part| try std.testing.expect(part.kind == .text and part.target.len == 0 and !part.generated_diagnostic);
+    try std.testing.expectEqual(@as(usize, 1), r.media.items.len);
+    try std.testing.expectEqualStrings(file, r.media.items[0].file);
+    try std.testing.expectEqualStrings("[[]]", r.media.items[0].caption);
+    try FigureProducerTest.roundtrip(a, &r, blocks);
 }
 
 test "image option case invalid widths formats and unsupported parameters remain visible captions" {
@@ -102525,6 +103341,21 @@ test "fixed Container source retains full overflowing child fonts actions and co
 }
 
 
+test "a flex row gap resolves against the declaring font once" {
+    const original: presentation_types.ContainerStyle = .{ .layout = .flex_row, .flex_column_gap = .{ .unit = .em, .value = 0.5 } };
+    var scaled = original;
+    try std.testing.expect(Renderer.normalizeContainerStyle(&scaled, 0.75));
+    try std.testing.expectEqual(presentation_types.StyleLength{ .unit = .em, .value = 0.375 }, scaled.flex_column_gap.?);
+    var zero = original;
+    try std.testing.expect(Renderer.normalizeContainerStyle(&zero, 0));
+    try std.testing.expect(zero.flex_column_gap == null and zero.layout == .flex_row);
+    var unknown = original;
+    try std.testing.expect(!Renderer.normalizeContainerStyle(&unknown, null));
+    var fixed = original; fixed.flex_column_gap = .{ .unit = .px, .value = 4 };
+    try std.testing.expect(Renderer.normalizeContainerStyle(&fixed, null));
+    try std.testing.expectEqual(@as(f32, 4), fixed.flex_column_gap.?.value);
+}
+
 test "count columns gap normalizes at owner font once and retains zero owner geometry" {
     var style: presentation_types.ContainerStyle = .{ .columns = .{ .count = 2, .gap = .{ .unit = .em, .value = 1 } }, .owner_font_scale = 0.95 };
     try std.testing.expect(Renderer.containerNeedsOwnedBox(style));
@@ -102541,6 +103372,27 @@ test "count columns gap normalizes at owner font once and retains zero owner geo
     var pixels: presentation_types.ContainerStyle = .{ .columns = .{ .count = 2, .gap = .{ .unit = .px, .value = 12 } } };
     try std.testing.expect(Renderer.normalizeContainerStyle(&pixels, null));
     try std.testing.expectEqual(@as(f32, 12), pixels.columns.?.gap.value);
+}
+
+test "preferred column widths use the declaring font and retain the exact original link" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var profile = try table_style_profile.parseForTargetAlloc(a, "", .screen);
+    defer profile.deinit();
+    var renderer: Renderer = .{ .a = a, .context = .{ .table_styles = &profile } };
+    const blocks = try renderer.renderBody("<div style='column-width:25em;column-gap:20px;font-size:80%'>[[Kept|kept]]</div>");
+    try std.testing.expect(!renderer.fallbacks.unsupported_element and !renderer.fallbacks.unresolved_table_style);
+    try std.testing.expectEqual(@as(usize, 1), blocks.len);
+    const box = blocks[0].container.?;
+    try std.testing.expectEqual(@as(?u16, null), box.style.columns.?.count);
+    try std.testing.expectEqual(presentation_types.StyleLength{ .unit = .em, .value = 20 }, box.style.columns.?.width.?);
+    try std.testing.expectEqual(presentation_types.StyleLength{ .unit = .px, .value = 20 }, box.style.columns.?.gap);
+    try std.testing.expectEqualStrings("Kept", box.blocks[0].spans[0].target);
+    try std.testing.expectEqualStrings("kept", box.blocks[0].spans[0].text);
+    const saved = try FormattingScopeTest.encode(a, &renderer, blocks);
+    const bytes = try @import("blob_encoder").presentation_codec.encodeAlloc(a, saved);
+    try std.testing.expectEqualStrings("DPRZ", bytes[0..4]);
 }
 
 test "EL count column source and table cell preserve full typed owners fonts actions and codec" {
@@ -102590,7 +103442,7 @@ test "EL count column source and table cell preserve full typed owners fonts act
     try std.testing.expectEqual(@as(usize, 1), blank.len);
     try std.testing.expect(blank[0].container != null and blank[0].container.?.blocks.len == 0);
     try std.testing.expectEqual(@as(u16, 1), blank[0].container.?.style.columns.?.count);
-    for ([_][]const u8{ "column-count:var(--unknown)", "column-count:2;column-width:10em", "column-count:2;column-gap:20%", "column-count:2;height:0", "column-count:2;display:flex", "column-count:2;overflow:auto", "column-count:2;break-inside:avoid" }) |css| {
+    for ([_][]const u8{ "column-count:var(--unknown)", "column-count:2;column-width:10ch", "column-count:2;column-gap:20%", "column-count:2;height:0", "column-count:2;display:flex", "column-count:2;overflow:auto", "column-count:2;break-inside:avoid" }) |css| {
         var refused: Renderer = .{ .a = a, .context = .{ .table_styles = &profile } };
         const body = try refused.renderBody(try std.fmt.allocPrint(a, "<div style='{s}'>[[Kept|kept]]</div>", .{css}));
         try std.testing.expect(refused.fallbacks.unsupported_element or refused.fallbacks.unresolved_table_style);
@@ -132863,6 +133715,15 @@ test "whole original Vietnamese Wiktionary page binds the pronunciation source t
     const observer = try @import("presentation_document.zig").observeHeadingAnchorsWithWikiScopeAlloc(
         a, "Wiktionary", numbered.missing, .{}, &ns, &behavior, null, .{ .citations = numbered.citations }, numbered.poem_phase, true);
     try std.testing.expect(std.mem.indexOfScalar(usize, observer.page_wiki_openings, 11303) != null);
+    const headword_start = 17795;
+    const headword_end = std.mem.indexOfScalarPos(u8, source, headword_start, '\n') orelse return error.MissingHeadwordLine;
+    const headword = source[headword_start..headword_end];
+    try std.testing.expectEqual(@as(usize, 194), headword.len);
+    try std.testing.expect(std.mem.indexOfScalar(usize, observer.page_static_paragraph_openings, headword_start) != null);
+    try std.testing.expect(Renderer.ordinaryParagraphInlineLine(&ns, headword) and Renderer.noLiParentSourceRange(tracked, headword));
+    const intersecting = [_]missing_dependency.Range{.{ .start = headword_start + 1, .end = headword_start + 9, .occurrence = 1 }};
+    try std.testing.expect(!Renderer.noLiParentSourceRange(.{ .bytes = source, .unknown = true, .ranges = &intersecting }, headword));
+    try std.testing.expect(!Renderer.noLiParentSourceRange(.{ .bytes = source, .lost_missing_range = true }, headword));
     try std.testing.expectEqualStrings(source[0..12211], numbered.source[0..12211]);
     var classes: std.ArrayList(u8) = .empty;
     try appendNativeAuthoredSourceClasses(a, &classes, source[0..11303]);
@@ -132874,5 +133735,306 @@ test "whole original Vietnamese Wiktionary page binds the pronunciation source t
     }
     var renderer: Renderer = .{ .a = a, .context = context };
     try std.testing.expect(has_nav and renderer.ordinaryBulletBoxPrefix(source[11303..11743]));
+    // Every real item through the last accent follows either closed inline
+    // siblings or an explicitly closed, non-nested physical audio table.
+    var row_start: usize = 11743;
+    for (0..11) |_| {
+        try std.testing.expect(renderer.ordinaryBulletBoxPrefix(source[11303..row_start]));
+        const next = std.mem.indexOfScalarPos(u8, source, row_start, '\n') orelse return error.MissingListLine;
+        try std.testing.expect(renderer.closedBoxBulletLine(source[row_start..next]));
+        row_start = next + 1;
+    }
+    for ([_][]const u8{ "* <table><tr><td>x</tr></table>", "** <span>x", "*: mixed",
+        "* <table><tr>foster<td>x</td></tr></table>", "* <table><tr><td><table></table></td></tr></table>",
+        "* <table><tr><td><i>x</td></tr></table>", "* {{unknown}}", "* <ref>x</ref>",
+        "* <span>[unclosed</span>", "* <i><span>x</i></span>", "* [[X|<span>open]]",
+        "* [https://example.com action]", "* [nested [gloss]]", "* [unclosed", "* [[X|<i>mis<span>nested</i></span>]]", "* [[Tập tin:Image.jpg|<span>x</span>]]",
+        "* [[Thể loại:X|<span>x</span>]]", "* [[X|<span>x|ambiguous</span>]]", "* <templatestyles src=invalid/>opaque<table></table>" }) |bad|
+        try std.testing.expect(!renderer.closedBoxBulletLine(bad));
+
     try std.testing.expect(!nativeSourceClassClean(tracked));
+}
+
+test "captured rounded source cards emit inline atoms original term and glossary actions and independent nested abbreviation" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const america =
+        \\<div style="position:relative;text-align:center;padding:5px 10px;background-color:#fffbf2;border:1px solid #ccc;border-radius:4px"><span style="display:inline-block" class="etyl">New Latin</span> <span style="display:inline-block"><i class="Latn mention" lang="la">[[America#Латински|America]]</i></span><span style="z-index:1;position:absolute;transform:translate(-50%);top:calc(100% + 5px);left:50%;border-radius:2px;background-color:rgba(234,255,255,0.85);font-size:12px;height:10px;line-height:10px">[[Додатак:Речник#learned_borrowing|<abbr title="learned borrowing" style="color:black;font-style:italic;text-decoration:none">lbor.</abbr>]]</span></div>
+    ;
+    const amerigo =
+        \\<div style="position:relative;text-align:center;padding:5px 10px;background-color:#fffbf2;border:1px solid #ccc;border-radius:4px"><span style="display:inline-block" class="etyl">Пра-Германски</span> <span style="display:inline-block"><i class="Latn mention" lang="gem-pro">[[Реконструкција&#x3A;Пра-Германски&#x2F;Haimarīks#Пра-Германски|&#x2A;Haimarīks]]</i></span><span style="z-index:1;position:absolute;transform:translate(-50%);top:calc(100% + 5px);left:50%;border-radius:2px;background-color:rgba(234,255,255,0.85);font-size:12px;height:10px;line-height:10px">[[Додатак:Речник#derived_terms|<abbr title="derived terms" style="color:black;font-style:italic;text-decoration:none">der.</abbr>]]<abbr title="uncertain" style="position:absolute;top:50%;transform:translate(0,-48%);left:calc(100% + 2px);font-size:10px;border-radius:2px;background-color:rgba(255,224,240,0.85);padding:1px 2px;font-weight:bold;text-decoration:none">?</abbr></span></div>
+    ;
+    // Isolate source/Container composition. The ordinary selected-edition
+    // Writer separately qualifies the complete source and screen stylesheet.
+    var profile = try table_style_profile.parseForTargetAlloc(a, "", .screen);
+    defer profile.deinit();
+    const NS = @import("namespace_registry");
+    var ns = try NS.Registry.init(a, @embedFile("testdata/sr-ri207-padding/namespace-registry.tsv"));
+    defer ns.deinit();
+    try ns.attachLanguageConversion(@embedFile("testdata/sr-ri207-padding/namespace-siteinfo.raw.json"));
+    try ns.attachInterwikiMap(@embedFile("testdata/sr-ri207-padding/interwiki-map.tsv"));
+    for ([_][]const u8{ america, amerigo }, 0..) |source, index| {
+        const glossary: []const u8 = if (index == 0) "Додатак:Речник#learned_borrowing" else "Додатак:Речник#derived_terms";
+        const title: []const u8 = if (index == 0) "America" else "Amerigo";
+        var renderer: Renderer = .{ .a = a, .content_root = .parser_output, .context = .{ .title = title, .namespace_catalog = &ns, .table_styles = &profile, .text_paint_styles = &profile } };
+        const blocks = try renderer.renderBodyWithMissing(.{ .bytes = source, .unknown = true });
+        try std.testing.expectEqual(@as(usize, 1), blocks.len);
+        const card = blocks[0].container orelse return error.TestUnexpectedResult;
+        try std.testing.expect(card.style.positioning == .relative_auto and card.style.corner_radius_px == 4 and card.style.text_align == .center);
+        try std.testing.expectEqualStrings("#fffbf2", card.style.background.?.rgb);
+        try std.testing.expect(card.style.padding.?.left.value == 10 and card.style.padding.?.top.value == 5 and card.style.border.?.solid.width.value == 1);
+        try std.testing.expectEqualStrings("#cccccc", card.style.border.?.solid.color.rgb);
+        try std.testing.expectEqual(@as(usize, 3), card.blocks.len);
+        const language = card.blocks[0].container.?;
+        const term = card.blocks[1].container.?;
+        try std.testing.expect(language.style.inline_atomic == .adjacent and term.style.inline_atomic == .after_space);
+        try std.testing.expectEqualStrings(if (index == 0) "New Latin" else "Пра-Германски", language.blocks[0].spans[0].text);
+        const word = term.blocks[0].spans[0];
+        try std.testing.expect(word.kind == .link and word.flags.italic);
+        try std.testing.expectEqualStrings(if (index == 0) "America#Латински" else "Реконструкција:Пра-Германски/Haimarīks#Пра-Германски", word.target);
+        const label = card.blocks[2].container.?;
+        const translated = label.style.translated_absolute.?;
+        try std.testing.expect(translated.z_index == 1 and translated.placement.left.percent == 50 and translated.placement.top.px == 5 and translated.placement.top.percent == 100 and translated.placement.translate_x.percent == -50);
+        try std.testing.expectEqual(@as(f32, 0.85), translated.background_alpha);
+        try std.testing.expectEqualStrings("#eaffff", label.style.background.?.rgb);
+        try std.testing.expect(label.style.owner_font.?.font_scale_basis == .css_px and label.style.owner_font.?.font_scale == 12 and label.style.height.?.value == 10);
+        const action = label.blocks[0].spans[0];
+        try std.testing.expect(action.kind == .link and action.flags.italic);
+        try std.testing.expectEqualStrings(glossary, action.target);
+        try std.testing.expectEqualStrings(if (index == 0) "lbor." else "der.", action.text);
+        try std.testing.expectEqualStrings(if (index == 0) "learned borrowing" else "derived terms", action.explanation);
+        try std.testing.expectEqual(@as(usize, if (index == 0) 1 else 2), label.blocks.len);
+        if (index == 1) {
+            const nested = label.blocks[1].container.?;
+            const side = nested.style.translated_absolute.?;
+            try std.testing.expect(side.z_index == null and side.placement.left.percent == 100 and side.placement.left.px == 2 and side.placement.translate_y.percent == -48);
+            try std.testing.expect(nested.style.owner_font.?.bold and nested.style.owner_font.?.font_scale == 10 and nested.style.height == null and nested.style.line_height.?.length.value == 10);
+            const question = nested.blocks[0].spans[0];
+            try std.testing.expect(question.kind == .text and question.flags.bold);
+            try std.testing.expectEqualStrings("?", question.text);
+            try std.testing.expect(side.owns_abbreviation and !translated.owns_abbreviation and question.tooltip == null);
+            try std.testing.expectEqualStrings("uncertain", question.explanation);
+        }
+        const stored = try FormattingScopeTest.encode(a, &renderer, blocks);
+        const wire = @import("blob_encoder").presentation_codec;
+        const bytes = try wire.encodeAlloc(a, stored);
+        const decoded = try wire.decodeAlloc(a, bytes, stored.entry.title, .language, .{ .heading = stored.entry.language.?, .code = stored.entry.language_code });
+        try std.testing.expectEqualDeep(stored, decoded);
+    }
+}
+
+test "original centered flex subtree emits both source cards and the blockified empty vertical edge" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source =
+        \\<div style="width:fit-content;margin:auto;padding:0.5em;display:flex;flex-direction:column;align-items:center"><div style="position:relative;text-align:center;padding:5px 10px;background-color:#fffbf2;border:1px solid #ccc;border-radius:4px"><span style="display:inline-block" class="etyl">New Latin</span> <span style="display:inline-block"><i class="Latn mention" lang="la">[[America#Латински|America]]</i></span><span style="z-index:1;position:absolute;transform:translate(-50%);top:calc(100% + 5px);left:50%;border-radius:2px;background-color:rgba(234,255,255,0.85);font-size:12px;height:10px;line-height:10px">[[Додатак:Речник#learned_borrowing|<abbr title="learned borrowing" style="color:black;font-style:italic;text-decoration:none">lbor.</abbr>]]</span></div><span style="position:relative;height:20px;border-right:2px solid #9e9e9e"></span><div style="position:relative;text-align:center;padding:5px 10px;background-color:#fffbf2;border:1px solid #ccc;border-radius:4px"><span style="display:inline-block" class="etyl">Енглески</span> <span style="display:inline-block"><i class="Latn mention" lang="en">'''America'''</i></span></div></div>
+    ;
+    var profile = try table_style_profile.parseForTargetAlloc(a, "", .screen);
+    defer profile.deinit();
+    const NS = @import("namespace_registry");
+    var ns = try NS.Registry.init(a, @embedFile("testdata/sr-ri207-padding/namespace-registry.tsv"));
+    defer ns.deinit();
+    try ns.attachLanguageConversion(@embedFile("testdata/sr-ri207-padding/namespace-siteinfo.raw.json"));
+    try ns.attachInterwikiMap(@embedFile("testdata/sr-ri207-padding/interwiki-map.tsv"));
+    var renderer: Renderer = .{ .a = a, .content_root = .parser_output, .context = .{
+        .title = "America", .namespace_catalog = &ns, .table_styles = &profile, .text_paint_styles = &profile,
+    } };
+    const blocks = try renderer.renderBodyWithMissing(.{ .bytes = source, .unknown = true });
+    try std.testing.expectEqual(@as(usize, 1), blocks.len);
+    const root = blocks[0].container.?;
+    try std.testing.expect(root.style.layout == .flex_column and root.style.align_items == .center and root.style.width.? == .fit_content);
+    try std.testing.expectEqual(@as(usize, 3), root.blocks.len);
+    const first = root.blocks[0].container.?; const middle = root.blocks[1].container.?; const last = root.blocks[2].container.?;
+    try std.testing.expect(first.style.corner_radius_px == 4 and last.style.corner_radius_px == 4);
+    try std.testing.expect(middle.blocks.len == 0 and middle.style.positioning == .relative_auto and middle.style.height.?.unit == .px);
+    try std.testing.expectEqual(@as(f32,20),middle.style.height.?.value);
+    const border = middle.style.border.?.edges;
+    try std.testing.expect(border.left == .none and border.top == .none and border.bottom == .none);
+    try std.testing.expectEqual(@as(f32,2),border.right.solid.width.value);
+    try std.testing.expectEqualStrings("#9e9e9e",border.right.solid.color.rgb);
+    try std.testing.expectEqualStrings("America#Латински",first.blocks[1].container.?.blocks[0].spans[0].target);
+    try std.testing.expectEqualStrings("lbor.",first.blocks[2].container.?.blocks[0].spans[0].text);
+    try std.testing.expect(last.blocks[1].container.?.blocks[0].spans[0].flags.bold);
+    try std.testing.expectEqualStrings("America",last.blocks[1].container.?.blocks[0].spans[0].text);
+    const stored = try FormattingScopeTest.encode(a,&renderer,blocks);
+    const wire = @import("blob_encoder").presentation_codec;
+    const bytes = try wire.encodeAlloc(a,stored);
+    const decoded = try wire.decodeAlloc(a,bytes,stored.entry.title,.language,.{.heading=stored.entry.language.?,.code=stored.entry.language_code});
+    try std.testing.expectEqualDeep(stored,decoded);
+    for ([_][]const u8{ "position:relative;left:50%;height:20px", "position:absolute;height:20px", "position:relative;transform:scale(2);height:20px" }) |invalid| {
+        const bad = try std.mem.replaceOwned(u8,a,source,"position:relative;height:20px",invalid);
+        var other: Renderer = .{ .a = a, .content_root = .parser_output, .context = renderer.context };
+        try std.testing.expectError(error.UncompiledPresentation,other.renderBodyWithMissing(.{ .bytes = bad, .unknown = true }));
+    }
+}
+
+test "original paired flex edge offsets, physical strokes and separate label actions survive DPRZ" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const source =
+        \\<div style="width:fit-content;margin:auto;padding:0.5em;display:flex;flex-direction:column;align-items:center"><div style="position:relative;display:flex;column-gap:0.5em;align-items:end"><div style="display:flex;flex-direction:column;align-items:center"><div style="position:relative;text-align:center;padding:5px 10px;background-color:#fffbf2;border:1px solid #ccc;border-radius:4px"><span style="display:inline-block" class="etyl">Пра-Германски</span> <span style="display:inline-block"><i class="Latn mention" lang="gem-pro">[[Реконструкција&#x3A;Пра-Германски&#x2F;Amalarīks#Пра-Германски|&#x2A;Amalarīks]]</i></span><span style="z-index:1;position:absolute;transform:translate(-50%);top:calc(100% + 5px);left:50%;border-radius:2px;background-color:rgba(234,255,255,0.85);font-size:12px;height:10px;line-height:10px">[[Додатак:Речник#derived_terms|<abbr title="derived terms" style="color:black;font-style:italic;text-decoration:none">der.</abbr>]]</span></div><span style="align-self:start;left:50%;width:calc(50% + 0.25em);height:10px;position:relative;border-bottom:2px solid #9e9e9e;border-left:2px solid #9e9e9e;border-bottom-left-radius:4px"></span></div><div style="display:flex;flex-direction:column;align-items:center"><div style="position:relative;text-align:center;padding:5px 10px;background-color:#fffbf2;border:1px solid #ccc;border-radius:4px"><span style="display:inline-block" class="etyl">Пра-Германски</span> <span style="display:inline-block"><i class="Latn mention" lang="gem-pro">[[Реконструкција&#x3A;Пра-Германски&#x2F;Haimarīks#Пра-Германски|&#x2A;Haimarīks]]</i></span><span style="z-index:1;position:absolute;transform:translate(-50%);top:calc(100% + 5px);left:50%;border-radius:2px;background-color:rgba(234,255,255,0.85);font-size:12px;height:10px;line-height:10px">[[Додатак:Речник#derived_terms|<abbr title="derived terms" style="color:black;font-style:italic;text-decoration:none">der.</abbr>]]<abbr title="uncertain" style="position:absolute;top:50%;transform:translate(0,-48%);left:calc(100% + 2px);font-size:10px;border-radius:2px;background-color:rgba(255,224,240,0.85);padding:1px 2px;font-weight:bold;text-decoration:none">?</abbr></span></div><span style="align-self:end;right:50%;width:calc(50% + 0.25em);height:10px;position:relative;border-bottom:2px solid #9e9e9e;border-right:2px solid #9e9e9e;border-bottom-right-radius:4px"></span></div></div><span style="position:relative;height:10px;border-right:2px solid #9e9e9e"></span><div style="position:relative;text-align:center;padding:5px 10px;background-color:#fffbf2;border:1px solid #ccc;border-radius:4px"><span style="display:inline-block" class="etyl">Италијански</span> <span style="display:inline-block"><i class="Latn mention" lang="it">'''Amerigo'''</i></span></div></div>
+    ;
+    var profile = try table_style_profile.parseForTargetAlloc(a, "", .screen); defer profile.deinit();
+    const NS = @import("namespace_registry");
+    var ns = try NS.Registry.init(a, @embedFile("testdata/sr-ri207-padding/namespace-registry.tsv")); defer ns.deinit();
+    try ns.attachLanguageConversion(@embedFile("testdata/sr-ri207-padding/namespace-siteinfo.raw.json"));
+    try ns.attachInterwikiMap(@embedFile("testdata/sr-ri207-padding/interwiki-map.tsv"));
+    var renderer: Renderer = .{ .a=a, .content_root=.parser_output, .context=.{
+        .title="Amerigo",.namespace_catalog=&ns,.table_styles=&profile,.text_paint_styles=&profile,
+    } };
+    const blocks = try renderer.renderBodyWithMissing(.{.bytes=source,.unknown=true});
+    try std.testing.expectEqual(@as(usize,1),blocks.len);
+    const root = blocks[0].container.?; try std.testing.expectEqual(@as(usize,3),root.blocks.len);
+    const row = root.blocks[0].container.?;
+    try std.testing.expect(row.style.positioning == .relative_auto and row.style.layout == .flex_row and row.style.align_items == .end);
+    try std.testing.expectEqual(presentation_types.StyleLength{.unit=.em,.value=0.5},row.style.flex_column_gap.?);
+    try std.testing.expectEqual(@as(usize,2),row.blocks.len);
+    for (row.blocks,0..) |branch,i| {
+        const column = branch.container.?; try std.testing.expect(column.style.layout == .flex_column and column.blocks.len==2);
+        const box = column.blocks[1].container.?; try std.testing.expect(box.blocks.len==0);
+        const edge = box.style.flex_edge.?;
+        try std.testing.expect(edge.inset_side == (if (i==0) presentation_types.ContainerFlexEdge.Side.left else .right));
+        try std.testing.expect(edge.align_self == (if (i==0) presentation_types.ContainerFlexEdge.Align.start else .end));
+        try std.testing.expect(edge.inset_percent==50 and edge.width_percent==50 and edge.bottom_radius_px==4);
+        try std.testing.expectEqual(presentation_types.StyleLength{.unit=.em,.value=0.25},edge.width_add);
+        try std.testing.expectEqual(@as(f32,10),box.style.height.?.value);
+        const lines=box.style.border.?.edges;
+        const upright=if(i==0) lines.left else lines.right;
+        try std.testing.expectEqualStrings("#9e9e9e",upright.solid.color.rgb);
+        try std.testing.expectEqual(@as(f32,2),lines.bottom.solid.width.value);
+        const card=column.blocks[0].container.?; const labels=card.blocks[2].container.?;
+        const term = card.blocks[1].container.?.blocks[0].spans;
+        const lemma: []const u8 = if (i == 0) "Amalarīks" else "Haimarīks";
+        const label = try std.mem.concat(a, u8, &.{ "*", lemma });
+        const target = try std.mem.concat(a, u8, &.{ "Реконструкција:Пра-Германски/", lemma, "#Пра-Германски" });
+        try std.testing.expectEqualStrings(label, try flattened(a, term));
+        for (term) |run| {
+            try std.testing.expect(run.kind == .link and run.flags.italic and run.target_fragment == null);
+            try std.testing.expectEqualStrings(target, run.target);
+            try std.testing.expectEqualStrings("gem-pro", run.language);
+        }
+        try std.testing.expectEqualStrings("Додатак:Речник#derived_terms",labels.blocks[0].spans[0].target);
+        if (i==1) try std.testing.expectEqualStrings("uncertain",labels.blocks[1].container.?.blocks[0].spans[0].explanation);
+    }
+    const stored=try FormattingScopeTest.encode(a,&renderer,blocks);
+    const wire=@import("blob_encoder").presentation_codec;
+    const bytes=try wire.encodeAlloc(a,stored);
+    const decoded=try wire.decodeAlloc(a,bytes,stored.entry.title,.language,.{.heading=stored.entry.language.?,.code=stored.entry.language_code});
+    try std.testing.expectEqualDeep(stored,decoded);
+    for ([_][]const u8{ "border-top-left-radius", "transform", "border-bottom-right-radius" }) |property| {
+        var bad: Renderer=.{.a=a,.content_root=.parser_output,.context=renderer.context};
+        const mutated=try std.mem.replaceOwned(u8,a,source,"border-bottom-left-radius",property);
+        try std.testing.expectError(error.UncompiledPresentation,bad.renderBodyWithMissing(.{.bytes=mutated,.unknown=true}));
+    }
+}
+
+test "translated card selectors keep closed sibling types and reject malformed or opaque prefixes" {
+    const Seen = struct {
+        fn previous(input: []const u8) ?[]const u8 {
+            const at = std.mem.indexOf(u8, input, "<div style") orelse return null;
+            return Renderer.translatedPreviousElement(input, at);
+        }
+    };
+    try std.testing.expectEqualStrings("", Seen.previous("<div><div style=''></div></div>").?);
+    try std.testing.expectEqualStrings("span", Seen.previous("<div><span><i>x</i></span> <div style=''></div></div>").?);
+    for ([_][]const u8{ "<div><span><i>x</span> <div style=''>", "<div>''<div style=''>",
+        "<div>[[link|<i>x]] <div style=''>", "<div><textarea id='wpTextbox1'>x</textarea><div style=''>",
+        "<table><tr><td><div style=''>" }) |source| try std.testing.expect(Seen.previous(source) == null);
+}
+
+test "original source flex cards retain translated actions under the selected Serbian screen styles" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const NS = @import("namespace_registry");
+    var ns = try NS.Registry.init(a, @embedFile("testdata/sr-ri207-padding/namespace-registry.tsv"));
+    defer ns.deinit();
+    try ns.attachLanguageConversion(@embedFile("testdata/sr-ri207-padding/namespace-siteinfo.raw.json"));
+    try ns.attachInterwikiMap(@embedFile("testdata/sr-ri207-padding/interwiki-map.tsv"));
+    var profile = try table_style_profile.parseSourcesForTargetAlloc(a, &.{
+        .{ .css = @embedFile("testdata/sr-ri632-list/SubtleUpdatemarker.css"), .base_url = "", .unknown_applicability = true },
+        .{ .css = @embedFile("testdata/sr-ri632-list/WatchlistBase.css"), .base_url = "", .unknown_applicability = true },
+        .{ .css = @embedFile("testdata/sr-ri632-list/WatchlistGreenIndicators.css"), .base_url = "", .unknown_applicability = true },
+        .{ .css = @embedFile("testdata/sr-ri632-list/WatchlistGreenIndicatorsMono.css"), .base_url = "", .unknown_applicability = true },
+        .{ .css = @embedFile("testdata/sr-ri632-list/charinsert-styles.css"), .base_url = "" },
+        .{ .css = @embedFile("testdata/sr-ri207-padding/common.css"), .base_url = "" },
+    }, .screen);
+    defer profile.deinit();
+    // Whole-entry Writer witness. The default gadget selections precede the
+    // indexed Common.css. Pin the originating stylesheet, offset and cascade order.
+    var found = [_]bool{ false, false };
+    for (profile.container_rules) |rule| {
+        const origin = rule.provenance orelse continue;
+        const selector = trim(origin.selector);
+        for ([_][]const u8{ ".IPA *", "textarea#wpTextbox1 + div:last-child" },
+            [_]usize{ 39309, 44052 }, [_]u32{ 1003, 1150 }, 0..) |expected, offset, order, index| {
+            if (std.mem.eql(u8, selector, expected) and origin.source_index == 5 and
+                origin.css_byte_start == offset and rule.order == order) found[index] = true;
+        }
+    }
+    try std.testing.expect(found[0] and found[1]);
+    const Walk = struct {
+        fn count(blocks: []const Block, labels: *usize, actions: *usize) void {
+            for (blocks) |block| {
+                if (block.container) |box| {
+                    if (box.style.translated_absolute != null) labels.* += 1;
+                    count(box.blocks, labels, actions);
+                }
+                for (block.spans) |span| if (span.kind == .link and
+                    (std.mem.eql(u8, span.target, "Додатак:Речник#learned_borrowing") or
+                    std.mem.eql(u8, span.target, "Додатак:Речник#derived_terms"))) { actions.* += 1; };
+            }
+        }
+    };
+    for ([_][]const u8{ 
+        "<div class=\"etytree NavFrame\" data-etytree-height=\"2\" data-etytree-width=\"1\"><div class=\"NavHead\" style=\"background:#eee\"><div style=\"width:25em\">Етимолошко стабло</div></div><div class=\"NavContent\" style=\"overflow:auto\"><div style=\"width:fit-content;margin:auto;padding:0.5em;display:flex;flex-direction:column;align-items:center\"><div style=\"position:relative;text-align:center;padding:5px 10px;background-color:#fffbf2;border:1px solid #ccc;border-radius:4px\"><span style=\"display:inline-block\" class=\"etyl\">New Latin</span> <span style=\"display:inline-block\"><i class=\"Latn mention\" lang=\"la\">[[America#Латински|America]]</i></span><span style=\"z-index:1;position:absolute;transform:translate(-50%);top:calc(100% + 5px);left:50%;border-radius:2px;background-color:rgba(234,255,255,0.85);font-size:12px;height:10px;line-height:10px\">[[Додатак:Речник#learned_borrowing|<abbr title=\"learned borrowing\" style=\"color:black;font-style:italic;text-decoration:none\">lbor.</abbr>]]</span></div><span style=\"position:relative;height:20px;border-right:2px solid #9e9e9e\"></span><div style=\"position:relative;text-align:center;padding:5px 10px;background-color:#fffbf2;border:1px solid #ccc;border-radius:4px\"><span style=\"display:inline-block\" class=\"etyl\">Енглески</span> <span style=\"display:inline-block\"><i class=\"Latn mention\" lang=\"en\">'''America'''</i></span></div></div></div></div>",
+        "<div class=\"etytree NavFrame\" data-etytree-height=\"2\" data-etytree-width=\"2\"><div class=\"NavHead\" style=\"background:#eee\"><div style=\"width:25em\">Етимолошко стабло</div></div><div class=\"NavContent\" style=\"overflow:auto\"><div style=\"width:fit-content;margin:auto;padding:0.5em;display:flex;flex-direction:column;align-items:center\"><div style=\"position:relative;display:flex;column-gap:0.5em;align-items:end\"><div style=\"display:flex;flex-direction:column;align-items:center\"><div style=\"position:relative;text-align:center;padding:5px 10px;background-color:#fffbf2;border:1px solid #ccc;border-radius:4px\"><span style=\"display:inline-block\" class=\"etyl\">Пра-Германски</span> <span style=\"display:inline-block\"><i class=\"Latn mention\" lang=\"gem-pro\">[[Реконструкција&#x3A;Пра-Германски&#x2F;Amalarīks#Пра-Германски|&#x2A;Amalarīks]]</i></span><span style=\"z-index:1;position:absolute;transform:translate(-50%);top:calc(100% + 5px);left:50%;border-radius:2px;background-color:rgba(234,255,255,0.85);font-size:12px;height:10px;line-height:10px\">[[Додатак:Речник#derived_terms|<abbr title=\"derived terms\" style=\"color:black;font-style:italic;text-decoration:none\">der.</abbr>]]</span></div><span style=\"align-self:start;left:50%;width:calc(50% + 0.25em);height:10px;position:relative;border-bottom:2px solid #9e9e9e;border-left:2px solid #9e9e9e;border-bottom-left-radius:4px\"></span></div><div style=\"display:flex;flex-direction:column;align-items:center\"><div style=\"position:relative;text-align:center;padding:5px 10px;background-color:#fffbf2;border:1px solid #ccc;border-radius:4px\"><span style=\"display:inline-block\" class=\"etyl\">Пра-Германски</span> <span style=\"display:inline-block\"><i class=\"Latn mention\" lang=\"gem-pro\">[[Реконструкција&#x3A;Пра-Германски&#x2F;Haimarīks#Пра-Германски|&#x2A;Haimarīks]]</i></span><span style=\"z-index:1;position:absolute;transform:translate(-50%);top:calc(100% + 5px);left:50%;border-radius:2px;background-color:rgba(234,255,255,0.85);font-size:12px;height:10px;line-height:10px\">[[Додатак:Речник#derived_terms|<abbr title=\"derived terms\" style=\"color:black;font-style:italic;text-decoration:none\">der.</abbr>]]<abbr title=\"uncertain\" style=\"position:absolute;top:50%;transform:translate(0,-48%);left:calc(100% + 2px);font-size:10px;border-radius:2px;background-color:rgba(255,224,240,0.85);padding:1px 2px;font-weight:bold;text-decoration:none\">?</abbr></span></div><span style=\"align-self:end;right:50%;width:calc(50% + 0.25em);height:10px;position:relative;border-bottom:2px solid #9e9e9e;border-right:2px solid #9e9e9e;border-bottom-right-radius:4px\"></span></div></div><span style=\"position:relative;height:10px;border-right:2px solid #9e9e9e\"></span><div style=\"position:relative;text-align:center;padding:5px 10px;background-color:#fffbf2;border:1px solid #ccc;border-radius:4px\"><span style=\"display:inline-block\" class=\"etyl\">Италијански</span> <span style=\"display:inline-block\"><i class=\"Latn mention\" lang=\"it\">'''Amerigo'''</i></span></div></div></div></div>",
+    }, [_][]const u8{ "America", "Amerigo" }, 0..) |tree, title, i| {
+        const context: Context = .{ .title = title, .namespace_catalog = &ns, .table_styles = &profile, .text_paint_styles = &profile };
+        for ([_]bool{ false, true }) |before| {
+            const later = "\n<div class='IPA'>/x/</div>";
+            const input = if (before) try std.mem.concat(a, u8, &.{ "<div class='IPA'>", tree, "</div>" })
+                else try std.mem.concat(a, u8, &.{ tree, later });
+            const tracked: MissingText = .{ .bytes = input, .unknown = true };
+            const prepared = try preparePageExternalLinksWithMissingAlloc(a, tracked, context);
+            var renderer: Renderer = .{ .a = a, .context = context, .content_root = .parser_output, .native_body_language = "en" };
+            renderer.context.citations = prepared.citations;
+            renderer.context.poem_phase = prepared.poem_phase;
+            renderer.context.external_links_prepared = true;
+            var host: NativeArticleHost = .{ .renderer = &renderer, .source = prepared.missing, .title = title, .language_code = "en",
+                .active_source = prepared.missing, .active_snapshot = NativeArticleHost.snapshot(prepared.missing),
+                .active_whole_page = true, .native_paragraph_css_subjects = true };
+            renderer.native_article_host = &host;
+            const rendered = renderer.renderBodyWithHeadingOffsets(prepared.missing);
+            if (before) {
+                try std.testing.expectError(error.UncompiledPresentation, rendered);
+            } else {
+                const blocks = try rendered;
+                var labels: usize = 0; var actions: usize = 0;
+                Walk.count(blocks, &labels, &actions);
+                try std.testing.expectEqual(@as(usize, if (i == 0) 1 else 3), labels);
+                try std.testing.expectEqual(@as(usize, if (i == 0) 1 else 2), actions);
+                const stored = try FormattingScopeTest.encode(a, &renderer, blocks);
+                const wire = @import("blob_encoder").presentation_codec;
+                const bytes = try wire.encodeAlloc(a, stored);
+                const decoded = try wire.decodeAlloc(a, bytes, stored.entry.title, .language, .{ .heading = stored.entry.language.?, .code = stored.entry.language_code });
+                try std.testing.expectEqualDeep(stored, decoded);
+            }
+        }
+    }
+}
+
+test "ordinary paragraph SPAN parent requires a closed inline source and complete link tokens" {
+    const ns = @import("namespace_registry");
+    var catalog = try ns.Registry.init(std.testing.allocator, @embedFile("testdata/vi-huis-entity/namespace-registry.tsv"));
+    defer catalog.deinit();
+    const line = "<span class=\"infl-inline\">'''Wiktionary''' (''số nhiều''&nbsp;<span class=\"form-of plural-form-of lang-en\">'''[[Wiktionaries]]'''</span>)</span>[[Category:Danh từ  tiếng Anh|Wiktionary]]";
+    try std.testing.expect(Renderer.ordinaryParagraphInlineLine(&catalog, line));
+    for ([_][]const u8{
+        "<li><span>x</span></li>", "<table><tr><td><span>x</span></td></tr></table>",
+        "<span>{{missing}}</span>", "<span>''open</span>", "<span>[[x|<li>Y</li>]]</span>",
+        "<span>[[Tập tin:a.jpg|thumb]]</span>", "<span>x</span>\n* [[b]]", "<ref><span>x</span></ref>",
+    }) |bad| try std.testing.expect(!Renderer.ordinaryParagraphInlineLine(&catalog, bad));
 }

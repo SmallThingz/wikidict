@@ -391,6 +391,8 @@ pub fn observeWithImportsForTarget(
         break :profile try encoder.table_style_profile.parseForTargetAlloc(a, css, target);
     };
     errdefer profile.deinit();
+    if (target == .screen and profile.custom_properties != null) if (snapshot) |bytes|
+        try imports.bindIndexedCustomRootFont(sa, &profile, css, bytes, namespaces, page_index, title_index);
     const gadget_proof = if (gadget_inputs) |inputs| try retainGadgetProof(profile.arena.allocator(), inputs.proof) else null;
     return .{ .article_styles = article_styles, .authority = .{
         .profile = profile,

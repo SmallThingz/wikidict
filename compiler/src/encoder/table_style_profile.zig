@@ -2090,6 +2090,10 @@ pub const SourceLiteralDivProof = struct {
 // Common tag only: no captured ordinal, parent identity or positive edge.
 pub const SourceDivParentTagProof = struct { range: SourceRootChildProof, candidate_count: u16, parent_tag: []const u8 };
 pub const TextElement = struct {
+    container_root_per_owner: ?f32 = null,
+    // A current source query owns the subject type. The optional preceding type
+    // is refusal-only. Empty means no previous element in the literal parent.
+    source_literal_previous: ?struct { tag: ?[]const u8 } = null,
     // Query-local negative direct-parent fact; never used for positive matching.
     source_parent_tag_nonmatch: ?[]const u8 = null,
     // Query-local negative facts from a tracked, physically authored SPAN.
@@ -2140,6 +2144,8 @@ pub const TextElement = struct {
     typeof_tokens: ?[]const u8 = null,
     // Null inherits; an explicit empty or unsupported language is a barrier.
     language: ?[]const u8 = null,
+    // Authored own attribute, separate from the inherited language used by :lang().
+    own_language_attribute: ?[]const u8 = null,
     classes: []const u8 = "",
     id: []const u8 = "",
     parent: ?*const TextElement = null,
@@ -2221,6 +2227,8 @@ fn canAppendPageRoot(root: *const TextElement, witness: *const TextElement, budg
 }
 
 const TextSelector = struct {
+    // Necessary own attribute predicate for text paint. A match alone cannot grant its rule.
+    own_language_guard: ?ObservedAttributeSelector = null,
     // A known nonmatch can refuse this candidate; a match remains uncertain.
     language_range: ?[]const u8 = null,
     // A complete original chain requires an element before its subject. This
@@ -2271,6 +2279,9 @@ const TextSelector = struct {
         return self.matchBranch(element, page_scoped);
     }
     fn matchBranch(self: TextSelector, element: *const TextElement, page_scoped: bool) ContainerSelectorMatch {
+        if (self.own_language_guard) |predicate| if (element.own_language_attribute) |language| {
+            if (predicate.matchValue(language) == .no) return .no;
+        };
         if (self.ancestorClassesRefute(element) or self.ancestorIdsRefute(element)) return .no;
         if (self.own_attribute_complete) {
             const name = self.required_own_attribute orelse return .unknown;
@@ -2404,8 +2415,7 @@ const ObservedAttributeSelector = struct {
     fn equal(self: @This(), left: []const u8, right: []const u8) bool {
         return if (self.insensitive) std.ascii.eqlIgnoreCase(left, right) else std.mem.eql(u8, left, right);
     }
-    fn matchesCase(self: @This(), node: FigureObservedNode) bool {
-        const value = observedFigureAttribute(node, self.name) orelse return false;
+    fn matchesCase(self: @This(), value: []const u8) bool {
         return switch (self.operator) {
             .present => true,
             .equals => self.equal(value, self.value),
@@ -2426,11 +2436,13 @@ const ObservedAttributeSelector = struct {
         };
     }
     fn matches(self: @This(), node: FigureObservedNode) ContainerSelectorMatch {
-        if (observedFigureAttribute(node, self.name) == null) return .no;
-        if (self.case_known or self.operator == .present) return if (self.matchesCase(node)) .known else .no;
+        return self.matchValue(observedFigureAttribute(node, self.name) orelse return .no);
+    }
+    fn matchValue(self: @This(), value: []const u8) ContainerSelectorMatch {
+        if (self.case_known or self.operator == .present) return if (self.matchesCase(value)) .known else .no;
         var exact = self; exact.insensitive = false;
         var folded = self; folded.insensitive = true;
-        const left = exact.matchesCase(node); const right = folded.matchesCase(node);
+        const left = exact.matchesCase(value); const right = folded.matchesCase(value);
         return if (left != right) .unknown else if (left) .known else .no;
     }
 };
@@ -3483,6 +3495,7 @@ fn observedFigureOtherPseudoEffectsWithWitness(context: FigureObservedContext, o
     return false;
 }
 const ObservedFigureEvaluation = struct {
+    selected_heading_language: bool = false,
     viewport_width: ?f64 = null,
     reduced_motion: ?bool = null,
     // Only the normal source-qualified mediawiki.page.media operation may set
@@ -3529,12 +3542,14 @@ fn observedFigureDataEqual(comptime T: type, left: T, right: T, depth: usize) bo
         .bool, .int, .float, .comptime_int, .comptime_float, .@"enum" => left == right,
         .optional => |info| if (left) |value| if (right) |other| observedFigureDataEqual(info.child, value, other, depth + 1) else false else right == null,
         .array => |info| blk: {
+            if (comptime info.child == u8) break :blk left.len == 0 or (depth < 63 and std.mem.eql(u8, &left, &right));
             for (left, right) |value, other| if (!observedFigureDataEqual(info.child, value, other, depth + 1)) break :blk false;
             break :blk true;
         },
         .pointer => |info| blk: {
             if (comptime info.size != .slice) break :blk false;
             if (left.len != right.len) break :blk false;
+            if (comptime info.child == u8) break :blk left.len == 0 or (depth < 63 and std.mem.eql(u8, left, right));
             for (left, right) |value, other| if (!observedFigureDataEqual(info.child, value, other, depth + 1)) break :blk false;
             break :blk true;
         },
@@ -3551,6 +3566,21 @@ fn observedFigureDataEqual(comptime T: type, left: T, right: T, depth: usize) bo
         },
         else => false,
     };
+}
+test "observed byte payload equality preserves independent storage and traversal depth" {
+    var right = [_]u8{ 0, 255, 42 };
+    const left = right;
+    try std.testing.expect(observedFigureDataEqual([3]u8, left, right, 62));
+    try std.testing.expect(observedFigureDataEqual([]const u8, &left, &right, 62));
+    right[2] = 43;
+    try std.testing.expect(!observedFigureDataEqual([3]u8, left, right, 0));
+    try std.testing.expect(!observedFigureDataEqual([]const u8, &left, &right, 0));
+    try std.testing.expect(!observedFigureDataEqual([]const u8, &left, left[0..2], 0));
+    try std.testing.expect(!observedFigureDataEqual([3]u8, left, left, 63));
+    try std.testing.expect(!observedFigureDataEqual([]const u8, &left, &left, 63));
+    try std.testing.expect(observedFigureDataEqual([0]u8, .{}, .{}, 63));
+    try std.testing.expect(observedFigureDataEqual([]const u8, "", "", 63));
+    try std.testing.expect(!observedFigureDataEqual([]const u8, "", "", 64));
 }
 fn observedFigureDataClone(comptime T: type, a: std.mem.Allocator, value: T, depth: usize) (std.mem.Allocator.Error || error{InvalidStyleProfile})!T {
     if (depth >= 64) return error.InvalidStyleProfile;
@@ -3776,6 +3806,27 @@ fn observedBareLanguageRefutes(raw: []const u8, nodes: []const ObservedStyleNode
     }
     return false;
 }
+/// A simple :lang() compound has a fixed CSS specificity even when alias
+/// handling leaves its match unknown. Each other selector in a comma list is
+/// still evaluated independently with its own specificity.
+fn selectedHeadingLanguageRank(raw: []const u8, nodes: []const ObservedStyleNode, subject: u32) ?struct { possible: bool, rank: u64 } {
+    if (subject >= nodes.len) return null;
+    const selector = trim(raw);
+    const class_rank: u64 = 1 << 21;
+    for ([_][]const u8{ "h1", "h2", "h3", "h4", "h5", "h6", ".mw-heading" }) |prefix| {
+        const is_class = prefix[0] == '.';
+        if (selector.len <= prefix.len or !(if (is_class) std.mem.startsWith(u8, selector, prefix)
+            else std.ascii.startsWithIgnoreCase(selector, prefix))) continue;
+        const predicate = selector[prefix.len..];
+        if (bareLanguageRange(predicate) == null) continue;
+        const node = nodes[subject];
+        const matches_subject = if (is_class) Profile.hasClass(observedFigureAttribute(node, "class") orelse "", prefix[1..])
+            else std.ascii.eqlIgnoreCase(node.tag, prefix);
+        return .{ .possible = matches_subject and !observedBareLanguageRefutes(predicate, nodes, subject),
+            .rank = class_rank + if (is_class) class_rank else @as(u64, 1) };
+    }
+    return null;
+}
 fn observedStyleNodeDeclarationsWithLanguage(a: std.mem.Allocator, styles: *const Profile, nodes: []const ObservedStyleNode,
     subject: u32, missing_media: ?u32, pseudo: ?GeneratedFigurePseudo, evaluation: ObservedFigureEvaluation,
     complete_language_path: bool) !?std.ArrayList(ObservedFigureDeclaration)
@@ -3813,6 +3864,9 @@ fn observedStyleNodeDeclarationsSelected(a: std.mem.Allocator, styles: *const Pr
             domain.contains(styles, nodes, subject)) continue;
         if (counts) |totals| totals.evaluated_rule_visits +|= 1;
         if (complete_language_path and observedBareLanguageRefutes(rule.raw_selector, nodes, subject)) continue;
+        const heading_language = if (complete_language_path and evaluation.selected_heading_language and pseudo == null)
+            selectedHeadingLanguageRank(rule.raw_selector, nodes, subject) else null;
+        if (heading_language) |compound| if (!compound.possible) continue;
         var matched = observedStyleRuleMatch(rule, nodes, missing_media, subject, pseudo, evaluation);
         if (evaluation.table_scroll_focus) |domain| if (index < domain.rules.bit_length and domain.rules.isSet(index)) {
             // The constructor's bitset admits only unconditional bare :focus
@@ -3823,9 +3877,11 @@ fn observedStyleNodeDeclarationsSelected(a: std.mem.Allocator, styles: *const Pr
         if (matched == .no) continue;
         const condition = observedFigureConditions(rule, evaluation);
         if (condition == .no) continue;
-        const specificity = if (rule.selector) |selector| selector.specificity else 0;
+        const specificity = if (heading_language) |compound| compound.rank
+            else if (rule.selector) |selector| selector.specificity else 0;
         try appendObservedFigureDeclarations(a, &result, rule.css, .{ .specificity = specificity, .order = rule.order },
-            matched == .unknown or condition == .unknown, rule.rank_unknown or rule.list_uncertain or rule.selector == null,
+            matched == .unknown or condition == .unknown or heading_language != null,
+            rule.rank_unknown or (heading_language == null and (rule.list_uncertain or rule.selector == null)),
             rule.source_index, rule.source_byte_start);
     }
     if (pseudo == null) if (observedFigureAttribute(nodes[subject], "style")) |css|
@@ -4255,6 +4311,11 @@ fn observedFigureMarginEqual(left: types.ContainerMargin, right: types.Container
 fn observedFigureEdges(a: std.mem.Allocator, declarations: []const ObservedFigureDeclaration, environment: CustomEnvironment,
     padding: bool, rtl: bool, font_scale: f32, inherited: ?types.ContainerMargins) !ObservedFigureMargins
 {
+    return observedEdgesWithRoot(a,declarations,environment,padding,rtl,font_scale,inherited,null);
+}
+fn observedEdgesWithRoot(a: std.mem.Allocator, declarations: []const ObservedFigureDeclaration, environment: CustomEnvironment,
+    padding: bool, rtl: bool, font_scale: f32, inherited: ?types.ContainerMargins, root_per_body: ?f32) !ObservedFigureMargins
+{
     if (!std.math.isFinite(font_scale) or font_scale < 0) return .{ .unresolved = true };
     var result: types.ContainerMargins = undefined;
     inline for (.{ "top", "right", "bottom", "left" }, 0..) |side, index| {
@@ -4290,7 +4351,8 @@ fn observedFigureEdges(a: std.mem.Allocator, declarations: []const ObservedFigur
                         if (padding) return .{ .unresolved = true };
                         break :blk .auto;
                     }
-                    break :blk .{ .length = observedFigurePhysicalLength(atom.known, font_scale) orelse return .{ .unresolved = true } };
+                    break :blk .{ .length = observedFigurePhysicalLength(atom.known, font_scale) orelse
+                        containerRootRelativeEdge(atom.known,root_per_body,!padding) orelse return .{ .unresolved = true } };
                 };
             if (selected) |prior| {
                 if (!observedFigureMarginEqual(prior, value)) return .{ .unresolved = true };
@@ -4309,7 +4371,7 @@ const ObservedFigureBorderAssignment = struct {
 fn observedFigureBorderAtomEqual(left: BorderAtom, right: BorderAtom) bool {
     if (std.meta.activeTag(left) != std.meta.activeTag(right)) return false;
     return switch (left) {
-        .unknown => true,
+        .unknown, .container_dashed => true,
         .length => |value| std.meta.eql(value, right.length),
         .line_style => |value| value == right.line_style,
         .color => |value| containerColorEqual(value, right.color),
@@ -7677,6 +7739,9 @@ const ContainerCompound = struct {
     direct_parent: bool = false,
 };
 const ContainerSelector = struct {
+    // Necessary types in two plain compounds separated by + with a terminal
+    // :last-child. Neither the sibling relation nor the pseudo is inferred.
+    last_child_adjacent_types: ?struct { previous: []const u8, subject: []const u8 } = null,
     // Exact single-compound inner-control pseudo: absence on a known non-control
     // host refutes only this candidate, without granting attribute or ancestry facts.
     control_pseudo_host: bool = false,
@@ -7796,6 +7861,10 @@ const ContainerSelector = struct {
         return self.matchBranch(element, element, page_scoped);
     }
     fn matchBranch(self: @This(), element: *const TextElement, original: *const TextElement, page_scoped: bool) ContainerSelectorMatch {
+        if (self.last_child_adjacent_types) |required| if (element.source_literal_previous) |observed| {
+            if (!std.ascii.eqlIgnoreCase(required.subject, element.tag)) return .no;
+            if (observed.tag) |previous| if (!std.ascii.eqlIgnoreCase(required.previous, previous)) return .no;
+        };
         if (self.terminal_positive_target and element.source_fragment_target_absent) return .no;
         if (element.source_nonlink_element and (std.ascii.eqlIgnoreCase(element.tag, "span") or std.ascii.eqlIgnoreCase(element.tag, "i")) and
             self.necessary_chain.len != 0 and
@@ -7971,6 +8040,7 @@ const ContainerSelector = struct {
     }
 };
 const ContainerRule = struct {
+    column_flow_candidate: bool = true,
     provenance: ?ContainerRuleProvenance = null,
     selector: ContainerSelector,
     css: []const u8,
@@ -8096,7 +8166,7 @@ fn inlineBorderWithLegacyBasis(cascade_value: BorderCascade, basis: types.Resolv
 }
 
 const BorderLineStyle = enum { none, hidden, solid, dotted };
-const BorderAtom = union(enum) { unknown, length: types.StyleLength, line_style: BorderLineStyle, color: types.ContainerColor };
+const BorderAtom = union(enum) { unknown, container_dashed, length: types.StyleLength, line_style: BorderLineStyle, color: types.ContainerColor };
 const BorderUpdate = struct { atoms: [12]?BorderAtom = @splat(null), unsafe: bool = false };
 const BorderCandidate = struct { atom: BorderAtom, priority: Priority };
 const BorderResolution = struct { value: ?types.ContainerBorder = null, unresolved: bool = false };
@@ -8119,13 +8189,14 @@ const BorderCascade = struct {
         for (&sides, 0..) |*side, index| {
             const start = index * 3;
             const line = if (self.atoms[start + 1]) |candidate| candidate.atom else BorderAtom{ .line_style = .none };
-            if (line != .line_style) return .{ .unresolved = true };
-            if (line.line_style == .none) { side.* = .none; continue; }
-            if (line.line_style == .hidden) { side.* = .hidden; continue; }
+            if (line == .line_style) {
+                if (line.line_style == .none) { side.* = .none; continue; }
+                if (line.line_style == .hidden) { side.* = .hidden; continue; }
+            } else if (line != .container_dashed) return .{ .unresolved = true };
             const width = if (self.atoms[start]) |candidate| candidate.atom else BorderAtom.unknown;
             const color = if (self.atoms[start + 2]) |candidate| candidate.atom else BorderAtom.unknown;
             if (width != .length or color != .color) return .{ .unresolved = true };
-            side.* = switch (line.line_style) {
+            side.* = if (line == .container_dashed) .{ .dashed = .{ .width = width.length, .color = color.color } } else switch (line.line_style) {
                 .solid => .{ .solid = .{ .width = width.length, .color = color.color } },
                 .dotted => .{ .dotted = .{ .width = width.length, .color = color.color } },
                 .none, .hidden => unreachable,
@@ -8238,6 +8309,13 @@ fn borderUnknownUpdate(side: ?usize, component: ?usize) BorderUpdate {
     return result;
 }
 fn borderUpdateAlloc(a: std.mem.Allocator, property: []const u8, raw: []const u8, environment: ?CustomEnvironment) std.mem.Allocator.Error!BorderUpdate {
+    return borderUpdateIn(a, property, raw, environment, false);
+}
+fn borderStyleIn(value: []const u8, container: bool) ?BorderAtom {
+    if (container and std.ascii.eqlIgnoreCase(value, "dashed")) return .container_dashed;
+    return borderStyleAtom(value);
+}
+fn borderUpdateIn(a: std.mem.Allocator, property: []const u8, raw: []const u8, environment: ?CustomEnvironment, container: bool) std.mem.Allocator.Error!BorderUpdate {
     const value = trim(raw);
     var side: ?usize = null; var component: ?usize = null; var recognized = std.ascii.eqlIgnoreCase(property, "border");
     inline for (.{ "width", "style", "color" }, 0..) |part, index|
@@ -8258,7 +8336,7 @@ fn borderUpdateAlloc(a: std.mem.Allocator, property: []const u8, raw: []const u8
         var atoms: [4]BorderAtom = undefined;
         for (tokens[0..count], 0..) |token, index| atoms[index] = switch (part) {
             0 => if (reset) .unknown else borderWidthAtom(token) orelse .unknown,
-            1 => if (reset) .{ .line_style = .none } else borderStyleAtom(token) orelse .unknown,
+            1 => if (reset) .{ .line_style = .none } else borderStyleIn(token, container) orelse .unknown,
             2 => if (reset) .unknown else if (try containerColorWithCustomAlloc(a, token, environment, false)) |color| .{ .color = color } else .unknown,
             else => unreachable,
         };
@@ -8268,7 +8346,7 @@ fn borderUpdateAlloc(a: std.mem.Allocator, property: []const u8, raw: []const u8
     }
     var width: ?BorderAtom = null; var line: ?BorderAtom = null; var color: ?BorderAtom = null;
     if (!reset) for (tokens[0..count]) |token| {
-        if (borderStyleAtom(token)) |known| { if (line != null) return borderUnknownUpdate(side, null); line = known; }
+        if (borderStyleIn(token, container)) |known| { if (line != null) return borderUnknownUpdate(side, null); line = known; }
         else if (try containerColorWithCustomAlloc(a, token, environment, false)) |known| { if (color != null) return borderUnknownUpdate(side, null); color = .{ .color = known }; }
         else if (std.mem.indexOfAny(u8, token, "(%") != null) return borderUnknownUpdate(side, null)
         else if (borderWidthAtom(token)) |known| { if (width != null) return borderUnknownUpdate(side, null); width = known; }
@@ -8286,7 +8364,7 @@ const ContainerSlot = enum {
     margin_top, margin_right, margin_bottom, margin_left,
     padding_top, padding_right, padding_bottom, padding_left,
     width, float_side, clear, max_width, box_sizing, layout, align_items,
-    flex_item, background, border, line_height, text_align, height, min_height, column_count, column_gap, positioning,
+    flex_item, background, border, line_height, text_align, height, min_height, column_count, column_width, column_gap, positioning,
 };
 const ContainerValue = union(enum) {
     unknown,
@@ -8307,14 +8385,23 @@ const ContainerValue = union(enum) {
     height: ?types.StyleLength,
     min_height: types.StyleLength,
     column_count: ?u16,
-    column_gap: types.StyleLength,
+    column_width: ?types.StyleLength,
+    column_gap: ?types.StyleLength,
     positioning: ?types.ContainerPositioning,
 };
 const ContainerCandidate = struct { value: ContainerValue, priority: Priority };
-const ContainerContextSlot = enum { position, overflow_x, overflow_y, flex_direction, flex_wrap, background_image, background_other, column_width, column_fill, inset_top, inset_right, inset_bottom, inset_left, inset_all, z_index };
-const ContainerContextCandidate = struct { ordinary: bool, priority: Priority, overflow: ?types.ContainerOverflow = null };
+const ContainerContextSlot = enum { position, overflow_x, overflow_y, flex_direction, flex_wrap, background_image, background_other, column_fill, inset_top, inset_right, inset_bottom, inset_left, inset_all, z_index };
+const ContainerAxisOverflow = enum { visible, auto, clip };
+const ContainerContextCandidate = struct { ordinary: bool, priority: Priority, overflow: ?ContainerAxisOverflow = null, column_direction: bool = false };
+fn containerAxisOverflow(value: []const u8) ?ContainerAxisOverflow {
+    inline for (@typeInfo(ContainerAxisOverflow).@"enum".field_names) |name| {
+        if (std.ascii.eqlIgnoreCase(value, name)) return @field(ContainerAxisOverflow, name);
+    }
+    return null;
+}
 const ColumnAliasPolicy = enum { standard, webkit, moz, all };
 const ContainerCascade = struct {
+    root_per_owner: ?f32 = null,
     borders: BorderCascade = .{},
     column_alias_policy: ColumnAliasPolicy = .standard,
     custom_environment: ?CustomEnvironment = null,
@@ -8340,7 +8427,7 @@ const ContainerCascade = struct {
         self.contexts[index] = .{ .ordinary = ordinary and !uncertain and !self.responsive, .priority = priority };
     }
 
-    fn considerOverflow(self: *@This(), slot: ContainerContextSlot, value: ?types.ContainerOverflow, priority: Priority, uncertain: bool) void {
+    fn considerOverflow(self: *@This(), slot: ContainerContextSlot, value: ?ContainerAxisOverflow, priority: Priority, uncertain: bool) void {
         const index = @intFromEnum(slot);
         if (self.contexts[index]) |current| if (!priority.wins(current.priority)) return;
         self.contexts[index] = .{ .ordinary = value != null and !uncertain and !self.responsive, .priority = priority, .overflow = value };
@@ -8397,7 +8484,8 @@ const ContainerCascade = struct {
                 if (@intFromEnum(slot) < 4 and std.ascii.eqlIgnoreCase(value, "auto")) {
                     self.consider(slot, .margin_auto, priority, uncertain_value); continue;
                 }
-                const edge = if (@intFromEnum(slot) < 4) containerMarginLength(value) else length(value);
+                const ordinary = if (@intFromEnum(slot) < 4) containerMarginLength(value) else length(value);
+                const edge = ordinary orelse containerRootRelativeEdge(value, self.root_per_owner, @intFromEnum(slot) < 4);
                 self.consider(slot, if (edge) |known| .{ .edge = known } else .unknown, priority, uncertain_value);
                 continue;
             }
@@ -8422,23 +8510,26 @@ const ContainerCascade = struct {
                 self.consider(.column_count, selected, priority, uncertain_value); continue;
             }
             if (std.ascii.eqlIgnoreCase(name, "column-gap")) {
-                const known: ?types.StyleLength = if (std.ascii.eqlIgnoreCase(value, "normal") or
-                    std.ascii.eqlIgnoreCase(value, "initial") or std.ascii.eqlIgnoreCase(value, "unset")) .{ .unit = .em, .value = 1 }
-                    else if (styleWidth(value)) |length_value| if (length_value.unit == .percent) null else .{
+                if (std.ascii.eqlIgnoreCase(value, "normal") or std.ascii.eqlIgnoreCase(value, "initial") or std.ascii.eqlIgnoreCase(value, "unset")) {
+                    self.consider(.column_gap, .{ .column_gap = null }, priority, uncertain_value);
+                    continue;
+                }
+                const known: ?types.StyleLength = if (styleWidth(value)) |length_value| if (length_value.unit == .percent) null else .{
                         .unit = if (length_value.unit == .px) .px else .em, .value = length_value.value,
                     } else null;
                 if (known == null and containerHeightInvalidLiteral(value)) continue;
                 self.consider(.column_gap, if (known) |length_value| .{ .column_gap = length_value } else .unknown, priority, uncertain_value); continue;
             }
             if (std.ascii.eqlIgnoreCase(name, "column-width")) {
-                // Percentages are not in column-width's grammar. Ignore the
-                // authored invalid declaration without replacing an earlier
-                // valid winner; never invent percentage column sizing.
-                if (styleWidth(value)) |length_value| {
-                    if (length_value.unit == .percent) continue;
-                } else if (containerHeightInvalidLiteral(value)) continue;
-                self.considerContext(.column_width, std.ascii.eqlIgnoreCase(value, "auto") or
-                    std.ascii.eqlIgnoreCase(value, "initial") or std.ascii.eqlIgnoreCase(value, "unset"), priority, uncertain_value); continue;
+                const selected: ContainerValue = if (std.ascii.eqlIgnoreCase(value, "auto") or
+                    std.ascii.eqlIgnoreCase(value, "initial") or std.ascii.eqlIgnoreCase(value, "unset"))
+                    .{ .column_width = null }
+                else if (styleWidth(value)) |width| blk: {
+                    if (width.unit == .percent) continue;
+                    break :blk .{ .column_width = .{ .unit = if (width.unit == .em) .em else .px, .value = width.value } };
+                } else if (containerHeightInvalidLiteral(value)) continue else .unknown;
+                self.consider(.column_width, selected, priority, uncertain_value);
+                continue;
             }
             if (std.ascii.eqlIgnoreCase(name, "column-fill")) {
                 self.considerContext(.column_fill, std.ascii.eqlIgnoreCase(value, "balance") or
@@ -8544,7 +8635,7 @@ const ContainerCascade = struct {
                 self.unsafe = true; continue;
             }
             if (std.ascii.eqlIgnoreCase(name, "border") or std.ascii.startsWithIgnoreCase(name, "border-")) {
-                self.borders.add(try borderUpdateAlloc(a, name, value, self.custom_environment), priority, uncertain_value or self.responsive);
+                self.borders.add(try borderUpdateIn(a, name, value, self.custom_environment, true), priority, uncertain_value or self.responsive);
                 self.specified = true;
                 continue;
             }
@@ -8556,16 +8647,33 @@ const ContainerCascade = struct {
                 self.consider(.text_align, if (presentationalTextAlign(value)) |known| .{ .text_align = known } else .unknown, priority, uncertain_value); continue;
             }
             if (std.ascii.eqlIgnoreCase(name, "overflow")) {
-                const overflow: ?types.ContainerOverflow = if (std.ascii.eqlIgnoreCase(value, "auto")) .auto
-                    else if (std.ascii.eqlIgnoreCase(value, "visible")) .visible else null;
-                self.considerOverflow(.overflow_x, overflow, priority, uncertain_value);
-                self.considerOverflow(.overflow_y, overflow, priority, uncertain_value); continue;
+                var tokens = std.mem.tokenizeAny(u8, value, " \t\r\n\x0c");
+                const first = tokens.next() orelse "";
+                const second = tokens.next() orelse first;
+                const valid_pair = tokens.next() == null;
+                self.considerOverflow(.overflow_x, if (valid_pair) containerAxisOverflow(first) else null, priority, uncertain_value);
+                self.considerOverflow(.overflow_y, if (valid_pair) containerAxisOverflow(second) else null, priority, uncertain_value);
+                continue;
+            }
+            const x_axis = std.ascii.eqlIgnoreCase(name, "overflow-x");
+            if (x_axis or std.ascii.eqlIgnoreCase(name, "overflow-y")) {
+                self.considerOverflow(if (x_axis) .overflow_x else .overflow_y, containerAxisOverflow(value), priority, uncertain_value);
+                continue;
             }
             var context_property = false;
-            inline for (.{ "position", "overflow-x", "overflow-y", "flex-direction", "flex-wrap" },
-                .{ "static", "visible", "visible", "row", "nowrap" }, 0..) |property, ordinary_value, index| {
+            if (std.ascii.eqlIgnoreCase(name, "flex-direction")) {
+                const column = std.ascii.eqlIgnoreCase(value, "column");
+                const row = std.ascii.eqlIgnoreCase(value, "row") or std.ascii.eqlIgnoreCase(value, "initial") or std.ascii.eqlIgnoreCase(value, "unset");
+                const direction = &self.contexts[@intFromEnum(ContainerContextSlot.flex_direction)];
+                if (direction.* == null or priority.wins(direction.*.?.priority)) {
+                    direction.* = .{ .priority = priority, .ordinary = (column or row) and !uncertain_value and !self.responsive, .column_direction = column };
+                }
+                continue;
+            }
+            inline for (.{ "position", "flex-wrap" }, .{ "static", "nowrap" },
+                .{ ContainerContextSlot.position, ContainerContextSlot.flex_wrap }) |property, ordinary_value, slot| {
                 if (std.ascii.eqlIgnoreCase(name, property)) {
-                    self.considerContext(@enumFromInt(index), std.ascii.eqlIgnoreCase(value, ordinary_value), priority, uncertain_value);
+                    self.considerContext(slot, std.ascii.eqlIgnoreCase(value, ordinary_value), priority, uncertain_value);
                     context_property = true;
                 }
             }
@@ -8614,16 +8722,29 @@ const ContainerCascade = struct {
         inline for (.{ "width", "float_side", "clear", "max_width", "box_sizing", "layout", "align_items", "flex_item", "background", "border", "line_height", "text_align", "height", "min_height", "positioning" }) |field| {
             if (self.slots[@intFromEnum(@field(ContainerSlot, field))]) |selected| @field(resolution.style, field) = @field(selected.value, field);
         }
-        if (self.slots[@intFromEnum(ContainerSlot.column_count)]) |candidate| if (candidate.value.column_count) |count| {
-            const gap = if (self.slots[@intFromEnum(ContainerSlot.column_gap)]) |selected| selected.value.column_gap else types.StyleLength{ .unit = .em, .value = 1 };
-            resolution.style.columns = .{ .count = count, .gap = gap };
-            if (self.fragmentation_policy_present or !types.validContainerStyle(resolution.style)) resolution.unresolved = true;
+        if (self.contexts[@intFromEnum(ContainerContextSlot.flex_direction)]) |direction| if (direction.column_direction) {
+            if (resolution.style.layout == .flex_row) {
+                resolution.style.layout = .flex_column;
+                if (!types.validContainerStyle(resolution.style)) resolution.unresolved = true;
+            }
         };
+        const explicit_gap = if (self.slots[@intFromEnum(ContainerSlot.column_gap)]) |selected| selected.value.column_gap else null;
+        // Normal resolves to zero between flex items and to one em between columns.
+        if (resolution.style.layout == .flex_row and explicit_gap != null and explicit_gap.?.value != 0) resolution.style.flex_column_gap = explicit_gap;
+        const count = if (self.slots[@intFromEnum(ContainerSlot.column_count)]) |selected| selected.value.column_count else null;
+        const width = if (self.slots[@intFromEnum(ContainerSlot.column_width)]) |selected| selected.value.column_width else null;
+        if (count != null or width != null) {
+            const gap = explicit_gap orelse types.StyleLength{ .unit = .em, .value = 1 };
+            resolution.style.columns = .{ .count = count, .width = width, .gap = gap };
+            if (self.fragmentation_policy_present or !types.validContainerStyle(resolution.style)) resolution.unresolved = true;
+        }
         const x = if (self.contexts[@intFromEnum(ContainerContextSlot.overflow_x)]) |candidate| candidate.overflow orelse .visible else .visible;
         const y = if (self.contexts[@intFromEnum(ContainerContextSlot.overflow_y)]) |candidate| candidate.overflow orelse .visible else .visible;
-        // No axis-specific scroll semantics are inferred by this first domain.
-        // A valid mixed-axis declaration remains unresolved, not silently lost.
-        if (x != y) resolution.unresolved = true;
+        // Visible/clip is a non-scrolling pair, unaffected by the CSS overflow
+        // cross-axis conversion to auto/hidden. Preserve its direction.
+        if (x == .visible and y == .clip) {
+            resolution.style.overflow = .visible_x_clip_y;
+        } else if (x != y or x == .clip) resolution.unresolved = true;
         if (x == .auto and y == .auto) {
             resolution.style.overflow = .auto;
             if (!types.containerAutoScrollportStyleSupported(resolution.style)) resolution.unresolved = true;
@@ -8659,6 +8780,78 @@ fn columnCanonicalProperty(name: []const u8) []const u8 {
     }
     return value;
 }
+pub const ColumnFlowBox = enum { root_block, list_item, block, inline_box };
+
+pub const ColumnBreakResolution = enum { auto, avoid, unresolved };
+
+const ColumnBreakCascade = struct {
+    known: ?struct { value: ColumnBreakResolution, priority: Priority } = null,
+    possible: [3]?Priority = @splat(null),
+    unsafe: bool = false,
+
+    fn declarations(states: *[4]@This(), a: std.mem.Allocator, css: []const u8, selected: Priority,
+        conditional: bool, rank_unknown: bool, box: ColumnFlowBox) !void
+    {
+        var cursor: usize = 0;
+        var priority = selected;
+        while (try nextDeclarationAlloc(a, css, &cursor)) |raw| {
+            defer a.free(raw);
+            priority.order += 1;
+            const colon = std.mem.indexOfScalar(u8, raw, ':') orelse continue;
+            const name = trim(raw[0..colon]);
+            const alias = columnAliasFamily(name);
+            const canonical = columnCanonicalProperty(name);
+            const inside = std.ascii.eqlIgnoreCase(canonical, "break-inside") or
+                std.ascii.eqlIgnoreCase(canonical, "page-break-inside");
+            const parsed = customPriority(raw[colon + 1 ..]);
+            const keyword = trim(parsed.value);
+            if (std.ascii.eqlIgnoreCase(name, "display") or std.ascii.eqlIgnoreCase(name, "float") or
+                std.ascii.eqlIgnoreCase(name, "position")) {
+                const expected: []const u8 = if (std.ascii.eqlIgnoreCase(name, "float")) "none"
+                    else if (std.ascii.eqlIgnoreCase(name, "position")) "static"
+                    else switch (box) { .root_block, .block => "block", .list_item => "list-item", .inline_box => "inline" };
+                if (parsed.unknown or !std.ascii.eqlIgnoreCase(expected, keyword))
+                    for (states) |*state| { state.unsafe = true; };
+                continue;
+            }
+            // The owner already has a complete width/count/gap cascade. A
+            // descendant establishing another multicol context needs its own box.
+            if (box == .root_block and (std.ascii.eqlIgnoreCase(canonical, "column-width") or
+                std.ascii.eqlIgnoreCase(canonical, "column-count") or std.ascii.eqlIgnoreCase(canonical, "column-gap"))) continue;
+            if (!columnFragmentationProperty(name) and !std.ascii.eqlIgnoreCase(name, "gap") and
+                !std.ascii.startsWithIgnoreCase(canonical, "column") and
+                !std.ascii.eqlIgnoreCase(name, "-webkit-columns") and !std.ascii.eqlIgnoreCase(name, "-moz-columns")) continue;
+            const value: ColumnBreakResolution = if (parsed.unknown) .unresolved
+                else if (std.ascii.eqlIgnoreCase(keyword, "avoid") or
+                    (std.ascii.eqlIgnoreCase(canonical, "break-inside") and std.ascii.eqlIgnoreCase(keyword, "avoid-column"))) .avoid
+                else if (std.ascii.eqlIgnoreCase(keyword, "auto") or std.ascii.eqlIgnoreCase(keyword, "initial") or
+                    std.ascii.eqlIgnoreCase(keyword, "unset")) .auto
+                else .unresolved;
+            priority.important = parsed.important;
+            for ([_]ColumnAliasPolicy{ .standard, .webkit, .moz, .all }, states) |family, *self| {
+                if (alias != .standard and family != .all and alias != family) continue;
+                if (!inside or rank_unknown or parsed.unknown) {
+                    self.unsafe = true;
+                } else if (conditional) {
+                    const slot = &self.possible[@intFromEnum(value)];
+                    if (slot.* == null or priority.wins(slot.*.?)) slot.* = priority;
+                } else if (self.known == null or priority.wins(self.known.?.priority)) {
+                    self.known = .{ .value = value, .priority = priority };
+                }
+            }
+        }
+    }
+
+    fn result(self: @This()) ColumnBreakResolution {
+        if (self.unsafe) return .unresolved;
+        const computed: ColumnBreakResolution = if (self.known) |winner| winner.value else .auto;
+        for (self.possible, 0..) |maybe, i| if (maybe) |choice| {
+            if (i != @intFromEnum(computed) and (self.known == null or choice.wins(self.known.?.priority))) return .unresolved;
+        };
+        return computed;
+    }
+};
+
 fn columnFragmentationProperty(name: []const u8) bool {
     const canonical = columnCanonicalProperty(name);
     if (std.mem.indexOfScalar(u8, canonical, '\\') != null or std.ascii.eqlIgnoreCase(canonical, "all")) return true;
@@ -8793,6 +8986,21 @@ fn containerBorderWithCustomAlloc(a: std.mem.Allocator, raw: []const u8, environ
 }
 // Signed lengths belong only to Container margins. Every other consumer
 // continues through the original nonnegative length/width grammars.
+fn containerRootRelativeEdge(raw: []const u8, root_per_owner: ?f32, margin: bool) ?types.StyleLength {
+    const ratio = root_per_owner orelse return null;
+    const token = trim(raw);
+    if (!std.math.isFinite(ratio) or ratio <= 0 or token.len <= 3 or !std.ascii.endsWithIgnoreCase(token, "rem")) return null;
+    const number = token[0 .. token.len - 3];
+    if (!widthNumberSyntax(number)) return null;
+    const units = std.fmt.parseFloat(f64, number) catch return null;
+    if ((!margin and units < 0) or (units == 0 and !widthNumberIsZero(number))) return null;
+    const value = units * ratio;
+    if (!std.math.isFinite(value) or @abs(value) > std.math.floatMax(f32)) return null;
+    const result: f32 = @floatCast(value);
+    if (result == 0 and units != 0) return null;
+    return .{ .unit = .em, .value = result };
+}
+
 fn containerMarginLength(raw: []const u8) ?types.StyleLength {
     const value = trim(raw);
     if (std.ascii.eqlIgnoreCase(value, "initial") or std.ascii.eqlIgnoreCase(value, "unset"))
@@ -8907,7 +9115,10 @@ fn containerStyleEqual(left: types.ContainerStyle, right: types.ContainerStyle) 
     return true;
 }
 fn containerCascadeAt(a: std.mem.Allocator, rules: []const ContainerRuleMatch, css: []const u8, screen_width: ?u32, environment: ?CustomEnvironment, border_collapse_consumed: bool) std.mem.Allocator.Error!ContainerResolution {
-    var result = try containerCascadeAtAliases(a, rules, css, screen_width, .standard, environment, border_collapse_consumed);
+    return containerCascadeAtRoot(a, rules, css, screen_width, environment, border_collapse_consumed, null);
+}
+fn containerCascadeAtRoot(a: std.mem.Allocator, rules: []const ContainerRuleMatch, css: []const u8, screen_width: ?u32, environment: ?CustomEnvironment, border_collapse_consumed: bool, root_per_owner: ?f32) std.mem.Allocator.Error!ContainerResolution {
+    var result = try containerCascadeAtAliases(a, rules, css, screen_width, .standard, environment, border_collapse_consumed, root_per_owner);
     if (result.unresolved) return result;
     var aliases = hasColumnAlias(css);
     for (rules) |rule| aliases = aliases or hasColumnAlias(rule.css);
@@ -8915,7 +9126,7 @@ fn containerCascadeAt(a: std.mem.Allocator, rules: []const ContainerRuleMatch, c
     // No engine family is implicit in a data-only native record. Admit only
     // an invariant result with neither, either, or both alias families active.
     inline for (.{ ColumnAliasPolicy.webkit, .moz, .all }) |policy| {
-        const alternative = try containerCascadeAtAliases(a, rules, css, screen_width, policy, environment, border_collapse_consumed);
+        const alternative = try containerCascadeAtAliases(a, rules, css, screen_width, policy, environment, border_collapse_consumed, root_per_owner);
         result.specified = result.specified or alternative.specified;
         if (alternative.unresolved or !containerStyleEqual(result.style, alternative.style)) {
             result.unresolved = true;
@@ -8924,8 +9135,8 @@ fn containerCascadeAt(a: std.mem.Allocator, rules: []const ContainerRuleMatch, c
     }
     return result;
 }
-fn containerCascadeAtAliases(a: std.mem.Allocator, rules: []const ContainerRuleMatch, css: []const u8, screen_width: ?u32, policy: ColumnAliasPolicy, environment: ?CustomEnvironment, border_collapse_consumed: bool) std.mem.Allocator.Error!ContainerResolution {
-    var cascade_value: ContainerCascade = .{ .column_alias_policy = policy, .custom_environment = environment, .border_collapse_consumed = border_collapse_consumed };
+fn containerCascadeAtAliases(a: std.mem.Allocator, rules: []const ContainerRuleMatch, css: []const u8, screen_width: ?u32, policy: ColumnAliasPolicy, environment: ?CustomEnvironment, border_collapse_consumed: bool, root_per_owner: ?f32) std.mem.Allocator.Error!ContainerResolution {
+    var cascade_value: ContainerCascade = .{ .column_alias_policy = policy, .root_per_owner = root_per_owner, .custom_environment = environment, .border_collapse_consumed = border_collapse_consumed };
     for (rules) |rule| {
         if (rule.rank_unknown) return .{ .unresolved = true };
         if (rule.viewport == .screen_max_width_px) {
@@ -9267,6 +9478,11 @@ pub const ReadingTarget = enum { unknown, screen, print };
 /// Producer-only static table styles. No selector or declaration text enters a reader.
 pub const Profile = struct {
     reading_target: ReadingTarget = .unknown,
+    // Issued on the exact page's shallow view. The shared profile's scalar
+    // stays absent even when it carries an observed article.
+    selected_root_per_body: ?f32 = null,
+    selected_phonos: []const SelectedPhonos = &.{},
+    selected_wrapped_heading: ?SelectedWrappedHeading = null,
     // Selected views borrow both this immutable page profile and their global
     // parent. No selected view owns or deinitializes either arena.
     page_style_parent: ?*const Profile = null,
@@ -9407,6 +9623,30 @@ pub const Profile = struct {
         if (matched.unresolved) return true;
         for (matched.rules) |rule| if (try hasRelativeContextDeclarationsAlloc(a, rule.css)) return true;
         return false;
+    }
+
+    /// Resolve the used break policy for one source-mapped box in column flow.
+    /// The caller owns the physical element, its CSS display, and the complete child inventory.
+    pub fn columnBreakInsideIn(self: *const Profile, a: std.mem.Allocator, element: *const TextElement,
+        css: []const u8, box: ColumnFlowBox) std.mem.Allocator.Error!ColumnBreakResolution
+    {
+        if (self.globally_unresolved or css.len > max_css_bytes or
+            (self.page_style_parent != null and element.page_style_root == null)) return .unresolved;
+        var states: [4]ColumnBreakCascade = @splat(.{});
+        for (self.container_rules) |rule| {
+            if (!rule.column_flow_candidate) continue;
+            const matched = rule.selector.matchIn(element, self.page_style_parent != null);
+            if (matched == .no) continue;
+            const specificity = if (element.source_sibling_scope != null and rule.selector.adjacent_sibling != null and matched == .known)
+                rule.selector.adjacent_sibling.?.specificity else rule.selector.specificity;
+            try ColumnBreakCascade.declarations(&states, a, rule.css,
+                .{ .specificity = specificity, .order = rule.order },
+                matched != .known or rule.viewport != .all, rule.rank_unknown, box);
+        }
+        try ColumnBreakCascade.declarations(&states, a, css, .{ .inline_style = true, .order = max_rules * 1024 }, false, false, box);
+        const result = states[0].result();
+        for (states[1..]) |state| if (state.result() != result) return .unresolved;
+        return result;
     }
 
     pub fn columnFlowStylesheetPolicyAbsent(self: *const Profile, a: std.mem.Allocator) std.mem.Allocator.Error!bool {
@@ -9735,7 +9975,7 @@ pub const Profile = struct {
         const matched = try self.containerRuleMatchesIn(a, element);
         defer a.free(matched.rules);
         if (matched.unresolved) return .{ .unresolved = true };
-        var base = try containerCascadeAt(a, matched.rules, css, null, environment, border_collapse_consumed);
+        var base = try containerCascadeAtRoot(a, matched.rules, css, null, environment, border_collapse_consumed, element.container_root_per_owner);
         if (base.unresolved) return base;
         // Preserve the existing bounded selector/cascade work. Semantic changes
         // become the already represented descending viewport bands below.
@@ -9756,7 +9996,7 @@ pub const Profile = struct {
         defer bands.deinit(a);
         var previous = base.style;
         for (thresholds[0..count]) |limit| {
-            const selected = try containerCascadeAt(a, matched.rules, css, limit, environment, border_collapse_consumed);
+            const selected = try containerCascadeAtRoot(a, matched.rules, css, limit, environment, border_collapse_consumed, element.container_root_per_owner);
             base.specified = base.specified or selected.specified;
             if (selected.unresolved) { base.unresolved = true; return base; }
             if (containerStyleEqual(previous, selected.style)) continue;
@@ -12260,6 +12500,16 @@ const Builder = struct {
             .terminal_positive_target = necessary.len != 0 and std.ascii.endsWithIgnoreCase(trim(raw), ":target") };
         // Parsing this extra factual shape does not alter any global caller.
         const text = trim(raw);
+        if (std.ascii.endsWithIgnoreCase(text, ":last-child")) adjacent: {
+            const pair = text[0 .. text.len - ":last-child".len];
+            if (std.mem.indexOfAny(u8, pair, "~>|\\[]():/*&") != null) break :adjacent;
+            const plus = std.mem.indexOfScalar(u8, pair, '+') orelse break :adjacent;
+            if (std.mem.indexOfScalar(u8, pair[plus + 1 ..], '+') != null) break :adjacent;
+            const left = (try self.paintCompound(trim(pair[0..plus]), true)) orelse break :adjacent;
+            const right = (try self.paintCompound(trim(pair[plus + 1 ..]), true)) orelse break :adjacent;
+            result.last_child_adjacent_types = .{ .previous = left.tag orelse break :adjacent,
+                .subject = right.tag orelse break :adjacent };
+        }
         if (std.mem.indexOfScalar(u8, text, '+')) |plus| {
             if (std.mem.indexOfAny(u8, text, "~>|\\[]():/*&") == null and
                 std.mem.indexOfScalar(u8, text[plus + 1 ..], '+') == null) {
@@ -12462,6 +12712,10 @@ const Builder = struct {
             try selectors.append(self.a, selected);
             try selector_texts.append(self.a, try self.a.dupe(u8, part));
         }
+        const column_flow_candidate = for ([_][]const u8{ "column", "break", "widows", "orphans", "gap", "display",
+            "float", "position", "all", "/*", "\\" }) |needle| {
+            if (std.ascii.findIgnoreCase(css, needle) != null) break true;
+        } else false;
         for (selectors.items, selector_texts.items) |item, selector_text| {
             var selected = item;
             // Keep existing list-wide uncertainty; this positive relation is
@@ -12469,7 +12723,7 @@ const Builder = struct {
             if (selectors.items.len != 1) selected.adjacent_sibling = null;
             if (uncertain_list) { selected.uncertain = true; selected.specificity = std.math.maxInt(u64); }
             if (self.container_rules.items.len >= self.selector_limit) return error.StyleProfileLimit;
-            try self.container_rules.append(self.a, .{ .selector = selected, .css = css, .order = order, .viewport = self.container_viewport, .rank_unknown = self.container_rank_unknown,
+            try self.container_rules.append(self.a, .{ .column_flow_candidate = column_flow_candidate, .selector = selected, .css = css, .order = order, .viewport = self.container_viewport, .rank_unknown = self.container_rank_unknown,
                 .provenance = .{ .selector = selector_text, .conditions = self.container_conditions,
                     .source_index = self.container_source_index, .css_byte_start = css_byte_start } });
         }
@@ -12483,7 +12737,13 @@ const Builder = struct {
         var selectors: std.ArrayList(TextSelector) = .empty;
         var uncertain_list = false;
         while (try parts.nextAlloc(self.a)) |part| {
-            const selector_value = try self.textSelector(part, conditional);
+            var selector_value = try self.textSelector(part, conditional);
+            if (destination == &self.text_rules and selector_value.uncertain and std.mem.indexOfScalar(u8, part, '[') != null) {
+                if (try self.observedCompoundPrefix(trim(part))) |compound| {
+                    if (compound.attributes.len == 1 and std.ascii.eqlIgnoreCase(compound.attributes[0].name, "lang"))
+                        selector_value.own_language_guard = compound.attributes[0];
+                }
+            }
             uncertain_list = uncertain_list or selector_value.uncertain;
             try selectors.append(self.a, selector_value);
         }
@@ -15771,6 +16031,8 @@ pub const CustomProfile = struct {
     // Observed page-specific stylesheet/ancestor context is not an edition
     // default. Other titles retain unknown authority until separately bound.
     page_title: ?[]const u8 = null,
+    phonos_article: ?struct { page_id: u64, revision_id: u64, buttons: []const PhonosButton } = null,
+    font_article: ?struct { page_id: u64, revision_id: u64, root_per_body: f32, heading: ?WrappedHeadingRecipe = null } = null,
     rules: []const CustomRule,
     classes: []const []const u8,
     is_opaque: bool,
@@ -18355,6 +18617,37 @@ test "container bounded ancestry search cannot turn exhausted proof into nonmatc
     try std.testing.expectEqual(ContainerSelectorMatch.unknown, result.rules[0].match);
 }
 
+test "centered flex column retains its original fit content padding and auto margins" {
+    const a = std.testing.allocator;
+    const actual = try resolveInlineContainerAlloc(a,"width:fit-content;margin:auto;padding:0.5em;display:flex;flex-direction:column;align-items:center");
+    try std.testing.expect(!actual.unresolved and actual.style.layout == .flex_column and actual.style.align_items == .center);
+    try std.testing.expect(actual.style.width.? == .fit_content and actual.style.margin_values.?.left == .auto and actual.style.margin_values.?.right == .auto);
+    try std.testing.expectEqual(types.StyleLength{.unit=.em,.value=0.5},actual.style.padding.?.top);
+    const nested = try resolveInlineContainerAlloc(a,"display:flex;flex-direction:column;align-items:center");
+    try std.testing.expect(!nested.unresolved and nested.style.layout == .flex_column);
+    try std.testing.expect((try resolveInlineContainerAlloc(a,"display:flex;flex-direction:column;align-items:center;height:10px")).unresolved);
+    try std.testing.expect((try resolveInlineContainerAlloc(a,"display:flex;flex-direction:column-reverse;align-items:center")).unresolved);
+    const row = try resolveInlineContainerAlloc(a,"display:flex;flex-direction:column;align-items:center;flex-direction:row");
+    try std.testing.expect(!row.unresolved and row.style.layout == .flex_row);
+}
+
+test "flex rows retain a nonzero authored column gap and zero has no extension" {
+    const a = std.testing.allocator;
+    const row = "position:relative;display:flex;column-gap:0.5em;align-items:end";
+    const actual = try resolveInlineContainerAlloc(a, row);
+    try std.testing.expect(!actual.unresolved and actual.style.positioning == .relative_auto and actual.style.align_items == .end);
+    try std.testing.expectEqual(types.StyleLength{ .unit = .em, .value = 0.5 }, actual.style.flex_column_gap.?);
+    for ([_][]const u8{ ";column-gap:0", ";column-gap:normal", ";column-gap:initial", ";column-gap:unset" }) |suffix| {
+        const style = try std.mem.concat(a, u8, &.{ row, suffix });
+        defer a.free(style);
+        const result = try resolveInlineContainerAlloc(a, style);
+        try std.testing.expect(!result.unresolved and result.style.layout == .flex_row and result.style.align_items == .end and result.style.flex_column_gap == null);
+    }
+    const columns = try resolveInlineContainerAlloc(a, "column-count:2;column-gap:normal");
+    try std.testing.expect(!columns.unresolved);
+    try std.testing.expectEqual(types.StyleLength{ .unit = .em, .value = 1 }, columns.style.columns.?.gap);
+}
+
 test "container cascade emits finite flex paint limits alignment and line height" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
     const a = arena.allocator();
@@ -18946,6 +19239,49 @@ test "container unsupported positive attributes retain necessary terminal class 
     }
 }
 
+test "container visible horizontal and clipped vertical preserve cascade axis direction" {
+    const a = std.testing.allocator;
+    for ([_][]const u8{ "overflow:visible;overflow-y:clip", "overflow:visible clip", "overflow-y:clip", "overflow:auto;overflow-x:visible;overflow-y:clip" }) |css| {
+        const box = try resolveInlineContainerAlloc(a, css);
+        try std.testing.expect(!box.unresolved and box.style.overflow == .visible_x_clip_y);
+    }
+    const source = try resolveInlineContainerAlloc(a, "margin-top:0.4em;border-top:1px dashed #a2a9b1;overflow:visible;overflow-y:clip;display:block");
+    try std.testing.expect(!source.unresolved and source.style.overflow == .visible_x_clip_y);
+    const border_edges = source.style.border.?.edges;
+    defer a.free(border_edges.top.dashed.color.rgb);
+    try std.testing.expectEqualDeep(types.StyleLength{ .unit = .px, .value = 1 }, border_edges.top.dashed.width);
+    try std.testing.expectEqualStrings("#a2a9b1", border_edges.top.dashed.color.rgb);
+    try std.testing.expect(border_edges.right == .none and border_edges.bottom == .none and border_edges.left == .none);
+    try std.testing.expectEqualDeep(types.StyleLength{ .unit = .em, .value = 0.4 }, source.style.margins.?.top);
+    const override = try resolveInlineContainerAlloc(a, "overflow:visible!important;overflow-y:clip");
+    try std.testing.expect(!override.unresolved and override.style.overflow == null);
+    for ([_][]const u8{ "overflow:clip visible", "overflow:clip", "overflow:auto clip", "overflow:clip auto", "overflow:visible clip auto", "overflow-y:var(--unknown)" }) |css| {
+        try std.testing.expect((try resolveInlineContainerAlloc(a, css)).unresolved);
+    }
+}
+
+test "text paint uses authored own lang to refute Indonesian mention exceptions" {
+    const a = std.testing.allocator;
+    // The actual Indonesian Common.css declares these selectors in this order.
+    var styles = try parseAlloc(a,
+        \\.Latn { font-style: normal; }
+        \\.mention { font-style: italic; }
+        \\.mention[lang$="-pro"], .mention i, i .mention { font-style: normal; }
+        \\.use-with-mention .mention, .form-of-definition-link .mention { font-style: normal; font-weight: bold; }
+    ); defer styles.deinit();
+    const wrapper: TextElement = .{ .tag = "div", .classes = "h-usage-example" };
+    var example: TextElement = .{ .tag = "i", .classes = "Latn mention e-example", .own_language_attribute = "bug", .language = "bug", .parent = &wrapper };
+    try std.testing.expect((try styles.resolveTextPaint(a, &example, "")).font_style.?.value);
+    // The retained selector is only a nonmatch proof; matching or unobserved own values remain unknown.
+    example.own_language_attribute = "gem-pro";
+    try std.testing.expect((try styles.resolveTextPaint(a, &example, "")).font_style.? == .unknown);
+    example.own_language_attribute = null;
+    try std.testing.expect((try styles.resolveTextPaint(a, &example, "")).font_style.? == .unknown);
+    var ancestor = try parseAlloc(a, ".mention{font-style:italic}[lang$='-pro'] .mention{font-style:normal}"); defer ancestor.deinit();
+    example.own_language_attribute = "bug";
+    try std.testing.expect((try ancestor.resolveTextPaint(a, &example, "")).font_style.? == .unknown);
+}
+
 test "container generated suffix retains required direct parent without granting an attribute match" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
     var sheet = try parseAlloc(a, "span[rel=\"mw:referencedBy\"] > a::before{font-weight:bold;content:'reference'}"); defer sheet.deinit();
@@ -19409,8 +19745,74 @@ test "EL count columns retain default gap and ignore invalid percentage column w
     const invalid_after_auto = try resolveInlineContainerAlloc(a, "column-count:2;column-width:auto;column-width:50%!important");
     try std.testing.expect(!invalid_after_auto.unresolved and invalid_after_auto.style.columns.?.count == 2);
     const invalid_after_width = try resolveInlineContainerAlloc(a, "column-count:2;column-width:10em;column-width:50%!important");
-    try std.testing.expect(invalid_after_width.unresolved);
+    try std.testing.expect(!invalid_after_width.unresolved);
+    try std.testing.expectEqual(types.ContainerColumns{ .count = 2, .width = .{ .unit = .em, .value = 10 },
+        .gap = .{ .unit = .em, .value = 1 } }, invalid_after_width.style.columns.?);
     try std.testing.expect(!containerStyleEqual(types.ContainerStyle{}, selected.style));
+}
+
+test "physical column break owners keep source cascade, media and alias uncertainty" {
+    const a = std.testing.allocator;
+    const ul: TextElement = .{ .tag = "ul", .ancestry_complete = true };
+    const li: TextElement = .{ .tag = "li", .parent = &ul, .ancestry_complete = true };
+    const dd: TextElement = .{ .tag = "dd", .parent = &li, .ancestry_complete = true };
+    var profile = try parseForTargetAlloc(a,
+        "li,.group-in-column{-moz-column-break-inside:avoid;break-inside:avoid}" ++
+        ".nocolbreak,div.columns li,div.columns dd dd{-webkit-column-break-inside:avoid;page-break-inside:avoid;break-inside:avoid-column}", .screen);
+    defer profile.deinit();
+    try std.testing.expectEqual(ColumnBreakResolution.avoid, try profile.columnBreakInsideIn(a, &li, "", .list_item));
+    try std.testing.expectEqual(ColumnBreakResolution.auto, try profile.columnBreakInsideIn(a, &dd, "", .block));
+    try std.testing.expectEqual(ColumnBreakResolution.auto, try profile.columnBreakInsideIn(a, &li, "break-inside:auto", .list_item));
+    try std.testing.expectEqual(ColumnBreakResolution.unresolved, try profile.columnBreakInsideIn(a, &li, "break-before:column", .list_item));
+    try std.testing.expectEqual(ColumnBreakResolution.unresolved, try profile.columnBreakInsideIn(a, &dd, "-moz-column-break-inside:avoid", .block));
+    try std.testing.expectEqual(ColumnBreakResolution.unresolved, try profile.columnBreakInsideIn(a, &dd, "column-width:4em", .block));
+    try std.testing.expectEqual(ColumnBreakResolution.unresolved, try profile.columnBreakInsideIn(a, &dd, "display:inline-block", .block));
+    try std.testing.expectEqual(ColumnBreakResolution.auto, try profile.columnBreakInsideIn(a, &ul, "column-width:4em", .root_block));
+    var media = try parseForTargetAlloc(a, "@media(max-width:800px){li{break-inside:avoid}}", .screen);
+    defer media.deinit();
+    try std.testing.expectEqual(ColumnBreakResolution.unresolved, try media.columnBreakInsideIn(a, &li, "", .list_item));
+    try std.testing.expectEqual(ColumnBreakResolution.auto, try media.columnBreakInsideIn(a, &li, "break-inside:auto!important", .list_item));
+}
+
+test "retained Vietnamese translation list uses the original screen width gap and group avoidance" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    // Unmodified declarations from viwiktionary p626/r2333787's Common.css and Site.css.
+    const css = ".nocolbreak,\ndiv.columns li,\ndiv.columns dd dd {\n    -webkit-column-break-inside: avoid;\n    page-break-inside: avoid;\n    break-inside: avoid-column;\n}\nli,\n.group-in-column {\n\t-moz-column-break-inside: avoid;\n\tbreak-inside: avoid;\n}\n.multicolumn-list>ul {\n\t-moz-column-width: 25em;\n\tcolumn-width: 25em;\n\t-moz-column-gap: 20px;\n\tcolumn-gap: 20px;\n}";
+    var profile = try parseForTargetAlloc(a, css, .screen); defer profile.deinit();
+    const table: TextElement = .{ .tag = "table", .classes = "translations", .ancestry_complete = true };
+    const tbody: TextElement = .{ .tag = "tbody", .parent = &table, .ancestry_complete = true };
+    const tr: TextElement = .{ .tag = "tr", .parent = &tbody, .ancestry_complete = true };
+    const td: TextElement = .{ .tag = "td", .classes = "translations-cell multicolumn-list", .parent = &tr, .ancestry_complete = true };
+    const ul: TextElement = .{ .tag = "ul", .parent = &td, .ancestry_complete = true };
+    const li: TextElement = .{ .tag = "li", .parent = &ul, .ancestry_complete = true };
+    const dl: TextElement = .{ .tag = "dl", .parent = &li, .ancestry_complete = true };
+    const dd: TextElement = .{ .tag = "dd", .parent = &dl, .ancestry_complete = true };
+    const selected = try profile.resolveContainerIn(a, &ul, "");
+    try std.testing.expect(!selected.unresolved);
+    try std.testing.expectEqual(types.ContainerColumns{ .width = .{ .unit=.em, .value=25 }, .gap=.{.unit=.px,.value=20} }, selected.style.columns.?);
+    try std.testing.expectEqual(ColumnBreakResolution.auto, try profile.columnBreakInsideIn(a, &ul, "", .root_block));
+    try std.testing.expectEqual(ColumnBreakResolution.avoid, try profile.columnBreakInsideIn(a, &li, "", .list_item));
+    try std.testing.expectEqual(ColumnBreakResolution.auto, try profile.columnBreakInsideIn(a, &dd, "", .block));
+}
+
+test "direct UL columns preserve the authored preferred width, gap and automatic count" {
+    const a = std.testing.allocator;
+    var profile = try parseForTargetAlloc(a, ".multicolumn-list>ul{column-width:25em;column-gap:20px}", .screen);
+    defer profile.deinit();
+    const cell: TextElement = .{ .tag = "td", .classes = "multicolumn-list", .ancestry_complete = true };
+    const list: TextElement = .{ .tag = "ul", .parent = &cell, .ancestry_complete = true };
+    const selected = try profile.resolveContainerIn(a, &list, "");
+    try std.testing.expect(!selected.unresolved);
+    try std.testing.expectEqual(types.ContainerColumns{ .width = .{ .unit = .em, .value = 25 },
+        .gap = .{ .unit = .px, .value = 20 } }, selected.style.columns.?);
+    const capped = try profile.resolveContainerIn(a, &list, "column-count:3");
+    try std.testing.expectEqual(@as(?u16, 3), capped.style.columns.?.count);
+    const reset = try profile.resolveContainerIn(a, &list, "column-width:auto");
+    try std.testing.expect(!reset.unresolved and reset.style.columns == null);
+    const nested: TextElement = .{ .tag = "ul", .parent = &list, .ancestry_complete = true };
+    const unrelated = try profile.resolveContainerIn(a, &nested, "");
+    try std.testing.expect(!unrelated.unresolved and unrelated.style.columns == null);
 }
 
 test "count column winners preserve resets important and independent computed gap" {
@@ -19444,7 +19846,7 @@ test "count column grammar ignores invalid numbers without converting unsupporte
         const selected = try resolveInlineContainerAlloc(a, try std.fmt.allocPrint(a, "column-count:{s};column-gap:normal", .{valid}));
         try std.testing.expect(!selected.unresolved and selected.style.columns != null);
     }
-    for ([_][]const u8{ "column-count:65536", "column-count:inherit", "column-count:calc(1 + 1)", "column-count:2;column-width:10em", "column-count:2;column-width:var(--w)", "column-count:2;column-gap:20%", "column-count:2;column-gap:var(--g)", "column-count:2;column-fill:auto" }) |css|
+    for ([_][]const u8{ "column-count:65536", "column-count:inherit", "column-count:calc(1 + 1)", "column-count:2;column-width:10ch", "column-count:2;column-width:var(--w)", "column-count:2;column-gap:20%", "column-count:2;column-gap:var(--g)", "column-count:2;column-fill:auto" }) |css|
         try std.testing.expect((try resolveInlineContainerAlloc(a, css)).unresolved);
 }
 
@@ -20399,7 +20801,7 @@ test "border components keep missing width color unknown selectors resets and un
     const complete = try resolveInlineContainerAlloc(a, "border-top-style:dotted;border-top-width:1px;border-top-color:#aaa");
     try std.testing.expect(!complete.unresolved and complete.style.border.?.edges.top == .dotted);
     for ([_][]const u8{ "border-top-style:dotted", "border-top:1px dotted", "border:1px solid currentcolor", "border:1px solid red;border-top-color:var(--unknown)",
-        "border-top:thin dotted red", "border-top:1px dashed red", "border-top:-1px solid red", "border:1px solid red;border-radius:0",
+        "border-top:thin dotted red", "border-top:1px double red", "border-top:-1px solid red", "border:1px solid red;border-radius:0",
         "border:1px solid red;border-image:none", "all:initial;border:1px solid red", "border-top:1px solid transparent" }) |css| {
         if (std.mem.eql(u8, css, "border-top:1px solid transparent")) {
             var styles = try parseForTargetAlloc(a, "table.x{border-top:1px solid transparent}", .screen); defer styles.deinit();
@@ -26376,6 +26778,396 @@ fn authoredElementRuleMatchesIn(a: std.mem.Allocator, context: AuthoredElementOb
                 .source_index = rule.source_index, .css_byte_start = rule.source_byte_start } });
     }
     return try result.toOwnedSlice(a);
+}
+
+/// Page-local proof derived from the entire selected skin/page cascade. The
+/// declaration arena and GET bytes may be freed after this recipe is copied.
+pub const WrappedHeadingRun = struct {
+    font: types.InlineFontSnapshot,
+    ink: []const u8,
+    line_height: types.ComputedLineHeight,
+};
+pub const WrappedHeadingRecipe = struct {
+    owners: [6]ObservedStyleNode,
+    title: []const u8, language: []const u8,
+    primary: []const u8, fallback: []const u8, tooltip: []const u8,
+    style: types.SectionHeadingStyle,
+    word: WrappedHeadingRun, separator: WrappedHeadingRun, sub: WrappedHeadingRun,
+};
+pub const PhonosButton = struct {
+    file: []const u8,
+    language: []const u8,
+    caption_html: []const u8,
+    caption: []const u8,
+    accessible_name: []const u8,
+    attribution_title: []const u8,
+    attribution_text: []const u8,
+};
+pub const SelectedPhonos = struct {
+    source: []const u8,
+    button: PhonosButton,
+
+    // Sorted by physical source address in the same live expanded page.
+    pub fn lookup(items: []const SelectedPhonos, token: []const u8) ?PhonosButton {
+        var left: usize = 0;
+        var right = items.len;
+        while (left < right) {
+            const at = left + (right - left) / 2;
+            const item = items[at];
+            if (@intFromPtr(item.source.ptr) < @intFromPtr(token.ptr)) left = at + 1 else right = at;
+        }
+        if (left >= items.len) return null;
+        const item = items[left];
+        return if (item.source.ptr == token.ptr and item.source.len == token.len) item.button else null;
+    }
+};
+
+pub const SelectedWrappedHeading = struct { source: []const u8, body_offset: usize, recipe: WrappedHeadingRecipe };
+
+fn headingBorders(a: std.mem.Allocator,node: ObservedFigureComputedNode) !?types.ContainerBorder {
+    var cascade_value: BorderCascade=.{};
+    for(node.declarations)|decl|{
+        if (decl.syntax_unknown or std.ascii.eqlIgnoreCase(decl.name,"all")) return null;
+        if (!std.ascii.eqlIgnoreCase(decl.name,"border") and !std.ascii.startsWithIgnoreCase(decl.name,"border-")) continue;
+        if(decl.rank_unknown) return null;
+        // Split the shorthand first. Its color component, including var(),
+        // resolves in the actual physical owner's custom environment.
+        const update=try borderUpdateIn(a,decl.name,decl.raw,node.environment,true);
+        cascade_value.add(update,decl.priority,decl.uncertain);
+    }
+    const result=cascade_value.result();
+    return if(result.unresolved) null else result.value orelse .none;
+}
+fn headingUsedEdges(a: std.mem.Allocator,node: ObservedFigureComputedNode, padding: bool, font_scale:f32, root_scale:f32) !?types.StyleEdges {
+    const result=try observedEdgesWithRoot(a,node.declarations,node.environment,padding,false,font_scale,null,root_scale);
+    if(result.unresolved) return null;
+    return observedFigureFixedEdges(result.value orelse return null);
+}
+fn headingSnapshot(font: types.FigureMediaStrut,scale:f32,family:types.ContainerFontFamily) types.InlineFontSnapshot {
+    return .{ .font_scale=scale,.font_scale_basis=.normal_body,.language=font.language,
+        .bold=font.bold,.italic=font.italic,.font_family=family,.font_features=font.font_features };
+}
+fn headingHasWinner(a:std.mem.Allocator, node:ObservedFigureComputedNode, key:[]const u8) !bool {
+    const candidates=try observedFigurePropertyCandidates(a,node.declarations,key,&.{"font"});
+    for(candidates)|candidate| if (!candidate.syntax_unknown and !candidate.uncertain) return true;
+    return false;
+}
+fn headingNoGenerated(a:std.mem.Allocator, sheets:*const Profile, nodes:[]const ObservedStyleNode, index:u32, env:CustomEnvironment) !bool {
+    inline for (.{GeneratedFigurePseudo.before,GeneratedFigurePseudo.after})|pseudo| {
+        const d=(try observedStyleNodeDeclarationsWithLanguage(a,sheets,nodes,index,null,pseudo,.{},true)) orelse return false;
+        const own=try observedFigureCustomEnvironment(a,d.items,env,true);
+        const content=try observedFigureKeyword(a,d.items,"content",&.{},own,&.{"none","normal"},"normal",null,false,"normal");
+        if (content.unresolved) return false;
+    }
+    return true;
+}
+fn headingAxis(a:std.mem.Allocator,node:ObservedFigureComputedNode,name:[]const u8,wanted:[]const u8) !bool {
+    const candidates=try observedFigurePropertyCandidates(a,node.declarations,name,&.{"overflow"});
+    var definite=false;
+    for(candidates)|c|{
+        if(c.syntax_unknown) return false;
+        const v=try customColorValue(a,node.environment,c.raw);
+        if (v!=.known) return false;
+        var words=std.mem.tokenizeAny(u8,trim(v.known)," \t\r\n");
+        const first=words.next() orelse return false;
+        const second=words.next();
+        if(words.next()!=null or (second!=null and !std.ascii.eqlIgnoreCase(c.name,"overflow"))) return false;
+        const selected=if(std.ascii.eqlIgnoreCase(name,"overflow-y")) second orelse first else first;
+        if(!std.ascii.eqlIgnoreCase(selected,wanted))return false;
+        definite=definite or !c.uncertain;
+    }
+    return definite or std.mem.eql(u8,wanted,"visible");
+}
+fn headingPropertiesCovered(a: std.mem.Allocator, state: ObservedFigureComputedNode, is_sub: bool, is_group: bool, is_heading: bool) !bool {
+    // The companion has no arbitrary CSS payload. Every declaration that may
+    // affect one of its physical owners must have a typed route or be inert.
+    var used = try ObservedFigurePropertyUse.init(a, state.declarations);
+    defer used.deinit(a);
+    used.customEnvironment();
+    if (!try used.staticMotion(a, state.environment)) return false;
+    for ([_][]const u8{ "font-size", "font-weight", "font-style", "font-family", "font-variant", "font-stretch",
+        "font-size-adjust", "font-variation-settings", "font-feature-settings", "line-height" }) |key| used.property(key, &.{"font"});
+    for ([_][]const u8{ "color", "direction", "visibility", "opacity", "float", "transform", "white-space",
+        "text-shadow", "word-break", "display", "position" }) |key| used.property(key, &.{});
+    used.property("overflow-x", &.{"overflow"}); used.property("overflow-y", &.{"overflow"});
+    used.property("background-image", &.{"background"});
+    if (!try observedFigureKeywordIs(a, state, "background-color", &.{"background"}, "transparent", "transparent")) return false;
+    used.property("background-color", &.{"background"});
+    if (is_group) { used.property("min-width", &.{}); used.property("overflow-wrap", &.{"word-wrap"}); }
+    if (is_heading) used.property("clear", &.{});
+    used.boxEdges(false); used.boxEdges(true); used.borderEdges();
+    inline for (.{ "top", "right", "bottom", "left" }) |key| {
+        if (!try observedFigureKeywordIs(a, state, key, &.{"inset"}, "auto", "auto")) return false;
+        used.property(key, &.{"inset"});
+    }
+    // An outline color alone cannot paint: even :focus supplies no outline
+    // if the used outline style remains none in every possible cascade.
+    if (!try observedFigureKeywordIs(a,state,"outline-style",&.{"outline"},"none","none")) return false;
+    used.property("outline-style",&.{"outline"}); used.property("outline-color",&.{});
+    const alignment: []const u8 = if (is_sub) "sub" else "baseline";
+    if (!try observedFigureKeywordIs(a,state,"vertical-align",&.{},alignment,alignment)) return false;
+    used.property("vertical-align", &.{});
+    if (!used.complete()) {
+        if (comptime @import("builtin").is_test) for (used.used,used.declarations) |seen,decl| {
+            if (!seen or decl.syntax_unknown) std.debug.print("Unrepresented heading property {s} on {d} source={?d} offset={d}\n", .{decl.name,state.index,decl.source_index,decl.source_byte_start});
+        };
+        return false;
+    }
+    return true;
+}
+const HeadingComputed = struct {
+    node:ObservedFigureComputedNode, font:types.FigureMediaStrut, family:?[]const u8, line:ObservedFigureLineHeight, ink:?types.FigureColor,
+};
+pub fn selectedWrappedHeadingStyleAlloc(a:std.mem.Allocator, keep:std.mem.Allocator,sheets:*const Profile, observed:anytype, root_per_body:f32) !?WrappedHeadingRecipe {
+    const nodes=observed.nodes;
+    var subject_trace:u32=observed.body;
+    const Trace=struct{
+        fn refuse(profile:*const Profile, ns:[]const ObservedStyleNode, root:u32, index:u32, comptime why:[]const u8) ?WrappedHeadingRecipe {
+            traceObservedPaintRefusal(true,profile,ns,root,index,why,null); return null;
+        }
+    };
+    if(!observedStyleGraphValid(sheets,nodes,observed.body) or sheets.globally_unresolved) return null;
+    if (!Profile.hasClass(observedFigureAttribute(nodes[0], "class") orelse return null, "skin-theme-clientpref-day")) return null;
+    const group=nodes[observed.word].parent orelse return null;
+    const roles=[_]u32{observed.outer,observed.inner,observed.heading,group,observed.word,observed.sub};
+    // UA H3 and SUB defaults are not simply inherited. Require the real source
+    // to override the size and weight before using the ordinary computed path.
+    const used=try a.alloc(bool,nodes.len); @memset(used,false);
+    for(roles)|index|{
+        var at:?u32=index;
+        while(at)|i| {if(used[i])break;used[i]=true;at=nodes[i].parent;}
+    }
+    // Every genuine generated fallback/entity span is a physical child. A
+    // style change on any one of these evidence-only carriers revokes the join.
+    for(nodes,0..) |n,i| if(n.parent)|parent| {
+        if (parent>=observed.outer and used[parent] and std.ascii.eqlIgnoreCase(n.tag,"span")) used[i]=true;
+    };
+    const computed=try a.alloc(HeadingComputed,nodes.len);
+    var root_scale:f32=1;
+    for(nodes,0..) |n,i|{
+        if(!used[i])continue;
+        const subject:u32=@intCast(i);subject_trace=subject;
+        const parent:?HeadingComputed=if(n.parent)|p|computed[p] else null;
+        const ds=(try observedStyleNodeDeclarationsWithLanguage(a,sheets,nodes,subject,null,null,.{.selected_heading_language=true},true)) orelse return Trace.refuse(sheets,nodes,observed.body,subject_trace,"wrapped-heading.29");
+        const env=try observedFigureCustomEnvironment(a,ds.items,if(parent)|p|p.node.environment else .{.complete=true},true);
+        if (!try observedFigureStaticMotion(a,ds.items,env))return Trace.refuse(sheets,nodes,observed.body,subject_trace,"wrapped-heading.31");
+        const node:ObservedFigureComputedNode=.{.index=subject,.declarations=ds.items,.environment=env};
+        if((subject==observed.heading or subject==observed.sub) and
+            (!try headingHasWinner(a,node,"font-size") or !try headingHasWinner(a,node,"font-weight")))return Trace.refuse(sheets,nodes,observed.body,subject_trace,"wrapped-heading.34");
+        const family=try observedFigureFontFamily(a,node,if(parent)|p|p.family else null);
+        const inherited_font:types.FigureMediaStrut=if(parent)|p|p.font else .{.font_scale=1,.direction=.ltr};
+        const font=(try observedFigureOwnFontInWithWitness(a,n,node,inherited_font,1,root_scale,true,null)) orelse return Trace.refuse(sheets,nodes,observed.body,subject_trace,"wrapped-heading.37");
+        if (i==0)root_scale=font.font_scale;
+        const line=try observedFigureLineHeight(a,node,if(parent)|p|p.line else .normal,font.font_scale);
+        const inherited_ink=if(parent)|p|p.ink else null;
+        const paint=try observedFigureColor(a,ds.items,"color",env,inherited_ink,inherited_ink);
+        computed[i]=.{.node=node,.font=font,.family=family,.line=line,.ink=if(paint.unresolved)null else paint.value};
+        if(i<observed.outer)continue;
+        if(!try headingPropertiesCovered(a,node,subject==observed.sub,subject==group,subject==observed.heading))
+            return Trace.refuse(sheets,nodes,observed.body,subject_trace,"wrapped-heading.closed-declarations");
+        if(font.direction!=.ltr or !try headingNoGenerated(a,sheets,nodes,subject,env))return Trace.refuse(sheets,nodes,observed.body,subject_trace,"wrapped-heading.44");
+        inline for(.{"visibility","opacity","float","transform","background-image","white-space","text-shadow"},.{"visible","1","none","none","none","normal","none"})|key,expected|{
+            if(!try observedFigureKeywordIs(a,node,key,if(comptime std.mem.eql(u8,key,"background-image"))&.{"background"} else &.{},expected,expected))return Trace.refuse(sheets,nodes,observed.body,subject_trace,"wrapped-heading.effect." ++ key);
+        }
+        // The H3's own break-word governs only an empty fallback-id carrier.
+        // Its sole text-bearing block has its own normal/anywhere override.
+        if(subject==observed.heading) {
+            const wrapping=try observedFigureKeyword(a,node.declarations,"word-break",&.{},env,&.{"normal","break-word"},"normal",null,false,"normal");
+            if(wrapping.unresolved)return Trace.refuse(sheets,nodes,observed.body,subject_trace,"wrapped-heading.52");
+        } else if(!try observedFigureKeywordIs(a,node,"word-break",&.{},"normal","normal"))return Trace.refuse(sheets,nodes,observed.body,subject_trace,"wrapped-heading.53");
+        const display:[]const u8=if(subject==observed.heading)"flow-root" else if(subject==observed.outer or subject==observed.inner or subject==group)"block" else "inline";
+        if (!try observedFigureKeywordIs(a,node,"display",&.{},display,if(n.tag.len==3 and std.ascii.eqlIgnoreCase(n.tag,"div"))"block" else "inline") or
+            !try observedFigureKeywordIs(a,node,"position",&.{},if(subject==observed.heading)"relative" else "static","static"))return Trace.refuse(sheets,nodes,observed.body,subject_trace,"wrapped-heading.56");
+        if(!try headingAxis(a,node,"overflow-x","visible") or
+            !try headingAxis(a,node,"overflow-y",if(subject==observed.outer)"clip" else "visible"))return Trace.refuse(sheets,nodes,observed.body,subject_trace,"wrapped-heading.58");
+    }
+    // Empty fallback and parser-generated entities carry no extra native
+    // boxes. The served tree supplied their real parents, so verify each
+    // stroke, spacing and paint before folding them into the visible runs.
+    for (nodes,0..) |n,i| {
+        if (i<observed.outer or !used[i] or std.mem.indexOfScalar(u32,&roles,@intCast(i))!=null) continue;
+        const current=computed[i]; const parent=computed[n.parent orelse return null];
+        const em=current.font.font_scale/computed[observed.body].font.font_scale;
+        const margin=(try headingUsedEdges(a,current.node,false,em,root_per_body)) orelse return null;
+        const pad=(try headingUsedEdges(a,current.node,true,em,root_per_body)) orelse return null;
+        const border=(try headingBorders(a,current.node)) orelse return null;
+        if (!observedFigureEdgesZero(margin) or !observedFigureEdgesZero(pad) or border!=.none or
+            !std.meta.eql(current.font,parent.font) or !observedFigureLineHeightEqual(current.line,parent.line) or
+            !std.mem.eql(u8,current.family orelse return null,parent.family orelse return null) or
+            !observedFigureColorEqual(current.ink orelse return null,parent.ink orelse return null))
+            return Trace.refuse(sheets,nodes,observed.body,@intCast(i),"wrapped-heading.generated-carrier");
+    }
+    const heading=computed[observed.heading]; const text=computed[group]; subject_trace=observed.heading;
+    const body_scale=computed[observed.body].font.font_scale;
+    if(body_scale<=0 or root_scale/body_scale!=root_per_body or heading.line!=.factor or
+        heading.font.font_scale<=0 or heading.font.language.len==0 or !heading.font.bold) return Trace.refuse(sheets,nodes,observed.body,subject_trace,"wrapped-heading.63");
+    const family=(try observedFontFamilyRequestAlloc(a,heading.family orelse return Trace.refuse(sheets,nodes,observed.body,subject_trace,"wrapped-heading.64"))) orelse return Trace.refuse(sheets,nodes,observed.body,subject_trace,"wrapped-heading.64");
+    if(!try observedFigureKeywordIs(a,text.node,"overflow-wrap",&.{"word-wrap"},"anywhere","normal") or
+        !try observedFigureKeywordIs(a,text.node,"min-width",&.{},"0","auto"))return Trace.refuse(sheets,nodes,observed.body,subject_trace,"wrapped-heading.66");
+    var margins:[6]types.StyleEdges=undefined; var padding:[6]types.StyleEdges=undefined;
+    var borders:[6]types.ContainerBorder=undefined;
+    for(roles,0..)|subject,j|{
+        subject_trace=subject; const value=computed[subject];const scale=value.font.font_scale/body_scale;
+        margins[j]=(try headingUsedEdges(a,value.node,false,scale,root_per_body)) orelse return Trace.refuse(sheets,nodes,observed.body,subject_trace,"wrapped-heading.71");
+        padding[j]=(try headingUsedEdges(a,value.node,true,scale,root_per_body)) orelse return Trace.refuse(sheets,nodes,observed.body,subject_trace,"wrapped-heading.72");
+        borders[j]=(try headingBorders(a,value.node)) orelse return Trace.refuse(sheets,nodes,observed.body,subject_trace,"wrapped-heading.73");
+        if((j!=0 and !observedFigureEdgesZero(margins[j])) or (j!=1 and j!=3 and !observedFigureEdgesZero(padding[j])) or (j!=0 and borders[j]!=.none))return Trace.refuse(sheets,nodes,observed.body,subject_trace,"wrapped-heading.74");
+    }
+    if(padding[3].right.unit!=.em or padding[3].right.value<=0 or padding[3].top.value!=0 or
+        padding[3].bottom.value!=0 or padding[3].left.value!=0 or text.font.font_scale!=heading.font.font_scale) return Trace.refuse(sheets,nodes,observed.body,subject_trace,"wrapped-heading.77");
+    const scale=heading.font.font_scale/body_scale;
+    const font=headingSnapshot(heading.font,scale,family);
+    if (!try observedFigureKeywordIs(a,heading.node,"clear",&.{},"none","none"))return Trace.refuse(sheets,nodes,observed.body,subject_trace,"wrapped-heading.80");
+    const style:types.SectionHeadingStyle=.{ .font=font,.direction=heading.font.direction,
+        .box=.{.positioning=.relative_auto,.padding=padding[2],.margins=margins[2],.border=borders[2],.clear=.none,
+            .owner_font_scale=scale,.font_family=family,.line_height=.{.multiplier=@floatCast(heading.line.factor)}},
+        .wrappers=.{.outer=.{.margins=margins[0],.border=borders[0],.overflow=.visible_x_clip_y},
+            .inner=.{.padding=padding[1]},.title_block_padding_right=.{.unit=.em,.value=padding[3].right.value/scale}} };
+    if(!types.validSectionHeadingStyle(style))return Trace.refuse(sheets,nodes,observed.body,subject_trace,"wrapped-heading.86");
+    var runs:[3]WrappedHeadingRun=undefined;
+    for([_]u32{observed.word,group,observed.sub},&runs)|subject,*run|{
+        subject_trace=subject; const state=computed[subject]; const rgb=state.ink orelse return Trace.refuse(sheets,nodes,observed.body,subject_trace,"wrapped-heading.89");
+        if (rgb.kind!=.rgb or state.font.font_scale<=0) return Trace.refuse(sheets,nodes,observed.body,subject_trace,"wrapped-heading.90");
+        const actual_family=(try observedFontFamilyRequestAlloc(a,state.family orelse return Trace.refuse(sheets,nodes,observed.body,subject_trace,"wrapped-heading.91"))) orelse return Trace.refuse(sheets,nodes,observed.body,subject_trace,"wrapped-heading.91");
+        if(!types.sameFontFamilyRequest(family,actual_family))return Trace.refuse(sheets,nodes,observed.body,subject_trace,"wrapped-heading.92");
+        const used_line=observedFigureUsedLineHeight(state.line,state.font.font_scale) orelse return Trace.refuse(sheets,nodes,observed.body,subject_trace,"wrapped-heading.93");
+        if (used_line.unit!=.em) return Trace.refuse(sheets,nodes,observed.body,subject_trace,"wrapped-heading.94");
+        run.*=.{.font=headingSnapshot(state.font,state.font.font_scale/body_scale,actual_family),.ink=rgb.value.?,
+             .line_height=.{.value=used_line.value/body_scale,.font_scale_basis=.normal_body}};
+    }
+    var owners:[6]ObservedStyleNode=undefined;
+    for(roles,&owners)|index,*out|out.*=.{.tag=nodes[index].tag,.attributes=nodes[index].attributes,.parent=null};
+    const recipe:WrappedHeadingRecipe=.{.title=observed.title,.language=observed.language,.primary=observed.primary,.fallback=observed.fallback,
+        .tooltip=observedFigureAttribute(nodes[observed.outer],"title") orelse return Trace.refuse(sheets,nodes,observed.body,subject_trace,"wrapped-heading.101"),.owners=owners,.style=style,.word=runs[0],.separator=runs[1],.sub=runs[2]};
+    return try observedFigureDataClone(WrappedHeadingRecipe,keep,recipe,0);
+}
+
+/// The source issuer supplies the actual HTML-to-parser-output ancestor path.
+/// Source measurements for a generated, empty vertical stroke inside a DD.
+/// These measurements alone do not authorize replacing its physical list body.
+pub const DescriptionBeforeMetrics = struct {
+    owner_scale: f32,
+    padding_left: types.StyleLength,
+    top: types.StyleLength,
+    bottom: types.StyleLength,
+    left: types.StyleLength,
+    width: types.StyleLength,
+    color: types.FigureColor,
+};
+
+pub fn observedDescriptionBefore(a: std.mem.Allocator, sheets: *const Profile, nodes: []const ObservedStyleNode,
+    body_index: u32, subject: u32) !?DescriptionBeforeMetrics {
+    if (subject >= nodes.len or !std.ascii.eqlIgnoreCase(nodes[subject].tag, "dd") or sheets.globally_unresolved or
+        !observedStyleGraphValid(sheets, nodes, body_index)) return null;
+    var ancestors: std.ArrayList(u32) = .empty;
+    defer ancestors.deinit(a);
+    var cursor: ?u32 = subject;
+    while (cursor) |index| {
+        if (ancestors.items.len == 64) return null;
+        try ancestors.append(a, index);
+        cursor = nodes[index].parent;
+    }
+    if (std.mem.indexOfScalar(u32, ancestors.items, body_index) == null) return null;
+    std.mem.reverse(u32, ancestors.items);
+    var font: f32 = 1;
+    var root_font: f32 = 1;
+    var body_font: f32 = 0;
+    var environment: CustomEnvironment = .{ .complete = true };
+    var owner: ObservedFigureComputedNode = undefined;
+    for (ancestors.items) |index| {
+        const physical = nodes[index];
+        // Each accepted element inherits the UA font size. In particular,
+        // a heading, code or small ancestor cannot acquire this baseline.
+        var ordinary = false;
+        inline for (.{ "html", "body", "main", "article", "section", "div", "ol", "ul", "li", "dl", "dd" }) |name|
+            ordinary = ordinary or std.ascii.eqlIgnoreCase(physical.tag, name);
+        if (!ordinary) return null;
+        const decl = (try observedStyleNodeDeclarationsWithLanguage(a, sheets, nodes, index, null, null,
+            .{ .selected_heading_language = true }, true)) orelse return null;
+        environment = try observedFigureCustomEnvironment(a, decl.items, environment, true);
+        if (!try observedFigureStaticMotion(a, decl.items, environment)) return null;
+        font = (try observedFigureRelativeFontSizeInWithWitness(a, decl.items, environment, font, 1, root_font, null)) orelse return null;
+        if (index == 0) root_font = font;
+        if (index == body_index) body_font = font;
+        if (index == subject) owner = .{ .index = index, .declarations = decl.items, .environment = environment };
+    }
+    if (font <= 0 or body_font <= 0 or root_font <= 0 or !try observedFigureKeywordIs(a, owner, "position", &.{}, "relative", "static")) return null;
+    const ratio = font / body_font;
+    const padding = (try headingUsedEdges(a, owner, true, ratio, root_font / body_font)) orelse return null;
+    const margins = (try headingUsedEdges(a, owner, false, ratio, root_font / body_font)) orelse return null;
+    if (!observedFigureEdgesZero(margins) or padding.top.value != 0 or padding.right.value != 0 or
+        padding.bottom.value != 0 or padding.left.value <= 0) return null;
+    const generated = (try observedStyleNodeDeclarationsWithLanguage(a, sheets, nodes, subject, null, .before,
+        .{ .selected_heading_language = true }, true)) orelse return null;
+    const penv = try observedFigureCustomEnvironment(a, generated.items, environment, true);
+    const pseudo: ObservedFigureComputedNode = .{ .index = subject, .declarations = generated.items, .environment = penv };
+    const content = try observedFigureKeyword(a, pseudo.declarations, "content", &.{}, penv, &.{ "''", "\"\"" }, "normal", null, false, "normal");
+    if (content.unresolved or !try observedFigureKeywordIs(a, pseudo, "position", &.{}, "absolute", "static") or
+        !try observedFigureKeywordIs(a, pseudo, "height", &.{}, "auto", "auto") or !try observedFigureKeywordIs(a, pseudo, "right", &.{"inset"}, "auto", "auto") or
+        !try observedFigureStaticMotion(a, pseudo.declarations, penv)) return null;
+    const pseudo_font = (try observedFigureRelativeFontSizeInWithWitness(a, pseudo.declarations, penv, font, 1, root_font, null)) orelse return null;
+    const paint = try observedFigureColor(a, pseudo.declarations, "background-color", penv, null, null);
+    if (paint.unresolved or paint.value == null or paint.value.?.kind != .rgb) return null;
+    var metrics: DescriptionBeforeMetrics = .{ .owner_scale = ratio, .padding_left = padding.left,
+        .color = paint.value.?, .top = undefined, .bottom = undefined, .left = undefined, .width = undefined };
+    inline for (.{ "left", "top", "bottom", "width" }) |property| {
+        const shorthand: []const []const u8 = if (comptime std.mem.eql(u8, property, "width")) &.{} else &.{"inset"};
+        const measured = try observedFigureComputedLength(a, pseudo.declarations, property, shorthand, penv,
+            pseudo_font / body_font, "auto", .automatic, .unknown, false, false);
+        if (measured != .known) return null;
+        @field(metrics, property) = measured.known;
+    }
+    return if (metrics.width.value > 0) metrics else null;
+}
+
+pub fn selectedPageRootPerBody(a: std.mem.Allocator, sheets: *const Profile, nodes: []const ObservedStyleNode) !?f32 {
+    if (nodes.len < 2 or nodes.len > 32 or sheets.globally_unresolved or
+        !observedStyleGraphValid(sheets, nodes, @intCast(nodes.len - 1))) return null;
+    var scratch = std.heap.ArenaAllocator.init(a);
+    defer scratch.deinit();
+    const sa = scratch.allocator();
+    var root_scale: f32 = 1;
+    var scale: f32 = 1;
+    var environment: CustomEnvironment = .{ .complete = true };
+    for (nodes, 0..) |node, index| {
+        if (index > 0 and node.parent != @as(u32, @intCast(index - 1))) return null;
+        // These structural ancestors inherit the UA font size; e.g. an H3
+        // cannot silently acquire that default from a missing stylesheet rule.
+        var structural = false;
+        for ([_][]const u8{ "html", "body", "div", "main", "article", "section" }) |tag|
+            structural = structural or std.ascii.eqlIgnoreCase(node.tag, tag);
+        if (!structural) return null;
+        const declarations = (try observedStyleNodeDeclarationsWithLanguage(sa, sheets, nodes, @intCast(index), null, null, .{}, true)) orelse return null;
+        environment = try observedFigureCustomEnvironment(sa, declarations.items, environment, true);
+        if (!try observedFigureStaticMotion(sa, declarations.items, environment)) return null;
+        scale = (try observedFigureRelativeFontSizeInWithWitness(sa, declarations.items, environment, scale, 1, root_scale, null)) orelse return null;
+        if (index == 0) root_scale = scale;
+    }
+    if (scale <= 0 or root_scale <= 0) return null;
+    const ratio = root_scale / scale;
+    return if (ratio > 0 and std.math.isFinite(ratio)) ratio else null;
+}
+
+test "selected article root font uses the actual normal-body cascade and preserves CSS cycle fallback" {
+    const a = std.testing.allocator;
+    const nodes = [_]ObservedStyleNode{
+        .{ .tag = "html", .attributes = &.{}, .parent = null },
+        .{ .tag = "body", .attributes = &.{}, .parent = 0 },
+        .{ .tag = "div", .attributes = &.{.{ .name = "class", .value = "mw-parser-output" }}, .parent = 1 },
+    };
+    for ([_]struct { css: []const u8, expected: ?f32 }{
+        .{ .css = "html{font-size:125%}body{font-size:200%}", .expected = 0.5 },
+        .{ .css = "html{font-size:125%;--size:var(--size,1rem)}body{font-size:var(--size)}", .expected = 1 },
+        .{ .css = "html{--size:var(--size,1rem)}body{font-size:var(--size,2rem)}", .expected = 0.5 },
+        .{ .css = "body{font-size:var(--absent,2rem)}", .expected = 0.5 },
+        .{ .css = "body{font-size:14px}", .expected = null },
+        .{ .css = "body{font-size:0}", .expected = null },
+        .{ .css = "@media (min-width:640px){body{font-size:2em}}", .expected = null },
+    }) |case| {
+        var sheet = try parseForTargetAlloc(a, case.css, .screen);
+        defer sheet.deinit();
+        try std.testing.expectEqual(case.expected, try selectedPageRootPerBody(a, &sheet, &nodes));
+    }
 }
 
 fn authoredElementFontSize(a: std.mem.Allocator, declarations: []const ObservedFigureDeclaration, environment: CustomEnvironment) !?ObservedFontSizeValue {
@@ -33387,6 +34179,9 @@ pub fn resolveObservedRichInlineLinkOwnerStyleWithScripts(a: std.mem.Allocator, 
 
 const ObservedStyleInventoryData = struct {
     reading_target: ReadingTarget,
+    selected_root_per_body: ?f32,
+    selected_phonos: []const SelectedPhonos,
+    selected_wrapped_heading: ?SelectedWrappedHeading,
     sources: []const SourceRange,
     retained_sources: []const Source,
     rules: []const Rule,
@@ -33405,6 +34200,26 @@ const ObservedStyleInventoryData = struct {
     display_classes: []const []const u8,
     custom_data: ?CustomProfile,
 };
+test "style inventory requires the exact selected root font ratio and issuing page" {
+    const a = std.testing.allocator;
+    var styles = try parseForTargetAlloc(a, "", .screen); defer styles.deinit();
+    try attachCustomProperties(&styles, &.{}, .{ .ancestors = &.{.{ .tag = "html", .root = true }} });
+    const custom = @constCast(styles.custom_properties.?);
+    custom.font_article = .{ .page_id = 1720, .revision_id = 1280692, .root_per_body = 1 };
+    styles.selected_root_per_body = 1;
+    var snapshot = try ObservedStyleInventorySnapshot.init(a, &styles); defer snapshot.deinit();
+    try std.testing.expect(snapshot.current());
+    styles.selected_root_per_body = null;
+    try std.testing.expect(!snapshot.current());
+    styles.selected_root_per_body = 0.5;
+    try std.testing.expect(!snapshot.current());
+    styles.selected_root_per_body = 1;
+    custom.font_article.?.revision_id += 1;
+    try std.testing.expect(!snapshot.current());
+    custom.font_article.?.revision_id -= 1;
+    try std.testing.expect(snapshot.current());
+}
+
 fn observedStyleInventoryData(styles: *const Profile) ObservedStyleInventoryData {
     comptime {
         for (@typeInfo(Profile).@"struct".field_names) |name| {
@@ -33413,7 +34228,10 @@ fn observedStyleInventoryData(styles: *const Profile) ObservedStyleInventoryData
             if (!@hasField(ObservedStyleInventoryData, name)) @compileError("Profile semantic field missing from inventory snapshot");
         }
     }
-    return .{ .reading_target = styles.reading_target, .sources = styles.sources, .retained_sources = styles.retained_sources,
+    return .{ .reading_target = styles.reading_target, .selected_root_per_body = styles.selected_root_per_body,
+        .selected_phonos = styles.selected_phonos,
+        .selected_wrapped_heading = styles.selected_wrapped_heading,
+        .sources = styles.sources, .retained_sources = styles.retained_sources,
         .rules = styles.rules, .classes = styles.classes, .ancestor_classes = styles.ancestor_classes,
         .admitted_rule_numbers = styles.admitted_rule_numbers, .has_unsupported_rules = styles.has_unsupported_rules,
         .globally_unresolved = styles.globally_unresolved, .text_rules = styles.text_rules,
@@ -39152,5 +39970,581 @@ test "ordinary bullet class proof only excludes required positive classes outsid
         var other = try parseForTargetAlloc(a, css, .screen);
         defer other.deinit();
         try std.testing.expect(try other.hasInlineBoxCandidateIn(a, &node, ""));
+    }
+}
+
+// A CSS length-percentage is resolved against one reference box. Insets use
+// the containing padding box, whereas translate() uses the child's border box.
+const PositionedLengthPercentage = struct {
+    px: f32 = 0,
+    percent: f32 = 0,
+
+    fn single(raw: []const u8) ?@This() {
+        const number = inlineBoxInset(raw) orelse return null;
+        return switch (number.unit) {
+            .px => .{ .px = number.value },
+            .percent => .{ .percent = number.value },
+            .em => null,
+        };
+    }
+
+    fn parse(raw: []const u8) ?@This() {
+        const value = trim(raw);
+        if (!std.ascii.startsWithIgnoreCase(value, "calc(")) return single(value);
+        if (value[value.len - 1] != ')') return null;
+        var terms = std.mem.tokenizeAny(u8, value[5 .. value.len - 1], " \t\n\r\x0c");
+        const first = dimension(terms.next() orelse return null) orelse return null;
+        const operation = terms.next() orelse return first;
+        if (operation.len != 1 or (operation[0] != '+' and operation[0] != '-')) return null;
+        const second = dimension(terms.next() orelse return null) orelse return null;
+        if (terms.next() != null) return null;
+        const sign: f32 = if (operation[0] == '-') -1 else 1;
+        const result: @This() = .{ .px = first.px + sign * second.px, .percent = first.percent + sign * second.percent };
+        if (!std.math.isFinite(result.px) or !std.math.isFinite(result.percent)) return null;
+        return result;
+    }
+
+    fn dimension(value: []const u8) ?@This() {
+        if (!std.mem.endsWith(u8, value, "%") and !std.ascii.endsWithIgnoreCase(value, "px")) return null;
+        return single(value);
+    }
+
+    fn used(self: @This(), axis_css_px: f64) f64 {
+        return @as(f64, self.px) + axis_css_px * self.percent / 100;
+    }
+};
+
+const PositionedTranslation = struct {
+    x: PositionedLengthPercentage = .{},
+    y: PositionedLengthPercentage = .{},
+
+    fn parse(raw: []const u8) ?@This() {
+        const value = trim(raw);
+        if (!std.ascii.startsWithIgnoreCase(value, "translate(") or value[value.len - 1] != ')') return null;
+        var axes = std.mem.splitScalar(u8, value[10 .. value.len - 1], ',');
+        const x = PositionedLengthPercentage.parse(axes.next() orelse return null) orelse return null;
+        const y: PositionedLengthPercentage = if (axes.next()) |axis| PositionedLengthPercentage.parse(axis) orelse return null else .{};
+        return if (axes.next() == null) .{ .x = x, .y = y } else null;
+    }
+};
+
+const PositionedBoxPlacement = struct {
+    left: PositionedLengthPercentage,
+    top: PositionedLengthPercentage,
+    translation: PositionedTranslation,
+
+    // Both axes survive on the typed path until native font/line measurement.
+    fn semantic(self: @This()) types.PositionedLabelPlacement {
+        return .{ .left = .{ .px = self.left.px, .percent = self.left.percent },
+            .top = .{ .px = self.top.px, .percent = self.top.percent },
+            .translate_x = .{ .px = self.translation.x.px, .percent = self.translation.x.percent },
+            .translate_y = .{ .px = self.translation.y.px, .percent = self.translation.y.percent } };
+    }
+};
+
+// Resolve only this node's physical two-axis placement. The caller must still
+// establish its containing block and capture all paint, metric and action data.
+fn positionedBoxPlacement(a: std.mem.Allocator, node: PositionedContainerPathNode) !?PositionedBoxPlacement {
+    if (!try observedFigureStaticMotion(a, node.declarations, node.environment)) return null;
+    const aliases: []const []const u8 = &.{ "inset", "inset-inline", "inset-block", "inset-inline-start", "inset-inline-end", "inset-block-start", "inset-block-end" };
+    inline for (.{ .{ "position", "absolute" }, .{ "right", "auto" }, .{ "bottom", "auto" },
+        .{ "translate", "none" }, .{ "rotate", "none" }, .{ "scale", "none" },
+        .{ "transform-box", "view-box" }, .{ "perspective", "none" } }) |pair| {
+        const key = pair[0];
+        const expected = pair[1];
+        const offsets = comptime std.mem.eql(u8, key, "right") or std.mem.eql(u8, key, "bottom");
+        const initial = if (comptime std.mem.eql(u8, key, "position")) "static" else expected;
+        const choices: []const []const u8 = if (comptime std.mem.eql(u8, key, "transform-box")) &.{ "view-box", "border-box" } else &.{expected};
+        const selected = try observedFigureKeyword(a, node.declarations, key, if (offsets) aliases else &.{}, node.environment,
+            choices, initial, null, false, initial);
+        if (selected.unresolved or selected.value == null) return null;
+        if (!std.ascii.eqlIgnoreCase(selected.value.?, expected) and
+            !(comptime std.mem.eql(u8, key, "transform-box"))) return null;
+    }
+    return .{
+        .left = (try positionedRequiredValue(PositionedLengthPercentage, a, node, "left", aliases)) orelse return null,
+        .top = (try positionedRequiredValue(PositionedLengthPercentage, a, node, "top", aliases)) orelse return null,
+        .translation = (try positionedRequiredValue(PositionedTranslation, a, node, "transform", &.{})) orelse return null,
+    };
+}
+
+fn positionedRequiredValue(comptime T: type, a: std.mem.Allocator, node: PositionedContainerPathNode,
+    property: []const u8, aliases: []const []const u8) !?T
+{
+    const candidates = try observedFigurePropertyCandidates(a, node.declarations, property, aliases);
+    defer a.free(candidates);
+    var definite = false;
+    var selected: ?T = null;
+    for (candidates) |candidate| {
+        if (candidate.syntax_unknown or candidate.rank_unknown or !std.ascii.eqlIgnoreCase(candidate.name, property)) return null;
+        const computed = try customColorValue(a, node.environment, candidate.raw);
+        const value = switch (computed) { .known => |raw| T.parse(raw) orelse return null, else => return null };
+        if (selected) |prior| if (!std.meta.eql(prior, value)) return null;
+        definite = definite or !candidate.uncertain;
+        selected = value;
+    }
+    return if (definite) selected else null;
+}
+
+test "translated absolute labels retain separate parent and child reference boxes at resized extents" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const T = struct {
+        fn fromCss(allocator: std.mem.Allocator, css: []const u8) !?PositionedBoxPlacement {
+            var declarations: std.ArrayList(ObservedFigureDeclaration) = .empty;
+            defer declarations.deinit(allocator);
+            try appendObservedFigureDeclarations(allocator, &declarations, css, .{ .inline_style = true }, false, false, null, 0);
+            return positionedBoxPlacement(allocator, .{ .tag = "span", .declarations = declarations.items, .environment = .{} });
+        }
+    };
+    const source = "z-index:1;position:absolute;transform:translate(-50%);top:calc(100% + 5px);left:50%;border-radius:2px;background-color:rgba(234,255,255,0.85);font-size:12px;height:10px;line-height:10px";
+    const outer = (try T.fromCss(a, source)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualDeep(outer, (try T.fromCss(a, source ++ ";translate:none")) orelse return error.TestUnexpectedResult);
+    try std.testing.expectEqual(@as(f64, 35), outer.left.used(100) + outer.translation.x.used(30));
+    try std.testing.expectEqual(@as(f64, 80), outer.left.used(200) + outer.translation.x.used(40));
+    try std.testing.expectEqual(@as(f64, 29), outer.top.used(24) + outer.translation.y.used(10));
+    const inner = (try T.fromCss(a, "position:absolute;top:50%;transform:translate(0,-48%);left:calc(100% + 2px)")) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(f64, 32), inner.left.used(30) + inner.translation.x.used(12));
+    try std.testing.expectApproxEqAbs(@as(f64, -0.76), inner.top.used(10) + inner.translation.y.used(12), 0.000001);
+    for ([_][]const u8{ ";position:relative", ";right:0", ";bottom:2px", ";transform:rotate(0deg)", ";transform:translate(-50%) scale(1)",
+        ";top:calc(100%+5px)", ";top:calc(100% + 5em)", ";top:calc(0 + 3px)", ";left:var(--absent)", ";transform-box:content-box", ";translate:1px", ";scale:1" }) |suffix| {
+        try std.testing.expect(try T.fromCss(a, try std.mem.concat(a, u8, &.{ source, suffix })) == null);
+    }
+}
+
+// Background alpha applies only to the background layer; integer channels
+// retain ordinary sRGB precision independently of the alpha component.
+const PositionedBackground = struct {
+    rgb: [3]u8,
+    alpha: f32,
+
+    fn parse(raw: []const u8) ?@This() {
+        const value = trim(raw);
+        if (!std.ascii.startsWithIgnoreCase(value, "rgba(") or value[value.len - 1] != ')') return null;
+        const arguments = value[5 .. value.len - 1];
+        const comma = std.mem.lastIndexOfScalar(u8, arguments, ',') orelse return null;
+        var buffer: [512]u8 = undefined;
+        const color = std.fmt.bufPrint(&buffer, "rgb({s})", .{arguments[0..comma]}) catch return null;
+        const rgb = legacyRgb(color) orelse return null;
+        const alpha = trim(arguments[comma + 1 ..]);
+        if (!widthNumberSyntax(alpha)) return null;
+        const number = std.fmt.parseFloat(f64, alpha) catch return null;
+        if (!std.math.isFinite(number)) return null;
+        return .{ .rgb = rgb, .alpha = @floatCast(std.math.clamp(number, 0, 1)) };
+    }
+};
+
+const PositionedStackLevel = struct {
+    value: i32,
+    fn parse(raw: []const u8) ?@This() {
+        const text = trim(raw);
+        if (text.len == 0) return null;
+        const digits = if (text[0] == '-' or text[0] == '+') text[1..] else text;
+        if (digits.len == 0) return null;
+        for (digits) |digit| if (!std.ascii.isDigit(digit)) return null;
+        return .{ .value = std.fmt.parseInt(i32, text, 10) catch return null };
+    }
+};
+
+const PositionedPixelLength = struct {
+    value: f32,
+    fn parse(raw: []const u8) ?@This() {
+        const length_value = inlineBoxInset(raw) orelse return null;
+        if (length_value.unit != .px or length_value.value < 0) return null;
+        return .{ .value = length_value.value };
+    }
+};
+
+fn PositionedAuto(comptime Numeric: type) type {
+    return union(enum) {
+        auto,
+        definite: Numeric,
+
+        fn parse(raw: []const u8) ?@This() {
+            if (std.ascii.eqlIgnoreCase(trim(raw), "auto")) return .auto;
+            return .{ .definite = Numeric.parse(raw) orelse return null };
+        }
+    };
+}
+
+fn positionedAutoValue(comptime Numeric: type, a: std.mem.Allocator, node: PositionedContainerPathNode,
+    property: []const u8) !?PositionedAuto(Numeric)
+{
+    const candidates = try observedFigurePropertyCandidates(a, node.declarations, property, &.{});
+    defer a.free(candidates);
+    if (candidates.len == 0) return .auto;
+    return positionedRequiredValue(PositionedAuto(Numeric), a, node, property, &.{});
+}
+
+// A fixed computed line-height is inherited as a length when the nested font
+// size changes. Unknown/normal/unitless ancestry needs its own metric origin.
+fn positionedLineHeight(a: std.mem.Allocator, node: PositionedContainerPathNode, parent_px: ?f32) !?f32 {
+    if (parent_px) |value| if (!std.math.isFinite(value) or value < 0) return null;
+    const candidates = try observedFigurePropertyCandidates(a, node.declarations, "line-height", &.{"font"});
+    defer a.free(candidates);
+    if (candidates.len == 0) return parent_px;
+    const value = (try positionedRequiredValue(PositionedPixelLength, a, node, "line-height", &.{"font"})) orelse return null;
+    return value.value;
+}
+
+const PositionedLabelStyle = struct {
+    placement: PositionedBoxPlacement,
+    background: PositionedBackground,
+    radius: types.StyleLength,
+    z_index: ?i32,
+    padding: types.StyleEdges,
+    font_size_px: f32,
+    height_px: ?f32,
+    line_height_px: f32,
+};
+
+// Only the declaring box's placement, dimensional values and background paint.
+// Font family, normal link actions, containing layout and stacking context are
+// owned by the enclosing source-backed query before a record can be issued.
+fn positionedLabelStyle(a: std.mem.Allocator, node: PositionedContainerPathNode) !?PositionedLabelStyle {
+    return positionedLabelStyleUnder(a, node, null);
+}
+
+fn positionedLabelStyleUnder(a: std.mem.Allocator, node: PositionedContainerPathNode, parent_line_px: ?f32) !?PositionedLabelStyle {
+    const placement = (try positionedBoxPlacement(a, node)) orelse return null;
+    const background = (try positionedRequiredValue(PositionedBackground, a, node, "background-color", &.{"background"})) orelse return null;
+    const radius = (try roundedInlineBoxRadius(a, node.declarations, node.environment)) orelse return null;
+    const stacking = (try positionedAutoValue(PositionedStackLevel, a, node, "z-index")) orelse return null;
+    const size = (try positionedRequiredValue(PositionedPixelLength, a, node, "font-size", &.{"font"})) orelse return null;
+    const height = (try positionedAutoValue(PositionedPixelLength, a, node, "height")) orelse return null;
+    const line = (try positionedLineHeight(a, node, parent_line_px)) orelse return null;
+    // This query owns physical box axes only. An authored logical dimension
+    // or inset needs its resolved writing mode before assigning an axis.
+    for (node.declarations) |declaration| {
+        if (inlineBoxKeyword(declaration.name, &.{ "inline-size", "block-size", "padding-inline", "padding-block",
+            "padding-inline-start", "padding-inline-end", "padding-block-start", "padding-block-end" })) return null;
+    }
+    const width = try observedFigureKeyword(a, node.declarations, "width", &.{"inline-size"}, node.environment, &.{"auto"}, "auto", null, false, "auto");
+    if (width.unresolved) return null;
+    const resolved_padding = try observedFigureEdges(a, node.declarations, node.environment, true, false, 1, null);
+    if (resolved_padding.unresolved or resolved_padding.value == null) return null;
+    const padding = observedFigureFixedEdges(resolved_padding.value.?) orelse return null;
+    inline for (.{ "top", "right", "bottom", "left" }) |name| {
+        const edge = @field(padding, name);
+        if (edge.unit != .px or !types.validStyleLength(edge)) return null;
+    }
+    const opacity = try observedFigureKeyword(a, node.declarations, "opacity", &.{}, node.environment, &.{"1"}, "1", null, false, "1");
+    if (opacity.unresolved) return null;
+    const image = try observedFigureKeyword(a, node.declarations, "background-image", &.{"background"}, node.environment, &.{"none"}, "none", null, false, "none");
+    if (image.unresolved) return null;
+    return .{ .placement = placement, .background = background, .radius = radius, .padding = padding,
+        .z_index = switch (stacking) { .auto => null, .definite => |value| value.value },
+        .font_size_px = size.value, .height_px = switch (height) { .auto => null, .definite => |value| value.value }, .line_height_px = line };
+}
+
+test "absolute label retains source alpha separate from the ink and independent pixel metrics" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const T = struct {
+        fn style(allocator: std.mem.Allocator, css: []const u8) !?PositionedLabelStyle {
+            var declarations: std.ArrayList(ObservedFigureDeclaration) = .empty;
+            defer declarations.deinit(allocator);
+            try appendObservedFigureDeclarations(allocator, &declarations, css, .{ .inline_style = true }, false, false, null, 0);
+            return positionedLabelStyle(allocator, .{ .tag = "span", .declarations = declarations.items, .environment = .{} });
+        }
+    };
+    const source = "z-index:1;position:absolute;transform:translate(-50%);top:calc(100% + 5px);left:50%;border-radius:2px;background-color:rgba(234,255,255,0.85);font-size:12px;height:10px;line-height:10px";
+    const exact = (try T.style(a, source)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualDeep([3]u8{234, 255, 255}, exact.background.rgb);
+    try std.testing.expectEqual(@as(f32, 0.85), exact.background.alpha);
+    try std.testing.expectEqual(@as(i32, 1), exact.z_index);
+    try std.testing.expectEqualDeep(types.StyleLength{ .unit = .px, .value = 2 }, exact.radius);
+    try std.testing.expectEqual(@as(f32, 12), exact.font_size_px);
+    try std.testing.expectEqual(@as(f32, 10), exact.height_px);
+    try std.testing.expectEqual(@as(f32, 10), exact.line_height_px);
+    const placement = exact.placement.semantic();
+    const parent: types.PositionedRect = .{ .x = 5, .y = 8, .width = 100, .height = 20 };
+    const measured = placement.contentWidth(parent, 0, 27, 27) orelse return error.TestUnexpectedResult;
+    const bounds = placement.borderBox(parent, measured, exact.height_px.?) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualDeep(types.PositionedRect{ .x = 41.5, .y = 33, .width = 27, .height = 10 }, bounds);
+    const override = (try T.style(a, source ++ ";z-index:-2;line-height:8px;z-index:3!important;z-index:1")) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(i32, 3), override.z_index);
+    try std.testing.expectEqual(@as(f32, 8), override.line_height_px);
+    try std.testing.expectEqual(@as(f32, 10), override.height_px);
+    for ([_][]const u8{ ";opacity:.85", ";background-image:linear-gradient(red,blue)", ";border-top-left-radius:3px",
+        ";z-index:1.5", ";font-size:2em", ";line-height:normal", ";background-color:rgba(1,2,3,var(--missing))" }) |suffix| {
+        try std.testing.expect(try T.style(a, try std.mem.concat(a, u8, &.{ source, suffix })) == null);
+    }
+}
+
+test "Amerigo nested uncertain label retains auto dimensions padding inherited line and separate stack level" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const T = struct {
+        fn style(allocator: std.mem.Allocator, css: []const u8, inherited_line: ?f32) !?PositionedLabelStyle {
+            var declarations: std.ArrayList(ObservedFigureDeclaration) = .empty;
+            defer declarations.deinit(allocator);
+            try appendObservedFigureDeclarations(allocator, &declarations, css, .{ .inline_style = true }, false, false, null, 0);
+            return positionedLabelStyleUnder(allocator, .{ .tag = "abbr", .declarations = declarations.items, .environment = .{} }, inherited_line);
+        }
+    };
+    const source = "position:absolute;top:50%;transform:translate(0,-48%);left:calc(100% + 2px);font-size:10px;border-radius:2px;background-color:rgba(255,224,240,0.85);padding:1px 2px;font-weight:bold;text-decoration:none";
+    const label = (try T.style(a, source, 10)) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(label.z_index == null and label.height_px == null);
+    try std.testing.expectEqual(@as(f32, 10), label.font_size_px);
+    try std.testing.expectEqual(@as(f32, 10), label.line_height_px);
+    try std.testing.expectEqualDeep([3]u8{255,224,240}, label.background.rgb);
+    try std.testing.expectEqual(@as(f32, 0.85), label.background.alpha);
+    try std.testing.expectEqualDeep(types.StyleLength{ .unit = .px, .value = 1 }, label.padding.top);
+    try std.testing.expectEqualDeep(label.padding.top, label.padding.bottom);
+    try std.testing.expectEqualDeep(types.StyleLength{ .unit = .px, .value = 2 }, label.padding.left);
+    try std.testing.expectEqualDeep(label.padding.left, label.padding.right);
+    const place = label.placement.semantic();
+    const parent: types.PositionedRect = .{ .x = 30, .y = 49, .width = 40, .height = 10 };
+    const native_width = place.contentWidth(parent, label.padding.left.value + label.padding.right.value, 6, 6) orelse return error.TestUnexpectedResult;
+    const rect = place.borderBox(parent, native_width + label.padding.left.value + label.padding.right.value,
+        label.line_height_px + label.padding.top.value + label.padding.bottom.value) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(f64, 72), rect.x);
+    try std.testing.expectApproxEqAbs(@as(f64, 48.24), rect.y, 0.000001);
+    try std.testing.expect(try T.style(a, source, null) == null);
+    try std.testing.expect(try T.style(a, source ++ ";width:20px", 10) == null);
+    try std.testing.expect(try T.style(a, source ++ ";padding-left:1em", 10) == null);
+    try std.testing.expect(try T.style(a, source ++ ";block-size:30px", 10) == null);
+    try std.testing.expect(try T.style(a, source ++ ";padding-inline-end:1px", 10) == null);
+}
+
+const FlexEdgeWidth = struct {
+    percent: f32,
+    add: types.StyleLength,
+
+    fn parse(raw: []const u8) ?@This() {
+        const result = FigureWidthMath.evaluate(raw, null) catch return null;
+        const value = result.value;
+        if (value.number or !result.has_percent or value.percent <= 0 or value.px < 0 or value.em < 0 or
+            (value.em != 0 and value.px != 0) or value.percent > std.math.floatMax(f32) or
+            value.px > std.math.floatMax(f32) or value.em > std.math.floatMax(f32)) return null;
+        return .{ .percent = @floatCast(value.percent), .add = if (value.em != 0)
+            .{ .unit = .em, .value = @floatCast(value.em) } else .{ .unit = .px, .value = @floatCast(value.px) } };
+    }
+};
+
+fn measuredFlexEdgeStyle(a: std.mem.Allocator, node: PositionedContainerPathNode, font: types.InlineFontSnapshot) !?types.ContainerStyle {
+    if (font.font_scale_basis != .normal_body) return null;
+    const position = (try positionedContainerKeyword(a,node,"position",&.{},&.{"relative"},"static","static",false)) orelse return null;
+    if (!std.ascii.eqlIgnoreCase(position,"relative")) return null;
+    const align_raw = (try positionedContainerKeyword(a,node,"align-self",&.{},&.{"start","end"},"auto","auto",false)) orelse return null;
+    const alignment: types.ContainerFlexEdge.Align = if (std.ascii.eqlIgnoreCase(align_raw,"start")) .start else if (std.ascii.eqlIgnoreCase(align_raw,"end")) .end else return null;
+    const left = try observedFigurePropertyCandidates(a,node.declarations,"left",&.{}); defer a.free(left);
+    const right = try observedFigurePropertyCandidates(a,node.declarations,"right",&.{}); defer a.free(right);
+    if ((left.len == 0) == (right.len == 0)) return null;
+    const side: types.ContainerFlexEdge.Side = if (left.len != 0) .left else .right;
+    const inset = (try positionedRequiredValue(PositionedLengthPercentage,a,node,@tagName(side),&.{})) orelse return null;
+    const width = (try positionedRequiredValue(FlexEdgeWidth,a,node,"width",&.{})) orelse return null;
+    const height = (try positionedRequiredValue(PositionedLengthPercentage,a,node,"height",&.{})) orelse return null;
+    const radius_name: []const u8 = if (side == .left) "border-bottom-left-radius" else "border-bottom-right-radius";
+    const other_radius: []const u8 = if (side == .left) "border-bottom-right-radius" else "border-bottom-left-radius";
+    const other = try observedFigurePropertyCandidates(a,node.declarations,other_radius,&.{}); defer a.free(other);
+    if (other.len != 0) return null;
+    const radius = (try positionedRequiredValue(PositionedLengthPercentage,a,node,radius_name,&.{})) orelse return null;
+    if (height.percent != 0 or radius.percent != 0 or inset.px != 0) return null;
+    const painted = (try observedFigureBorders(a,node.declarations,node.environment,1)) orelse return null;
+    var borders = types.ContainerBorderEdges.all(.none);
+    inline for (.{ "left","right","bottom","top" }) |edge_name| {
+        const line = @field(painted,edge_name);
+        @field(borders,edge_name) = switch (line) {
+            .none => .none,
+            .solid => |solid| if (solid.color.kind == .rgb and solid.color.value != null) .{ .solid = .{
+                .width = solid.width, .color = .{ .rgb = solid.color.value.? },
+            } } else return null,
+            else => return null,
+        };
+    }
+    const style: types.ContainerStyle = .{ .owner_font = font, .border = .{ .edges = borders },
+        .height = .{ .unit = .px, .value = height.px }, .flex_edge = .{ .align_self = alignment, .inset_side = side,
+            .inset_percent = inset.percent, .width_percent = width.percent, .width_add = width.add, .bottom_radius_px = radius.px } };
+    return if (types.validContainerStyle(style)) style else null;
+}
+
+pub const TranslatedBoxRole = enum { relative_card, inline_atom, absolute_label, flex_owner, empty_vertical_edge, flex_edge };
+
+/// Resolves the matched physical node. The caller binds the ordered original
+/// source, normal inline text/links and declaring font before requesting it.
+pub fn translatedContainerStyle(a: std.mem.Allocator, profile: *const Profile, element: *const TextElement,
+    own_css: []const u8, environment: CustomEnvironment, font: types.InlineFontSnapshot, role: TranslatedBoxRole,
+    parent_line_px: ?f32, after_space: bool) !?types.ContainerStyle
+{
+    if (!types.validContainerOwnerFont(font)) return null;
+    if (element.observed_inline_style) |known| if (!std.mem.eql(u8, known, own_css)) return null;
+    const matches = try profile.containerRuleMatchesIn(a, element);
+    defer a.free(matches.rules);
+    if (matches.unresolved) return null;
+    var declarations: std.ArrayList(ObservedFigureDeclaration) = .empty;
+    defer declarations.deinit(a);
+    const static_motion = try positionedStaticMotionRules(a, matches.rules, own_css);
+    defer a.free(static_motion);
+    for (matches.rules, 0..) |rule, index| {
+        if (static_motion[index]) continue;
+        if (rule.rank_unknown or rule.viewport != .all) return null;
+        try appendObservedFigureDeclarations(a, &declarations, rule.css, .{ .specificity = rule.specificity, .order = rule.order }, rule.match == .unknown, false, null, 0);
+    }
+    try appendObservedFigureDeclarations(a, &declarations, own_css, .{ .inline_style = true, .order = max_rules * 1024 }, false, false, null, 0);
+    // Only represented declarations enter the composed geometry. In particular
+    // cursor, generated paint, ambiguous resets, transformed parent axes, and
+    // inherited typography requiring a new strut must not disappear here.
+    for (declarations.items) |decl| {
+        if (decl.rank_unknown or decl.syntax_unknown) return null;
+        const supported = switch (role) {
+            .relative_card => inlineBoxKeyword(decl.name, &.{ "position", "padding", "padding-top", "padding-right", "padding-bottom", "padding-left", "background-color", "border", "border-radius", "text-align" }),
+            .inline_atom => inlineBoxKeyword(decl.name, &.{"display"}),
+            .flex_owner => inlineBoxKeyword(decl.name, &.{ "position", "display", "flex-direction", "align-items", "width", "margin", "padding", "column-gap" }),
+            .empty_vertical_edge => inlineBoxKeyword(decl.name, &.{ "position", "height", "border-right" }),
+            .flex_edge => inlineBoxKeyword(decl.name,&.{ "align-self","width","height","position","left","right",
+                "border-left","border-right","border-bottom","border-bottom-left-radius","border-bottom-right-radius" }),
+            .absolute_label => inlineBoxKeyword(decl.name, &.{ "position", "left", "top", "right", "bottom", "transform", "transform-box", "translate", "rotate", "scale", "z-index", "border-radius", "background-color", "font-size", "line-height", "height", "padding", "padding-top", "padding-right", "padding-bottom", "padding-left", "font-weight", "text-decoration", "border-bottom-width" }),
+        };
+        if (!supported) return null;
+    }
+    const node: PositionedContainerPathNode = .{ .tag = element.tag, .declarations = declarations.items, .environment = environment };
+    var style: types.ContainerStyle = .{ .owner_font = font };
+    switch (role) {
+        .flex_edge => return measuredFlexEdgeStyle(a,node,font),
+        .flex_owner, .empty_vertical_edge => {
+            const ordinary = try profile.resolveContainerInWithInheritance(a, element, own_css, environment, false);
+            if (ordinary.unresolved or !ordinary.specified or font.font_scale_basis != .normal_body) return null;
+            style = ordinary.style;
+            if (role == .flex_owner) {
+                if (style.layout == .flex_row) {
+                    if (style.flex_column_gap == null or style.positioning != .relative_auto or style.align_items != .end) return null;
+                    inline for (@typeInfo(types.ContainerStyle).@"struct".field_names) |name| {
+                        if (comptime std.mem.eql(u8,name,"layout") or std.mem.eql(u8,name,"flex_column_gap") or
+                            std.mem.eql(u8,name,"positioning") or std.mem.eql(u8,name,"align_items")) continue;
+                        if (@field(style,name) != null) return null;
+                    }
+                } else if (style.layout != .flex_column) return null;
+            } else {
+                if (style.positioning != .relative_auto or style.height == null or style.height.?.unit != .px or
+                    style.border == null or style.border.? != .edges) return null;
+                const lines = style.border.?.edges;
+                if (lines.top != .none or lines.bottom != .none or lines.left != .none or lines.right != .solid or
+                    lines.right.solid.width.unit != .px or lines.right.solid.color != .rgb) return null;
+            }
+            style.owner_font = font;
+        },
+        .inline_atom => {
+            const display = (try positionedContainerKeyword(a, node, "display", &.{}, &.{"inline-block"}, "inline", "inline", false)) orelse return null;
+            if (!std.ascii.eqlIgnoreCase(display, "inline-block")) return null;
+            style.inline_atomic = if (after_space) .after_space else .adjacent;
+        },
+        .relative_card => {
+            const position = (try positionedContainerKeyword(a, node, "position", &.{}, &.{"relative"}, "static", "static", false)) orelse return null;
+            if (!std.ascii.eqlIgnoreCase(position, "relative")) return null;
+            const alignment = (try positionedContainerKeyword(a, node, "text-align", &.{}, &.{"center"}, "start", "start", true)) orelse return null;
+            if (!std.ascii.eqlIgnoreCase(alignment, "center")) return null;
+            const radius = (try roundedInlineBoxRadius(a, declarations.items, environment)) orelse return null;
+            if (radius.unit != .px) return null;
+            const padding = try observedFigureEdges(a, declarations.items, environment, true, false, 1, null);
+            if (padding.unresolved or padding.value == null) return null;
+            const padding_edges = observedFigureFixedEdges(padding.value.?) orelse return null;
+            inline for (.{ "top", "right", "bottom", "left" }) |side| if (@field(padding_edges, side).unit != .px) return null;
+            const border = (try observedFigureBorders(a, declarations.items, environment, 1)) orelse return null;
+            const line = switch (border.top) { .solid => |known| known, else => return null };
+            if (line.width.unit != .px or line.color.kind != .rgb) return null;
+            inline for (.{ "right", "bottom", "left" }) |side| {
+                const edge = @field(border, side);
+                if (edge != .solid or !std.meta.eql(edge.solid.width, line.width) or !observedFigureColorEqual(edge.solid.color, line.color)) return null;
+            }
+            const paint = try observedFigureColor(a, declarations.items, "background-color", environment, null, null);
+            if (paint.unresolved or paint.value == null or paint.value.?.kind != .rgb) return null;
+            style.positioning = .relative_auto;
+            style.text_align = .center;
+            style.padding = padding_edges;
+            style.border = .{ .solid = .{ .width = line.width, .color = .{ .rgb = line.color.value.? } } };
+            style.background = .{ .rgb = paint.value.?.value.? };
+            style.corner_radius_px = radius.value;
+        },
+        .absolute_label => {
+            const label = (try positionedLabelStyleUnder(a, node, parent_line_px)) orelse return null;
+            const bottom_width = try observedFigurePropertyCandidates(a, node.declarations, "border-bottom-width", &.{});
+            defer a.free(bottom_width);
+            if (bottom_width.len != 0) {
+                const resolved = (try positionedRequiredValue(PositionedPixelLength, a, node, "border-bottom-width", &.{})) orelse return null;
+                if (resolved.value != 0) return null;
+            }
+            if (label.radius.unit != .px) return null;
+            const weight = try observedFigurePropertyCandidates(a, node.declarations, "font-weight", &.{"font"});
+            defer a.free(weight);
+            if (weight.len != 0) {
+                const name: []const u8 = if (font.bold) "bold" else "normal";
+                const resolved = (try positionedContainerKeyword(a, node, "font-weight", &.{"font"}, &.{"bold", "normal"}, "normal", name, true)) orelse return null;
+                if (!std.ascii.eqlIgnoreCase(resolved, name)) return null;
+            }
+            const decoration = (try positionedContainerKeyword(a, node, "text-decoration-line", &.{"text-decoration"}, &.{"none"}, "none", "none", false)) orelse return null;
+            if (!std.ascii.eqlIgnoreCase(decoration, "none")) return null;
+            if (std.ascii.eqlIgnoreCase(node.tag, "abbr")) {
+                // The UA abbreviation decoration must be explicitly disabled.
+                const specified = try observedFigurePropertyCandidates(a, node.declarations, "text-decoration-line", &.{"text-decoration"});
+                defer a.free(specified);
+                if (specified.len == 0) return null;
+                for (specified) |decl| if (decl.uncertain) return null;
+            }
+            const digits = std.fmt.bytesToHex(label.background.rgb, .lower);
+            style.background = .{ .rgb = try std.mem.concat(a, u8, &.{ "#", &digits }) };
+            style.width = .fit_content;
+            style.padding = label.padding;
+            style.owner_font.?.font_scale_basis = .css_px;
+            style.owner_font.?.font_scale = label.font_size_px;
+            style.line_height = .{ .length = .{ .unit = .px, .value = label.line_height_px } };
+            if (label.height_px) |height| style.height = .{ .unit = .px, .value = height };
+            style.corner_radius_px = label.radius.value;
+            style.translated_absolute = .{ .placement = label.placement.semantic(), .z_index = label.z_index, .background_alpha = label.background.alpha };
+        },
+    }
+    return if (types.validContainerStyle(style)) style else null;
+}
+
+test "translated abbreviation proves the selected stylesheet zero border width and rejects a different winner" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const stylesheet = @embedFile("testdata/sr-ri207-padding/common.css");
+    const site_rule = "abbr { border-bottom-width: 0; }";
+    const at = std.mem.indexOf(u8, stylesheet, site_rule) orelse return error.TestUnexpectedResult;
+    const selected = stylesheet[at..][0..site_rule.len];
+    const source = "position:absolute;top:50%;transform:translate(0,-48%);left:calc(100% + 2px);font-size:10px;border-radius:2px;background-color:rgba(255,224,240,0.85);padding:1px 2px;font-weight:bold;text-decoration:none";
+    const font: types.InlineFontSnapshot = .{ .font_scale = 10, .font_scale_basis = .css_px, .font_normalized = true, .bold = true };
+    for ([_][]const u8{ "", "abbr{border-bottom-width:2px}", "abbr{border-bottom:2px solid red!important}",
+        "abbr{border-bottom-width:2px}abbr{border-bottom-width:0!important}" }, 0..) |suffix, number| {
+        var profile = try parseForTargetAlloc(a, try std.mem.concat(a, u8, &.{ selected, suffix }), .screen);
+        defer profile.deinit();
+        const element: TextElement = .{ .tag = "abbr", .observed_inline_style = source };
+        const style = try translatedContainerStyle(a, &profile, &element, source, .{}, font, .absolute_label, 10, false);
+        if (number == 0 or number == 3) {
+            const value = style orelse return error.TestUnexpectedResult;
+            try std.testing.expect(value.border == null and value.corner_radius_px == 2 and value.padding.?.left.value == 2);
+            try std.testing.expect(value.translated_absolute.?.placement.translate_y.percent == -48);
+        } else try std.testing.expect(style == null);
+    }
+}
+
+test "source preceding tag only refutes necessary types in a terminal last-child adjacency" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var builder: Builder = .{ .a = arena.allocator() };
+    const selected = try builder.containerSelector("textarea#wpTextbox1 + div:last-child");
+    var div: TextElement = .{ .tag = "div" };
+    try std.testing.expect(selected.matchIn(&div, false) == .unknown);
+    for ([_]?[]const u8{ null, "textarea" }) |previous| {
+        div.source_literal_previous = .{ .tag = previous };
+        try std.testing.expect(selected.matchIn(&div, false) == .unknown);
+    }
+    for ([_][]const u8{ "", "SPAN", "div" }) |previous| {
+        div.source_literal_previous = .{ .tag = previous };
+        try std.testing.expect(selected.matchIn(&div, false) == .no);
+    }
+    div.source_literal_previous = .{ .tag = null };
+    div.tag = "abbr";
+    try std.testing.expect(selected.matchIn(&div, false) == .no);
+    for ([_][]const u8{ ":not(textarea) + div:last-child", "a textarea + div:last-child", "textarea + div:not(:last-child)",
+        "textarea + div + span:last-child", "textarea ~ div:last-child" }) |raw| {
+        const unsupported = try builder.containerSelector(raw);
+        try std.testing.expect(unsupported.last_child_adjacent_types == null);
     }
 }

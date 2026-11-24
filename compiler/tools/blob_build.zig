@@ -1064,6 +1064,27 @@ fn attachFigurePageObservation(a: std.mem.Allocator, codes: *encoder.blob_builde
             break;
         }
     }
+    if (codes.table_styles) |parent| if (parent.custom_properties) |custom| {
+        if (namespace_id == 0 and custom.appliesTo(title)) {
+            const font = if (custom.font_article) |article|
+                if (page_id == article.page_id and revision_id == article.revision_id) article else null
+            else null;
+            const audio = if (custom.phonos_article) |article|
+                if (page_id == article.page_id and revision_id == article.revision_id) article.buttons else null
+            else null;
+            if (font != null or audio != null) {
+                const view = try a.create(encoder.table_style_profile.Profile);
+                view.* = parent.*;
+                if (font) |article| {
+                    view.selected_root_per_body = article.root_per_body;
+                    view.selected_wrapped_heading = if (article.heading) |recipe| try figure_page_observations.bindWrappedHeading(a, expanded, recipe) else null;
+                }
+                if (audio) |buttons| view.selected_phonos = try figure_page_observations.bindPhonos(a, expanded, buttons);
+                codes.page_style_parent = parent;
+                codes.table_styles = view;
+            }
+        }
+    };
     const sizing_source = if (codes.figure_sizing) |*value| value else return;
     sizing_source.default_thumbnail_page = if (namespace_id == 0 and sizing_source.default_thumbnail_file_fn != null) expanded else null;
     if (sizing_source.table_containing_direction) |direction| {
@@ -1146,7 +1167,7 @@ fn attachFigurePageObservation(a: std.mem.Allocator, codes: *encoder.blob_builde
         sizing_source.resolve_image_map_no_link_fn = if (media.image_map_no_link != null) figure_page_observations.SelectedPage.imageMapNoLink else null;
     }
     if (page_styles) |styles| {
-        codes.page_style_parent = codes.table_styles;
+        if (codes.page_style_parent == null) codes.page_style_parent = codes.table_styles;
         codes.table_styles = styles.styles;
         sizing_source.text_class_scope = .{ .source = styles.source, .scope = &styles.scope };
         if (styles.floating_tables.len != 0) sizing_source.table_float_source = .{ .source = styles.source,
@@ -4046,6 +4067,330 @@ const ControlledFigureFixture = struct {
         return total;
     }
 };
+
+test "original Babua description list owns independent outer and translated DD pseudo metrics" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const css = @embedFile("testdata/id-swadesh-jawa/common.css");
+    var ns = try namespace_registry.Registry.init(a, @embedFile("testdata/id-swadesh-jawa/namespace-registry.tsv"));
+    defer ns.deinit();
+    var stream: std.Io.Reader = .fixed(@embedFile("testdata/id-babua/stylesheet-imports.json.gz"));
+    var inflater: std.compress.flate.Decompress = .init(&stream, .gzip, &.{});
+    const role = try inflater.reader.allocRemaining(a, .limited(512 * 1024));
+    try std.testing.expect(inflater.err == null and inflater.state == .end);
+    var hash: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(role, &hash, .{});
+    try std.testing.expectEqualStrings("6df1a8508046210ad9292e1bac7ad56b214cc661f98b49b586fe4602d115e621", &std.fmt.bytesToHex(hash, .lower));
+    const snapshot = try std.json.parseFromSlice(struct {
+        page_html: []const u8, page_url: []const u8,
+        sources: []const struct { url: []const u8, css: []const u8 },
+    }, a, role, .{ .ignore_unknown_fields = true });
+    defer snapshot.deinit();
+    const served = try a.alloc(encoder.table_style_profile.Source, snapshot.value.sources.len);
+    for (served, snapshot.value.sources) |*out, src| out.* = .{ .base_url = src.url, .css = src.css };
+    const ancestors = try figure_page_observations.selectedArticleFontAncestors(a, &ns, snapshot.value.page_html, snapshot.value.page_url,
+        served, 1720, 1280692, "babua");
+    const nodes = (try figure_page_observations.selectedArticleStyleNodes(a, &ns, snapshot.value.page_html, ancestors)) orelse return error.TestExpectedArticleBody;
+    const body: u32 = @intCast(ancestors.len - 1);
+    // The actual ordered stylesheet certificate includes two served links
+    // and one article style element. The dated site root is the last source.
+    const all_sources = try a.alloc(encoder.table_style_profile.Source, served.len + 1);
+    @memcpy(all_sources[0..served.len], served);
+    all_sources[served.len] = .{ .css = css, .base_url = "" };
+    var screen = try encoder.table_style_profile.parseSourcesForTargetAlloc(a, all_sources, .screen);
+    defer screen.deinit();
+    var dd: std.ArrayList(u32) = .empty;
+    for (nodes, 0..) |element, node_id| if (std.mem.eql(u8, element.tag, "dd")) {
+        try dd.append(a, @intCast(node_id));
+    };
+    // Two pronunciation-list owners precede the actual nested usage example.
+    try std.testing.expectEqual(@as(usize, 4), dd.items.len);
+    const outer_dd = dd.items[2];
+    const inner_dd = dd.items[3];
+    const inner_dl = nodes[inner_dd].parent.?;
+    const usage = nodes[inner_dl].parent.?;
+    const wrapper = nodes[usage].parent.?;
+    try std.testing.expectEqual(outer_dd, nodes[wrapper].parent.?);
+    try std.testing.expectEqualStrings("dl", nodes[inner_dl].tag);
+    for ([_]u32{ usage, wrapper }, [_][]const u8{ "h-usage-example", "usex-item" }) |node_id, class| {
+        var found = false;
+        for (nodes[node_id].attributes) |attr| {
+            if (std.mem.eql(u8, attr.name, "class") and std.mem.eql(u8, attr.value, class)) found = true;
+        }
+        try std.testing.expect(found);
+    }
+    for ([_]u32{ outer_dd, inner_dd }, [_]f32{ 1, 0.95 }) |node_id, expected_scale| {
+        const metric = (try encoder.table_style_profile.observedDescriptionBefore(a, &screen, nodes, body, node_id))
+            orelse return error.TestExpectedDescriptionBefore;
+        try std.testing.expectApproxEqAbs(expected_scale, metric.owner_scale, 0.00001);
+        try std.testing.expect(metric.padding_left.unit == .em and metric.width.unit == .px and metric.width.value == 1);
+        try std.testing.expectApproxEqAbs(0.8 * expected_scale, metric.padding_left.value, 0.00001);
+        for ([_]encoder.presentation_types.StyleLength{ metric.top, metric.bottom, metric.left }) |offset| {
+            try std.testing.expect(offset.unit == .em);
+            try std.testing.expectApproxEqAbs(0.2 * expected_scale, offset.value, 0.00001);
+        }
+        try std.testing.expectEqualStrings("#cccccc", metric.color.value.?);
+    }
+    try std.testing.expect((try encoder.table_style_profile.observedDescriptionBefore(a, &screen, nodes, body, inner_dl)) == null);
+    const suppress = try std.mem.concat(a, u8, &.{ css, "\nbody dd::before{content:none!important}" });
+    all_sources[served.len].css = suppress;
+    var no_stroke = try encoder.table_style_profile.parseSourcesForTargetAlloc(a, all_sources, .screen);
+    defer no_stroke.deinit();
+    try std.testing.expect((try encoder.table_style_profile.observedDescriptionBefore(a, &no_stroke, nodes, body, inner_dd)) == null);
+}
+
+test "indexed Indonesian babua body font is tied to its original revision and exact advertised screen sheets" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const io = std.testing.io;
+    const css = @embedFile("testdata/id-swadesh-jawa/common.css");
+    const raw = @embedFile("testdata/id-babua/original.wikitext");
+    var ns = try namespace_registry.Registry.init(a, @embedFile("testdata/id-swadesh-jawa/namespace-registry.tsv"));
+    defer ns.deinit();
+    var stream: std.Io.Reader = .fixed(@embedFile("testdata/id-babua/stylesheet-imports.json.gz"));
+    var inflater: std.compress.flate.Decompress = .init(&stream, .gzip, &.{});
+    const role = try inflater.reader.allocRemaining(a, .limited(512 * 1024));
+    try std.testing.expect(inflater.err == null and inflater.state == .end);
+    var hash: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(role, &hash, .{});
+    try std.testing.expectEqualStrings("6df1a8508046210ad9292e1bac7ad56b214cc661f98b49b586fe4602d115e621", &std.fmt.bytesToHex(hash, .lower));
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    const index_path = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/page-index.tsv", .{tmp.sub_path});
+    const titles_path = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/page-title-index.bin", .{tmp.sub_path});
+    const dump_path = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/pages.xml", .{tmp.sub_path});
+    try tmp.dir.writeFile(io, .{ .sub_path = "pages.xml", .data = css ++ raw });
+    const index = try std.fmt.allocPrint(a, "0\t{d}\tMediaWiki:Common.css\t\t9841\t1461245\t2026-09-01T00:00:00Z\tFixture\tcss\t8\t1\t0\n{d}\t{d}\tbabua\t\t1720\t1280692\t2026-09-01T00:00:00Z\tFixture\twikitext\t0\t1\t0\n", .{ css.len, css.len, raw.len });
+    try tmp.dir.writeFile(io, .{ .sub_path = "page-index.tsv", .data = index });
+    try dump_source.buildPageTitleIndex(io, a, index_path, titles_path);
+    const titles = try dump_source.PageTitleIndex.init(try tmp.dir.readFileAlloc(io, "page-title-index.bin", a, .limited(64 * 1024)));
+    var reader = try dump_source.SourceReader.open(io, a, std.heap.page_allocator, dump_path, .raw_xml, null); defer reader.deinit();
+    var observed = try source_table_styles.observeWithImportsForTarget(a, &ns, &reader, index, titles, role, .screen);
+    const authority = &observed.authority.?;
+    defer authority.deinit();
+    const snapshot = try std.json.parseFromSlice(struct {
+        page_html: []const u8, page_url: []const u8,
+        sources: []const struct { url: []const u8, css: []const u8 },
+    }, a, role, .{ .ignore_unknown_fields = true }); defer snapshot.deinit();
+    const served = try a.alloc(encoder.table_style_profile.Source, snapshot.value.sources.len);
+    for (served, snapshot.value.sources) |*out, src| out.* = .{ .base_url = src.url, .css = src.css };
+    try std.testing.expectEqual(@as(usize, 3), served.len);
+    const html = snapshot.value.page_html; const url = snapshot.value.page_url;
+    for (0..3) |bad| {
+        const copy = try a.dupe(encoder.table_style_profile.Source, served);
+        if (bad == 0) std.mem.swap(encoder.table_style_profile.Source, &copy[0], &copy[1]);
+        if (bad == 1) copy[2].css = "body{font-size:200%}";
+        const supplied = if (bad == 2) copy[1..] else copy;
+        try std.testing.expectError(error.InvalidFigurePageObservations, figure_page_observations.selectedArticleFontAncestors(a, &ns, html, url, supplied, 1720, 1280692, "babua"));
+    }
+    const ancestors = try figure_page_observations.selectedArticleFontAncestors(a, &ns, html, url, served, 1720, 1280692, "babua");
+    const heading = (try figure_page_observations.selectedWrappedHeadingAlloc(a, &ns, html, ancestors, "babua")) orelse return error.TestExpectedWrappedHeading;
+    try std.testing.expectEqualStrings("babua_[bug]", heading.primary);
+    try std.testing.expectEqualStrings("babua_.5Bbug.5D", heading.fallback);
+    try std.testing.expectEqualStrings("bug", heading.language);
+    try std.testing.expectEqual(heading.outer, heading.nodes[heading.inner].parent.?);
+    try std.testing.expectEqual(heading.inner, heading.nodes[heading.heading].parent.?);
+    try std.testing.expect((try figure_page_observations.selectedWrappedHeadingAlloc(a, &ns, html, ancestors, "other")) == null);
+    const extra = try std.mem.replaceOwned(u8, a, html, "<div class=\"headword-inner\"", "<span>extra</span><div class=\"headword-inner\"");
+    try std.testing.expect((try figure_page_observations.selectedWrappedHeadingAlloc(a, &ns, extra, ancestors, "babua")) == null);
+    const listed = try std.mem.replaceOwned(u8,a,html,"href=\"#Bahasa_Bugis\"","href=\"#babua_[bug]\"");
+    try std.testing.expect(!std.mem.eql(u8,listed,html));
+    try std.testing.expect((try figure_page_observations.selectedWrappedHeadingAlloc(a,&ns,listed,ancestors,"babua")) == null);
+    const shared = &authority.profile;
+    const font = shared.custom_properties.?.font_article orelse return error.TestExpectedArticleFont;
+    const expanded = @embedFile("testdata/id-babua/expanded.wikitext");
+    std.crypto.hash.sha2.Sha256.hash(expanded,&hash,.{});
+    try std.testing.expectEqualStrings("a78babcdb387aa196e94ada5d562674f7dda0ad7ed20ef19437a02b335ec3005",&std.fmt.bytesToHex(hash,.lower));
+    const buttons = (shared.custom_properties.?.phonos_article orelse return error.TestExpectedPhonos).buttons;
+    try std.testing.expectEqual(@as(usize, 1), buttons.len);
+    const audio = buttons[0];
+    try std.testing.expectEqualStrings("Putar audio", audio.accessible_name);
+    try std.testing.expectEqualStrings("Suara", audio.caption);
+    try std.testing.expectEqualStrings("Berkas:LL-Q33190 (bug)-Iripseudocorus-Babbua.wav", audio.attribution_title);
+    try std.testing.expect((try figure_page_observations.bindPhonos(a, expanded, buttons)).len == 1);
+    const repeated = try std.mem.concat(a, u8, &.{ expanded, expanded });
+    try std.testing.expect((try figure_page_observations.bindPhonos(a, repeated, buttons)).len == 0);
+    // The same physical extension may legitimately appear twice. Two complete
+    // observed widgets and two original intervals own two independent actions.
+    const type_at = std.mem.indexOf(u8, html, "typeof=\"mw:Extension/phonos\"").?;
+    const widget_start = std.mem.lastIndexOf(u8, html[0..type_at], "<span").?;
+    const tail = "</a></sup></span>";
+    const widget_end = std.mem.indexOfPos(u8, html, type_at, tail).? + tail.len;
+    const copied_id = try std.mem.replaceOwned(u8, a, html[widget_start..widget_end], "ooui-php-1", "ooui-php-919");
+    const copied_about = try std.mem.replaceOwned(u8, a, copied_id, "#mwt4", "#mwt919");
+    const two_html = try std.mem.concat(a, u8, &.{ html[0..widget_end], copied_about, html[widget_end..] });
+    const two_buttons = (try figure_page_observations.selectedPhonosAlloc(a, a, &ns, two_html)).?;
+    try std.testing.expectEqual(@as(usize, 2), two_buttons.len);
+    const two = try figure_page_observations.bindPhonos(a, repeated, two_buttons);
+    try std.testing.expectEqual(@as(usize, 2), two.len);
+    try std.testing.expect(two[0].source.ptr != two[1].source.ptr);
+    for (two) |entry| {
+        try std.testing.expectEqualStrings("Putar audio", encoder.table_style_profile.SelectedPhonos.lookup(two, entry.source).?.accessible_name);
+        try std.testing.expect(encoder.table_style_profile.SelectedPhonos.lookup(two, entry.source[1..]) == null);
+    }
+    const changed_label = try std.mem.replaceOwned(u8, a, copied_about, "Suara", "Lagi");
+    const alternate_html = try std.mem.concat(a, u8, &.{ html[0..widget_end], changed_label, html[widget_end..] });
+    const alternate = (try figure_page_observations.selectedPhonosAlloc(a, a, &ns, alternate_html)).?;
+    const second_expansion = try std.mem.replaceOwned(u8, a, expanded, ">Suara<", ">Lagi<");
+    const ordered = try std.mem.concat(a, u8, &.{ expanded, second_expansion });
+    const reversed = try std.mem.concat(a, u8, &.{ second_expansion, expanded });
+    const distinct = try figure_page_observations.bindPhonos(a, ordered, alternate);
+    try std.testing.expectEqual(@as(usize, 2), distinct.len);
+    try std.testing.expectEqualStrings("Lagi", distinct[1].button.caption);
+    try std.testing.expect((try figure_page_observations.bindPhonos(a, reversed, alternate)).len == 0);
+    try std.testing.expect((try figure_page_observations.bindPhonos(a, expanded, alternate)).len == 0);
+    const wrong_language = try std.mem.replaceOwned(u8, a, expanded, "lang=\"bug\" data-phonos-audio", "lang=\"id\" data-phonos-audio");
+    try std.testing.expect((try figure_page_observations.bindPhonos(a, wrong_language, buttons)).len == 0);
+    for ([_]struct { old: []const u8, changed: []const u8 }{
+        .{ .old = "role=\"button\" tabindex=\"0\" href=\"//upload.wikimedia.org/wikipedia/commons/transcoded/",
+           .changed = "role=\"link\" tabindex=\"0\" href=\"//upload.wikimedia.org/wikipedia/commons/transcoded/" },
+        .{ .old = "aria-label=\"Putar audio\"", .changed = "aria-label=\"changed\"" },
+        .{ .old = "href=\"/wiki/Berkas:LL-Q33190_(bug)-Iripseudocorus-Babbua.wav\"", .changed = "href=\"/wiki/Berkas:Other.wav\"" },
+    }) |case| {
+        try std.testing.expect(std.mem.indexOf(u8, html, case.old) != null);
+        const changed = try std.mem.replaceOwned(u8, a, html, case.old, case.changed);
+        try std.testing.expect((try figure_page_observations.selectedPhonosAlloc(a, a, &ns, changed)) == null);
+    }
+    const recipe=font.heading orelse return error.TestExpectedComputedHeading;
+    try std.testing.expectEqualStrings("#333333",recipe.word.ink);
+    try std.testing.expectEqualStrings("#888888",recipe.sub.ink);
+    try std.testing.expectApproxEqAbs(@as(f32,1.68),recipe.word.font.font_scale.?,0.00001);
+    try std.testing.expectApproxEqAbs(@as(f32,3.2),recipe.style.wrappers.?.title_block_padding_right.value,0.00001);
+    try std.testing.expectEqual(@as(f32, 1), font.root_per_body);
+    var codes: encoder.blob_builder.LanguageCodes = .{ .namespace_catalog = &ns, .table_styles = shared };
+    for ([_]struct { ns: i32, id: u64, rev: u64, title: []const u8, selected: bool }{
+        .{ .ns = 0, .id = 1720, .rev = 1280692, .title = "babua", .selected = true },
+        .{ .ns = 0, .id = 1720, .rev = 1280693, .title = "babua", .selected = false },
+        .{ .ns = 0, .id = 1721, .rev = 1280692, .title = "babua", .selected = false },
+        .{ .ns = 0, .id = 1720, .rev = 1280692, .title = "other", .selected = false },
+        .{ .ns = 100, .id = 1720, .rev = 1280692, .title = "babua", .selected = false },
+    }) |case| {
+        try attachFigurePageObservation(a, &codes, null, null, case.ns, case.id, case.rev, case.title, raw, expanded);
+        try std.testing.expectEqual(case.selected, codes.table_styles.?.selected_phonos.len != 0);
+        try std.testing.expectEqual(case.selected,codes.table_styles.?.selected_wrapped_heading!=null);
+        if(codes.table_styles.?.selected_wrapped_heading)|issued| {
+            try std.testing.expect(std.mem.startsWith(u8,issued.source[issued.body_offset..],"\n      <span class=\"headword-text\""));
+        }
+        try std.testing.expectEqual(if (case.selected) @as(?f32, 1) else null, codes.table_styles.?.selected_root_per_body);
+        try std.testing.expect(shared.selected_root_per_body == null);
+        try std.testing.expectEqual(!case.selected, codes.table_styles.? == shared);
+    }
+    var separate_custom = shared.custom_properties.?.*;
+    separate_custom.font_article = null;
+    var separate_profile = shared.*;
+    separate_profile.custom_properties = &separate_custom;
+    var without_font: encoder.blob_builder.LanguageCodes = .{ .namespace_catalog = &ns, .table_styles = &separate_profile };
+    try attachFigurePageObservation(a, &without_font, null, null, 0, 1720, 1280692, "babua", raw, expanded);
+    try std.testing.expect(without_font.table_styles.?.selected_root_per_body == null);
+    try std.testing.expectEqual(@as(usize, 1), without_font.table_styles.?.selected_phonos.len);
+}
+
+test "original indexed Indonesian babua emits its anchored headword and complete Buginese entry" {
+    // Optional original-data integration test. These are the same dump and
+    // complete prepared expander root accepted by the ordinary command.
+    const raw_dump = getenv("WIKIDICT_BABUA_TEST_DUMP") orelse return error.SkipZigTest;
+    const raw_root = getenv("WIKIDICT_BABUA_TEST_EXPANDER") orelse return error.TestExpectedPreparedInput;
+    const dump = std.mem.span(raw_dump);
+    const root = std.mem.span(raw_root);
+    const io = std.testing.io;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    // Every accepted path must carry the original selected producer bytes.
+    var inputs: CapturedWriterInputs=.{ .io=io, .a=a }; defer inputs.deinit();
+    try inputs.pin(.{ .path=dump, .bytes=59878298, .sha256="237ecd11595ab45358b476b5930e1eee894b4abdb88b04e6ebb6fdab5e02d4a3" });
+    for ([_]struct{ leaf:[]const u8, bytes:usize, digest:[]const u8 }{
+        .{.leaf="stylesheet-imports.json",.bytes=339779,.digest="6df1a8508046210ad9292e1bac7ad56b214cc661f98b49b586fe4602d115e621"},
+        .{.leaf="dict-bundle-expander",.bytes=42723048,.digest="884c17202c86c03546bcbda1064179f0391604039737069119196cb20629c41e"},
+        .{.leaf="file-metadata.tsv",.bytes=2585729,.digest="c715e678e61b2b020781f33ffac4fa1e1712c388cc929f7427a1e33692aa8488"},
+        .{.leaf="interface-messages.tsv",.bytes=3226,.digest="e68b52fdb5570fbffd450382327dfb53e2c3fca028def4bf13b4342cb31d772c"},
+        .{.leaf="page-index.tsv",.bytes=46939670,.digest="a2c88308bdbf3392a681a73611cfb7e4e79660a2c097f0ff75bd6727c9273e30"},
+    }) |required|try inputs.pin(.{ .path=try std.fs.path.join(a,&.{root,required.leaf}), .bytes=required.bytes, .sha256=required.digest });
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    const out = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/data", .{tmp.sub_path});
+    const args = [_][]const u8{ "dict-blob-build", dump, out, "--expander-root", root,
+        "--start-page", "161", "--index-byte-offset", "21569", "--limit-pages", "1",
+        "--workers", "1", "--now-unix", "1791731560" };
+    try runBlobBuild(io, std.heap.smp_allocator, &args, try parseOptions(&args), null, null);
+    try inputs.verify();
+    const records = try CapturedWriterCurrentStored.load(io, a, out, "babua");
+    try std.testing.expectEqual(@as(usize, 1), records.len);
+    const r = records[0];
+    try std.testing.expect(r.kind == .language and r.blob_record_count == 1);
+    try std.testing.expectEqualStrings("Buginese", r.owner);
+    try encoder.presentation_types.validateStored(a, r.stored, "babua", .language, r.language);
+    const e = r.stored.entry;
+    try std.testing.expectEqualStrings("bug",e.language_code);
+    try std.testing.expectEqual(@as(usize,2),e.sections.len);
+    try std.testing.expectEqualStrings("Bahasa_Bugis", e.sections[0].anchor);
+    const section=e.sections[1];
+    try std.testing.expectEqualStrings("babua [bug]",section.title);
+    try std.testing.expect(section.level==3 and section.blocks.len==6);
+    try std.testing.expectEqualStrings("babua_[bug]",section.anchor);
+    try std.testing.expectEqualStrings("babua_.5Bbug.5D",section.anchor_fallback);
+    const heading=section.blocks[0];
+    try std.testing.expect(heading.kind==.heading and heading.level==section.level);
+    try std.testing.expectEqualStrings(section.anchor,heading.anchor);
+    try std.testing.expectEqualStrings(section.anchor_fallback,heading.anchor_fallback);
+    const style=section.heading_style orelse return error.TestMissingPhysicalHeading;
+    const wrappers=style.wrappers orelse return error.TestMissingHeadingOwners;
+    try std.testing.expect(wrappers.outer.overflow==.visible_x_clip_y and wrappers.outer.border.?==.edges);
+    const top=wrappers.outer.border.?.edges.top;
+    try std.testing.expect(top==.dashed and top.dashed.color==.rgb);
+    try std.testing.expectEqualStrings("#a2a9b1",top.dashed.color.rgb);
+    try std.testing.expect(top.dashed.width.unit==.px and top.dashed.width.value==1);
+    try std.testing.expect(wrappers.outer.margins.?.top.unit==.em and wrappers.inner.padding.?.top.unit==.em and wrappers.title_block_padding_right.unit==.em);
+    try std.testing.expectApproxEqAbs(@as(f32,0.4),wrappers.outer.margins.?.top.value,0.00001);
+    try std.testing.expectApproxEqAbs(@as(f32,1.25),wrappers.inner.padding.?.top.value,0.00001);
+    try std.testing.expectApproxEqAbs(@as(f32,3.2),wrappers.title_block_padding_right.value,0.00001);
+    try std.testing.expectApproxEqAbs(@as(f32,1.2),style.font.font_scale.?,0.00001);
+    try std.testing.expectEqual(@as(usize,5),heading.spans.len);
+    for (heading.spans,[_][]const u8{"babua"," ","[","bug","]"},0..) |span,label,i| {
+        try std.testing.expectEqualStrings(label,span.text);
+        try std.testing.expectEqualStrings("Penjabaran untuk \"babua\" dalam bahasa Bugis",span.tooltip.?);
+        try std.testing.expect(span.font_scale_basis==.normal_body and span.direction.len==0);
+        try std.testing.expectEqualStrings("headword-wrapper headword-inner headword-text", span.classes);
+        if(i==1)continue;
+        try std.testing.expect(span.inline_style.?.font_normalized and span.subscript==(i>=2));
+        try std.testing.expectEqualStrings(if(i==0)"#333333" else "#888888",span.foreground.?);
+        try std.testing.expectApproxEqAbs(if(i==0)@as(f32,1.68) else @as(f32,0.84),span.font_scale.?,0.00001);
+    }
+    try std.testing.expectEqual(@as(usize,1),e.organization.lexemes.len);
+    const lexeme = e.organization.lexemes[0];
+    try std.testing.expect(lexeme.section==1 and lexeme.definitions.len==1);
+    try std.testing.expectEqualStrings("Noun",lexeme.kind);
+    try std.testing.expect(lexeme.definitions[0].block==4);
+    try std.testing.expectEqualSlices(usize,&.{5},lexeme.definitions[0].examples);
+    const definition=section.blocks[4]; const example=section.blocks[5];
+    try std.testing.expect(definition.kind==.definition and definition.spans.len==1 and definition.spans[0].kind==.link and example.kind==.example);
+    try std.testing.expectEqualStrings("perut",definition.spans[0].target);
+    try std.testing.expectEqualStrings("perut",definition.spans[0].text);
+    var example_text:std.ArrayList(u8)=.empty;
+    for(example.spans)|span|try example_text.appendSlice(a,span.text);
+    try std.testing.expectEqualStrings("Maloppo babuana amboku.\nPerut bapak saya besar.",std.mem.trim(u8,example_text.items," \t\r\n"));
+    try std.testing.expect(e.media.len==2 and e.media[0].kind==.audio and e.media[1].kind==.image);
+    try std.testing.expectEqualStrings("LL-Q33190 (bug)-Iripseudocorus-Babbua.wav",e.media[0].file);
+    try std.testing.expectEqualStrings("Suara",e.media[0].caption);
+    const audio_body = section.blocks[2];
+    try std.testing.expect(audio_body.kind == .indent and audio_body.spans.len == 2);
+    const play = audio_body.spans[0];
+    try std.testing.expect(play.kind == .link and play.audio_control != null and play.audio_control.?.presentation == .phonos_button and
+        encoder.presentation_types.inlineTableMediaOwnerMatches(play, e.media[0].file));
+    try std.testing.expectEqualStrings("Suara", play.text);
+    try std.testing.expectEqualStrings("bug", play.language);
+    try std.testing.expectEqualStrings("Putar audio", play.tooltip.?);
+    const attribution = audio_body.spans[1];
+    try std.testing.expect(attribution.kind == .link and attribution.audio_control == null and attribution.superscript);
+    try std.testing.expectEqualStrings("ⓘ", attribution.text);
+    try std.testing.expectEqualStrings("Berkas:LL-Q33190 (bug)-Iripseudocorus-Babbua.wav", attribution.target);
+    const term=section.blocks[3];
+    try std.testing.expect(term.kind==.term and term.spans.len>1 and term.spans[0].image!=null);
+    try std.testing.expectEqualStrings("Codex icon tag color-progressive.svg",term.spans[0].image.?.file);
+    try std.testing.expect(term.spans[0].image.?.width_px==12);
+    const report=try std.Io.Dir.cwd().readFileAlloc(io,try std.fs.path.join(a,&.{out,"fallback-pages.jsonl"}),a,.limited(4096));
+    try std.testing.expectEqual(@as(usize,0),std.mem.trim(u8,report," \t\r\n").len);
+}
+
 
 test "presentation failure receipt round trips exact invocation and page identity" {
     const a = std.testing.allocator;
@@ -47668,8 +48013,9 @@ test "normal Writer retained IT nero preserves indented Figure space complete ow
     try std.testing.expectEqualStrings("fi", (registry.resolveTrusted("finlandese") orelse return error.TestUnexpectedResult).code);
     try std.testing.expectEqualStrings("fi", (registry.resolveTrusted("Finlandese") orelse return error.TestUnexpectedResult).code);
     var codes = languageCodes(&registry, &ns); codes.behavior_switches = &behavior; codes.image_options = &images; codes.table_styles = &styles;
-    inline for (.{ "figure-siteinfo.raw.json", "figure-sizing.json", "figure-sizing.raw.json", "figure-sizing.site.json" }) |name|
+    inline for (.{ "figure-siteinfo.raw.json", "figure-sizing.json", "figure-sizing.site.json" }) |name|
         try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{metadata_root, name}), .data = @embedFile("testdata/it-nero227/" ++ name) });
+    try figure_page_observations.Testing.writeRawSizing(a, io, metadata_root, .it_nero);
     checkpoint = "normal Figure registry and immutable source defaults";
     const before_defaults = ns.figure_source_defaults; const before_conversion = ns.manual_conversion_context;
     const site = (try loadFigureSite(io, a, metadata_root, &ns)) orelse return error.TestUnexpectedResult;
@@ -48360,8 +48706,9 @@ test "normal Writer retained IT basco clamps proved unrotated JPEG and preserves
     inline for (metadata_files) |file| try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{metadata_root, file[0]}), .data = file[1] });
     var registry = try loadLanguageRegistry(io, a, metadata_root, &ns); defer registry.deinit();
     var codes = languageCodes(&registry, &ns); codes.behavior_switches = &behavior; codes.image_options = &images; codes.table_styles = &styles;
-    inline for (.{ "figure-siteinfo.raw.json", "figure-sizing.json", "figure-sizing.raw.json", "figure-sizing.site.json" }) |name|
+    inline for (.{ "figure-siteinfo.raw.json", "figure-sizing.json", "figure-sizing.site.json" }) |name|
         try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{metadata_root, name}), .data = @embedFile("testdata/it-basco238/" ++ name) });
+    try figure_page_observations.Testing.writeRawSizing(a, io, metadata_root, .it_basco);
     checkpoint = "normal Figure registry and immutable source defaults";
     const before_defaults = ns.figure_source_defaults; const before_conversion = ns.manual_conversion_context;
     const site = (try loadFigureSite(io, a, metadata_root, &ns)) orelse return error.TestUnexpectedResult;
@@ -65693,10 +66040,10 @@ test "Ready Figure style attachment is independent of ordinary occurrences and c
     inline for (.{
         .{ "figure-siteinfo.raw.json", @embedFile("testdata/figure-inputs198/vi/figure-siteinfo.raw.json") },
         .{ "figure-sizing.json", @embedFile("testdata/vi-context347/metadata/figure-sizing.json") },
-        .{ "figure-sizing.raw.json", @embedFile("testdata/vi-context347/metadata/figure-sizing.raw.json") },
         .{ "figure-sizing.site.json", @embedFile("testdata/vi-imidazole-fit/figure-sizing.site.json") },
     }) |input|
         try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{metadata_root, input[0]}), .data = input[1] });
+    try figure_page_observations.Testing.writeRawSizing(a, io, metadata_root, .vi_context);
     const site = (try loadFigureSite(io, a, metadata_root, &ns)) orelse return error.TestUnexpectedResult;
     var sizing = (try loadFigureSizing(io, a, metadata_root, &ns, site)) orelse return error.TestUnexpectedResult; defer sizing.deinit();
     var book = try figure_page_observations.Book.init(a, @embedFile("testdata/vi-context347/metadata/figure-page-observations.json"), &ns, &sizing, site.source_sha256,

@@ -1620,13 +1620,28 @@ pub fn validAudioControlFocusPaint(value: AudioControlFocusPaint) bool {
     if (value.color) |color| return color.kind == .rgb or color.kind == .transparent;
     return true;
 }
+pub const AudioControlPresentation = enum { transport, phonos_button };
 pub const AudioControl = struct {
+    presentation: AudioControlPresentation = .transport,
     // Geometry uses the existing original-normal-body em and containing-width
     // vocabulary. Null retains source-auto sizing; native height is not guessed.
     width: ?StyleWidth = null,
     height: ?StyleLength = null,
     focus: ?AudioControlFocusPaint = null,
+    pub fn jsonStringify(self: @This(), jw: anytype) !void {
+        try jw.beginObject();
+        inline for (.{ "width", "height", "focus" }) |name| {
+            try jw.objectField(name);
+            try jw.write(@field(self, name));
+        }
+        if (self.presentation != .transport) {
+            try jw.objectField("presentation");
+            try jw.write(self.presentation);
+        }
+        try jw.endObject();
+    }
     const JsonFields = struct {
+        presentation: AudioControlPresentation = .transport,
         width: ?StyleWidth = null,
         height: ?StyleLength = null,
         focus: ?AudioControlFocusPaint = null,
@@ -1640,12 +1655,14 @@ pub const AudioControl = struct {
         return fromJson(try std.json.innerParseFromValue(JsonFields, a, source, strict));
     }
     fn fromJson(value: JsonFields) error{UnexpectedToken}!@This() {
-        const result: @This() = .{ .width = value.width, .height = value.height, .focus = value.focus };
+        const result: @This() = .{ .presentation = value.presentation, .width = value.width, .height = value.height, .focus = value.focus };
         if (!validAudioControl(result)) return error.UnexpectedToken;
         return result;
     }
 };
 pub fn validAudioControl(value: AudioControl) bool {
+    // Frameless source-inline playback has intrinsic label/icon dimensions.
+    if (value.presentation == .phonos_button and (value.width != null or value.height != null)) return false;
     if (value.width) |width| if (!validStyleWidth(width) or width.value <= 0) return false;
     if (value.height) |height| if (!validStyleLength(height) or height.value <= 0) return false;
     if (value.focus) |focus| if (!validAudioControlFocusPaint(focus)) return false;
@@ -1656,6 +1673,10 @@ pub fn spanAudioControl(span: anytype) ?AudioControl {
 }
 pub fn validSpanAudioControl(span: anytype) bool {
     const control = spanAudioControl(span) orelse return true;
+    if (control.presentation == .phonos_button) {
+        if (comptime !@hasField(@TypeOf(span), "tooltip") or !@hasField(@TypeOf(span), "text")) return false;
+        if (span.text.len == 0 or (span.tooltip orelse return false).len == 0) return false;
+    }
     const trail: []const u8 = if (comptime @hasField(@TypeOf(span), "trail")) span.trail else "";
     if (!validAudioControl(control) or !std.mem.eql(u8, @tagName(span.kind), "link") or
         !std.mem.startsWith(u8, span.target, "File:") or span.target.len == 5 or trail.len != 0) return false;

@@ -707,8 +707,8 @@ pub fn joinIndexedArticleStylesAlloc(a: A, root_css: []const u8, root: Root, sna
         const sa = scratch.allocator();
         try requireArticleUrl(sa, root.wiki, article.revision_id, observed);
         const prefix_end = observed.ancestors[observed.ancestors.len - 1].end;
-        const identity = @import("page_language_prefix.zig").parseSelectedOldidAlloc(sa, observed.page_html[0..prefix_end],
-            article.page_id, article.revision_id, 0, observed.page_title) catch |err| switch (err) {
+        const identity = @import("page_language_prefix.zig").parseStylesheetOldidAlloc(sa, observed.page_html[0..prefix_end],
+            article.page_id, article.revision_id, observed.page_title, root.wiki, observed.generator) catch |err| switch (err) {
             error.OutOfMemory => return err,
             else => return error.InvalidStylesheetImports,
         };
@@ -754,6 +754,59 @@ fn requireArticleUrl(a: A, wiki: []const u8, revision_id: u64, observed: CustomS
         } else return error.InvalidStylesheetImports;
     }
     if (!has_title or !has_revision or !has_skin) return error.InvalidStylesheetImports;
+}
+
+/// A custom-property snapshot may describe a current page unrelated to the
+/// dump revision. Only an indexed oldid with a matching complete served
+/// structural prefix can additionally issue a scalable root-font metric.
+pub fn bindIndexedCustomRootFont(a: A, profile: *styles.Profile, root_css: []const u8, snapshot: []const u8, namespaces: anytype, page_index: []const u8, titles: anytype) !void {
+    const custom = profile.custom_properties orelse return;
+    const title = custom.page_title orelse return;
+    const parsed = try std.json.parseFromSlice(CustomSnapshot, a, snapshot, .{});
+    defer parsed.deinit();
+    const value = parsed.value;
+    const ref = (try titles.lookup(page_index, title)) orelse return;
+    const dump = @import("wikimedia_dump");
+    const at = dump.pageRowRefOffset(ref);
+    if (at >= page_index.len or (at != 0 and page_index[at - 1] != '\n')) return error.InvalidStylesheetImports;
+    const end = std.mem.indexOfScalarPos(u8, page_index, at, '\n') orelse page_index.len;
+    const row = try dump.parsePageIndexLine(titles.kind, page_index[at..end]);
+    if (row.ns != 0 or row.page_id == 0 or row.revision_id == 0 or !row.has_source or row.redirect != null or
+        !std.mem.eql(u8, row.content_model, "wikitext") or !std.mem.eql(u8, row.title, title)) return;
+    const question = std.mem.indexOfScalar(u8, value.page_url, '?') orelse return;
+    var query = std.mem.tokenizeScalar(u8, value.page_url[question + 1 ..], '&');
+    var oldid: ?u64 = null;
+    while (query.next()) |parameter| if (std.mem.startsWith(u8, parameter, "oldid=")) {
+        if (oldid != null) return;
+        oldid = std.fmt.parseInt(u64, parameter["oldid=".len..], 10) catch return;
+    };
+    if (oldid == null or oldid.? != row.revision_id) return;
+    var arena = std.heap.ArenaAllocator.init(a); defer arena.deinit();
+    const sa = arena.allocator();
+    const sources = try sa.alloc(styles.Source, value.sources.len + 1);
+    for (value.sources, 0..) |leaf, i| sources[i] = .{ .css = leaf.css, .base_url = leaf.url };
+    const nodes = @import("figure_page_observations.zig").selectedArticleFontAncestors(sa, namespaces, value.page_html, value.page_url, sources[0..value.sources.len], row.page_id, row.revision_id, title) catch |err| switch (err) {
+        error.OutOfMemory => return err, else => return,
+    };
+    // The indexed oldid and ordered source set are already authenticated. The
+    // presence of an inline control is independent of any computed font metric.
+    const buttons = @import("figure_page_observations.zig").selectedPhonosAlloc(sa, profile.arena.allocator(), namespaces, value.page_html)
+        catch |err| switch (err) { error.OutOfMemory => return err, else => null };
+    if (buttons) |present| @constCast(custom).phonos_article = .{
+        .page_id = row.page_id, .revision_id = row.revision_id, .buttons = present,
+    };
+    sources[value.sources.len] = .{ .css = root_css, .base_url = "" };
+    var full = styles.parseSourcesForTargetAlloc(sa, sources, .screen) catch |err| switch (err) {
+        error.OutOfMemory => return err, else => return,
+    };
+    defer full.deinit();
+    const ratio = styles.selectedPageRootPerBody(sa, &full, nodes) catch |err| switch (err) {
+        error.OutOfMemory => return err, else => return,
+    };
+    const known = ratio orelse return;
+    @constCast(custom).font_article = .{ .page_id = row.page_id, .revision_id = row.revision_id, .root_per_body = known };
+    const heading = @import("figure_page_observations.zig").selectedWrappedHeadingAlloc(sa, namespaces, value.page_html, nodes, title) catch |err| switch(err){error.OutOfMemory=>return err,else=>return};
+    if(heading)|owned| @constCast(custom).font_article.?.heading=styles.selectedWrappedHeadingStyleAlloc(sa,profile.arena.allocator(), &full,owned,known) catch |err| switch(err){error.OutOfMemory=>return err,else=>null};
 }
 
 pub fn joinIndexedAbsentCustomAlloc(a: A, snapshot_bytes: []const u8, target: styles.ReadingTarget, namespaces: anytype, page_index: []const u8, titles: anytype) !Joined {

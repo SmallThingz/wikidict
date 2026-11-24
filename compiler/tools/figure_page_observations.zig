@@ -6837,6 +6837,13 @@ fn observedTextClassScopeToEndWithSections(a: A, ns: *const namespaces.Registry,
 fn observedTextClassScopeToEndWithRootOptions(a: A, ns: *const namespaces.Registry, html: []const u8,
     nodes: ?*std.ArrayList(ObservedSiblingNode), root_end: ?*usize, current_literal: bool, expected_root: ?Inventory, retain_sections: bool, returned_html_comments: bool) !profile.BoundedTextClassScope
 {
+    return observedClassRootTokens(a, ns, html, nodes, root_end, current_literal, expected_root,
+        retain_sections, returned_html_comments, current_literal);
+}
+
+fn observedClassRootTokens(a: A, ns: *const namespaces.Registry, html: []const u8,
+    nodes: ?*std.ArrayList(ObservedSiblingNode), root_end: ?*usize, current_literal: bool, expected_root: ?Inventory, retain_sections: bool, returned_html_comments: bool, quoted_html_attributes: bool) !profile.BoundedTextClassScope
+{
     if (html.len == 0 or html.len > max_response or !std.unicode.utf8ValidateSlice(html) or std.mem.indexOfScalar(u8, html, 0) != null) return invalid;
     var stack: [128]ObservedOpenNode = undefined;
     var depth: usize = 0;
@@ -6880,9 +6887,9 @@ fn observedTextClassScopeToEndWithRootOptions(a: A, ns: *const namespaces.Regist
             at += 1;
             continue;
         }
-        const tag = (if (current_literal) currentLiteralHtmlTagAt(html, at) else syntax.tagAt(html, at)) orelse return invalid;
+        const tag = (if (quoted_html_attributes) currentLiteralHtmlTagAt(html, at) else syntax.tagAt(html, at)) orelse return invalid;
         if (tag.end <= at or tag.end > html.len) return invalid;
-        const inv = try inventoryReturnedMode(a, tag, false, false, current_literal);
+        const inv = try inventoryReturnedMode(a, tag, false, false, quoted_html_attributes);
         // Active handlers can mutate classes independently of this observed tree.
         for (inv.attributes) |attr| if (attr.name.len >= 2 and std.ascii.eqlIgnoreCase(attr.name[0..2], "on")) return invalid;
         if (tag.closing) {
@@ -7640,6 +7647,29 @@ fn observedImagesWithServedPaintFailureMode(a: A, ns: *const namespaces.Registry
 }
 
 pub const Testing = if (@import("builtin").is_test) struct {
+    pub const RawSizingFixture = enum { it_nero, it_basco, vi_context };
+
+    pub fn rawSizingBytes(a: A, comptime fixture: RawSizingFixture) ![]u8 {
+        const spec = comptime switch (fixture) {
+            .it_nero => .{ "testdata/it-nero227/figure-sizing.raw.json.zst", @as(usize, 13079955), "ca50c876000f593f0a96feaffad087e1c242393bf23a418d15252efa5187fbd3" },
+            .it_basco => .{ "testdata/it-basco238/figure-sizing.raw.json.zst", @as(usize, 9597404), "d7e0858bdbdd6a12d1d7fe9f3b5af94812a6725dc874418533ffeac1e4b89c1b" },
+            .vi_context => .{ "testdata/vi-context347/metadata/figure-sizing.raw.json.zst", @as(usize, 8485773), "b553461b8f741244d905b2908920c6edac0ea78d23136bb8231bd0b06a2d0f3d" },
+        };
+        const bytes = try @import("wikimedia_dump").decompressZstdBytesAlloc(a, @embedFile(spec[0]), spec[1]);
+        errdefer a.free(bytes);
+        try std.testing.expectEqual(spec[1], bytes.len);
+        try std.testing.expectEqualStrings(spec[2], &std.fmt.bytesToHex(hash(bytes), .lower));
+        return bytes;
+    }
+
+    pub fn writeRawSizing(a: A, io: std.Io, directory: []const u8, comptime fixture: RawSizingFixture) !void {
+        const path = try std.fs.path.join(a, &.{ directory, "figure-sizing.raw.json" });
+        defer a.free(path);
+        const bytes = try rawSizingBytes(a, fixture);
+        defer a.free(bytes);
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = bytes });
+    }
+
     // Typed defaults for the legacy receipt branch are not fields of the
     // observed-set protocol. Keep its exact three-field serialized shape.
     pub fn observedSetDocumentBytes(a: A, doc: Document) ![]const u8 {
@@ -17278,6 +17308,404 @@ fn tableDirectionReceiptBool(source: Value, name: []const u8) !bool {
     if (value != .bool) return invalid;
     return value.bool;
 }
+/// A lexical path to the served normal reading body. Only parent edges and
+/// actual attributes are known. Sibling order, :empty and child inventories
+/// retain their unknown defaults.
+pub fn selectedArticleFontAncestors(a: A, ns: *const namespaces.Registry, html: []const u8, url: []const u8,
+    sheets: []const profile.Source, page_id: u64, revision_id: u64, title: []const u8) ![]const profile.ObservedStyleNode {
+    const outer = try observedOuterPrefix(a, html, true);
+    const prefix = html[0 .. outer.root_open_end orelse return invalid];
+    _ = try @import("page_language_prefix.zig").parseSelectedOldidAlloc(a, prefix, page_id, revision_id, 0, title);
+    const domain = try missingStyleOrigin(a, ns.wiki);
+    if (!std.mem.startsWith(u8, url, domain.origin) or url.len <= domain.origin.len or url[domain.origin.len] != '/') return invalid;
+    var links: std.ArrayList([]const u8) = .empty;
+    var responses: std.ArrayList([]const u8) = .empty;
+    for (sheets) |sheet| if (std.mem.indexOfScalar(u8, sheet.base_url, '#') == null) {
+        try links.append(a, sheet.base_url);
+        try responses.append(a, sheet.css);
+    };
+    const closed = try sourceParentOwnedRootEnd(html, prefix);
+    const ordered = try sourceParentStyleSourcesIn(a, ns, html, .{ .urls = links.items, .responses = responses.items }, true, url, closed);
+    if (sheets.len != ordered.len) return invalid;
+    var inline_count: usize = 0;
+    for (sheets, ordered) |expected, observed| {
+        const expected_url = if (observed.byte_start != 0) blk: {
+            const token = try std.fmt.allocPrint(a, "{s}#inline-style-{d}", .{ url, inline_count });
+            inline_count += 1;
+            break :blk token;
+        } else observed.base_url;
+        if (!equal(expected_url, expected.base_url) or !equal(expected.css, observed.css)) return invalid;
+    }
+    const root = outer.root orelse return invalid;
+    const nodes = try a.alloc(profile.ObservedStyleNode, outer.ancestors.len + 1);
+    for (nodes, 0..) |*node, i| {
+        const inv = if (i < outer.ancestors.len) outer.ancestors[i].attributes else root;
+        for (inv.attributes) |attr| if (std.ascii.startsWithIgnoreCase(attr.name, "on")) return invalid;
+        node.* = .{ .tag = if (i < outer.ancestors.len) outer.ancestors[i].tag else "div",
+            .attributes = try figureObservedAttributes(a, inv), .parent = if (i == 0) null else @intCast(i - 1) };
+    }
+    return nodes;
+}
+
+pub fn selectedArticleStyleNodes(a: A, ns: *const namespaces.Registry, html: []const u8,
+    ancestors: []const profile.ObservedStyleNode) !?[]const profile.ObservedStyleNode {
+    const envelope = try observedOuterPrefix(a, html, true);
+    const start = envelope.root_start orelse return null;
+    const opening_end = envelope.root_open_end orelse return null;
+    const limit = try sourceParentOwnedRootEnd(html, html[0..opening_end]);
+    const body = html[start..limit];
+    var elements: std.ArrayList(ObservedSiblingNode) = .empty;
+    defer elements.deinit(a);
+    var end: usize = 0;
+    _ = try observedClassRootTokens(a, ns, body, &elements, &end, false, envelope.root, true, true, true);
+    if (end != body.len) return null;
+    return observedArticleStyleNodes(a, ancestors, elements.items);
+}
+
+fn observedArticleStyleNodes(a: A, ancestors: []const profile.ObservedStyleNode,
+    nodes: []const ObservedSiblingNode) !?[]const profile.ObservedStyleNode {
+    if (ancestors.len == 0 or ancestors.len > 32) return null;
+    const offset = ancestors.len-1;
+    if (offset+nodes.len > 16384) return null;
+    const physical = try a.alloc(profile.ObservedStyleNode, offset+nodes.len);
+    @memcpy(physical[0..offset], ancestors[0..offset]);
+    for (nodes,0..) |n,i| {
+        physical[offset+i] = .{ .tag=n.tag.name,.attributes=try figureObservedAttributes(a,n.attributes),
+            .known_no_previous_element_sibling=n.parent!=null and n.previous==null, .known_previous_element_sibling=if(n.previous)|j| @intCast(offset+j) else null,
+            .parent=if (n.parent) |j| @intCast(offset+j) else if (offset!=0) @intCast(offset-1) else null };
+    }
+    // Previous/next facts come from this same complete body. The unknown
+    // siblings of outer skin ancestors stay unknown.
+    for (nodes,0..) |n,i| if (n.parent != null) {
+        const item=&physical[offset+i];
+        item.known_no_next_element_sibling=true;
+        if (n.previous) |j| {
+            physical[offset+j].known_next_element_sibling=@intCast(offset+i);
+            physical[offset+j].known_no_next_element_sibling=false;
+        }
+    };
+    return physical;
+}
+
+// Inspect the served contents list itself. Both fragment spellings remain
+// destinations of the single heading even when the skin omits it from this list.
+fn headingAbsentFromContents(a: A, html: []const u8, root_start: usize, primary: []const u8, fallback: []const u8) !bool {
+    var at: usize = 0;
+    var menus: usize = 0;
+    var active: usize = 0;
+    var ordinary_anchor = false;
+    while (at < root_start) {
+        const start = std.mem.indexOfScalarPos(u8, html, at, '<') orelse break;
+        if (start >= root_start) break;
+        if (std.mem.startsWith(u8, html[start..], "<!--")) {
+            at = (std.mem.indexOfPos(u8, html, start + 4, "-->") orelse return false) + 3;
+            continue;
+        }
+        if (std.ascii.startsWithIgnoreCase(html[start..], "<!doctype ")) {
+            at = (std.mem.indexOfScalarPos(u8, html, start, '>') orelse return false) + 1;
+            continue;
+        }
+        const tag = currentLiteralHtmlTagAt(html,start) orelse return false;
+        at = tag.end;
+        if (!tag.closing and (tag.is("script") or tag.is("style") or tag.is("title") or tag.is("noscript"))) {
+            at = try outerRawTextEnd(html,tag);
+            continue;
+        }
+        if (tag.is("ul")) {
+            if (tag.closing) {
+                if (active > 0) active -= 1;
+            } else {
+                const attrs = try outerInventoryReturned(a,tag,true);
+                if (equal(attrs.get("id") orelse "", "mw-panel-toc-list") and
+                    profile.Profile.hasClass(attrs.get("class") orelse "", "vector-toc-contents")) {
+                    if (active != 0 or menus != 0) return false;
+                    menus += 1; active = 1;
+                } else if (active != 0) active += 1;
+            }
+        } else if (active != 0 and tag.is("a") and !tag.closing) {
+            const attrs = try outerInventoryReturned(a,tag,true);
+            const href = attrs.get("href") orelse return false;
+            if (href.len == 0 or href[0] != '#' or std.mem.indexOfAny(u8, href, "%&\r\n\t") != null) return false;
+            if (equal(href[1..],primary) or equal(href[1..],fallback)) return false;
+            ordinary_anchor = ordinary_anchor or href.len > 1;
+        }
+    }
+    return menus == 1 and active == 0 and ordinary_anchor;
+}
+/// Closed ParserOutput heading and original parent chain from an already
+/// authenticated selected oldid. Source expansion must still match each owner.
+pub const WrappedHeadingObservation = struct {
+    nodes: []const profile.ObservedStyleNode,
+    body: u32, outer: u32, inner: u32, heading: u32, word: u32, sub: u32,
+    title: []const u8, language: []const u8, primary: []const u8, fallback: []const u8,
+};
+
+fn headingElementChildren( html: []const u8, nodes: []const ObservedSiblingNode,
+    parent: usize, comptime count: usize, allow_text: bool) ?[count]usize {
+    var children: [count]usize = undefined;
+    const node = nodes[parent];
+    const end = node.inner_end orelse return null;
+    var cursor = node.tag.end;
+    var n: usize = 0;
+    for (nodes[parent + 1..], parent + 1..) |next, index| {
+        if (next.start >= end) break;
+        if (next.parent != parent) continue;
+        if (n == count or next.start < cursor or (!allow_text and
+            std.mem.trim(u8, html[cursor..next.start], " \t\r\n").len != 0)) return null;
+        const at = next.inner_end orelse return null;
+        const close = syntax.tagAt(html, at) orelse return null;
+        if (!close.closing or close.self_closing or close.attrs.len != 0 or !std.ascii.eqlIgnoreCase(close.name, next.tag.name)) return null;
+        children[n] = index; n += 1; cursor = close.end;
+    }
+    if (n != count or cursor > end or (!allow_text and std.mem.trim(u8, html[cursor..end], " \t\r\n").len != 0)) return null;
+    return children;
+}
+fn headingLeafText(html: []const u8, node: ObservedSiblingNode, expected: []const u8) bool {
+    const end = node.inner_end orelse return false;
+    return node.first_child == null and end >= node.tag.end and equal(html[node.tag.end..end], expected);
+}
+fn headingEntity(html: []const u8, node: ObservedSiblingNode, text: []const u8) bool {
+    return node.tag.is("span") and node.attributes.attributes.len == 1 and
+        equal(node.attributes.get("typeof") orelse return false, "mw:Entity") and headingLeafText(html, node, text);
+}
+fn phonosClass(node: ObservedSiblingNode, tag: []const u8, token: []const u8) bool {
+    return node.tag.is(tag) and profile.Profile.hasClass(node.attributes.get("class") orelse "", token);
+}
+
+// The old worker preserves the label and file, but omits the localized
+// accessible name and attribution action. Read them from the same served
+// extension, verifying both are owned by that file before retaining them.
+pub fn selectedPhonosAlloc(a: A, keep: A, ns: *const namespaces.Registry, html: []const u8) !?[]const profile.PhonosButton {
+    if (std.mem.indexOf(u8, html, "mw:Extension/phonos") == null) return null;
+    const envelope = try observedOuterPrefix(a, html, true);
+    const base = envelope.root_start orelse return null;
+    const opening = envelope.root_open_end orelse return null;
+    const limit = try sourceParentOwnedRootEnd(html, html[0..opening]);
+    const body = html[base..limit];
+    var items: std.ArrayList(ObservedSiblingNode) = .empty;
+    defer items.deinit(a);
+    var end: usize = 0;
+    _ = try observedClassRootTokens(a, ns, body, &items, &end, false, envelope.root, true, true, true);
+    if (end != body.len) return null;
+    const nodes = items.items;
+    var buttons: std.ArrayList(profile.PhonosButton) = .empty;
+    defer buttons.deinit(a);
+    for (nodes, 0..) |node, index| {
+        if (!equal(node.attributes.get("typeof") orelse "", "mw:Extension/phonos")) continue;
+        if (!phonosClass(node, "span", "ext-phonos")) return null;
+        const button = (try observedPhonosButton(a, ns, body, nodes, index)) orelse return null;
+        try buttons.append(a, button);
+    }
+    if (buttons.items.len == 0) return null;
+    const retained = try keep.alloc(profile.PhonosButton, buttons.items.len);
+    for (buttons.items, retained) |button, *entry| {
+        inline for (@typeInfo(profile.PhonosButton).@"struct".field_names) |name|
+            @field(entry, name) = try keep.dupe(u8, @field(button, name));
+    }
+    return retained;
+}
+
+fn observedPhonosButton(a: A, ns: *const namespaces.Registry, body: []const u8,
+    nodes: []const ObservedSiblingNode, owner: usize) !?profile.PhonosButton {
+    const extension = try json(a, nodes[owner].attributes.get("data-mw") orelse return null);
+    if (!equal(try string(extension, "name"), "phonos")) return null;
+    const attrs = try field(extension, "attrs");
+    const file = try string(attrs, "file");
+    const lang = try string(attrs, "lang");
+    const caption_html = try string(try field(extension, "body"), "extsrc");
+    const children = headingElementChildren(body, nodes, owner, 2, false) orelse return null;
+    const widget = nodes[children[0]];
+    if (file.len == 0 or lang.len == 0 or !phonosClass(widget, "span", "ext-phonos-PhonosButton") or
+        !phonosClass(widget, "span", "oo-ui-widget-enabled") or !phonosClass(widget, "span", "oo-ui-buttonElement-frameless") or
+        !phonosClass(nodes[children[1]], "sup", "ext-phonos-attribution")) return null;
+    const config = try json(a, widget.attributes.get("data-ooui") orelse return null);
+    const data = try field(config, "data");
+    const framed = try field(config, "framed");
+    if (!equal(try string(config, "_"), "mw.Phonos.PhonosButton") or framed != .bool or framed.bool or
+        !equal(try string(config, "icon"), "volumeUp") or !equal(try string(data, "lang"), lang) or
+        !equal(try string(data, "file"), file) or !equal(try string(try field(config, "label"), "html"), caption_html)) return null;
+    const button_id = (headingElementChildren(body, nodes, children[0], 1, false) orelse return null)[0];
+    const button = nodes[button_id];
+    const href = button.attributes.get("href") orelse return null;
+    const name = button.attributes.get("aria-label") orelse return null;
+    if (!phonosClass(button, "a", "oo-ui-buttonElement-button") or !equal(button.attributes.get("role") orelse "", "button") or
+        !equal(button.attributes.get("tabindex") orelse "", "0") or name.len == 0 or !equal(button.attributes.get("title") orelse "", name) or
+        !equal(try string(config, "href"), href)) return null;
+    const prefix = "//upload.wikimedia.org/wikipedia/commons/transcoded/";
+    if (!std.mem.startsWith(u8, href, prefix) or std.mem.indexOfAny(u8, href, "?#\\") != null) return null;
+    var path = std.mem.splitScalar(u8, href[prefix.len..], '/');
+    const bucket = path.next() orelse return null;
+    const dir = path.next() orelse return null;
+    const source_file = path.next() orelse return null;
+    const stream = path.next() orelse return null;
+    if (path.next() != null or bucket.len != 1 or dir.len != 2 or bucket[0] != dir[0] or
+        !std.ascii.isHex(dir[0]) or !std.ascii.isHex(dir[1]) or !std.mem.startsWith(u8, stream, source_file) or
+        !equal(stream[source_file.len..], ".mp3")) return null;
+    const decoded_file = std.Uri.percentDecodeInPlace(try a.dupe(u8, source_file));
+    const expected = try canonicalFile(a, ns, file);
+    if (!equal(try canonicalFile(a, ns, decoded_file), expected)) return null;
+    const runs = headingElementChildren(body, nodes, button_id, 3, false) orelse return null;
+    if (!phonosClass(nodes[runs[0]], "span", "oo-ui-icon-volumeUp") or !headingLeafText(body, nodes[runs[0]], "") or
+        !phonosClass(nodes[runs[1]], "span", "oo-ui-labelElement-label") or
+        !phonosClass(nodes[runs[2]], "span", "oo-ui-indicatorElement-noIndicator") or !headingLeafText(body, nodes[runs[2]], "")) return null;
+    const label_node = nodes[runs[1]];
+    const inner = body[label_node.tag.end..label_node.inner_end orelse return null];
+    if (!equal(inner, caption_html)) return null;
+    const label = if (label_node.first_child == null) inner else child: {
+        const id = (headingElementChildren(body, nodes, runs[1], 1, false) orelse return null)[0];
+        const caption = nodes[id];
+        if (!phonosClass(caption, "span", "e-audio") or caption.attributes.attributes.len != 1 or caption.first_child != null) return null;
+        break :child body[caption.tag.end..caption.inner_end orelse return null];
+    };
+    if (label.len == 0 or std.mem.indexOfAny(u8, label, "&<>\r\n") != null) return null;
+    const attribution = nodes[(headingElementChildren(body, nodes, children[1], 1, false) orelse return null)[0]];
+    const title = attribution.attributes.get("title") orelse return null;
+    const link_file = (try fileHref(a, ns, attribution.attributes.get("href") orelse return null)) orelse return null;
+    if (!attribution.tag.is("a") or ns.ofTitle(title).id != 6 or !equal(try canonicalFile(a, ns, title), expected) or
+        !equal(link_file, expected) or !headingLeafText(body, attribution, "ⓘ")) return null;
+    return .{ .file = ns.ofTitle(expected).text, .language = lang, .caption_html = caption_html,
+        .caption = label, .accessible_name = name, .attribution_title = title, .attribution_text = "ⓘ" };
+}
+
+pub fn bindPhonos(a: A, source: []const u8, buttons: []const profile.PhonosButton) ![]const profile.SelectedPhonos {
+    if (source.len > max_response or buttons.len == 0) return &.{};
+    var pos: usize = 0;
+    var result: std.ArrayList(profile.SelectedPhonos) = .empty;
+    defer result.deinit(a);
+    while (std.mem.indexOfPos(u8, source, pos, "<span")) |start| {
+        pos = start + 5;
+        const tag = syntax.tagAt(source, start) orelse continue;
+        if (!tag.is("span") or tag.closing or tag.self_closing or std.mem.indexOf(u8, tag.attrs, "data-phonos-audio") == null) continue;
+        const attrs = try inventory(a, tag);
+        if (!equal(attrs.get("class") orelse "", "ext-phonos ext-phonos-PhonosButton")) continue;
+        if (result.items.len == buttons.len) return &.{};
+        const button = buttons[result.items.len];
+        const pair = syntax.matchingTag(source, tag) orelse return &.{};
+        if (attrs.attributes.len != 3 or !equal(attrs.get("data-phonos-audio") orelse "", button.file) or
+            !equal(attrs.get("lang") orelse "", button.language) or !equal(source[tag.end..pair.inner_end], button.caption_html)) return &.{};
+        try result.append(a, .{ .source = source[start..pair.end], .button = button });
+        pos = pair.end;
+    }
+    return if (result.items.len == buttons.len) try result.toOwnedSlice(a) else &.{};
+}
+
+pub fn selectedWrappedHeadingAlloc(a: A, ns: *const namespaces.Registry, html: []const u8,
+    ancestors: []const profile.ObservedStyleNode, page_title: []const u8) !?WrappedHeadingObservation {
+    if (ancestors.len == 0 or ancestors.len > 32) return null;
+    const envelope = try observedOuterPrefix(a, html, true);
+    const base = envelope.root_start orelse return null;
+    const opening = envelope.root_open_end orelse return null;
+    const limit = try sourceParentOwnedRootEnd(html, html[0..opening]);
+    const body = html[base..limit];
+    var original: std.ArrayList(ObservedSiblingNode) = .empty; defer original.deinit(a);
+    var end: usize = 0;
+    _ = try observedClassRootTokens(a, ns, body, &original, &end, false, envelope.root, true, true, true);
+    if (end != body.len) return null;
+    const nodes = original.items;
+    var found: ?usize = null;
+    for (nodes, 0..) |n,i| if (n.tag.is("h3") and equal(n.attributes.get("data-title") orelse "",page_title)) {
+        if (found != null) return null;
+        found = i;
+    };
+    const hi = found orelse return null;
+    const h = nodes[hi]; const inner = h.parent orelse return null; const outer = nodes[inner].parent orelse return null;
+    const section = nodes[outer].parent orelse return null;
+    if (!nodes[section].tag.is("section") or nodes[section].parent != 0 or
+        !nodes[outer].tag.is("div") or !nodes[inner].tag.is("div") or
+        (headingElementChildren( body, nodes, outer, 1, false) orelse return null)[0] != inner or
+        (headingElementChildren( body, nodes, inner, 1, false) orelse return null)[0] != hi) return null;
+    const language = h.attributes.get("data-lang") orelse return null;
+    const primary = h.attributes.get("id") orelse return null;
+    if (language.len == 0 or primary.len == 0) return null;
+    const title_children = (headingElementChildren(body,nodes,hi,2,false)) orelse return null;
+    const fallback_node = nodes[title_children[0]]; const group = nodes[title_children[1]];
+    const fallback = fallback_node.attributes.get("id") orelse return null;
+    if (!fallback_node.tag.is("span") or !equal(fallback_node.attributes.get("typeof") orelse "", "mw:FallbackId") or
+        fallback_node.attributes.attributes.len != 2 or !headingLeafText(body,fallback_node,"") or
+        fallback.len == 0 or equal(fallback, primary) or !group.tag.is("span")) return null;
+    if (!try headingAbsentFromContents(a, html, base, primary, fallback)) return null;
+    const runs = (headingElementChildren(body,nodes,title_children[1],3,false)) orelse return null;
+    const word = nodes[runs[0]]; const sub = nodes[runs[2]];
+    if (!word.tag.is("span") or !headingLeafText(body,word,page_title) or
+        !headingEntity(body,nodes[runs[1]]," ") or !sub.tag.is("sub")) return null;
+    const brackets = (headingElementChildren(body,nodes,runs[2],2,true)) orelse return null;
+    if (!headingEntity(body,nodes[brackets[0]],"[") or !headingEntity(body,nodes[brackets[1]],"]")) return null;
+    const left = nodes[brackets[0]]; const right = nodes[brackets[1]];
+    const left_close = syntax.tagAt(body,left.inner_end.?) orelse return null;
+    const right_close = syntax.tagAt(body,right.inner_end.?) orelse return null;
+    if (left.start != sub.tag.end or right_close.end != sub.inner_end.? or !equal(body[left_close.end..right.start],language)) return null;
+    const offset = ancestors.len-1;
+    const physical = (try observedArticleStyleNodes(a, ancestors, nodes)) orelse return null;
+    return .{ .nodes=physical,.body=@intCast(offset),.outer=@intCast(offset+outer),.inner=@intCast(offset+inner),
+        .heading=@intCast(offset+hi),.word=@intCast(offset+runs[0]),.sub=@intCast(offset+runs[2]),
+        .title=page_title,.language=language,.primary=primary,.fallback=fallback };
+}
+
+// Compare the original worker's source with the authenticated served owners.
+// Generated HTML ids/entity spans and transclusion metadata are never copied
+// into the expanded source. All authored attributes and text must match.
+fn headingSourceOpening(a: A, source: []const u8, cursor: *usize, witness: profile.ObservedStyleNode,
+    fields: []const []const u8) !bool {
+    while (cursor.* < source.len and std.ascii.isWhitespace(source[cursor.*])) cursor.* += 1;
+    const tag = syntax.tagAt(source, cursor.*) orelse return false;
+    if (tag.closing or tag.self_closing or !tag.is(witness.tag)) return false;
+    const actual = try inventory(a,tag);
+    if (actual.attributes.len != fields.len) return false;
+    for (fields) |name| {
+        const value = actual.get(name) orelse return false;
+        var matched = false;
+        for (witness.attributes) |attr| if (equal(attr.name,name)) {
+            matched = equal(attr.value,value); break;
+        };
+        if (!matched) return false;
+    }
+    cursor.*=tag.end;
+    return true;
+}
+fn headingSourceClose(source: []const u8, cursor: *usize, name: []const u8, blank: bool) bool {
+    if (blank) while (cursor.* < source.len and std.ascii.isWhitespace(source[cursor.*])) { cursor.* += 1; };
+    const tag=syntax.tagAt(source,cursor.*) orelse return false;
+    if (!tag.is(name) or !tag.closing or tag.self_closing or std.mem.trim(u8,tag.attrs," \t\r\n").len!=0) return false;
+    cursor.*=tag.end;
+    return true;
+}
+fn headingSourceText(source: []const u8, cursor: *usize, expected: []const u8) bool {
+    if (!std.mem.startsWith(u8,source[cursor.*..],expected)) return false;
+    cursor.*+=expected.len;
+    return true;
+}
+fn headingSourceAt(a: A, source: []const u8, start: usize, p: profile.WrappedHeadingRecipe) !?struct { end: usize, body_offset: usize } {
+    var pos=start;
+    if (!try headingSourceOpening(a,source,&pos,p.owners[0],&.{"class","title","style"}) or
+        !try headingSourceOpening(a,source,&pos,p.owners[1],&.{"class","style"}) or
+        !try headingSourceOpening(a,source,&pos,p.owners[2],&.{"data-lang","data-title","style"})) return null;
+    const body_offset = pos-start;
+    if (!try headingSourceOpening(a,source,&pos,p.owners[3],&.{"class"}) or
+        !try headingSourceOpening(a,source,&pos,p.owners[4],&.{"style"}) or
+        !headingSourceText(source,&pos,p.title) or !headingSourceClose(source,&pos,"span",false) or
+        !headingSourceText(source,&pos,"&#32;") or
+        !try headingSourceOpening(a,source,&pos,p.owners[5],&.{"style"}) or
+        !headingSourceText(source,&pos,"&#91;") or !headingSourceText(source,&pos,p.language) or
+        !headingSourceText(source,&pos,"&#93;") or !headingSourceClose(source,&pos,"sub",false) or
+        !headingSourceClose(source,&pos,"span",false) or !headingSourceClose(source,&pos,"h3",true) or
+        !headingSourceClose(source,&pos,"div",true) or !headingSourceClose(source,&pos,"div",true)) return null;
+    return .{.end=pos,.body_offset=body_offset};
+}
+pub fn bindWrappedHeading(a: A, source: []const u8, p: profile.WrappedHeadingRecipe) !?profile.SelectedWrappedHeading {
+    if (source.len == 0 or source.len > max_response or p.title.len == 0 or p.language.len == 0 or
+        std.mem.indexOfAny(u8,p.title,"<>&[{}]'|\r\n")!=null or std.mem.indexOfAny(u8,p.language,"<>&[{}]'|\r\n")!=null) return null;
+    var at:usize=0; var result:?profile.SelectedWrappedHeading=null;
+    while (std.mem.indexOfPos(u8,source,at,"<div")) |start| {
+        at=start+4;
+        const end=headingSourceAt(a,source,start,p) catch |err| switch(err){error.OutOfMemory=>return err,else=>continue};
+        if(end) |last| {
+            if (result!=null) return null;
+            result=.{.source=source[start..last.end],.body_offset=last.body_offset,.recipe=p};
+        }
+    }
+    return result;
+}
+
 pub fn tableDirectionRootAlloc(a: A, ns: *const namespaces.Registry, bytes: []const u8,
     page_id: u64, revision_id: u64, resources: TableDirectionResources) !TableDirectionRoot
 {
@@ -19677,7 +20105,8 @@ test "retained two-operation Ready input binds every listed ordinary and block F
     // stream reader as the normal Book fixtures; do not reinterpret each file
     // as one JSON value or alter its receipts and source contract.
     const projected = @embedFile("testdata/vi-context347/metadata/figure-sizing.json");
-    const captured = @embedFile("testdata/vi-context347/metadata/figure-sizing.raw.json");
+    const captured = try Testing.rawSizingBytes(a, .vi_context);
+    defer a.free(captured);
     var projection_slice: CombinedObservationTesting.Slice = .{ .bytes = projected };
     var raw_slice: CombinedObservationTesting.Slice = .{ .bytes = captured };
     var projection_input: sizing.StreamInput = .{ .context = &projection_slice, .read_at = CombinedObservationTesting.Slice.readAt, .size = projected.len };
@@ -27847,6 +28276,28 @@ test "SR WMF5 selected oldid wrapper retains actual GET and independent POST hea
     try std.testing.expectEqual(@as(u64, 711271), page.revision_id);
     // No page body/style/Book load, JavaScript, tooltip callback or Writer is run.
     try std.testing.expect(page.page_styles == null and page.authored_style_operations == null);
+}
+
+test "America selected oldid and supplied expansion have identical complete etymology tree HTML" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const get = @embedFile("testdata/sr-wmf5-america/get.html");
+    const post = @embedFile("testdata/sr-wmf5-america/post-response.json");
+    try std.testing.expect(digestMatches(get, "3a70a1c524897fc65a6de6ee1e981d96481d782dc6a9f3b935d923d81c11d155"));
+    try std.testing.expect(digestMatches(post, "c603d074ce5709e3cf5b52db23273392b5bdb9e2875f5e1de1348b9fa5f83dea"));
+    const root = try std.json.parseFromSliceLeaky(std.json.Value, a, post, .{});
+    const supplied = try string(try field(root, "parse"), "text");
+    const tag = "<div class=\"etytree NavFrame\"";
+    const get_at = std.mem.indexOf(u8, get, tag) orelse return error.TestUnexpectedResult;
+    const post_at = std.mem.indexOf(u8, supplied, tag) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 103048), get_at);
+    try std.testing.expectEqual(@as(usize, 8561), post_at);
+    const bytes = 1565;
+    try std.testing.expect(get.len - get_at >= bytes and supplied.len - post_at >= bytes);
+    const subtree = get[get_at..][0..bytes];
+    try std.testing.expectEqualSlices(u8, subtree, supplied[post_at..][0..bytes]);
+    try std.testing.expect(digestMatches(subtree, "fa2428c4898dcc7c3a0606b037eadabc4b240c6503583cd71c87957f69626403"));
 }
 
 test "SR WMF5 wrapper refuses crossed generation identity program and root operands" {

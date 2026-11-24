@@ -7024,7 +7024,9 @@ fn processMain(
         unchangedTableSourceProjection(codes.figure_sizing, raw_missing, source_missing, &direct_table_copy) else null;
     const final_source_projection: ?*const presentation_document.SourceElementProjection =
         if (numbered.source_element_projection) |*proof| proof else if (direct_table_projection) |*proof| proof else null;
-    const needs_source_fragments = native_source_class_proof != null or final_source_projection != null or pre_observation.scopes.len != 0 or
+    const selected_wrapped_heading = if (codes.table_styles) |profile| profile.selected_wrapped_heading != null else false;
+    const selected_phonos = if (codes.table_styles) |profile| profile.selected_phonos.len != 0 else false;
+    const needs_source_fragments = selected_wrapped_heading or selected_phonos or native_source_class_proof != null or final_source_projection != null or pre_observation.scopes.len != 0 or
         (if (codes.figure_sizing) |sizing| sizing.text_class_scope != null or sizing.resolve_image_map_no_link_fn != null else false) or
         (codes.table_styles != null and (heading_observation.page_root_wiki_table_openings.len != 0 or heading_observation.page_top_level_wiki_table_openings.len != 0 or heading_observation.page_static_paragraph_openings.len != 0 or heading_observation.page_static_example_openings.len != 0));
     const quote_cuts: PageQuoteCuts = if (needs_source_fragments)

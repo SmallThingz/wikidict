@@ -807,6 +807,8 @@ pub const HeadingObservation = struct {
 };
 
 const WorkSection = struct {
+    heading_style: ?types.SectionHeadingStyle = null,
+    expected_heading_pair: @FieldType(compiler.Block,"expected_heading_pair") = null,
     is_heading: bool = false,
     anchor: []const u8 = "",
     anchor_fallback: []const u8 = "",
@@ -1182,6 +1184,8 @@ const ValidateCompilerSpans = struct {
 };
 
 const Builder = struct {
+    heading_style: ?types.SectionHeadingStyle = null,
+    expected_heading_pair: @FieldType(compiler.Block,"expected_heading_pair") = null,
     is_heading: bool = false,
     heading_source_offset: ?usize = null,
     heading_authored_id: []const u8 = "",
@@ -1201,6 +1205,8 @@ const Builder = struct {
             .level = self.level,
             .title = self.title,
             .is_heading = self.is_heading,
+            .heading_style = self.heading_style,
+            .expected_heading_pair = self.expected_heading_pair,
             .heading_source_offset = self.heading_source_offset,
             .heading_authored_id = self.heading_authored_id,
             .title_spans = self.title_spans,
@@ -1249,6 +1255,8 @@ const Builder = struct {
                 try self.flush(rendered[section_start..i]);
                 self.started = true;
                 self.is_heading = true;
+                self.heading_style = item.section_heading_style;
+                self.expected_heading_pair = item.expected_heading_pair;
                 self.heading_source_offset = item.heading_source_offset;
                 self.heading_authored_id = item.heading_authored_id;
                 self.title_spans = item.spans;
@@ -1317,7 +1325,34 @@ fn bindFragmentNativeSourceClasses(renderer: *compiler.Renderer, fragment: Sourc
     renderer.native_source_class_range = range;
 }
 
+fn selectedFragmentOccurrence(fragment: SourceFragment, tracked: MissingText, source: []const u8) ?[]const u8 {
+    if (fragmentContentRoot(fragment, tracked) != .parser_output or tracked.lost_missing_range or tracked.generated_source != null) return null;
+    const range = fragment.parser_output_range.?;
+    const original = range.original_page orelse return null;
+    if (!std.mem.eql(u8, original, range.page)) return null;
+    const begin = std.math.sub(usize, @intFromPtr(source.ptr), @intFromPtr(original.ptr)) catch return null;
+    if (begin > original.len or source.len > original.len - begin or begin < range.start) return null;
+    const offset = begin - range.start;
+    if (offset > tracked.bytes.len or source.len > tracked.bytes.len - offset) return null;
+    const piece = tracked.bytes[offset..][0..source.len];
+    return if (std.mem.eql(u8, piece, source)) piece else null;
+}
+
 fn bindFragmentTextClassScope(renderer: *compiler.Renderer, fragment: SourceFragment, tracked: MissingText) void {
+    renderer.wrapped_heading_source = null;
+    renderer.phonos_fragment = null;
+    if (renderer.context.table_styles) |styles| {
+        if (styles.selected_wrapped_heading) |selected| renderer.wrapped_heading_source = selectedFragmentOccurrence(fragment, tracked, selected.source);
+        if (styles.selected_phonos.len != 0 and fragmentContentRoot(fragment, tracked) == .parser_output and !tracked.lost_missing_range and tracked.generated_source == null) {
+            const range = fragment.parser_output_range.?;
+            if (range.original_page) |original| {
+                if (std.mem.eql(u8, original, range.page) and range.start <= original.len and tracked.bytes.len <= original.len - range.start) {
+                    const input = original[range.start..][0..tracked.bytes.len];
+                    if (std.mem.eql(u8, input, tracked.bytes)) renderer.phonos_fragment = .{ .original = input, .projected = tracked.bytes };
+                }
+            }
+        }
+    }
     bindFragmentNativeSourceClasses(renderer, fragment, tracked);
     bindFragmentObservedImageMapSource(renderer, fragment, tracked);
     bindFragmentSourceElements(renderer, fragment, tracked);
@@ -2215,6 +2250,10 @@ pub fn compileClassifiedWithHeadingAnchorsAndSourceMediaRootAlloc(
         // The shared registry follows section headings and cell blocks in source order.
         if (section.is_heading) {
             const identity = try assign.identity(section.heading_source_offset, section.heading_authored_id, try compiler.plainText(a, section.title_spans));
+            if(section.expected_heading_pair)|expected| {
+                if (!std.mem.eql(u8,identity.anchor,expected.primary) or
+                    !std.mem.eql(u8,identity.anchor_fallback,expected.fallback)) return error.UncompiledPresentation;
+            }
             section.anchor = identity.anchor;
             section.anchor_fallback = identity.anchor_fallback;
         }
@@ -2258,7 +2297,7 @@ pub fn compileClassifiedWithHeadingAnchorsAndSourceMediaRootAlloc(
                 navigable = true;
             }
         }
-        if (visual_image or navigable or explained or advised or styled_self or styled or section.title_depth != 0 or section.title_list_path.len != 0) {
+        if (section.heading_style != null or visual_image or navigable or explained or advised or styled_self or styled or section.title_depth != 0 or section.title_list_path.len != 0) {
             const blocks = try a.alloc(compiler.Block, section.blocks.len + 1);
             blocks[0] = .{ .kind = .heading, .spans = section.title_spans, .level = section.level, .depth = section.title_depth, .list_path = section.title_list_path, .anchor = section.anchor, .anchor_fallback = section.anchor_fallback };
             @memcpy(blocks[1..], section.blocks);
@@ -10623,6 +10662,63 @@ test "quoted terminal dot lexical document preserves style actions codec and raw
     }
     const unresolved_target = [_]compiler.Span{.{ .kind = .link, .target = "{{missing}}", .text = "<", .provenance = .entity_literal }};
     try std.testing.expectError(error.UncompiledTemplate, validateSpans(a, &unresolved_target, null));
+}
+
+test "Inuktitut translation cells retain authored empty pairs and neighboring actions" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // Two cropped cells in the dated aasivaq translation table. The table
+    // delimiters and the sw/qu/en labels come from its static source templates.
+    // This fixture exercises stored cell parsing independently of expansion.
+    const source =
+        \\{|class="wikiObject" style="width:100%; text-align: left;"
+        \\|valign="top" width="50%"|
+        \\*[[ᔅᕙᐦᐃᓕᑐᑦ]]: [[]]
+        \\|valign="top" width="50%"|
+        \\*[[ᑮᓱᐊ]]: [[]]
+        \\*[[ᖃᓪᓗᓈᑎᑐᑦ]]: [[spider]]
+        \\|}
+    ;
+    const protected = try std.mem.replaceOwned(u8, a, source, "[[]]", "<nowiki>[[]]</nowiki>");
+    var actual_report: Fallbacks = .{};
+    var protected_report: Fallbacks = .{};
+    const bytes = try compileReportedAlloc(a, "aasivaq", .language, "Unclassified", "", source, null, &actual_report);
+    const expected = try compileReportedAlloc(a, "aasivaq", .language, "Unclassified", "", protected, null, &protected_report);
+    try std.testing.expect(actual_report.literal_markup and !protected_report.literal_markup);
+    try std.testing.expectEqualSlices(u8, expected, bytes);
+    const stored = try codec.decodeAlloc(a, bytes, "aasivaq", .language, .{ .code = "", .heading = "Unclassified" });
+    try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, stored));
+    const targets = [_][]const []const u8{ &.{"ᔅᕙᐦᐃᓕᑐᑦ"}, &.{ "ᑮᓱᐊ", "ᖃᓪᓗᓈᑎᑐᑦ", "spider" } };
+    var tables: usize = 0;
+    for (stored.entry.sections) |section| for (section.blocks) |block| {
+        const table = block.table orelse continue;
+        tables += 1;
+        try std.testing.expectEqual(@as(usize, 1), table.rows.len);
+        try std.testing.expectEqual(targets.len, table.rows[0].cells.len);
+        for (table.rows[0].cells, targets) |cell, actions| {
+            const simple: types.Block = .{ .kind = .paragraph, .spans = cell.spans };
+            const content = cell.blocks orelse &.{simple};
+            var next: usize = 0;
+            var placeholders: usize = 0;
+            for (content) |part| for (part.spans) |span| {
+                try std.testing.expect(std.mem.indexOf(u8, span.text, "[malformed link]") == null);
+                const empty_count = std.mem.count(u8, span.text, "[[]]");
+                if (empty_count != 0) {
+                    try std.testing.expect(span.kind == .text and span.target.len == 0);
+                    placeholders += empty_count;
+                }
+                if (span.kind == .link) {
+                    try std.testing.expect(next < actions.len);
+                    try std.testing.expectEqualStrings(actions[next], span.target);
+                    next += 1;
+                }
+            };
+            try std.testing.expectEqual(@as(usize, 1), placeholders);
+            try std.testing.expectEqual(actions.len, next);
+        }
+    };
+    try std.testing.expectEqual(@as(usize, 1), tables);
 }
 
 test "empty target source delimiters prevent synthetic table tokens through codec" {

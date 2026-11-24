@@ -85,6 +85,7 @@ fn configuration(a: A, text: []const u8, page_id: u64, revision_id: u64) !bool {
     return configurationForPage(a, text, page_id, revision_id, null);
 }
 const SelectedPage = struct { namespace_id: i32, title: []const u8, sr_wmf5_prelude: bool = false,
+    is_screen_prelude: bool = false,
     exterior: ?struct { wiki: []const u8, tags: *std.ArrayList([]const u8) } = null };
 fn configurationForPage(a: A, text: []const u8, page_id: u64, revision_id: u64, current_title: ?[]const u8) !bool {
     return configurationForSelectedPage(a, text, page_id, revision_id, current_title, null, "");
@@ -109,6 +110,7 @@ fn configurationForSelectedPage(a: A, text: []const u8, page_id: u64, revision_i
         break :program true;
     } else false;
     if (sr_wmf5 and at != 952) return invalid;
+    if (selected != null and selected.?.is_screen_prelude and at != 956) return invalid;
     if (at != 0) {
         if (!exterior_program and at != 952 and at != 956 and !(selected != null and at == 960)) return invalid;
         var digest: [32]u8 = undefined;
@@ -118,7 +120,13 @@ fn configurationForSelectedPage(a: A, text: []const u8, page_id: u64, revision_i
         // Complete observed preludes differ only in the literal wiki cookie
         // name (ru/wo/el/sr) and TOC availability class. Each closes the IIFE
         // before RLCONF; unknown programs remain rejected.
-        if (!exterior_program and !std.mem.eql(u8, &hash, "4596a0a448783bdf5cd823d3b017520464502eba17da6e0277049df0c171bf39") and
+        // This exact Icelandic program differs from the reviewed Serbian script
+        // only in its site cookie. The ordinary article stylesheet join binds
+        // the selected wiki, generator, class list and revision independently.
+        const is_screen_program = selected != null and selected.?.is_screen_prelude and
+            std.mem.eql(u8, &hash, "2b0ae9eb6125752f1f9cc44637490ceab85da7c39b5fb1d392e3fde2995856f0");
+        if (selected != null and selected.?.is_screen_prelude and !is_screen_program) return invalid;
+        if (!exterior_program and !is_screen_program and !std.mem.eql(u8, &hash, "4596a0a448783bdf5cd823d3b017520464502eba17da6e0277049df0c171bf39") and
             !std.mem.eql(u8, &hash, "296e5797ae51141a36d124508c23b7e0aeb2cb5be620e060fc6eb5aceb39cc89") and
             !std.mem.eql(u8, &hash, "4883bdb1c585b9440aa445aacdea8bdb5df146ca42bde57bd25862fffb71ed0f") and
             !std.mem.eql(u8, &hash, "ff0406678d57587b7409bfba7f818a44a9ec8dd418eb27da4b32823b3e19ed0d") and
@@ -128,6 +136,7 @@ fn configurationForSelectedPage(a: A, text: []const u8, page_id: u64, revision_i
             !std.mem.eql(u8, &hash, "f8b4a82d07b0c2847a010739493119441c8ce97437e68ba0dac16f921ee322a8") and
             !std.mem.eql(u8, &hash, "932b9910c9e926e55516112a7ce9644909c06c20035d794b10947a5eec4e3f94") and
             !std.mem.eql(u8, &hash, "e925dc8ae7861a33fd0b23132dbc9eeae57bba470d42e81320a4b43ed0a6a5e1") and
+            !(selected != null and std.mem.eql(u8, &hash, "6fd0a7ffa6553aafe70ba992a6f570ffa854338377eed5e58f2e635dfa099fa0")) and
             !(selected != null and std.mem.eql(u8, &hash, "65ec9c98e6764dbb12bc436514f1033a9cb2eb780783cd043398b237e6dc8d6b"))) return invalid;
         if (selected != null) {
             // Bind the observed static root to the complete retained prelude.
@@ -195,6 +204,13 @@ pub fn parseSelectedOldidAlloc(a: A, bytes: []const u8, page_id: u64, revision_i
 {
     return parseForSelectedPage(a, bytes, page_id, revision_id, null, .{ .namespace_id = namespace_id, .title = title });
 }
+pub fn parseStylesheetOldidAlloc(a: A, bytes: []const u8, page_id: u64, revision_id: u64,
+    title: []const u8, wiki: []const u8, generator: []const u8) !Observation
+{
+    return parseForSelectedPage(a, bytes, page_id, revision_id, null, .{ .namespace_id = 0, .title = title,
+        .is_screen_prelude = std.mem.eql(u8, wiki, "iswiktionary") and std.mem.eql(u8, generator, "MediaWiki 1.48.0-wmf.5") });
+}
+
 // The SR WMF5 Book path requires its exact observed static program. Older
 // APIs retain their existing prelude choices and direct-assignment behavior.
 pub fn parseSrWmf5SelectedOldidAlloc(a: A, bytes: []const u8, page_id: u64, revision_id: u64,
@@ -242,9 +258,11 @@ fn parseForSelectedPage(a: A, bytes: []const u8, page_id: u64, revision_id: u64,
         if (tag.is("html")) { if (html_seen or depth != 0) return invalid; html_seen = true; }
         if (tag.is("head")) { if (head_seen or depth != 1 or !stack[0].tag.is("html")) return invalid; head_seen = true; }
         if (tag.is("body")) { if (body_seen or !head_seen or depth != 1 or !stack[0].tag.is("html")) return invalid; body_seen = true; }
-        if (selected != null and selected.?.exterior != null and !tag.closing and tag.is("meta") and
+        if (selected != null and (selected.?.exterior != null or selected.?.is_screen_prelude) and !tag.closing and tag.is("meta") and
             depth == 2 and stack[1].tag.is("head") and same(tag.attr("name") orelse "", "generator")) {
-            if (exterior_generator or !same(tag.attr("content") orelse "", "MediaWiki 1.48.0-wmf.5")) return invalid;
+            const generator = tag.attr("content") orelse "";
+            if (exterior_generator or !same(generator, "MediaWiki 1.48.0-wmf.5")) return invalid;
+            if (selected.?.is_screen_prelude and !std.mem.eql(u8, generator, "MediaWiki 1.48.0-wmf.5")) return invalid;
             exterior_generator = true;
         }
         if (tag.is("noscript") or tag.is("template")) return invalid;
@@ -275,6 +293,7 @@ fn parseForSelectedPage(a: A, bytes: []const u8, page_id: u64, revision_id: u64,
         stack[depth] = .{ .tag = tag, .attrs = attrs }; depth += 1;
         if (tag.is("div") and hasClass(attrs.classes, "mw-parser-output")) {
             if (tag.end != bytes.len or !config_seen or !html_seen or !body_seen or depth < 3 or !stack[0].tag.is("html") or !stack[1].tag.is("body")) return invalid;
+            if (selected != null and selected.?.is_screen_prelude and !exterior_generator) return invalid;
             if (selected) |record| if (record.exterior) |exterior| {
                 if (!exterior_generator) return invalid;
                 for (stack[0..depth]) |node| try exterior.tags.append(a, node.tag.name);
@@ -604,4 +623,32 @@ test "selected SR WMF5 oldid prefix retains actual program and refuses crossed o
     try std.testing.expectError(invalid, configurationForSelectedPage(a, script[marker..], 11827, 711271, null, selected, html_class));
     const post = @embedFile("testdata/sr-wmf5-america/post-config.js");
     try std.testing.expectError(invalid, configurationForSelectedPage(a, post, 11827, 711271, null, selected, html_class));
+}
+
+
+test "observed Icelandic article stylesheet requires its exact selected revision generator and reviewed site prelude" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+    var input: std.Io.Reader = .fixed(@embedFile("testdata/is-authoritative-table/p888-prefix.html.gz"));
+    var inflater: std.compress.flate.Decompress = .init(&input, .gzip, &.{});
+    const prefix = try inflater.reader.allocRemaining(alloc, .limited(64 * 1024));
+    try std.testing.expect(inflater.err == null and inflater.state == .end);
+    const name = "Autoversicherung";
+    const generator = "MediaWiki 1.48.0-wmf.5";
+    const accepted = try parseStylesheetOldidAlloc(alloc, prefix, 888, 309701, name, "iswiktionary", generator);
+    try std.testing.expectEqualStrings("is", accepted.root_language);
+    try std.testing.expectError(invalid, parseSelectedOldidAlloc(alloc, prefix, 888, 309701, 0, name));
+    try std.testing.expectError(invalid, parseStylesheetOldidAlloc(alloc, prefix, 888, 309701, name, "elwiktionary", generator));
+    try std.testing.expectError(invalid, parseStylesheetOldidAlloc(alloc, prefix, 888, 309701, name, "iswiktionary", "MediaWiki 1.48.0-wmf.4"));
+    try std.testing.expectError(invalid, parseStylesheetOldidAlloc(alloc, prefix, 888, 309701, name, "ISwiktionary", generator));
+    try std.testing.expectError(invalid, parseStylesheetOldidAlloc(alloc, prefix, 888, 309702, name, "iswiktionary", generator));
+    for ([_][2][]const u8{ .{ "iswiktionarymwclientpreferences", "xxwiktionarymwclientpreferences" },
+        .{ "iswiktionarymwclientpreferences", "srwiktionarymwclientpreferences" },
+        .{ "client-nojs vector-feature", "client-nojs changed vector-feature" }, .{ generator, "MediaWiki 1.48.0-wmf.4" },
+        .{ generator, "MediaWiki 1.48.0-WMF.5" } }) |change| {
+        const altered = try std.mem.replaceOwned(u8, alloc, prefix, change[0], change[1]);
+        try std.testing.expect(!std.mem.eql(u8, prefix, altered));
+        try std.testing.expectError(invalid, parseStylesheetOldidAlloc(alloc, altered, 888, 309701, name, "iswiktionary", generator));
+    }
 }

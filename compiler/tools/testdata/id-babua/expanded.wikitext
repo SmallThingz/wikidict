@@ -1,0 +1,19 @@
+==<span class="lang" data-code="bug" data-name="Bahasa Bugis">Bahasa Bugis</span>==
+<div class="headword-wrapper" title="Penjabaran untuk &quot;babua&quot; dalam bahasa Bugis" style="margin-top:0.4rem; border-top:1px dashed var(--border-color-base); color:var(--color-base); overflow:visible; overflow-y:clip; display:block;">
+  <div class="headword-inner" style="padding-top: 1.25rem; color: var(--color-subtle);">
+    <h3 data-lang="bug" data-title="babua" style="padding:0; margin:0; position:relative;">
+      <span class="headword-text"><span style="font-weight: normal; line-height:1.4em; font-size: 1.4em; color: var(--faded-font, #333);">babua</span>&#32;<sub style="font-size:0.7em; font-weight: normal; color: #888888;">&#91;bug&#93;</sub></span>
+    </h3>
+  </div>
+</div>
+[[Kategori:Uji coba tata letak entri 2025]]
+: 
+: <span class="ext-phonos ext-phonos-PhonosButton" lang="bug" data-phonos-audio="LL-Q33190 (bug)-Iripseudocorus-Babbua.wav"><span class="e-audio">Suara</span></span>[[Kategori:bug:Istilah dengan tautan audio]]
+
+<templatestyles src="Template:-subjudul-/style.css"/><div class="section-header section-header-def">
+; <span class="section-header-img">[[File:Codex icon tag color-progressive.svg|12px|link=]]</span>Nomina&#32;[[Kategori:bug:Lema|babua]][[Kategori:bug:Nomina|babua]]</div>
+# [[perut]]
+#: <div class="usex-item"><div class="h-usage-example"><i class="Latn mention e-example" lang="bug">Maloppo '''babua'''na amboku.</i><dl><dd><span class="e-translation">'''Perut''' bapak saya besar.</span></dd></dl></div>[[Category:bug:Istilah dengan contoh kalimat|BABUA]]</div>
+
+[[Kategori:WikiTutur Daring Umum 11 Februari 2024]]
+[[Kategori:WikiTutur - Bugis]]
