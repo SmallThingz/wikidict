@@ -130,13 +130,24 @@ export async function verifyPhonos(page,bundle,asset,stylesheet,description=fals
     const icon=el.querySelector('img');
     await icon.decode();
     const {width,height}=icon.getBoundingClientRect(),style=getComputedStyle(el);
-    return {width,height,em:parseFloat(style.fontSize),margin:getComputedStyle(el.querySelector('.phonos-label')).marginInlineStart,
+    const baseline=document.createElement('span');
+    baseline.style.cssText='display:inline-block;width:0;height:0;margin:0;padding:0;vertical-align:baseline';
+    const label=el.querySelector('.phonos-label'),before=label.getBoundingClientRect();
+    label.prepend(baseline);
+    const iconCSS=getComputedStyle(icon),iconBaseline=icon.getBoundingClientRect().bottom-baseline.getBoundingClientRect().bottom;
+    baseline.remove();
+    return {width,height,iconBaseline,marginEdges:[iconCSS.marginTop,iconCSS.marginRight,iconCSS.marginBottom,iconCSS.marginLeft],
+      radius:iconCSS.borderRadius,labelPositionStable:before.y===label.getBoundingClientRect().y,em:parseFloat(style.fontSize),margin:getComputedStyle(el.querySelector('.phonos-label')).marginInlineStart,
       iconWidth:icon.naturalWidth,title:el.title,tabIndex:el.tabIndex,independent:!el.closest('a')};
   });
   // Chromium reports painted CSS boxes on a 1/64-pixel grid.
   assert.ok(Math.abs(geometry.width-geometry.em)<=1/64);
   assert.equal(geometry.height,geometry.width);
   assert.equal(geometry.margin,'2px');
+  assert.deepEqual(geometry.marginEdges,Array(4).fill('0px'));
+  assert.equal(geometry.radius,'0px');
+  assert.ok(geometry.labelPositionStable);
+  assert.ok(Math.abs(geometry.iconBaseline-geometry.em*.1)<=1/32,JSON.stringify(geometry));
   assert.equal(geometry.iconWidth,20);
   assert.equal(geometry.title,'Putar audio');
   assert.equal(geometry.tabIndex,0);
@@ -209,11 +220,22 @@ async function verifyDescription(page,bytes,metadata){
       });
       const title=document.querySelector('.compiled-heading-title'),nodes=[...title.querySelectorAll('*')];
       const rgb=text=>getComputedStyle(nodes.find(el=>el.childElementCount===0&&el.textContent.trim()===text)).color;
-      return {bodyOrder,sourceHeading,fragments,description,nested:bodies.length===2&&bodies[0].contains(bodies[1]),word:rgb('babua'),sub:['[','bug',']'].map(rgb),frame:getComputedStyle(document.querySelector('.compiled-heading-outer')).borderTopColor};
+      const heading=label=>nodes.find(el=>el.childElementCount===0&&el.textContent===label);
+      const weights=['babua',' ','[','bug',']'].map(label=>getComputedStyle(heading(label)).fontWeight);
+      const sense=leaf('perut').closest('li'),outer=bodies[0];
+      const parentage=!!sense&&outer.closest('dd')?.parentElement?.parentElement===sense&&sense.parentElement.tagName==='OL';
+      const definitionLeft=leaf('perut').getBoundingClientRect().left,bodyLeft=outer.getBoundingClientRect().left;
+      return {weights,parentage,definitionLeft,bodyLeft,bodyOrder,sourceHeading,fragments,description,nested:bodies.length===2&&bodies[0].contains(bodies[1]),word:rgb('babua'),sub:['[','bug',']'].map(rgb),frame:getComputedStyle(document.querySelector('.compiled-heading-outer')).borderTopColor};
     },theme);
     const dark=theme==='dark';
     assert.deepEqual(result.bodyOrder,['heading','audio','info','term','definition','example']);
     assert.ok(result.fragments);
+    const accessibleHeading=page.getByRole('heading',{level:3,name:'babua [bug]',exact:true});
+    assert.equal(await accessibleHeading.count(),1);
+    assert.deepEqual(result.weights,['400','700','400','400','400']);
+    assert.ok(result.parentage);
+    assert.ok(result.definitionLeft>result.sourceHeading.left);
+    assert.ok(Math.abs(result.bodyLeft-result.definitionLeft)<1/32,JSON.stringify(result));
     assert.ok(Math.abs(result.sourceHeading.left-result.sourceHeading.containerLeft)<1/64);
     assert.ok(Math.abs(result.sourceHeading.right-result.sourceHeading.containerRight)<1/64);
     assert.ok(Math.abs(result.sourceHeading.labelLeft-result.sourceHeading.left)<1/64);
@@ -233,6 +255,13 @@ async function verifyDescription(page,bytes,metadata){
     assert.equal(result.description[1].text.trim(),'Perut bapak saya besar.');
     states[theme]=result;
   }
+  const session=await page.context().newCDPSession(page);
+  try{
+    const {nodes}=await session.send('Accessibility.getFullAXTree');
+    const heading=nodes.find(n=>!n.ignored&&n.role?.value==='heading'&&n.name?.value==='babua [bug]');
+    assert.ok(heading,JSON.stringify(nodes.filter(n=>n.role?.value==='heading').map(n=>n.name?.value)));
+    assert.equal(heading.properties.find(p=>p.name==='level')?.value.value,3);
+  }finally{await session.detach();}
   const ink=Buffer.from('#e0e0e0'),at=bytes.indexOf(ink);
   assert.ok(at>=0);
   const malformed=Buffer.from(bytes);malformed[at+1]=71;

@@ -32,7 +32,7 @@
 .phonos-control>button {display:inline;vertical-align:baseline;margin:0;padding:0;min-height:22px;min-width:0;border:0;border-radius:0;background:transparent;color:inherit;font:inherit;user-select:auto}
 .phonos-control>button:hover:not(:disabled),.phonos-control[data-media-state="playing"]>button {background:var(--background-color-progressive-subtle,#e8eeff);color:var(--color-base,#202122)}
 .phonos-control[data-media-state="error"]>button,.phonos-control[data-media-state="error"]>button:hover {background:var(--background-color-disabled-subtle,#eaecf0);color:var(--color-base,#202122)}
-.phonos-control>button>img {position:relative;display:inline-block;width:1em;height:1em;min-width:0;min-height:0;top:.1em}
+.phonos-control>button>img {position:relative;display:inline-block;width:1em;height:1em;min-width:0;min-height:0;top:.1em;margin:0;border-radius:0;vertical-align:baseline}
 .phonos-label {display:inline-block;font-weight:normal;margin-inline-start:2px}
 .phonos-control [data-focus="authored_none"]:focus-visible,.inline-audio-control [data-focus="authored_none"]:focus-visible {outline:none}
 .phonos-control [data-focus="ua_auto"]:focus-visible,.inline-audio-control [data-focus="ua_auto"]:focus-visible {outline:auto var(--audio-outline,Highlight)}
@@ -60,3 +60,7 @@ summary:has(>.compiled-heading-outer)::after {position:absolute;inset-inline-end
 .table-disclosure>button {font:inherit;color:inherit;margin:0;padding:0;border:0;border-radius:0;vertical-align:baseline;cursor:pointer}
 .table-disclosure>button:hover {text-decoration:underline}
 .table-disclosure>button:focus-visible {outline:auto}
+
+summary .heading-label {font:inherit;color:inherit;margin:0}
+.compiled-sense-list,.compiled-sense-details {margin-block:0}
+.compiled-sense-details>dd {margin:0}

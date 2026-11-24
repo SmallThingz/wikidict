@@ -223,7 +223,7 @@ function applyInlineTextStyle(element,span){
     }else element.style.lineHeight=computed({font_scale_basis:basis,value:factor*scale});
   }
 }
-export function spans(values = [], onLink = () => {}, preserve = false, explanations = null, withinSummary = false, cellBackground = null, rubyFontContext = null, darkReadingSurface = null) {
+export function spans(values = [], onLink = () => {}, preserve = false, explanations = null, withinSummary = false, cellBackground = null, rubyFontContext = null, darkReadingSurface = null, normalizedEmphasis = false) {
   for(const value of values)if(value.target_fragment!=null){if(value.kind!=='link')throw Error('Invalid target fragment kind');linkTargetParts(value.target,value.target_fragment);}
   if (!preserve && values.some(isPoem)) return poemSpans(values,onLink,explanations,withinSummary,cellBackground);
   const fragment = document.createDocumentFragment();
@@ -293,7 +293,7 @@ export function spans(values = [], onLink = () => {}, preserve = false, explanat
       applyInlineBox(el,span.inline_box_group);
     }
     applyInlineTextStyle(el,span);
-    if(rubyFontContext){el.style.fontWeight=span.bold?'bold':'normal';el.style.fontStyle=span.italic?'italic':'normal';}
+    if(rubyFontContext||normalizedEmphasis){el.style.fontWeight=span.bold?'bold':'normal';el.style.fontStyle=span.italic?'italic':'normal';}
     if(span.image){const image=inlineImageElement(span.image,explanations?.inlineImage,{sizing:explanations?.figureSizing,figureImage:explanations?.figureImage,intrinsic_size:explanations?.figureIntrinsicSize});el.append(span.image.map?mappedImage(image,span.image,onLink,explanations):image);}
     colorSpan(el,span);
     if(!canonicalRGB(span.foreground)&&inkFor(span)&&((span.kind==='link'&&(span.target||span.target_fragment))||(span.kind==='external_link'&&safeURL(span.target))))el.style.textDecoration='underline';
@@ -776,18 +776,21 @@ function visibleBlock(block){
 function appendBlocks(parent,values,render){
   const created=[];
   let lists=[];
-  for(const block of values){
+  for(const [index,block] of values.entries()){
     const visible=visibleBlock(block);
     const path=block.list_path??block.path??'';
-    if(block.kind==='list_item'){
+    const next=values[index+1],nextPath=next?.list_path??next?.path??'';
+    const hasChild=nextPath.length>path.length&&nextPath.startsWith(path)&&['definition','example','quotation','list_item','list_detail'].includes(next.kind);
+    const sense=block.kind==='definition'&&hasChild&&/^[*#:;]*#$/.test(path)&&/^[1-9]\d*$/.test(block.number||'')&&Number(block.number)<=2147483647;
+    if(block.kind==='list_item'||sense){
       const key=/^[*#:;]*[*#]$/.test(path)?path:(block.number?'#':'*');
-      let at=lists.findIndex(list=>list.path===key);
+      let at=lists.findIndex(list=>list.path===key&&list.sense===sense);
       if(at<0){
-        while(lists.length&&!key.startsWith(lists.at(-1).path))lists.pop();
-        const owner=lists.at(-1)?.item||parent,list=node(key.endsWith('#')?'ol':'ul',null,'compiled-list');
+        while(lists.length&&(lists.at(-1).path===key||!key.startsWith(lists.at(-1).path)))lists.pop();
+        const owner=lists.at(-1)?.item||parent,list=node(key.endsWith('#')?'ol':'ul',null,sense?'compiled-sense-list':'compiled-list');
         // Retain list semantics when custom visible markers suppress native markers.
         list.setAttribute('role','list');owner.append(list);created.push(list);
-        lists.push({path:key,list,item:null});at=lists.length-1;
+        lists.push({path:key,list,item:null,sense});at=lists.length-1;
       }
       lists.length=at+1;
       const current=lists[at],item=node('li',null,'compiled-list-item');
@@ -797,16 +800,28 @@ function appendBlocks(parent,values,render){
       }
       if(visible){
         const view=render(block);
+        if(sense){
+          view.querySelector(':scope > .prefix')?.remove();
+          if(!block.style?.margins)view.style.removeProperty('margin-inline-start');
+        }
         if(!block.number)view.querySelector(':scope > .prefix')?.setAttribute('aria-hidden','true');
         item.append(view);
       }
       current.list.append(item);current.item=item;
     }else{
-      const continuation=block.kind==='list_detail'?/^([*#:;]*[*#]):+$/.exec(path):null;
+      const continuation=['list_detail','example','quotation'].includes(block.kind)?/^([*#:;]*[*#]):+$/.exec(path):null;
       const at=continuation?lists.findIndex(list=>list.path===continuation[1]):-1;
       if(at>=0&&lists[at].item){
         lists.length=at+1;
-        if(visible){const view=render(block);view.querySelector(':scope > .prefix')?.setAttribute('aria-hidden','true');lists[at].item.append(view);}
+        if(visible){
+          const view=render(block),item=lists[at].item;
+          view.querySelector(':scope > .prefix')?.setAttribute('aria-hidden','true');
+          if(lists[at].sense&&block.description_body){
+            let details=item.lastElementChild;
+            if(details?.tagName!=='DL'){details=node('dl',null,'compiled-sense-details');item.append(details);}
+            const description=node('dd');description.append(view);details.append(description);
+          }else item.append(view);
+        }
       }else{lists=[];if(visible)parent.append(render(block));}
     }
   }
@@ -1054,9 +1069,13 @@ export function renderEntry(entry, onLink, settings = {}, mediaView = () => null
   const title = node('h1'); title.append(entry.display_title?.length?spans(entry.display_title,followLink,false,explanations):document.createTextNode(entry.title)); root.append(title);
   if(entry.redirect){const r=entry.redirect;root.append(node('p',(r.followed?'Redirected from '+r.source_title+' to ':'Redirect to ')+r.target_title+(r.fragment?'#'+r.fragment:''),'entry-redirect'));}
   if(entry.alias&&entry.redirect?.followed){const a=entry.alias;root.append(node('p','Redirect to '+a.target_title+(a.fragment?'#'+a.fragment:''),'entry-alias'));}
-  function fold(title, open=false, rich=null, depth=0) {
+  function fold(title, open=false, rich=null, depth=0, level=0, normalizedEmphasis=false) {
     const el=node('details'),summary=node('summary',rich?null:title);el.open=open;
-    if(rich){const label=node('span',null,'heading-label');if(depth>0){label.style.display='inline-block';label.style.marginInlineStart=`${Math.min(depth,8)*.45}rem`;}label.append(spans(rich,followLink,false,explanations,true));summary.append(label);}
+    if(rich){const authoredLevel=Number.isInteger(level)&&level>=1&&level<=6;
+      const label=node(authoredLevel?'h'+level:'span',null,'heading-label');
+      // Preserve the original title spacing when styled leaf runs become separate AX nodes.
+      if(authoredLevel)label.setAttribute('aria-label',inlineText(rich,'\n').trim());
+      if(depth>0){label.style.display='inline-block';label.style.marginInlineStart=`${Math.min(depth,8)*.45}rem`;}label.append(spans(rich,followLink,false,explanations,true,null,null,null,normalizedEmphasis));summary.append(label);}
     el.append(summary);return el;
   }
   if (entry.preamble_spans?.length) { const preamble=fold('About this entry',entry.kind==='alias'||!settings.collapseOtherSections);preamble.append(spans(entry.preamble_spans,followLink,false,explanations));root.append(preamble); }
@@ -1066,7 +1085,7 @@ export function renderEntry(entry, onLink, settings = {}, mediaView = () => null
     const meaning=section.blocks.some(containsDefinition);
     const expanded=meaning || (section.title.startsWith('Pronunciation')?!settings.collapsePronunciation:section.title.startsWith('Etymology')?!settings.collapseEtymology:!settings.collapseOtherSections);
     const companion=sectionHeadingCompanion(section);
-    const el=fold(section.title===entry.language?'Overview':section.title||'Notes',expanded,companion?.spans,companion?.depth);
+    const el=fold(section.title===entry.language?'Overview':section.title||'Notes',expanded,companion?.spans,companion?.depth,section.level,!!section.heading_style?.font);
     if(section.heading_style){
       validateWrappedHeading(section);
       applyWrappedHeading(el.querySelector('summary'),section.heading_style);
