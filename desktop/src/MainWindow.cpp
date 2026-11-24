@@ -5681,7 +5681,31 @@ bool MainWindow::refreshReading() {
     }
     // A new complete Reading composition also recovers a previous disabled
     // failure; it does not inherit that failed transaction's layout state.
-    document->setLayoutEnabled(true);
+    {
+        bool reserveScrollBar = false;
+        if (browser->isVisible() && browser->lineWrapMode() == QTextEdit::WidgetWidth
+            && browser->verticalScrollBarPolicy() == Qt::ScrollBarAsNeeded
+            && !browser->verticalScrollBar()->isVisible()) {
+            // Start a tall table at the viewport width it will use once Qt
+            // displays its scrollbar. Qt still decides the final scroll range.
+            for (auto *frame : document->rootFrame()->childFrames()) {
+                auto *table = qobject_cast<QTextTable *>(frame);
+                if (table && table->rows() > browser->viewport()->height()) {
+                    reserveScrollBar = true;
+                    break;
+                }
+            }
+        }
+        const auto restorePolicy = qScopeGuard([browser, reserveScrollBar] {
+            if (reserveScrollBar && browser && browser->verticalScrollBarPolicy() == Qt::ScrollBarAlwaysOn)
+                browser->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+        });
+        if (reserveScrollBar) {
+            browser->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOn);
+            CompiledContent::require(sameSource());
+        }
+        document->setLayoutEnabled(true);
+    }
     CompiledContent::require(sameSource());
     layout->documentSize();
     CompiledContent::require(sameSource());
