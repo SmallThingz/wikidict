@@ -161,3 +161,57 @@ environment metadata and validation receipts are in `.tmp/local-environment.json
 and `.tmp/local-build/`. The reconciled RD job records and selected original
 inputs are in `.tmp/rd-reconciliation.md` and `.tmp/rd-originals/`. These local
 files are intentionally excluded from Git; the original RD corpus is retained.
+
+### Continuing original-source qualification
+
+The completion target remains all 198 original editions and faithful rendering
+on the supported clients. The current generated inventory is still 185/198;
+scoped Writer or UI passes do not close a whole edition. The nine-seat RD/DC
+review council remains active with whole-task completion open. Its current
+receipts and owners are recorded in `.tmp/completion-council/parent-live.json`.
+
+R17's original Hungarian Writer, reference comparison and codec passed and
+exported a fresh member with SHA-256
+`83a15b666db909aa3a95d5f443e6bef72c1fe61b9dc7be233833c2d677f1a33d`.
+The local browser imported that member and verified one accessible `Tmax`
+action, its subscript and clipped explanation, horizontal pan and one Enter
+lookup in each combination of light/dark and 340/1100-pixel widths. The old
+two-action member remains a negative control. Full Hungarian table fidelity
+and whole-edition qualification remain separate. The original Chinese action
+repair also passed a fresh Writer/readback and browser action comparison.
+
+R18's complete Kurdish table method reached its 4 GiB sampled PSS limit after
+520.739 seconds, with child cleanup confirmed. Its source and runtime pins
+remained unchanged. A separate finite probe of the same executable measured
+eight completed calls to each of two functions at the first table-cell loop.
+Nested-font queries retained 516,096–520,192 bytes per sampled call, while text
+resolution retained 16,384–20,480 bytes. These are resident PSS deltas, not
+allocation totals or transient peaks. The probe deliberately stopped its own
+child after the sample budget and is not a passing full-method result.
+
+The earlier focus-scratch repair has an independent sensitivity check. The
+same corrected helper passes on the repaired source, while the old production
+function returns typed `OutOfMemory` on its initial query inside the exact
+2 MiB scratch bound. The old-function control used a smaller selected test
+executable, so its process timing and PSS are not a matched performance ratio.
+Keep the closed receipts under `.tmp/r14-ku-old-control/` and the finite probe
+under `.tmp/completion-council/KU-performance/r18-owned-query-probe/`.
+
+The independently joined native scan checkpoint covers 103 of the 185 generated
+seals, with 400,101 attempted layouts and 306 refusals on the original runtime.
+Private repair results have their own runtime identities and must not be mixed
+into those seal receipts. Repeated browser checks also exposed intermittent
+history loss after a cold reopen; earlier intermittent passes do not close it.
+The latest six-case Android device run passed one case, retained five failures,
+verified the protected dictionary/preferences bytes and restored the prior
+foreground application. These findings keep application acceptance open.
+
+The next local candidate, R19, combines reviewed Malagasy/Thai source-custody
+repairs, a responsive-layout format extension and the Babua mutation-test
+correction. Its 3,194-file manifest is
+`915c8c39ca3b9f73d5b95d1934409749ed7562389f240621217e865dfcd1ef44`.
+Qualification is in progress; it is not integrated production source. The new
+responsive capability uses DPRa global bit 24. The earlier bit-21 proposal was
+withdrawn because Android already uses bits 21 and 22 for bottom alignment.
+Reserved bit 23 remains rejected. Preserve the allocation and legacy-format
+controls when combining the client candidates. No release is published.
