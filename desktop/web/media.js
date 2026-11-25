@@ -8,7 +8,12 @@ const releaseMedia=()=>{const next=mediaWaiters.shift();if(next)next();else acti
 export async function trimMedia(mb){const cache=await caches.open(CACHE),keys=await cache.keys();let total=0;for(let i=keys.length-1;i>=0;i--){const r=await cache.match(keys[i]);total+=(await r.blob()).size;if(total>mb*1024*1024)await cache.delete(keys[i]);}}
 export async function clearMedia(){await caches.delete(CACHE);}
 export function mediaView(media,settings,sourceEdition,canonicalIdentity=false){
- const root=document.createElement('details'),summary=document.createElement('summary');summary.textContent=media.caption||media.file;root.append(summary);
+ const root=document.createElement('details'),summary=document.createElement('summary');
+ const label=document.createElement('span');
+ label.className='heading-label';
+ label.textContent=media.caption||media.file;
+ summary.append(label);
+ root.append(summary);
  const allowed=media.kind==='image'?settings.allowImages:settings.allowAudio;
  if(!allowed){const note=document.createElement('small');note.textContent='Enable online '+(media.kind==='image'?'images':'audio')+' in Settings.';root.append(note);return root;}
  let loaded=false;
