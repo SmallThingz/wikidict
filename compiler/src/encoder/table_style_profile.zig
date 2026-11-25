@@ -52,7 +52,7 @@ pub const CellResolution = struct { style: ?types.CellStyle, background: ?[]cons
 const max_css_bytes = 1024 * 1024;
 const max_rules = 4096;
 const Target = enum { element, table, cell, th, td, other };
-const Property = enum { background, border, corner_radii, collapse, margins, margin_top, margin_right, margin_bottom, margin_left, padding, text_align, float_side, width, min_width, clear, box_sizing, layout_reset, display, vertical_align, line_height, list_style, font_size, text_color, cell_opacity, other };
+const Property = enum { background, border, corner_radii, collapse, margins, margin_top, margin_right, margin_bottom, margin_left, padding, padding_top, padding_right, padding_bottom, padding_left, text_align, float_side, width, min_width, clear, box_sizing, layout_reset, display, vertical_align, line_height, list_style, font_size, text_color, cell_opacity, other };
 const Value = union(enum) {
     color: []const u8,
     no_background,
@@ -135,6 +135,11 @@ const Winners = struct {
         self.slots[index] = .{ .value = if (conditional) .unsupported else declaration.value, .priority = next };
     }
     fn value(self: Winners, property: Property) ?Value {
+        if (property == .padding) {
+            const padding = resolvedPadding(self);
+            if (padding.unresolved) return .unsupported;
+            return if (padding.value) |known| .{ .edges = known } else null;
+        }
         if (property == .border) {
             const border = self.borders.result();
             if (border.unresolved) return .unsupported;
@@ -152,16 +157,67 @@ const Winners = struct {
         if (self.value(.border)) |border| if (border == .unsupported) return true;
         for (self.slots, 0..) |slot, index| {
             const property: Property = @enumFromInt(index);
-            if (property == .margins or marginEdge(property) != null) continue;
+            if (property == .margins or marginEdge(property) != null or
+                property == .padding or paddingEdge(property) != null) continue;
             if (slot) |winner| {
                 if (winner.value == .unsupported) return true;
                 if (property == .font_size and !font_size_consumed) return true;
             }
         }
-        return resolvedMargins(self).unresolved;
+        return resolvedMargins(self).unresolved or resolvedPadding(self).unresolved;
     }
 };
 
+
+// Table padding longhands participate independently in the existing cascade.
+// Cell longhands remain unrepresented: an omitted side cannot erase the
+// separate legacy cell-padding hint without a complete source basis.
+fn paddingEdge(property: Property) ?usize {
+    return switch (property) { .padding_top => 0, .padding_right => 1, .padding_bottom => 2, .padding_left => 3, else => null };
+}
+const PaddingResolution = struct { value: ?types.StyleEdges = null, unresolved: bool = false };
+fn resolvedPadding(winners: Winners) PaddingResolution {
+    var values: [4]types.StyleLength = @splat(.{ .unit = .px, .value = 0 });
+    var seen = false;
+    inline for (.{ Property.padding_top, Property.padding_right, Property.padding_bottom, Property.padding_left }, 0..) |property, index| {
+        var selected = winners.slots[@backingInt(Property.padding)];
+        if (winners.slots[@backingInt(property)]) |edge| {
+            if (selected == null or edge.priority.wins(selected.?.priority)) selected = edge;
+        }
+        if (winners.slots[@backingInt(Property.layout_reset)]) |reset| {
+            if (selected == null or reset.priority.wins(selected.?.priority)) selected = reset;
+        }
+        if (selected) |winner| {
+            seen = true;
+            switch (winner.value) {
+                .length_value => |value| values[index] = value,
+                .edges => |value| values[index] = switch (index) { 0 => value.top, 1 => value.right, 2 => value.bottom, 3 => value.left, else => unreachable },
+                else => return .{ .unresolved = true },
+            }
+        }
+    }
+    return if (seen) .{ .value = .{ .top = values[0], .right = values[1], .bottom = values[2], .left = values[3] } } else .{};
+}
+
+fn paddingLonghandValue(value: []const u8) ?Value {
+    if (std.ascii.eqlIgnoreCase(value, "initial") or std.ascii.eqlIgnoreCase(value, "unset"))
+        return .{ .length_value = .{ .unit = .px, .value = 0 } };
+    // Reuse the strict width grammar, including its lexical negative-nonzero
+    // check before float parsing. Invalid negatives must not win as -0.
+    if (styleWidth(value)) |width| {
+        if (width.unit == .percent) return .unsupported;
+        const numeric = if (std.ascii.endsWithIgnoreCase(value, "px") or std.ascii.endsWithIgnoreCase(value, "em"))
+            value[0 .. value.len - 2] else value;
+        if (width.value == 0 and !widthNumberIsZero(numeric)) return .unsupported;
+        return .{ .length_value = .{ .unit = if (width.unit == .px) .px else .em, .value = width.value } };
+    }
+    // Width's intrinsic keywords are not padding values. Other valid lengths,
+    // percentages and contextual winners remain unknown, including overflow;
+    // they cannot revive an earlier numeric padding declaration.
+    inline for (.{ "min-content", "max-content", "fit-content", "stretch" }) |keyword|
+        if (std.ascii.eqlIgnoreCase(value, keyword)) return null;
+    return if (unsupportedWidth(value)) .unsupported else null;
+}
 
 fn marginEdge(property: Property) ?usize {
     return switch (property) { .margin_top => 0, .margin_right => 1, .margin_bottom => 2, .margin_left => 3, else => null };
@@ -14722,6 +14778,7 @@ fn representedProperty(target: Target, property: Property) bool {
         .font_size => target == .table or target == .td or target == .th or target == .cell,
         .min_width, .cell_opacity => target == .td or target == .th or target == .cell,
         .padding => true,
+        .padding_top, .padding_right, .padding_bottom, .padding_left => target == .table,
         // Table alignment is projected separately into inherited cell styles.
         // Dynamic values and uncertain selectors still cascade as unsupported.
         .text_align => true,
@@ -14756,6 +14813,7 @@ fn propertyFor(name: []const u8) ?Property {
     if (std.ascii.eqlIgnoreCase(name, "clear")) return .clear;
     if (std.ascii.eqlIgnoreCase(name, "box-sizing")) return .box_sizing;
     if (std.ascii.eqlIgnoreCase(name, "all")) return .layout_reset;
+    inline for (.{ "padding-top", "padding-right", "padding-bottom", "padding-left" }, .{ Property.padding_top, .padding_right, .padding_bottom, .padding_left }) |edge, property| if (std.ascii.eqlIgnoreCase(name, edge)) return property;
     if (std.ascii.eqlIgnoreCase(name, "padding") or std.ascii.startsWithIgnoreCase(name, "padding-")) return .padding;
     if (std.ascii.eqlIgnoreCase(name, "text-align")) return .text_align;
     if (std.ascii.eqlIgnoreCase(name, "opacity")) return .cell_opacity;
@@ -15019,6 +15077,9 @@ fn declarationAlloc(a: std.mem.Allocator, raw: []const u8, order: u32) !?Declara
                     projection = .{ .edges = next };
                 } else if (!unsupportedEdges(value, property == .margins)) return null;
             }
+        },
+        .padding_top, .padding_right, .padding_bottom, .padding_left => {
+            projection = paddingLonghandValue(value) orelse return null;
         },
         .margin_top, .margin_right, .margin_bottom, .margin_left => {
             if ((property == .margin_right or property == .margin_left) and std.ascii.eqlIgnoreCase(value, "auto")) {
@@ -42017,4 +42078,60 @@ test "ordered list language refutation uses its actual OL and nearest captured l
 
 test "literal descendant CSS preserves bounded dependency work" {
     try verifyTableDescendantLiteralCssProofOnceForTesting();
+}
+
+
+test "table physical padding longhands preserve independent cascade and cell refusal" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Case = struct { css: []const u8, px: [4]f32 };
+    for ([_]Case{
+        .{ .css = "padding-top:0px", .px = .{ 0, 0, 0, 0 } },
+        .{ .css = "padding:1px 2px 3px 4px;padding-top:5px", .px = .{ 5, 2, 3, 4 } },
+        .{ .css = "padding-top:5px;padding:1px 2px 3px 4px", .px = .{ 1, 2, 3, 4 } },
+        .{ .css = "padding:1px!important;padding-right:7px", .px = .{ 1, 1, 1, 1 } },
+        .{ .css = "padding-right:7px!important;padding:1px", .px = .{ 1, 7, 1, 1 } },
+        .{ .css = "padding:4px;padding-left:initial;padding-bottom:unset", .px = .{ 4, 4, 0, 0 } },
+        .{ .css = "padding:4px;padding-top:-1px;padding-right:1px 2px;padding-left:1_0px", .px = .{ 4, 4, 4, 4 } },
+        .{ .css = "padding:4px;padding-top:-1e-1000px;padding-right:-1e-1000rem;padding-bottom:min-content;padding-left:auto", .px = .{ 4, 4, 4, 4 } },
+        .{ .css = "padding:4px;padding-top:-0e-1000px;padding-right:+0.0px", .px = .{ 0, 0, 4, 4 } },
+    }) |case| {
+        errdefer std.debug.print("table padding longhand case={s}\n", .{case.css});
+        const actual = try resolveInlineTableAlloc(a, case.css);
+        try std.testing.expect(!actual.unresolved);
+        const padding = actual.style.?.padding orelse return error.TestUnexpectedResult;
+        inline for (.{ "top", "right", "bottom", "left" }, 0..) |field, index|
+            try std.testing.expectEqualDeep(types.StyleLength{ .unit = .px, .value = case.px[index] }, @field(padding, field));
+    }
+    var profile = try parseAlloc(a, "table.P{padding:2px!important;padding-left:6px!important}");
+    defer profile.deinit();
+    const authored = try profile.resolveTable(a, 0, "P", null, "padding-top:9px;padding-right:3px!important");
+    try std.testing.expect(!authored.unresolved);
+    try std.testing.expectEqualDeep(types.StyleEdges{
+        .top = .{ .unit = .px, .value = 2 }, .right = .{ .unit = .px, .value = 3 },
+        .bottom = .{ .unit = .px, .value = 2 }, .left = .{ .unit = .px, .value = 6 },
+    }, authored.style.?.padding.?);
+    for ([_][]const u8{ "padding-top:10%", "padding-left:var(--gap)", "padding-right:inherit", "padding-bottom:calc(1px + 1em)", "padding:4px;padding-top:1e100px", "padding:4px;padding-top:1e100rem", "padding:4px;padding-top:1e1000px", "padding:4px;padding-top:1e-1000px" }) |css| {
+        const refused = try resolveInlineTableAlloc(a, css);
+        try std.testing.expect(refused.unresolved and (refused.style == null or refused.style.?.padding == null));
+    }
+    const collapsed = try resolveInlineTableAlloc(a, "border-collapse:collapse;padding-top:3px");
+    // Preserve the existing representation: known collapsed-table padding is
+    // retained in data; the reader owns its collapsed-border applicability.
+    try std.testing.expect(!collapsed.unresolved and collapsed.style.?.collapse.? == .collapse);
+    try std.testing.expectEqual(@as(f32, 3), collapsed.style.?.padding.?.top.value);
+    const unknown_model = try resolveInlineTableAlloc(a, "border-collapse:var(--model);padding-top:3px");
+    try std.testing.expect(unknown_model.unresolved and (unknown_model.style == null or unknown_model.style.?.padding == null));
+    var plain = try parseAlloc(a, "");
+    defer plain.deinit();
+    const cell = try plain.resolveCell(a, 0, false, null, "padding-top:0px");
+    try std.testing.expect(cell.unresolved and (cell.style == null or cell.style.?.padding == null));
+    const complete_cell = try plain.resolveCell(a, 0, false, null, "padding:2px");
+    try std.testing.expect(!complete_cell.unresolved);
+    try std.testing.expectEqualDeep(types.StyleEdges.all(.{ .unit = .px, .value = 2 }), complete_cell.style.?.padding.?);
+    const original = try resolveInlineTableAlloc(a, "border:1px solid #dddddd;background:#f4f4f4;padding-top:0px;margin-top:0px;margin-bottom:.1em;width:100%");
+    try std.testing.expect(!original.unresolved);
+    try std.testing.expectEqualDeep(types.StyleEdges.all(.{ .unit = .px, .value = 0 }), original.style.?.padding.?);
+    try std.testing.expectEqualStrings("#f4f4f4", original.style.?.background.?);
 }
