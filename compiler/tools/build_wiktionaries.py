@@ -9711,8 +9711,8 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
         staged=read_small_json((staged_input_root if staged_input_root is not None else workspace/'input')/'.complete.json')
         extraction_cache=None if is_fresh_archive(original_archive_record(staged_input_root)) else edition_extraction_cache(workspace, extraction_cache_root)
         tools=prepare_blob_tools(workspace,zig,edition,date,build_identity,
-                  expander_args=[str(dump),str(expander_build),*archive_args,
-                     *(['--expander-only'] if retained_roles is not None else []),
+                  expander_args=[str(dump),str(expander_build),
+                     *(['--expander-only'] if retained_roles is not None else []),*archive_args,
                      *(['--interwiki-map-snapshot',str(interwiki_snapshot)] if interwiki_snapshot else []),
                      *pipeline_snapshot_args(registry,native_snapshots,page_links_snapshot,page_redirects_snapshot),
                      '--llvm-workers',str(llvm_workers),
