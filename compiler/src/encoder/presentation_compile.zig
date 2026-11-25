@@ -27864,7 +27864,10 @@ pub const Renderer = struct {
         var tokens = std.mem.tokenizeAny(u8, classes, " \t\r\n");
         while (tokens.next()) |class| {
             var safe = class.len != 0;
-            for (class) |c| if (!(std.ascii.isAlphanumeric(c) or c == '_' or c == '-')) {
+            // HTML class tokens may contain a literal pipe (also decoded from
+            // Sanitizer's &#124;). This is opaque metadata, not converter syntax
+            // or a CSS selector. Keep all other projection and ownership gates.
+            for (class) |c| if (!(std.ascii.isAlphanumeric(c) or c == '_' or c == '-' or c == '|')) {
                 safe = false;
                 break;
             };
@@ -31288,6 +31291,13 @@ pub const Renderer = struct {
         return precedingFormattedNestedLinksEndIn(input, start, limit, tracked, false);
     }
     fn precedingFormattedNestedLinksEndIn(input: []const u8, start: usize, limit: usize, tracked: MissingText, recursive_semantics: bool) ?usize {
+        return precedingFormattedNestedLinksEndWithClassPipe(input, start, limit, tracked, recursive_semantics, null);
+    }
+    // Position only. The pinned ZH caller may cross a complete earlier form
+    // whose quoted class pipe was armored before conversion upstream. Keep
+    // the same balanced tags, plain labels and tracked interval requirements;
+    // generic and KU callers retain their original pipe refusal.
+    fn precedingFormattedNestedLinksEndWithClassPipe(input: []const u8, start: usize, limit: usize, tracked: MissingText, recursive_semantics: bool, class_owner: ?*const Renderer) ?usize {
         if (start > limit or limit > input.len or limit - start < 9 or limit - start > 4096 or
             !starts(input[start..limit], "-{") or (tracked.unknown and !recursive_semantics) or tracked.lost_missing_range or
             (recursive_semantics and tracked.generated_source != null)) return null;
@@ -31320,7 +31330,9 @@ pub const Renderer = struct {
                 if (!std.unicode.utf8ValidateSlice(token) or tag.self_closing or
                     !oneOf(tag.name, &.{ "b", "i", "strong", "em", "span", "sup", "small" }) or
                     !formattingAngleAttributesBalanced(tag.attrs) or
-                    std.mem.indexOfAny(u8, token, "[]{}|:;&\r\n") != null or
+                    std.mem.indexOfAny(u8, token, "[]{}:;&\r\n") != null or
+                    (std.mem.indexOfScalar(u8, token, '|') != null and
+                        (!recursive_semantics or class_owner == null or !class_owner.?.sourceArmoredClassPipeTag(tag))) or
                     (tag.closing and trim(tag.attrs).len != 0)) return null;
                 for (token) |byte| if (std.ascii.isControl(byte) and byte != '\t') return null;
                 if (tag.closing) {
@@ -31696,7 +31708,9 @@ pub const Renderer = struct {
                     cursor = end;
                     continue;
                 }
-                if (precedingFormattedNestedLinksEndIn(input, cursor, at, source, recursive_semantics)) |end| {
+                const class_owner = if (recursive_semantics and !ku_rulefree_predecessors and
+                    local_namespace != null) citation_owner else null;
+                if (precedingFormattedNestedLinksEndWithClassPipe(input, cursor, at, source, recursive_semantics, class_owner)) |end| {
                     cursor = end;
                     continue;
                 }
@@ -37874,6 +37888,51 @@ pub const Renderer = struct {
         return true;
     }
 
+    // Parser79b sanitizes ordinary HTML attributes before final conversion.
+    // Sanitizer::safeEncodeAttribute armors a literal class pipe as &#124;.
+    // This bounded grammar grants only that transformation in a proof buffer;
+    // the emitted body and its class value remain the original borrowed bytes.
+    fn sourceArmoredClassPipeTag(self: *const Renderer, tag: syntax.Tag) bool {
+        if (!self.sourceRecursiveManualContext() or tag.closing or tag.self_closing) return false;
+        var cursor: usize = 0;
+        var seen_class = false;
+        var seen_language = false;
+        var saw_pipe = false;
+        while (cursor < tag.attrs.len) {
+            while (cursor < tag.attrs.len and std.ascii.isWhitespace(tag.attrs[cursor])) : (cursor += 1) {}
+            if (cursor == tag.attrs.len) break;
+            const name_start = cursor;
+            while (cursor < tag.attrs.len and std.ascii.isAlphabetic(tag.attrs[cursor])) : (cursor += 1) {}
+            if (cursor == name_start) return false;
+            const name = tag.attrs[name_start..cursor];
+            const is_class = std.ascii.eqlIgnoreCase(name, "class");
+            const is_language = std.ascii.eqlIgnoreCase(name, "lang");
+            if ((!is_class and !is_language) or (is_class and seen_class) or (is_language and seen_language)) return false;
+            while (cursor < tag.attrs.len and std.ascii.isWhitespace(tag.attrs[cursor])) : (cursor += 1) {}
+            if (cursor == tag.attrs.len or tag.attrs[cursor] != '=') return false;
+            cursor += 1;
+            while (cursor < tag.attrs.len and std.ascii.isWhitespace(tag.attrs[cursor])) : (cursor += 1) {}
+            if (cursor == tag.attrs.len or (tag.attrs[cursor] != '\'' and tag.attrs[cursor] != '"')) return false;
+            const quote = tag.attrs[cursor];
+            cursor += 1;
+            const value_start = cursor;
+            while (cursor < tag.attrs.len and tag.attrs[cursor] != quote) : (cursor += 1) {
+                const byte = tag.attrs[cursor];
+                if (std.ascii.isControl(byte) or std.mem.indexOfScalar(u8, "<>[]{}:;&=\"'`", byte) != null) return false;
+                if (byte == '|') {
+                    if (!is_class) return false;
+                    saw_pipe = true;
+                }
+            }
+            if (cursor == tag.attrs.len or cursor == value_start) return false;
+            cursor += 1;
+            if (cursor < tag.attrs.len and !std.ascii.isWhitespace(tag.attrs[cursor])) return false;
+            seen_class = seen_class or is_class;
+            seen_language = seen_language or is_language;
+        }
+        return seen_class and saw_pipe;
+    }
+
     // The pinned recursive converter evaluates complete children before its
     // parent. This buffer is an admission proof only; emitted source stays the
     // original borrowed body, including all formatting and link boundaries.
@@ -37898,13 +37957,20 @@ pub const Renderer = struct {
             }
             if (body[cursor] == '<') {
                 const tag = syntax.tagAt(body, cursor) orelse return false;
+                const tag_bytes = body[cursor..tag.end];
+                const has_pipe = std.mem.indexOfScalar(u8, tag_bytes, '|') != null;
                 if (!(tag.is("b") or tag.is("i") or tag.is("strong") or tag.is("em") or
                     tag.is("span") or tag.is("sup") or tag.is("small")) or tag.self_closing or
                     !formattingAngleAttributesBalanced(tag.attrs) or
-                    std.mem.indexOfAny(u8, body[cursor..tag.end], "[]{}|:;&\r\n") != null or
+                    std.mem.indexOfAny(u8, tag_bytes, "[]{}:;&\r\n") != null or
+                    (has_pipe and !self.sourceArmoredClassPipeTag(tag)) or
                     (tag.closing and trim(tag.attrs).len != 0)) return false;
-                for (body[cursor..tag.end]) |byte| if (std.ascii.isControl(byte) and byte != '\t') return false;
-                try output.appendSlice(self.a, body[cursor..tag.end]);
+                for (tag_bytes) |byte| if (std.ascii.isControl(byte) and byte != '\t') return false;
+                if (has_pipe) {
+                    for (tag_bytes) |byte| {
+                        if (byte == '|') try output.appendSlice(self.a, "&#124;") else try output.append(self.a, byte);
+                    }
+                } else try output.appendSlice(self.a, tag_bytes);
                 cursor = tag.end;
                 continue;
             }
@@ -135949,6 +136015,181 @@ pub fn verifyTableNestedFontOwnerEqualityForTesting() !void {
     changed = equal; changed.height = .{ .length = .{ .value = 1.5, .font_scale_basis = .normal_body } }; try F.disagree(original, changed);
     try std.testing.expectEqualDeep(original, equal);
     std.debug.print("KU_FONT_OWNER_EQUALITY stage=complete snapshots=3\n", .{});
+}
+
+const ArmoredClassPipe461Test = struct {
+    // Exact three form owners retained in ZH03 failure461, polvoroso p1513544/r6045117.
+    const feminine = "-{ <b class=\"Latn form-of lang-es f|s-form-of\" lang=\"es\">[[:polvorosa#西班牙語|-{polvorosa}-]]</b>}-";
+    const masculine_plural = "-{ <b class=\"Latn form-of lang-es m|p-form-of\" lang=\"es\">[[:polvorosos#西班牙語|-{polvorosos}-]]</b>}-";
+    const feminine_plural = "-{ <b class=\"Latn form-of lang-es f|p-form-of\" lang=\"es\">[[:polvorosas#西班牙語|-{polvorosas}-]]</b>}-";
+    const body = feminine ++ "，陽性複數" ++ masculine_plural ++ "，陰性複數" ++ feminine_plural;
+    // The existing flat HTML conversion is the independent reference. Keep
+    // each outer frame: deleting it coalesces adjacent plain-text spans before
+    // the codec (see SourceRecursiveManualTest). Only flatten inner labels;
+    // armor attribute pipes exactly as the pinned Sanitizer does.
+    const reference = "-{ <b class=\"Latn form-of lang-es f&#124;s-form-of\" lang=\"es\">[[:polvorosa#西班牙語|polvorosa]]</b>}-，陽性複數-{ <b class=\"Latn form-of lang-es m&#124;p-form-of\" lang=\"es\">[[:polvorosos#西班牙語|polvorosos]]</b>}-，陰性複數-{ <b class=\"Latn form-of lang-es f&#124;p-form-of\" lang=\"es\">[[:polvorosas#西班牙語|polvorosas]]</b>}-";
+};
+
+test "pinned sanitized class pipes preserve recursive original forms actions classes Missing and codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = ArmoredClassPipe461Test; const M = SourceRecursiveManualTest; const NS = @import("namespace_registry");
+    var ns = try NS.Registry.init(a, NS.english_test_fixture); defer ns.deinit();
+    ns.content_language = "zh"; ns.language_conversion = &.{ "zh", "zh-hans", "zh-hant" }; ns.manual_conversion_context = M.profile();
+    var behavior = try ManualConversionTest.behavior(a, &ns); defer behavior.deinit();
+    const context: Context = .{ .title = "polvoroso", .namespace_catalog = &ns, .behavior_switches = &behavior };
+    const prefix = "forms ";
+    const source = prefix ++ T.body ++ "\n\n" ++ M.marked;
+    const reference = prefix ++ T.reference ++ "\n\n" ++ M.marked;
+    for ([_]bool{ false, true }) |unknown| {
+        var tracked = try M.tracked(a, source); tracked.unknown = unknown;
+        var reference_tracked = try M.tracked(a, reference); reference_tracked.unknown = unknown;
+        var proof: Renderer = .{ .a = a, .context = context, .inline_missing = tracked };
+        const operation = (try proof.sourceRecursiveRuleFreeLinkLabels(source, prefix.len, .{})) orelse return error.TestUnexpectedResult;
+        try std.testing.expect(operation.body.ptr == source.ptr + prefix.len + 2);
+        try std.testing.expectEqualStrings(T.feminine[2..T.feminine.len - 2], operation.body);
+        try std.testing.expectEqual(prefix.len + T.feminine.len, operation.end);
+        try std.testing.expectEqualDeep(tracked, proof.inline_missing.?);
+        var actual_renderer: Renderer = .{ .a = a, .context = context, .body_missing = tracked };
+        var expected_renderer: Renderer = .{ .a = a, .context = context, .body_missing = reference_tracked };
+        const blocks = try actual_renderer.renderBodyWithMissing(tracked);
+        const expected_blocks = try expected_renderer.renderBodyWithMissing(reference_tracked);
+        try std.testing.expectEqual(@as(usize, 2), blocks.len);
+        try std.testing.expectEqualStrings("forms  polvorosa，陽性複數 polvorosos，陰性複數 polvorosas",
+            try FormattingScopeTest.text(a, blocks[0].spans));
+        try std.testing.expectEqual(@as(usize, 1), tracked.ranges.len);
+        try std.testing.expectEqual(@as(u32, 1), tracked.ranges[0].occurrence);
+        try std.testing.expectEqualStrings(M.marked, source[tracked.ranges[0].start..tracked.ranges[0].end]);
+        const actual = try FormattingScopeTest.encode(a, &actual_renderer, blocks);
+        const expected = try FormattingScopeTest.encode(a, &expected_renderer, expected_blocks);
+        try std.testing.expectEqualDeep(expected, actual);
+        try std.testing.expectEqualDeep(expected_renderer.fallbacks, actual_renderer.fallbacks);
+        try std.testing.expect(!actual_renderer.fallbacks.literal_markup);
+        try std.testing.expectEqual(unknown, actual_renderer.body_missing.?.unknown);
+        try std.testing.expectEqualDeep(tracked.ranges, actual_renderer.body_missing.?.ranges);
+        var forms: usize = 0;
+        for (blocks) |block| for (block.spans) |span| {
+            try std.testing.expect(std.mem.indexOf(u8, span.text, "-{") == null);
+            if (std.mem.startsWith(u8, span.target, "polvoros")) {
+                const expected_forms = [_][]const u8{ "polvorosa", "polvorosos", "polvorosas" };
+                const expected_classes = [_][]const u8{ "f|s-form-of", "m|p-form-of", "f|p-form-of" };
+                try std.testing.expect(forms < expected_forms.len);
+                try std.testing.expectEqualStrings(expected_forms[forms], span.text);
+                try std.testing.expectEqualStrings("es", span.language);
+                try std.testing.expect(span.kind == .link and span.flags.bold);
+                try std.testing.expect(std.mem.indexOf(u8, span.classes, expected_classes[forms]) != null);
+                try std.testing.expectEqualStrings(try std.fmt.allocPrint(a, "{s}#西班牙語", .{expected_forms[forms]}), span.target);
+                try std.testing.expectEqualStrings(try std.fmt.allocPrint(a, "Latn form-of lang-es {s}", .{expected_classes[forms]}), span.classes);
+                forms += 1;
+            }
+        };
+        try std.testing.expectEqual(@as(usize, 3), forms);
+        const codec = @import("blob_encoder").presentation_codec;
+        const encoded = try codec.encodeAlloc(a, actual);
+        try std.testing.expectEqualSlices(u8, try codec.encodeAlloc(a, expected), encoded);
+        try std.testing.expectEqualDeep(actual, try codec.decodeAlloc(a, encoded, "formatting scope", .language, .{ .heading = "English", .code = "en" }));
+    }
+}
+
+test "pinned class pipe proof refuses rule flags foreign attributes duplicate owners and tainted source" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const M = SourceRecursiveManualTest; const NS = @import("namespace_registry");
+    var ns = try NS.Registry.init(a, NS.english_test_fixture); defer ns.deinit();
+    ns.content_language = "zh"; ns.language_conversion = &.{ "zh", "zh-hans", "zh-hant" }; ns.manual_conversion_context = M.profile();
+    var behavior = try ManualConversionTest.behavior(a, &ns); defer behavior.deinit();
+    const context: Context = .{ .title = "class pipe refusal", .namespace_catalog = &ns, .behavior_switches = &behavior };
+    // Literal and entity-armored pipes are the same ordinary HTML token.
+    // No namespace/conversion context is supplied to this lexical projection.
+    var ordinary: Renderer = .{ .a = a, .context = .{} };
+    for ([_]struct { source: []const u8, expected: []const u8 }{
+        .{ .source = "<b class=\"Latn f|s-form-of\">", .expected = "Latn f|s-form-of" },
+        .{ .source = "<b class=\"Latn f&#124;s-form-of\">", .expected = "Latn f|s-form-of" },
+        .{ .source = "<b class=\"Latn f&#x7c;s-form-of\">", .expected = "Latn f|s-form-of" },
+        .{ .source = "<b class=\"IPA|headword f|s-form-of\">", .expected = "IPA|headword f|s-form-of" },
+        .{ .source = "<b class=\"keep wikidict-media-file-546f6e65 wikidict-media-file-54|66\">", .expected = "keep" },
+        .{ .source = "<b class=\"keep wikidict-media-file-54&#124;66\">", .expected = "keep" },
+        .{ .source = "<b class=\"keep bad:selector bad[selector] bad&amp;token bad&quot;quote bad&lt;tag\">", .expected = "keep" },
+        .{ .source = "<b class=\"keep bad\x01control\">", .expected = "keep" },
+    }) |sample| {
+        const tag = syntax.tagAt(sample.source, 0) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualStrings(sample.expected, try ordinary.safeHtmlClassNames(tag));
+    }
+    for ([_][]const u8{
+        "-{ <b class=f|s>-{plain}-</b>}-",
+        "-{ <b lang=\"f|s\">-{plain}-</b>}-",
+        "-{ <b title=\"f|s\">-{plain}-</b>}-",
+        "-{ <b class=\"f|s\" class=\"other\">-{plain}-</b>}-",
+        "-{ <b class=\"f|s\"lang=\"es\">-{plain}-</b>}-",
+        "-{ <b class=\"f|s\">-{T|plain}-</b>}-",
+        "-{ <b class=\"f|s\">-{zh-hans:a;zh-hant:b}-</b>}-",
+        "-{ <b class=\"f|s\">-{plain}-</i>}-",
+        "-{plain|<b class=\"f|s\">-{plain}-</b>}-",
+    }) |invalid| {
+        var refused: Renderer = .{ .a = a, .context = context, .inline_missing = MissingText.untracked(invalid) };
+        try std.testing.expectError(error.UncompiledPresentation, refused.manualConversion(invalid, 0, .{}));
+    }
+    const body = ArmoredClassPipe461Test.feminine;
+    for (0..4) |mode| {
+        var tracked: MissingText = .{ .bytes = body, .unknown = true };
+        switch (mode) {
+            0 => tracked.lost_missing_range = true,
+            1 => tracked.generated_source = body,
+            2 => tracked.ranges = &.{.{ .start = 2, .end = 3, .occurrence = 1 }},
+            3 => tracked.literal_curly_ranges = &.{.{ .start = 2, .end = 3 }},
+            else => unreachable,
+        }
+        var refused: Renderer = .{ .a = a, .context = context, .inline_missing = tracked };
+        try std.testing.expectError(error.UncompiledPresentation, refused.manualConversion(body, 0, .{}));
+    }
+    var protected: Renderer = .{ .a = a, .context = context, .inline_missing = MissingText.untracked(body) };
+    try std.testing.expectError(error.UncompiledPresentation, protected.manualConversion(body, 0, .{ .provenance = .protected_literal }));
+    ns.manual_conversion_context.?.source_core = "unproved core";
+    var unproved: Renderer = .{ .a = a, .context = context, .inline_missing = MissingText.untracked(body) };
+    try std.testing.expectError(error.UncompiledPresentation, unproved.manualConversion(body, 0, .{}));
+}
+
+test "pinned class pipe predecessor keeps complete tracked sibling scope and refuses generic or tainted shortcuts" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = ArmoredClassPipe461Test; const M = SourceRecursiveManualTest; const NS = @import("namespace_registry");
+    var ns = try NS.Registry.init(a, NS.english_test_fixture); defer ns.deinit();
+    ns.content_language = "zh"; ns.language_conversion = &.{ "zh", "zh-hans", "zh-hant" }; ns.manual_conversion_context = M.profile();
+    const context: Context = .{ .title = "tracked sibling forms", .namespace_catalog = &ns };
+    const source = "forms " ++ T.body;
+    const second = "forms ".len + T.feminine.len + "，陽性複數".len;
+    const third = second + T.masculine_plural.len + "，陰性複數".len;
+    for ([_]bool{ false, true }) |unknown| {
+        const tracked: MissingText = .{ .bytes = source, .unknown = unknown };
+        var proof: Renderer = .{ .a = a, .context = context, .inline_missing = tracked };
+        try std.testing.expect(!Renderer.formattingAngleBodyPositionWithTrackedSiblingsIn(source, second, true, tracked, true));
+        for ([_]usize{ second, third }) |at| {
+            const operation = (try proof.sourceRecursiveRuleFreeLinkLabels(source, at, .{})) orelse return error.TestUnexpectedResult;
+            try std.testing.expect(operation.body.ptr == source.ptr + at + 2);
+            try std.testing.expectEqualDeep(tracked, proof.inline_missing.?);
+        }
+        for (0..4) |mode| {
+            var tainted = tracked;
+            switch (mode) {
+                0 => tainted.ranges = &.{.{ .start = 8, .end = 9, .occurrence = 1 }},
+                1 => tainted.literal_curly_ranges = &.{.{ .start = 8, .end = 9 }},
+                2 => tainted.lost_missing_range = true,
+                3 => tainted.generated_source = source,
+                else => unreachable,
+            }
+            var refused: Renderer = .{ .a = a, .context = context, .inline_missing = tainted };
+            try std.testing.expect((try refused.sourceRecursiveRuleFreeLinkLabels(source, second, .{})) == null);
+        }
+    }
+    for ([_][]const u8{
+        "-{ <b class=\"f|s\">[[:one|-{one}-]]</i>}-",
+        "-{ <b title=\"f|s\">[[:one|-{one}-]]</b>}-",
+        "-{ <b class=\"f|s\" class=\"two\">[[:one|-{one}-]]</b>}-",
+        "-{ <b class=\"f|s\">[[:one|-{T|one}-]]</b>}-",
+        "-{ <b class=\"f|s\">[[:one|-{one}-]]</b>",
+    }) |prefix| {
+        const candidate = try std.mem.concat(a, u8, &.{ prefix, " next ", T.masculine_plural });
+        const tracked = MissingText.untracked(candidate);
+        var refused: Renderer = .{ .a = a, .context = context, .inline_missing = tracked };
+        try std.testing.expect((try refused.sourceRecursiveRuleFreeLinkLabels(candidate, prefix.len + " next ".len, .{})) == null);
+    }
 }
 
 test "nested top stroke preserves its interior fixed dotted circle and plain neighbors" {
