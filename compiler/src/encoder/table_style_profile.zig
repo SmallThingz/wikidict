@@ -26804,6 +26804,88 @@ fn observedTableDescendantVariablesEqual(a: std.mem.Allocator, css: []const u8,
     return true;
 }
 
+const TableDescendantVariablesAgreement = union(enum) { agreed, budget, dependency: usize };
+
+fn observedTableDescendantVariablesAgree(a: std.mem.Allocator, css: []const u8,
+    left: []const ?CustomEnvironment, right: []const ?CustomEnvironment,
+    css_budget: *usize) !TableDescendantVariablesAgreement
+{
+    std.debug.assert(left.len != 0 and left.len == right.len and left.len <= 4097);
+    // Null environments cannot discharge a dependency. A successful original
+    // proof therefore applies to every environment without parsing CSS again.
+    // Charge that proof too; a dependent block pays for all remaining scans.
+    if (css.len > css_budget.*) return .budget;
+    css_budget.* -= css.len;
+    if (try observedTableDescendantVariablesEqual(a, css, null, null)) return .agreed;
+    if (css.len > css_budget.* / left.len) return .budget;
+    css_budget.* -= css.len * left.len;
+    for (left, right, 0..) |le, re, index|
+        if (!try observedTableDescendantVariablesEqual(a, css, le, re)) return .{ .dependency = index };
+    return .agreed;
+}
+
+pub fn verifyTableDescendantLiteralCssProofOnceForTesting() !void {
+    if (!@import("builtin").is_test) @compileError("test-only CSS work accounting");
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const literal = "--color:#36c;color:#101418;border:1px solid #ddd";
+    const contexts = try a.alloc(?CustomEnvironment, 4097);
+    defer a.free(contexts);
+    @memset(contexts, null);
+    var budget: usize = literal.len;
+    try std.testing.expect((try observedTableDescendantVariablesAgree(a, literal, contexts, contexts, &budget)) == .agreed);
+    try std.testing.expectEqual(@as(usize, 0), budget);
+    budget = literal.len - 1;
+    var denied = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 0 });
+    try std.testing.expect((try observedTableDescendantVariablesAgree(denied.allocator(), literal, contexts, contexts, &budget)) == .budget);
+    try std.testing.expectEqual(@as(usize, 0), denied.allocations);
+    budget = literal.len;
+    try std.testing.expectError(error.OutOfMemory,
+        observedTableDescendantVariablesAgree(denied.allocator(), literal, contexts, contexts, &budget));
+    budget = 2 * literal.len;
+    for (0..2) |_| try std.testing.expect((try observedTableDescendantVariablesAgree(a, literal, contexts, contexts, &budget)) == .agreed);
+    try std.testing.expect((try observedTableDescendantVariablesAgree(a, literal, contexts, contexts, &budget)) == .budget);
+
+    const value: CustomEnvironment = .{ .complete = true, .values = &.{
+        .{ .name = "--main", .value = .{ .known = "#36c" } },
+        .{ .name = "--fallback", .value = .{ .known = "#000" } },
+    } };
+    const changed: CustomEnvironment = .{ .complete = true, .values = &.{
+        .{ .name = "--main", .value = .{ .known = "#36c" } },
+        .{ .name = "--fallback", .value = .{ .known = "#f00" } },
+    } };
+    const dependent = "border:1px solid var(--main,var(--fallback,#fff))";
+    const left = [_]?CustomEnvironment{value, value, value};
+    var right = left;
+    budget = dependent.len * (left.len + 1);
+    try std.testing.expect((try observedTableDescendantVariablesAgree(a, dependent, &left, &right, &budget)) == .agreed);
+    try std.testing.expectEqual(@as(usize, 0), budget);
+    budget = dependent.len * (left.len + 1) - 1;
+    try std.testing.expect((try observedTableDescendantVariablesAgree(a, dependent, &left, &right, &budget)) == .budget);
+    right[2] = changed; // An unused fallback may become active in a descendant.
+    budget = dependent.len * (left.len + 1);
+    const divergent = try observedTableDescendantVariablesAgree(a, dependent, &left, &right, &budget);
+    try std.testing.expect(divergent == .dependency and divergent.dependency == 2);
+    right[2] = null;
+    budget = dependent.len * (left.len + 1);
+    const absent = try observedTableDescendantVariablesAgree(a, dependent, &left, &right, &budget);
+    try std.testing.expect(absent == .dependency and absent.dependency == 2);
+    for ([_][]const u8{
+        "color:VAR(--main)", "color:v\\ar(--main)", "color:var(--main)!bogus",
+        "color:calc(var(--main))", "color:var(--main",
+    }) |unsafe| {
+        budget = unsafe.len * (left.len + 1);
+        const rejected = try observedTableDescendantVariablesAgree(a, unsafe, &left, &left, &budget);
+        try std.testing.expect(rejected == .dependency);
+    }
+    // A quoted var spelling keeps the original conservative environment path.
+    const quoted = "content:'var(--missing)'";
+    budget = quoted.len * (left.len + 1);
+    try std.testing.expect((try observedTableDescendantVariablesAgree(a, quoted, &left, &left, &budget)) == .agreed);
+    std.debug.print("KU_LITERAL_CSS_PROOF controls=passed contexts=4097 original_dependencies=retained budget_raised=false\n", .{});
+}
+
 pub fn observedTableStaticDescendantsAgreeWithMotion(a: std.mem.Allocator, left: TableContainingDirectionContext,
     right: TableContainingDirectionContext, inventory: ObservedTableDescendantInventory,
     left_environments: []const ?CustomEnvironment, right_environments: []const ?CustomEnvironment,
@@ -26837,16 +26919,12 @@ pub fn observedTableStaticDescendantsAgreeWithLinks(a: std.mem.Allocator, left: 
         if (!std.mem.eql(u8, lr.raw_selector, rr.raw_selector) or !std.mem.eql(u8, lr.css, rr.css) or
             lr.selector.?.specificity != rr.selector.?.specificity or
             !observedTableDescendantSelectorInputsEqual(lr.selector.?, left, right, &selector_budget)) return false;
-        if (lr.css.len > css_budget / left_environments.len) return false;
-        css_budget -= lr.css.len * left_environments.len;
-        for (left_environments, right_environments) |le, re| if (!try observedTableDescendantVariablesEqual(a, lr.css, le, re)) return false;
+        if ((try observedTableDescendantVariablesAgree(a, lr.css, left_environments, right_environments, &css_budget)) != .agreed) return false;
     }
     // Source-authored inline declarations may read the inherited environment
     // even when there is no matching stylesheet declaration for that property.
     for (inventory.inline_styles) |css| {
-        if (css.len > css_budget / left_environments.len) return false;
-        css_budget -= css.len * left_environments.len;
-        for (left_environments, right_environments) |le, re| if (!try observedTableDescendantVariablesEqual(a, css, le, re)) return false;
+        if ((try observedTableDescendantVariablesAgree(a, css, left_environments, right_environments, &css_budget)) != .agreed) return false;
     }
     return true;
 }
@@ -41935,4 +42013,8 @@ test "ordered list language refutation uses its actual OL and nearest captured l
     var retained_foreign = false;
     for (incomplete.items) |declaration| if (std.mem.eql(u8, declaration.raw, "persian")) { retained_foreign = true; };
     try std.testing.expect(retained_foreign);
+}
+
+test "literal descendant CSS preserves bounded dependency work" {
+    try verifyTableDescendantLiteralCssProofOnceForTesting();
 }
