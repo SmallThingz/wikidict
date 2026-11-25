@@ -9657,6 +9657,54 @@ class RetainedNativeRoleTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, 'Retained native source metadata changed'):
                     b.RetainedNativeToolRoles(roles, zig_sha256=b.sha256_file(compiler))
 
+    def test_fresh_archive_retained_expander_flag_precedes_transport(self):
+        class Captured(Exception):
+            pass
+        for version in (None, b.FRESH_BZIP2_INPUT_VERSION, b.ORIGINAL_BZIP2_INPUT_VERSION):
+            for retained in (False, True):
+                with self.subTest(version=version, retained=retained), tempfile.TemporaryDirectory() as tmp:
+                    root=Path(tmp);work=root/'work';stage=root/'staged'
+                    work.mkdir();stage.mkdir();(work/'state.json').write_text('{}')
+                    marker={'dump_sha256':'a'*64,'index_sha256':'b'*64,'source_pages':1}
+                    if version is not None:
+                        marker.update(version=version,source_directory=str(root/'original'))
+                    (stage/'.complete.json').write_text(json.dumps(marker))
+                    selection=None
+                    if retained:
+                        selection=object.__new__(b.RetainedNativeToolRoles)
+                        selection.records={'dict-bundle-build':{}}
+                        selection.initial_sealed_generation=None
+                        selection.staged_provider_inputs={}
+                    calls=[]
+                    def prepare(*args, **kwargs):
+                        command=kwargs['expander_args'];calls.append(command)
+                        if retained:
+                            selection.require_command('dict-bundle-build',command)
+                            self.assertEqual(command[2],'--expander-only')
+                        self.assertEqual(command.count('--expander-only'),1)
+                        transport=b.original_archive_args(marker if version is not None else None)
+                        if transport:
+                            at=command.index('--bzip2-source-directory')
+                            self.assertEqual(command[at:at+2],transport)
+                            self.assertEqual(at,3 if retained else 2)
+                        else:
+                            self.assertNotIn('--bzip2-source-directory',command)
+                        if version==b.FRESH_BZIP2_INPUT_VERSION:
+                            self.assertNotIn('--extraction-cache-root',command)
+                            self.assertNotIn('--verified-dump-sha256',command)
+                            self.assertNotIn('--verified-index-sha256',command)
+                        raise Captured
+                    with patch.object(b,'PROJECT',root), patch.object(b,'_PREPARED_SOURCE',threading.local()), \
+                         patch.object(b,'expander_ready',return_value=False), \
+                         patch.object(b,'prepare_blob_tools',side_effect=prepare), \
+                         patch.object(b,'run_checked',side_effect=AssertionError('Unexpected native execution')), \
+                         patch.object(b,'timed_run',side_effect=AssertionError('Unexpected native execution')):
+                        with self.assertRaises(Captured):
+                            b.build_sharded(stage/'input',root/'staging',work,root/'registry','zig',1,
+                                [{'wiki':'testwiktionary','date':'20261001'}],123,
+                                staged_input_root=stage,compress_shards=True,retained_roles=selection)
+                    self.assertEqual(len(calls),1)
+
     def test_retained_roles_select_existing_tools_and_expander_without_compile(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);roles,compiler=self.fixture(root)
