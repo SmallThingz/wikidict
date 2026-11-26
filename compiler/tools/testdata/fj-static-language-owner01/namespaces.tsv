@@ -1,0 +1,28 @@
+# wikidict-namespace-registry-v1
+# wiki	fjwiktionary
+# dump-date	20261001
+# content-language	fj
+-2	Media	Media	case-sensitive	0	0	0		compile_only	virtual_namespace
+-1	Special	Special	first-letter	0	0	0		compile_only	virtual_namespace
+0			case-sensitive	0	1	0		main	dictionary_entries
+1	Talk	Talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+2	User	User	first-letter	1	0	0		compile_only	standard_build_input
+3	User talk	User talk	first-letter	1	0	0		compile_only	discussion_namespace
+4	Wiktionary	Project	case-sensitive	1	0	0		compile_only	standard_build_input	WT
+5	Wiktionary talk	Project talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+6	File	File	case-sensitive	0	0	0		compile_only	standard_build_input	Image
+7	File talk	File talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Image talk
+8	MediaWiki	MediaWiki	first-letter	1	0	0		compile_only	standard_build_input
+9	MediaWiki talk	MediaWiki talk	first-letter	1	0	0		compile_only	discussion_namespace
+10	Template	Template	case-sensitive	1	0	0		compile_only	standard_build_input
+11	Template talk	Template talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+12	Help	Help	case-sensitive	1	0	0		compile_only	standard_build_input
+13	Help talk	Help talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+14	Category	Category	case-sensitive	0	0	0		compile_only	standard_build_input
+15	Category talk	Category talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+710	TimedText	TimedText	case-sensitive	0	0	0		compile_only	ancillary_site_input
+711	TimedText talk	TimedText talk	case-sensitive	0	0	0		compile_only	discussion_namespace
+828	Module	Module	case-sensitive	1	0	0		compile_only	standard_build_input
+829	Module talk	Module talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+1728	Event	Event	case-sensitive	1	0	0		compile_only	ancillary_site_input
+1729	Event talk	Event talk	case-sensitive	1	0	0		compile_only	discussion_namespace

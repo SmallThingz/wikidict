@@ -42,6 +42,7 @@ pub fn parse(source: []const u8, ns: *const namespaces.Registry, behavior: ?*con
         parseLiteralCode(source, ns, behavior, registry, code) orelse
         parseEmphasizedCode(source, ns, behavior, registry, code) orelse
         parseCategoryLinkedHeading(source, ns, behavior, registry, code) orelse
+        parseFjStaticCategoryBanner(source, ns, behavior, registry, code) orelse
         parseStaticCategoryHeading(source, ns, behavior, registry, code, false) orelse return null;
     if (result.emitted_prefix != null) return result;
     // Existing known-name authority stays exact. A separately complete static
@@ -977,4 +978,112 @@ pub fn equalsProjectLabel(source: []const u8, ns: *const namespaces.Registry, be
     const sort = std.mem.lastIndexOfScalar(u8, category, '|') orelse return null;
     if (!std.mem.endsWith(u8, category, "]]") or !std.mem.eql(u8, category[sort + 1 .. category.len - 2], code)) return null;
     return label;
+}
+
+
+// Complete dated FJ static -code- declarations. This does not infer language
+// from an arbitrary rendered prefix, nor register the displayed Fijian name.
+// The category and linked target must repeat the same literal label; an
+// explicit displayed code, when present, must be exactly this source owner.
+fn parseFjStaticCategoryBanner(source: []const u8, ns: *const namespaces.Registry,
+    behavior: ?*const Behavior, registry: *const languages.Registry, code: []const u8) ?languages.SourceLanguageBanner
+{
+    if (source.len > 4096 or !std.mem.eql(u8, ns.wiki, "fjwiktionary") or
+        !std.mem.eql(u8, ns.content_language, "fj") or !registry.codes.contains(code)) return null;
+    const Take = struct {
+        fn text(input: []const u8, cursor: *usize, expected: []const u8) bool {
+            if (!std.mem.startsWith(u8, input[cursor.*..], expected)) return false;
+            cursor.* += expected.len;
+            return true;
+        }
+    };
+    var cursor: usize = 0;
+    const included = Take.text(source, &cursor, "<includeonly>");
+    const category_start = cursor;
+    if (!Take.text(source, &cursor, "[[Category:Na Vosa Vaka-")) return null;
+    const label_start = cursor;
+    const label_end = std.mem.indexOfPos(u8, source, cursor, "]]") orelse return null;
+    const label = source[label_start..label_end];
+    if (!plain(label) or label.len > 256 or !std.unicode.utf8ValidateSlice(label) or
+        !std.mem.eql(u8, label, std.mem.trim(u8, label, " ")) or
+        std.mem.indexOfAny(u8, label, ":#_") != null or
+        !registry.sourceBannerCategoryNameCompatible(code, label)) return null;
+    cursor = label_end + 2;
+    const category = source[category_start..cursor];
+    if (!hiddenCategory(category, ns, behavior)) return null;
+    if (included and !Take.text(source, &cursor, "</includeonly>")) return null;
+    const prefix_start = cursor;
+    const switch_end = (controlAt(behavior, source, cursor) catch return null) orelse return null;
+    if (!Take.text(source, &cursor, "__NOEDITSECTION__") or switch_end != cursor or
+        !Take.text(source, &cursor, "\n<br>\n=")) return null;
+    const heading_start = cursor;
+    if (!Take.text(source, &cursor, "<div id=\"toc\" class=\"toccolours\" ><big>A [[")) return null;
+    const target_start = cursor;
+    if (!Take.text(source, &cursor, "Vosa Vaka-") or !Take.text(source, &cursor, label)) return null;
+    const target = source[target_start..cursor];
+    if (!registry.sourceBannerCategoryNameCompatible(code, target) or
+        !Take.text(source, &cursor, "]] <small><small>")) return null;
+    if (Take.text(source, &cursor, "(")) {
+        if (!Take.text(source, &cursor, code) or !Take.text(source, &cursor, ")")) return null;
+    }
+    if (!Take.text(source, &cursor, "</small></small></big></div>=")) return null;
+    const heading = source[heading_start .. cursor - 1];
+    if (cursor != source.len) {
+        if (!std.mem.startsWith(u8, source[cursor..], "<noinclude>") or
+            (excludedDocumentationEnd(source, cursor) orelse return null) != source.len) return null;
+    }
+    return .{ .heading = heading, .level = 1, .target = target, .label = label,
+        .authority = .category_declaration,
+        .emitted_prefix = .{ .category = category, .suffix = source[prefix_start .. heading_start - 1] } };
+}
+
+
+const FjStaticCase = struct { code: []const u8, source: []const u8, pages: usize,
+    accepted_shape: bool, page_id: u64, revision_id: u64, sha256: []const u8 };
+
+test "FJ dated static banners respect captured registry collisions" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile("testdata/fj-static-language-owner01/namespaces.tsv")); defer ns.deinit();
+    var registry = languages.Registry.empty(a); defer registry.deinit(); try registry.addTsv(@embedFile("testdata/fj-static-language-owner01/languages.tsv"));
+    const cases = try std.json.parseFromSlice([]FjStaticCase, a, @embedFile("testdata/fj-static-language-owner01/cases-positive.json"), .{});
+    defer cases.deinit();
+    var accepted: usize = 0;
+    for (cases.value) |case| {
+        const proof = parse(case.source, &ns, null, &registry, case.code);
+        if (!case.accepted_shape) { try std.testing.expect(proof == null); continue; }
+        const actual = proof orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(@as(u8, 1), actual.level);
+        try std.testing.expect(actual.authority == .category_declaration);
+        try std.testing.expect(actual.emitted_prefix != null);
+        const before_alias = registry.resolveStrong(actual.target);
+        try registry.addSourceLanguageBanner(case.code, actual);
+        try std.testing.expect(registry.matchesSourceLanguageBanner(case.code, actual.heading, 1));
+        try std.testing.expect(!registry.matchesSourceLanguageBanner(case.code, actual.heading, 2));
+        try std.testing.expectEqualDeep(before_alias, registry.resolveStrong(actual.target));
+        accepted += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 19), accepted);
+}
+
+test "FJ static banner source drift never manufactures a language owner" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile("testdata/fj-static-language-owner01/namespaces.tsv")); defer ns.deinit();
+    var registry = languages.Registry.empty(a); defer registry.deinit(); try registry.addTsv(@embedFile("testdata/fj-static-language-owner01/languages.tsv"));
+    const cases = try std.json.parseFromSlice([]FjStaticCase, a, @embedFile("testdata/fj-static-language-owner01/cases-negative.json"), .{}); defer cases.deinit();
+    var de: []const u8 = undefined;
+    for (cases.value) |case| if (std.mem.eql(u8, case.code, "de")) { de = case.source; };
+    for ([_][]const u8{ "visible", "\n==Other==", "<onlyinclude>x</onlyinclude>", "<noinclude>x</noinclude>visible" }) |suffix| {
+        const altered = try std.mem.concat(a, u8, &.{de, suffix});
+        try std.testing.expect(parse(altered, &ns, null, &registry, "de") == null);
+    }
+    try std.testing.expect(parse(de, &ns, null, &registry, "fr") == null);
+    const wrong_site = try a.dupe(u8, @embedFile("testdata/fj-static-language-owner01/namespaces.tsv"));
+    const site = std.mem.indexOf(u8, wrong_site, "fjwiktionary").?;
+    wrong_site[site] = 'e'; wrong_site[site + 1] = 'n';
+    var other_ns = try namespaces.Registry.init(a, wrong_site); defer other_ns.deinit();
+    try std.testing.expect(parse(de, &other_ns, null, &registry, "de") == null);
+    try registry.addLocalAlias("Vakeramana", "fr");
+    try std.testing.expect(parse(de, &ns, null, &registry, "de") == null);
 }
