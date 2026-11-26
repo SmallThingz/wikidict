@@ -1,0 +1,41 @@
+{
+  "schema": "wikidict.fj-vosa-language-owner-fixture.v1",
+  "fixture": {
+    "file": "expanded.wikitext",
+    "bytes": 161,
+    "sha256": "dee03c581419d15a3390b32b02496862e87c08e1a29d19a031e19d471091a542",
+    "trailing_newline": false
+  },
+  "origin": "Unmodified output of the maintained native Expander for {{-nl-}} using the two dated source bodies below.",
+  "snapshot": {
+    "project": "fjwiktionary",
+    "date": "20261001",
+    "file": "fjwiktionary-20261001-pages-meta-current.xml.bz2",
+    "sha256": "5a985980f8ed35b2b3df4230b0661aef6c968ecf2c105d15d3709212a9209360",
+    "sha1": "7f5d2afafd77b5a35ef2939b5dcc816d84622b14"
+  },
+  "providers": [
+    {
+      "title": "Template:-nl-",
+      "page_id": 6713,
+      "revision_id": 10265,
+      "bytes": 15,
+      "sha256": "f5faddaae43aca3b5175349c7af4f180e8899ef5e18507ae92a9c0afe5714a78"
+    },
+    {
+      "title": "Template:vosa",
+      "page_id": 6720,
+      "revision_id": 106027,
+      "bytes": 163,
+      "sha256": "2de714af0d6663709b5490a79fbdf12429040c57ff2bb1a23f47e089c001509a"
+    }
+  ],
+  "qualification": {
+    "test": "FJ authentic literal wrapper expands through dated vosa provider",
+    "exit_code": 0,
+    "closure_sha256": "4c1a07432340ce44d63fad8103438de2b9e511ff12849f98b9f6d5343ab76c1a",
+    "output_receipt_sha256": "f413f6098a69a89ae748566ad0f1e52264490af2eb166f5fcd8f1c39830481bb"
+  },
+  "scope": "Literal wrapper/provider output only; minimal namespace fixture. No historical full-page provider parity, dynamic #language proof, current rendered-page or whole-edition acceptance.",
+  "historical_receipts_required_at_test_runtime": false
+}

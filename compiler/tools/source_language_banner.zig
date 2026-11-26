@@ -522,6 +522,35 @@ pub fn categoryH1ProofAlloc(a: std.mem.Allocator, wrapper: []const u8, formatter
     return .{ .heading = heading, .level = 1, .target = label, .label = label };
 }
 
+// The indexed FJ -code- leaf and the exact dated vosa provider together name
+// one language region. Only a literal positional label is admitted here:
+// #language and other executable arguments need their own captured dependency.
+// This creates no general name/heading alias and never strips a display prefix.
+pub fn fjVosaProofAlloc(a: std.mem.Allocator, wrapper: []const u8, formatter: []const u8,
+    ns: *const namespaces.Registry, registry: *const languages.Registry, code: []const u8) !?languages.SourceLanguageBanner
+{
+    if (!std.mem.eql(u8, ns.wiki, "fjwiktionary") or !std.mem.eql(u8, ns.content_language, "fj") or
+        !registry.codes.contains(code) or ns.ofTitle("Category:proof").id != 14 or
+        !categoryRoleHash(formatter, "2de714af0d6663709b5490a79fbdf12429040c57ff2bb1a23f47e089c001509a")) return null;
+    const open = "{{vosa|";
+    if (wrapper.len <= open.len + 2 or wrapper.len > 512 or
+        !std.mem.startsWith(u8, wrapper, open) or !std.mem.endsWith(u8, wrapper, "}}")) return null;
+    const label = wrapper[open.len .. wrapper.len - 2];
+    if (!plain(label) or label.len > 256 or !std.unicode.utf8ValidateSlice(label) or
+        !std.mem.eql(u8, label, std.mem.trim(u8, label, " ")) or
+        std.mem.indexOfAny(u8, label, ":#_") != null or
+        !registry.sourceBannerCategoryNameCompatible(code, label)) return null;
+    const target = try std.fmt.allocPrint(a, "Vosa Vaka-{s}", .{label});
+    errdefer a.free(target);
+    if (!registry.sourceBannerCategoryNameCompatible(code, target)) { a.free(target); return null; }
+    const heading = try std.fmt.allocPrint(a, "<div id=\"toc\" class=\"toccolours\" ><big>A [[{s}]] <small><small></small></small></big></div>", .{target});
+    errdefer a.free(heading);
+    const category = try std.fmt.allocPrint(a, "[[Category:Na Vosa Vaka-{s}]]", .{label});
+    return .{ .heading = heading, .level = 1, .target = target, .label = label,
+        .authority = .category_declaration,
+        .emitted_prefix = .{ .category = category, .suffix = "__NOEDITSECTION__\n<br>" } };
+}
+
 test "category H1 current registry binds bare and legacy source owners" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();

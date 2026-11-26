@@ -1327,6 +1327,8 @@ fn loadLanguageRegistry(io: std.Io, a: std.mem.Allocator, expander_root: []const
     try template_rows.check();
     try loadSourceCategoryH1BannersWithRows(io, a, expander_root, namespaces, &out, &template_rows);
     try template_rows.check();
+    try loadFjVosaBannersWithRows(a, expander_root, namespaces, &out, &template_rows);
+    try template_rows.check();
     const names_path = try std.fs.path.join(a, &.{ expander_root, "language-names.tsv" });
     defer a.free(names_path);
     const names = std.Io.Dir.cwd().readFileAlloc(io, names_path, a, .limited(32 * 1024 * 1024)) catch |err| switch (err) {
@@ -2459,6 +2461,56 @@ fn loadSourceCategoryH1BannersWithRows(io: std.Io, a: std.mem.Allocator, root: [
         if (try source_language_banner.categoryH1ProofAlloc(a, wrapper, formatter_source, name_source, ns, registry, code)) |proof| {
             defer a.free(proof.heading);
             defer a.free(proof.label);
+            try registry.addSourceLanguageBanner(code, proof);
+        }
+    }
+}
+
+// Reuse the normal checksum-verified template index and source sidecar. The
+// selected provider and every code leaf must be unique, nonredirect NS10 rows.
+fn loadFjVosaBannersWithRows(a: std.mem.Allocator, root: []const u8, ns: *const namespace_registry.Registry,
+    registry: *language_registry.Registry, view: *LanguageTemplateRows) !void
+{
+    if (!std.mem.eql(u8, ns.wiki, "fjwiktionary") or !std.mem.eql(u8, ns.content_language, "fj")) return;
+    try view.requireContext(root, ns);
+    var candidates = (try view.begin()) orelse return;
+    const Role = struct { row: dump_source.IndexedPage, ordinal: u64 };
+    var provider: ?Role = null;
+    var wrappers: std.ArrayList(Role) = .empty; defer wrappers.deinit(a);
+    var seen: std.StringHashMapUnmanaged(void) = .empty; defer seen.deinit(a);
+    while (try candidates.next()) |entry| {
+        const row = entry.row;
+        const title = ns.ofTitle(row.title);
+        if (title.id != 10) continue;
+        const formatter = std.mem.eql(u8, title.text, "vosa");
+        const leaf = title.text.len > 2 and title.text[0] == '-' and title.text[title.text.len - 1] == '-' and
+            registry.codes.contains(title.text[1 .. title.text.len - 1]);
+        if (!formatter and !leaf) continue;
+        const slot = try seen.getOrPut(a, title.text);
+        if (slot.found_existing) return error.DuplicateLanguageTemplateSource;
+        if (row.ns != 10 or row.redirect != null or !row.has_source or !std.mem.eql(u8, row.content_model, "wikitext")) continue;
+        const role: Role = .{ .row = row, .ordinal = entry.ordinal };
+        if (formatter) provider = role else try wrappers.append(a, role);
+    }
+    const selected = provider orelse return;
+    if (wrappers.items.len == 0) return;
+    const templates = (try view.templates(root, ns)) orelse return;
+    const Read = struct {
+        fn source(alloc: std.mem.Allocator, store: *const dump_source.TemplateSource, role: Role) !?[]u8 {
+            const raw = (try store.lookup(role.ordinal, role.row.page_id, role.row.revision_id)) orelse return error.MissingLanguageTemplateSource;
+            if (raw.len > 4096) return null;
+            return if (role.row.source_needs_decode) try xml_decode.decodeSinglePassAlloc(alloc, raw) else try alloc.dupe(u8, raw);
+        }
+    };
+    const formatter_source = (try Read.source(a, templates, selected)) orelse return; defer a.free(formatter_source);
+    for (wrappers.items) |role| {
+        const wrapper = (try Read.source(a, templates, role)) orelse continue; defer a.free(wrapper);
+        const title = ns.ofTitle(role.row.title);
+        const code = title.text[1 .. title.text.len - 1];
+        if (try source_language_banner.fjVosaProofAlloc(a, wrapper, formatter_source, ns, registry, code)) |proof| {
+            defer a.free(proof.heading);
+            defer a.free(proof.target);
+            defer a.free(proof.emitted_prefix.?.category);
             try registry.addSourceLanguageBanner(code, proof);
         }
     }
@@ -73052,4 +73104,102 @@ test "normal CSB Figure defaults preserve exact observed core without File autho
     var changed_digest = loaded.source_sha256;
     changed_digest[0] ^= 1;
     try std.testing.expect(ns.currentFigureDefaultsCore(changed_digest, true) == null);
+}
+
+// Focused dated source fixtures; minimal registry rows are test scaffolding,
+// not a replacement for the missing historical captured name provider.
+const FjVosaTest = struct {
+    const namespaces = "# wikidict-namespace-registry-v1\n# wiki\tfjwiktionary\n# dump-date\t20261001\n# content-language\tfj\n0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n10\tTemplate\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n14\tCategory\tCategory\tcase-sensitive\t0\t0\t0\twikitext\tcompile_only\tcategories\n";
+    const registry = "# content-language\tfj\n# mediawiki\nfj\tFijian\nnl\tDutch\ngd\tScottish Gaelic\nen\tEnglish\n";
+    const wrapper = "{{vosa|Dautia}}";
+    const formatter = "[[Category:Na Vosa Vaka-{{{1}}}]]__NOEDITSECTION__\n<br>\n=<div id=\"toc\" class=\"toccolours\" ><big>A [[Vosa Vaka-{{{1}}}]] <small><small></small></small></big></div>=";
+    const dynamic = "{{vosa|{{#language:gd|fj}}}}";
+    const raw = "{{-nl-}}\n\n'''&#39;k'''\n#  au \n\n{{bot-made entry}}\n\n[[en:'k]]\n[[gd:'k]]\n[[hu:'k]]\n[[lt:'k]]\n[[mg:'k]]\n[[nl:'k]]";
+
+    fn install(io: std.Io, a: std.mem.Allocator, root: []const u8, duplicate: bool) !void {
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{root,"manifest.jsonl"}), .data = "" });
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{root,"language-registry.tsv"}), .data = registry });
+        const rows = "0\t0\tTemplate:-nl-\t\t6713\t10265\t2011-10-31T23:19:49Z\tA\twikitext\t10\t1\t0\n" ++
+            "0\t0\tTemplate:vosa\t\t6720\t106027\t2013-04-25T00:25:32Z\tA\twikitext\t10\t1\t0\n" ++
+            "0\t0\tTemplate:-gd-\t\t34175\t136750\t2015-06-05T10:28:00Z\tA\twikitext\t10\t1\t0\n";
+        const repeated = "0\t0\tTemplate:-nl-\t\t6713\t10265\t2011-10-31T23:19:49Z\tA\twikitext\t10\t1\t0\n";
+        const index = try std.fs.path.join(a, &.{root,"page-index.tsv"});
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = index, .data = if (duplicate) rows ++ repeated else rows });
+        var store = try dump_source.TemplateSourceWriter.init(io, a, root); defer store.deinit();
+        try store.append(0, 6713, 10265, wrapper);
+        try store.append(1, 6720, 106027, formatter);
+        try store.append(2, 34175, 136750, dynamic);
+        if (duplicate) try store.append(3, 6713, 10265, wrapper);
+        try store.finish(index);
+    }
+};
+
+test "FJ dated literal vosa proof rejects unbound and conflicting providers" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespace_registry.Registry.init(a, FjVosaTest.namespaces); defer ns.deinit();
+    var registry = language_registry.Registry.empty(a); defer registry.deinit(); try registry.addTsv(FjVosaTest.registry);
+    // The original generic grammar refuses this nested provider leaf.
+    try std.testing.expect(source_language_banner.parse(FjVosaTest.wrapper, &ns, null, &registry, "nl") == null);
+    const proof = (try source_language_banner.fjVosaProofAlloc(a, FjVosaTest.wrapper, FjVosaTest.formatter, &ns, &registry, "nl")).?;
+    try registry.addSourceLanguageBanner("nl", proof);
+    try std.testing.expect(registry.matchesSourceLanguageBanner("nl", proof.heading, 1));
+    try std.testing.expect(!registry.matchesSourceLanguageBanner("nl", proof.heading, 2));
+    try std.testing.expect(!registry.matchesSourceLanguageBanner("gd", proof.heading, 1));
+    try std.testing.expect(registry.resolveTrusted("Dautia") == null);
+    try std.testing.expect(registry.resolveTrusted(proof.heading) == null);
+    try std.testing.expect((try source_language_banner.fjVosaProofAlloc(a, FjVosaTest.dynamic, FjVosaTest.formatter, &ns, &registry, "gd")) == null);
+    for ([_][]const u8{ "{{vosa|Dautia|x}}", "{{vosa| Dautia}}", "{{vosa|Dautia}}extra", "{{vosa|{{{1}}}}}", "{{vosa|English}}", "{{vosa|Dautia\n}}" }) |bad|
+        try std.testing.expect((try source_language_banner.fjVosaProofAlloc(a, bad, FjVosaTest.formatter, &ns, &registry, "nl")) == null);
+    try std.testing.expect((try source_language_banner.fjVosaProofAlloc(a, FjVosaTest.wrapper, FjVosaTest.formatter ++ " ", &ns, &registry, "nl")) == null);
+    try std.testing.expect((try source_language_banner.fjVosaProofAlloc(a, FjVosaTest.wrapper, FjVosaTest.formatter, &ns, &registry, "zzzzz")) == null);
+    try registry.addLocalAlias("Dautia", "en");
+    try std.testing.expect(!registry.matchesSourceLanguageBanner("nl", proof.heading, 1));
+    try std.testing.expect((try source_language_banner.fjVosaProofAlloc(a, FjVosaTest.wrapper, FjVosaTest.formatter, &ns, &registry, "nl")) == null);
+}
+
+test "FJ indexed source banner binds actual expanded root and preserves typed body" {
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator(); const io = std.testing.io;
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path}); try FjVosaTest.install(io, a, root, false);
+    var ns = try namespace_registry.Registry.init(a, FjVosaTest.namespaces); defer ns.deinit();
+    var registry = try loadLanguageRegistry(io, a, root, &ns); defer registry.deinit();
+    const proof = (try source_language_banner.fjVosaProofAlloc(a, FjVosaTest.wrapper, FjVosaTest.formatter, &ns, &registry, "nl")).?;
+    try std.testing.expect(registry.matchesSourceLanguageBanner("nl", proof.heading, 1));
+    try std.testing.expect(registry.source_banners.get("gd") == null);
+    // Read the actual prior maintained Expander result, never synthesize an
+    // observation. Header-only input excludes the unbound bot/interwiki roles.
+    const header = @embedFile("testdata/fj-vosa-language-owner01/expanded.wikitext");
+    const expanded = try std.mem.concat(a, u8, &.{header, "\n\n'''&#39;k'''\n#  au \n"});
+    const raw = "{{-nl-}}\n\n'''&#39;k'''\n#  au \n";
+    const codes = languageCodes(&registry, &ns); const output = try std.fs.path.join(a, &.{root,"blobs"});
+    var writer = try encoder.blob_builder.Writer.init(io, a, output); defer writer.deinit(); writer.language_codes = codes;
+    try writer.addExpandedPage(a, .{.id=0,.kind=.language}, "'k", expanded, raw, null);
+    const negatives = [_][]const u8{"", "{{-gd-}}\n", "{{-nl-|x}}\n", "prefix\n{{-nl-}}\n", "<nowiki>{{-nl-}}</nowiki>\n"};
+    for (negatives,0..) |control,i| try writer.addExpandedPage(a, .{.id=0,.kind=.language}, try std.fmt.allocPrint(a,"negative-{d}",.{i}), expanded, control,null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize,1+negatives.len),stats.language_records);
+    for (0..1+negatives.len) |i| {
+        const heading = if(i==0) "Dutch" else "Unclassified";
+        const title = if(i==0) "'k" else try std.fmt.allocPrint(a,"negative-{d}",.{i-1});
+        var filename: [encoder.blob_catalog.language_blob_filename_len]u8=undefined;
+        var mapped=try mmapPath(io,try std.fs.path.join(a,&.{output,"languages",encoder.blob_catalog.languageBlobFilename(heading,&filename)})); defer mapped.deinit();
+        const blob=try encoder.blob_format.inspect(mapped.bytes);const metadata=try blob.languageMetadata();var index=try blob.buildTrustedIndexAlloc(a);defer index.deinit(a);
+        const record=(try index.find(title)).?;
+        const decoded=try encoder.presentation_codec.decodeAlloc(a,record.payload,record.title,.language,metadata);
+        try std.testing.expectEqualStrings(if(i==0) "nl" else "",decoded.entry.language_code);
+        var report:encoder.presentation_document.Fallbacks=.{};
+        const whole_payload=try encoder.presentation_document.compileReportedWithLinkTrailAlloc(a,title,.language,heading,metadata.code,expanded,null,.{},&ns,&report);
+        const whole=try encoder.presentation_codec.decodeAlloc(a,whole_payload,title,.language,metadata);
+        try std.testing.expectEqualDeep(whole.entry.sections,decoded.entry.sections);
+        try std.testing.expectEqualDeep(whole.entry.references,decoded.entry.references);
+        try std.testing.expectEqualDeep(whole.entry.media,decoded.entry.media);
+        try std.testing.expectEqualSlices(u8,record.payload,try encoder.presentation_codec.encodeAlloc(a,decoded));
+        var au:usize=0;
+        for(decoded.entry.sections)|section| for(section.blocks)|block| for(block.spans)|span| {if(std.mem.eql(u8,span.text,"au")) au+=1;};
+        try std.testing.expectEqual(@as(usize,1),au);
+    }
+    // A second indexed occurrence refuses, even though source bytes agree.
+    const dup=try std.fs.path.join(a,&.{root,"duplicate"});try std.Io.Dir.cwd().createDir(io,dup,.default_dir);
+    try FjVosaTest.install(io,a,dup,true);
+    try std.testing.expectError(error.DuplicateLanguageTemplateSource,loadLanguageRegistry(io,a,dup,&ns));
 }
