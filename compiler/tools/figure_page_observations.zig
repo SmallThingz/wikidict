@@ -5233,8 +5233,6 @@ pub const Book = struct {
                 try observedSourceRootTables(a, ns, source_and_html.source, source_and_html.html, observed_nodes.items) else &.{};
             const source_root_children = if (has_page_styles)
                 try observedSourceRootChildren(a, source_and_html.source, source_and_html.html, observed_nodes.items) else &.{};
-            const source_div_parent_tags = if (has_page_styles)
-                try observedRepeatedDivParentTags(a, ns, source_and_html.source, source_and_html.html, observed_nodes.items) else &.{};
             const source_literal_divs = if (has_page_styles)
                 if (page.authored_style_operations != null)
                     try observedLiteralDivParentsIn(a, ns, source_and_html.source, source_and_html.html, observed_nodes.items, true)
@@ -5250,6 +5248,11 @@ pub const Book = struct {
                     paint_outer = context;
                 } else return invalid;
             }
+            const yi_nav_frames = if (yi_style_page and paint_outer != null)
+                try selectedYiNavFrames(a, ns, page, paint_outer.?, observed_nodes.items) else false;
+            const source_div_parent_tags = if (has_page_styles)
+                try observedRepeatedDivParentTags(a, ns, source_and_html.source, source_and_html.html,
+                    observed_nodes.items, yi_nav_frames) else &.{};
             const page_styles = try observedPageStyleProfile(a, ns, doc.schema, page,
                 (try field(shape, "pages")).array.items[index], source_and_html.html, text_scope, paint_outer,
                 if (yi_style_page) current_yi_styles else null);
@@ -24190,10 +24193,63 @@ test "note UL restoration requires the exact captured sibling skeleton and compl
     }
 }
 
+// The proof may refute a direct-parent selector only when both authenticated
+// renderings retain the same static frame/heading/content relationship.
+fn selectedYiNavFrames(a: A, ns: *const namespaces.Registry, page: RawPage,
+    outer: ObservedOuterContext, supplied: []const ObservedSiblingNode) !bool
+{
+    if (!yiNavFramePair(supplied)) return false;
+    const response = (page.outer_context orelse return false).response;
+    const start = outer.root_start orelse return false;
+    const root = outer.root_attributes orelse return false;
+    if (start >= response.len) return false;
+    var nodes: std.ArrayList(ObservedSiblingNode) = .empty;
+    defer nodes.deinit(a);
+    var root_end: usize = 0;
+    _ = observedTextClassScopeToEndWithSections(a, ns, response[start..], &nodes, &root_end, root, true) catch |err| switch (err) {
+        error.OutOfMemory => return err,
+        else => return false,
+    };
+    return root_end != 0 and yiNavFramePair(nodes.items);
+}
+
+fn yiNavFramePair(nodes: []const ObservedSiblingNode) bool {
+    var count: usize = 0;
+    for (nodes, 0..) |node, index| {
+        if (!equal(node.attributes.get("class") orelse "", "NavContent")) continue;
+        if (!node.tag.is("div") or node.attributes.attributes.len != 1 or node.inner_end == null) return false;
+        const parent = node.parent orelse return false;
+        const head = node.previous orelse return false;
+        const table = node.first_child orelse return false;
+        if (parent >= head or head >= index or table <= index or table >= nodes.len) return false;
+        const frame = nodes[parent];
+        if (!frame.tag.is("div") or !equal(frame.attributes.get("class") orelse "", "NavFrame") or
+            frame.first_child != head or nodes[head].parent != parent or !nodes[head].tag.is("div") or
+            !equal(nodes[head].attributes.get("class") orelse "", "NavHead") or
+            nodes[table].parent != index or !nodes[table].tag.is("table")) return false;
+        count += 1;
+    }
+    return count == 2;
+}
+
+// The regular authored-prefix scanner still checks the full lexical table,
+// including physical line boundaries, attributes, links, and balanced owners.
+fn yiNavSingleWikiTableBody(raw: []const u8) bool {
+    const body = std.mem.trim(u8, raw, " \t\r\n");
+    if (body.len <= 4 or !std.mem.startsWith(u8, body, "{|") or !std.mem.endsWith(u8, body, "\n|}")) return false;
+    return std.mem.indexOfAny(u8, body[2 .. body.len - 2], "{}\x00") == null;
+}
+
+test "YI NavContent brace admission requires one closed table" {
+    try std.testing.expect(yiNavSingleWikiTableBody("\n{| class=\"inflection-table\"\n| row\n|}\n"));
+    for ([_][]const u8{ "\n{|\n| row\n", "\n{|\n| {{template}}\n|}\n", "\n{|\n| row\n|}\nmore", "text\n{|\n| row\n|}\n" }) |source|
+        try std.testing.expect(!yiNavSingleWikiTableBody(source));
+}
+
 // The full observed group may have several different owners. Only a parent tag
 // common to every possible source/captured correspondence is published.
 fn observedRepeatedDivParentTags(a: A, ns: *const namespaces.Registry, source: []const u8, html: []const u8,
-    nodes: []const ObservedSiblingNode) ![]const profile.SourceDivParentTagProof
+    nodes: []const ObservedSiblingNode, yi_nav_frames: bool) ![]const profile.SourceDivParentTagProof
 {
     var result: std.ArrayList(profile.SourceDivParentTagProof) = .empty;
     if (nodes.len == 0 or nodes[0].parent != null or !nodes[0].tag.is("div")) return result.toOwnedSlice(a);
@@ -24214,11 +24270,22 @@ fn observedRepeatedDivParentTags(a: A, ns: *const namespaces.Registry, source: [
             count += 1;
             if (count > 256 or other.self_closing or other.html_pre) { valid = false; break; }
             const other_pair = syntax.matchingTag(source, other) orelse { valid = false; break; };
-            if (other_pair.end <= other.end or other_pair.end > source.len or
-                std.mem.indexOfAny(u8, source[at..other_pair.end], "{}\x00") != null) { valid = false; break; }
-            authoredElementPrefix(a, ns, source, .{ .start = at, .end = other_pair.end }, false) catch |err| switch (err) {
+            if (other_pair.inner_end < other.end or other_pair.end <= other.end or other_pair.end > source.len) { valid = false; break; }
+            const nav = yi_nav_frames and attrs.attributes.len == 1 and equal(attrs.get("class") orelse "", "NavContent");
+            if (nav) {
+                if (!yiNavSingleWikiTableBody(source[other.end..other_pair.inner_end])) { valid = false; break; }
+            } else if (std.mem.indexOfAny(u8, source[at..other_pair.end], "{}\x00") != null) { valid = false; break; }
+            var source_parent: ?usize = null;
+            authoredElementPrefixForRole(a, ns, source, .{ .start = at, .end = other_pair.end }, false,
+                &.{}, false, if (nav) &source_parent else null) catch |err| switch (err) {
                 error.OutOfMemory => return err, else => { valid = false; break; },
             };
+            if (nav) {
+                const parent_at = source_parent orelse { valid = false; break; };
+                const parent = syntax.tagAt(source, parent_at) orelse { valid = false; break; };
+                const parent_attrs = (try literalDivAttributes(a, parent)) orelse { valid = false; break; };
+                if (!equal(parent_attrs.get("class") orelse "", "NavFrame")) { valid = false; break; }
+            }
         }
         if (!valid or count < 2) continue;
         var observed_count: usize = 0; var parent_tag: ?[]const u8 = null;
@@ -24274,7 +24341,7 @@ test "repeated nonempty DIV parent tag proof retains genuine Mai group without s
     const supplied = try responseSource(a, &ns, doc.pages[0]);
     var nodes: std.ArrayList(ObservedSiblingNode) = .empty;
     _ = try observedTextClassScopeWithElements(a, &ns, supplied.html, &nodes);
-    const proofs = try observedRepeatedDivParentTags(a, &ns, supplied.source, supplied.html, nodes.items);
+    const proofs = try observedRepeatedDivParentTags(a, &ns, supplied.source, supplied.html, nodes.items, false);
     for ([_]usize{ 10555, 53856, 60297 }) |start| {
         var matches: usize = 0;
         for (proofs) |proof| if (proof.range.anchor_start == start) {
@@ -24296,7 +24363,7 @@ test "repeated DIV negative parent tag requires every source and observed member
     const html = root ++ source ++ "</div>";
     var nodes: std.ArrayList(ObservedSiblingNode) = .empty;
     _ = try observedTextClassScopeWithElements(a, &ns, html, &nodes);
-    const good = try observedRepeatedDivParentTags(a, &ns, source, html, nodes.items);
+    const good = try observedRepeatedDivParentTags(a, &ns, source, html, nodes.items, false);
     var count: usize = 0;
     for (good) |proof| if (proof.range.attrs_len != 0) { count += 1; try std.testing.expectEqualStrings("div", proof.parent_tag); };
     try std.testing.expectEqual(@as(usize, 2), count);
@@ -24307,7 +24374,7 @@ test "repeated DIV negative parent tag requires every source and observed member
     }) |changed| {
         var altered: std.ArrayList(ObservedSiblingNode) = .empty;
         _ = try observedTextClassScopeWithElements(a, &ns, changed, &altered);
-        const refused = try observedRepeatedDivParentTags(a, &ns, source, changed, altered.items);
+        const refused = try observedRepeatedDivParentTags(a, &ns, source, changed, altered.items, false);
         for (refused) |proof| try std.testing.expect(proof.range.attrs_len == 0);
     }
     for ([_][]const u8{
@@ -24315,7 +24382,7 @@ test "repeated DIV negative parent tag requires every source and observed member
         source ++ "<div class='item__head'>extra</div>",
         "<div><div class='item__head'>{{unknown}}</div></div>\n<div><div class='item__head'>two</div></div>",
     }) |changed| {
-        const refused = try observedRepeatedDivParentTags(a, &ns, changed, html, nodes.items);
+        const refused = try observedRepeatedDivParentTags(a, &ns, changed, html, nodes.items, false);
         for (refused) |proof| try std.testing.expect(proof.range.attrs_len == 0);
     }
 }
