@@ -1780,6 +1780,7 @@ pub const Context = struct {
     citation_original_root: ?[]const u8 = null,
     poem_phase: ?*const PoemPhase = null,
     external_links_prepared: bool = false,
+    media_attribute_links: bool = false,
     image_options: ?*const @import("namespace_registry").image_options.Registry = null,
     behavior_switches: ?*const @import("namespace_registry").behavior_switches.Registry = null,
     namespace_catalog: ?*const @import("namespace_registry").Registry = null,
@@ -5820,6 +5821,8 @@ const PageExternalNumbering = struct {
         if (depth > max_depth) return error.RenderLimit;
         var it: ir.InlineIterator = .{ .input = input, .renderer_boundaries = true, .link_trail = self.renderer.context.link_trail };
         var opaque_scan: syntax.OpaqueScan = .{};
+        var external_quotes: ?QuoteBoundaryScan = null;
+        defer if (external_quotes) |*quotes| quotes.deinit();
         while (it.cursor < input.len) {
             const at = it.cursor;
             if (phase != .extensions) if (self.deletedEnd(input, at)) |end| {
@@ -5945,6 +5948,23 @@ const PageExternalNumbering = struct {
             {
                 const target_at = @intFromPtr(token.target.ptr) - @intFromPtr(input.ptr);
                 if (target_at == 0 or target_at > input.len or input[target_at - 1] != '[' or it.cursor == 0 or input[it.cursor - 1] != ']') continue;
+                const ordinary = !self.renderer.context.media_attribute_links;
+                if (ordinary and std.mem.indexOf(u8, token.target, "''") != null) {
+                    // MediaWiki resolves quotes before numbering links. A quote
+                    // tag can expose an explicit label without a separating space.
+                    if (external_quotes == null) external_quotes = QuoteBoundaryScan.initWithContext(input, null, self.renderer.context);
+                    const opening = target_at - 1;
+                    const seed = try external_quotes.?.at(self.a, opening, self.renderer.context.behavior_switches);
+                    const raw = input[opening..it.cursor];
+                    const normalized = try normalizeWikiQuotesSeededWithContext(self.a, raw, 0, false, self.renderer.context, seed);
+                    defer if (normalized.ptr != raw.ptr) self.a.free(normalized);
+                    if (std.mem.indexOfScalar(u8, normalized, '[')) |bracket| {
+                        var quote_tokens: ir.InlineIterator = .{ .input = normalized[bracket..], .renderer_boundaries = true };
+                        if (quote_tokens.next()) |quoted| {
+                            if (quoted.kind == .external_link and (quoted.external_label_prefix.len != 0 or quoted.text.ptr != quoted.target.ptr)) continue;
+                        }
+                    }
+                }
                 // Only a complete parsed source token can authorize a literal
                 // defaultless destination before ordinary page numbering. The
                 // prepared explicit token is independently revalidated at emission.
@@ -15541,7 +15561,8 @@ pub const Renderer = struct {
                 span.external_literal_parameter = proof;
             };
         };
-        const resolved_target = if (external and !parameter_proven) try self.externalUrlTarget(target) else target;
+        var resolved_target = if (external and !parameter_proven) try self.externalUrlTarget(target) else target;
+        var escaped_pipe = false;
         if (external and !parameter_proven and ir.literalUnclosedConditionalUrl(target) != null)
             return error.UncompiledTemplate;
         if (parameter_proven) {
@@ -15581,6 +15602,12 @@ pub const Renderer = struct {
             return;
         }
         if (resolved_target.len != 0 and (!external or safeUrl(resolved_target) or (angle_proven and std.mem.eql(u8, resolved_target, target)))) {
+            // Apply cleanUrl pipe escaping only to an admitted ordinary action.
+            // Media attribute projections keep their existing display value.
+            if (external and !parameter_proven and self.media_action_depth == 0 and std.mem.indexOfScalar(u8, resolved_target, '|') != null) {
+                resolved_target = try std.mem.replaceOwned(u8, self.a, resolved_target, "|", "%7C");
+                escaped_pipe = true;
+            }
             s.kind = if (external) .external_link else .link;
             s.target = resolved_target;
             const same_observed_caption_action = !external and self.figure_caption_depth != 0 and
@@ -15603,9 +15630,9 @@ pub const Renderer = struct {
         if (action_capture) |capture| capture.* = s;
         if (external and std.mem.eql(u8, label, target)) {
             const decoded_label = try self.entityText(label);
-            // URL text containing encoded controls/whitespace uses its escaped
-            // destination spelling, never raw navigation control characters.
+            // Bare external links display the cleaned URL for these escapes.
             const escaped_label = std.mem.indexOfAny(u8, decoded_label, " \t\n\r\"") != null or
+                (escaped_pipe and label.ptr == target.ptr) or
                 std.mem.indexOf(u8, decoded_label, "\xc2\xa0") != null;
             const visible = if (escaped_label) resolved_target else decoded_label;
             if (s.kind == .external_link and safeUrl(resolved_target) and
@@ -41038,6 +41065,7 @@ pub const Renderer = struct {
             style.kind == .external_link or (style.kind == .link and !style.poem_independent_parse)) return tracked;
         try self.loadPoemPhase();
         var prepare_context = self.context;
+        prepare_context.media_attribute_links = self.media_action_depth != 0;
         prepare_context.citation_definitions = if (self.poem_definitions_complete) self.ref_defs.items else self.page_reference_definitions;
         const category_sortkeys = !self.pre_block and !self.parsed_pre and !self.in_template_literal_scope and !self.block_formatting.code and
             self.inline_source_domain == null and style.kind == .text and style.target.len == 0 and
@@ -58936,6 +58964,53 @@ test "encoded external URL controls quotes and ordinary references preserve targ
     var long_buf: [192]u8 = undefined;
     const unsupported = try std.fmt.bufPrint(&long_buf, "https://example.test/a&#{s}60;b", .{digits});
     try externalDelimiterCheck(unsupported, unsupported, unsupported);
+}
+
+test "Sindhi external link pipes preserve the source label and encoded destination" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const url = "https://www.youtube.com/watch?v=-JN14aOt5Qk";
+    const label = "لڪيرنامو";
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    // sdwiktionary page 5753, revision 21696, ordinary external-link list item.
+    const blocks = try renderer.renderBody("* [" ++ url ++ "|''" ++ label ++ "'']\n* [https://example.test/next]");
+    const stored = try FormattingScopeTest.encode(a, &renderer, blocks);
+    const spans = stored.entry.sections[0].blocks[0].spans;
+    try std.testing.expectEqual(@as(usize, 1), spans.len);
+    try std.testing.expectEqual(.external_link, spans[0].kind);
+    try std.testing.expectEqualStrings(url ++ "%7C", spans[0].target);
+    try std.testing.expectEqualStrings(label, spans[0].text);
+    try std.testing.expect(spans[0].italic);
+    const following = stored.entry.sections[0].blocks[1].spans;
+    try std.testing.expectEqual(@as(usize, 1), following.len);
+    try std.testing.expectEqual(.external_link, following[0].kind);
+    try std.testing.expectEqualStrings("https://example.test/next", following[0].target);
+    try std.testing.expectEqualStrings("[1]", following[0].text);
+
+    try externalDelimiterCheck("[" ++ url ++ "|<i>" ++ label ++ "</i>]", label, url ++ "%7C");
+    try externalDelimiterCheck("[" ++ url ++ " ''" ++ label ++ "'']", label, url);
+    const encoded = "https://example.test/?q=a%7Cb&next=c%7Cd";
+    try externalDelimiterCheck("[https://example.test/?q=a|b&amp;next=c&#124;d label]", "label", encoded);
+    try externalDelimiterCheck("[" ++ encoded ++ " label]", "label", encoded);
+    try externalDelimiterCheck("https://example.test/?q=a|b", "https://example.test/?q=a%7Cb", "https://example.test/?q=a%7Cb");
+    try externalDelimiterCheck("[https://example.test/?q=a|b https://example.test/?q=a|b]", "https://example.test/?q=a|b", "https://example.test/?q=a%7Cb");
+    const image_override = try renderer.mediaActionStyle(.{}, "Example.jpg", "https://example.test/?q=a&#124;b");
+    try std.testing.expectEqual(.external_link, image_override.kind);
+    try std.testing.expectEqualStrings("https://example.test/?q=a|b", image_override.target);
+    const styled_override = try renderer.mediaActionStyle(.{}, "Example.jpg", "<i>https://example.test/?q=a&#124;b</i>");
+    try std.testing.expectEqual(.external_link, styled_override.kind);
+    try std.testing.expectEqualStrings("https://example.test/?q=a|b", styled_override.target);
+    const escaped_override = try renderer.mediaActionStyle(.{}, "Example.jpg", "<i>https://example.test/?q=a%7Cb</i>");
+    try std.testing.expectEqual(.external_link, escaped_override.kind);
+    try std.testing.expectEqualStrings("https://example.test/?q=a%7Cb", escaped_override.target);
+    var numbered: Renderer = .{ .a = a, .context = .{} };
+    const numbered_blocks = try numbered.renderBody("[https://example.test/?q=a|b] [https://example.test/?q=%27%27] [https://example.test/next]");
+    try ExternalNumberingFixture.roundtrip(a, &numbered, numbered_blocks, &.{
+        .{ .target = "https://example.test/?q=a%7Cb", .label = "[1]" },
+        .{ .target = "https://example.test/?q=%27%27", .label = "[2]" },
+        .{ .target = "https://example.test/next", .label = "[3]" },
+    });
 }
 
 test "external URL entity normalization still refuses raw controls and unsafe schemes" {
