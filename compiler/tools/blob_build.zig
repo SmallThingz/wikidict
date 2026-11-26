@@ -72869,6 +72869,8 @@ fn expectEnglishThaiAdvisoryCircles(io: std.Io, a: std.mem.Allocator, root: []co
                 try std.testing.expectEqualStrings(span.tooltip.?, child.tooltip orelse "");
                 try std.testing.expect(span.direction.len == 0 and child.direction.len == 0 and box.overlays.len == 0);
                 try std.testing.expectEqual(span.font_scale, child.font_scale);
+                try std.testing.expect(span.font_family != null and span.font_family.? == .sans_serif);
+                try std.testing.expectEqualDeep(span.font_family, child.font_family);
                 try std.testing.expectApproxEqAbs(@as(f32, 0.8333), span.font_scale orelse return error.MissingSmallScale, 0.0001);
                 try std.testing.expect(box.radius.?.unit == .percent and box.radius.?.value == 50);
                 for ([_]@TypeOf(box.border.top){ box.border.top, box.border.right, box.border.bottom, box.border.left }) |edge| {

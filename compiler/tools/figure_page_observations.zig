@@ -6536,7 +6536,12 @@ fn observedHelpCircleArm(a: A, ns: *const namespaces.Registry, stored: *const Pa
                     root + @as(u32, @intCast(index)), candidate.variable, preference.os_dark)) orelse return false;
                 if (paint.geometry) |known| {
                     if (!physical.agrees(known)) return false;
-                } else paint.geometry = physical.geometry;
+                } else {
+                    var geometry = physical.geometry;
+                    geometry.font_family = try profile.cloneFontFamilyRequestAlloc(a,
+                        geometry.font_family orelse return false);
+                    paint.geometry = geometry;
+                }
                 const chains = &paint.table_chains[@intFromBool(alternative)];
                 for (chains.items) |known| {
                     if (std.mem.eql(u8, &physical.table_chain, &known)) break;
@@ -6586,6 +6591,7 @@ fn observedSourceHelpCirclePaints(a: A, ns: *const namespaces.Registry, expanded
         !profile.helpCircleProfileBound(parent) or !profile.helpCircleProfileBound(selected)) return &.{};
     for (result, candidates, colors) |*out, candidate, paint| {
         var box = paint.geometry orelse return &.{};
+        box.font_family = try profile.cloneFontFamilyRequestAlloc(a, box.font_family orelse return &.{});
         const light = try a.dupe(u8, paint.light orelse return &.{});
         const dark = try a.dupe(u8, paint.dark orelse return &.{});
         inline for (.{ "top", "right", "bottom", "left" }) |side|

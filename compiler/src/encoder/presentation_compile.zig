@@ -13757,7 +13757,16 @@ pub const Renderer = struct {
             if (failure == error.UncompiledPresentation) self.tracePresentationRejection("inline_box", "bidi_query_rejection", tracked.bytes, at, 0, error.UncompiledPresentation);
             return failure;
         } ) != null) { self.tracePresentationRejection("inline_box", "bidi_owner", tracked.bytes, at, 0, error.UncompiledPresentation); return error.UncompiledPresentation; }
-        var child_style = effective;
+        var declaring_style = effective;
+        if (box.font_family) |family| {
+            // The paired proof belongs to this exact plain-text circle. Its
+            // declaring box and text share a family; neither gains an action.
+            if (!box.static_decoration or box.cursor != .help or box.radius == null or
+                box.radius.?.unit != .percent or effective.kind != .text or effective.target.len != 0)
+                return error.UncompiledPresentation;
+            declaring_style.font_family = family;
+        }
+        var child_style = declaring_style;
         const inherited_action = (effective.kind == .link or effective.kind == .external_link) and effective.target.len != 0;
         if (inherited_action) {
             child_style.kind = .text; child_style.target = ""; child_style.link_paint = null;
@@ -13808,7 +13817,7 @@ pub const Renderer = struct {
         group.* = .{ .padding = box.padding, .border = box.border, .overlays = try owner.overlays.toOwnedSlice(self.a), .spans = children, .radius = box.radius };
         const before = self.spans.items.len;
         errdefer self.spans.items.len = before;
-        self.textRawGeneratedWithPayload("", effective, null, null, null, group) catch |failure| {
+        self.textRawGeneratedWithPayload("", declaring_style, null, null, null, group) catch |failure| {
             if (failure == error.UncompiledPresentation) self.tracePresentationRejection("inline_box", "emission_rejection", tracked.bytes, at, 0, error.UncompiledPresentation);
             return failure;
         };
@@ -136365,4 +136374,94 @@ test "literal HTML cell DIV uses only the current complete projected table opera
     renderer.body_missing = owner;
     renderer.source_element_binding.?.owner = owner;
     try std.testing.expect(renderer.prepareLiteralHtmlTable(table, table_body) == null);
+}
+
+test "paired advisory circle emits owner and text family through Stored codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const P = table_style_profile;
+    const title = "Vowel sign appearing in front of the initial consonant.";
+    const css = "border:1px dotted var(--wikt-palette-grey-9,gray);border-radius:50%;cursor:help";
+    const token = "<span title=\"" ++ title ++ "\" style=\"" ++ css ++ "\">æ</span>";
+    const source = try a.dupe(u8, "<table><tr><td><small>" ++ token ++ "</small></td></tr></table>");
+    const nodes = [_]P.ObservedStyleNode{
+        .{ .tag = "html", .parent = null, .attributes = &.{} },
+        .{ .tag = "body", .parent = 0, .attributes = &.{} },
+        .{ .tag = "div", .parent = 1, .attributes = &.{.{ .name = "class", .value = "mw-parser-output" }} },
+        .{ .tag = "table", .parent = 2, .attributes = &.{} },
+        .{ .tag = "tr", .parent = 3, .attributes = &.{} },
+        .{ .tag = "td", .parent = 4, .attributes = &.{} },
+        .{ .tag = "small", .parent = 5, .attributes = &.{} },
+        .{ .tag = "span", .parent = 6, .has_text = true, .empty = false,
+            .attributes = &.{.{ .name = "title", .value = title }, .{ .name = "style", .value = css }} },
+    };
+    var parent = try P.parseForTargetAlloc(a, "", .screen);
+    defer parent.deinit();
+    var styles = try P.parseForTargetAlloc(a,
+        "@media screen{html,body{font-family:sans-serif}}:root{--wikt-palette-grey-9:#777777}", .screen);
+    defer styles.deinit();
+    styles.page_style_parent = &parent;
+    const observed = (try P.observedHelpCircleBox(a, &styles, &nodes, 2, 7,
+        "--wikt-palette-grey-9", false)) orelse return error.TestUnexpectedResult;
+    var geometry = observed.geometry;
+    inline for (.{ "top", "right", "bottom", "left" }) |side|
+        @field(geometry.border, side).dotted.color = .{ .rgb = observed.ink };
+    const at = std.mem.indexOf(u8, source, "<span").?;
+    const tag = syntax.tagAt(source, at).?;
+    const pair = syntax.matchingTag(source, tag).?;
+    var root_element: P.TextElement = .{ .tag = "div", .classes = "mw-parser-output" };
+    const paints = [_]P.SourceHelpCirclePaint{.{ .source = source, .styles = &styles,
+        .opening = source[at..tag.end], .owner_snapshot = try a.dupe(u8, source[at..pair.end]),
+        .physical = .{ .parent = &parent, .box = geometry,
+            .table_chains = .{ &.{observed.table_chain}, &.{observed.table_chain} } } }};
+    var scope: P.BoundedTextClassScope = .{ .root_tag = "div", .root_classes = "mw-parser-output",
+        .subtree_classes = "", .complete_ancestor_class_superset = "mw-parser-output",
+        .page_styles = &styles, .page_style_root = &root_element, .help_circle_paints = &paints };
+    const input = MissingText.untracked(source);
+    // A paired page profile deliberately cannot issue a whole-page class proof.
+    // This fixture uses its current source-bound help-circle paint instead.
+    try std.testing.expect((try nativeSourceClassProofAlloc(a, input, &styles)) == null);
+    var renderer: Renderer = .{ .a = a, .content_root = .parser_output, .body_depth = 1,
+        .body_missing = input, .inline_missing = input,
+        .bounded_text_class_source = source, .bounded_text_class_scope = &scope,
+        .context = .{ .table_styles = &styles, .text_paint_styles = &styles,
+            .figure_sizing = .{ .resolve_fn = OrdinaryPlainPaintTransportTest.sizing,
+                .text_class_scope = .{ .source = source, .scope = &scope } } } };
+    var root: NativeInlineMotionRoot = .{ .source = input };
+    const motion = renderer.nativeInlineMotionBegin(&root, false);
+    defer motion.deinit();
+    var inherited: Style = .{ .native_inline_motion = renderer.body_formatting_attributes.native_inline_motion };
+    var offset: usize = 0;
+    while (offset < at) {
+        const ancestor = syntax.tagAt(source, offset).?;
+        const element = try renderer.textElement(ancestor, inherited.text_element, "");
+        inherited.native_inline_motion = try renderer.nativeInlineMotionEntry(ancestor, inherited.native_inline_motion);
+        inherited.text_element = element;
+        offset = ancestor.end;
+    }
+    var effective = inherited;
+    effective.native_inline_motion = try renderer.nativeInlineMotionEntry(tag, inherited.native_inline_motion);
+    effective.tooltip = title;
+    effective.font_scale = 0.8333;
+    try std.testing.expect(effective.font_family == null);
+    try std.testing.expect(try renderer.typedInlineBox(input, at, tag, pair, effective, inherited, 0));
+    try std.testing.expectEqual(@as(usize, 1), renderer.spans.items.len);
+    const blocks = [_]Block{.{ .kind = .paragraph, .spans = renderer.spans.items }};
+    const stored = try FormattingScopeTest.encode(a, &renderer, &blocks);
+    const codec = @import("blob_encoder").presentation_codec;
+    const encoded = try codec.encodeAlloc(a, stored);
+    const decoded = try codec.decodeAlloc(a, encoded, "formatting scope", .language,
+        .{ .heading = "English", .code = "en" });
+    const owner = decoded.entry.sections[0].blocks[0].spans[0];
+    const child = owner.inline_box_group.?.spans[0];
+    try std.testing.expect(owner.font_family.? == .sans_serif);
+    try std.testing.expectEqualDeep(owner.font_family, child.font_family);
+    try std.testing.expectEqualStrings("æ", child.text);
+    for ([_]presentation_types.Span{owner, child}) |span| {
+        try std.testing.expect(span.kind == .text and span.target.len == 0);
+        try std.testing.expectEqualStrings(title, span.tooltip.?);
+        try std.testing.expect(span.inline_style.?.cursor == .help);
+    }
+    try std.testing.expectEqualSlices(u8, encoded, try codec.encodeAlloc(a, decoded));
 }

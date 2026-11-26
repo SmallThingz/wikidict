@@ -37546,6 +37546,9 @@ fn inlineBoxSourceRejected(diagnostic: ?*InlineBoxSourceDiagnostic, reason: Inli
 }
 
 pub const InlineBoxResolution = struct {
+    // Only the paired, current help-circle proof supplies this inherited
+    // family. Geometry alone does not grant a font to an arbitrary box.
+    font_family: ?types.ContainerFontFamily = null,
     cursor: ?types.InlineCursor = null,
     static_decoration: bool = false,
     radius: ?types.StyleWidth = null,
@@ -38408,6 +38411,7 @@ pub fn observedHelpCircleBox(a: std.mem.Allocator, styles: *const Profile, nodes
     }
     var nonediting_path = true;
     var environment: CustomEnvironment = .{ .complete = true };
+    var font_family: ?types.ContainerFontFamily = null;
     while (count != 0) {
         count -= 1;
         const next = path[count];
@@ -38428,6 +38432,12 @@ pub fn observedHelpCircleBox(a: std.mem.Allocator, styles: *const Profile, nodes
         // Recompute each inherited custom value after the verified root class
         // substitution. A cached environment belongs to its original day shell.
         environment = try observedFigureCustomEnvironment(a, applicable, environment, true);
+        // Resolve the same physical inheritance path, including the exterior
+        // and implicit table nodes. Do not substitute the reader's default.
+        const family = (try positionedContainerFamily(a, .{ .index = next,
+            .declarations = applicable, .environment = environment }, font_family,
+            nodes[next].tag, null)) orelse return null;
+        font_family = family.value;
         if (std.ascii.eqlIgnoreCase(nodes[next].tag, "bdi") or std.ascii.eqlIgnoreCase(nodes[next].tag, "bdo")) return null;
         if (observedFigureAttribute(nodes[next], "dir")) |dir| {
             if ((next != 0 and next != root) or !std.ascii.eqlIgnoreCase(dir, "ltr")) return null;
@@ -38457,11 +38467,66 @@ pub fn observedHelpCircleBox(a: std.mem.Allocator, styles: *const Profile, nodes
         if (resolved.unresolved or resolved.cursor != .help or resolved.radius == null or resolved.radius.?.unit != .percent or
             resolved.radius.?.value != 50 or !std.mem.eql(u8, dottedHelpBorderColor(resolved.border) orelse return null, color.rgb)) return null;
         var geometry = resolved;
+        geometry.font_family = font_family orelse return null;
         inline for (.{ "top", "right", "bottom", "left" }) |side|
             @field(geometry.border, side).dotted.color = .{ .rgb = "" };
         return .{ .ink = color.rgb, .geometry = geometry, .table_chain = table_chain orelse return null };
     }
     return null;
+}
+
+test "paired advisory circle retains inherited family and rejects disagreement" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // Reduced from EN p10500003/r87816728. The screen rule and declaring
+    // attributes are retained literals; this synthetic shell is not a page grant.
+    const css = "@media screen{html,body{font-family:sans-serif}}" ++
+        ":root{--wikt-palette-grey-9:#777777}";
+    const owner_css = "border:1px dotted var(--wikt-palette-grey-9,gray);border-radius:50%;cursor:help";
+    const nodes = [_]ObservedStyleNode{
+        .{ .tag = "html", .parent = null, .attributes = &.{} },
+        .{ .tag = "body", .parent = 0, .attributes = &.{} },
+        .{ .tag = "div", .parent = 1, .attributes = &.{.{ .name = "class", .value = "mw-parser-output" }} },
+        .{ .tag = "table", .parent = 2, .attributes = &.{} },
+        .{ .tag = "tbody", .parent = 3, .attributes = &.{} },
+        .{ .tag = "tr", .parent = 4, .attributes = &.{} },
+        .{ .tag = "td", .parent = 5, .attributes = &.{} },
+        .{ .tag = "small", .parent = 6, .attributes = &.{} },
+        .{ .tag = "span", .parent = 7, .has_text = true, .empty = false, .attributes = &.{
+            .{ .name = "title", .value = "Vowel sign appearing in front of the initial consonant." },
+            .{ .name = "style", .value = owner_css },
+        } },
+    };
+    var styles = try parseForTargetAlloc(a, css, .screen);
+    defer styles.deinit();
+    const actual = (try observedHelpCircleBox(a, &styles, &nodes, 2, 8, "--wikt-palette-grey-9", false)) orelse
+        return error.TestUnexpectedResult;
+    try std.testing.expect(actual.geometry.font_family.? == .sans_serif);
+    try std.testing.expect(actual.geometry.cursor == .help and actual.geometry.static_decoration);
+    const repeated = (try observedHelpCircleBox(a, &styles, &nodes, 2, 8, "--wikt-palette-grey-9", false)).?;
+    try std.testing.expect(actual.agrees(repeated.geometry));
+    var body_winner = try parseForTargetAlloc(a, css ++ "html{font-family:serif}", .screen);
+    defer body_winner.deinit();
+    const body_font = (try observedHelpCircleBox(a, &body_winner, &nodes, 2, 8, "--wikt-palette-grey-9", false)).?;
+    try std.testing.expect(body_font.geometry.font_family.? == .sans_serif);
+    var implicit = try parseForTargetAlloc(a, css ++ "tbody{font-family:'Fixture Face',serif}", .screen);
+    defer implicit.deinit();
+    const implicit_font = (try observedHelpCircleBox(a, &implicit, &nodes, 2, 8, "--wikt-palette-grey-9", false)).?;
+    try std.testing.expectEqualStrings("Fixture Face", implicit_font.geometry.font_family.?.stack.names[0]);
+    try std.testing.expect(implicit_font.geometry.font_family.?.stack.fallback == .serif);
+    try std.testing.expect(!actual.agrees(implicit_font.geometry));
+    var changed = try parseForTargetAlloc(a, css ++ "small{font-family:serif}", .screen);
+    defer changed.deinit();
+    const other = (try observedHelpCircleBox(a, &changed, &nodes, 2, 8, "--wikt-palette-grey-9", false)).?;
+    try std.testing.expect(!actual.agrees(other.geometry));
+    try std.testing.expect(other.geometry.font_family.?.stack.fallback == .serif);
+    for ([_][]const u8{ "small{font-family:initial}", "small:hover{font-family:serif}" }) |extra| {
+        var uncertain = try parseForTargetAlloc(a, try std.mem.concat(a, u8, &.{css, extra}), .screen);
+        defer uncertain.deinit();
+        try std.testing.expect((try observedHelpCircleBox(a, &uncertain, &nodes, 2, 8,
+            "--wikt-palette-grey-9", false)) == null);
+    }
 }
 
 fn dottedHelpBorderColor(border_edges: types.InlineBoxBorderEdges) ?[]const u8 {
