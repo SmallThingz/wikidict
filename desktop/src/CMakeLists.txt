@@ -188,6 +188,19 @@ if(BUILD_TESTING)
     set_tests_properties(native-reader-ux PROPERTIES
         WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;DICT_TEST_ROOT=${CMAKE_SOURCE_DIR}/tests/fixtures")
+    # Focused disclosure regression: reuse the product, not the large reader test TU.
+    add_executable(dict-disclosure-tests ../tests/DisclosureContinuityTest.cpp)
+    set_target_properties(dict-disclosure-tests PROPERTIES AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)
+    target_compile_features(dict-disclosure-tests PRIVATE cxx_std_20)
+    target_compile_options(dict-disclosure-tests PRIVATE -Wall -Wextra -Wpedantic)
+    target_include_directories(dict-disclosure-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}" "${WIKIDICT_CORE}/renderer/src/ffi")
+    target_link_libraries(dict-disclosure-tests PRIVATE wikidict-product wikidict-fonts wikidict-phonos
+        Qt6::Widgets Qt6::GuiPrivate Qt6::Test Qt6::Concurrent Qt6::Network Qt6::Multimedia Qt6::Svg "${DICT_FFI_LIBRARY}")
+    add_test(NAME native-disclosure-continuity COMMAND dict-disclosure-tests
+        "${CMAKE_SOURCE_DIR}/tests/fixtures/it-cediglia-disclosure"
+        "${CMAKE_SOURCE_DIR}/tests/fixtures/it_public_disclosure_button_source01.json")
+    set_tests_properties(native-disclosure-continuity PROPERTIES
+        WORKING_DIRECTORY "${CMAKE_BINARY_DIR}" TIMEOUT 180 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
     add_executable(dict-fake-voice ../tests/FakeVoice.cpp)
     target_compile_features(dict-fake-voice PRIVATE cxx_std_20)
     set_target_properties(dict-fake-voice PROPERTIES AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)

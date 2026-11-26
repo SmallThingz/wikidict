@@ -143,3 +143,47 @@ Regeneration uses the existing `zig build test-reader` route and its
 composition test consumes the recorded JSON; ordinary installed GUI qualification
 separately opened the genuine Writer library through the core FFI. The committed
 DPRJ retains the paired semantic payload; it is not executable corpus code.
+
+## Disclosure format continuity
+
+`dict-disclosure-tests` is a focused executable linked to `wikidict-product`.
+CTest registers it as `native-disclosure-continuity`; it does not compile the large
+`MainWindowTest.cpp` translation unit. Build that target and select that CTest name
+when qualifying this regression independently.
+
+`fixtures/it-cediglia-disclosure` retains the complete ordinary `cediglia` Italian
+Entry and its original compiled library member, not a synthetic surrounding body.
+Its source is Italian Wiktionary [cediglia, revision 3991833](https://it.wiktionary.org/w/index.php?title=cediglia&oldid=3991833),
+page 143745. The manifest pins the compiled member, full Entry, authored expectations
+and existing `it_public_disclosure_button_source01.json` policy. Source witnesses
+also remain in `compiler/tools/testdata/it-cediglia-right-default`. This fixture
+covers one entry, not the whole Italian edition.
+
+Provenance is limited to retained page 143745/revision 3991833: 590 bytes of raw
+source and 2,086 bytes of retained expanded source, passed through the private
+four-leaf producer with the controlled c5b0 policy capture. The fixture manifest
+records the full producer closure and handoff hashes. Consumer evidence is a
+direct Entry/native blob read through the product FFI, not a CLI check. It grants
+no re-expansion, historical CSS fidelity, generic Writer, canonical producer, or
+whole-Italian-edition qualification.
+
+The test opens a private copy through the product FFI, compares the complete Entry,
+and performs native collapsed/expanded/recollapsed clicks. It then reports the six
+`FC02-*` controls separately: owned no-op, owned reflow, no consumption during a
+hold (including idle click/programmatic toggle restoration), cancelled/new tickets,
+foreign no-op/rebinding, and rejected holds. Each control explicitly resets private
+disclosure state before rendering the same captured Entry; that setup is not a
+claim about product reset behavior.
+
+The maintained Qt capabilities and genuine Arial font tables are required.
+Provide the licensed font through the test environment; this fixture does not
+redistribute it. Missing capabilities/fonts fail rather than skip or substitute.
+The test isolates XDG directories and default/explicit QSettings formats/scopes
+before QApplication. Ordinary successful runs remove temporary profiles only after
+a complete report write and flush. Failures retain available reports/captures under
+the build directory's `.tmp`; report transport failures return 74 and print the
+primary result, report path and I/O error to stderr.
+Append `--startup-only` after the two fixture arguments to execute portable setup
+only. This reports `STARTUP_ONLY_NOT_CONTROLS`, leaves the native cycle and all six
+controls `UNRUN`, and retains its profile and `result.json` for archival while also
+emitting the report to stdout. It does not replay or qualify the earned controls.

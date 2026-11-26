@@ -1,0 +1,85 @@
+{
+  "schema": "wikidict.desktop.cediglia-disclosure-fixture.v1",
+  "files": {
+    "entry.json": {
+      "bytes": 35817,
+      "sha256": "24858c50a946139afa44c87d4d4f34bf4c53b7dc519b9aca6d130e9f01c3ed70"
+    },
+    "authored.json": {
+      "bytes": 3000,
+      "sha256": "062d40880b5c5bdf4f5a17d6208ca4b6969cc63e00fa693614ea0fd178381a94"
+    },
+    "languages.tsv": {
+      "bytes": 17,
+      "sha256": "26b96e37e99806d7fd54ca15386b1c10c3c668fc987aa52d169ae355d915b9b7"
+    },
+    "languages/2cb4c2ac5779606a1fc2ff523ddacb4fd3a31294935a676b44c8e5a966586c5a.wikblb": {
+      "bytes": 8368,
+      "sha256": "43cd39cdfbd3cf14a1dee5e925a872e5b718184d27446690d8e3c6007ff80ee0"
+    }
+  },
+  "source_policy": {
+    "bytes": 6242,
+    "sha256": "c5b0e5998409bf5f26dae8d7dbb9160402b4ea016e07356e317a0e4f94873c4e"
+  },
+  "font_tables": {
+    "cmap": {
+      "bytes": 5006,
+      "sha256": "a48fa82b57546837c3c8e54fc66331bb3183f4c2605ee73fa41ecbd3b3c866ab"
+    },
+    "glyf": {
+      "bytes": 184196,
+      "sha256": "c78045d126d1af462b32fdba654c8691d28527cdc6e464c2143e8bed85cbc0cf"
+    },
+    "head": {
+      "bytes": 54,
+      "sha256": "999f2f7d1742f7230839a0b160362cc33ad1adede8c46d111979c59887269da6"
+    },
+    "hhea": {
+      "bytes": 36,
+      "sha256": "fa2f5bf342b197c61d429af3537b0a1a76db2b1348fafb091399ce24c4c4aa7f"
+    },
+    "hmtx": {
+      "bytes": 5280,
+      "sha256": "8bed8f0e7ab83f8e2b8949aa4b08c97013254b016f9762ac7bdcc47a5b662937"
+    },
+    "maxp": {
+      "bytes": 32,
+      "sha256": "3681017aea515f8e2dfe60b382081b9000898ab1151bcef7c324fcd208699f50"
+    },
+    "name": {
+      "bytes": 6925,
+      "sha256": "51734968e17288c30b8fd0341272789249ce66c6ab2371b06aa8ab0696e2935e"
+    }
+  },
+  "scope": "Retained complete cediglia italiano Entry. Qualification is limited to the private producer/captured-policy and direct native Entry/blob-read path described below.",
+  "provenance": {
+    "page_id": 143745,
+    "revision_id": 3991833,
+    "raw_source": {
+      "bytes": 590,
+      "sha256": "896fed09cc1c9dc23c30b1c1da96c7fb59c013ce9f2f7edf3e23fdef5d7e6374"
+    },
+    "retained_expanded_source": {
+      "bytes": 2086,
+      "sha256": "3276e7db61f157e745d6baf9e7b0189fa5aee4236afa5f30b9f061905eee05af"
+    },
+    "controlled_policy_capture": {
+      "bytes": 6242,
+      "sha256": "c5b0e5998409bf5f26dae8d7dbb9160402b4ea016e07356e317a0e4f94873c4e"
+    },
+    "private_producer": {
+      "scope": "Passed private four-leaf producer with controlled c5b0 policy capture",
+      "closure_sha256": "37b59725b6e4e835b6357c66bdd1f7b52f742bd1fed49dbd825112f4a0698362",
+      "handoff_sha256": "fa374013ccb6c98530325dbe7e0e052deaec239c4c80af24f036ca78b8b0c7ae"
+    },
+    "consumer_path": "Direct Entry/native blob read through the product FFI; not CLI",
+    "excluded_grants": [
+      "re-expansion",
+      "historical CSS fidelity",
+      "generic Writer",
+      "canonical producer",
+      "whole Italian edition"
+    ]
+  }
+}

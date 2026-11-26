@@ -4783,7 +4783,6 @@ bool MainWindow::editDocumentFormats(QTextBrowser *browser, const std::function<
         if (refreshAudioBindings && (!scrollReader || !scrollReader->audioControls
             || !scrollReader->audioControls->refreshRevision())) return false;
         if (heldDisclosures && !heldDisclosures->refreshRevision()) return false;
-        disclosureFormatsAccepted = true;
         audioFormatsAccepted = true;
         // beginEditBlock advances even a no-op format transaction. Only refresh
         // bindings validated before this successful, source-preserving edit.
@@ -4795,7 +4794,8 @@ bool MainWindow::editDocumentFormats(QTextBrowser *browser, const std::function<
         const auto revision = LogicalFlow::editFormats(document, readingLogicalOwners_, readingLogicalRevision_, mutation);
         if (!current() || !revision) return false;
         readingLogicalRevision_ = *revision;
-        return finishOwnedFormats(*revision);
+        disclosureFormatsAccepted = finishOwnedFormats(*revision);
+        return disclosureFormatsAccepted;
     }
     const QString text = document->toRawText();
     const int count = document->characterCount();
@@ -4814,7 +4814,8 @@ bool MainWindow::editDocumentFormats(QTextBrowser *browser, const std::function<
     restored = true; document->setLayoutEnabled(enabled);
     if (!current() || document->revision() != revision || document->characterCount() != count) return false;
     document->markContentsDirty(0, count);
-    return finishOwnedFormats(revision) && document->characterCount() == count;
+    disclosureFormatsAccepted = finishOwnedFormats(revision) && document->characterCount() == count;
+    return disclosureFormatsAccepted;
 }
 
 void MainWindow::updateInlineImageNotice() {
@@ -5024,30 +5025,34 @@ void MainWindow::queueDisclosureToggle(const QString &path, const QJsonObject &s
     const QPointer<MainWindow> self(this);
     const QPointer<CompiledDisclosure::Host> controls(readingDisclosures_);
     const QPointer<CompiledDisclosure::Button> button(controls ? controls->button(path, source) : nullptr);
-    if (!controls || !button || readingUncommitted_ || loading_ || readingCompositionActive_
-        || disclosureSources_.value(path) != source) {
-        if (controls && button) controls->cancelToggle(path, button);
+    const auto ticket = controls ? controls->pendingToggle(path, source, button, expanded) : CompiledDisclosure::Host::Toggle{};
+    if (!controls || !button || !ticket || !controls->toggleCurrent(ticket)
+        || readingUncommitted_ || loading_ || readingCompositionActive_ || disclosureSources_.value(path) != source) {
+        if (controls && button) controls->cancelToggle(path, button, ticket);
         return;
     }
     const QPointer<QTextDocument> document(reading_->document());
     const auto composition = readingComposition_, images = inlineImageGeneration_;
-    const int revision = document->revision();
+    // The ticket retains an exact expected revision; only an accepted owned
+    // format transaction may advance it while this activation is queued.
     const auto entry = currentEntry_;
     const bool focusVisible = controls->pendingFocusVisible(path);
     // Rebuild outside the button's signal stack; retire/deleteLater may then
     // replace its native occurrence without deleting the signal sender in place.
-    QTimer::singleShot(0, this, [self, controls, button, document, composition, images, revision,
+    QTimer::singleShot(0, this, [self, controls, button, document, composition, images, ticket,
                                entry, path, source, expanded, focusVisible] {
         if (!self || !controls || !button) return;
         const bool same = document && self->reading_->document() == document
             && self->readingComposition_ == composition && self->inlineImageGeneration_ == images
-            && document->revision() == revision && self->currentEntry_ == entry
+            && controls->toggleCurrent(ticket) && self->currentEntry_ == entry
             && self->readingDisclosures_ == controls && controls->current()
             && controls->button(path, source) == button && self->disclosureSources_.value(path) == source
             && !self->readingUncommitted_ && !self->loading_ && !self->readingCompositionActive_;
-        if (!same) { controls->cancelToggle(path, button); return; }
+        if (!same) { controls->cancelToggle(path, button, ticket); return; }
         const auto model = CompiledDisclosure::parse(source.value("container").toObject());
-        if (!model.button || model.contentIndex != button->model().contentIndex) return;
+        if (!model.button || model.contentIndex != button->model().contentIndex || !controls->consumeToggle(ticket)) {
+            controls->cancelToggle(path, button, ticket); return;
+        }
         self->disclosureStates_.insert(path, QJsonObject{{"source", source}, {"expanded", expanded}});
         self->pendingDisclosureFocusPath_ = path; self->pendingDisclosureFocusSource_ = source;
         self->pendingDisclosureFocusVisible_ = focusVisible; self->pendingDisclosureScroll_.reset();

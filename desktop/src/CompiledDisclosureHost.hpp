@@ -19,6 +19,7 @@
 #include <QTimer>
 #include <QUrl>
 #include <algorithm>
+#include <memory>
 #include <utility>
 
 // Native widgets belong to the viewport; their border boxes belong to the
@@ -32,6 +33,20 @@ public:
     static constexpr int GenerationProperty = QTextFormat::UserProperty + 0x5891;
     static constexpr auto markerScheme = "wikidict-disclosure-marker";
     static constexpr auto resourceScheme = "wikidict-disclosure-allocation";
+    // Each shared allocation is a unique activation token. A queued callback
+    // keeps its token alive, so cancellation/new activation cannot reuse it.
+    struct ToggleTicket {
+    private:
+        friend class Host;
+        QPointer<Host> host;
+        QPointer<Button> widget;
+        QString path;
+        QJsonObject source;
+        quint64 generation = 0;
+        int expectedRevision = -1;
+        bool expanded = false;
+    };
+    using Toggle = std::shared_ptr<ToggleTicket>;
     struct Occurrence {
         QString path, text, resource;
         QJsonObject block;
@@ -42,6 +57,7 @@ public:
         QSizeF size;
         int basePosition = -1;
         bool pendingToggle = false, metricsQueued = false, expanded = false, focusVisibleBeforeToggle = false;
+        Toggle toggle;
     };
     QList<Occurrence> occurrences;
     std::function<void()> requestSync;
@@ -93,10 +109,27 @@ public:
         for (const auto &row : occurrences) if (row.path == path) return row.focusVisibleBeforeToggle;
         return false;
     }
-    void cancelToggle(const QString &path, Button *widget) {
-        if (!current()) return;
-        for (auto &row : occurrences) if (row.path == path && row.widget == widget) {
-            row.pendingToggle = false;
+    Toggle pendingToggle(const QString &path, const QJsonObject &source, Button *widget, bool expanded) const {
+        for (const auto &row : occurrences) if (row.path == path && row.block == source && row.widget == widget
+            && ownsToggle(row.toggle) && row.toggle->expanded == expanded) return row.toggle;
+        return {};
+    }
+    bool toggleCurrent(const Toggle &ticket) const {
+        return !formatting_ && current() && ownsToggle(ticket)
+            && document_->revision() == ticket->expectedRevision;
+    }
+    bool consumeToggle(const Toggle &ticket) {
+        if (!toggleCurrent(ticket)) return false;
+        for (auto &row : occurrences) if (row.toggle == ticket) {
+            row.toggle.reset(); // Keep pending/disabled until composition retires this occurrence.
+            return true;
+        }
+        return false;
+    }
+    void cancelToggle(const QString &path, Button *widget, const Toggle &ticket) {
+        if (!current() || !ownsToggle(ticket)) return;
+        for (auto &row : occurrences) if (row.path == path && row.widget == widget && row.toggle == ticket) {
+            row.toggle.reset(); row.pendingToggle = false;
             const QSignalBlocker blocked(widget); widget->setChecked(row.expanded);
             widget->setText(row.text); widget->setAccessibleName(row.text); widget->setEnabled(interactive_);
             return;
@@ -122,7 +155,7 @@ public:
     }
     void retire() {
         const QPointer<Host> self(this);
-        ++generation_; revision_ = -1; count_ = -1; formatting_ = false; interactive_ = false; semanticText_.clear();
+        ++generation_; revision_ = -1; count_ = -1; heldRevision_ = -1; formatting_ = false; restoringHeldActivation_ = false; interactive_ = false; semanticText_.clear();
         const auto old = std::exchange(occurrences, {});
         for (const auto &row : old) if (row.widget) {
             row.widget->expandedChanged = {}; row.widget->metricsChanged = {};
@@ -223,9 +256,21 @@ public:
                     row.cursor = QTextCursor(document_); row.cursor.setPosition(fragment.position()); row.cursor.setKeepPositionOnInsert(true);
                     const QPointer<Button> widget(row.widget);
                     widget->expandedChanged = [self, widget, generation, path](quint32 index, bool value) {
-                        if (!self || !widget || self->generation_ != generation || !self->current() || !self->interactive_) return;
+                        if (!self || !widget || self->generation_ != generation) return;
+                        // Button already changed its check/label before this callback.
+                        // Reject held activations even while the document is between revisions.
+                        if (self->formatting_) {
+                            if (!self->restoreHeldActivation(path, widget, generation)
+                                && self && self->generation_ == generation && self->formatting_) self->retire();
+                            return;
+                        }
+                        if (!self->current() || !self->interactive_) return;
                         for (auto &entry : self->occurrences) if (entry.path == path && entry.widget == widget) {
                             if (entry.pendingToggle || index != widget->model().contentIndex) return;
+                            auto ticket = std::make_shared<ToggleTicket>();
+                            ticket->host = self; ticket->widget = widget; ticket->path = path; ticket->source = entry.block;
+                            ticket->generation = generation; ticket->expectedRevision = self->document_->revision();
+                            ticket->expanded = value; entry.toggle = std::move(ticket);
                             entry.pendingToggle = true;
                             entry.focusVisibleBeforeToggle = widget->focusVisible();
                             const auto source = entry.block; const auto toggle = self->requestToggle;
@@ -244,6 +289,9 @@ public:
         std::sort(occurrences.begin(), occurrences.end(), [](const auto &a, const auto &b) { return a.cursor.position() < b.cursor.position(); });
     }
     bool seal(const std::function<int(int)> &baseOffset) {
+        // Initial composition is unsealed. An existing binding may be resealed
+        // only by the active hold of that exact predecessor revision.
+        if (revision_ >= 0 && (!formatting_ || heldRevision_ < 0 || heldRevision_ != revision_)) return false;
         if (!document_ || !layout_ || document_->documentLayout() != layout_) return false;
         int previous = -1;
         for (auto &row : occurrences) {
@@ -265,9 +313,13 @@ public:
         }
         revision_ = document_->revision(); count_ = document_->characterCount(); return true;
     }
-    bool holdFormats() { if (!current() || formatting_) return false; formatting_ = true; return true; }
+    bool holdFormats() {
+        if (!current() || formatting_) return false;
+        heldRevision_ = revision_; formatting_ = true; return true;
+    }
     bool refreshRevision() {
-        if (!document_ || document_->characterCount() != count_) return false;
+        if (!formatting_ || heldRevision_ < 0 || heldRevision_ != revision_
+            || !document_ || document_->characterCount() != count_) return false;
         return seal([&](int position) {
             for (const auto &row : occurrences) {
                 if (row.cursor.position() == position) return row.basePosition;
@@ -276,7 +328,15 @@ public:
             return -1;
         });
     }
-    void releaseFormats(bool accepted) { formatting_ = false; if (!accepted || !current()) retire(); }
+    void releaseFormats(bool accepted) {
+        // Only the outer transaction's final RAII acceptance may bridge revisions.
+        // refreshRevision() alone never authorizes a pending action.
+        if (restoringHeldActivation_ || !formatting_ || !accepted || !current() || heldRevision_ < 0) { retire(); return; }
+        for (const auto &row : occurrences) if (row.toggle
+            && (!ownsToggle(row.toggle) || row.toggle->expectedRevision != heldRevision_)) { retire(); return; }
+        for (const auto &row : occurrences) if (row.toggle) row.toggle->expectedRevision = revision_;
+        heldRevision_ = -1; formatting_ = false;
+    }
     int toSource(int base) const { int extra = 0; for (const auto &row : occurrences) if (row.basePosition < base) extra += row.text.size() - 1; return base + extra; }
     int toBase(int source, bool after) const {
         int extra = 0;
@@ -409,6 +469,43 @@ protected:
         return QObject::eventFilter(watched, event);
     }
 private:
+    bool restoreHeldActivation(const QString &path, const QPointer<Button> &widget, quint64 generation) {
+        if (!widget || !formatting_ || heldRevision_ < 0 || generation_ != generation || restoringHeldActivation_) return false;
+        const QPointer<Host> self(this); const int heldRevision = heldRevision_;
+        const auto rows = occurrences;
+        for (const auto &row : rows) if (row.path == path && row.widget == widget) {
+            if (row.pendingToggle && !ownsToggle(row.toggle)) return false;
+            const bool checked = row.pendingToggle ? row.toggle->expanded : row.expanded;
+            const QString label = checked ? widget->model().collapseLabel : widget->model().expandLabel;
+            const auto same = [&] {
+                if (!self || !widget || self->generation_ != generation || !self->formatting_
+                    || self->heldRevision_ != heldRevision) return false;
+                for (const auto &entry : self->occurrences) if (entry.path == path && entry.widget == widget
+                    && entry.block == row.block && entry.expanded == row.expanded
+                    && entry.pendingToggle == row.pendingToggle && entry.toggle == row.toggle) return true;
+                return false;
+            };
+            restoringHeldActivation_ = true;
+            const auto finish = qScopeGuard([self, generation] {
+                if (self && self->generation_ == generation) self->restoringHeldActivation_ = false;
+            });
+            QSignalBlocker blocked(widget.data());
+            // Qt property/accessibility callbacks may delete the widget. Never
+            // restore its signal flag through a dead QObject on scope exit.
+            const auto dismiss = qScopeGuard([&blocked, widget] { if (!widget) blocked.dismiss(); });
+            widget->setChecked(checked); if (!same()) return false;
+            widget->setText(label); if (!same()) return false;
+            widget->setAccessibleName(label); if (!same()) return false;
+            return widget->isChecked() == checked && widget->text() == label && widget->accessibleName() == label;
+        }
+        return false;
+    }
+    bool ownsToggle(const Toggle &ticket) const {
+        if (!ticket || ticket->host != this || ticket->generation != generation_ || !ticket->widget) return false;
+        for (const auto &row : occurrences) if (row.pendingToggle && row.toggle == ticket
+            && row.widget == ticket->widget && row.path == ticket->path && row.block == ticket->source) return true;
+        return false;
+    }
     void queueMetrics(const QString &path, const QPointer<Button> &widget) {
         if (!current()) return;
         for (auto &row : occurrences) if (row.path == path && row.widget == widget) {
@@ -442,9 +539,9 @@ private:
     QPointer<QTextDocument> document_;
     QPointer<QAbstractTextDocumentLayout> layout_;
     QPointer<QWidget> viewport_;
-    int revision_ = -1, count_ = -1;
+    int revision_ = -1, count_ = -1, heldRevision_ = -1;
     quint64 generation_ = 0;
-    bool formatting_ = false, interactive_ = false;
+    bool formatting_ = false, restoringHeldActivation_ = false, interactive_ = false;
     QString semanticText_;
 };
 }

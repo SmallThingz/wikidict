@@ -1,0 +1,90 @@
+{
+  "schema": "wikidict.parent.it-cediglia.authored-content-expectations.v1",
+  "state": "EXPECTED_SOURCE_VALUES_NOT_CURRENT_QUALIFICATION",
+  "entry": {
+    "title": "cediglia",
+    "language": "Italiano",
+    "language_code": "it",
+    "page_id": 143745,
+    "revision_id": 3991833
+  },
+  "references": {
+    "raw_sha256": "896fed09cc1c9dc23c30b1c1da96c7fb59c013ce9f2f7edf3e23fdef5d7e6374",
+    "retained_expanded_sha256": "3276e7db61f157e745d6baf9e7b0189fa5aee4236afa5f30b9f061905eee05af",
+    "source_reference_manifest": "63db9eee73815a7b8473358effe31cd5c6b11a890d432e40bfd64f49dea95d02",
+    "current_native_closure": "9c611806c31576a5b21fd180cb65cb32c9085a0c4fce26c89238b874d789da55"
+  },
+  "headword": {
+    "text": "cediglia",
+    "authored_bold": true,
+    "part_of_speech": "Sostantivo",
+    "gender_text": "f",
+    "plural": "cediglie"
+  },
+  "definition": {
+    "count": 1,
+    "plain_text": "segno ortografico consistente originariamente in una piccola zeta posta sotto la lettera c davanti alle vocali a, o, u. Indica un suono cz oppure s sorda. È usata in varie lingue, tra cui il francese",
+    "authored_link_targets": [
+      "segno",
+      "ortografico",
+      "originariamente",
+      "zeta",
+      "sorda"
+    ],
+    "authored_italic_literals": [
+      "c",
+      "a",
+      "o",
+      "u",
+      "cz",
+      "s"
+    ]
+  },
+  "syllabification": "ce | dì | glia",
+  "pronunciation_ipa": "/t͡ʃeˈdiʎʎa/",
+  "etymology": {
+    "plain_text": "dallo spagnolo cedilla",
+    "source_link_targets": [
+      "spagnolo",
+      "cedilla"
+    ],
+    "cedilla_authored_italic": true
+  },
+  "translations": [
+    {
+      "language_label": "esperanto",
+      "word_target": "cedilo"
+    },
+    {
+      "language_label": "inglese",
+      "word_target": "cedilla"
+    }
+  ],
+  "translation_disclosure": {
+    "retained_expanded_caption": "Vedi le traduzioni",
+    "open_label": "Mostra",
+    "close_label": "Nascondi",
+    "initially_collapsed_in_source": true
+  },
+  "primary_figure": {
+    "source_file": "Unicode 0x0327.svg",
+    "caption": "La cediglia",
+    "authored_options": [
+      "upright",
+      "right",
+      "thumb"
+    ],
+    "exact_geometry": "Requires Book8/source-observation join; no inferred pixel width or media-load claim."
+  },
+  "external_references": [
+    "https://www.treccani.it/vocabolario/ricerca/cediglia/",
+    "https://www.treccani.it"
+  ],
+  "limits": [
+    "These values are authored-source expectations for an independent comparison after Reader export, not another native execution or a pass.",
+    "Logical authored targets must be checked through the qualified namespace/interwiki resolver; no assumed URL rewriting.",
+    "Preserve all other current content, media/heading actions and formatting; this short checklist is not exhaustive full-entry acceptance.",
+    "The retained expansion is not a fresh current-native expansion capture.",
+    "Source CSS, all-client behavior, media loading and whole Italian generation remain unqualified."
+  ]
+}
