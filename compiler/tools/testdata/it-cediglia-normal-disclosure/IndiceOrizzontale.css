@@ -1,0 +1,21 @@
+/*************************
+ Stile dell'indice nel NS:0
+
+Permette di rendere orizzontale l'elenco delle sezioni;
+
+Codice fregato ai francesi:
+
+(http://fr.wiktionary.org/wiki/MediaWiki:Gadget-TOC.css)
+*************************/
+
+/* Soppressione dei numeri del sommario */
+.ns-0 .toclevel-2 span.tocnumber,
+.ns-0 .toclevel-3 span.tocnumber,
+.ns-0 .toclevel-4 span.tocnumber,
+.ns-0 .toclevel-5 span.tocnumber { display:none; }
+ 
+/* mostra l'indice su di una riga*/
+.ns-0 #toc li.toclevel-1 ul { display: inline; margin-left: 1em }
+.ns-0 #toc li.toclevel-2 { display: inline; margin-left:0.5em }
+.ns-0 #toc li.toclevel-2:before { content:"—"; margin-right:0.5em }
+.ns-0 #toc li.toclevel-2 ul { display: none }

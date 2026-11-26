@@ -3543,7 +3543,7 @@ fn normalizeWikiQuotesPreparedMappedInDomain(a: A, source: MissingText, depth: u
 
 pub const Reference = struct { kind: citation_state.Kind = .note, number: usize, group_number: ?u32, name: []const u8 = "", group: []const u8 = "", body: []const u8 = "", missing: ?MissingText = null, spans: []const Span = &.{}, blocks: ?[]const Block = null, poem: bool = false, poem_direction: []const u8 = "", citation_plan: ?*const CitationPlan = null, citation_item: ?usize = null };
 pub const ReferenceDefinition = struct { name: []const u8, group: []const u8 = "", body: []const u8 = "", missing: ?MissingText = null, list_defined: bool = false };
-pub const ReferenceDefinitions = struct { body_link_continuations: ?*const BodyLinkContinuations = null, normal_title_defaults: ?NormalTitleDefaults = null, display_title_precedence: ?DisplayTitlePrecedence = null, local_link_targets: ?LocalLinkTargetSource = null, content_conversion: ?bool = null, items: []const ReferenceDefinition = &.{}, fallbacks: @import("presentation_fallback.zig").Report = .{}, citations: ?*const CitationPlan = null };
+pub const ReferenceDefinitions = struct { container_disclosures: ?*const ContainerDisclosureSource = null, container_disclosure_projection: ?*const SourceElementProjection = null, body_link_continuations: ?*const BodyLinkContinuations = null, normal_title_defaults: ?NormalTitleDefaults = null, display_title_precedence: ?DisplayTitlePrecedence = null, local_link_targets: ?LocalLinkTargetSource = null, content_conversion: ?bool = null, items: []const ReferenceDefinition = &.{}, fallbacks: @import("presentation_fallback.zig").Report = .{}, citations: ?*const CitationPlan = null };
 
 /// Collect names once without rendering reference bodies or creating citations.
 pub fn referenceDefinitionsAlloc(a: std.mem.Allocator, source: []const u8) Error!ReferenceDefinitions {
@@ -9800,6 +9800,7 @@ pub const Renderer = struct {
     body_depth: usize = 0,
     container_child_positions: ?ContainerChildPositions = null,
     generic_disclosure_child_binding: ?*GenericDisclosureChildBinding = null,
+    container_disclosure_binding: ?TableDirectionRangeBinding = null,
     container_parent_flex: bool = false,
     // Exact original DIV -> single physical list edge, never inferred from
     // inherited style ancestry or generated block owners.
@@ -47806,6 +47807,23 @@ pub const Renderer = struct {
         if (offset > root.len or part.len > root.len - offset) return null;
         return offset;
     }
+    fn genericDisclosureInputOffset(self: *const Renderer, root: []const u8, part: []const u8) ?usize {
+        if (self.container_disclosure_binding) |binding| {
+            if (binding.projection.original.bytes.ptr != root.ptr or binding.projection.original.bytes.len != root.len)
+                return null;
+            if (binding.originalRange(part)) |offset| return offset;
+            // A fragment may retain an original slice. Prove its reverse range
+            // is still within this exact admitted owner, not a matching string.
+            const original = genericDisclosureOffset(root, part) orelse return null;
+            const prepared = binding.projection.preparedRange(original, part.len) orelse return null;
+            if (prepared < binding.page_start) return null;
+            const offset = prepared - binding.page_start;
+            if (offset > binding.owner.bytes.len or part.len > binding.owner.bytes.len - offset) return null;
+            const mapped = binding.originalRange(binding.owner.bytes[offset..][0..part.len]) orelse return null;
+            return if (mapped == original) original else null;
+        }
+        return genericDisclosureOffset(root, part);
+    }
     fn genericDisclosureTargetChild(self: *const Renderer, input: []const u8, source: []const u8) bool {
         const binding = self.generic_disclosure_child_binding orelse return false;
         return input.ptr == binding.parent_inner.ptr and input.len == binding.parent_inner.len and
@@ -47817,9 +47835,9 @@ pub const Renderer = struct {
         // A finite source table, not a renderer-wide style default or a callback.
         if (held.source.len == 0 or held.captures.len == 0 or held.captures.len > 4096)
             return self.containerUnavailableAt("generic_disclosure_capture_scope", query.owner_source);
-        const owner_start = genericDisclosureOffset(held.source, query.owner_source) orelse
+        const owner_start = self.genericDisclosureInputOffset(held.source, query.owner_source) orelse
             return self.containerUnavailableAt("generic_disclosure_capture_source", query.owner_source);
-        const content_start = genericDisclosureOffset(held.source, query.content_source) orelse
+        const content_start = self.genericDisclosureInputOffset(held.source, query.content_source) orelse
             return self.containerUnavailableAt("generic_disclosure_capture_source", query.owner_source);
         const owner_end = owner_start + query.owner_source.len;
         const content_end = content_start + query.content_source.len;

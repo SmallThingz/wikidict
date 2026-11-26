@@ -124,6 +124,7 @@ pub fn prepareBodySourceInContextWithMissingAlloc(a: A, source: MissingText, con
             !source.unknown and !source.lost_missing_range and source.generated_source == null)
             renderer.local_link_binding = .{ .projection = selected, .owner = source, .page_start = 0 };
     };
+    bindContainerDisclosureProjection(&renderer, projection, source, 0);
     const prepared = try renderer.prepareBodySourceWithMissing(source);
     return .{ .source = prepared.bytes, .missing = prepared,
         .body_link_continuations = renderer.context.body_link_continuations, .fallbacks = renderer.fallbacks };
@@ -188,7 +189,25 @@ fn tracePreObservationBinding(renderer: *const compiler.Renderer, stage: []const
     }
 }
 
+// This carries only the existing insertion-only source projection. It grants
+// no ancestor/cascade authority and refuses generated or lost source ranges.
+fn bindContainerDisclosureProjection(renderer: *compiler.Renderer,
+    projection: ?*const compiler.SourceElementProjection, tracked: MissingText,
+    page_start: usize) void
+{
+    renderer.container_disclosure_binding = null;
+    const held = renderer.context.container_disclosures orelse return;
+    const selected = projection orelse return;
+    if (selected.original.bytes.ptr != held.source.ptr or selected.original.bytes.len != held.source.len or
+        selected.original.unknown or selected.original.lost_missing_range or selected.original.generated_source != null or
+        tracked.unknown or tracked.lost_missing_range or tracked.generated_source != null or
+        page_start > selected.prepared.len or tracked.bytes.len > selected.prepared.len - page_start or
+        !std.mem.eql(u8, tracked.bytes, selected.prepared[page_start..][0..tracked.bytes.len])) return;
+    renderer.container_disclosure_binding = .{ .projection = selected, .owner = tracked, .page_start = page_start };
+}
+
 fn bindPreObservationSelectedPage(renderer: *compiler.Renderer, source: MissingText, styles: ?*const TableStyleProfile, figure_sizing: ?FigureSizingSource, source_projection: ?*const compiler.SourceElementProjection) void {
+    bindContainerDisclosureProjection(renderer, source_projection, source, 0);
     const projection = source_projection orelse {
         tracePreObservationBinding(renderer, "projection_absent", source, styles, figure_sizing, source_projection);
         return;
@@ -454,6 +473,7 @@ fn observePreScopesSourceAlloc(a: A, title: []const u8, source: []const u8, sour
             .content_conversion = reference_context.content_conversion,
             .display_title_precedence = reference_context.display_title_precedence,
             .normal_title_defaults = reference_context.normal_title_defaults,
+            .container_disclosures = reference_context.container_disclosures,
             .local_link_targets = reference_context.local_link_targets,
             .body_link_continuations = reference_context.body_link_continuations,
             .external_links_prepared = reference_context.citations != null,
@@ -1459,9 +1479,12 @@ fn bindFragmentSourceElements(renderer: *compiler.Renderer, fragment: SourceFrag
     renderer.local_link_binding = null;
     renderer.source_element_binding = null;
     renderer.table_direction_binding = null;
+    renderer.container_disclosure_binding = null;
     if (fragmentContentRoot(fragment, tracked) != .parser_output) return;
     const range = fragment.parser_output_range.?;
     const projection = range.source_element_projection orelse return;
+    if (projection.prepared.ptr == range.page.ptr and projection.prepared.len == range.page.len)
+        bindContainerDisclosureProjection(renderer, projection, tracked, range.start);
     if (renderer.context.local_link_targets) |selected| {
         if (projection.prepared.ptr == range.page.ptr and projection.prepared.len == range.page.len and
             projection.original.bytes.ptr == selected.source.ptr and projection.original.bytes.len == selected.source.len and
@@ -1617,6 +1640,7 @@ fn workAllocWithMissingFragmentsIn(a: A, title: []const u8, language: []const u8
             .content_conversion = reference_context.content_conversion,
             .display_title_precedence = reference_context.display_title_precedence,
             .normal_title_defaults = reference_context.normal_title_defaults,
+            .container_disclosures = reference_context.container_disclosures,
             .local_link_targets = reference_context.local_link_targets,
             .body_link_continuations = reference_context.body_link_continuations,
             .external_links_prepared = reference_context.citations != null,
@@ -1624,6 +1648,7 @@ fn workAllocWithMissingFragmentsIn(a: A, title: []const u8, language: []const u8
     };
     // One final Entry owner, not one receipt per selected source fragment.
     renderer.budgetForSource(tracked.bytes.len);
+    bindContainerDisclosureProjection(&renderer, reference_context.container_disclosure_projection, tracked, 0);
     var native_host = nativeArticleHostForFinalBody(&renderer, tracked, title, native_body_language,
         native_article_owner and final_document_body);
     renderer.native_article_host = if (native_host) |*host| host else null;
@@ -1723,10 +1748,12 @@ fn workWithHeadingOffsetsAllocIn(a: A, title: []const u8, language: []const u8, 
     renderer.context.display_title_precedence = reference_context.display_title_precedence;
     renderer.context.normal_title_defaults = reference_context.normal_title_defaults;
     renderer.context.citations = reference_context.citations;
+    renderer.context.container_disclosures = reference_context.container_disclosures;
     renderer.context.local_link_targets = reference_context.local_link_targets;
     renderer.context.body_link_continuations = reference_context.body_link_continuations;
     renderer.context.content_conversion = try compiler.pageContentConversion(a, source.bytes, .{ .namespace_catalog = namespace_catalog, .behavior_switches = behavior_switches, .content_conversion = reference_context.content_conversion });
     renderer.context.external_links_prepared = reference_context.citations != null;
+    bindContainerDisclosureProjection(&renderer, reference_context.container_disclosure_projection, source, 0);
     renderer.page_reference_definitions = reference_context.items;
     renderer.fallbacks.merge(reference_context.fallbacks);
     var builder: Builder = .{ .a = a, .renderer = &renderer, .title = if (language.len == 0) title else language };

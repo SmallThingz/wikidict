@@ -47,6 +47,7 @@ pub const ScreenStyleArticle = struct {
 };
 
 pub const LanguageCodes = struct {
+    container_disclosures: ?*const @import("presentation_compile.zig").ContainerDisclosureSource = null,
     local_link_targets: ?@import("presentation_compile.zig").LocalLinkTargetSource = null,
     revision_exterior: ?struct { namespace_sha256: [32]u8, title: []const u8, raw: []const u8, expanded: []const u8, tags: []const []const u8 } = null,
     // A selected page borrows its Profile from the page arena. Retain the stable
@@ -6166,6 +6167,12 @@ fn processMain(
     const organization_phase = consume_diagnostics.beginConsumePhase(.organization);
     defer consume_diagnostics.endConsumePhase(organization_phase);
     const raw_missing = if (missing_phase) |phase| phase.output() else MissingText.untracked(source_raw);
+    const disclosure_selected = if (codes.container_disclosures) |held| selected: {
+        if (held.source.ptr != source_raw.ptr or held.source.len != source_raw.len or
+            raw_missing.bytes.ptr != source_raw.ptr or raw_missing.bytes.len != source_raw.len)
+            return error.InvalidContainerDisclosureSource;
+        break :selected true;
+    } else false;
     // Normal native pages have no URL/user/header or custom variant override.
     // Select the pinned core defaults explicitly; body fallback stays separate.
     const title_defaults = if (display_title == null and std.mem.indexOf(u8, source_raw, "-{T|") != null)
@@ -6182,7 +6189,8 @@ fn processMain(
     const numbered = try checkedWriterNumbering(page_allocator, try presentation_document.preparePageExternalLinksWithMissingAlloc(page_allocator, raw_missing, .{
         .title = title,
         .observe_source_elements = observeSourceElements(codes.figure_sizing, raw_missing.bytes) or
-            local_targets_selected,
+            local_targets_selected or disclosure_selected,
+        .container_disclosures = codes.container_disclosures,
         .local_link_targets = codes.local_link_targets,
         .display_title_precedence = title_precedence,
         .normal_title_defaults = title_defaults,
@@ -6202,6 +6210,7 @@ fn processMain(
         try presentation_document.prepareBodySourceInContextWithMissingAlloc(page_allocator, numbered.missing, .{
             .title = title, .link_trail = codes.link_trail, .namespace_catalog = codes.namespace_catalog,
             .behavior_switches = codes.behavior_switches, .image_options = codes.image_options,
+            .container_disclosures = codes.container_disclosures,
             .local_link_targets = codes.local_link_targets, .content_conversion = numbered.content_conversion,
             .citations = numbered.citations, .external_links_prepared = true,
             .poem_phase = poem_phase,
@@ -6267,6 +6276,8 @@ fn processMain(
     defer page_sections.deinit(page_allocator);
     var reference_context = try presentation_document.referenceDefinitionsWithMissingAlloc(page_allocator, source_missing);
     reference_context.local_link_targets = codes.local_link_targets;
+    reference_context.container_disclosures = codes.container_disclosures;
+    reference_context.container_disclosure_projection = if (numbered.source_element_projection) |*proof| proof else null;
     if (body_source.body_link_continuations) |continuations| {
         if (source.ptr != continuations.source.bytes.ptr or source.len != continuations.source.bytes.len)
             return error.InvalidPreContext;

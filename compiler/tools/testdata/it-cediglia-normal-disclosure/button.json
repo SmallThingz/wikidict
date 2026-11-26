@@ -1,0 +1,321 @@
+{
+  "content_index": 1,
+  "initially_collapsed": true,
+  "expand_label": "Mostra",
+  "collapse_label": "Nascondi",
+  "focus": null,
+  "placement": "float_right",
+  "foreground": {
+    "kind": "rgb",
+    "value": "#000000"
+  },
+  "direction": "ltr",
+  "expand_run": {
+    "start": 0,
+    "end": 6,
+    "paint": {
+      "normal": {
+        "foreground": "#000000",
+        "underline": false
+      },
+      "hover": {
+        "foreground": "#000000",
+        "underline": false
+      },
+      "active": {
+        "foreground": "#000000",
+        "underline": false
+      },
+      "hover_active": {
+        "foreground": "#000000",
+        "underline": false
+      },
+      "underline_on_focus": false
+    }
+  },
+  "collapse_run": {
+    "start": 0,
+    "end": 8,
+    "paint": {
+      "normal": {
+        "foreground": "#000000",
+        "underline": false
+      },
+      "hover": {
+        "foreground": "#000000",
+        "underline": false
+      },
+      "active": {
+        "foreground": "#000000",
+        "underline": false
+      },
+      "hover_active": {
+        "foreground": "#000000",
+        "underline": false
+      },
+      "underline_on_focus": false
+    }
+  },
+  "button": {
+    "font_family": {
+      "name": "Arial"
+    },
+    "appearance": "native_button",
+    "font_size": {
+      "unit": "px",
+      "value": 13.3333
+    },
+    "font_weight": 400,
+    "font_italic": false,
+    "line_height": {
+      "normal": {}
+    },
+    "padding": {
+      "top": {
+        "unit": "px",
+        "value": 1.0
+      },
+      "right": {
+        "unit": "px",
+        "value": 6.0
+      },
+      "bottom": {
+        "unit": "px",
+        "value": 1.0
+      },
+      "left": {
+        "unit": "px",
+        "value": 6.0
+      }
+    },
+    "normal": {
+      "background": {
+        "kind": "rgb",
+        "value": "#efefef"
+      },
+      "border": {
+        "top": {
+          "outset": {
+            "width": {
+              "unit": "px",
+              "value": 2.0
+            },
+            "paint": {
+              "rgb": "#000000"
+            }
+          }
+        },
+        "right": {
+          "outset": {
+            "width": {
+              "unit": "px",
+              "value": 2.0
+            },
+            "paint": {
+              "rgb": "#000000"
+            }
+          }
+        },
+        "bottom": {
+          "outset": {
+            "width": {
+              "unit": "px",
+              "value": 2.0
+            },
+            "paint": {
+              "rgb": "#000000"
+            }
+          }
+        },
+        "left": {
+          "outset": {
+            "width": {
+              "unit": "px",
+              "value": 2.0
+            },
+            "paint": {
+              "rgb": "#000000"
+            }
+          }
+        }
+      }
+    },
+    "hover": {
+      "background": {
+        "kind": "rgb",
+        "value": "#efefef"
+      },
+      "border": {
+        "top": {
+          "outset": {
+            "width": {
+              "unit": "px",
+              "value": 2.0
+            },
+            "paint": {
+              "rgb": "#000000"
+            }
+          }
+        },
+        "right": {
+          "outset": {
+            "width": {
+              "unit": "px",
+              "value": 2.0
+            },
+            "paint": {
+              "rgb": "#000000"
+            }
+          }
+        },
+        "bottom": {
+          "outset": {
+            "width": {
+              "unit": "px",
+              "value": 2.0
+            },
+            "paint": {
+              "rgb": "#000000"
+            }
+          }
+        },
+        "left": {
+          "outset": {
+            "width": {
+              "unit": "px",
+              "value": 2.0
+            },
+            "paint": {
+              "rgb": "#000000"
+            }
+          }
+        }
+      }
+    },
+    "active": {
+      "background": {
+        "kind": "rgb",
+        "value": "#efefef"
+      },
+      "border": {
+        "top": {
+          "inset": {
+            "width": {
+              "unit": "px",
+              "value": 2.0
+            },
+            "paint": {
+              "rgb": "#000000"
+            }
+          }
+        },
+        "right": {
+          "inset": {
+            "width": {
+              "unit": "px",
+              "value": 2.0
+            },
+            "paint": {
+              "rgb": "#000000"
+            }
+          }
+        },
+        "bottom": {
+          "inset": {
+            "width": {
+              "unit": "px",
+              "value": 2.0
+            },
+            "paint": {
+              "rgb": "#000000"
+            }
+          }
+        },
+        "left": {
+          "inset": {
+            "width": {
+              "unit": "px",
+              "value": 2.0
+            },
+            "paint": {
+              "rgb": "#000000"
+            }
+          }
+        }
+      }
+    },
+    "hover_active": {
+      "background": {
+        "kind": "rgb",
+        "value": "#efefef"
+      },
+      "border": {
+        "top": {
+          "inset": {
+            "width": {
+              "unit": "px",
+              "value": 2.0
+            },
+            "paint": {
+              "rgb": "#000000"
+            }
+          }
+        },
+        "right": {
+          "inset": {
+            "width": {
+              "unit": "px",
+              "value": 2.0
+            },
+            "paint": {
+              "rgb": "#000000"
+            }
+          }
+        },
+        "bottom": {
+          "inset": {
+            "width": {
+              "unit": "px",
+              "value": 2.0
+            },
+            "paint": {
+              "rgb": "#000000"
+            }
+          }
+        },
+        "left": {
+          "inset": {
+            "width": {
+              "unit": "px",
+              "value": 2.0
+            },
+            "paint": {
+              "rgb": "#000000"
+            }
+          }
+        }
+      }
+    },
+    "focus_visible": {
+      "mode": "ua_auto",
+      "outline": {
+        "width": {
+          "unit": "px",
+          "value": 1.0
+        },
+        "color": {
+          "kind": "rgb",
+          "value": "#3366cc"
+        },
+        "radius": {
+          "unit": "px",
+          "value": 0.0
+        },
+        "offset": {
+          "unit": "px",
+          "value": 0.0
+        }
+      }
+    }
+  }
+}

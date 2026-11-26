@@ -635,3 +635,4 @@ compiler/src/encoder/testdata/zh-piasu381-pitch/expanded.wikitext whitespace=-bl
 
 # Preserve the verified upstream font notice byte for byte.
 renderer/fonts/NotoSansThaana-OFL.txt whitespace=-blank-at-eol
+compiler/tools/testdata/it-cediglia-normal-disclosure/IndiceOrizzontale.css whitespace=-blank-at-eol
