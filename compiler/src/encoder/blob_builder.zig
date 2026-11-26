@@ -3367,6 +3367,22 @@ fn italianSupportContinuation(codes: LanguageCodes, source: MissingText, section
         ns.ofTitle("note").id == 0 and ns.ofTitle("riferimenti").id == 0;
 }
 
+// A retained Malagasy general-information heading declares no language. This
+// only recognizes a clean support section after the ordinary continuation
+// branch has independently selected an existing Malagasy owner. It cannot
+// clear an earlier refusal, create an owner, or lend an unowned page prefix.
+fn malagasySupportContinuation(codes: LanguageCodes, source: MissingText, section: language_source.Section, owner_code: []const u8) bool {
+    const ns = codes.namespace_catalog orelse return false;
+    if (!std.mem.eql(u8, ns.wiki, "mgwiktionary") or !std.mem.eql(u8, ns.content_language, "mg") or
+        !std.mem.eql(u8, owner_code, "mg") or source.unknown or source.lost_missing_range or
+        section.hyphen_marker or !std.mem.eql(u8, section.heading, "Ankapobeny") or
+        !sourceCategoryHeaderRangesClean(source, section)) return false;
+    missing_dependency.generated_link.validateRanges(source.bytes, source.generated_source, source.generated_links) catch return false;
+    const line = std.mem.trimEnd(u8, section.source[0 .. std.mem.indexOfScalar(u8, section.source, '\n') orelse section.source.len], "\r");
+    const heading = blobs.wikitext_syntax.controlHeading(line, null) orelse return false;
+    return heading.level == 2 and std.mem.eql(u8, heading.title, section.heading);
+}
+
 // Known support/POS vocabulary only; it does not classify any language.
 fn knownOuterSupportOrPos(heading: []const u8) bool {
     const part = blobs.part_kind;
@@ -6842,7 +6858,10 @@ fn processMain(
             }
             try groups.items[group_index].appendSource(page_allocator, .{ .source = section.source, .original_start = @intFromPtr(section.source.ptr) - @intFromPtr(source.ptr) });
         } else if (current) |group_index| {
-            if (groups.items[group_index].language.code.len != 0 and italianSupportContinuation(codes, source_missing, section)) {
+            if (groups.items[group_index].language.code.len != 0 and
+                (italianSupportContinuation(codes, source_missing, section) or
+                    malagasySupportContinuation(codes, source_missing, section, groups.items[group_index].language.code)))
+            {
                 support_continuation_seen = true;
             } else fallbacks.unresolved_language_heading = true;
             try groups.items[group_index].appendSource(page_allocator, .{ .source = section.source, .original_start = @intFromPtr(section.source.ptr) - @intFromPtr(source.ptr) });
@@ -22279,6 +22298,97 @@ test "Italian support diagnostics do not lend an unowned preamble to the sole la
     }
 }
 
+
+test "Writer Malagasy Ankapobeny preserves exact support ownership and prefix refusal" {
+    const Fixture = struct {
+        const namespaces = "# wikidict-namespace-registry-v1\n# wiki\tmgwiktionary\n# dump-date\t20261001\n# content-language\tmg\n" ++
+            "0\t\t\tcase-sensitive\t0\t1\t0\t\tmain\tdictionary_entries\n" ++
+            "6\tSary\tFile\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\tImage\n" ++
+            "10\tEndrika\tTemplate\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\n" ++
+            "14\tSokajy\tCategory\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\n";
+
+        fn resolve(ctx: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
+            if (std.mem.eql(u8, value, "Malagasy") or std.mem.eql(u8, value, "mg"))
+                return .{ .code = "mg", .heading = "Malagasy" };
+            return TestLanguages.resolve(ctx, value);
+        }
+
+        fn trusted(ctx: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
+            if (std.mem.eql(u8, value, "Malagasy")) return .{ .code = "mg", .heading = "Malagasy" };
+            return TestLanguages.trusted(ctx, value);
+        }
+
+        fn get(ctx: ?*const anyopaque, value: []const u8) ?[]const u8 {
+            return if (resolve(ctx, value)) |language| language.code else null;
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var ns = try @import("namespace_registry").Registry.init(a, Fixture.namespaces);
+    defer ns.deinit();
+    const codes: LanguageCodes = .{
+        .namespace_catalog = &ns,
+        .get_fn = Fixture.get,
+        .resolve_fn = Fixture.resolve,
+        .trusted_fn = Fixture.trusted,
+        .strong_fn = Fixture.trusted,
+    };
+    const title = "saosy-support";
+    const owned = "==Malagasy==\n===Matoanteny===\n# [[meaning|owned definition]]\n";
+    const foreign = "==English==\n===Noun===\n# [[meaning|owned definition]]\n";
+    const support = "== Ankapobeny ==\nSakafo; ''Mpiray saosy'' : [[Politika]] miray.\n====Fivaditsoratra====\n* [[sasoy]], [[sosay]]\n";
+    const similar = "==Ankapobeny extra==\n# [[unknown|unproved body]]\n";
+    const unknown = "==Unproved language==\n# [[unknown|unproved body]]\n";
+    const prefix = "[[preamble|unowned context]]\n";
+    const cases = [_]struct {
+        source: []const u8,
+        owner: []const u8 = "Malagasy",
+        code: []const u8 = "mg",
+        unresolved: bool = false,
+        has_prefix: bool = false,
+    }{
+        .{ .source = owned ++ support },
+        .{ .source = prefix ++ owned ++ support, .has_prefix = true },
+        .{ .source = owned ++ similar ++ support, .unresolved = true },
+        .{ .source = owned ++ support ++ unknown, .unresolved = true },
+        .{ .source = foreign ++ support, .owner = "English", .code = "en", .unresolved = true },
+        .{ .source = support, .owner = "Unclassified", .code = "", .unresolved = true },
+    };
+    for (cases, 0..) |case, index| {
+        errdefer std.debug.print("Malagasy Ankapobeny case {d}\n", .{index});
+        var tmp = std.testing.tmpDir(.{});
+        defer tmp.cleanup();
+        const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/mg-support", .{tmp.sub_path});
+        var writer = try Writer.init(std.testing.io, a, root);
+        defer writer.deinit();
+        writer.language_codes = codes;
+        try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, title, case.source, case.source, null);
+        const stats = try writer.finish(codes);
+        try std.testing.expectEqual(@as(usize, if (case.has_prefix) 2 else 1), stats.language_records);
+        const report_path = try std.fs.path.join(a, &.{ root, "fallback-pages.jsonl" });
+        const report = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, report_path, a, .limited(65536));
+        try std.testing.expectEqual(case.unresolved, std.mem.indexOf(u8, report, "unresolved_language_heading") != null);
+
+        const actual = (try LeadingRegionFixture.entry(a, root, case.owner, title)) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualStrings(case.code, actual.language_code);
+        try std.testing.expect(LeadingRegionFixture.contains(actual, "Politika"));
+        if (case.code.len != 0) {
+            const expected_source = if (case.has_prefix) case.source[prefix.len..] else case.source;
+            const encoded = try presentation_document.compileReportedWithLinkTrailAlloc(a, title, .language, case.owner, case.code, expected_source, null, .{}, &ns, null);
+            const expected = try blobs.presentation_codec.decodeAlloc(a, encoded, title, .language, .{ .heading = case.owner, .code = case.code });
+            try std.testing.expectEqualDeep(expected.entry, actual);
+        }
+        if (case.has_prefix) {
+            try std.testing.expect(!LeadingRegionFixture.contains(actual, "unowned context"));
+            const unowned = (try LeadingRegionFixture.entry(a, root, "Unclassified", title)) orelse return error.TestUnexpectedResult;
+            try std.testing.expect(LeadingRegionFixture.contains(unowned, "unowned context"));
+            try std.testing.expect(!LeadingRegionFixture.contains(unowned, "owned definition"));
+            try std.testing.expect(!LeadingRegionFixture.contains(unowned, "Politika"));
+            try std.testing.expect(std.mem.indexOf(u8, report, "missing_language_heading") != null);
+        }
+    }
+}
 
 test "normal copied owner page stylesheet reaches complete body actions and codec only through its issued source projection" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
