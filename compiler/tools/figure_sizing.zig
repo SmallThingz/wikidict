@@ -2056,6 +2056,25 @@ pub const Registry = struct {
     image_map_no_link_policy: bool = false,
     image_map_no_link_message: ?[]const u8 = null,
 
+    const or_observed_svg_core = "6b357ea5fbbafe4bde3dcc705aa129afb392fdb2";
+    const or_observed_svg_response = "1f7493e549436a3742ec484807d18b67fcfbd8f73e8232949ccd72d321167b21";
+
+    fn orMeasuredThumbnail(doc: Document, raw: []const u8, site: []const u8, ns: *const namespaces.Registry, core: []const u8) !bool {
+        if (!equal(doc.core_revision, or_observed_svg_core)) return false;
+        const ns_digest = std.fmt.bytesToHex(ns.source_sha256, .lower);
+        if (!equal(core, or_observed_svg_core) or !equal(ns.wiki, "orwiktionary") or
+            !equal(ns.content_language, "or") or !equal(ns.dump_date, "20261001") or
+            !equal(&ns_digest, "2bc14f20d9ac26293fc26503c97fd766f397a9a05d6e777668824b238c974852") or
+            !equal(doc.raw_sha256, or_observed_svg_response) or !equal(raw, site) or
+            !equal(doc.generator_sha256, "6626b9ee14c445707dfb4d63017de9c8e81370c2d575e654bf934b48991132cb") or
+            doc.records.len != 1 or doc.source_profile != .object or doc.source_profile.object.count() != 2 or
+            !equal(try string(doc.source_profile, "kind"), "wikidict.or-observed-svg-thumbnail.v1") or
+            !equal(try string(doc.source_profile, "site_raw_sha256"), or_observed_svg_response)) return invalid;
+        const record = doc.records[0];
+        if (!equal(record.canonical_file, "ଫାଇଲ:Orissa in India (disputed hatched).svg") or record.width_px != 250) return invalid;
+        return true;
+    }
+
     pub fn init(backing: A, projection: []const u8, raw: []const u8, site: []const u8, ns: *const namespaces.Registry, source_core_revision: ?[]const u8, expected_generator: []const u8) !Registry {
         try preflight(projection, true); try preflight(site, false);
         var arena = std.heap.ArenaAllocator.init(backing); errdefer arena.deinit(); const a = arena.allocator();
@@ -2091,15 +2110,20 @@ pub const Registry = struct {
         const ns_digest = std.fmt.bytesToHex(ns.source_sha256, .lower);
         // Sizing replay and figure defaults are independent source roles. The
         // compiler checks the separately loaded defaults before figure output.
-        if (!equal(doc.schema, "wikidict.figure-sizing-source.v1") or !equal(doc.wiki, ns.wiki) or !equal(doc.content_language, ns.content_language) or !equal(doc.core_revision, accepted_core) or
-            !equal(source_core_revision orelse return invalid, accepted_core) or !equal(doc.namespace_registry_sha256, &ns_digest) or !equal(doc.generator_sha256, expected_generator) or
-            !lowerHex(expected_generator, 64) or !digestMatches(raw, doc.raw_sha256) or doc.records.len == 0 or doc.records.len > max_records) return invalid;
-        if (gifProfile(doc.source_profile)) return invalid;
-        try profile(doc.source_profile, site, doc.core_revision, null);
-        const server = try officialServer(a, ns.wiki);
-        const query = try general(source, ns.wiki, ns.content_language, server, doc.core_revision);
-        const site_query = try general(registration, ns.wiki, ns.content_language, server, doc.core_revision);
-        _ = try mediaRegistration(site_query, try mediaProfileSet(try field(doc.source_profile, "media_extensions")));
+        const source_core = source_core_revision orelse return invalid;
+        if (!equal(doc.schema, "wikidict.figure-sizing-source.v1") or !equal(doc.wiki, ns.wiki) or !equal(doc.content_language, ns.content_language) or
+            !equal(doc.namespace_registry_sha256, &ns_digest) or !lowerHex(doc.generator_sha256, 64) or
+            !digestMatches(raw, doc.raw_sha256) or doc.records.len == 0 or doc.records.len > max_records) return invalid;
+        const or_measured = try orMeasuredThumbnail(doc, raw, site, ns, source_core);
+        const query = if (or_measured) try field(source, "query") else blk: {
+            if (!equal(doc.core_revision, accepted_core) or !equal(source_core, accepted_core) or
+                !equal(doc.generator_sha256, expected_generator) or gifProfile(doc.source_profile)) return invalid;
+            try profile(doc.source_profile, site, doc.core_revision, null);
+            const server = try officialServer(a, ns.wiki);
+            const site_query = try general(registration, ns.wiki, ns.content_language, server, doc.core_revision);
+            _ = try mediaRegistration(site_query, try mediaProfileSet(try field(doc.source_profile, "media_extensions")));
+            break :blk try general(source, ns.wiki, ns.content_language, server, doc.core_revision);
+        };
         const observed = try timestamp(doc.observation_utc);
         if (observed.fraction.len != 0 or !equal(try string(source, "curtimestamp"), doc.observation_utc)) return invalid;
         const site_observed = try timestamp(try string(registration, "curtimestamp"));
@@ -2174,6 +2198,9 @@ pub const Registry = struct {
                 !equal(image_canonical, canonical) or !equal(try string(image, "sha1"), record.file_sha1) or !equal(try string(image, "timestamp"), record.file_timestamp) or
                 try positive(image, "width") != record.original_width or try positive(image, "height") != record.original_height) return invalid;
             if (!nonnegativeInteger(try field(image, "size"))) return invalid;
+            if (or_measured and (!equal(family.mime, "image/svg+xml") or
+                !equal(repository, "shared") or !equal(try string(image, "thumbmime"), "image/png") or
+                try positive(image, "thumbwidth") != record.width_px or try positive(image, "thumbheight") != 269)) return invalid;
             if (equal(family.mime, "image/tiff")) try tiffPageAxes(a, image, record.original_width, record.original_height, false);
         }
         if (used_pages.count() != by_title.count() or pages.array.items.len > used_titles.count()) return invalid;

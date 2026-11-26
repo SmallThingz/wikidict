@@ -53,6 +53,9 @@ SD_FIGURE_NAMESPACE = '1a335a658db305317b17e342af9a38fdfd12cf306244ba5e35fe102b7
 # registration are identical to the reviewed WMF6 bundle.
 NN_FIGURE_CORE = '6b357ea5fbbafe4bde3dcc705aa129afb392fdb2'
 NN_FIGURE_DEFAULTS = ('20261001', 'd018de55d0920199f0e5e613209f7961500ac0fce8b0b77169e32cd28f54c669')
+# Exact current Odia Figure defaults using the reviewed WMF6 source leaves.
+OR_FIGURE_DEFAULTS_CORE = '6b357ea5fbbafe4bde3dcc705aa129afb392fdb2'
+OR_FIGURE_DEFAULTS = ('20261001', 'db3b0a09923e7f718234cf8b830da3905b3b4667b67b0d2b7bf008b57f3006b7')
 FIGURE_WMF5_CORE = '87f311882d8c84ec21e288d0bde8aa289df8dc56'
 FIGURE_WMF5_SCRIBUNTO = '25f7cdefa45a3b8417d7fa296f86b76537927f43'
 # Retained CSB response: current Figure defaults only, never main site-info.
@@ -218,6 +221,8 @@ def response(data, wiki, language, profile=PROFILE, *, raw_sha=None, date=None):
 
 
 def file_defaults_observation(core, wiki):
+    if core == OR_FIGURE_DEFAULTS_CORE and wiki == 'orwiktionary':
+        return OR_FIGURE_DEFAULTS
     if core == NN_FIGURE_CORE and wiki == 'nnwiktionary':
         return NN_FIGURE_DEFAULTS
     if core == SD_FIGURE_CORE and wiki == 'sdwiktionary':
