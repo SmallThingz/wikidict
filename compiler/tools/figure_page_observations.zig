@@ -4152,7 +4152,44 @@ const OrdinaryPlainLinkPage = struct {
     }
 };
 
+
+// Retained only after Book matched page/revision/raw/source/defaults. This
+// binding is independent of HR and conveys no source/native-parent authority.
+const FixedAtomPageStyleBinding = struct {
+    stored: *const PageStyleData,
+    parent: *const profile.Profile,
+    original: []const u8,
+};
+const FixedAtomOperationRanges = struct {
+    row: AuthoredElementStyleRange,
+    span: AuthoredElementStyleRange,
+    entity: AuthoredElementStyleRange,
+};
+fn fixedAtomOperationRanges(source: []const u8, owner: []const u8) ?FixedAtomOperationRanges {
+    const origin = @intFromPtr(source.ptr); const address = @intFromPtr(owner.ptr);
+    if (address < origin or owner.len == 0) return null;
+    const start = address - origin;
+    if (start > source.len or owner.len > source.len - start) return null;
+    const stop = start + owner.len;
+    const tag = syntax.tagAt(source[0..stop], start) orelse return null;
+    if (!tag.is("span") or tag.closing or tag.self_closing) return null;
+    const pair = syntax.matchingTag(source[0..stop], tag) orelse return null;
+    if (pair.end != stop) return null;
+    // This is an exact local tuple boundary, never an inferred DOM ordinal or
+    // ancestor chain. The original tuple issuer rechecks both complete bodies.
+    const before = start - @min(start, 4096);
+    const relative = std.mem.lastIndexOfScalar(u8, source[before..start], '<') orelse return null;
+    const row_start = before + relative;
+    const limit = row_start + @min(source.len - row_start, 4096);
+    const div = syntax.tagAt(source[0..limit], row_start) orelse return null;
+    if (!div.is("div") or div.closing or div.self_closing or div.end != start) return null;
+    const row = syntax.matchingTag(source[0..limit], div) orelse return null;
+    return .{ .row = .{ .start = row_start, .end = row.end }, .span = .{ .start = start, .end = stop },
+        .entity = .{ .start = tag.end, .end = pair.inner_end } };
+}
+
 pub const SelectedPageStyles = struct {
+    fixed_inline_box_page: ?FixedAtomPageStyleBinding = null,
     ordinary_link_page: ?*OrdinaryPlainLinkPage = null,
     inline_missing: []const InlineMissingProof = &.{},
     intrinsic_tables: []const SelectedFloatingTable = &.{},
@@ -4687,6 +4724,26 @@ pub const SelectedPageStyles = struct {
                 .contexts = proof.contexts };
         }
         return null;
+    }
+
+    pub fn authoredFixedInlineBox(raw: ?*const anyopaque, a: A,
+        operation: compiler.AuthoredFixedInlineBoxOperation) A.Error!?compiler.AuthoredFixedInlineBoxObservation
+    {
+        const self: *const SelectedPageStyles = @ptrCast(@alignCast(raw orelse return null));
+        const binding = self.fixed_inline_box_page orelse return null;
+        if (operation.source.ptr != self.source.ptr or operation.source.len != self.source.len or
+            !equal(self.source, binding.original)) return null;
+        const ranges = fixedAtomOperationRanges(self.source, operation.owner_span) orelse return null;
+        const entity = self.source[ranges.entity.start..ranges.entity.end];
+        if (operation.token.ptr != entity.ptr or operation.token.len != entity.len) return null;
+        const selected = (try selectFixedAtomObservedStylesAlloc(a, self.namespace_catalog, binding.parent, binding.stored,
+            self.source, ranges.row, ranges.span)) orelse return null;
+        if (selected.entityToken().ptr != entity.ptr or selected.entityToken().len != entity.len) return null;
+        const observed = selected.observe(.{ .source = operation.source, .element = operation.owner_span }) orelse return null;
+        // The ordinary compiler selected THIS page profile. Each independent
+        // context retains its own joined profile; no paired-arm equality or
+        // native parent is certified here.
+        return .{ .profile = self.styles, .contexts = observed.contexts };
     }
 
     pub fn authoredElementStyle(raw: ?*const anyopaque, a: A, operation: compiler.AuthoredElementStyleOperation) A.Error!?compiler.AuthoredElementStyleObservation {
@@ -5429,6 +5486,8 @@ pub const Book = struct {
                 .ready_behavior = if (context) |native| native.behavior_switches else null,
                 .figure_styles = selected_figures, .figure_assets = figure_operations.figure_assets,
                 .inline_missing = try selectInlineMissingStyles(a, ns, self.file_registry, parent, stored, expanded, context),
+                .fixed_inline_box_page = if (context != null and !selectedGetRoot(stored.page) and stored.figure_alternative_sources != null)
+                    .{ .stored = stored, .parent = parent, .original = page.source } else null,
                 .authored_element_original = expanded, .intrinsic_tables = intrinsic_tables, .floating_tables = selected_tables, .authored_element_styles = try selectAuthoredElementStyles(a, parent, stored) };
             if (profile.hasPageSourceFocusObligation(styles)) {
                 result.scope.page_source_focus = try result.selectSourceFocus();
@@ -31715,4 +31774,64 @@ test "fixed atom style join refuses crossed captures ranges offsets inventories 
     const changed_ancestors = @constCast(changed.outer.ancestors);
     changed_ancestors[2].attributes = .{ .attributes = &.{.{ .name = "id", .value = "crossed-shell" }} };
     try std.testing.expect(try selectFixedAtomObservedStylesAlloc(a, &ns, &parent, &changed, source, row, span) == null);
+}
+
+test "ordinary fixed atom callback binds current row span token and both original arm contexts" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile(AuthoredHeadTesting.prefix ++ "namespace-registry.tsv")); defer ns.deinit();
+    var parent = try profile.parseForTargetAlloc(a, "", .screen); defer parent.deinit();
+    var page_profile = try profile.parseForTargetAlloc(a, "", .screen); defer page_profile.deinit();
+    const t = FixedAtomLocalTesting;
+    // Original HU rows in the existing explicitly synthetic complete-shell
+    // harness. This test is not an authentic Book/profile issuance.
+    const source = try std.mem.concat(a, u8, &.{ t.source_rows[0], t.source_rows[1] });
+    const original = try a.dupe(u8, source);
+    const stored = try FixedAtomStyleJoinTesting.stored(a, &ns, original);
+    const selected: SelectedPageStyles = .{ .styles = &page_profile, .scope = stored.scope,
+        .source = source, .namespace_catalog = &ns, .authored_element_original = original,
+        .fixed_inline_box_page = .{ .stored = &stored, .parent = &parent, .original = original } };
+    var start: usize = 0;
+    var first: ?compiler.AuthoredFixedInlineBoxOperation = null;
+    for (t.source_rows) |row| {
+        const span = t.span(source, start);
+        const owner = source[span.start..span.end];
+        const ranges = fixedAtomOperationRanges(source, owner).?;
+        try std.testing.expectEqual(start, ranges.row.start);
+        try std.testing.expectEqual(start + row.len, ranges.row.end);
+        const operation: compiler.AuthoredFixedInlineBoxOperation = .{
+            .source = source, .owner_span = owner, .token = source[ranges.entity.start..ranges.entity.end] };
+        if (first == null) first = operation;
+        const observation = (try SelectedPageStyles.authoredFixedInlineBox(&selected, a, operation)).?;
+        try std.testing.expect(observation.profile == &page_profile and observation.contexts.len == 2);
+        const get = observation.contexts[0]; const post = observation.contexts[1];
+        try std.testing.expect(get.nodes.ptr != post.nodes.ptr and get.element != post.element);
+        try std.testing.expectEqual(@as(?bool, false), get.nodes[get.element].has_text);
+        try std.testing.expectEqual(@as(?bool, true), post.nodes[post.element].has_text);
+        const proof = (try profile.proveObservedFixedInlineEntityNeutral(a, get,
+            operation.source, operation.owner_span, operation.token)).?;
+        try std.testing.expectEqual(@as(?u32, get.element), get.nodes[proof.child].parent);
+        try std.testing.expect((try SelectedPageStyles.authoredElementStyle(&selected, a,
+            .{ .source = source, .element = owner })) == null);
+        for (0..4) |mutation| {
+            var wrong = operation;
+            switch (mutation) {
+                0 => wrong.source = try a.dupe(u8, source),
+                1 => wrong.owner_span = try a.dupe(u8, owner),
+                2 => wrong.token = try a.dupe(u8, operation.token),
+                else => wrong.token = source[span.end .. span.end + 6], // exterior NBSP
+            }
+            try std.testing.expect((try SelectedPageStyles.authoredFixedInlineBox(&selected, a, wrong)) == null);
+        }
+        start += row.len;
+    }
+    const white = t.span(source, t.source_rows[0].len);
+    var crossed = first.?; crossed.owner_span = source[white.start..white.end];
+    try std.testing.expect((try SelectedPageStyles.authoredFixedInlineBox(&selected, a, crossed)) == null);
+    var absent = selected; absent.fixed_inline_box_page = null;
+    try std.testing.expect((try SelectedPageStyles.authoredFixedInlineBox(&absent, a, first.?)) == null);
+    const saved = source[source.len - 1]; source[source.len - 1] = '!';
+    try std.testing.expect((try SelectedPageStyles.authoredFixedInlineBox(&selected, a, first.?)) == null);
+    source[source.len - 1] = saved;
+    try std.testing.expect(fixedAtomOperationRanges(source, source[0..0]) == null);
+    try std.testing.expect(fixedAtomOperationRanges(source, source[0..t.source_rows[0].len]) == null);
 }

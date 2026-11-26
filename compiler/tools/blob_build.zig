@@ -1116,6 +1116,8 @@ fn attachFigurePageObservation(a: std.mem.Allocator, codes: *encoder.blob_builde
     sizing_source.resolve_ordinary_action_group_script_fn = null;
     sizing_source.authored_element_style_ctx = null;
     sizing_source.resolve_authored_element_style_fn = null;
+    sizing_source.authored_fixed_inline_box_ctx = null;
+    sizing_source.resolve_authored_fixed_inline_box_fn = null;
     sizing_source.page_observation_ctx = null;
     sizing_source.resolve_observed_width_fn = null;
     sizing_source.resolve_observed_svg_upright_fit_fn = null;
@@ -1199,6 +1201,10 @@ fn attachFigurePageObservation(a: std.mem.Allocator, codes: *encoder.blob_builde
         if (styles.authored_element_styles.len != 0) {
             sizing_source.authored_element_style_ctx = styles;
             sizing_source.resolve_authored_element_style_fn = figure_page_observations.SelectedPageStyles.authoredElementStyle;
+        }
+        if (styles.fixed_inline_box_page != null) {
+            sizing_source.authored_fixed_inline_box_ctx = styles;
+            sizing_source.resolve_authored_fixed_inline_box_fn = figure_page_observations.SelectedPageStyles.authoredFixedInlineBox;
         }
         if (styles.ordinary_link_page != null) {
             sizing_source.ordinary_link_paint_ctx = styles;
@@ -73202,4 +73208,22 @@ test "FJ indexed source banner binds actual expanded root and preserves typed bo
     const dup=try std.fs.path.join(a,&.{root,"duplicate"});try std.Io.Dir.cwd().createDir(io,dup,.default_dir);
     try FjVosaTest.install(io,a,dup,true);
     try std.testing.expectError(error.DuplicateLanguageTemplateSource,loadLanguageRegistry(io,a,dup,&ns));
+}
+
+test "ordinary fixed atom Tools callback is reset before an absent next page" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespace_registry.Registry.init(a, namespace_registry.english_test_fixture); defer ns.deinit();
+    var files: figure_sizing.Registry = .{ .arena = std.heap.ArenaAllocator.init(a), .namespace_catalog = &ns,
+        .records = &.{}, .file_authority = true }; defer files.deinit();
+    var parent = try encoder.table_style_profile.parseForTargetAlloc(a, "", .screen); defer parent.deinit();
+    var prior = try encoder.table_style_profile.parseForTargetAlloc(a, "", .screen); defer prior.deinit();
+    var codes: encoder.blob_builder.LanguageCodes = .{ .namespace_catalog = &ns, .table_styles = &prior,
+        .page_style_parent = &parent, .figure_sizing = .{ .ctx = &files, .resolve_fn = figure_sizing.Registry.resolve,
+            // A stale sentinel is cleared before Book lookup; never invoked.
+            .authored_fixed_inline_box_ctx = &files,
+            .resolve_authored_fixed_inline_box_fn = figure_page_observations.SelectedPageStyles.authoredFixedInlineBox } };
+    try attachFigurePageObservation(a, &codes, null, null, 0, 609, 3518053, "synthetic reset", "", "");
+    try std.testing.expect(codes.figure_sizing.?.authored_fixed_inline_box_ctx == null);
+    try std.testing.expect(codes.figure_sizing.?.resolve_authored_fixed_inline_box_fn == null);
+    try std.testing.expect(codes.table_styles == &parent and codes.page_style_parent == null);
 }

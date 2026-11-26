@@ -1,0 +1,868 @@
+<templatestyles src="Chembox/styles.css"/>
+{|class="infobox ib-chembox" 
+|+ Water
+|- 
+| colspan="2" style="text-align:center; padding:2px;" | [[File:H2O 2D labelled.svg|150px|center|class=skin-invert-image|The water molecule has this basic geometric structure]]
+|-
+| colspan=2 class="borderless" border=0 style="text-align:center" | 
+{| border=0 style="width:100%;display:inline-table;"
+| style="border-right:1px solid #aaa; width:50%;" |[[File:Water-3D-balls-A.png|100px|center|class=bg-transparent|Ball-and-stick model of a water molecule]]
+
+| style="width:50%;" |[[File:Water molecule 3D.svg|100px|center|class=bg-transparent|Space filling model of a water molecule]]<div style="text-align:center"><div class="legend"><span class="legend-color" style="display:inline-block; width:1.5em; height:1.5em; margin:1px 0; border:1px solid black; background-color:red; color:black; font-size:90%; text-align:center;">&nbsp;</span>&nbsp;Oxygen, O</div><div class="legend"><span class="legend-color" style="display:inline-block; width:1.5em; height:1.5em; margin:1px 0; border:1px solid black; background-color:white; color:black; font-size:90%; text-align:center;">&nbsp;</span>&nbsp;Hydrogen, H</div></div>
+|}
+
+|-
+| colspan="2" style="text-align:center; padding:2px;" | [[File:Water drop 001.jpg|264px|center|A drop of water falling towards water in a glass]]
+|-
+! colspan=2 style="background: #f8eaba;color:inherit; text-align: center;" |Names
+
+|-
+
+
+| colspan=2 style="text-align:left;" | [[Preferred IUPAC name]]
+<div style="max-width:22em; word-wrap:break-word; padding-left:1.7em;"><div style="display: inline-block; line-height: 1.2em; padding: .1em 0; max-width:22em;">Water</div></div>
+
+|-
+| colspan=2 style="text-align:left;" | [[Chemical nomenclature#Systematic name|Systematic IUPAC name]]
+<div style="max-width:22em; word-wrap:break-word; padding-left:1.7em;"><div style="display: inline-block; line-height: 1.2em; padding: .1em 0; max-width:22em;">Oxidane (not in common use)</div></div>
+
+|-
+| colspan=2 style="text-align:left;" | Other names
+<div style="max-width:22em; word-wrap:break-word; padding-left:1.7em;"><templatestyles src="Plainlist/styles.css"/><div class="plainlist"><ul><li>Hydrogen oxide</li><li>Hydrogen hydroxide (H<sub>2</sub>O or HOH)</li><li>Hydroxylic acid</li><li>[[Dihydrogen monoxide]] (DHMO) (parody name)</li><li>Dihydrogen oxide</li><li>Hydric acid</li><li>Hydrohydroxic acid</li><li>Hydroxic acid</li><li>Hydroxoic acid</li><li>Hydrol</li><li>μ-Oxidodihydrogen</li><li>κ<sup>1</sup>-Hydroxylhydrogen(0)</li><li>Aqua</li><li>Neutral liquid</li><li>Oxygen dihydride (may be considered incorrect)</li></ul></div></div>
+
+|-
+! colspan=2 style="background: #f8eaba;color:inherit; text-align: center;" |Identifiers[[Category:Articles without InChI source]]
+
+|-
+
+
+| <div style="display: inline-block; line-height: 1.2em; padding: .1em 0; ">[[CAS Registry Number|CAS Number]]</div>
+| <templatestyles src="Plainlist/styles.css"/><div class="plainlist"><ul><li><span title="commonchemistry.cas.org">[https://commonchemistry.cas.org/detail?cas_rn=7732-18-5 7732-18-5]</span><sup>&nbsp;[[File:Yes check.svg|7px|link=|alt=check]]<span style="display:none">Y</span></sup></li></ul></div>
+
+|-
+| <div style="display: inline-block; line-height: 1.2em; padding: .1em 0; ">3D model ([[JSmol]])</div>
+| <templatestyles src="Plainlist/styles.css"/><div class="plainlist"><ul><li><span title="chemapps.stolaf.edu (3D interactive model)">[https://chemapps.stolaf.edu/jmol/jmol.php?model=O Interactive image]</span></li></ul></div>
+
+|-
+
+
+| <div style="display: inline-block; line-height: 1.2em; padding: .1em 0; ">[[Beilstein database|Beilstein Reference]]</div>
+| 3587155
+|-
+| [[ChEBI]]
+| <templatestyles src="Plainlist/styles.css"/><div class="plainlist"><ul><li><span title="www.ebi.ac.uk">[https://www.ebi.ac.uk/chebi/searchId.do?chebiId=15377 CHEBI:15377]</span><sup>&nbsp;[[File:Yes check.svg|7px|link=|alt=check]]<span style="display:none">Y</span></sup></li></ul></div>
+
+|-
+| [[ChEMBL]]
+| <templatestyles src="Plainlist/styles.css"/><div class="plainlist"><ul><li><span title="www.ebi.ac.uk">[https://www.ebi.ac.uk/chembl/explore/compound/ChEMBL1098659 ChEMBL1098659]</span><sup>&nbsp;[[File:Yes check.svg|7px|link=|alt=check]]<span style="display:none">Y</span></sup></li></ul></div>
+
+|-
+| [[ChemSpider]]
+| <templatestyles src="Plainlist/styles.css"/><div class="plainlist"><ul><li><span title="www.chemspider.com">[https://www.chemspider.com/Chemical-Structure.937.html 937]</span><sup>&nbsp;[[File:Yes check.svg|7px|link=|alt=check]]<span style="display:none">Y</span></sup></li></ul></div>
+
+|-
+| [[DrugBank]]
+| <templatestyles src="Plainlist/styles.css"/><div class="plainlist"><ul><li><span title="www.drugbank.ca">[https://www.drugbank.ca/drugs/DB09145 DB09145]</span></li></ul></div>
+
+|-
+| [[ECHA InfoCard|<span title="echa.europa.eu">ECHA InfoCard</span>]][[Category:ECHA InfoCard ID from Wikidata]]
+| [https://echa.europa.eu/substance-information/-/substanceinfo/<strong class="error"><span class="scribunto-error">Lua error in Modul:0Wikidata: IndexType</span></strong> <strong class="error"><span class="scribunto-error">Lua error in Modul:0Wikidata: IndexType</span></strong>]<strong class="error"><span class="scribunto-error">Lua error in Modul:0EditAtWikidata: Wikibase page-link snapshot missing title=víz</span></strong>
+|-
+| [[European Community number|<span title="European Community number (chemical identifier)">EC Number</span>]]
+| <templatestyles src="Plainlist/styles.css"/><div class="plainlist"><ul><li>231-791-2</li></ul></div>
+
+|-
+| [[E number|<span title="E number (food additive code)">E number</span>]][[Category:E number from Wikidata]]
+| <strong class="error"><span class="scribunto-error">Lua error in Modul:0Wikidata: IndexType</span></strong> 
+
+|-
+| <div style="display: inline-block; line-height: 1.2em; padding: .1em 0; ">[[Gmelin database|Gmelin Reference]]</div>
+| 117
+|-
+
+| [[KEGG]]
+| <templatestyles src="Plainlist/styles.css"/><div class="plainlist"><ul><li><span title="www.kegg.jp">[https://www.kegg.jp/entry/C00001 C00001]</span></li></ul></div>
+
+|-
+
+| <div style="display: inline-block; line-height: 1.2em; padding: .1em 0; ">[[PubChem]] <abbr    title="<nowiki>Compound ID</nowiki>">CID</abbr></div>
+| <templatestyles src="Plainlist/styles.css"/><div class="plainlist"><ul><li><span title="pubchem.ncbi.nlm.nih.gov">[https://pubchem.ncbi.nlm.nih.gov/compound/962 962]</span></li></ul></div>
+
+|-
+| [[RTECS|RTECS number]]
+| <templatestyles src="Plainlist/styles.css"/><div class="plainlist"><ul><li>ZC0110000</li></ul></div>
+
+|-
+| [[Unique Ingredient Identifier|UNII]]
+| <templatestyles src="Plainlist/styles.css"/><div class="plainlist"><ul><li><span title="precision.fda.gov">[https://precision.fda.gov/uniisearch/srs/unii/059QF0KO0R 059QF0KO0R]</span><sup>&nbsp;[[File:Yes check.svg|7px|link=|alt=check]]<span style="display:none">Y</span></sup></li></ul></div>
+
+|-
+
+| <div style="display: inline-block; line-height: 1.2em; padding: .1em 0; ">[[CompTox Chemicals Dashboard|CompTox Dashboard]] <span style="font-weight:normal">(<abbr    title="<nowiki>U.S. Environmental Protection Agency</nowiki>">EPA</abbr>)</span></div>
+| <templatestyles src="Plainlist/styles.css"/><div class="plainlist"><ul><li><span title="comptox.epa.gov">[https://comptox.epa.gov/dashboard/chemical/details/&#123;&#123;#property:P3117&#125;&#125; &#123;&#123;#property:P3117&#125;&#125;]<strong class="error"><span class="scribunto-error">Lua error in Modul:0EditAtWikidata: Wikibase page-link snapshot missing title=víz</span></strong></span></li></ul></div>
+
+|-
+| colspan="2" | <div class="collapsible-list mw-collapsible mw-collapsed" style="text-align: left;">
+<div style="line-height: 1.6em; font-weight: bold; text-align:left; font-weight:normal;"><div>[[International Chemical Identifier|InChI]]</div></div>
+<ul class="mw-collapsible-content" style="margin-top: 0; margin-bottom: 0; line-height: inherit; list-style: none; margin-left: 0; word-break:break-all;"><li style="line-height: inherit; margin: 0"><div style="border-top:1px solid #ccc; padding:0.2em 0 0.2em 1.5em; text-align:left;"><div style="word-wrap:break-word; text-indent:-1.5em; font-size:97%; line-height:120%;">InChI=1S/H2O/h1H2<sup>&nbsp;[[File:Yes check.svg|7px|link=|alt=check]]<span style="display:none">Y</span></sup></div><div style="word-wrap:break-word; text-indent:-1.5em; font-size:97%; line-height:120%;">Key:&nbsp;XLYOFNOQVPJJNP-UHFFFAOYSA-N<sup>&nbsp;[[File:Yes check.svg|7px|link=|alt=check]]<span style="display:none">Y</span></sup></div></div></li></ul>
+</div>
+|-
+| colspan="2" | <div class="collapsible-list mw-collapsible mw-collapsed" style="text-align: left;">
+<div style="line-height: 1.6em; font-weight: bold; text-align:left; font-weight:normal;"><div>[[Simplified molecular-input line-entry system|SMILES]]</div></div>
+<ul class="mw-collapsible-content" style="margin-top: 0; margin-bottom: 0; line-height: inherit; list-style: none; margin-left: 0; word-break:break-all;"><li style="line-height: inherit; margin: 0"><div style="border-top:1px solid #ccc; padding:0.2em 0 0.2em 1.6em; word-wrap:break-word; text-indent:-1.5em; text-align:left; font-size:97%; line-height:120%;">O</div></li></ul>
+</div>
+
+|-
+! colspan=2 style="background: #f8eaba;color:inherit; text-align: center;" |Properties
+
+|-
+| <div style="display: inline-block; line-height: 1.2em; padding: .1em 0; ">[[Chemical formula]]</div>
+
+| <span class="chemf nowrap">H<span class="nowrap"><span style="display:inline-block;margin-bottom:-0.3em;vertical-align:-0.4em;line-height:1em;font-size:80%;text-align:left"><sup style="font-size:inherit;line-height:inherit;vertical-align:baseline"></sup><br /><sub style="font-size:inherit;line-height:inherit;vertical-align:baseline">2</sub></span></span>O</span>&#x20;
+
+|-
+| [[Molar mass]]
+
+| 18.01528(33) g/mol&#x20; &#x20;
+
+|-
+| Appearance
+| Almost colorless or white crystalline solid, almost colorless liquid, with a [[Color of water|hint of blue]], colorless gas<ref name="Braun_1993_612" />
+|-
+| [[Odor]]
+| Odorless
+|-
+| [[Density]]
+| <templatestyles src="Plainlist/styles.css"/><div class="plainlist"><ul><li>Liquid (1 atm, [[Vienna Standard Mean Ocean Water|VSMOW]]):</li><li><span class="nowrap"><span data-sort-value="7002999842829999999♠"></span>0.999<span style="margin-left:.25em;">842</span><span style="margin-left:.25em;">83</span>(84)&nbsp;g/mL</span> at <span class="nowrap"><span data-sort-value="7002273149999999999♠"></span>0&nbsp;°C</span><ref name=Tanaka>&nbsp;</ref></li><li><span class="nowrap"><span data-sort-value="7002999974950000000♠"></span>0.999<span style="margin-left:.25em;">974</span><span style="margin-left:.25em;">95</span>(84)&nbsp;g/mL</span> at <span class="nowrap"><span data-sort-value="7002277133034999999♠"></span>3.983<span style="margin-left:.25em;">035</span>(670)&nbsp;°C</span> (temperature of maximum density, often 4 °C)<ref name=Tanaka/></li><li><span class="nowrap"><span data-sort-value="7002997047020000000♠"></span>0.997<span style="margin-left:.25em;">047</span><span style="margin-left:.25em;">02</span>(83)&nbsp;g/mL</span> at <span class="nowrap"><span data-sort-value="7002298150000000000♠"></span>25&nbsp;°C</span><ref name=Tanaka/></li><li><span class="nowrap"><span data-sort-value="7002961887909999999♠"></span>0.961<span style="margin-left:.25em;">887</span><span style="margin-left:.25em;">91</span>(96)&nbsp;g/mL</span> at <span class="nowrap"><span data-sort-value="7002368150000000000♠"></span>95&nbsp;°C</span><ref>&nbsp;</ref></li><li>Solid:</li><li>0.9167 g/mL at 0 °C</li></ul></div>
+|-
+| [[Melting point]]
+| 0.00&nbsp;°C (32.00&nbsp;°F; 273.15&nbsp;K)
+
+
+|-
+| [[Boiling point]]
+| 99.98&nbsp;°C (211.96&nbsp;°F; 373.13&nbsp;K)
+
+
+|-
+
+
+
+
+
+| [[Solubility]] 
+| Poorly soluble in [[haloalkane]]s, [[aliphatic]] and [[aromatic]] hydrocarbons, [[ether]]s.<ref name=chemister><span class="citation">Anatolievich, Kiper Ruslan&#58;&#32;[https://web.archive.org/web/20140602200111/http://chemister.ru/Database/properties-en.php?dbid=1&id=1  ''Properties of substance: water''].&#32;[2014. June 2-i dátummal az [http://chemister.ru/Database/properties-en.php?dbid=1&id=1 eredetiből] archiválva].</span></ref> <br> Improved solubility in [[carboxylate]]s, [[alcohols]], [[ketones]], [[amines]]. <br> Miscible with [[methanol]], [[ethanol]], [[propanol]], [[isopropanol]], [[acetone]], [[glycerol]], [[1,4-dioxane]], [[tetrahydrofuran]], [[sulfolane]], [[acetaldehyde]], [[dimethylformamide]], [[dimethoxyethane]], [[dimethyl sulfoxide]], [[acetonitrile]]. <br> Partially miscible with [[diethyl ether]], [[methyl ethyl ketone]], [[dichloromethane]], [[ethyl acetate]], [[bromine]].
+|-
+
+
+
+
+
+
+
+
+
+
+
+| [[Acid dissociation constant|Acidity]] (p''K''<sub>a</sub>)
+| 13.995
+|-
+| [[Acid dissociation constant|Basicity]] (p''K''<sub>b</sub>)
+| 13.995
+|-
+| [[Conjugate acid]]
+| [[Hydronium]] H<sub>3</sub>O<sup>+</sup> (pK<sub>a</sub> = 0)
+|-
+| [[Conjugate base]]
+| [[Hydroxide]] OH<sup>–</sup> (pK<sub>b</sub> = 0)
+|-
+
+
+
+
+
+
+
+
+| [[Thermal conductivity]]
+| 0.6065 W/(m·K)<ref>&nbsp;</ref>
+|-
+| <div style="display: inline-block; line-height: 1.2em; padding: .1em 0; ">[[Refractive index]] (''n''<sub>D</sub>)</div>
+| 1.3330 (20&nbsp;°C) at 25&nbsp;°C
+|-
+| [[Viscosity]]
+| 0.890 mPa·s (0.890 [[Poise (unit)|cP]])
+|-
+! colspan=2 style="background: #f8eaba;color:inherit; text-align: center;" |Structure
+
+|-
+| <div style="display: inline-block; line-height: 1.2em; padding: .1em 0; ">[[Crystal structure]]</div>
+| [[ice|Hexagonal]]
+|-
+
+| <div style="display: inline-block; line-height: 1.2em; padding: .1em 0; ">[[Molecular symmetry|Point group]]</div>
+| C<sub>2v</sub>
+|-
+
+
+
+
+| <div style="display: inline-block; line-height: 1.2em; padding: .1em 0; ">[[Molecular geometry|Molecular shape]]</div>
+| [[bent (chemistry)|Bent]]
+|-
+
+| <div style="display: inline-block; line-height: 1.2em; padding: .1em 0; ">[[Dipole#Molecular_dipoles|Dipole moment]]</div>
+| 1.8546 [[Debye|D]]
+|-
+! colspan=2 style="background: #f8eaba;color:inherit; text-align: center;" |Thermochemistry
+
+|-
+| <div style="display: inline-block; line-height: 1.2em; padding: .1em 0; ">[[Heat capacity]] <div style="color: #595959; font-family: tahoma,  serif; font-size: 150% "></div>
+| 75.385 ± 0.05&nbsp;J/(mol·K)<ref name=nist />
+|-
+| <div style="display: inline-block; line-height: 1.2em; padding: .1em 0; ">[[Standard molar entropy|Std molar<br/>entropy]] <div style="color: #595959; font-family: tahoma,  serif; font-size: 150% "></div>
+| 69.95 ± 0.03&nbsp;J/(mol·K)<ref name=nist />
+|-
+| <div style="display: inline-block; line-height: 1.2em; padding: .1em 0; ">[[Standard enthalpy change of formation|Std enthalpy of<br/>formation]] <div style="color: #595959; font-family: tahoma,  serif; font-size: 150% "></div>
+| −285.83 ± 0.04&nbsp;kJ/mol<ref name=chemister /><ref name=nist>[[:Sablon:nist]]</ref>
+|-
+| <div style="display: inline-block; line-height: 1.2em; padding: .1em 0; ">[[Gibbs_free_energy#Standard_energy_change_of_formation|Gibbs free energy]] <div style="color: #595959; font-family: tahoma,  serif; font-size: 150% "></div>
+| −237.24&nbsp;kJ/mol<ref name=chemister />
+|-
+
+
+! colspan=2 style="background: #f8eaba;color:inherit; text-align: center;" |Hazards
+
+|-
+| colspan=2 style="text-align:left; background-color:#eaeaea;color:inherit;" | '''[[Occupational safety and health]]''' (OHS/OSH):
+|-
+|-
+
+| style="padding-left:1em;" | <div style="display: inline-block; line-height: 1.2em; padding: .1em 0; ">Main hazards</div>
+
+| [[Drowning]]<br />[[Avalanche]] (as snow)<br />[[Water intoxication]]
+
+|-
+
+
+| [[NFPA 704|'''NFPA 704''']] (fire&nbsp;diamond)
+| <templatestyles src="NFPA 704 diamond/styles.css" /><div class="nfpa-704-diamond notheme"><div class="nfpa-704-diamond-container "><div class="nfpa-704-diamond-images nounderlines" >
+<div class="nfpa-704-diamond-map"><imagemap>
+File:NFPA 704.svg|80px|alt=NFPA 704 four-colored diamond
+poly 150 150 300 300 150 450   0 300 [[NFPA 704#Blue|Health 0: Exposure under fire conditions would offer no hazard beyond that of ordinary combustible material. E.g. sodium chloride]]
+poly 300   0 450 150 300 300 150 150 [[NFPA 704#Red|Flammability 0: Will not burn. E.g. water]]
+poly 450 150 600 300 450 450 300 300 [[NFPA 704#Yellow|Instability 0: Normally stable, even under fire exposure conditions, and is not reactive with water. E.g. liquid nitrogen]]
+poly 300 300 450 450 300 600 150 450 [[NFPA 704#White|Special hazards (white): no code]]
+desc none
+</imagemap></div><div class="nfpa-704-diamond-code nfpa-704-diamond-blue">
+[[NFPA 704#Blue|<span title="Health 0: Exposure under fire conditions would offer no hazard beyond that of ordinary combustible material. E.g. sodium chloride" class="notheme mw-no-invert">0</span>]]</div><div class="nfpa-704-diamond-code nfpa-704-diamond-red">
+[[NFPA 704#Red|<span title="Flammability 0: Will not burn. E.g. water" class="notheme mw-no-invert">0</span>]]</div><div class="nfpa-704-diamond-code nfpa-704-diamond-yellow">
+[[NFPA 704#Yellow|<span title="Instability 0: Normally stable, even under fire exposure conditions, and is not reactive with water. E.g. liquid nitrogen" class="notheme mw-no-invert">0</span>]]</div></div></div></div>
+
+|-
+| [[Flash point]]
+| Non-flammable
+
+
+|-
+
+! colspan=2 style="background: #f8eaba;color:inherit; text-align: center;" |Related compounds
+
+|-
+| <div style="display: inline-block; line-height: 1.2em; padding: .1em 0; ">Other [[Ion|anion]]s</div>
+| <templatestyles src="Plainlist/styles.css"/><div class="plainlist"><ul><li>[[Hydrogen sulfide]]</li><li>[[Hydrogen selenide]]</li><li>[[Hydrogen telluride]]</li><li>[[Hydrogen polonide]]</li><li>[[Hydrogen peroxide]]</li></ul></div>
+|-
+
+| <div style="display: inline-block; line-height: 1.2em; padding: .1em 0; ">Related [[solvent]]s</div>
+| <templatestyles src="Plainlist/styles.css"/><div class="plainlist"><ul><li>[[Acetone]]</li><li>[[Ethanol]]</li><li>[[Methanol]]</li><li>[[Hydrogen fluoride]]</li><li>[[Ammonia]]</li></ul></div>
+|-
+
+
+| colspan=2 style="text-align:left; background:#f8eaba; color:inherit; border:1px solid #a2a9b1;" | <div style="display: inline-block; line-height: 1.2em; padding: .1em 0; ">Except where otherwise noted, data are given for materials in their [[standard state]] (at 25&nbsp;°C [77&nbsp;°F], 100&nbsp;kPa).</div>
+
+<div style="margin-top: 0.3em;"><div style="text-align:center;">[[File:Yes check.svg|12px|link=|alt=check]]<span style="display:none">Y</span>&nbsp;<span class="reflink plainlinks nourlexpansion">[//hu.wiktionary.org/w/index.php?title=Special:ComparePages&rev1=477162647&page2=v%C3%ADz verify]</span>&nbsp;([[Wikipedia:WikiProject_Chemicals/Chembox_validation|what is]]&nbsp;<sup>[[File:Yes check.svg|7px|link=|alt=check]]<span style="display:none">Y</span>[[File:X mark.svg|7px|link=|alt=&#9746;]]<span style="display:none">N</span></sup>&nbsp;?)
+
+</div></div>
+
+<div style="margin-top: 0.3em; text-align: center;">[[Wikipedia:Chemical infobox#References|Infobox references]]</div>
+
+|-
+
+|}[[Category:Articles containing unverified chemical infoboxes]][[Category:Chembox image size set]][[Category:Chembox image size set|*]]
+<templatestyles src="categorize/styles.css"/>__NOEDITSECTION__ [[Category:magyar szótár|VIZ]]
+==[[:w:magyar nyelv|Magyar]]==
+===Kiejtés===
+
+* [[w:Nemzetközi fonetikai ábécé|IPA]]:&#32;<templatestyles src="Modul:scripts/style.css"></templatestyles><span class="IPA">[ ˈviːz]</span>
+[[Kategória:magyar szótár]]
+===Főnév===
+<strong class="Latn headword" lang="hu">víz</strong>[[Category:magyar lemmák|VIZ]][[Category:magyar főnevek|VIZ]]
+# <span class="ib-brac">(</span><span style="font-style: italic">[[gyógyszertan|gyógyszertan]][[Category:hu:Gyógyszertan|VIZ]]</span><span class="ib-brac">)</span> A víz a Föld egyik legelterjedtebb, legfontosabb és legkülönlegesebb vegyülete. Kémiai képlete egyszerű: '''H₂O''', vagyis két hidrogénatom és egy oxigénatom alkotja. Minden ismert élőlény létezéséhez elengedhetetlen, és a Föld felszínének mintegy 71%-át borítja. A víz nélkülözhetetlen az '''élet fenntartásához''', és különleges fizikai-kémiai tulajdonságainak köszönhetően számos tudományterület központi témája.
+
+
+-----
+
+<span id="a-víz-kémiai-szerkezete-és-molekulája"></span>
+== 2. A víz kémiai szerkezete és molekulája ==
+
+<span id="a-molekula-szerkezete"></span>
+=== 2.1 A molekula szerkezete ===
+
+A vízmolekula egy '''poláris kovalens kötésű''' háromatomos molekula:
+
+* Központi atom: '''oxigén (O)'''
+* Két hidrogénatom kapcsolódik hozzá '''két darab σ-kötéssel'''
+* Kötésszög: kb. '''104,5°''', ami meghatározza a molekula hajlított (V-alakú) szerkezetét
+
+<span id="polaritás"></span>
+=== 2.2 Polaritás ===
+
+A víz rendkívül '''poláris molekula''':
+
+* Az oxigén nagyobb '''elektronegativitása''' miatt a kötéseknél elektroneltolódás jön létre
+* Ez '''részleges negatív töltést''' eredményez az oxigénnél, míg a hidrogéneknél '''pozitív töltés'''
+* A molekula '''dipólusmomentuma''': 1,85 D (Debye)
+
+<span id="hidrogénkötés"></span>
+=== 2.3 Hidrogénkötés ===
+
+A vízmolekulák között '''hidrogénkötések''' alakulnak ki:
+
+* Egy vízmolekula akár '''4 hidrogénkötésben''' is részt vehet
+* Ez felelős a víz '''magas olvadás- és forráspontjáért''', '''felületi feszültségéért''', '''anomáliáiért'''
+
+
+-----
+
+<span id="fizikai-tulajdonságok"></span>
+== 3. Fizikai tulajdonságok ==
+
+{| class="wikitable"
+|-
+! Tulajdonság
+! Érték
+|-
+| Képlet
+| H₂O
+|-
+| Moláris tömeg
+| 18,015 g/mol
+|-
+| Olvadáspont
+| 0 °C
+|-
+| Forráspont
+| 100 °C
+|-
+| Legnagyobb sűrűség
+| 4 °C-on
+|-
+| Dielektromos állandó
+| ~80 (20 °C-on)
+|-
+| Viszkozitás
+| 0,89 mPa·s (25 °C-on)
+|-
+| Felületi feszültség
+| 72,8 mN/m
+|-
+| Párolgáshő
+| 2260 kJ/kg (100 °C-on)
+|}
+
+<span id="anomáliák"></span>
+=== 3.1 Anomáliák ===
+
+* A víz '''4 °C-on sűrűbb''', mint fagyott (jég) formájában
+* Ez lehetővé teszi, hogy a jég '''úszik''' a víz felszínén → élet fennmaradása tavak mélyén
+* A víz '''nagy fajhője''' stabilizálja a hőmérsékletet → éghajlati szabályozó
+
+
+-----
+
+<span id="a-víz-halmazállapotai"></span>
+== 4. A víz halmazállapotai ==
+
+<span id="szilárd-jég"></span>
+=== 4.1 Szilárd: jég ===
+
+* Rendezett kristályos szerkezet, hexagonális rács
+* Kisebb sűrűség → úszik a vízen
+* 14 különböző '''jég-fázis''' ismert extrém nyomáson és hőmérsékleten
+
+<span id="folyékony"></span>
+=== 4.2 Folyékony ===
+
+* Legelterjedtebb forma a Földön
+* Dinamikus hidrogénkötés-hálózat, ami állandóan változik
+
+<span id="gáz-vízgőz"></span>
+=== 4.3 Gáz: vízgőz ===
+
+* Légkör fontos komponense
+* Felelős az '''üvegházhatás''' egy részéért
+
+
+-----
+
+<span id="víz-a-földön"></span>
+== 5. Víz a Földön ==
+
+<span id="eloszlás"></span>
+=== 5.1 Eloszlás ===
+
+{| class="wikitable"
+|-
+! Forrás
+! Megoszlás
+|-
+| Óceánok
+| ~97,5%
+|-
+| Édesvíz
+| ~2,5%
+|-
+| - Jégtakarók, gleccserek
+| ~68% az édesvízből
+|-
+| - Felszín alatti víz
+| ~30%
+|-
+| - Felszíni víz (tavak, folyók)
+| &lt;1%
+|}
+
+<span id="hidrológiai-ciklus"></span>
+=== 5.2 Hidrológiai ciklus ===
+
+A víz '''körforgása''' elengedhetetlen a Föld klímájának és élővilágának fenntartásához:
+
+# '''Párolgás'''
+# '''Kondenzáció'''
+# '''Csapadék'''
+# '''Lefolyás''', '''beszivárgás'''
+# '''Talajvízmozgás'''
+# '''Visszakerülés''' a tengerekbe
+
+
+-----
+
+<span id="biológiai-jelentőség"></span>
+== 6. Biológiai jelentőség ==
+
+<span id="az-élő-szervezetekben"></span>
+=== 6.1 Az élő szervezetekben ===
+
+* Az emberi test '''60–70%-a víz'''
+* Sejtek belsejében az anyagcsere '''vizes közegben''' történik
+* A víz a '''tápanyagok, ionok, gázok oldószere'''
+
+<span id="enzimek-és-fehérjék"></span>
+=== 6.2 Enzimek és fehérjék ===
+
+* A víz strukturálja a fehérjéket
+* A hidrogénkötések szerepet játszanak a '''fehérjeszerkezet stabilitásában'''
+
+<span id="hőszabályozás"></span>
+=== 6.3 Hőszabályozás ===
+
+* A víz '''magas fajhője''' segíti a '''testhőmérséklet szabályozását'''
+* Az izzadás párologtatása '''hőt von el''', így hűt
+
+
+-----
+
+<span id="a-víz-környezeti-szerepe"></span>
+== 7. A víz környezeti szerepe ==
+
+<span id="klímastabilizáló"></span>
+=== 7.1 Klímastabilizáló ===
+
+* A víz jelenléte '''mérsékli a napi és szezonális hőingásokat'''
+* Az '''óceánok hőelnyelő képessége''' kulcsfontosságú a globális éghajlatban
+
+<span id="ökoszisztémák"></span>
+=== 7.2 Ökoszisztémák ===
+
+* Tavak, folyók, mocsarak: '''élőhelyek'''
+* Halak, kétéltűek, vízinövények víz nélkül nem élnek
+
+<span id="vízszennyezés"></span>
+=== 7.3 Vízszennyezés ===
+
+* Nehézfémek, nitrátok, szerves szennyezők, mikroplasztikok veszélyt jelentenek
+* Tisztítás: fizikai, kémiai, biológiai módszerekkel
+
+
+-----
+
+<span id="technológiai-és-ipari-jelentőség"></span>
+== 8. Technológiai és ipari jelentőség ==
+
+<span id="víz-mint-oldószer"></span>
+=== 8.1 Víz, mint oldószer ===
+
+* '''Poláris oldószer''', ionos vegyületeket jól old
+* Használják gyógyszerészetben, vegyiparban, laboratóriumokban
+
+<span id="ipari-alkalmazás"></span>
+=== 8.2 Ipari alkalmazás ===
+
+* '''Hűtőfolyadék''' – például erőművekben
+* '''Gőzturbina''' működtetése
+* '''Oldószerként''' vegyi reakciókban
+
+<span id="desztillált-és-ultrapure-víz"></span>
+=== 8.3 Desztillált és ultrapure víz ===
+
+* '''Desztillált víz''': ionmentes, laboratóriumi célokra
+* '''Ultrapure (18 MΩ·cm)''': elektronikai iparban (pl. félvezetők gyártása)
+
+
+-----
+
+<span id="víz-a-gyógyszerészetben"></span>
+== 9. Víz a gyógyszerészetben ==
+
+<span id="típusai"></span>
+=== 9.1 Típusai ===
+
+{| class="wikitable"
+|-
+! Típus
+! Felhasználás
+|-
+| '''Aqua purificata''' (tisztított víz)
+| gyógyszergyártás
+|-
+| '''Aqua pro injectione''' (injekcióhoz való víz)
+| parenterális készítmények
+|-
+| '''Aqua destillata'''
+| laboratóriumokban
+|-
+| '''Fiziológiás sóoldat'''
+| 0,9% NaCl – izotóniás oldat
+|-
+| '''Vízmentes készítmények'''
+| érzékeny hatóanyagokhoz
+|}
+
+<span id="szerepe"></span>
+=== 9.2 Szerepe ===
+
+* Oldószer, vivőanyag, injekciós készítmények alapja
+* A víz mikrobiológiai tisztasága döntő fontosságú
+
+
+-----
+
+<span id="a-víz-a-történelemben-és-kultúrában"></span>
+== 10. A víz a történelemben és kultúrában ==
+
+<span id="víz-és-civilizációk"></span>
+=== 10.1 Víz és civilizációk ===
+
+* Folyóvölgyi kultúrák: '''Nílus, Tigris–Eufrátesz, Indus, Jangce'''
+* A víz közelsége alapja volt a '''mezőgazdaság és letelepedett élet''' kialakulásának
+
+<span id="szimbolikus-jelentés"></span>
+=== 10.2 Szimbolikus jelentés ===
+
+* Tisztaság, élet, újjászületés
+* Vallási rítusok (keresztelés, rituális fürdés)
+
+
+-----
+
+<span id="vízhiány-és-hozzáférés"></span>
+== 11. Vízhiány és hozzáférés ==
+
+<span id="globális-kihívás"></span>
+=== 11.1 Globális kihívás ===
+
+* A világ lakosságának kb. '''25–30%-a''' nem fér hozzá biztonságos ivóvízhez
+* Szárazság, vízhiány → élelmiszer-ellátási problémák, migráció
+
+<span id="ivóvíztisztítás"></span>
+=== 11.2 Ivóvíztisztítás ===
+
+* '''Ülepítés, szűrés, fertőtlenítés (klórozás, UV, ózon)'''
+* Membrántechnológia (fordított ozmózis)
+
+
+-----
+
+<span id="a-víz-különleges-jelenségei"></span>
+== 12. A víz különleges jelenségei ==
+
+<span id="felületi-feszültség"></span>
+=== 12.1 Felületi feszültség ===
+
+* A víz molekulái a felszínen '''erősebben vonzzák egymást''', mint a levegő molekuláit
+* Ezért '''“vízcsepp” alak''' alakul ki, és a rovarok (pl. vízi poloska) a felszínen maradnak
+
+<span id="kapillaritás"></span>
+=== 12.2 Kapillaritás ===
+
+* A víz képes '''“felmászni”''' szűk csövekben a hidrogénkötések révén
+* Fontos szerepe van a '''növények vízszállításában'''
+
+<span id="anomáliák-listája"></span>
+=== 12.3 Anomáliák listája ===
+
+* Jég úszik a vízen
+* Magas olvadás- és forráspont
+* Nagy párolgáshő
+* Magas dielektromos állandó
+* Tágulás fagyáskor (ellentétben más folyadékokkal)
+
+
+-----
+
+<span id="víz-a-világűrben-és-asztrobiológiában"></span>
+== 13. Víz a világűrben és asztrobiológiában ==
+
+* Víz jelenléte kimutatható '''Marson''', a '''Jupiter holdjain (Europa, Ganymedes)''', és '''Enceladuson'''
+* A folyékony víz a '''földön kívüli élet lehetőségének''' egyik feltétele
+* A víz '''abszorpciós spektruma''' segíti a bolygók elemzését
+
+
+-----
+
+<span id="összegzés"></span>
+== 14. Összegzés ==
+
+A víz az '''élet alapja''', a '''tudomány és technológia egyik központi szereplője''', és '''a természet legcsodálatosabb anyaga'''. Kémiai egyszerűsége ellenére rendkívül komplex viselkedést mutat, anomáliái és oldószertulajdonságai révén. A biológiától a geológián, fizikán és kémián át a társadalmi, gazdasági és politikai rendszerekig '''mindenhol szerepet játszik'''.
+
+A víz az emberi túlélés és a bolygó ökológiai egyensúlyának kulcsa – éppen ezért a '''fenntartható vízgazdálkodás és hozzáférés biztosítása''' a jövő egyik legnagyobb globális kihívása.
+
+
+====Fordítások====
+
+<div class="NavFrame mw-collapsible translations-outer">
+<templatestyles src="NavFrame/style.css" /><templatestyles src="trans-top/style.css" />
+<div class="NavHead">H₂O</div>
+<div class="NavFrame mw-collapsible-content">
+{| class="translations"
+|-
+| |
+
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Abház nyelv|abház]]</span>[[Kategória:magyar-abház szótár]]: <span class="Cyrl" lang="ab">[[аӡы#Abház|аӡы]]</span><span class="tpos">&nbsp;[[:ab:аӡы|(ab)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ab-Latn" class="tr Latn">āʒə</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Adige nyelv|adige]]</span>[[Kategória:magyar-adige szótár]]: <span class="Cyrl" lang="ady">[[псы#Adige|псы]]</span><span class="tpos">&nbsp;[[:ady:псы|(ady)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ady-Latn" class="tr Latn">psə</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Afar nyelv|afar]]</span>[[Kategória:magyar-afar szótár]]: <span class="Latn" lang="aa">[[lee#Afar|lee]]</span><span class="tpos">&nbsp;[[:aa:lee|(aa)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Afrikaans nyelv|afrikaans]]</span>[[Kategória:magyar-afrikaans szótár]][[Kategória:magyar-afrikaans szótár]]: <span class="Latn" lang="af">[[water#Afrikaans|water]]</span><span class="tpos">&nbsp;[[:af:water|(af)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Ajmara nyelv|ajmara]]</span>[[Kategória:magyar-ajmara szótár]]: <span class="Latn" lang="ay">[[uma#Ajmara|uma]]</span><span class="tpos">&nbsp;[[:ay:uma|(ay)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Akan nyelv|akan]]</span>[[Kategória:magyar-akan szótár]][[Kategória:magyar-akan szótár]]: <span class="Latn" lang="ak">[[nsu#Akan|nsu]]</span><span class="tpos">&nbsp;[[:ak:nsu|(ak)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Albán nyelv|albán]]</span>[[Kategória:magyar-albán szótár]][[kategória:magyar-albán szótár]]: <span class="Latn" lang="sq">[[ujë#Albán|ujë]]</span><span class="tpos">&nbsp;[[:sq:ujë|(sq)]]</span>&nbsp;<span class="gender"><abbr title="hímnem">hn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Amhara nyelv|amhara]]</span>[[Kategória:magyar-amhara szótár]][[Kategória:magyar-amhara szótár]]: <span class="Ethi" lang="am">[[ውሃ#Amhara|ውሃ]]</span><span class="tpos">&nbsp;[[:am:ውሃ|(am)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="am-Latn" class="tr Latn">wəḫa</span><span class="mention-gloss-paren annotation-paren">)</span>[[Kategória:Fordítások automatikustól eltérő manuális átírással]]
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Angol nyelv|angol]]</span>[[Kategória:magyar-angol szótár]][[Kategória:magyar-angol szótár]]: <span class="Latn" lang="en">[[water#Angol|water]]</span><span class="tpos">&nbsp;[[:en:water|(en)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Arab nyelv|arab]]</span>[[Kategória:magyar-arab szótár]]: <span class="fa-Arab" lang="ar">[[ماء#Arab|مَاء]]</span>&lrm;<span class="tpos">&nbsp;[[:ar:ماء|(ar)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ar-Latn" class="tr Latn">māʔ</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Aragóniai nyelv|aragóniai]]</span>[[Kategória:magyar-aragóniai szótár]]: <span class="Latn" lang="an">[[aigua#Aragóniai|aigua]]</span><span class="tpos">&nbsp;[[:an:aigua|(an)]]</span>, <span class="Latn" lang="an">[[augua#Aragóniai|augua]]</span><span class="tpos">&nbsp;[[:an:augua|(an)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Arámi nyelv|arámi]]</span>[[Kategória:magyar-arámi szótár]]: [[ܡܝܐ]] 
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Aromán nyelv|aromán]]</span>[[Kategória:magyar-aromán szótár]]: <span class="Latn" lang="rup">[[apã#Aromán|apã]]</span><span class="tpos">&nbsp;[[:roa-rup:apã|(roa-rup)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Asszámi nyelv|asszámi]]</span>[[Kategória:magyar-asszámi szótár]][[Kategória:magyar-asszámi szótár]]: <span class="as-Beng" lang="as">[[পানী#Asszámi|পানী]]</span><span class="tpos">&nbsp;[[:as:পানী|(as)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="as-Latn" class="tr Latn">pani</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Asztúriai nyelv|asztúriai]]</span>[[Kategória:magyar-asztúriai szótár]]: <span class="Latn" lang="ast">[[agua#Asztúriai|agua]]</span><span class="tpos">&nbsp;[[:ast:agua|(ast)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Avar nyelv|avar]]</span>[[Kategória:magyar-avar szótár]][[Kategória:magyar-avar szótár]]: <span class="Cyrl" lang="av">[[лъим#Avar|лъим]]</span><span class="tpos">&nbsp;[[:av:лъим|(av)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="av-Latn" class="tr Latn">łim</span><span class="mention-gloss-paren annotation-paren">)</span>[[Kategória:Fordítások automatikustól eltérő manuális átírással]]
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Azeri nyelv|azeri]]</span>[[Kategória:magyar-azeri szótár]]: <span class="Latn" lang="az">[[su#Azeri|su]]</span><span class="tpos">&nbsp;[[:az:su|(az)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Bambara nyelv|bambara]]</span>[[Kategória:magyar-bambara szótár]][[kategória:magyar-bambara szótár]]: <span class="Latn" lang="bm">[[ji#Bambara|ji]]</span><span class="tpos">&nbsp;[[:bm:ji|(bm)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Baskír nyelv|baskír]]</span>[[Kategória:magyar-baskír szótár]][[Kategória:magyar-baskír szótár]]: <span class="Cyrl" lang="ba">[[һыу#Baskír|һыу]]</span><span class="tpos">&nbsp;[[:ba:һыу|(ba)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ba-Latn" class="tr Latn">hïw</span><span class="mention-gloss-paren annotation-paren">)</span>[[Kategória:Fordítások automatikustól eltérő manuális átírással]]
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Baszk nyelv|baszk]]</span>[[Kategória:magyar-baszk szótár]][[kategória:magyar-baszk szótár]]: <span class="Latn" lang="eu">[[ur#Baszk|ur]]</span><span class="tpos">&nbsp;[[:eu:ur|(eu)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Bajor nyelv|bajor]]</span>[[Kategória:magyar-bajor szótár]]: <span class="Latn" lang="bar">[[Wossa#Bajor|Wossa]]</span><span class="tpos">&nbsp;[[:bar:Wossa|(bar)]]</span>, <span class="Latn" lang="bar">[[boßər#Bajor|boßər]]</span><span class="tpos">&nbsp;[[:bar:boßər|(bar)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Belarusz nyelv|belarusz]]</span>[[Kategória:magyar-belarusz szótár]][[kategória:magyar-belarusz szótár]]: <span class="Cyrl" lang="be">[[вада#Belarusz|вада]]</span><span class="tpos">&nbsp;[[:be:вада|(be)]]</span>&nbsp;<span class="gender"><abbr title="nőnem">nn</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="be-Latn" class="tr Latn">vada</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Bengáli nyelv|bengáli]]</span>[[Kategória:magyar-bengáli szótár]][[kategória:magyar-bengáli szótár]]: <span class="Beng" lang="bn">[[জল#Bengáli|জল]]</span><span class="tpos">&nbsp;[[:bn:জল|(bn)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="bn-Latn" class="tr Latn">jal</span><span class="mention-gloss-paren annotation-paren">)</span>[[Kategória:Fordítások automatikustól eltérő manuális átírással]], <span class="Beng" lang="bn">[[পানি#Bengáli|পানি]]</span><span class="tpos">&nbsp;[[:bn:পানি|(bn)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="bn-Latn" class="tr Latn">pāni</span><span class="mention-gloss-paren annotation-paren">)</span>[[Kategória:Fordítások automatikustól eltérő manuális átírással]]
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Bihari nyelv|bihari]]</span>[[Kategória:magyar-bihari szótár]]: <span class="Deva" lang="bh">[[पानी#Bihari|पानी]]</span><span class="tpos">&nbsp;[[:bh:पानी|(bh)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="bh-Latn" class="tr Latn">pānī</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Bislama nyelv|bislama]]</span>[[Kategória:magyar-bislama szótár]][[Kategória:magyar-bislama szótár]]: <span class="Latn" lang="bi">[[wota#Bislama|wota]]</span><span class="tpos">&nbsp;[[:bi:wota|(bi)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Bolgár nyelv|bolgár]]</span>[[Kategória:magyar-bolgár szótár]][[kategória:magyar-bolgár szótár]]: <span class="Cyrl" lang="bg">[[вода#Bolgár|вода]]</span><span class="tpos">&nbsp;[[:bg:вода|(bg)]]</span>&nbsp;<span class="gender"><abbr title="nőnem">nn</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="bg-Latn" class="tr Latn">voda</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Breton nyelv|breton]]</span>[[Kategória:magyar-breton szótár]][[kategória:magyar-breton szótár]]: <span class="Latn" lang="br">[[dour#Breton|dour]]</span><span class="tpos">&nbsp;[[:br:dour|(br)]]</span>&nbsp;<span class="gender"><abbr title="hímnem">hn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Burmai nyelv|burmai]]</span>[[Kategória:magyar-burmai szótár]][[Kategória:magyar-burmai szótár]]: <span class="Mymr" lang="my">[[ရေ#Burmai|ရေ]]</span><span class="tpos">&nbsp;[[:my:ရေ|(my)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="my-Latn" class="tr Latn">re</span><span class="mention-gloss-paren annotation-paren">)</span>[[Kategória:Fordítások automatikustól eltérő manuális átírással]]
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Burját nyelv|burját]]</span>[[Kategória:magyar-burját szótár]]: <span class="Cyrl" lang="bua">[[уһан#Burját|уһан]]</span><span class="tpos">&nbsp;[[:bxr:уһан|(bxr)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="bua-Latn" class="tr Latn">uhan</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Szebuano nyelv|szebuano]]</span>[[Kategória:magyar-szebuano szótár]]: <span class="Latn" lang="ceb">[[tubig#Szebuano|tubig]]</span><span class="tpos">&nbsp;[[:ceb:tubig|(ceb)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Cigány nyelv|cigány]]</span>[[Kategória:magyar-cigány szótár]]: <span class="Latn" lang="rom">[[páji#Cigány|páji]]</span>, <span class="Latn" lang="rom">[[pányi#Cigány|pányi]]</span>, <span class="Latn" lang="rom">[[páni#Cigány|páni]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Csamoró nyelv|csamoró]]</span>[[Kategória:magyar-csamoró szótár]]: <span class="Latn" lang="ch">[[hånom#Csamoró|hånom]]</span><span class="tpos">&nbsp;[[:ch:hånom|(ch)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Csecsen nyelv|csecsen]]</span>[[Kategória:magyar-csecsen szótár]][[Kategória:magyar-csecsen szótár]]: <span class="Cyrl" lang="ce">[[хи#Csecsen|хи]]</span><span class="tpos">&nbsp;[[:ce:хи|(ce)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ce-Latn" class="tr Latn">χi</span><span class="mention-gloss-paren annotation-paren">)</span>[[Kategória:Fordítások automatikustól eltérő manuális átírással]]
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Cseroki nyelv|cseroki]]</span>[[Kategória:magyar-cseroki szótár]]: <span class="Cher" lang="chr">[[ᎠᎹ#Cseroki|ᎠᎹ]]</span><span class="tpos">&nbsp;[[:chr:ᎠᎹ|(chr)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="chr-Latn" class="tr Latn">ama</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Nyandzsa nyelv|nyandzsa]]</span>[[Kategória:magyar-nyandzsa szótár]]: <span class="Latn" lang="ny">[[madzi#Nyandzsa|madzi]]</span><span class="tpos">&nbsp;[[:ny:madzi|(ny)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Cseh nyelv|cseh]]</span>[[Kategória:magyar-cseh szótár]][[kategória:magyar-cseh szótár]]: <span class="Latn" lang="cs">[[voda#Cseh|voda]]</span><span class="tpos">&nbsp;[[:cs:voda|(cs)]]</span>&nbsp;<span class="gender"><abbr title="nőnem">nn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Csuvas nyelv|csuvas]]</span>[[Kategória:magyar-csuvas szótár]][[Kategória:magyar-csuvas szótár]]: <span class="Cyrl" lang="cv">[[шыв#Csuvas|шыв]]</span><span class="tpos">&nbsp;[[:cv:шыв|(cv)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="cv-Latn" class="tr Latn">šyv</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Dán nyelv|dán]]</span>[[Kategória:magyar-dán szótár]][[kategória:magyar-dán szótár]]: <span class="Latn" lang="da">[[vand#Dán|vand]]</span><span class="tpos">&nbsp;[[:da:vand|(da)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Erza nyelv|erza]]</span>[[Kategória:magyar-erza szótár]][[kategória:magyar-erza szótár]]: <span class="Cyrl" lang="myv">[[ведь#Erza|ведь]]</span><span class="tpos">&nbsp;[[:myv:ведь|(myv)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="myv-Latn" class="tr Latn">vedʹ</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Eszperantó nyelv|eszperantó]]</span>[[Kategória:magyar-eszperantó szótár]][[kategória:magyar-eszperantó szótár]]: <span class="Latn" lang="eo">[[akvo#Eszperantó|akvo]]</span><span class="tpos">&nbsp;[[:eo:akvo|(eo)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Északi számi nyelv|északi számi]]</span>[[Kategória:magyar-északi számi szótár]][[Kategória:magyar-északi számi szótár]]: <span class="Latn" lang="se">[[čáhci#Északi számi|čáhci]]</span><span class="tpos">&nbsp;[[:se:čáhci|(se)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Észt nyelv|észt]]</span>[[Kategória:magyar-észt szótár]][[kategória:magyar-észt szótár]]: <span class="Latn" lang="et">[[vesi#Észt|vesi]]</span><span class="tpos">&nbsp;[[:et:vesi|(et)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Eve nyelv|eve]]</span>[[Kategória:magyar-eve szótár]][[kategória:magyar-eve szótár]]: <span class="Latn" lang="ee">[[tsi#Eve|tsi]]</span><span class="tpos">&nbsp;[[:ee:tsi|(ee)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Felsőszorb nyelv|felsőszorb]]</span>[[Kategória:magyar-felsőszorb szótár]]: <span class="Latn" lang="hsb">[[woda#Felsőszorb|woda]]</span><span class="tpos">&nbsp;[[:hsb:woda|(hsb)]]</span>&nbsp;<span class="gender"><abbr title="nőnem">nn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Feröeri nyelv|feröeri]]</span>[[Kategória:magyar-feröeri szótár]][[kategória:magyar-feröeri szótár]]: <span class="Latn" lang="fo">[[vatn#Feröeri|vatn]]</span><span class="tpos">&nbsp;[[:fo:vatn|(fo)]]</span>&nbsp;<span class="gender"><abbr title="semlegesnem">sn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Fidzsi nyelv|fidzsi]]</span>[[Kategória:magyar-fidzsi szótár]][[Kategória:magyar-fidzsi szótár]]: <span class="Latn" lang="fj">[[wai#Fidzsi|wai]]</span><span class="tpos">&nbsp;[[:fj:wai|(fj)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Finn nyelv|finn]]</span>[[Kategória:magyar-finn szótár]][[kategória:magyar-finn szótár]]: <span class="Latn" lang="fi">[[vesi#Finn|vesi]]</span><span class="tpos">&nbsp;[[:fi:vesi|(fi)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Francia nyelv|francia]]</span>[[Kategória:magyar-francia szótár]][[kategória:magyar-francia szótár]]: <span class="Latn" lang="fr">[[eau#Francia|eau]]</span><span class="tpos">&nbsp;[[:fr:eau|(fr)]]</span>&nbsp;<span class="gender"><abbr title="nőnem">nn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Nyugati fríz nyelv|nyugati fríz]]</span>[[Kategória:magyar-nyugati fríz szótár]]: <span class="Latn" lang="fy">[[wetter#Nyugati fríz|wetter]]</span><span class="tpos">&nbsp;[[:fy:wetter|(fy)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Friuli nyelv|friuli]]</span>[[Kategória:magyar-friuli szótár]][[Kategória:magyar-friuli szótár]]: <span class="Latn" lang="fur">[[aghe#Friuli|aghe]]</span><span class="tpos">&nbsp;[[:fur:aghe|(fur)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Fulani nyelv|fulani]]</span>[[Kategória:magyar-fulani szótár]]: <span class="Latn" lang="ff">[[ndiyam#Fulani|ndiyam]]</span><span class="tpos">&nbsp;[[:ff:ndiyam|(ff)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Skót gael nyelv|skót gael]]</span>[[Kategória:magyar-skót gael szótár]]: <span class="Latn" lang="gd">[[uisge#Skót gael|uisge]]</span><span class="tpos">&nbsp;[[:gd:uisge|(gd)]]</span>&nbsp;<span class="gender"><abbr title="hímnem">hn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Galiciai nyelv|galiciai]]</span>[[Kategória:magyar-galiciai szótár]][[kategória:magyar-galiciai szótár]]: <span class="Latn" lang="gl">[[auga#Galiciai|auga]]</span><span class="tpos">&nbsp;[[:gl:auga|(gl)]]</span>&nbsp;<span class="gender"><abbr title="nőnem">nn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Ganda nyelv|ganda]]</span>[[Kategória:magyar-ganda szótár]][[Kategória:magyar-ganda szótár]]: <span class="Latn" lang="lg">[[mazzi#Ganda|mazzi]]</span><span class="tpos">&nbsp;[[:lg:mazzi|(lg)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Görög nyelv|görög]]</span>[[Kategória:magyar-görög szótár]][[kategória:magyar-görög szótár]]: <span class="Grek" lang="el">[[νερό#Görög|νερό]]</span><span class="tpos">&nbsp;[[:el:νερό|(el)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="el-Latn" class="tr Latn">neró</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Grúz nyelv|grúz]]</span>[[Kategória:magyar-grúz szótár]][[kategória:magyar-grúz szótár]]: <span class="Geor" lang="ka">[[წყალი#Grúz|წყალი]]</span><span class="tpos">&nbsp;[[:ka:წყალი|(ka)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ka-Latn" class="tr Latn">c̣q̇ali</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Grönlandi nyelv|grönlandi]]</span>[[Kategória:magyar-grönlandi szótár]][[kategória:magyar-grönlandi szótár]]: <span class="Latn" lang="kl">[[imeq#Grönlandi|imeq]]</span><span class="tpos">&nbsp;[[:kl:imeq|(kl)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Guarani nyelv|guarani]]</span>[[Kategória:magyar-guarani szótár]]: <span class="Latn" lang="gn">[[y#Guarani|y]]</span><span class="tpos">&nbsp;[[:gn:y|(gn)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Gudzsaráti nyelv|gudzsaráti]]</span>[[Kategória:magyar-gudzsaráti szótár]][[kategória:magyar-gudzsaráti szótár]]: <span class="Gujr" lang="gu">[[પાણી#Gudzsaráti|પાણી]]</span><span class="tpos">&nbsp;[[:gu:પાણી|(gu)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="gu-Latn" class="tr Latn">pāṇī</span><span class="mention-gloss-paren annotation-paren">)</span>[[Kategória:Fordítások redundáns átírással]]
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Haiti kreol nyelv|haiti kreol]]</span>[[Kategória:magyar-haiti kreol szótár]][[Kategória:magyar-haiti kreol szótár]]: <span class="Latn" lang="ht">[[dlo#Haiti kreol|dlo]]</span><span class="tpos">&nbsp;[[:ht:dlo|(ht)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Hakasz nyelv|hakasz]]</span>[[Kategória:magyar-hakasz szótár]]: <span class="Cyrl" lang="kjh">[[суғ#Hakasz|суғ]]</span><span class="tpos">&nbsp;[[:kjh:суғ|(kjh)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="kjh-Latn" class="tr Latn">suğ</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Hausza nyelv|hausza]]</span>[[Kategória:magyar-hausza szótár]][[Kategória:magyar-hausza szótár]]: <span class="Latn" lang="ha">[[ruwa#Hausza|ruwa]]</span><span class="tpos">&nbsp;[[:ha:ruwa|(ha)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Hawaii nyelv|hawaii]]</span>[[Kategória:magyar-hawaii szótár]][[kategória:magyar-hawaii szótár]]: <span class="Latn" lang="haw">[[wai#Hawaii|wai]]</span><span class="tpos">&nbsp;[[:haw:wai|(haw)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Héber nyelv|héber]]</span>[[Kategória:magyar-héber szótár]][[kategória:magyar-héber szótár]]: <span class="Hebr" lang="he">[[מים#Héber|מַיִם]]</span>&lrm;<span class="tpos">&nbsp;[[:he:מים|(he)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="he-Latn" class="tr Latn">máyim</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Hindi nyelv|hindi]]</span>[[Kategória:magyar-hindi szótár]][[kategória:magyar-hindi szótár]]: <span class="Deva" lang="hi">[[पानी#Hindi|पानी]]</span><span class="tpos">&nbsp;[[:hi:पानी|(hi)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="hi-Latn" class="tr Latn">pānī</span><span class="mention-gloss-paren annotation-paren">)</span>, <span class="Deva" lang="hi">[[जल#Hindi|जल]]</span><span class="tpos">&nbsp;[[:hi:जल|(hi)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="hi-Latn" class="tr Latn">jal</span><span class="mention-gloss-paren annotation-paren">)</span>[[Kategória:Fordítások redundáns átírással]], <span class="Deva" lang="hi">[[आब#Hindi|आब]]</span><span class="tpos">&nbsp;[[:hi:आब|(hi)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="hi-Latn" class="tr Latn">āb</span><span class="mention-gloss-paren annotation-paren">)</span>[[Kategória:Fordítások redundáns átírással]]
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Holland nyelv|holland]]</span>[[Kategória:magyar-holland szótár]][[kategória:magyar-holland szótár]]: <span class="Latn" lang="nl">[[water#Holland|water]]</span><span class="tpos">&nbsp;[[:nl:water|(nl)]]</span>&nbsp;<span class="gender"><abbr title="semlegesnem">sn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Igbó nyelv|igbó]]</span>[[Kategória:magyar-igbó szótár]][[Kategória:magyar-igbo szótár]]: <span class="Latn" lang="ig">[[mmiri#Igbó|mmiri]]</span><span class="tpos">&nbsp;[[:ig:mmiri|(ig)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Indonéz nyelv|indonéz]]</span>[[Kategória:magyar-indonéz szótár]][[kategória:magyar-indonéz szótár]]: <span class="Latn" lang="id">[[air#Indonéz|air]]</span><span class="tpos">&nbsp;[[:id:air|(id)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Inupiak nyelv|inupiak]]</span>[[Kategória:magyar-inupiak szótár]][[Kategória:magyar-inupiak szótár]]: <span class="Latn" lang="ik">[[imiq#Inupiak|imiq]]</span><span class="tpos">&nbsp;[[:ik:imiq|(ik)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Ír nyelv|ír]]</span>[[Kategória:magyar-ír szótár]]: <span class="Latn" lang="ga">[[uisce#Ír|uisce]]</span><span class="tpos">&nbsp;[[:ga:uisce|(ga)]]</span>&nbsp;<span class="gender"><abbr title="hímnem">hn</abbr></span>, <span class="Latn" lang="ga">[[dobhar#Ír|dobhar]]</span><span class="tpos">&nbsp;[[:ga:dobhar|(ga)]]</span>&nbsp;<span class="gender"><abbr title="hímnem">hn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Izlandi nyelv|izlandi]]</span>[[Kategória:magyar-izlandi szótár]][[kategória:magyar-izlandi szótár]]: <span class="Latn" lang="is">[[vatn#Izlandi|vatn]]</span><span class="tpos">&nbsp;[[:is:vatn|(is)]]</span>&nbsp;<span class="gender"><abbr title="semlegesnem">sn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Jakut nyelv|jakut]]</span>[[Kategória:magyar-jakut szótár]]: <span class="Cyrl" lang="sah">[[уу#Jakut|уу]]</span><span class="tpos">&nbsp;[[:sah:уу|(sah)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="sah-Latn" class="tr Latn">uu</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Japán nyelv|japán]]</span>[[Kategória:magyar-japán szótár]][[kategória:magyar-japán szótár]]: <span class="Jpan" lang="ja">[[水#Japán|水]]</span><span class="tpos">&nbsp;[[:ja:水|(ja)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Jiddis nyelv|jiddis]]</span>[[Kategória:magyar-jiddis szótár]][[kategória:magyar-jiddis szótár]]: <span class="Hebr" lang="yi">[[װאַסער#Jiddis|װאַסער]]</span>&lrm;<span class="tpos">&nbsp;[[:yi:װאַסער|(yi)]]</span>&nbsp;<span class="gender"><abbr title="semlegesnem">sn</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="yi-Latn" class="tr Latn">vaser</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Joruba nyelv|joruba]]</span>[[Kategória:magyar-joruba szótár]][[kategória:magyar-joruba szótár]]: <span class="Latn" lang="yo">[[omi#Joruba|omi]]</span><span class="tpos">&nbsp;[[:yo:omi|(yo)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Kalmük nyelv|kalmük]]</span>[[Kategória:magyar-kalmük szótár]]: <span class="Cyrl" lang="xal">[[усн#Kalmük|усн]]</span><span class="tpos">&nbsp;[[:xal:усн|(xal)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="xal-Latn" class="tr Latn">usn</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Kannada nyelv|kannada]]</span>[[Kategória:magyar-kannada szótár]][[Kategória:magyar-kannada szótár]]: <span class="Knda" lang="kn">[[ನೀರು#Kannada|ನೀರು]]</span><span class="tpos">&nbsp;[[:kn:ನೀರು|(kn)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="kn-Latn" class="tr Latn">nīru</span><span class="mention-gloss-paren annotation-paren">)</span>[[Kategória:Fordítások redundáns átírással]]
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Kanuri nyelv|kanuri]]</span>[[Kategória:magyar-kanuri szótár]][[Kategória:magyar-kanuri szótár]]: <span class="Latn" lang="kr">[[nji#Kanuri|nji]]</span><span class="tpos">&nbsp;[[:kr:nji|(kr)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Kapampangan nyelv|kapampangan]]</span>[[Kategória:magyar-kapampangan szótár]]: <span class="Latn" lang="pam">[[danum#Kapampangan|danum]]</span><span class="tpos">&nbsp;[[:pam:danum|(pam)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Kasmíri nyelv|kasmíri]]</span>[[Kategória:magyar-kasmíri szótár]]</font>[[Kategória:magyar-kasmíri szótár]]: <span class="Deva" lang="ks">[[आब#Kasmíri|आब]]</span><span class="tpos">&nbsp;[[:ks:आब|(ks)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ks-Latn" class="tr Latn">āb</span><span class="mention-gloss-paren annotation-paren">)</span>[[Kategória:Fordítások redundáns átírással]], <span class="Deva" lang="ks">[[पोञ#Kasmíri|पोञ]]</span><span class="tpos">&nbsp;[[:ks:पोञ|(ks)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ks-Latn" class="tr Latn">pōn</span><span class="mention-gloss-paren annotation-paren">)</span>[[Kategória:Fordítások automatikustól eltérő manuális átírással]], <span class="Deva" lang="ks">[[ज़ल#Kasmíri|ज़ल]]</span><span class="tpos">&nbsp;[[:ks:ज़ल|(ks)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ks-Latn" class="tr Latn">zal</span><span class="mention-gloss-paren annotation-paren">)</span>[[Kategória:Fordítások redundáns átírással]]
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Kanuri nyelv|kanuri]]</span>[[Kategória:magyar-kanuri szótár]][[Kategória:magyar-kanuri szótár]]: <span class="Latn" lang="kr">[[nji#Kanuri|nji]]</span><span class="tpos">&nbsp;[[:kr:nji|(kr)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Katalán nyelv|katalán]]</span>[[Kategória:magyar-katalán szótár]][[Kategória:magyar-katalán szótár]]: <span class="Latn" lang="ca">[[aigua#Katalán|aigua]]</span><span class="tpos">&nbsp;[[:ca:aigua|(ca)]]</span>&nbsp;<span class="gender"><abbr title="nőnem">nn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Kazah nyelv|kazah]]</span>[[Kategória:magyar-kazah szótár]][[kategória:magyar-kazah szótár]]: <span class="Cyrl" lang="kk">[[су#Kazah|су]]</span><span class="tpos">&nbsp;[[:kk:су|(kk)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="kk-Latn" class="tr Latn">sw</span><span class="mention-gloss-paren annotation-paren">)</span>[[Kategória:Fordítások automatikustól eltérő manuális átírással]]
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Kecsua nyelv|kecsua]]</span>[[Kategória:magyar-kecsua szótár]][[Kategória:magyar-kecsua szótár]]: <span class="Latn" lang="qu">[[unu#Kecsua|unu]]</span><span class="tpos">&nbsp;[[:qu:unu|(qu)]]</span>, <span class="Latn" lang="qu">[[yaku#Kecsua|yaku]]</span><span class="tpos">&nbsp;[[:qu:yaku|(qu)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Khmer nyelv|khmer]]</span>[[Kategória:magyar-khmer szótár]][[kategória:magyar-khmer szótár]]: <span class="Khmr" lang="km">[[ទឹក#Khmer|ទឹក]]</span><span class="tpos">&nbsp;[[:km:ទឹក|(km)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="km-Latn" class="tr Latn">tɨk</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Kikuju nyelv|kikuju]]</span>[[Kategória:magyar-kikuju szótár]][[Kategória:magyar-kikuju szótár]]</font>: <span class="Latn" lang="ki">[[maĩ#Kikuju|maĩ]]</span><span class="tpos">&nbsp;[[:ki:maĩ|(ki)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Kínai nyelv|kínai]]</span>[[Kategória:magyar-kínai szótár]][[Kategória:magyar-kínai szótár]]: <span class="Hani" lang="zh">[[水#Kínai|水]]</span><span class="tpos">&nbsp;[[:zh:水|(zh)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Kirgiz nyelv|kirgiz]]</span>[[Kategória:magyar-kirgiz szótár]][[kategória:magyar-kirgiz szótár]]: <span class="Cyrl" lang="ky">[[суу#Kirgiz|суу]]</span><span class="tpos">&nbsp;[[:ky:суу|(ky)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ky-Latn" class="tr Latn">suu</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Kongo nyelv|kongo]]</span>[[Kategória:magyar-kongo szótár]][[Kategória:magyar-kongo szótár]]: <span class="Latn" lang="kg">[[maza#Kongo|maza]]</span><span class="tpos">&nbsp;[[:kg:maza|(kg)]]</span>, <span class="Latn" lang="kg">[[masa#Kongo|masa]]</span><span class="tpos">&nbsp;[[:kg:masa|(kg)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Koreai nyelv|koreai]]</span>[[Kategória:magyar-koreai szótár]][[kategória:magyar-koreai szótár]]: <span class="Kore" lang="ko">[[물#Koreai|물]]</span><span class="tpos">&nbsp;[[:ko:물|(ko)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ko-Latn" class="tr Latn">mul</span><span class="mention-gloss-paren annotation-paren">)</span>[[Kategória:Fordítások redundáns átírással]]}, <span class="Kore" lang="ko">[[수#Koreai|수]]</span><span class="tpos">&nbsp;[[:ko:수|(ko)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ko-Latn" class="tr Latn">su, 水</span><span class="mention-gloss-paren annotation-paren">)</span>[[Kategória:Fordítások automatikustól eltérő manuális átírással]]
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Krí nyelv|krí]]</span>[[Kategória:magyar-krí szótár]][[Kategória:magyar-krí szótár]]: <span class="Cans" lang="cr">[[ᓃᐲᔾ#Krí|ᓃᐲᔾ]]</span><span class="tpos">&nbsp;[[:cr:ᓃᐲᔾ|(cr)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="cr-Latn" class="tr Latn">niipiiy</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Korni nyelv|korni]]</span>[[Kategória:magyar-korni szótár]][[Kategória:magyar-korni szótár]]: <span class="Latn" lang="kw">[[dowr#Korni|dowr]]</span><span class="tpos">&nbsp;[[:kw:dowr|(kw)]]</span>&nbsp;<span class="gender"><abbr title="hímnem">hn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Korzikai nyelv|korzikai]]</span>[[Kategória:magyar-korzikai szótár]][[Kategória:magyar-korzikai szótár]]: <span class="Latn" lang="co">[[acqua#Korzikai|acqua]]</span><span class="tpos">&nbsp;[[:co:acqua|(co)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Krími tatár nyelv|krími tatár]]</span>[[Kategória:magyar-krími tatár szótár]]: <span class="Latn" lang="crh">[[suv#Krími tatár|suv]]</span><span class="tpos">&nbsp;[[:crh:suv|(crh)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Kumük nyelv|kumük]]</span>[[Kategória:magyar-kumük szótár]]: <span class="Cyrl" lang="kum">[[сув#Kumük|сув]]</span><span class="tpos">&nbsp;[[:kum:сув|(kum)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Kurd nyelv|kurd]]</span>[[Kategória:magyar-kurd szótár]][[kategória:magyar-kurd szótár]]: <span class="Latn" lang="ku">[[av#Kurd|av]]</span><span class="tpos">&nbsp;[[:ku:av|(ku)]]</span>, <span class="ku-Arab" lang="ku">[[ئاو#Kurd|ئاو]]</span>&lrm;<span class="tpos">&nbsp;[[:ku:ئاو|(ku)]]</span>&nbsp;<span class="gender"><abbr title="nőnem">nn</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ku-Latn" class="tr Latn">aw</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Kuanyama nyelv|kuanyama]]</span>[[Kategória:magyar-kuanyama szótár]]: <span class="Latn" lang="kj">[[omeva#Kuanyama|omeva]]</span><span class="tpos">&nbsp;[[:kj:omeva|(kj)]]</span>
+| class="translations-middle" |
+| |
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Ladino nyelv|ladino]]</span>[[Kategória:magyar-ladino szótár]]: <span class="Latn" lang="lad">[[agua#Ladino|agua]]</span><span class="tpos">&nbsp;[[:lad:agua|(lad)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Lao nyelv|lao]]</span>[[Kategória:magyar-lao szótár]][[Kategória:magyar-lao szótár]]: <span class="Laoo" lang="lo">[[ນ້ຳ#Lao|ນ້ຳ]]</span><span class="tpos">&nbsp;[[:lo:ນ້ຳ|(lo)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="lo-Latn" class="tr Latn">nam</span><span class="mention-gloss-paren annotation-paren">)</span>[[Kategória:Fordítások redundáns átírással]]
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Latin nyelv|latin]]</span>[[Kategória:magyar-latin szótár]][[Kategória:magyar-latin szótár]]: <span class="Latn" lang="la">[[aqua#Latin|aqua]]</span><span class="tpos">&nbsp;[[:la:aqua|(la)]]</span>&nbsp;<span class="gender"><abbr title="nőnem">nn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Lengyel nyelv|lengyel]]</span>[[Kategória:magyar-lengyel szótár]][[kategória:magyar-lengyel szótár]]: <span class="Latn" lang="pl">[[woda#Lengyel|woda]]</span><span class="tpos">&nbsp;[[:pl:woda|(pl)]]</span>&nbsp;<span class="gender"><abbr title="nőnem">nn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Lett nyelv|lett]]</span>[[Kategória:magyar-lett szótár]][[kategória:magyar-lett szótár]]: <span class="Latn" lang="lv">[[ūdens#Lett|ūdens]]</span><span class="tpos">&nbsp;[[:lv:ūdens|(lv)]]</span>&nbsp;<span class="gender"><abbr title="hímnem">hn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Limburgi nyelv|limburgi]]</span>[[Kategória:magyar-limburgi szótár]][[kategória:magyar-limburgi szótár]]: <span class="Latn" lang="li">[[water#Limburgi|water]]</span><span class="tpos">&nbsp;[[:li:water|(li)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Lingala nyelv|lingala]]</span>[[Kategória:magyar-lingala szótár]][[Kategória:magyar-lingala szótár]]: <span class="Latn" lang="ln">[[mái#Lingala|mái]]</span><span class="tpos">&nbsp;[[:ln:mái|(ln)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Litván nyelv|litván]]</span>[[Kategória:magyar-litván szótár]][[kategória:magyar-litván szótár]]: <span class="Latn" lang="lt">[[vanduo#Litván|vanduo]]</span><span class="tpos">&nbsp;[[:lt:vanduo|(lt)]]</span>&nbsp;<span class="gender"><abbr title="hímnem">hn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Lombard nyelv|lombard]]</span>[[Kategória:magyar-lombard szótár]]: <span class="Latn" lang="lmo">[[acqua#Lombard|acqua]]</span><span class="tpos">&nbsp;[[:lmo:acqua|(lmo)]]</span>; <span class="Latn" lang="lmo">[[ègua#Lombard|ègua]]</span><span class="tpos">&nbsp;[[:lmo:ègua|(lmo)]]</span>, <span class="Latn" lang="lmo">[[aiva#Lombard|aiva]]</span><span class="tpos">&nbsp;[[:lmo:aiva|(lmo)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Luba-katanga nyelv|luba-katanga]]</span>[[Kategória:magyar-luba-katanga szótár]][[Kategória:magyar-luba-katanga szótár]]: <span class="Latn" lang="lu">[[mema#Luba-katanga|mema]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Luxemburgi nyelv|luxemburgi]]</span>[[Kategória:magyar-luxemburgi szótár]][[Kategória:magyar-luxemburgi szótár]]: <span class="Latn" lang="lb">[[Waasser#Luxemburgi|Waasser]]</span><span class="tpos">&nbsp;[[:lb:Waasser|(lb)]]</span>&nbsp;<span class="gender"><abbr title="semlegesnem">sn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Macedón nyelv|macedón]]</span>[[Kategória:magyar-macedón szótár]][[Kategória:magyar-macedón szótár]]: <span class="Cyrl" lang="mk">[[вода#Macedón|вода]]</span><span class="tpos">&nbsp;[[:mk:вода|(mk)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="mk-Latn" class="tr Latn">vóda</span><span class="mention-gloss-paren annotation-paren">)</span>[[Kategória:Fordítások automatikustól eltérő manuális átírással]]
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Malgas nyelv|malgas]]</span>[[Kategória:magyar-malgas szótár]]: <span class="Latn" lang="mg">[[rano#Malgas|rano]]</span><span class="tpos">&nbsp;[[:mg:rano|(mg)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Malajálam nyelv|malajálam]]</span>[[Kategória:magyar-malajálam szótár]][[Kategória:magyar-malajálam szótár]]: <span class="Mlym" lang="ml">[[ജലം#Malajálam|ജലം]]</span><span class="tpos">&nbsp;[[:ml:ജലം|(ml)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ml-Latn" class="tr Latn">jalaṃ</span><span class="mention-gloss-paren annotation-paren">)</span>, <span class="Mlym" lang="ml">[[വെള്ളം#Malajálam|വെള്ളം]]</span><span class="tpos">&nbsp;[[:ml:വെള്ളം|(ml)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ml-Latn" class="tr Latn">veḷḷaṃ</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Maláj nyelv|maláj]]</span>[[Kategória:magyar-maláj szótár]][[kategória:magyar-maláj szótár]]: <span class="Latn" lang="ms">[[air#Maláj|air]]</span><span class="tpos">&nbsp;[[:ms:air|(ms)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Maldív nyelv|maldív]]</span>[[Kategória:magyar-maldív szótár]]: <span class="Thaa" lang="dv">[[ފެން#Maldív|ފެން]]</span>&lrm;<span class="tpos">&nbsp;[[:dv:ފެން|(dv)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="dv-Latn" class="tr Latn">fen</span><span class="mention-gloss-paren annotation-paren">)</span>[[Kategória:Fordítások redundáns átírással]]
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Manysi nyelv|manysi]]</span>[[Kategória:magyar-manysi szótár]]: <span class="Cyrl" lang="mns">[[вит#Manysi|вит]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="mns-Latn" class="tr Latn">vit</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Manx nyelv|manx]]</span>[[Kategória:magyar-manx szótár]][[kategória:magyar-manx szótár]]: <span class="Latn" lang="gv">[[ushtey#Manx|ushtey]]</span><span class="tpos">&nbsp;[[:gv:ushtey|(gv)]]</span>&nbsp;<span class="gender"><abbr title="hímnem">hn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Maori nyelv|maori]]</span>[[Kategória:magyar-maori szótár]][[Kategória:magyar-maori szótár]]: <span class="Latn" lang="mi">[[wai#Maori|wai]]</span><span class="tpos">&nbsp;[[:mi:wai|(mi)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Mezei mari nyelv|mezei mari]]</span>[[Kategória:magyar-mezei mari szótár]]: <span class="Cyrl" lang="chm">[[вӱд#Mezei mari|вӱд]]</span><span class="tpos">&nbsp;[[:mhr:вӱд|(mhr)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="chm-Latn" class="tr Latn">vüd</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Máltai nyelv|máltai]]</span>[[Kategória:magyar-máltai szótár]][[kategória:magyar-máltai szótár]]: <span class="Latn" lang="mt">[[ilma#Máltai|ilma]]</span><span class="tpos">&nbsp;[[:mt:ilma|(mt)]]</span>&nbsp;<span class="gender"><abbr title="hímnem">hn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Maráthi nyelv|maráthi]]</span>[[Kategória:magyar-maráthi szótár]][[Kategória:magyar-maráthi szótár]]: <span class="Deva" lang="mr">[[पाणी#Maráthi|पाणी]]</span><span class="tpos">&nbsp;[[:mr:पाणी|(mr)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="mr-Latn" class="tr Latn">pāṇī</span><span class="mention-gloss-paren annotation-paren">)</span>[[Kategória:Fordítások redundáns átírással]], <span class="Deva" lang="mr">[[जल#Maráthi|जल]]</span><span class="tpos">&nbsp;[[:mr:जल|(mr)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="mr-Latn" class="tr Latn">jal</span><span class="mention-gloss-paren annotation-paren">)</span>[[Kategória:Fordítások redundáns átírással]]
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Mongol nyelv|mongol]]</span>[[Kategória:magyar-mongol szótár]][[kategória:magyar-mongol szótár]]: <span class="Cyrl" lang="mn">[[ус#Mongol|ус]]</span><span class="tpos">&nbsp;[[:mn:ус|(mn)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="mn-Latn" class="tr Latn">us</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Azték nyelv|azték]]</span>[[Kategória:magyar-azték szótár]]: <span class="Latn" lang="nah">[[atl#Azték|atl]]</span><span class="tpos">&nbsp;[[:nah:atl|(nah)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Naurui nyelv|naurui]]</span>[[Kategória:magyar-naurui szótár]][[Kategória:magyar-naurui szótár]]: <span class="Latn" lang="na">[[ebok#Naurui|ebok]]</span><span class="tpos">&nbsp;[[:na:ebok|(na)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Navahó nyelv|navahó]]</span>[[Kategória:magyar-navahó szótár]][[Kategória:magyar-navahó szótár]]: <span class="nv-Latn" lang="nv">[[tó#Navahó|tó]]</span><span class="tpos">&nbsp;[[:nv:tó|(nv)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Ndonga nyelv|ndonga]]</span>[[Kategória:magyar-ndonga szótár]]: <span class="Latn" lang="ng">[[omeya#Ndonga|omeya]]</span><span class="tpos">&nbsp;[[:ng:omeya|(ng)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Nápolyi nyelv|nápolyi]]</span>[[Kategória:magyar-nápolyi szótár]]: <span class="Latn" lang="nap">[[acqua#Nápolyi|acqua]]</span><span class="tpos">&nbsp;[[:nap:acqua|(nap)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Német nyelv|német]]</span>[[Kategória:magyar-német szótár]][[Kategória:magyar-német szótár]]: <span class="Latn" lang="de">[[Wasser#Német|Wasser]]</span><span class="tpos">&nbsp;[[:de:Wasser|(de)]]</span>&nbsp;<span class="gender"><abbr title="semlegesnem">sn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Nepáli nyelv|nepáli]]</span>[[Kategória:magyar-nepáli szótár]][[Kategória:magyar-nepáli szótár]]: <span class="Deva" lang="ne">[[पानी#Nepáli|पानी]]</span><span class="tpos">&nbsp;[[:ne:पानी|(ne)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ne-Latn" class="tr Latn">paani</span><span class="mention-gloss-paren annotation-paren">)</span>[[Kategória:Fordítások automatikustól eltérő manuális átírással]], <span class="Deva" lang="ne">[[जल#Nepáli|जल]]</span><span class="tpos">&nbsp;[[:ne:जल|(ne)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ne-Latn" class="tr Latn">jal</span><span class="mention-gloss-paren annotation-paren">)</span>[[Kategória:Fordítások automatikustól eltérő manuális átírással]]
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Norvég nyelv|norvég]]</span>[[Kategória:magyar-norvég szótár]][[Kategória:magyar-norvég szótár]]: <span class="Latn" lang="no">[[vann#Norvég|vann]]</span><span class="tpos">&nbsp;[[:no:vann|(no)]]</span>&nbsp;<span class="gender"><abbr title="semlegesnem">sn</abbr></span>
+*:<span style="font-variant: small-caps; font-size:larger;">[[:w:Norvég nynorsk nyelv|norvég nynorsk]]</span>[[Kategória:magyar-norvég nynorsk szótár]][[kategória:magyar-norvég nynorsk szótár]]: <span class="Latn" lang="nn">[[vatn#Norvég nynorsk|vatn]]</span><span class="tpos">&nbsp;[[:nn:vatn|(nn)]]</span>&nbsp;<span class="gender"><abbr title="semlegesnem">sn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Provanszál nyelv|provanszál]]</span>[[Kategória:magyar-provanszál szótár]][[kategória:magyar-okszitán szótár]]: <span class="Latn" lang="oc">[[aiga#Provanszál|aiga]]</span><span class="tpos">&nbsp;[[:oc:aiga|(oc)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Odzsibva nyelv|odzsibva]]</span>[[Kategória:magyar-odzsibva szótár]]: <span class="Latn" lang="oj">[[nibi#Odzsibva|nibi]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Olasz nyelv|olasz]]</span>[[Kategória:magyar-olasz szótár]][[Kategória:magyar-olasz szótár]]: <span class="Latn" lang="it">[[acqua#Olasz|acqua]]</span><span class="tpos">&nbsp;[[:it:acqua|(it)]]</span>&nbsp;<span class="gender"><abbr title="nőnem">nn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Oromo nyelv|oromo]]</span>[[Kategória:magyar-oromo szótár]]: <span class="Latn" lang="om">[[bishaan#Oromo|bishaan]]</span><span class="tpos">&nbsp;[[:om:bishaan|(om)]]</span>, <span class="Latn" lang="om">[[biye#Oromo|biye]]</span><span class="tpos">&nbsp;[[:om:biye|(om)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Orija nyelv|orija]]</span>[[Kategória:magyar-orija szótár]][[kategória:magyar-orijá szótár]]: <span class="Orya" lang="or">[[ପାଣି#Orija|ପାଣି]]</span><span class="tpos">&nbsp;[[:or:ପାଣି|(or)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="or-Latn" class="tr Latn">paṇi</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Orosz nyelv|orosz]]</span>[[Kategória:magyar-orosz szótár]][[Kategória:magyar-orosz szótár]]: <span class="Cyrl" lang="ru">[[вода#Orosz|вода]]</span><span class="tpos">&nbsp;[[:ru:вода|(ru)]]</span>&nbsp;<span class="gender"><abbr title="nőnem">nn</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ru-Latn" class="tr Latn">voda</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Oszét nyelv|oszét]]</span>[[Kategória:magyar-oszét szótár]][[kategória:magyar-oszét szótár]]: <span class="Cyrl" lang="os">[[дон#Oszét|дон]]</span><span class="tpos">&nbsp;[[:os:дон|(os)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="os-Latn" class="tr Latn">don</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Óangol nyelv|óangol]]</span>[[Kategória:magyar-óangol szótár]]: <span class="Latinx" lang="ang">[[wæd#Óangol|wæd]]</span><span class="tpos">&nbsp;[[:ang:wæd|(ang)]]</span>&nbsp;<span class="gender"><abbr title="semlegesnem">sn</abbr></span>, <span class="Latinx" lang="ang">[[wæter#Óangol|wæter]]</span><span class="tpos">&nbsp;[[:ang:wæter|(ang)]]</span>&nbsp;<span class="gender"><abbr title="semlegesnem">sn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Óegyiptomi nyelv|óegyiptomi]]</span>[[Kategória:magyar-óegyiptomi szótár]]: <span class="Latinx" lang="egy">[[mw#Óegyiptomi|mw]]</span>
+*:<hiero>n:n:n</hiero>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Ófelnémet nyelv|ófelnémet]]</span>[[Kategória:magyar-ófelnémet szótár]]: <span class="None" lang="goh">[[wazzar#Ófelnémet|wazzar]]</span>&nbsp;<span class="gender"><abbr title="semlegesnem">sn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Ógörög nyelv|ógörög]]</span>[[Kategória:magyar-ógörög szótár]][[Kategória:magyar-ógörög szótár]]: <span class="polytonic" lang="grc">[[ὕδωρ#Ógörög|ὕδωρ]]</span><span class="tpos">&nbsp;[[:grc:ὕδωρ|(grc)]]</span>&nbsp;<span class="gender"><abbr title="semlegesnem">sn</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="grc-Latn" class="tr Latn">húdōr</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Óegyházi szláv nyelv|óegyházi szláv]]</span>[[Kategória:magyar-óegyházi szláv szótár]]: <span class="Cyrs" lang="cu">[[вода#Óegyházi szláv|вода]]</span><span class="tpos">&nbsp;[[:cu:вода|(cu)]]</span>&nbsp;<span class="gender"><abbr title="nőnem">nn</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="cu-Latn" class="tr Latn">voda</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Örmény nyelv|örmény]]</span>[[Kategória:magyar-örmény szótár]][[kategória:magyar-örmény szótár]]: <span class="Armn" lang="hy">[[ջուր#Örmény|ջուր]]</span><span class="tpos">&nbsp;[[:hy:ջուր|(hy)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="hy-Latn" class="tr Latn">ǰur</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Páli nyelv|páli]]</span>[[Kategória:magyar-páli szótár]][[Kategória:magyar-páli szótár]]: <span class="Latn" lang="pi">[[āpa#Páli|āpa]]</span><span class="tpos">&nbsp;[[:pi:āpa|(pi)]]</span>, <span class="Latn" lang="pi">[[jala#Páli|jala]]</span><span class="tpos">&nbsp;[[:pi:jala|(pi)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Pastu nyelv|pastu]]</span>[[Kategória:magyar-pastu szótár]][[Kategória:magyar-pastu szótár]]: <span class="ps-Arab" lang="ps">[[اوبه#Pastu|اوبه]]</span>&lrm;<span class="tpos">&nbsp;[[:ps:اوبه|(ps)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Perzsa nyelv|perzsa]]</span>[[Kategória:magyar-perzsa szótár]][[Kategória:magyar-perzsa szótár]]: <span class="fa-Arab" lang="fa">[[آب#Perzsa|آب]]</span>&lrm;<span class="tpos">&nbsp;[[:fa:آب|(fa)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="fa-Latn" class="tr Latn">âb</span><span class="mention-gloss-paren annotation-paren">)</span>, <span class="fa-Arab" lang="fa">[[او#Perzsa|او]]</span>&lrm;<span class="tpos">&nbsp;[[:fa:او|(fa)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="fa-Latn" class="tr Latn">ow, aw</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Portugál nyelv|portugál]]</span>[[Kategória:magyar-portugál szótár]][[kategória:magyar-portugál szótár]]: <span class="Latn" lang="pt">[[água#Portugál|água]]</span><span class="tpos">&nbsp;[[:pt:água|(pt)]]</span>&nbsp;<span class="gender"><abbr title="nőnem">nn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Pandzsábi nyelv|pandzsábi]]</span>[[Kategória:magyar-pandzsábi szótár]][[kategória:magyar-pandzsábi szótár]]: <span class="Guru" lang="pa">[[ਪਾਣੀ#Pandzsábi|ਪਾਣੀ]]</span><span class="tpos">&nbsp;[[:pa:ਪਾਣੀ|(pa)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="pa-Latn" class="tr Latn">pāṇī</span><span class="mention-gloss-paren annotation-paren">)</span>[[Kategória:Fordítások redundáns átírással]], <span class="Guru" lang="pa">[[ਜਲ#Pandzsábi|ਜਲ]]</span><span class="tpos">&nbsp;[[:pa:ਜਲ|(pa)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="pa-Latn" class="tr Latn">jal</span><span class="mention-gloss-paren annotation-paren">)</span>, <span class="Guru" lang="pa">[[ਆਬ#Pandzsábi|ਆਬ]]</span><span class="tpos">&nbsp;[[:pa:ਆਬ|(pa)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="pa-Latn" class="tr Latn">āb</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Rohingya nyelv|rohingya]]</span>[[Kategória:magyar-rohingya szótár]]: <span class="Latn" lang="rhg">[[faní#Rohingya|faní]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Román nyelv|román]]</span>[[Kategória:magyar-román szótár]][[kategória:magyar-román szótár]]: <span class="Latn" lang="ro">[[apă#Román|apă]]</span><span class="tpos">&nbsp;[[:ro:apă|(ro)]]</span>&nbsp;<span class="gender"><abbr title="nőnem">nn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Romans nyelv|romans]]</span>[[Kategória:magyar-romans szótár]][[kategória:magyar-romans szótár]]: <span class="Latn" lang="rm">[[aua#Romans|aua]]</span><span class="tpos">&nbsp;[[:rm:aua|(rm)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Ruandai nyelv|ruandai]]</span>[[Kategória:magyar-ruandai szótár]]: <span class="Latn" lang="rw">[[amazi#Ruandai|amazi]]</span><span class="tpos">&nbsp;[[:rw:amazi|(rw)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Sór nyelv|sór]]</span>[[Kategória:magyar-sór szótár]]: <span class="Cyrl" lang="cjs">[[суғ#Sór|суғ]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Spanyol nyelv|spanyol]]</span>[[Kategória:magyar-spanyol szótár]][[Kategória:magyar-spanyol szótár]]: <span class="Latn" lang="es">[[agua#Spanyol|agua]]</span><span class="tpos">&nbsp;[[:es:agua|(es)]]</span>&nbsp;<span class="gender"><abbr title="nőnem">nn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Svéd nyelv|svéd]]</span>[[Kategória:magyar-svéd szótár]][[kategória:magyar-svéd szótár]]: <span class="Latn" lang="sv">[[vatten#Svéd|vatten]]</span><span class="tpos">&nbsp;[[:sv:vatten|(sv)]]</span>&nbsp;<span class="gender"><abbr title="semlegesnem">sn</abbr></span>; <span class="Latn" lang="sv">[[vätur#Svéd|vätur]]</span><span class="tpos">&nbsp;[[:sv:vätur|(sv)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Szamoai nyelv|szamoai]]</span>[[Kategória:magyar-szamoai szótár]][[Kategória:magyar-szamoai szótár]]: <span class="Latn" lang="sm">[[vai#Szamoai|vai]]</span><span class="tpos">&nbsp;[[:sm:vai|(sm)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Szanszkrit nyelv|szanszkrit]]</span>[[Kategória:magyar-szanszkrit szótár]][[kategória:magyar-szanszkrit szótár]]: <span class="Deva" lang="sa">[[जल#Szanszkrit|जल]]</span><span class="tpos">&nbsp;[[:sa:जल|(sa)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="sa-Latn" class="tr Latn">jala</span><span class="mention-gloss-paren annotation-paren">)</span>, <span class="Deva" lang="sa">[[अंब#Szanszkrit|अंब]]</span><span class="tpos">&nbsp;[[:sa:अंब|(sa)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="sa-Latn" class="tr Latn">aṃba</span><span class="mention-gloss-paren annotation-paren">)</span>, <span class="Deva" lang="sa">[[पानीय#Szanszkrit|पानीय]]</span><span class="tpos">&nbsp;[[:sa:पानीय|(sa)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="sa-Latn" class="tr Latn">pānīya</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Szangó nyelv|szangó]]</span>[[Kategória:magyar-szangó szótár]]: <span class="Latn" lang="sg">[[ngu#Szangó|ngu]]</span><span class="tpos">&nbsp;[[:sg:ngu|(sg)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Szárd nyelv|szárd]]</span>[[Kategória:magyar-szárd szótár]]: <span class="Latn" lang="sc">[[aba#Szárd|aba]]</span><span class="tpos">&nbsp;[[:sc:aba|(sc)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Szerbhorvát nyelv|szerbhorvát]]</span>[[Kategória:magyar-szerbhorvát szótár]][[Kategória:magyar-szerbhorvát szótár]]: <span class="Cyrl" lang="sh">[[вода#Szerbhorvát|вода]]</span><span class="tpos">&nbsp;[[:sh:вода|(sh)]]</span>&nbsp;<span class="gender"><abbr title="nőnem">nn</abbr></span>, <span class="Latn" lang="sh">[[voda#Szerbhorvát|voda]]</span><span class="tpos">&nbsp;[[:sh:voda|(sh)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Szicíliai nyelv|szicíliai]]</span>[[Kategória:magyar-szicíliai szótár]]: <span class="Latn" lang="scn">[[acqua#Szicíliai|acqua]]</span><span class="tpos">&nbsp;[[:scn:acqua|(scn)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Szindhi nyelv|szindhi]]</span>[[Kategória:magyar-szindhi szótár]][[kategória:magyar-szindhi szótár]]: <span class="sd-Arab" lang="sd">[[پاڻي#Szindhi|پاڻي]]</span>&lrm;<span class="tpos">&nbsp;[[:sd:پاڻي|(sd)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="sd-Latn" class="tr Latn">pāṇī</span><span class="mention-gloss-paren annotation-paren">)</span>, <span class="sd-Arab" lang="sd">[[آب#Szindhi|آب]]</span>&lrm;<span class="tpos">&nbsp;[[:sd:آب|(sd)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="sd-Latn" class="tr Latn">āb</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Szingaléz nyelv|szingaléz]]</span>[[Kategória:magyar-szingaléz szótár]][[kategória:magyar-szingaléz szótár]]: <span class="Sinh" lang="si">[[ජලය#Szingaléz|ජලය]]</span><span class="tpos">&nbsp;[[:si:ජලය|(si)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="si-Latn" class="tr Latn">jalaya</span><span class="mention-gloss-paren annotation-paren">)</span>, <span class="Sinh" lang="si">[[වතුර#Szingaléz|වතුර]]</span><span class="tpos">&nbsp;[[:si:වතුර|(si)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="si-Latn" class="tr Latn">vatura</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Szlovák nyelv|szlovák]]</span>[[Kategória:magyar-szlovák szótár]][[kategória:magyar-szlovák szótár]]: <span class="Latn" lang="sk">[[voda#Szlovák|voda]]</span><span class="tpos">&nbsp;[[:sk:voda|(sk)]]</span>&nbsp;<span class="gender"><abbr title="nőnem">nn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Szlovén nyelv|szlovén]]</span>[[Kategória:magyar-szlovén szótár]][[kategória:magyar-szlovén szótár]]: <span class="Latn" lang="sl">[[voda#Szlovén|voda]]</span><span class="tpos">&nbsp;[[:sl:voda|(sl)]]</span>&nbsp;<span class="gender"><abbr title="nőnem">nn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Szomáli nyelv|szomáli]]</span>[[Kategória:magyar-szomáli szótár]][[kategória:magyar-szomáli szótár]]: <span class="Latn" lang="so">[[biyo#Szomáli|biyo]]</span><span class="tpos">&nbsp;[[:so:biyo|(so)]]</span>, <span class="Latn" lang="so">[[waraabin#Szomáli|waraabin]]</span><span class="tpos">&nbsp;[[:so:waraabin|(so)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Szotó nyelv|szotó]]</span>[[Kategória:magyar-szotó szótár]]: <span class="Latn" lang="st">[[metsi#Szotó|metsi]]</span><span class="tpos">&nbsp;[[:st:metsi|(st)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Szundanéz nyelv|szundanéz]]</span>[[Kategória:magyar-szundanéz szótár]][[kategória:magyar-szundanéz szótár]]: <span class="Latn" lang="su">[[cai#Szundanéz|cai]]</span><span class="tpos">&nbsp;[[:su:cai|(su)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Szuahéli nyelv|szuahéli]]</span>[[Kategória:magyar-szuahéli szótár]][[kategória:magyar-szuahéli szótár]]: <span class="Latn" lang="sw">[[maji#Szuahéli|maji]]</span><span class="tpos">&nbsp;[[:sw:maji|(sw)]]</span>&nbsp;<span class="gender"><abbr title="többes szám">tsz</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Szvázi nyelv|szvázi]]</span>[[Kategória:magyar-szvázi szótár]]: <span class="Latn" lang="ss">[[emanti#Szvázi|emanti]]</span><span class="tpos">&nbsp;[[:ss:emanti|(ss)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Tagalog nyelv|tagalog]]</span>[[Kategória:magyar-tagalog szótár]][[kategória:magyar-tagalog szótár]]: <span class="Latn" lang="tl">[[tubig#Tagalog|tubig]]</span><span class="tpos">&nbsp;[[:tl:tubig|(tl)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Tahiti nyelv|tahiti]]</span>[[Kategória:magyar-tahiti szótár]][[kategória:magyar-tahiti szótár]]: <span class="Latn" lang="ty">[[pape#Tahiti|pape]]</span><span class="tpos">&nbsp;[[:ty:pape|(ty)]]</span>, <span class="Latn" lang="ty">[[vai#Tahiti|vai]]</span><span class="tpos">&nbsp;[[:ty:vai|(ty)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Tádzsik nyelv|tádzsik]]</span>[[Kategória:magyar-tádzsik szótár]][[kategória:magyar-tádzsik szótár]]: <span class="Cyrl" lang="tg">[[об#Tádzsik|об]]</span><span class="tpos">&nbsp;[[:tg:об|(tg)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="tg-Latn" class="tr Latn">ob</span><span class="mention-gloss-paren annotation-paren">)</span>[[Kategória:Fordítások redundáns átírással]]
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Tamil nyelv|tamil]]</span>[[Kategória:magyar-tamil szótár]][[kategória:magyar-tamil szótár]]: <span class="Taml" lang="ta">[[தண்ணீர்#Tamil|தண்ணீர்]]</span><span class="tpos">&nbsp;[[:ta:தண்ணீர்|(ta)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ta-Latn" class="tr Latn">taṇṇīr</span><span class="mention-gloss-paren annotation-paren">)</span>[[Kategória:Fordítások redundáns átírással]], <span class="Taml" lang="ta">[[நீர்#Tamil|நீர்]]</span><span class="tpos">&nbsp;[[:ta:நீர்|(ta)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ta-Latn" class="tr Latn">nīr</span><span class="mention-gloss-paren annotation-paren">)</span>[[Kategória:Fordítások redundáns átírással]]
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Tatár nyelv|tatár]]</span>[[Kategória:magyar-tatár szótár]][[kategória:magyar-tatár szótár]]: <span class="Cyrl" lang="tt">[[су#Tatár|су]]</span><span class="tpos">&nbsp;[[:tt:су|(tt)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="tt-Latn" class="tr Latn">su</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Telugu nyelv|telugu]]</span>[[Kategória:magyar-telugu szótár]][[Kategória:magyar-telugu szótár]]: <span class="Telu" lang="te">[[నీరు#Telugu|నీరు]]</span><span class="tpos">&nbsp;[[:te:నీరు|(te)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="te-Latn" class="tr Latn">nīru</span><span class="mention-gloss-paren annotation-paren">)</span>, <span class="Telu" lang="te">[[జలము#Telugu|జలము]]</span><span class="tpos">&nbsp;[[:te:జలము|(te)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="te-Latn" class="tr Latn">jalamu</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Thai nyelv|thai]]</span>[[Kategória:magyar-thai szótár]][[kategória:magyar-thai szótár]]: <span class="Thai" lang="th">[[น้ำ#Thai|น้ำ]]</span><span class="tpos">&nbsp;[[:th:น้ำ|(th)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="th-Latn" class="tr Latn">nám</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Tibeti nyelv|tibeti]]</span>[[Kategória:magyar-tibeti szótár]][[Kategória:magyar-tibeti szótár]]: <span class="Tibt" lang="bo">[[ཆུ#Tibeti|ཆུ]]</span><span class="tpos">&nbsp;[[:bo:ཆུ|(bo)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="bo-Latn" class="tr Latn">chu</span><span class="mention-gloss-paren annotation-paren">)</span>[[Kategória:Fordítások redundáns átírással]]
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Tigrinya nyelv|tigrinya]]</span>[[Kategória:magyar-tigrinya szótár]][[Kategória:magyar-tigrinya szótár]]: <span class="Ethi" lang="ti">[[ማይ#Tigrinya|ማይ]]</span><span class="tpos">&nbsp;[[:ti:ማይ|(ti)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ti-Latn" class="tr Latn">may</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Tok piszin nyelv|tok piszin]]</span>[[Kategória:magyar-tok piszin szótár]][[Kategória:magyar-tok piszin szótár]]: <span class="Latn" lang="tpi">[[wara#Tok piszin|wara]]</span><span class="tpos">&nbsp;[[:tpi:wara|(tpi)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Tongai nyelv|tongai]]</span>[[Kategória:magyar-tongai szótár]][[Kategória:magyar-tongai szótár]]: <span class="Latn" lang="to">[[vai#Tongai|vai]]</span><span class="tpos">&nbsp;[[:to:vai|(to)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Conga nyelv|conga]]</span>[[Kategória:magyar-conga szótár]]: <span class="Latn" lang="ts">[[mati#Conga|mati]]</span><span class="tpos">&nbsp;[[:ts:mati|(ts)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Török nyelv|török]]</span>[[Kategória:magyar-török szótár]][[kategória:magyar-török szótár]]: <span class="Latn" lang="tr">[[su#Török|su]]</span><span class="tpos">&nbsp;[[:tr:su|(tr)]]</span>, <span class="Latn" lang="tr">[[ab#Török|ab]]</span><span class="tpos">&nbsp;[[:tr:ab|(tr)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Türkmén nyelv|türkmén]]</span>[[Kategória:magyar-türkmén szótár]][[kategória:magyar-türkmén szótár]]: <span class="Latn" lang="tk">[[suw#Türkmén|suw]]</span><span class="tpos">&nbsp;[[:tk:suw|(tk)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Udmurt nyelv|udmurt]]</span>[[Kategória:magyar-udmurt szótár]]: <span class="Cyrl" lang="udm">[[ву#Udmurt|ву]]</span><span class="tpos">&nbsp;[[:udm:ву|(udm)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="udm-Latn" class="tr Latn">vu</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Ukrán nyelv|ukrán]]</span>[[Kategória:magyar-ukrán szótár]][[Kategória:magyar-ukrán szótár]]: <span class="Cyrl" lang="uk">[[вода#Ukrán|вода]]</span><span class="tpos">&nbsp;[[:uk:вода|(uk)]]</span>&nbsp;<span class="gender"><abbr title="nőnem">nn</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="uk-Latn" class="tr Latn">voda</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Urdu nyelv|urdu]]</span>[[Kategória:magyar-urdu szótár]][[kategória:magyar-urdu szótár]]: <span class="ur-Arab" lang="ur">[[پانی#Urdu|پانی]]</span>&lrm;<span class="tpos">&nbsp;[[:ur:پانی|(ur)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ur-Latn" class="tr Latn">pāni</span><span class="mention-gloss-paren annotation-paren">)</span>, <span class="ur-Arab" lang="ur">[[آب#Urdu|آب]]</span>&lrm;<span class="tpos">&nbsp;[[:ur:آب|(ur)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ur-Latn" class="tr Latn">āb</span><span class="mention-gloss-paren annotation-paren">)</span>, <span class="ur-Arab" lang="ur">[[جل#Urdu|جل]]</span>&lrm;<span class="tpos">&nbsp;[[:ur:جل|(ur)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ur-Latn" class="tr Latn">jal</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Ujgur nyelv|ujgur]]</span>[[Kategória:magyar-ujgur szótár]][[Kategória:magyar-ujgur szótár]]: <span class="ug-Arab" lang="ug">[[سۇ#Ujgur|سۇ]]</span>&lrm;<span class="tpos">&nbsp;[[:ug:سۇ|(ug)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ug-Latn" class="tr Latn">su</span><span class="mention-gloss-paren annotation-paren">)</span>[[Kategória:Fordítások redundáns átírással]]
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Üzbég nyelv|üzbég]]</span>[[Kategória:magyar-üzbég szótár]][[kategória:magyar-üzbég szótár]]: <span class="Latn" lang="uz">[[suv#Üzbég|suv]]</span><span class="tpos">&nbsp;[[:uz:suv|(uz)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Venda nyelv|venda]]</span>[[Kategória:magyar-venda szótár]][[Kategória:magyar-venda szótár]]: <span class="Latn" lang="ve">[[maḓi#Venda|maḓi]]</span><span class="tpos">&nbsp;[[:ve:maḓi|(ve)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Velencei nyelv|velencei]]</span>[[Kategória:magyar-velencei szótár]]: <span class="Latn" lang="vec">[[aqua#Velencei|aqua]]</span><span class="tpos">&nbsp;[[:vec:aqua|(vec)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Vietnámi nyelv|vietnámi]]</span>[[Kategória:magyar-vietnámi szótár]][[kategória:magyar-vietnámi szótár]]: <span class="Latn" lang="vi">[[nước#Vietnámi|nước]]</span><span class="tpos">&nbsp;[[:vi:nước|(vi)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Võro nyelv|võro]]</span>[[Kategória:magyar-võro szótár]]: <span class="Latn" lang="vro">[[vesi#Võro|vesi]]</span><span class="tpos">&nbsp;[[:fiu-vro:vesi|(fiu-vro)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Vallon nyelv|vallon]]</span>[[Kategória:magyar-vallon szótár]][[kategória:magyar-vallon szótár]]: <span class="Latn" lang="wa">[[aiwe#Vallon|aiwe]]</span><span class="tpos">&nbsp;[[:wa:aiwe|(wa)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Walesi nyelv|walesi]]</span>[[Kategória:magyar-walesi szótár]][[kategória:magyar-walesi szótár]]: <span class="Latn" lang="cy">[[dŵr#Walesi|dŵr]]</span><span class="tpos">&nbsp;[[:cy:dŵr|(cy)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Volof nyelv|volof]]</span>[[Kategória:magyar-volof szótár]][[Kategória:magyar-volof szótár]]: <span class="Latn" lang="wo">[[ndoh#Volof|ndoh]]</span><span class="tpos">&nbsp;[[:wo:ndoh|(wo)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Xhosza nyelv|xhosza]]</span>[[Kategória:magyar-xhosza szótár]]: <span class="Latn" lang="xh">[[amanzi#Xhosza|amanzi]]</span><span class="tpos">&nbsp;[[:xh:amanzi|(xh)]]</span>&nbsp;<span class="gender"><abbr title="többes szám">tsz</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Zazaki nyelv|zazaki]]</span>[[Kategória:magyar-zazaki szótár]]: <span class="Latn" lang="zza">[[awk#Zazaki|awk]]</span><span class="tpos">&nbsp;[[:diq:awk|(diq)]]</span>, <span class="Latn" lang="zza">[[aw#Zazaki|aw]]</span><span class="tpos">&nbsp;[[:diq:aw|(diq)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Zsuang nyelv|zsuang]]</span>[[Kategória:magyar-zsuang szótár]][[Kategória:magyar-zsuang szótár]]: <span class="Latn" lang="za">[[raemx#Zsuang|raemx]]</span><span class="tpos">&nbsp;[[:za:raemx|(za)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Zulu nyelv|zulu]]</span>[[Kategória:magyar-zulu szótár]][[Kategória:magyar-zulu szótár]]: <span class="Latn" lang="zu">[[amanzi#Zulu|amanzi]]</span><span class="tpos">&nbsp;[[:zu:amanzi|(zu)]]</span>&nbsp;<span class="gender"><abbr title="többes szám">tsz</abbr></span>
+|}</div></div>
+====Származékok====
+
+* [[vizel]], [[vizes]], [[vizez]], [[vízhatlan]], [[vízi]], [[víztelen]]
+===[[Wikiszótár:Szótárak és referenciaművek#Magyar|További információk]]===
+<templatestyles src="acol/styles.css" /><div class="ouac-acoln ouac-acol4"></div>
+* [https://mek.oszk.hu/adatbazis/magyar-nyelv-ertelmezo-szotara/kereses.php?kereses=v%C3%ADz víz] - ''Értelmező szótár'' (MEK)
+* [https://uesz.nytud.hu/index.html?searchmode=lemma&searchstr=v%C3%ADz víz] - ''Etimológiai szótár'' (UMIL)
+* [https://www.szotar.net/mind/v%C3%ADz/ víz] - ''Szótár.net'' (hu-hu)
+* [https://www.deepl.com/translator#hu/de/v%C3%ADz víz] - ''DeepL''  (hu-de)
+* [https://translate.yandex.com/?text=v%C3%ADz&lang=hu-ru víz] - ''Яндекс''  (hu-ru)
+* [https://translate.google.com/?sl=hu&tl=en&text=v%C3%ADz víz] - ''Google'' (hu-en)
+* 
+* [https://helyesiras.szotar.org/helyesirasajax.php?keresoszo=v%C3%ADz víz] - ''Helyesírási szótár'' (MTA)
+* [https://www.wikidata.org/w/index.php?search=v%C3%ADz víz] - ''Wikidata''
+* [https://hu.wikipedia.org/w/index.php?search=v%C3%ADz víz] - ''Wikipédia'' (magyar)[[category:hu]]

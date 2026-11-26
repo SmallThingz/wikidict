@@ -1158,6 +1158,18 @@ pub const AuthoredElementStyleObservation = struct {
     contexts: []const table_style_profile.AuthoredElementObservedContext,
 };
 
+// Dedicated fixed-SPAN callback. The generic authored callback stays HR-only.
+pub const AuthoredFixedInlineBoxOperation = struct {
+    source: []const u8,
+    owner_span: []const u8,
+    token: []const u8,
+};
+pub const AuthoredFixedInlineBoxObservation = struct {
+    profile: *const table_style_profile.Profile,
+    // Exactly GET then POST; no ancestry or native-parent grant is implied.
+    contexts: []const table_style_profile.AuthoredElementObservedContext,
+};
+
 pub const InlineMissingOperation = struct {
     source: []const u8,
     token: []const u8,
@@ -1338,6 +1350,8 @@ pub const FigureSizingSource = struct {
     resolve_ordinary_action_group_script_fn: ?OrdinaryActionGroupScriptResolver = null,
     ordinary_link_paint_ctx: ?*const anyopaque = null,
     resolve_ordinary_link_paint_fn: ?OrdinaryLinkPaintResolver = null,
+    authored_fixed_inline_box_ctx: ?*const anyopaque = null,
+    resolve_authored_fixed_inline_box_fn: ?*const fn (?*const anyopaque, A, AuthoredFixedInlineBoxOperation) A.Error!?AuthoredFixedInlineBoxObservation = null,
     // HR-only normal issuer; no generic authored element producer is installed.
     authored_element_style_ctx: ?*const anyopaque = null,
     resolve_authored_element_style_fn: ?*const fn (?*const anyopaque, A, AuthoredElementStyleOperation) A.Error!?AuthoredElementStyleObservation = null,
@@ -6421,6 +6435,20 @@ fn validateInlineBoxRunStructure(values: []const Span) Error!void {
         }
         if (!staticInlineOrdinarySpan(span)) return error.UncompiledPresentation;
         if (span.inline_box_group) |group| {
+            if (presentation_types.inlineBoxAtomicLayout(group.*) != null) {
+                // An authored fixed swatch has its own normal-line font, size
+                // and baseline. Its single interior entity stays in that atom;
+                // the surrounding paragraph keeps its own direction scan.
+                if (remaining == 0 or span.provenance != .parsed or span.font_size_unknown or
+                    !staticInlineNonbreakingSwatch(span, group.*) or
+                    !presentation_types.validInlineBoxGroupOwner(span)) return error.UncompiledPresentation;
+                const child = group.spans[0];
+                if (!staticInlineOrdinarySpan(child) or child.font_size_unknown or child.provenance != .entity_literal or
+                    !std.mem.eql(u8, child.text, "\u{a0}")) return error.UncompiledPresentation;
+                remaining -= 1;
+                try paragraph.text(child.text);
+                continue;
+            }
             if (staticInlineFrame(span, group.*)) {
                 try scanStaticInlineFrame(&paragraph, span, 0, &remaining);
                 continue;
@@ -13716,6 +13744,7 @@ pub const Renderer = struct {
         };
         if (box.unresolved) {
             if (!static_candidate and try self.positionedInlineImage(tracked, at, tag, pair, effective, inherited, depth, own_css)) return true;
+            if (try self.observedFixedInlineBox(tracked, at, tag, pair, effective, inherited)) return true;
             const previous_native_reason = self.inline_box_native_motion_diagnostic;
             self.inline_box_native_motion_diagnostic = native_reason;
             defer self.inline_box_native_motion_diagnostic = previous_native_reason;
@@ -13901,6 +13930,226 @@ pub const Renderer = struct {
     }
 
 
+
+    fn fixedInlineBoxPlainStyle(style: Style) bool {
+        return style.provenance == .parsed and style.kind == .text and style.target.len == 0 and
+            style.self_link_target == null and style.image == null and style.link_paint == null and
+            style.ordinary_link_paint == null and style.ordinary_action_origin == null and
+            style.ordinary_action_script == null and style.table_link_source == null and
+            style.ruby_unitless_line_height == null and !style.font_size_unknown and !style.heading and
+            !style.code and !style.small and !style.superscript and !style.subscript and
+            !style.strike and !style.underline and !style.preserve_whitespace and !style.missing_nonaction and
+            style.tooltip == null and !style.tooltip_set and style.explanation.len == 0 and !style.explanation_set and
+            style.role == .normal and style.captured_direction == null and
+            (style.direction.len == 0 or std.ascii.eqlIgnoreCase(style.direction, "ltr"));
+    }
+
+    // Both observations must independently agree with this live native parent.
+    // This helper does not derive a parent from the observed child's CSS pixels.
+    fn fixedInlineBoxNativeFont(self: *Renderer, parent: Style) ?presentation_types.InlineFontSnapshot {
+        if (!fixedInlineBoxPlainStyle(parent) or self.block_formatting.code or self.block_formatting.small or
+            self.block_formatting.superscript or self.block_formatting.subscript or self.block_formatting.strike or
+            self.block_formatting.underline) return null;
+        const metric = self.authoredElementFontMetric(parent) orelse return null;
+        var font = ordinaryActionScriptFont(parent, .{ .bold = parent.bold, .italic = parent.italic });
+        font.font_scale = metric.value; font.font_scale_basis = metric.basis;
+        if (font.font_family == null or font.font_features == null or font.font_scale == null or
+            font.font_scale.? <= 0 or font.font_scale_basis == .context) return null;
+        return if (presentation_types.validContainerOwnerFont(font)) font else null;
+    }
+
+
+    fn fixedInlineBoxFontEqual(left: presentation_types.InlineFontSnapshot,
+        right: presentation_types.InlineFontSnapshot) bool
+    {
+        if (!presentation_types.sameFontFamilyRequest(left.font_family, right.font_family)) return false;
+        var comparable = right;
+        comparable.font_family = left.font_family; // Already compared by value, not allocation identity.
+        return sameFigurePreparationValue(left, comparable);
+    }
+    fn fixedInlineBoxHeightEqual(left: ?presentation_types.InlineLineHeight,
+        right: ?presentation_types.InlineLineHeight) bool
+    {
+        const one = left orelse return right == null;
+        const two = right orelse return false;
+        if (std.meta.activeTag(one) != std.meta.activeTag(two)) return false;
+        return switch (one) {
+            .computed => |value| sameFigurePreparationValue(value, two.computed),
+            .font_relative => |value| value.factor == two.font_relative.factor and
+                fixedInlineBoxFontEqual(value.font, two.font_relative.font),
+        };
+    }
+    fn fixedInlineBoxComputedEqual(left: table_style_profile.FixedInlineBoxComputed,
+        right: table_style_profile.FixedInlineBoxComputed) bool
+    {
+        if (!fixedInlineBoxFontEqual(left.font, right.font) or
+            !fixedInlineBoxHeightEqual(left.layout.line_height, right.layout.line_height)) return false;
+        var comparable = right;
+        comparable.font = left.font; comparable.layout.line_height = left.layout.line_height;
+        return sameFigurePreparationValue(left, comparable);
+    }
+
+    fn fixedInlineBoxComputedAgreement(self: *Renderer, context: table_style_profile.AuthoredElementObservedContext,
+        computed: table_style_profile.ObservedFixedInlineBoxComputedContext, native_parent: Style,
+        parent_font: presentation_types.InlineFontSnapshot) Error!bool
+    {
+        const known = (try self.authoredElementComputedStyle(context, computed.text, native_parent)) orelse return false;
+        if (computed.text.nodes.len < 2) return false;
+        const own = computed.text.nodes[computed.text.nodes.len - 1];
+        const parent = computed.text.nodes[computed.text.nodes.len - 2];
+        const parent_family = (try table_style_profile.observedFontFamilyRequestAlloc(self.a,
+            parent.font_family orelse return false)) orelse return false;
+        if (!presentation_types.sameFontFamilyRequest(parent_font.font_family, parent_family) or
+            parent.font_features == null or parent_font.font_features != parent.font_features) return false;
+        var expected = parent_font;
+        expected.font_scale = known.own.font_scale; expected.font_scale_basis = known.own.font_scale_basis;
+        expected.bold = known.own.bold; expected.italic = known.own.italic; expected.language = known.own.language;
+        expected.font_family = (try table_style_profile.observedFontFamilyRequestAlloc(self.a,
+            own.font_family orelse return false)) orelse return false;
+        expected.font_features = own.font_features orelse return false;
+        if (!fixedInlineBoxFontEqual(expected, computed.box.font) or
+            known.own.font_size_unknown or known.own.font_scale_basis == .context or
+            !std.ascii.eqlIgnoreCase(known.own.direction, "ltr") or
+            !std.mem.eql(u8, known.own.foreground orelse return false, computed.box.foreground) or
+            !std.mem.eql(u8, known.own.background orelse return false, computed.box.background)) return false;
+        // Known CSS normal has a null atomic line-height; missing/unknown never
+        // becomes normal. This preserves GET multiplier versus POST normal.
+        const height: ?presentation_types.InlineLineHeight = switch (known.line_height orelse return false) {
+            .normal => null,
+            .multiplier => |factor| .{ .font_relative = .{ .factor = factor, .font = expected } },
+            .length => |length| .{ .computed = .{ .value = length.value,
+                .font_scale_basis = if (length.unit == .px) .css_px else .normal_body } },
+        };
+        return fixedInlineBoxHeightEqual(height, computed.box.layout.line_height);
+    }
+
+    fn observedFixedInlineBoxStyleForOperation(self: *Renderer, operation: AuthoredFixedInlineBoxOperation,
+        parent: Style) Error!?table_style_profile.FixedInlineBoxComputed
+    {
+        const domain = self.observedOperationSourceDomain() orelse return null;
+        if (operation.source.ptr != domain.source.ptr or operation.source.len != domain.source.len) return null;
+        const token = self.authoredFixedInlineEntity(MissingText.untracked(operation.source), operation.owner_span, .absent) orelse return null;
+        if (token.ptr != operation.token.ptr or token.len != operation.token.len) return null;
+        const sizing = self.context.figure_sizing orelse return null;
+        const callback = sizing.resolve_authored_fixed_inline_box_fn orelse return null;
+        const observation = (try callback(sizing.authored_fixed_inline_box_ctx, self.a, operation)) orelse return null;
+        if (observation.profile != self.context.table_styles or observation.contexts.len != 2) return null;
+        const style_parent = observation.profile.page_style_parent orelse return null;
+        var effective_parent = self.bodyFormattingStyle(parent);
+        effective_parent.bold = effective_parent.bold or self.block_formatting.bold;
+        effective_parent.italic = effective_parent.italic or self.block_formatting.italic;
+        const parent_font = self.fixedInlineBoxNativeFont(effective_parent) orelse return null;
+        var result: ?table_style_profile.FixedInlineBoxComputed = null;
+        for (observation.contexts, 0..) |context, arm| {
+            if (context.styles.page_style_parent != style_parent or
+                !self.fixedInlineBoxNativeParent(operation, context, effective_parent)) return null;
+            const computed = if (arm == 0) get: {
+                const proof = (table_style_profile.proveObservedFixedInlineEntityNeutral(self.a, context,
+                    operation.source, operation.owner_span, operation.token) catch |err| return self.authoredElementQueryError(err)) orelse return null;
+                break :get (table_style_profile.resolveObservedFixedInlineBoxWithEntity(self.a, context,
+                    operation.source, operation.owner_span, operation.token, parent_font, proof) catch |err| return self.authoredElementQueryError(err)) orelse return null;
+            } else (table_style_profile.resolveObservedFixedInlineBoxWithText(self.a, context, parent_font)
+                catch |err| return self.authoredElementQueryError(err)) orelse return null;
+            if (!try self.fixedInlineBoxComputedAgreement(context, computed, effective_parent, parent_font)) return null;
+            if (result) |prior| {
+                // Includes the full owner font, paint, border/padding, sizing,
+                // margins, alignment, wrap and line-height. No arm coercion.
+                if (!fixedInlineBoxComputedEqual(prior, computed.box)) return null;
+            } else result = computed.box;
+        }
+        var owned = result orelse return null;
+        owned.background = try self.a.dupe(u8, owned.background);
+        owned.foreground = try self.a.dupe(u8, owned.foreground);
+        owned.font.language = try self.a.dupe(u8, owned.font.language);
+        owned.font.classes = try self.a.dupe(u8, owned.font.classes);
+        owned.font.font_family = try table_style_profile.cloneFontFamilyRequestAlloc(self.a, owned.font.font_family orelse return null);
+        inline for (.{ "top", "right", "bottom", "left" }) |side| {
+            const edge = &@field(owned.border, side);
+            if (edge.* == .solid) edge.solid.color.rgb = try self.a.dupe(u8, edge.solid.color.rgb);
+        }
+        if (owned.layout.line_height) |*height| {
+            if (height.* == .font_relative) height.font_relative.font = owned.font;
+        }
+        return owned;
+    }
+
+    fn observedFixedInlineBox(self: *Renderer, tracked: MissingText, at: usize, tag: syntax.Tag, pair: syntax.Pair,
+        effective: Style, inherited: Style) Error!bool
+    {
+        if (self.context.observe_structure_only or self.inline_box_owner != null or self.ruby_depth != 0 or
+            !tag.is("span") or tag.closing or tag.self_closing or at >= tag.end or tag.end > pair.inner_end or
+            pair.inner_end > pair.end or pair.end > tracked.bytes.len or !fixedInlineBoxPlainStyle(effective) or
+            !std.mem.eql(u8, effective.classes, inherited.classes)) return false;
+        const domain = self.observedOperationSourceDomain() orelse return false;
+        const current = tracked.bytes[at..pair.end];
+        const held = self.currentAuthoredSwatchRange(tracked, current, inherited.native_inline_motion) orelse return false;
+        const original = self.authoredElementOriginalSlice(domain, held) orelse return false;
+        if (!wikiClassContains(domain.source, original) or !std.mem.eql(u8, current, original)) return false;
+        const offset = @intFromPtr(original.ptr) - @intFromPtr(domain.source.ptr);
+        if (self.source_element_binding) |binding| {
+            const observed = binding.projection.observedOriginal() orelse return false;
+            if (observed.scope != domain.scope or observed.source.ptr != domain.source.ptr or observed.source.len != domain.source.len or
+                !binding.projection.ordinaryRange(tracked, at, pair.end) or
+                !binding.projection.ordinaryRange(binding.projection.original, offset, offset + original.len)) return false;
+            const owner = binding.ownerRange(offset, original.len) orelse return false;
+            const owner_at = @intFromPtr(owner.ptr) - @intFromPtr(binding.owner.bytes.ptr);
+            if (binding.originalRange(owner) != offset or !noLiParentSourceRange(binding.owner, owner) or
+                !binding.projection.ordinaryRange(binding.owner, owner_at, owner_at + owner.len)) return false;
+        } else if (!ordinaryNormalizationRange(tracked, at, pair.end)) return false;
+        const token = self.authoredFixedInlineEntity(MissingText.untracked(domain.source), original, .absent) orelse return false;
+        const box = (try self.observedFixedInlineBoxStyleForOperation(
+            .{ .source = domain.source, .owner_span = original, .token = token }, inherited)) orelse return false;
+        const font = box.font;
+        if (font.role != .normal or font.code or font.small or font.superscript or font.subscript) return false;
+        const children = try self.a.alloc(Span, 1);
+        children[0] = .{ .text = "\u{a0}", .provenance = .entity_literal,
+            .foreground = box.foreground, .foreground_set = true, .background = box.background,
+            .font_scale = font.font_scale, .font_scale_basis = font.font_scale_basis, .font_scale_set = true,
+            .font_family = font.font_family, .font_features = font.font_features,
+            .language = font.language, .classes = font.classes, .direction = "ltr",
+            .flags = .{ .bold = font.bold, .italic = font.italic },
+            .inline_style = .{ .font_normalized = true, .wrap = .normal, .line_height = box.layout.line_height } };
+        const group = try self.a.create(presentation_types.InlineBoxGroup(Span));
+        group.* = .{ .padding = box.padding, .border = box.border, .atomic_layout = box.layout, .spans = children };
+        var owner = children[0]; owner.text = ""; owner.provenance = .parsed; owner.inline_box_group = group;
+        presentation_types.validateInlineBoxGroupTree(owner, 0, self.ruby_depth) catch return error.UncompiledPresentation;
+        // Only the closed source SPAN is consumed. The caller resumes at
+        // pair.end, preserving the exterior entity and label as ordinary input.
+        try self.spans.append(self.a, owner);
+        return true;
+    }
+
+    fn currentAuthoredSwatchRange(self: *const Renderer, tracked: MissingText, piece: []const u8,
+        state: NativeInlineMotionState) ?[]const u8
+    {
+        if (!noLiParentSourceRange(tracked, piece)) return null;
+        if (!tracked.unknown) return piece;
+        const held = switch (state) { .proved => |value| value, else => return null };
+        const host = self.native_article_host orelse return null;
+        if (self.native_inline_motion_root != held.root or self.native_inline_motion_epoch != held.epoch or
+            held.epoch == 0 or !host.matchesActive(self, held.root.source)) return null;
+        const original = self.wikiCellCurrentBodyRange(held.root.source, piece) orelse return null;
+        return if (noLiParentSourceRange(held.root.source, original) and std.mem.eql(u8, original, piece)) original else null;
+    }
+
+    // The normal renderer still needs the node's complete computed geometry.
+    // This binds its closed physical SPAN and the one interior entity only.
+    fn authoredFixedInlineEntity(self: *const Renderer, tracked: MissingText, owner: []const u8,
+        state: NativeInlineMotionState) ?[]const u8
+    {
+        const original = self.currentAuthoredSwatchRange(tracked, owner, state) orelse return null;
+        const opening = syntax.tagAt(original, 0) orelse return null;
+        if (!opening.is("span") or opening.closing or opening.self_closing or opening.html_pre or
+            opening.attr("style") == null or !htmlNestedAttributes(opening.attrs, &.{ "class", "style" })) return null;
+        const pair = syntax.matchingTag(original, opening) orelse return null;
+        if (pair.end != original.len or !tableNestedSourceClose(original, "span", pair, false)) return null;
+        const body = original[opening.end..pair.inner_end];
+        if (body.len < 3 or body[0] != '&') return null;
+        var scratch: [4]u8 = undefined;
+        const token = decodeEntity(body, &scratch, true) orelse return null;
+        return if (token.consumed == body.len and std.mem.eql(u8, token.bytes, "\u{a0}")) body else null;
+    }
+
     // The ordinary entity parser emits one source-provenance leaf per reference.
     // A uniformly styled static swatch uses a single native text run. Verify every
     // original token and its ordinary leaf before joining that run.
@@ -13910,15 +14159,7 @@ pub const Renderer = struct {
         const spans = self.spans.items;
         if (!box.static_decoration or box.cursor != null or spans.len == 0 or
             style.kind != .text or style.target.len != 0 or style.background == null or
-            !noLiParentSourceRange(tracked, body)) return false;
-        if (tracked.unknown) {
-            const held = switch (style.native_inline_motion) { .proved => |value| value, else => return false };
-            const host = self.native_article_host orelse return false;
-            if (self.native_inline_motion_root != held.root or self.native_inline_motion_epoch != held.epoch or
-                held.epoch == 0 or !host.matchesActive(self, held.root.source)) return false;
-            const original = self.wikiCellCurrentBodyRange(held.root.source, body) orelse return false;
-            if (!noLiParentSourceRange(held.root.source, original) or !std.mem.eql(u8, original, body)) return false;
-        }
+            self.currentAuthoredSwatchRange(tracked, body, style.native_inline_motion) == null) return false;
         const group: presentation_types.InlineBoxGroup(Span) = .{ .padding = box.padding, .border = box.border,
             .radius = box.radius, .spans = spans[0..1] };
         if (!staticInlineNonbreakingSwatch(.{ .text = "", .background = style.background }, group)) return false;
@@ -20234,6 +20475,19 @@ pub const Renderer = struct {
     {
         if (!table_style_profile.authoredRuleObservedContextValid(context)) return false;
         const domain = self.authoredElementSourceDomain() orelse return false;
+        return self.authoredObservedNativeParentIn(domain, operation, context, parent);
+    }
+    fn fixedInlineBoxNativeParent(self: *const Renderer, operation: AuthoredFixedInlineBoxOperation,
+        context: table_style_profile.AuthoredElementObservedContext, parent: Style) bool
+    {
+        if (!table_style_profile.authoredElementObservedContextValid(context)) return false;
+        const domain = self.observedOperationSourceDomain() orelse return false;
+        return self.authoredObservedNativeParentIn(domain,
+            .{ .source = operation.source, .element = operation.owner_span }, context, parent);
+    }
+    fn authoredObservedNativeParentIn(self: *const Renderer, domain: AuthoredElementSourceDomain,
+        operation: AuthoredElementStyleOperation, context: table_style_profile.AuthoredElementObservedContext, parent: Style) bool
+    {
         if (operation.source.ptr != domain.source.ptr or operation.source.len != domain.source.len or
             !wikiClassContains(domain.source, operation.element)) return false;
         const observed_parent = context.nodes[context.element].parent orelse return false;
@@ -136906,4 +137160,214 @@ test "RU p933 empty paint owner omits only custody-checked metric-neutral emptin
         .context = .{ .text_paint_styles = &poisoned } };
     try std.testing.expectError(error.UncompiledPresentation, styled.renderBody(source));
 
+}
+
+
+
+test "original viz atomic entity stops at its own SPAN before the outside NBSP and label" {
+    const bytes = @embedFile("testdata/hu-viz609-hu02/expanded.wikitext");
+    const held = MissingText.untracked(bytes);
+    var renderer: Renderer = .{ .a = std.testing.allocator, .context = .{} };
+    const red = bytes[721..925];
+    const white = bytes[966..1172];
+    try std.testing.expectEqualStrings("&nbsp;", renderer.authoredFixedInlineEntity(held, red, .absent) orelse return error.TestUnexpectedResult);
+    try std.testing.expectEqualStrings("&nbsp;", renderer.authoredFixedInlineEntity(held, white, .absent) orelse return error.TestUnexpectedResult);
+    try std.testing.expectEqualStrings("&nbsp;Oxygen, O", bytes[925..940]);
+    try std.testing.expectEqualStrings("&nbsp;Hydrogen, H", bytes[1172..1189]);
+    try std.testing.expect(renderer.authoredFixedInlineEntity(held, bytes[721..940], .absent) == null);
+    try std.testing.expect(renderer.authoredFixedInlineEntity(held, bytes[721..1172], .absent) == null);
+    const changed = try std.testing.allocator.dupe(u8, red);
+    defer std.testing.allocator.free(changed);
+    try std.testing.expect(renderer.authoredFixedInlineEntity(held, changed, .absent) == null);
+    try std.testing.expect(renderer.authoredFixedInlineEntity(MissingText.transformed(red), red, .absent) == null);
+    const at = std.mem.indexOf(u8, changed, "&nbsp;") orelse return error.TestUnexpectedResult;
+    changed[at + 1] = 'x';
+    try std.testing.expect(renderer.authoredFixedInlineEntity(MissingText.untracked(changed), changed, .absent) == null);
+    const missing: MissingText = .{ .bytes = bytes, .ranges = &.{.{ .start = 918, .end = 919, .occurrence = 0 }} };
+    try std.testing.expect(renderer.authoredFixedInlineEntity(missing, red, .absent) == null);
+}
+
+
+
+test "source owned fixed legend atom keeps its normalized metric and the exterior label" {
+    const paint = "#ff0000";
+    const style: presentation_types.InlineTextStyle = .{ .font_normalized = true };
+    const zero: presentation_types.StyleLength = .{ .unit = .px, .value = 0 };
+    const one: presentation_types.StyleLength = .{ .unit = .px, .value = 1 };
+    const em: presentation_types.StyleLength = .{ .unit = .em, .value = 1.5 };
+    const border: presentation_types.InlineBoxBorderEdge = .{ .solid = .{ .width = one, .color = .{ .rgb = "#000000" } } };
+    var child = [_]Span{.{
+        .text = "\u{a0}", .provenance = .entity_literal, .inline_style = style, .font_scale = 0.9,
+        .font_scale_basis = .normal_body, .background = paint, .foreground = "#000000",
+    }};
+    var group: presentation_types.InlineBoxGroup(Span) = .{
+        .padding = .all(zero), .border = .all(border), .spans = &child,
+        .atomic_layout = .{ .width = em, .height = em, .margins = .{ .top = one, .bottom = one, .left = zero, .right = zero },
+            .box_sizing = .content_box, .text_align = .center, .wrap = .normal },
+    };
+    var values = [_]Span{
+        .{ .text = "", .background = paint, .foreground = "#000000", .font_scale = 0.9,
+            .font_scale_basis = .normal_body, .inline_style = style, .inline_box_group = &group },
+        .{ .text = "\u{a0}", .provenance = .entity_literal }, .{ .text = "Oxygen, O" },
+    };
+    try validateInlineBoxParagraph(&values);
+    try std.testing.expectEqualStrings("\u{a0}", group.spans[0].text);
+    try std.testing.expectEqualStrings("\u{a0}", values[1].text);
+    try std.testing.expectEqualStrings("Oxygen, O", values[2].text);
+
+    child[0].font_size_unknown = true;
+    try std.testing.expectError(error.UncompiledPresentation, validateInlineBoxParagraph(&values));
+    child[0].font_size_unknown = false;
+    values[0].provenance = .entity_literal;
+    try std.testing.expectError(error.UncompiledPresentation, validateInlineBoxParagraph(&values));
+    values[0].provenance = .parsed;
+    child[0].font_scale = 1;
+    try std.testing.expectError(error.UncompiledPresentation, validateInlineBoxParagraph(&values));
+    child[0].font_scale = 0.9;
+    child[0].provenance = .parsed;
+    try std.testing.expectError(error.UncompiledPresentation, validateInlineBoxParagraph(&values));
+    child[0].provenance = .entity_literal;
+    child[0].text = "\u{a0}Oxygen, O";
+    try std.testing.expectError(error.UncompiledPresentation, validateInlineBoxParagraph(&values));
+    child[0].text = "\u{a0}";
+    values[2].text = "\u{200e}";
+    try std.testing.expectError(error.UncompiledPresentation, validateInlineBoxParagraph(&values));
+    values[2].text = "Oxygen, O";
+    const saved = group.atomic_layout;
+    group.atomic_layout = null;
+    try std.testing.expectError(error.UncompiledPresentation, validateInlineBoxParagraph(&values));
+    group.atomic_layout = saved;
+    try validateInlineBoxParagraph(&values);
+}
+
+
+const ObservedFixedInlineBoxConsumerTest = struct {
+    const owner_css = "display:inline-block;width:1.5em;height:1.5em;margin:1px 0;border:1px solid black;" ++
+        "background-color:red;color:black;font-size:90%;text-align:center";
+    const source_text = "<span style='" ++ owner_css ++ "'>&nbsp;</span>&nbsp;label";
+    const css = "html{font-family:sans-serif;font-size:100%;font-feature-settings:normal;font-weight:normal;" ++
+        "font-style:normal;line-height:1.6;white-space:normal;direction:ltr;text-align:left;color:black}";
+    const Probe = struct {
+        operation: AuthoredFixedInlineBoxOperation,
+        profile: *const table_style_profile.Profile,
+        contexts: [2]table_style_profile.AuthoredElementObservedContext,
+        calls: usize = 0,
+        fn resolve(raw: ?*const anyopaque, _: A, requested: AuthoredFixedInlineBoxOperation) A.Error!?AuthoredFixedInlineBoxObservation {
+            const self: *Probe = @ptrCast(@alignCast(@constCast(raw orelse return null)));
+            if (requested.source.ptr != self.operation.source.ptr or requested.source.len != self.operation.source.len or
+                requested.owner_span.ptr != self.operation.owner_span.ptr or requested.owner_span.len != self.operation.owner_span.len or
+                requested.token.ptr != self.operation.token.ptr or requested.token.len != self.operation.token.len) return null;
+            self.calls += 1;
+            return .{ .profile = self.profile, .contexts = &self.contexts };
+        }
+    };
+    renderer: Renderer,
+    probe: *Probe,
+    parent: Style,
+    effective: Style,
+    tracked: MissingText,
+    tag: syntax.Tag,
+    pair: syntax.Pair,
+    fn init(a: A) !@This() {
+        const source = try a.dupe(u8, source_text);
+        const tag = syntax.tagAt(source, 0).?;
+        const pair = syntax.matchingTag(source, tag).?;
+        const common = try a.create(table_style_profile.Profile);
+        common.* = try table_style_profile.parseForTargetAlloc(a, "", .screen);
+        const get = try a.create(table_style_profile.Profile);
+        get.* = try table_style_profile.parseForTargetAlloc(a, css, .screen); get.page_style_parent = common;
+        const post_style = try a.create(table_style_profile.Profile);
+        post_style.* = try table_style_profile.parseForTargetAlloc(a, css, .screen); post_style.page_style_parent = common;
+        const nodes = try a.dupe(table_style_profile.ObservedStyleNode, &.{
+            .{ .tag = "html", .parent = null, .attributes = &.{} },
+            .{ .tag = "body", .parent = 0, .attributes = &.{} },
+            .{ .tag = "div", .parent = 1, .attributes = &.{.{ .name = "class", .value = "mw-parser-output" }} },
+            .{ .tag = "span", .parent = 2, .attributes = &.{.{ .name = "style", .value = owner_css }},
+                .empty = false, .has_text = false, .known_complete_child_elements = true },
+            .{ .tag = "span", .parent = 3, .attributes = &.{.{ .name = "typeof", .value = "mw:Entity" }},
+                .empty = false, .has_text = true, .known_complete_child_elements = true, .captured_entity_text = "\xc2\xa0" },
+            .{ .tag = "span", .parent = 2, .attributes = &.{.{ .name = "typeof", .value = "mw:Entity" }},
+                .empty = false, .has_text = true, .known_complete_child_elements = true, .captured_entity_text = "\xc2\xa0" },
+        });
+        const post_nodes = try a.dupe(table_style_profile.ObservedStyleNode, nodes[0..4]); post_nodes[3].has_text = true;
+        const probe = try a.create(Probe);
+        probe.* = .{ .operation = .{ .source = source, .owner_span = source[0..pair.end], .token = source[tag.end..pair.inner_end] },
+            .profile = get, .contexts = .{
+                .{ .styles = get, .nodes = nodes, .root = 2, .element = 3 },
+                .{ .styles = post_style, .nodes = post_nodes, .root = 2, .element = 3 },
+            } };
+        const root = try a.create(table_style_profile.TextElement);
+        root.* = .{ .tag = "div", .classes = "mw-parser-output", .ancestry_complete = true, .physical_ancestry_complete = true };
+        const scope = try a.create(table_style_profile.BoundedTextClassScope);
+        scope.* = .{ .root_tag = "div", .root_classes = "mw-parser-output", .subtree_classes = "",
+            .complete_ancestor_class_superset = "mw-parser-output", .page_styles = get,
+            .page_style_root = root, .page_style_complete_root = root };
+        var context = try FigureProducerTest.context(a); context.table_styles = get;
+        context.figure_sizing.?.text_class_scope = .{ .source = source, .scope = scope };
+        context.figure_sizing.?.authored_element_style_ctx = null;
+        context.figure_sizing.?.resolve_authored_element_style_fn = null;
+        context.figure_sizing.?.authored_fixed_inline_box_ctx = probe;
+        context.figure_sizing.?.resolve_authored_fixed_inline_box_fn = Probe.resolve;
+        const parent: Style = .{ .text_element = root, .font_scale = 1, .font_scale_basis = .normal_body,
+            .font_scale_set = true, .font_family = .sans_serif, .font_features = .normal,
+            .foreground = "#000000", .foreground_set = true, .direction = "ltr" };
+        var effective = parent; effective.font_scale = 0.9; effective.background = "#ff0000"; effective.direction = "";
+        const tracked = MissingText.untracked(source);
+        return .{ .renderer = .{ .a = a, .context = context, .content_root = .parser_output, .body_depth = 1,
+                .bounded_text_class_scope = scope, .bounded_text_class_source = source, .body_missing = tracked },
+            .probe = probe, .parent = parent, .effective = effective, .tracked = tracked, .tag = tag, .pair = pair };
+    }
+};
+
+test "observed fixed atom callback emits only the exact agreeing owner and leaves exterior source" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var fixture = try ObservedFixedInlineBoxConsumerTest.init(a);
+    // Synthetic parent/context controls only; no authentic HU grant.
+    try std.testing.expect(try fixture.renderer.observedFixedInlineBox(fixture.tracked, 0, fixture.tag, fixture.pair,
+        fixture.effective, fixture.parent));
+    try std.testing.expectEqual(@as(usize, 1), fixture.probe.calls);
+    try std.testing.expectEqual(@as(usize, 1), fixture.renderer.spans.items.len);
+    const owner = fixture.renderer.spans.items[0];
+    const group = owner.inline_box_group orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 1), group.spans.len);
+    try std.testing.expectEqualStrings("\u{a0}", group.spans[0].text);
+    try std.testing.expect(group.spans[0].provenance == .entity_literal and owner.provenance == .parsed);
+    try std.testing.expectEqual(@as(f32, 0.9), owner.font_scale.?);
+    try std.testing.expectEqual(@as(f32, 1.6), group.atomic_layout.?.line_height.?.font_relative.factor);
+    try std.testing.expectEqualStrings("&nbsp;label", fixture.tracked.bytes[fixture.pair.end..]);
+    try std.testing.expect(fixture.probe.operation.owner_span.ptr + fixture.probe.operation.owner_span.len ==
+        fixture.tracked.bytes[fixture.pair.end..].ptr);
+    try std.testing.expect(fixture.renderer.context.figure_sizing.?.resolve_authored_element_style_fn == null);
+    try presentation_types.validateInlineBoxGroupTree(owner, 0, 0);
+}
+
+test "observed fixed atom callback refuses line height mismatch stale ranges and unproved native parent" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = ObservedFixedInlineBoxConsumerTest;
+    var fixture = try T.init(a);
+    const operation = fixture.probe.operation;
+    const original_context = fixture.probe.contexts[1];
+    for ([_][]const u8{ "html{line-height:normal}", "html{font-size:125%}",
+        "span{font-size:80%!important}" }) |delta| {
+        var changed = try table_style_profile.parseForTargetAlloc(a, try std.mem.concat(a, u8, &.{ T.css, delta }), .screen);
+        defer changed.deinit(); changed.page_style_parent = original_context.styles.page_style_parent;
+        fixture.probe.contexts[1].styles = &changed;
+        try std.testing.expect((try fixture.renderer.observedFixedInlineBoxStyleForOperation(operation, fixture.parent)) == null);
+    }
+    fixture.probe.contexts[1] = original_context;
+    for (0..3) |mutation| {
+        var parent = fixture.parent;
+        switch (mutation) { 0 => parent.font_scale = 1.25, 1 => parent.font_family = null, 2 => parent.font_features = null, else => unreachable }
+        try std.testing.expect((try fixture.renderer.observedFixedInlineBoxStyleForOperation(operation, parent)) == null);
+    }
+    var copied_token = operation; copied_token.token = try a.dupe(u8, operation.token);
+    try std.testing.expect((try fixture.renderer.observedFixedInlineBoxStyleForOperation(copied_token, fixture.parent)) == null);
+    var exterior = operation; exterior.token = operation.source[fixture.pair.end .. fixture.pair.end + 6];
+    try std.testing.expect((try fixture.renderer.observedFixedInlineBoxStyleForOperation(exterior, fixture.parent)) == null);
+    var copied_source = operation; copied_source.source = try a.dupe(u8, operation.source);
+    try std.testing.expect((try fixture.renderer.observedFixedInlineBoxStyleForOperation(copied_source, fixture.parent)) == null);
+    var held = fixture.renderer;
+    held.context.figure_sizing.?.resolve_authored_fixed_inline_box_fn = null;
+    try std.testing.expect((try held.observedFixedInlineBoxStyleForOperation(operation, fixture.parent)) == null);
+    try std.testing.expectEqual(@as(usize, 0), fixture.renderer.spans.items.len);
 }
