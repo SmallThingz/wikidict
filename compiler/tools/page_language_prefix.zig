@@ -86,7 +86,26 @@ fn configuration(a: A, text: []const u8, page_id: u64, revision_id: u64) !bool {
 }
 const SelectedPage = struct { namespace_id: i32, title: []const u8, sr_wmf5_prelude: bool = false,
     is_screen_prelude: bool = false,
+    selected_get_wiki: ?[]const u8 = null,
     exterior: ?struct { wiki: []const u8, tags: *std.ArrayList([]const u8) } = null };
+// Both retained EN Vector 2022 and HU legacy GETs have this complete static
+// program. Only the literal class suffix and site cookie vary. Matching these
+// bytes proves the program boundary, not an evaluated cookie/class outcome.
+fn selectedGetPrelude(a: A, text: []const u8, html_classes: []const u8, wiki: []const u8) !void {
+    if (text.len == 0 or text.len > 2048 or wiki.len == 0 or wiki.len > 128) return invalid;
+    for (wiki) |byte| if (!std.ascii.isAlphanumeric(byte) and byte != '_') return invalid;
+    const nojs = "client-nojs ";
+    if (!std.mem.startsWith(u8, html_classes, nojs) or html_classes.len <= nojs.len or html_classes.len > 1536) return invalid;
+    const suffix = html_classes[nojs.len..];
+    for (suffix) |byte| if (!std.ascii.isAlphanumeric(byte) and byte != '-' and byte != '_' and byte != ' ') return invalid;
+    const expected = try std.mem.concat(a, u8, &.{
+        "(function(){var className=\"client-js ", suffix,
+        "\";var cookie=document.cookie.match(/(?:^|; )", wiki,
+        "mwclientpreferences=([^;]+)/);if(cookie){cookie[1].split('%2C').forEach(function(pref){className=className.replace(new RegExp('(^| )'+pref.replace(/-clientpref-\\w+$|[^\\w-]+/g,'')+'-clientpref-\\\\w+( |$)'),'$1'+pref+'$2');});}document.documentElement.className=className;}());",
+    });
+    defer a.free(expected);
+    if (!std.mem.eql(u8, text, expected)) return invalid;
+}
 fn configurationForPage(a: A, text: []const u8, page_id: u64, revision_id: u64, current_title: ?[]const u8) !bool {
     return configurationForSelectedPage(a, text, page_id, revision_id, current_title, null, "");
 }
@@ -94,6 +113,11 @@ fn configurationForSelectedPage(a: A, text: []const u8, page_id: u64, revision_i
     current_title: ?[]const u8, selected: ?SelectedPage, html_classes: []const u8) !bool
 {
     const at = std.mem.indexOf(u8, text, "RLCONF=") orelse return false;
+    const selected_get_wiki = if (selected) |value| value.selected_get_wiki else null;
+    const selected_get_program = if (selected_get_wiki) |wiki| program: {
+        try selectedGetPrelude(a, text[0..at], html_classes, wiki);
+        break :program true;
+    } else false;
     const sr_wmf5 = if (selected) |value| value.sr_wmf5_prelude else false;
     const exterior = if (selected) |record| record.exterior else null;
     // For exterior evidence, compare the whole reviewed static program after
@@ -112,7 +136,7 @@ fn configurationForSelectedPage(a: A, text: []const u8, page_id: u64, revision_i
     if (sr_wmf5 and at == 0) return invalid;
     if (selected != null and selected.?.is_screen_prelude and at != 956) return invalid;
     if (at != 0) {
-        if (!exterior_program and at != 952 and at != 956 and !(selected != null and at == 960)) return invalid;
+        if (!selected_get_program and !exterior_program and at != 952 and at != 956 and !(selected != null and at == 960)) return invalid;
         var digest: [32]u8 = undefined;
         std.crypto.hash.sha2.Sha256.hash(text[0..at], &digest, .{});
         const hash = std.fmt.bytesToHex(digest, .lower);
@@ -135,7 +159,7 @@ fn configurationForSelectedPage(a: A, text: []const u8, page_id: u64, revision_i
         const is_screen_program = selected != null and selected.?.is_screen_prelude and
             std.mem.eql(u8, &hash, "2b0ae9eb6125752f1f9cc44637490ceab85da7c39b5fb1d392e3fde2995856f0");
         if (selected != null and selected.?.is_screen_prelude and !is_screen_program) return invalid;
-        if (!exterior_program and !is_screen_program and !std.mem.eql(u8, &hash, "4596a0a448783bdf5cd823d3b017520464502eba17da6e0277049df0c171bf39") and
+        if (!selected_get_program and !exterior_program and !is_screen_program and !std.mem.eql(u8, &hash, "4596a0a448783bdf5cd823d3b017520464502eba17da6e0277049df0c171bf39") and
             !std.mem.eql(u8, &hash, "296e5797ae51141a36d124508c23b7e0aeb2cb5be620e060fc6eb5aceb39cc89") and
             !std.mem.eql(u8, &hash, "4883bdb1c585b9440aa445aacdea8bdb5df146ca42bde57bd25862fffb71ed0f") and
             !std.mem.eql(u8, &hash, "ff0406678d57587b7409bfba7f818a44a9ec8dd418eb27da4b32823b3e19ed0d") and
@@ -164,7 +188,7 @@ fn configurationForSelectedPage(a: A, text: []const u8, page_id: u64, revision_i
     const parsed = std.json.parseFromSlice(std.json.Value, a, text[start..end], .{}) catch |err| switch (err) { error.OutOfMemory => return err, else => return invalid };
     defer parsed.deinit();
     if (parsed.value != .object) return invalid;
-    if (exterior != null) {
+    if (exterior != null or selected_get_program) {
         const groups = parsed.value.object.get("wgUserGroups") orelse return invalid;
         const user = parsed.value.object.get("wgUserName") orelse return invalid;
         if (user != .null or groups != .array or groups.array.items.len != 1 or groups.array.items[0] != .string or
@@ -183,6 +207,10 @@ fn configurationForSelectedPage(a: A, text: []const u8, page_id: u64, revision_i
         std.mem.replaceScalar(u8, expected_name, ' ', '_');
         if (page_name != .string or !std.mem.eql(u8, page_name.string, expected_name) or
             action != .string or !std.mem.eql(u8, action.string, "view") or article_view != .bool or !article_view.bool) return invalid;
+    }
+    if (selected_get_program) {
+        const title = parsed.value.object.get("wgTitle") orelse return invalid;
+        if (title != .string or !std.mem.eql(u8, title.string, selected.?.title)) return invalid;
     }
     if (current_title) |title| {
         const current = parsed.value.object.get("wgCurRevisionId") orelse return invalid;
@@ -213,6 +241,18 @@ pub fn parseSelectedOldidAlloc(a: A, bytes: []const u8, page_id: u64, revision_i
 {
     return parseForSelectedPage(a, bytes, page_id, revision_id, null, .{ .namespace_id = namespace_id, .title = title });
 }
+// Captured main-namespace GET identity: exact selected oldid, anonymous view,
+// WMF5 generator, static class/cookie literals and the complete fixed program.
+// No evaluated class, cookie, CSS, skin or Book ancestry authority is issued.
+// Other entry points and current-versus-oldid contracts remain unchanged.
+pub fn parseSelectedGetOldidAlloc(a: A, bytes: []const u8, page_id: u64, revision_id: u64,
+    namespace_id: i32, title: []const u8, wiki: []const u8) !Observation
+{
+    if (namespace_id != 0) return invalid;
+    return parseForSelectedPage(a, bytes, page_id, revision_id, null,
+        .{ .namespace_id = namespace_id, .title = title, .selected_get_wiki = wiki });
+}
+
 pub fn parseStylesheetOldidAlloc(a: A, bytes: []const u8, page_id: u64, revision_id: u64,
     title: []const u8, wiki: []const u8, generator: []const u8) !Observation
 {
@@ -267,11 +307,11 @@ fn parseForSelectedPage(a: A, bytes: []const u8, page_id: u64, revision_id: u64,
         if (tag.is("html")) { if (html_seen or depth != 0) return invalid; html_seen = true; }
         if (tag.is("head")) { if (head_seen or depth != 1 or !stack[0].tag.is("html")) return invalid; head_seen = true; }
         if (tag.is("body")) { if (body_seen or !head_seen or depth != 1 or !stack[0].tag.is("html")) return invalid; body_seen = true; }
-        if (selected != null and (selected.?.exterior != null or selected.?.is_screen_prelude) and !tag.closing and tag.is("meta") and
+        if (selected != null and (selected.?.exterior != null or selected.?.is_screen_prelude or selected.?.selected_get_wiki != null) and !tag.closing and tag.is("meta") and
             depth == 2 and stack[1].tag.is("head") and same(tag.attr("name") orelse "", "generator")) {
             const generator = tag.attr("content") orelse "";
             if (exterior_generator or !same(generator, "MediaWiki 1.48.0-wmf.5")) return invalid;
-            if (selected.?.is_screen_prelude and !std.mem.eql(u8, generator, "MediaWiki 1.48.0-wmf.5")) return invalid;
+            if ((selected.?.is_screen_prelude or selected.?.selected_get_wiki != null) and !std.mem.eql(u8, generator, "MediaWiki 1.48.0-wmf.5")) return invalid;
             exterior_generator = true;
         }
         if (tag.is("noscript") or tag.is("template")) return invalid;
@@ -302,7 +342,7 @@ fn parseForSelectedPage(a: A, bytes: []const u8, page_id: u64, revision_id: u64,
         stack[depth] = .{ .tag = tag, .attrs = attrs }; depth += 1;
         if (tag.is("div") and hasClass(attrs.classes, "mw-parser-output")) {
             if (tag.end != bytes.len or !config_seen or !html_seen or !body_seen or depth < 3 or !stack[0].tag.is("html") or !stack[1].tag.is("body")) return invalid;
-            if (selected != null and selected.?.is_screen_prelude and !exterior_generator) return invalid;
+            if (selected != null and (selected.?.is_screen_prelude or selected.?.selected_get_wiki != null) and !exterior_generator) return invalid;
             if (selected) |record| if (record.exterior) |exterior| {
                 if (!exterior_generator) return invalid;
                 for (stack[0..depth]) |node| try exterior.tags.append(a, node.tag.name);
@@ -667,4 +707,92 @@ test "observed Icelandic article stylesheet requires its exact selected revision
         try std.testing.expect(!std.mem.eql(u8, prefix, altered));
         try std.testing.expectError(invalid, parseStylesheetOldidAlloc(alloc, altered, 888, 309701, name, "iswiktionary", generator));
     }
+}
+
+test "selected GET en authentic fixed prelude binds identity and rejects crossed program" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const bytes = @embedFile("testdata/selected-get-static01/en.prefix.html");
+    var digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
+    try std.testing.expectEqualStrings("0d9e9249963ce0184fc246e77fa038215c7fd13d9227272df34544c59489754d", &std.fmt.bytesToHex(digest, .lower));
+    const observed = try parseSelectedGetOldidAlloc(a, bytes, 10500003, 87816728, 0, "แมวเสือ", "enwiktionary");
+    try std.testing.expectEqualStrings("en", observed.root_language);
+    try std.testing.expectError(invalid, parseSelectedGetOldidAlloc(a, bytes, 10500003 + 1, 87816728, 0, "แมวเสือ", "enwiktionary"));
+    try std.testing.expectError(invalid, parseSelectedGetOldidAlloc(a, bytes, 10500003, 87816728 + 1, 0, "แมวเสือ", "enwiktionary"));
+    try std.testing.expectError(invalid, parseSelectedGetOldidAlloc(a, bytes, 10500003, 87816728, 1, "แมวเสือ", "enwiktionary"));
+    try std.testing.expectError(invalid, parseSelectedGetOldidAlloc(a, bytes, 10500003, 87816728, 0, "crossed", "enwiktionary"));
+    try std.testing.expectError(invalid, parseSelectedGetOldidAlloc(a, bytes, 10500003, 87816728, 0, "แมวเสือ", "crossedwiktionary"));
+    for ([_][2][]const u8{
+        .{ "enwiktionarymwclientpreferences", "crossedwiktionarymwclientpreferences" },
+        .{ "client-nojs ", "client-nojs crossed " },
+        .{ "var cookie=", "var cookix=" },
+        .{ "document.documentElement.className=className", "document.documentElement.className=other" },
+        .{ "RLCONF=", "if(false)RLCONF=" },
+        .{ "RLCONF=", "void 0;RLCONF=" },
+        .{ "MediaWiki 1.48.0-wmf.5", "MediaWiki 1.48.0-wmf.4" },
+        .{ "MediaWiki 1.48.0-wmf.5", "MediaWiki 1.48.0-WMF.5" },
+        .{ "\"wgRevisionId\":87816728", "\"wgRevisionId\":\"87816728\"" },
+        .{ "\"wgNamespaceNumber\":0", "\"wgNamespaceNumber\":1" },
+        .{ "\"wgAction\":\"view\"", "\"wgAction\":\"edit\"" },
+        .{ "\"wgTitle\":\"แมวเสือ\"", "\"wgTitle\":\"crossed\"" },
+        .{ "\"wgUserName\":null", "\"wgUserName\":\"crossed\"" },
+        .{ "<script>", "<script type=\"text/plain\">" },
+        .{ "</head>", "<script>RLCONF={};</script></head>" },
+    }) |pair| {
+        const altered = try std.mem.replaceOwned(u8, a, bytes, pair[0], pair[1]);
+        try std.testing.expect(!std.mem.eql(u8, bytes, altered));
+        try std.testing.expectError(invalid, parseSelectedGetOldidAlloc(a, altered, 10500003, 87816728, 0, "แมวเสือ", "enwiktionary"));
+    }
+    // Even valid direct configuration cannot replace the captured full program.
+    const cropped = try std.mem.concat(a, u8, &.{bytes[0..758], bytes[1710..]});
+    try std.testing.expectError(invalid, parseSelectedGetOldidAlloc(a, cropped, 10500003, 87816728, 0, "แมวเสือ", "enwiktionary"));
+    try std.testing.expectError(invalid, parseSelectedGetOldidAlloc(a, bytes[0..bytes.len - 1], 10500003, 87816728, 0, "แมวเสือ", "enwiktionary"));
+    // Selected oldid does not require the wiki's latest revision to be identical.
+    const newer = try std.mem.replaceOwned(u8, a, bytes, "\"wgCurRevisionId\":87816728", "\"wgCurRevisionId\":87816729");
+    _ = try parseSelectedGetOldidAlloc(a, newer, 10500003, 87816728, 0, "แมวเสือ", "enwiktionary");
+}
+
+test "selected GET hu authentic fixed prelude binds identity and rejects crossed program" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const bytes = @embedFile("testdata/selected-get-static01/hu.prefix.html");
+    var digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
+    try std.testing.expectEqualStrings("984e7ce3058d2897e96fc9441af6cb348973cfb5a00bf3c7505ba03d365b6633", &std.fmt.bytesToHex(digest, .lower));
+    const observed = try parseSelectedGetOldidAlloc(a, bytes, 609, 3518053, 0, "víz", "huwiktionary");
+    try std.testing.expectEqualStrings("hu", observed.root_language);
+    try std.testing.expectError(invalid, parseSelectedGetOldidAlloc(a, bytes, 609 + 1, 3518053, 0, "víz", "huwiktionary"));
+    try std.testing.expectError(invalid, parseSelectedGetOldidAlloc(a, bytes, 609, 3518053 + 1, 0, "víz", "huwiktionary"));
+    try std.testing.expectError(invalid, parseSelectedGetOldidAlloc(a, bytes, 609, 3518053, 1, "víz", "huwiktionary"));
+    try std.testing.expectError(invalid, parseSelectedGetOldidAlloc(a, bytes, 609, 3518053, 0, "crossed", "huwiktionary"));
+    try std.testing.expectError(invalid, parseSelectedGetOldidAlloc(a, bytes, 609, 3518053, 0, "víz", "crossedwiktionary"));
+    for ([_][2][]const u8{
+        .{ "huwiktionarymwclientpreferences", "crossedwiktionarymwclientpreferences" },
+        .{ "client-nojs ", "client-nojs crossed " },
+        .{ "var cookie=", "var cookix=" },
+        .{ "document.documentElement.className=className", "document.documentElement.className=other" },
+        .{ "RLCONF=", "if(false)RLCONF=" },
+        .{ "RLCONF=", "void 0;RLCONF=" },
+        .{ "MediaWiki 1.48.0-wmf.5", "MediaWiki 1.48.0-wmf.4" },
+        .{ "MediaWiki 1.48.0-wmf.5", "MediaWiki 1.48.0-WMF.5" },
+        .{ "\"wgRevisionId\":3518053", "\"wgRevisionId\":\"3518053\"" },
+        .{ "\"wgNamespaceNumber\":0", "\"wgNamespaceNumber\":1" },
+        .{ "\"wgAction\":\"view\"", "\"wgAction\":\"edit\"" },
+        .{ "\"wgTitle\":\"víz\"", "\"wgTitle\":\"crossed\"" },
+        .{ "\"wgUserName\":null", "\"wgUserName\":\"crossed\"" },
+        .{ "<script>", "<script type=\"text/plain\">" },
+        .{ "</head>", "<script>RLCONF={};</script></head>" },
+    }) |pair| {
+        const altered = try std.mem.replaceOwned(u8, a, bytes, pair[0], pair[1]);
+        try std.testing.expect(!std.mem.eql(u8, bytes, altered));
+        try std.testing.expectError(invalid, parseSelectedGetOldidAlloc(a, altered, 609, 3518053, 0, "víz", "huwiktionary"));
+    }
+    // Even valid direct configuration cannot replace the captured full program.
+    const cropped = try std.mem.concat(a, u8, &.{bytes[0..207], bytes[642..]});
+    try std.testing.expectError(invalid, parseSelectedGetOldidAlloc(a, cropped, 609, 3518053, 0, "víz", "huwiktionary"));
+    try std.testing.expectError(invalid, parseSelectedGetOldidAlloc(a, bytes[0..bytes.len - 1], 609, 3518053, 0, "víz", "huwiktionary"));
+    // Selected oldid does not require the wiki's latest revision to be identical.
+    const newer = try std.mem.replaceOwned(u8, a, bytes, "\"wgCurRevisionId\":3518053", "\"wgCurRevisionId\":3518054");
+    _ = try parseSelectedGetOldidAlloc(a, newer, 609, 3518053, 0, "víz", "huwiktionary");
 }

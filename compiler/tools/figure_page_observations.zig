@@ -17948,7 +17948,7 @@ pub fn selectedArticleFontAncestors(a: A, ns: *const namespaces.Registry, html: 
     sheets: []const profile.Source, page_id: u64, revision_id: u64, title: []const u8) ![]const profile.ObservedStyleNode {
     const outer = try observedOuterPrefix(a, html, true);
     const prefix = html[0 .. outer.root_open_end orelse return invalid];
-    _ = try @import("page_language_prefix.zig").parseSelectedOldidAlloc(a, prefix, page_id, revision_id, 0, title);
+    _ = try @import("page_language_prefix.zig").parseSelectedGetOldidAlloc(a, prefix, page_id, revision_id, 0, title, ns.wiki);
     const domain = try missingStyleOrigin(a, ns.wiki);
     if (!std.mem.startsWith(u8, url, domain.origin) or url.len <= domain.origin.len or url[domain.origin.len] != '/') return invalid;
     var links: std.ArrayList([]const u8) = .empty;
