@@ -1359,7 +1359,7 @@ function applyWrappedHeading(summary,style){
   title.append(label);
 }
 
-function sectionHeadingCompanion(section){
+export function sectionHeadingCompanion(section){
   const first=section.blocks?.[0];
   if(!section.title||!first||first.kind!=='heading'||first.level!==section.level)return null;
   if(first.text_align!=null)return null;

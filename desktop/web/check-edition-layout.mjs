@@ -125,7 +125,7 @@ async function journal(name) {
   };
 }
 const failures = await journal('issues'), summary = await journal('editions'), progress = await journal('progress');
-const productBundle = await build({stdin: {contents: "export {linkNameCandidate} from './check-edition-link-name.js'; export {expectedTextFragments,normalizeVisibleText} from './check-edition-text.js'; export {renderEntry} from './renderer.js'; export {mediaView,loadInlineImage,inlineImageActionURL} from './media.js';", resolveDir: web}, bundle: true, format: 'iife', globalName: 'Product', write: false});
+const productBundle = await build({stdin: {contents: "export {linkNameCandidate} from './check-edition-link-name.js'; export {entryTextProblems,normalizeVisibleText} from './check-edition-text.js'; export {renderEntry} from './renderer.js'; export {mediaView,loadInlineImage,inlineImageActionURL} from './media.js';", resolveDir: web}, bundle: true, format: 'iife', globalName: 'Product', write: false});
 const js = productBundle.outputFiles[0].text;
 const css = await readFile(path.join(web, 'style.css'), 'utf8');
 const font = await readFile(path.join(web, 'reader.ttf'));
@@ -153,12 +153,6 @@ async function inspectBatch(payload) {
       const problems = {};
       const text = normalize(main.innerText); // forces style/layout on this record
       if (!main.querySelector('h1')?.getBoundingClientRect().height) problems.missingHeading = true;
-      const expected = Product.expectedTextFragments(entry.sections, entry.references);
-      let missing = 0;
-      for (const fragment of expected) if (!text.includes(fragment)) {
-        if (++missing <= 4) (problems.missingTextExamples ??= []).push(fragment.slice(0, 120));
-      }
-      if (missing) problems.missingTextCandidates = missing;
       if (document.documentElement.scrollWidth > innerWidth + 1) problems.pageOverflow = true;
       const cells = main.querySelectorAll('th,td');
       const overflowing = [...cells].filter(el => el.scrollWidth > el.clientWidth + 1).length;
@@ -184,7 +178,7 @@ async function inspectBatch(payload) {
       }
       if (outside) problems.outsideViewportCandidates = outside;
       if (splitWords) problems.fragmentedWordCandidates = splitWords;
-      if (expected.size && !bodyNodes) problems.emptyVisibleBody = true;
+      Object.assign(problems, Product.entryTextProblems(entry, text, bodyNodes));
       let figure = null;
       if (measureFigure) {
         const frame = main.querySelector('figure.compiled-figure');
