@@ -7549,6 +7549,88 @@ QString MainWindow::entryHtml(const QJsonObject &entry, bool bodyBoundary) const
         }
         finishCaption();
     };
+    // Typed figures bind exact catalog names independently of legacy caption keys.
+    QHash<QString, QSet<QString>> flowFigureCaptions;
+    const auto collectFlowFigureCaptions = [&](const QJsonObject &block) {
+        if (!CompiledContent::present(block.value(QStringLiteral("flow")))) return;
+        const auto collect = [&](const QJsonArray &, const CompiledContent::Context &context) {
+            const auto &figure = context.figureMediaOwner;
+            // Only an actual typed image owner can bind its class-free caption to a catalog file.
+            // Missing-content labels retain the legacy/footer path.
+            if (!figure.value(QStringLiteral("image_span")).isObject()) return;
+            const auto image = figure.value(QStringLiteral("image_span")).toObject().value(QStringLiteral("image")).toObject();
+            const auto file = image.value(QStringLiteral("file")).toString();
+            if (file.isEmpty() || !mediaOwners.contains(ownerPrefix + QString::fromLatin1(file.toUtf8().toHex()))) return;
+            const auto captionScale = figure.value(QStringLiteral("caption_font_scale"));
+            if (!captionScale.isDouble() || !std::isfinite(captionScale.toDouble()) || captionScale.toDouble() < 0) return;
+            // flowBlockHtml gives each Figure caption its own zero-font context.
+            const bool zeroCaptionFont = captionScale.toDouble() == 0;
+            QString caption;
+            bool plain = true;
+            const auto append = [&](const QJsonArray &values, const CompiledContent::Context &captionContext) {
+                if (!captionContext.figureMediaOwner.isEmpty()) {
+                    plain = false;
+                    return;
+                }
+                if (!plain) return;
+                for (const auto &raw : values) {
+                    const auto span = raw.toObject();
+                    const auto kind = span.value(QStringLiteral("kind")).toString();
+                    if (!raw.isObject() || (kind != QStringLiteral("text") && kind != QStringLiteral("link")
+                            && kind != QStringLiteral("external_link") && kind != QStringLiteral("line_break"))) {
+                        plain = false;
+                        return;
+                    }
+                    // A structural owner can display content absent from its text and trail.
+                    for (const auto *key : {"image", "ruby", "inline_box_group", "inline_padding_group",
+                                            "inline_action_group", "clipped_absolute", "audio_control", "citation_marker"}) {
+                        if (CompiledContent::present(span.value(QLatin1String(key)))) {
+                            plain = false;
+                            return;
+                        }
+                    }
+                    const auto numericScale = span.value(QStringLiteral("font_scale"));
+                    const auto basis = span.value(QStringLiteral("font_scale_basis"));
+                    const bool absoluteFont = basis == QStringLiteral("normal_body") || basis == QStringLiteral("css_px");
+                    const bool positiveAbsoluteFont = absoluteFont && numericScale.isDouble()
+                        && std::isfinite(numericScale.toDouble()) && numericScale.toDouble() > 0;
+                    // Match spansHtml's inherited and explicit zeroScale handling.
+                    // Relative positive sizes retain a zero caption context.
+                    if ((numericScale.isDouble() && numericScale.toDouble() == 0)
+                        || (zeroCaptionFont && !positiveAbsoluteFont)) {
+                        plain = false;
+                        return;
+                    }
+                    if (kind == QStringLiteral("line_break")) caption += QChar('\n');
+                    else caption += span.value(QStringLiteral("text")).toString();
+                    caption += span.value(QStringLiteral("trail")).toString();
+                }
+            };
+            const auto owned = figure.value(QStringLiteral("caption_blocks"));
+            if (CompiledContent::present(owned)) {
+                // Paragraph Flow/Scope preserves authored concatenation. More complex caption
+                // structures retain their footer caption until their text projection is explicit.
+                CompiledContent::Walker captionWalker(append, CompiledContent::TableSpans::VisibleBody);
+                for (const auto &raw : owned.toArray()) {
+                    const auto paragraph = raw.toObject();
+                    if (!raw.isObject() || paragraph.value(QStringLiteral("kind")) != QStringLiteral("paragraph")
+                        || paragraph.value(QStringLiteral("depth")).toInt() != 0
+                        || !paragraph.value(QStringLiteral("list_path")).toString().isEmpty()
+                        || CompiledContent::present(paragraph.value(QStringLiteral("table")))
+                        || CompiledContent::present(paragraph.value(QStringLiteral("figure")))
+                        || CompiledContent::present(paragraph.value(QStringLiteral("container")))
+                        || CompiledContent::present(paragraph.value(QStringLiteral("feature")))) { plain = false; break; }
+                    if (!caption.isEmpty()) caption += QChar('\n');
+                    captionWalker.block(paragraph);
+                }
+            } else append(figure.value(QStringLiteral("caption")).toArray(), {});
+            if (!plain) return;
+            const QString normalizedCaption = caption.simplified();
+            if (!normalizedCaption.isEmpty()) flowFigureCaptions[file].insert(normalizedCaption);
+        };
+        CompiledContent::Walker walker(collect, CompiledContent::TableSpans::VisibleBody);
+        walker.block(block);
+    };
     const QJsonArray preamble = entry.value(QStringLiteral("preamble_spans")).toArray();
     collectEmbeddedMedia(preamble);
     if (!preamble.isEmpty()) {
@@ -7585,6 +7667,7 @@ QString MainWindow::entryHtml(const QJsonObject &entry, bool bodyBoundary) const
                         const QJsonObject block = value.toObject();
                         if (block.value(QStringLiteral("table")).isObject()) visit(visit, block.value(QStringLiteral("table")).toObject(), tableDepth + 1);
                         else {
+                            collectFlowFigureCaptions(block);
                             if (block.value(QStringLiteral("figure")).isObject())
                                 collectEmbeddedMedia(QJsonArray{CompiledContent::figureSpan(block.value(QStringLiteral("figure")).toObject())});
                             collectEmbeddedMedia(block.value(QStringLiteral("spans")).toArray());
@@ -7628,6 +7711,7 @@ QString MainWindow::entryHtml(const QJsonObject &entry, bool bodyBoundary) const
                         collectTableMedia(collectTableMedia, block.value(QStringLiteral("table")).toObject(), 1);
                     else if (block.value(QStringLiteral("kind")).toString() != QStringLiteral("blank") &&
                              block.value(QStringLiteral("kind")).toString() != QStringLiteral("rule")) {
+                        collectFlowFigureCaptions(block);
                         if (block.value(QStringLiteral("figure")).isObject())
                             collectEmbeddedMedia(QJsonArray{CompiledContent::figureSpan(block.value(QStringLiteral("figure")).toObject())});
                         collectEmbeddedMedia(block.value(QStringLiteral("spans")).toArray());
@@ -7759,6 +7843,7 @@ QString MainWindow::entryHtml(const QJsonObject &entry, bool bodyBoundary) const
                     const QJsonObject object = table.toObject();
                     collectTableMedia(collectTableMedia, object, 1);
                 } else {
+                            collectFlowFigureCaptions(block);
                             if (block.value(QStringLiteral("figure")).isObject())
                                 collectEmbeddedMedia(QJsonArray{CompiledContent::figureSpan(block.value(QStringLiteral("figure")).toObject())});
                             collectEmbeddedMedia(block.value(QStringLiteral("spans")).toArray());
@@ -7791,11 +7876,13 @@ QString MainWindow::entryHtml(const QJsonObject &entry, bool bodyBoundary) const
             const QString caption = item.value(QStringLiteral("caption")).toString();
             const QString normalizedFile = QString(file).replace(QChar('_'), QChar(' ')).simplified();
             const bool captionRepeatsFile = QString(caption).replace(QChar('_'), QChar(' ')).simplified() == normalizedFile;
+            const QString normalizedCaption = caption.simplified();
             const QString url = QStringLiteral("https://commons.wikimedia.org/wiki/File:%1").arg(QString::fromLatin1(QUrl::toPercentEncoding(file)));
             out += QStringLiteral("<li>%1: <a href='%2'>%3</a>%4</li>")
                 .arg(item.value(QStringLiteral("kind")).toString().toHtmlEscaped(), url.toHtmlEscaped(), file.toHtmlEscaped(),
                     caption.isEmpty() || captionRepeatsFile ||
-                        embeddedCaptions.value(QString(file).replace(QChar('_'), QChar(' '))).contains(caption.simplified())
+                        embeddedCaptions.value(QString(file).replace(QChar('_'), QChar(' '))).contains(normalizedCaption) ||
+                        flowFigureCaptions.value(file).contains(normalizedCaption)
                         ? QString() : QStringLiteral(" · %1").arg(caption.toHtmlEscaped()));
         }
         out += QStringLiteral("</ul><p><small>Media links open online in your browser.</small></p>");
