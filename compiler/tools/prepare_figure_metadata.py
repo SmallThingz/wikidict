@@ -386,6 +386,9 @@ NN_JPEG_RESPONSES = {
     'e3e86dbbefc759aaa56ef9439941727c6b49c0456b486212f89b366e73dc7719': 'Fil:Hohenfriedeberg - Attack of Prussian Infantry - 1745.jpg',
     'e0c3b753f5a7a0237b79e7c313646900c1c1444862bfe7f5b4932d93ab99463a': 'Fil:Sunflower sky backdrop.jpg',
 }
+SD_JPEG_RESPONSE = ('3b9e78bbae62834749d361eb74116b444030cc6628650443109b1aace970ffcb', "فائل:Devil's Staircase Wales.jpg")
+SD_JPEG_DEPLOYED_SOURCES = '9641bd2cfe64f9a0cef506a6a165b818dad212b000022d643aa9ac9480f620b7'
+SD_JPEG_NAMESPACE = '1a335a658db305317b17e342af9a38fdfd12cf306244ba5e35fe102b703f1ff2'
 NN_JPEG_REGISTRATION = {
     'PagedTiffHandler': '0dd1254beafb560f2cd76923c1997fb7d4aacda8',
     'TimedMediaHandler': '8d9c271fb65e04e13a16acc5d5ed7da1cc51accc',
@@ -396,9 +399,16 @@ NN_JPEG_REGISTRATION = {
 
 def figure_profile(core, kind, media_extensions=None, *, wiki=None):
     if core == site_info.NN_FIGURE_CORE:
-        if (wiki != 'nnwiktionary' or kind != FIGURE_PROFILE_V4 or
+        if (wiki not in ('nnwiktionary', 'sdwiktionary') or kind != FIGURE_PROFILE_V4 or
                 media_extensions != NN_JPEG_REGISTRATION):
-            raise ValueError('Unreviewed NN JPEG profile or registration')
+            raise ValueError('Unreviewed selected JPEG profile or registration')
+        if wiki == 'sdwiktionary':
+            # This single-file role attests the deployed JPEG source bundle.
+            # The older V4 comparison leaves do not describe this deployment.
+            return {'kind': FIGURE_PROFILE_V4, 'site_family': 'wikimedia-wiktionary',
+                    'deployed_jpeg_sources_sha256': SD_JPEG_DEPLOYED_SOURCES,
+                    'handler_families': {'image/jpeg': FIGURE_WMF4_PROFILE['handler_families']['image/jpeg']},
+                    'media_extensions': dict(NN_JPEG_REGISTRATION)}
         return dict(FIGURE_WMF4_PROFILE, media_extensions=dict(NN_JPEG_REGISTRATION))
     if core == FIGURE_WMF5_ROLLOUT_CORE and (wiki == 'mnwwiktionary' or wiki in CURRENT_SQL_FILE_BINDINGS):
         if kind != FIGURE_PROFILE_V4 or media_extensions != FIGURE_WMF5_MEDIA:
@@ -1635,12 +1645,22 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
     if (core in (FIGURE_RESPONSE_CORE, *FIGURE_REGISTRATION_EPOCHS, *FIGURE_WMF4_CORES, site_info.FIGURE_WMF5_CORE) or profile_kind == FIGURE_PROFILE_V5) and not allow_compatible_epochs:
         raise ValueError('Compatible response epochs require replay contract v3')
     profile = None
-    nn_jpeg = core == site_info.NN_FIGURE_CORE
-    nn_jpeg_file = NN_JPEG_RESPONSES.get(digest(site_raw)) if nn_jpeg else None
-    if nn_jpeg and (wiki != 'nnwiktionary' or language != 'nn' or date != '20261001' or
-                    not has_batches or not allow_compatible_epochs or not current_file_supplements or
-                    digest(namespace_raw) != NN_FIGURE_NAMESPACE or nn_jpeg_file is None):
-        raise ValueError('Unreviewed NN JPEG source binding')
+    current_jpeg = core == site_info.NN_FIGURE_CORE
+    sd_jpeg = current_jpeg and wiki == 'sdwiktionary'
+    jpeg_file = None
+    if current_jpeg:
+        site_sha = digest(site_raw)
+        if sd_jpeg:
+            if (language != 'sd' or site_general.get('rtl') is not True or
+                    site_general.get('generator') != 'MediaWiki 1.48.0-wmf.6' or
+                    digest(namespace_raw) != SD_JPEG_NAMESPACE or site_sha != SD_JPEG_RESPONSE[0]):
+                raise ValueError('Unreviewed SD JPEG source binding')
+            jpeg_file = SD_JPEG_RESPONSE[1]
+        elif wiki == 'nnwiktionary' and language == 'nn' and digest(namespace_raw) == NN_FIGURE_NAMESPACE:
+            jpeg_file = NN_JPEG_RESPONSES.get(site_sha)
+        if (date != '20261001' or not has_batches or not allow_compatible_epochs or
+                not current_file_supplements or jpeg_file is None):
+            raise ValueError('Unreviewed selected JPEG source binding')
     # Per-batch TIFF classification consumes one response in isolation. This
     # local validation cannot provide the registration header of a capture.
     current_sql = core == FIGURE_WMF5_ROLLOUT_CORE and wiki in CURRENT_SQL_FILE_BINDINGS
@@ -1718,9 +1738,9 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
         if len(response_raw) > MAX_RESPONSE:
             raise ValueError('Figure API response exceeds per-response bound')
         titles = batch['requests']
-        if nn_jpeg and (batch_index != 0 or set(batch) != {'requests', 'response'} or
-                        titles != [nn_jpeg_file] or response_raw != site_raw):
-            raise ValueError('NN JPEG replay requires its exact ordinary single-file response')
+        if current_jpeg and (batch_index != 0 or set(batch) != {'requests', 'response'} or
+                             titles != [jpeg_file] or response_raw != site_raw):
+            raise ValueError('Selected JPEG replay requires its exact single-file response')
         if any(not isinstance(title, str) for title in titles) or len(set(titles)) != len(titles):
             raise ValueError('Duplicate or invalid Figure batch request')
         for title in titles:
@@ -1904,8 +1924,17 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
         if (target is not None and target is not record and
                 file_fact_identity(target) != file_fact_identity(record)):
             raise ValueError('Requested file conflicts with an authenticated canonical alias')
-    if nn_jpeg and (base_count != 1 or observed_count != 0 or len(records) != 1):
-        raise ValueError('NN JPEG replay omitted its ordinary source batch')
+    if current_jpeg and (base_count != 1 or observed_count != 0 or len(records) != 1):
+        raise ValueError('Selected JPEG replay omitted its source batch')
+    if sd_jpeg:
+        row = records[0]
+        proof = jpeg_evidence.get(jpeg_file)
+        if (row['canonical_file'] != jpeg_file or row['state'] != 'eligible' or
+                row['file_sha1'] != '5378622ff95a5795a126ee18b8d9d24710eb3f64' or
+                row['file_timestamp'] != '2007-10-09T06:06:13Z' or
+                (row['original_width'], row['original_height']) != (2272, 1704) or
+                proof is None or proof['omitted'] or proof['veto'] or proof['repository'] != 'shared'):
+            raise ValueError('SD JPEG metadata or unrotated axes differ')
     records.sort(key=lambda row: row['requested_file'].encode('utf-8'))
     return {'wiki': wiki, 'content_language': language, 'core_revision': core,
             'namespace_registry_sha256': digest(namespace_raw), 'source_profile': profile,
