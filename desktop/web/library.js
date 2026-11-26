@@ -77,8 +77,15 @@ export function search(views,query,limit=80) {
   return result;
 }
 export function exact(views,args) {
-  for(const view of views){
-    if(args.context&&view.context.id!==args.context)continue;
+  let candidates=views;
+  if(args.context){
+    const origin=views.find(view=>view.context.id===args.context);
+    if(!origin)return null;
+    candidates=[origin];
+    const edition=group(origin.context);
+    if(edition)candidates.push(...views.filter(view=>view!==origin&&group(view.context)===edition));
+  }
+  for(const view of candidates){
     const entry=view.entries.find(({row})=>row.title===args.title||row.source_title===args.title);
     if(entry)return makeHit(entry.owner,entry.row,view.context);
   }
