@@ -1252,6 +1252,55 @@ function containerView(value,onLink,explanations,context,before=null){
   if(value.style.overflow==='auto'){el.tabIndex=0;el.setAttribute('aria-label','Scrollable content');}
   appendBlocks(el,value.blocks,block=>blockView(block,onLink,explanations,'',{...context,container:true}),explanations?.sourceAnchors);return el;
 }
+// A fractional final glyph can outlive the scrollport's rounded maximum.
+// Give ordinary start-aligned PRE content only the missing fractional end gutter.
+function preformattedScrollPort(pre){
+  const name='wikidict-preformatted-scroll';
+  if(!customElements.get(name))customElements.define(name,class extends HTMLElement{
+    connectedCallback(){this.stopPre?.();this.stopPre=this.startPre?.();}
+    disconnectedCallback(){this.stopPre?.();this.stopPre=null;}
+  });
+  const host=document.createElement(name);host.style.display='contents';host.append(pre);
+  host.startPre=()=>{
+    let active=true,frame=0,ownedPadding=null;
+    const clearPadding=()=>{
+      if(ownedPadding!==null&&pre.style.paddingInlineEnd===ownedPadding)
+        pre.style.removeProperty('padding-inline-end');
+      ownedPadding=null;
+    };
+    const update=()=>{
+      frame=0;if(!active||!pre.isConnected)return;
+      clearPadding();
+      if(!pre.getClientRects().length)return;
+      const style=getComputedStyle(pre),rtl=style.direction==='rtl';
+      // An end gutter must not shift centered/end-aligned authored text or replace padding.
+      if(style.writingMode!=='horizontal-tb'||style.whiteSpace!=='pre'||
+        !['auto','scroll'].includes(style.overflowX)||
+        !(style.textAlign==='start'||style.textAlign===(rtl?'right':'left'))||
+        parseFloat(style.paddingInlineStart)!==0||parseFloat(style.paddingInlineEnd)!==0)return;
+      const box=pre.getBoundingClientRect(),range=document.createRange();range.selectNodeContents(pre);
+      const start=rtl?box.right-parseFloat(style.borderRightWidth):box.left+parseFloat(style.borderLeftWidth);
+      let extent=0;
+      for(const rect of range.getClientRects()){
+        const end=rtl?rect.left+pre.scrollLeft:rect.right+pre.scrollLeft;
+        extent=Math.max(extent,rtl?start-end:end-start);
+      }
+      const overflow=extent-pre.clientWidth;
+      if(!Number.isFinite(overflow)||overflow<=0)return;
+      const gutter=Math.ceil(overflow)-overflow;
+      if(gutter>0&&gutter<1){pre.style.paddingInlineEnd=gutter+'px';ownedPadding=pre.style.paddingInlineEnd;}
+    };
+    const queue=()=>{if(active&&!frame)frame=requestAnimationFrame(update);};
+    const resize=new ResizeObserver(queue),mutation=new MutationObserver(queue);
+    resize.observe(pre);
+    mutation.observe(pre,{subtree:true,childList:true,characterData:true,attributes:true,attributeFilter:['class','dir','hidden']});
+    host.addEventListener('load',queue,true);document.fonts?.addEventListener('loadingdone',queue);
+    document.fonts?.ready.then(queue);queue();
+    return ()=>{active=false;cancelAnimationFrame(frame);resize.disconnect();mutation.disconnect();host.removeEventListener('load',queue,true);document.fonts?.removeEventListener('loadingdone',queue);clearPadding();};
+  };
+  return host;
+}
+
 function blockView(block, onLink, explanations, legacy = '', context = {}) {
   if(block.text_align!=null&&!['left','center','right'].includes(block.text_align))throw Error('Invalid block text alignment');
   const margin = `${Math.min(Math.max(block.depth || 0,0),8)*.45}rem`;
@@ -1303,7 +1352,7 @@ function blockView(block, onLink, explanations, legacy = '', context = {}) {
     wrap.append(table); return wrap;
   }
   if (block.kind === 'rule') return node('hr');
-  if (block.kind === 'preformatted') { const pre = node('pre'); if(block.text_align!=null)pre.style.textAlign=block.text_align; if(context.header)pre.style.fontWeight='inherit'; pre.append(spans(block.spans,onLink,true,explanations,false,context.background)); return pre; }
+  if (block.kind === 'preformatted') { const pre = node('pre'); if(block.text_align!=null)pre.style.textAlign=block.text_align; if(context.header)pre.style.fontWeight='inherit'; pre.append(spans(block.spans,onLink,true,explanations,false,context.background)); return preformattedScrollPort(pre); }
   const allowed = new Set(['paragraph','definition','example','quotation','list_item','list_detail','indent','term','heading']);
   const kind = allowed.has(block.kind) ? block.kind : 'paragraph';
   const el = node(kind === 'heading'?'h'+(Number.isInteger(block.level)&&block.level>=1&&block.level<=6?block.level:4):'div',null,'block '+kind);
