@@ -41,6 +41,8 @@ pub const ElementContext = struct {
     // Single wiki TD/TH query. Source and logical ancestry can exclude a
     // required ID, but its presence in the page cannot establish a CSS match.
     cell_ancestor_id_superset: ?[]const u8 = null,
+    // Wiki TABLE only; negative page-wide ID evidence, not a native ancestor domain.
+    table_ancestor_id_superset: ?[]const u8 = null,
     // Union across every selected head: negative evidence only.
     complete_table_ancestor_classes: ?[]const u8 = null,
     // Complete original ancestor tag inventory; null retains uncertainty.
@@ -10945,6 +10947,9 @@ pub const Profile = struct {
                     !(self.page_style_parent != null and context.page_style_root != null and positivePageAncestorClass(context.page_style_root.?, name))) continue :rules;
             };
             if (target == .td or target == .th) if (context.cell_ancestor_id_superset) |ids| {
+                for (selector_value.necessary_ancestor_ids) |required| if (!hasClass(ids, required)) continue :rules;
+            };
+            if (target == .table) if (context.table_ancestor_id_superset) |ids| {
                 for (selector_value.necessary_ancestor_ids) |required| if (!hasClass(ids, required)) continue :rules;
             };
             if (context.complete_table_ancestor_ids) |ids| {

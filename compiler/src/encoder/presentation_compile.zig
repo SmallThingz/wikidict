@@ -1035,7 +1035,28 @@ pub const NormalTextLinkClassObservation = struct {
 pub const NormalTextClassObservation = struct {
     opening: []const u8,
     complete_ancestor_class_superset: []const u8,
+    // Optional query-local IDs; ordinary class issuers leave this unknown.
+    complete_ancestor_id_superset: ?[]const u8 = null,
 };
+
+// Build-only coverage check, not an ancestry or identity issuer. A page-wide
+// negative inventory must include every represented ID; unknown alternatives
+// and cyclic/unbounded chains cannot be refuted by this observation.
+pub fn wikiTableIdsCoverRepresented(element: ?*const table_style_profile.TextElement, ids: []const u8) bool {
+    var cursor = element;
+    var remaining: usize = 128;
+    while (cursor) |node| {
+        if (remaining == 0 or node.alternative_ancestry != null) return false;
+        remaining -= 1;
+        if (node.id.len != 0 and !table_style_profile.Profile.hasClass(ids, node.id)) return false;
+        if (node.complete_ancestor_ids) |inherited| {
+            var names = std.mem.tokenizeAny(u8, inherited, " \t\r\n\x0c");
+            while (names.next()) |name| if (!table_style_profile.Profile.hasClass(ids, name)) return false;
+        }
+        cursor = node.parent;
+    }
+    return true;
+}
 
 // A captured class superset may refute only classes absent from BOTH the
 // captured source domain and every currently represented generated ancestor.
@@ -1154,7 +1175,7 @@ pub const TableContainingDirectionSource = struct {
     // A root-language receipt conveys no table observation or parent CSS.
     root_language_only: bool = false,
     source_root_language: ?*const SourceRootLanguageProof = null,
-    // Independent, alignment-only absence evidence for an owned wiki table opening.
+    // Independent class/optional-ID absence for one owned wiki table opening.
     wiki_table_class_context: ?*const anyopaque = null,
     observe_wiki_table_classes: ?*const fn (?*const anyopaque, A, NormalTextClassOperation) A.Error!?NormalTextClassObservation = null,
     normal_text_context: ?*const anyopaque = null,
@@ -19527,6 +19548,40 @@ pub const Renderer = struct {
         return try profile.resolveAlignmentIn(self.a, &query, null, (try self.semanticAttribute(tag, "style")) orelse "");
     }
 
+    // This optional ID superset is local to one current wiki TABLE query.
+    // It cannot establish positive ancestry, font basis, tags or geometry.
+    fn wikiTableIdAbsence(self: *Renderer, opening: []const u8, tag: syntax.Tag,
+        style: Style) Error!?[]const u8
+    {
+        if (!self.wikiClassOrdinaryDomain() or self.typed_table_depth != 1 or !tag.is("table") or
+            tag.closing or tag.self_closing or self.content_root != .parser_output or
+            self.in_reference or self.in_template_literal_scope or !starts(opening, "{|")) return null;
+        const profile = self.context.table_styles orelse return null;
+        if (profile.page_style_parent != null) return null;
+        const tracked = self.inline_missing orelse self.body_missing orelse return null;
+        const selected = (self.mediaRootLanguageCarrier(tracked) catch return null) orelse return null;
+        const observe = selected.observe_wiki_table_classes orelse return null;
+        const ns = self.context.namespace_catalog orelse return null;
+        const root = selected.source_root_language orelse return null;
+        if (!root.current(selected.source, ns.source_sha256, self.context.title, profile)) return null;
+        if (!std.mem.eql(u8, tag.attrs, std.mem.trimEnd(u8, opening[2..], "\r"))) return null;
+        const original = self.boundSourceOriginal(opening, selected) orelse return null;
+        if (!std.mem.eql(u8, original, opening)) return null;
+        const observation = (try observe(selected.wiki_table_class_context, self.a, .{ .source = selected.source,
+            .opening = original, .title = self.context.title, .namespace_sha256 = ns.source_sha256, .profile = profile })) orelse return null;
+        const ids = observation.complete_ancestor_id_superset orelse return null;
+        if (observation.opening.ptr != original.ptr or observation.opening.len != original.len or
+            ids.len > 65536 or !std.unicode.utf8ValidateSlice(ids) or std.mem.indexOfScalar(u8, ids, 0) != null or
+            !root.current(selected.source, ns.source_sha256, self.context.title, profile)) return null;
+        const language_parent = if (self.body_language_direction) |language| language.text_element else null;
+        var query: table_style_profile.TextElement = .{ .tag = "table",
+            .id = (try self.semanticAttribute(tag, "id")) orelse "", .parent = style.text_element };
+        if (!wikiTableIdsCoverRepresented(&query, ids) or
+            !wikiTableIdsCoverRepresented(language_parent, ids) or
+            !wikiTableIdsCoverRepresented(self.body_formatting_attributes.text_element, ids)) return null;
+        return ids;
+    }
+
     fn htmlTextAlignment(self: *Renderer, tag: syntax.Tag, inherited: ?presentation_types.CellTextAlign) Error!?presentation_types.CellTextAlign {
         const resolved = try self.alignmentResolution(tag);
         self.fallbacks.unresolved_table_style = self.fallbacks.unresolved_table_style or self.traceUnresolvedTableStyle(resolved.unresolved, "htmlTextAlignment.1", tag.attrs);
@@ -27935,7 +27990,7 @@ pub const Renderer = struct {
         return presentation_types.ResolvedStyleBorderEdges.all(if (owner == .table) .{ .outset = line } else .{ .inset = line });
     }
 
-    fn resolvedTableStyle(self: *Renderer, tag: syntax.Tag, style: Style, witnessed_root: bool, source_opening: ?[]const u8) Error!table_style_profile.TableResolution {
+    fn resolvedTableStyle(self: *Renderer, tag: syntax.Tag, style: Style, witnessed_root: bool, source_opening: ?[]const u8, table_id_superset: ?[]const u8) Error!table_style_profile.TableResolution {
         const profile = self.context.table_styles orelse {
             // Use the same finite attribute parser as legacyTableGeometry;
             // unrelated geometry attributes do not erase a valid border hint.
@@ -27960,7 +28015,7 @@ pub const Renderer = struct {
         const complete_ids = if (ancestor_domain) |domain| domain.ids else try self.completeTableFontAncestorIds(style.text_element, witnessed_root);
         var resolved = try profile.resolveTableWithContext(self.a, self.table_style_scope,
             (try self.semanticAttribute(tag, "class")) orelse "",
-            .{ .font_size_consumed = style.font_scale_set and !style.font_size_unknown, .page_style_root = if (style.text_element) |node| node.page_style_root else null, .custom_environment = style.custom_properties, .text_color_consumed = style.table_text_color_consumed, .absent_own_attribute = self.tableRowColorOwnAbsence(tag, style), .computed_border_collapse = if (style.table_inheritance_scoped) style.table_collapse else null, .ancestor_classes = self.table_css_ancestor_classes, .own_id = (try self.semanticAttribute(tag, "id")) orelse "", .complete_table_ancestor_classes = if (ancestor_domain) |domain| domain.classes else null, .complete_table_ancestor_ids = if (ancestor_domain) |domain| domain.ids else null, .complete_font_ancestor_ids = complete_ids, .complete_font_ancestor_tags = if (ancestor_domain) |domain| domain.tags else try self.completeTableFontAncestorTags(style.text_element, complete_ids) },
+            .{ .font_size_consumed = style.font_scale_set and !style.font_size_unknown, .page_style_root = if (style.text_element) |node| node.page_style_root else null, .custom_environment = style.custom_properties, .text_color_consumed = style.table_text_color_consumed, .absent_own_attribute = self.tableRowColorOwnAbsence(tag, style), .computed_border_collapse = if (style.table_inheritance_scoped) style.table_collapse else null, .ancestor_classes = self.table_css_ancestor_classes, .table_ancestor_id_superset = table_id_superset, .own_id = (try self.semanticAttribute(tag, "id")) orelse "", .complete_table_ancestor_classes = if (ancestor_domain) |domain| domain.classes else null, .complete_table_ancestor_ids = if (ancestor_domain) |domain| domain.ids else null, .complete_font_ancestor_ids = complete_ids, .complete_font_ancestor_tags = if (ancestor_domain) |domain| domain.tags else try self.completeTableFontAncestorTags(style.text_element, complete_ids) },
             try self.semanticAttribute(tag, "bgcolor"),
             (try self.semanticAttribute(tag, "style")) orelse "");
         if (self.table_style_unresolved or resolved.descendant_style_unresolved) {
@@ -49564,7 +49619,7 @@ pub const Renderer = struct {
         self.typed_table_depth += 1;
         defer self.typed_table_depth -= 1;
         const table_alignment = if (opening) |tag| try self.htmlTextAlignment(tag, inherited_alignment) else inherited_alignment;
-        var resolved = if (opening) |tag| try self.resolvedTableStyle(tag, style, false, null) else table_style_profile.TableResolution{ .style = null, .scope = self.table_style_scope, .unresolved = false };
+        var resolved = if (opening) |tag| try self.resolvedTableStyle(tag, style, false, null, null) else table_style_profile.TableResolution{ .style = null, .scope = self.table_style_scope, .unresolved = false };
         const previous_css_ancestors = self.table_css_ancestor_classes;
         if (opening) |tag| self.table_css_ancestor_classes = try self.cssClassesWith(previous_css_ancestors, tag);
         defer self.table_css_ancestor_classes = previous_css_ancestors;
@@ -50316,7 +50371,7 @@ pub const Renderer = struct {
         var resolved: table_style_profile.TableResolution = if (viewport) |known| .{ .style = known.wide_style,
             .block_viewport = known.policy, .float_viewport = known.float_policy, .scope = known.profile.classScope((try self.semanticAttribute(opening, "class")) orelse ""),
             .unresolved = false, .background_specified = true, .width_specified = true }
-            else try self.resolvedTableStyle(opening, table_style, self.witnessedRootWikiTableOpening(source, opening_start) or self.witnessedTopLevelWikiTableOpening(source, opening_start) or self.witnessedObservedRootWikiTable(source, opening_start, table_style.text_element), source[opening_start..(std.mem.indexOfScalarPos(u8, source, opening_start, '\n') orelse source.len)]);
+            else try self.resolvedTableStyle(opening, table_style, self.witnessedRootWikiTableOpening(source, opening_start) or self.witnessedTopLevelWikiTableOpening(source, opening_start) or self.witnessedObservedRootWikiTable(source, opening_start, table_style.text_element), source[opening_start..(std.mem.indexOfScalarPos(u8, source, opening_start, '\n') orelse source.len)], if (class_source_visible) try self.wikiTableIdAbsence(source[opening_start..(std.mem.indexOfScalarPos(u8, source, opening_start, '\n') orelse source.len)], opening, table_style) else null);
         const previous_css_ancestors = self.table_css_ancestor_classes;
         self.table_css_ancestor_classes = if (viewport != null) (try self.childAncestorClasses(table_style.text_element)) orelse { _ = self.traceTableViewportRefusal("parseTable.parent_ancestor", source, opening_start, opening.end, parent_cell_context, null, null, false); return error.UncompiledPresentation; }
             else try self.cssClassesWith(previous_css_ancestors, opening);
@@ -114989,7 +115044,7 @@ test "wiki table trimmed opener retains only complete source owned horizontal wh
         try std.testing.expectEqualStrings(source[start..physical_end], node.page_style_anchor.?);
         try std.testing.expectEqualStrings(prefix[2..], tag.attrs);
         try std.testing.expect(renderer.currentAncestorScope(node));
-        const resolved = try renderer.resolvedTableStyle(tag, style, false, null);
+        const resolved = try renderer.resolvedTableStyle(tag, style, false, null, null);
         try std.testing.expect(resolved.style != null and resolved.style.?.border != null);
         try std.testing.expect(!resolved.descendant_style_unresolved);
         for (0..5) |mode| {
@@ -115050,7 +115105,7 @@ test "retained KU table opener custody preserves all ten exact physical attribut
         try std.testing.expect(node.page_style_root == &root);
         try std.testing.expect(node.page_style_anchor.?.ptr == physical.ptr and node.page_style_anchor.?.len == physical.len);
         try std.testing.expect(tag.attrs.ptr == source[start + 2 ..].ptr and tag.attrs.len == opening.len - 2);
-        const resolved = try renderer.resolvedTableStyle(tag, style, false, null);
+        const resolved = try renderer.resolvedTableStyle(tag, style, false, null, null);
         try std.testing.expect(!resolved.descendant_style_unresolved and resolved.style != null and resolved.style.?.border != null);
         at = end; count += 1;
     }

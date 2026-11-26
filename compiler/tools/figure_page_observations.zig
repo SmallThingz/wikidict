@@ -22313,11 +22313,13 @@ pub fn bindWikiTableClassAbsenceAlloc(a: A, media: *const SelectedPage,
     if (!equal(capsule.prefix, capsule.response[0..root_end]) or
         !equal(root_attributes.get("lang") orelse return invalid, capsule.root_language) or
         outer.ancestors.len == 0 or !equal(outer.ancestors[0].tag, "html")) return invalid;
+    var get_nodes: std.ArrayList(ObservedSiblingNode) = .empty; defer get_nodes.deinit(a);
+    var post_nodes: std.ArrayList(ObservedSiblingNode) = .empty; defer post_nodes.deinit(a);
     var get_end: usize = 0;
-    const get_scope = try observedClassRootTokens(a, ns, capsule.response[root_start..], null, &get_end,
+    const get_scope = try observedClassRootTokens(a, ns, capsule.response[root_start..], &get_nodes, &get_end,
         false, outer.root, true, true, true);
     if (get_end == 0 or root_start + get_end != try sourceParentOwnedRootEnd(capsule.response, capsule.prefix)) return invalid;
-    const post_scope = try observedClassRootTokens(a, ns, captured.html, null, null,
+    const post_scope = try observedClassRootTokens(a, ns, captured.html, &post_nodes, null,
         false, null, false, true, true);
     var outer_classes: std.ArrayList(u8) = .empty;
     defer outer_classes.deinit(a);
@@ -22336,11 +22338,17 @@ pub fn bindWikiTableClassAbsenceAlloc(a: A, media: *const SelectedPage,
     try appendOuterClasses(a, &outer_classes, schemes.day);
     try appendOuterClasses(a, &outer_classes, schemes.night);
     const classes = try completeObservedTextClassSuperset(a, post_scope, outer_classes.items, source);
+    // The same strict parsed GET/POST inventories cover IDs independently.
+    // Malformed authored ID syntax withholds only this new optional proof.
+    const outer_ids: ?[]const u8 = outerIdSuperset(a, outer.ancestors, &.{}, root_attributes) catch |err|
+        if (err == error.InvalidFigurePageObservations) null else return err;
+    const get_ids = try completeObservedTextIdSuperset(a, get_nodes.items, outer_ids, source);
+    const ids = try completeObservedTextIdSuperset(a, post_nodes.items, get_ids, source);
     const Bound = struct {
         source: []const u8, source_digest: [32]u8, post: []const u8, post_digest: [32]u8,
         get: []const u8, get_digest: [64]u8, title: []const u8,
         ns: *const namespaces.Registry, ns_digest: [32]u8, styles: *const profile.Profile,
-        root: *const compiler.SourceRootLanguageProof, classes: []const u8,
+        root: *const compiler.SourceRootLanguageProof, classes: []const u8, ids: ?[]const u8,
         fn observe(raw: ?*const anyopaque, _: A, operation: compiler.NormalTextClassOperation) A.Error!?compiler.NormalTextClassObservation {
             const self: *const @This() = @ptrCast(@alignCast(raw orelse return null));
             if (operation.source.ptr != self.source.ptr or operation.source.len != self.source.len or
@@ -22359,13 +22367,13 @@ pub fn bindWikiTableClassAbsenceAlloc(a: A, media: *const SelectedPage,
                 (offset != 0 and self.source[offset - 1] != '\n') or !std.mem.startsWith(u8, operation.opening, "{|")) return null;
             const end = std.mem.indexOfScalarPos(u8, self.source, offset, '\n') orelse return null;
             if (end - offset != operation.opening.len) return null;
-            return .{ .opening = operation.opening, .complete_ancestor_class_superset = self.classes };
+            return .{ .opening = operation.opening, .complete_ancestor_class_superset = self.classes, .complete_ancestor_id_superset = self.ids };
         }
     };
     const bound = try a.create(Bound);
     bound.* = .{ .source = source, .source_digest = undefined, .post = captured.html, .post_digest = undefined,
         .get = capsule.response, .get_digest = capsule.response_sha256, .title = try a.dupe(u8, capsule.page.title),
-        .ns = ns, .ns_digest = ns.source_sha256, .styles = styles, .root = root_proof, .classes = classes };
+        .ns = ns, .ns_digest = ns.source_sha256, .styles = styles, .root = root_proof, .classes = classes, .ids = ids };
     std.crypto.hash.sha2.Sha256.hash(source, &bound.source_digest, .{});
     std.crypto.hash.sha2.Sha256.hash(captured.html, &bound.post_digest, .{});
     var result = selected;
