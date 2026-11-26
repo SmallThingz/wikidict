@@ -3,6 +3,7 @@ const diagnostics = @import("build_diagnostics");
 const namespace_registry = @import("namespace_registry");
 const figure_sizing = @import("figure_sizing.zig");
 const figure_page_observations = @import("figure_page_observations.zig");
+const container_disclosure_inputs = @import("container_disclosure_inputs.zig");
 const page_language = @import("page_language.zig");
 const page_source_context = @import("page_source_context.zig");
 const source_internal_link = @import("source_internal_link.zig");
@@ -1002,6 +1003,24 @@ fn loadPageLanguage(io: std.Io, a: std.mem.Allocator, root: []const u8, namespac
     }
     return page_source_context.Registry.init(a, if (mapped[0]) |v| v.bytes else null, if (mapped[1]) |v| v.bytes else null, if (mapped[2]) |v| v.bytes else null, namespaces);
 }
+fn loadContainerDisclosureInputs(io: std.Io, a: std.mem.Allocator, root: []const u8,
+    namespaces: *const namespace_registry.Registry) !?container_disclosure_inputs.Book
+{
+    const path = try std.fs.path.join(a, &.{ root, container_disclosure_inputs.filename });
+    defer a.free(path);
+    const observed = if (captured_writer_inputs) |inputs| try inputs.hold(path, "normal-container-disclosure-input") else null;
+    var mapped = mmapPathLimit(io, path, container_disclosure_inputs.max_input) catch |err| switch (err) {
+        error.FileNotFound => {
+            if (captured_writer_inputs) |inputs| if (observed) |index| try inputs.checkRecord(index);
+            return null;
+        },
+        else => return err,
+    };
+    defer mapped.deinit();
+    if (captured_writer_inputs) |inputs| if (observed) |index| try inputs.acceptBytes(index, mapped.bytes);
+    return try container_disclosure_inputs.Book.init(a, mapped.bytes, namespaces);
+}
+
 fn loadFigurePageObservations(io: std.Io, a: std.mem.Allocator, root: []const u8, namespaces: *const namespace_registry.Registry, registry: ?*const figure_sizing.Registry, site: ?FigureSite) !?figure_page_observations.Book {
     const path = try std.fs.path.join(a, &.{ root, figure_page_observations.filename });
     defer a.free(path);
@@ -3408,6 +3427,7 @@ const ExpansionSlot = struct {
     table_link_index: ?*const source_internal_link.TableLinkIndex = null,
     page_language_core: ?[]const u8 = null,
     page_observations: ?*const figure_page_observations.Book = null,
+    disclosure_inputs: ?*const container_disclosure_inputs.Book = null,
     figure_defaults_sha256: ?[32]u8 = null,
     prepared: ?encoder.blob_builder.PreparedPage = null,
     compile_failure: ?anyerror = null,
@@ -3497,6 +3517,18 @@ const ExpansionSlot = struct {
             self.compile_failure = err;
             return;
         };
+        // Clear any inherited carrier even when this page has no row. The
+        // returned carrier borrows only this job's current expansion and the
+        // immutable build-input book, whose lifetime encloses every slot.
+        codes.container_disclosures = null;
+        if (self.disclosure_inputs) |inputs| {
+            codes.container_disclosures = inputs.bind(self.arena.allocator(), observation_namespace,
+                self.job.ns.kind == .language, self.job.alias_record != null, self.job.title,
+                self.job.page_id, self.job.revision_id, self.job.source, expanded.source) catch |err| {
+                self.compile_failure = err;
+                return;
+            };
+        }
         codes.revision_exterior = null;
         if (self.page_languages) |languages| bindRevisionExterior(&codes, &languages.metadata, self.job.page_id, self.job.revision_id,
             observation_namespace, self.job.title, self.job.source, expanded.source);
@@ -3865,6 +3897,7 @@ const ExpansionPool = struct {
     table_link_index: ?*const source_internal_link.TableLinkIndex = null,
     page_language_core: ?[]const u8 = null,
     page_observations: ?*const figure_page_observations.Book = null,
+    disclosure_inputs: ?*const container_disclosure_inputs.Book = null,
     figure_defaults_sha256: ?[32]u8 = null,
     site_mainpage: ?SiteMainPage = null,
     reviewed_nonlexical: ?*reviewed_nonlexical.Review = null,
@@ -3979,6 +4012,7 @@ const ExpansionPool = struct {
                 slot.table_link_index = self.table_link_index;
                 slot.page_language_core = self.page_language_core;
                 slot.page_observations = self.page_observations;
+                slot.disclosure_inputs = self.disclosure_inputs;
                 slot.figure_defaults_sha256 = self.figure_defaults_sha256;
                 return slot;
             };
@@ -5530,6 +5564,8 @@ fn runBlobBuild(io: std.Io, a: std.mem.Allocator, args: []const []const u8, opti
     defer if (page_languages) |*value| value.deinit();
     var page_observations: ?figure_page_observations.Book = null;
     defer if (page_observations) |*value| value.deinit();
+    var disclosure_inputs: ?container_disclosure_inputs.Book = null;
+    defer if (disclosure_inputs) |*value| value.deinit();
     var sizing_authority: ?figure_sizing.Registry = null;
     defer if (sizing_authority) |*value| value.deinit();
     var codes = languageCodes(&registry, &namespaces);
@@ -5688,6 +5724,8 @@ fn runBlobBuild(io: std.Io, a: std.mem.Allocator, args: []const []const u8, opti
     var table_link_index = source_internal_link.TableLinkIndex.select(&namespaces, page_index.bytes, title_index, codes.table_styles);
     pool.table_link_index = if (table_link_index) |*index| index else null;
     pool.page_observations = if (page_observations) |*value| value else null;
+    disclosure_inputs = try loadContainerDisclosureInputs(io, a, options.expander_root, &namespaces);
+    pool.disclosure_inputs = if (disclosure_inputs) |*value| value else null;
     pool.figure_defaults_sha256 = if (figure_site) |site| site.source_sha256 else null;
     codes.figure_sizing = if (sizing_authority) |*value| .{ .ctx = value, .resolve_fn = figure_sizing.Registry.resolve,
         .resolve_intrinsic_size_fn = figure_sizing.Registry.resolveIntrinsicSize,
@@ -74097,4 +74135,219 @@ test "IT full retained cediglia Writer carries observed disclosure through norma
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{root, "cediglia.dpr"}), .data = bytes });
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{root, "cediglia.json"}), .data = complete });
     std.debug.print("IT_CEDIGLIA_NORMAL_STORED bytes={d} sections={d} content_index={d} full_source_bytes={d}\n", .{bytes.len, entry.sections.len, policy.content_index, source.len});
+}
+
+test "IT capture input loader rejects crossed edition duplicate page and widened scope" {
+    const B = container_disclosure_inputs;
+    const F = struct {
+        fn reject(a: std.mem.Allocator, input: B.Input, ns: *const namespace_registry.Registry) !void {
+            const bytes = try std.json.Stringify.valueAlloc(a, input, .{});
+            try std.testing.expectError(error.InvalidContainerDisclosureInput, B.Book.init(a, bytes, ns));
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var ns = try namespace_registry.Registry.init(a, @embedFile("testdata/it-per/namespace-registry.tsv")); defer ns.deinit();
+    const bytes = @embedFile("testdata/it-cediglia-normal-disclosure/capture-input.json");
+    const input = try std.json.parseFromSliceLeaky(B.Input, a, bytes, .{});
+    var changed = input; changed.wiki = "frwiktionary"; try F.reject(a, changed, &ns);
+    changed = input; changed.dump_date = "20260901"; try F.reject(a, changed, &ns);
+    changed = input; changed.namespace_sha256 = input.pages[0].raw_sha256; try F.reject(a, changed, &ns);
+    const duplicates = [_]B.Page{input.pages[0], input.pages[0]};
+    changed = input; changed.pages = &duplicates; try F.reject(a, changed, &ns);
+    var page = input.pages[0]; var capture = page.captures[0];
+    capture.content_end = capture.owner_end; page.captures = &.{capture};
+    changed = input; changed.pages = &.{page}; try F.reject(a, changed, &ns);
+    page = input.pages[0]; capture = page.captures[0];
+    capture.reference.full_page_cascade_qualified = true; page.captures = &.{capture};
+    changed = input; changed.pages = &.{page}; try F.reject(a, changed, &ns);
+    page = input.pages[0]; capture = page.captures[0];
+    capture.reference.historical_deployment_qualified = true; page.captures = &.{capture};
+    changed = input; changed.pages = &.{page}; try F.reject(a, changed, &ns);
+    page = input.pages[0]; capture = page.captures[0];
+    capture.policy.direction = null; page.captures = &.{capture};
+    changed = input; changed.pages = &.{page}; try F.reject(a, changed, &ns);
+}
+
+test "IT capture input loader binds only current page bytes and owns unmapped metadata" {
+    const B = container_disclosure_inputs;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var ns = try namespace_registry.Registry.init(a, @embedFile("testdata/it-per/namespace-registry.tsv")); defer ns.deinit();
+    const mutable = try a.dupe(u8, @embedFile("testdata/it-cediglia-normal-disclosure/capture-input.json"));
+    var book = try B.Book.init(a, mutable, &ns); defer book.deinit();
+    @memset(mutable, 0); // Equivalent lifetime boundary to loader mmap teardown.
+    const raw = @embedFile("testdata/it-cediglia-right-default/raw.wikitext");
+    const source = @embedFile("testdata/it-cediglia-right-default/expanded.wikitext");
+    const held = (try book.bind(a, 0, true, false, "cediglia", 143745, 3991833, raw, source)) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(held.source.ptr == source.ptr and held.source.len == source.len);
+    try std.testing.expectEqual(@as(usize, 1), held.captures.len);
+    try std.testing.expectEqualStrings("Mostra", held.captures[0].policy.expand_label);
+    try std.testing.expect(try book.bind(a, 0, true, false, "other", 55, 66, raw, source) == null);
+    try std.testing.expectError(error.InvalidContainerDisclosureInput, book.bind(a, 0, true, false, "other", 143745, 3991833, raw, source));
+    try std.testing.expectError(error.InvalidContainerDisclosureInput, book.bind(a, 0, true, false, "cediglia", 143745, 3991834, raw, source));
+    try std.testing.expectError(error.InvalidContainerDisclosureInput, book.bind(a, 0, false, false, "cediglia", 143745, 3991833, raw, source));
+    try std.testing.expectError(error.InvalidContainerDisclosureInput, book.bind(a, 0, true, true, "cediglia", 143745, 3991833, raw, source));
+    try std.testing.expectError(error.InvalidContainerDisclosureInput, book.bind(a, 0, true, false, "cediglia", 143745, 3991833, raw[1..], source));
+    try std.testing.expectError(error.InvalidContainerDisclosureInput, book.bind(a, 0, true, false, "cediglia", 143745, 3991833, raw, source[1..]));
+    // Even valid full-page hashes cannot authorize a crossed owner range.
+    var input = book.input; var page = input.pages[0]; var capture = page.captures[0];
+    capture.owner_sha256 = page.raw_sha256; page.captures = &.{capture}; input.pages = &.{page};
+    const crossed = try std.json.Stringify.valueAlloc(a, input, .{});
+    var wrong_owner = try B.Book.init(a, crossed, &ns); defer wrong_owner.deinit();
+    try std.testing.expectError(error.InvalidContainerDisclosureInput,
+        wrong_owner.bind(a, 0, true, false, "cediglia", 143745, 3991833, raw, source));
+}
+
+// One new full retained article through the maintained Writer. The disclosure
+// measurements remain the controlled component capture; no historical CSS or
+// native-expansion equivalence is asserted by supplying these retained inputs.
+test "IT capture input loader ordinary slot emits retained cediglia" {
+    const F = struct {
+        const T = encoder.presentation_types;
+        fn hash(bytes: []const u8, expected: []const u8) !void {
+            var digest: [32]u8 = undefined;
+            std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
+            try std.testing.expectEqualStrings(expected, &std.fmt.bytesToHex(digest, .lower));
+        }
+        fn find(values: []const T.Block) ?T.Container {
+            for (values) |block| {
+                if (block.container) |box| {
+                    if (box.disclosure != null) return box;
+                    if (find(box.blocks)) |found| return found;
+                }
+                if (block.table) |table| for (table.rows) |row| {
+                    for (row.cells) |cell| if (cell.blocks) |children| {
+                        if (find(children)) |found| return found;
+                    };
+                };
+            }
+            return null;
+        }
+    };
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var checkpoint: []const u8 = "exact full raw/expansion and controlled disclosure measurements";
+    errdefer std.debug.print("IT_CEDIGLIA_INPUT_LOADER first_checkpoint={s}\n", .{checkpoint});
+    const raw = @embedFile("testdata/it-cediglia-right-default/raw.wikitext");
+    const source = @embedFile("testdata/it-cediglia-right-default/expanded.wikitext");
+    try F.hash(raw, "896fed09cc1c9dc23c30b1c1da96c7fb59c013ce9f2f7edf3e23fdef5d7e6374");
+    try F.hash(source, "3276e7db61f157e745d6baf9e7b0189fa5aee4236afa5f30b9f061905eee05af");
+    const policy_bytes = @embedFile("testdata/it-cediglia-normal-disclosure/button.json");
+    try F.hash(policy_bytes, "c5b0e5998409bf5f26dae8d7dbb9160402b4ea016e07356e317a0e4f94873c4e");
+    const policy = try std.json.parseFromSliceLeaky(F.T.ContainerDisclosure, a, policy_bytes, .{});
+    var ns = try namespace_registry.Registry.init(a, @embedFile("testdata/it-per/namespace-registry.tsv")); defer ns.deinit();
+    try ns.attachInterwikiMap(@embedFile("testdata/it-consistente/interwiki-map.tsv"));
+    try ns.attachLanguageConversion(@embedFile("testdata/it-consistente/namespace-siteinfo.raw.json"));
+    const behavior_bytes = @embedFile("testdata/it-per/behavior-switches.tsv");
+    var behavior = try namespace_registry.behavior_switches.Registry.init(a, behavior_bytes, ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256); defer behavior.deinit();
+    var digest: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(behavior_bytes, &digest, .{});
+    var images = try namespace_registry.image_options.Registry.init(a, @embedFile("testdata/it-per/image-options.tsv"), ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256, digest); defer images.deinit();
+    const css = @embedFile("testdata/it-consistente/it-common.css");
+    try F.hash(css, "98694865a8a0da877f6cad072dbf74ff605b410afaa3587b39c7864ddacc294a");
+    const gadget = @embedFile("testdata/it-cediglia-normal-disclosure/IndiceOrizzontale.css");
+    try F.hash(gadget, "e709e719949c725531cad0cfba932c7efa2bff992098a74a27c81910c94d81ac");
+    var styles = try encoder.table_style_profile.parseSourcesAlloc(a, &.{ .{ .css = gadget, .base_url = "" }, .{ .css = css, .base_url = "" } }); defer styles.deinit();
+    const metadata_root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/it-cediglia-normal-metadata", .{tmp.sub_path});
+    try std.Io.Dir.cwd().createDirPath(io, try std.fs.path.join(a, &.{metadata_root, "modules"}));
+    const metadata_files = .{
+        .{ "namespace-registry.tsv", @embedFile("testdata/it-per/namespace-registry.tsv") },
+        .{ "language-registry.tsv", @embedFile("testdata/it-per/language-registry.tsv") },
+        .{ "language-names.tsv", @embedFile("testdata/it-giunto105/language-names.tsv") },
+        .{ "manifest.jsonl", @embedFile("testdata/it-nero227/manifest.jsonl") },
+        .{ "modules/491823.lua", @embedFile("testdata/it-nero227/modules/491823.lua") },
+        .{ "modules/491824.lua", @embedFile("testdata/it-nero227/modules/491824.lua") },
+        .{ "modules/491828.lua", @embedFile("testdata/it-nero227/modules/491828.lua") },
+        .{ "figure-siteinfo.raw.json", @embedFile("testdata/it-basco238/figure-siteinfo.raw.json") },
+        .{ "figure-sizing.json", @embedFile("testdata/it-basco238/figure-sizing.json") },
+        .{ "figure-sizing.site.json", @embedFile("testdata/it-basco238/figure-sizing.site.json") },
+    };
+    inline for (metadata_files) |file| try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{metadata_root, file[0]}), .data = file[1] });
+    checkpoint = "normal language and Figure registries";
+    var registry = try loadLanguageRegistry(io, a, metadata_root, &ns); defer registry.deinit();
+    var codes = languageCodes(&registry, &ns); codes.behavior_switches = &behavior; codes.image_options = &images; codes.table_styles = &styles;
+    try figure_page_observations.Testing.writeRawSizing(a, io, metadata_root, .it_basco);
+    const site = (try loadFigureSite(io, a, metadata_root, &ns)) orelse return error.TestUnexpectedResult;
+    var sizing = (try loadFigureSizing(io, a, metadata_root, &ns, site)) orelse return error.TestUnexpectedResult; defer sizing.deinit();
+    codes.figure_sizing = .{ .ctx = &sizing, .resolve_fn = figure_sizing.Registry.resolve,
+        .resolve_height_only_width_fn = figure_sizing.Registry.resolveHeightOnlyWidth,
+        .resolve_width_limit_fn = figure_sizing.Registry.resolveWidthLimit,
+        .resolve_height_occurrence_fn = figure_sizing.Registry.resolveHeightOccurrence,
+        .source_context = try figureSourceContext(site, null) };
+    const book_bytes = @embedFile("testdata/it-cediglia-normal-disclosure/cediglia-book.json");
+    checkpoint = "normal Book intake and full supplied page attachment";
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{metadata_root, figure_page_observations.filename}), .data = book_bytes });
+    var book = (try loadFigurePageObservations(io, a, metadata_root, &ns, &sizing, site)) orelse return error.TestUnexpectedResult; defer book.deinit();
+    checkpoint = "ordinary input file loader and immutable Book ownership";
+    try std.testing.expect(try loadContainerDisclosureInputs(io, a, metadata_root, &ns) == null);
+    const capture_input = @embedFile("testdata/it-cediglia-normal-disclosure/capture-input.json");
+    try F.hash(capture_input, "f392d48d5b7a4d5523a8199889e0fa0a7f834eee1eda4b7ceec61867704a1d00");
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a,
+        &.{metadata_root, container_disclosure_inputs.filename}), .data = capture_input });
+    var captures = (try loadContainerDisclosureInputs(io, a, metadata_root, &ns)) orelse return error.TestUnexpectedResult;
+    defer captures.deinit();
+    // Only the real slot binds the carrier; the test supplies an input file.
+    // Worker expansion is not invoked: these are the exact retained raw/expanded bytes.
+    var completion: std.Io.Event = .unset;
+    var slot: ExpansionSlot = .{
+        .io = io, .completion = &completion,
+        .arena = std.heap.ArenaAllocator.init(a),
+        .worker = bundle_expander.Worker.init(io, metadata_root, "", ""),
+        .language_codes = codes, .page_observations = &book,
+        .figure_defaults_sha256 = site.source_sha256, .disclosure_inputs = &captures,
+        .job = .{ .ordinal = 0, .index_offset = 0, .ns = .{ .id = 0, .kind = .language },
+            .title = "cediglia", .source = raw, .page_id = 143745, .revision_id = 3991833 },
+    };
+    defer slot.arena.deinit();
+    defer slot.worker.deinit();
+    checkpoint = "normal ExpansionSlot compileExpanded/commitExpanded";
+    const expanded: bundle_expander.Expansion = .{ .source = source };
+    slot.compileExpanded(expanded);
+    if (slot.compile_failure) |err| return err;
+    try std.testing.expect(slot.prepared != null);
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/it-cediglia-loader-output", .{tmp.sub_path});
+    var writer = try encoder.blob_builder.Writer.init(io, a, root); defer writer.deinit(); writer.language_codes = codes;
+    writer.stats.pages_seen += 1;
+    try std.testing.expect(try slot.commitExpanded(&writer, expanded, null, a));
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 1), stats.pages_seen);
+    try std.testing.expectEqual(@as(usize, 1), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 0), stats.supplemental_records);
+    try std.testing.expectEqual(@as(usize, 0), stats.fallback_pages);
+    checkpoint = "normal blob read, complete Stored roundtrip and independent body witnesses";
+    const manifest = try std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(a, &.{root, encoder.blob_catalog.manifest_filename}), a, .limited(64 * 1024));
+    var it = try encoder.blob_catalog.Iterator.init(manifest);
+    const row = (try it.next()) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(try it.next() == null);
+    const entry = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, root, row.heading, "cediglia");
+    try std.testing.expectEqualStrings("it", entry.language_code);
+    const stored: F.T.Stored = .{ .entry = entry }; const codec = encoder.presentation_codec;
+    const bytes = try codec.encodeAlloc(a, stored);
+    const decoded = try codec.decodeAlloc(a, bytes, "cediglia", .language, .{ .heading = row.heading, .code = "it" });
+    try std.testing.expectEqualDeep(stored, decoded);
+    try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, decoded));
+    var disclosure: ?F.T.Container = null;
+    for (entry.sections) |section| if (F.find(section.blocks)) |box| { try std.testing.expect(disclosure == null); disclosure = box; };
+    const box = disclosure orelse return error.TestUnexpectedResult;
+    try std.testing.expect(F.T.validContainerDisclosureOwner(box));
+    try std.testing.expectEqualDeep(policy, box.disclosure.?);
+    const child = box.blocks[policy.content_index].container orelse return error.TestUnexpectedResult;
+    try std.testing.expect(child.blocks.len != 0);
+    const inside = try std.json.Stringify.valueAlloc(a, child, .{});
+    for ([_][]const u8{"esperanto", "cedilo", "inglese", "cedilla"}) |target| {
+        const marker = try std.fmt.allocPrint(a, "\"target\":\"{s}\"", .{target});
+        try std.testing.expect(std.mem.indexOf(u8, inside, marker) != null);
+    }
+    try std.testing.expect(std.mem.indexOf(u8, inside, "Vocabolario Treccani") == null);
+    const complete = try std.json.Stringify.valueAlloc(a, entry, .{});
+    for ([_][]const u8{"segno", "ortografico", "ce | dì | glia", "/t͡ʃeˈdiʎʎa/", "Vocabolario Treccani", "Unicode 0x0327.svg"}) |text|
+        try std.testing.expect(std.mem.indexOf(u8, complete, text) != null);
+    // Retain bounded output outside the per-test tmpDir for the guarded caller.
+    const retained = ".zig-cache/it-capture-loader-control";
+    try std.Io.Dir.cwd().createDirPath(io, retained);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = retained ++ "/cediglia.dpr", .data = bytes });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = retained ++ "/cediglia.json", .data = complete });
+    std.debug.print("IT_CEDIGLIA_INPUT_LOADER_STORED bytes={d} sections={d} content_index={d} full_source_bytes={d}\n", .{bytes.len, entry.sections.len, policy.content_index, source.len});
 }

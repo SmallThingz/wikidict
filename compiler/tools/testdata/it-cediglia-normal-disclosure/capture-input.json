@@ -1,0 +1,354 @@
+{
+  "schema": "wikidict.container-disclosure-captures.v1",
+  "wiki": "itwiktionary",
+  "dump_date": "20261001",
+  "namespace_sha256": "8fc73407a5f932ba725c3339034fc0aa9894078272b08a5ae62566a834496996",
+  "pages": [
+    {
+      "namespace_id": 0,
+      "title": "cediglia",
+      "page_id": 143745,
+      "revision_id": 3991833,
+      "raw_sha256": "896fed09cc1c9dc23c30b1c1da96c7fb59c013ce9f2f7edf3e23fdef5d7e6374",
+      "expanded_sha256": "3276e7db61f157e745d6baf9e7b0189fa5aee4236afa5f30b9f061905eee05af",
+      "captures": [
+        {
+          "owner_start": 1272,
+          "owner_end": 1768,
+          "content_start": 1523,
+          "content_end": 1762,
+          "owner_sha256": "d92bf866f05dfb1f136ce7b9fdad4983e0299fc82e0cae3112890b7c82a106b4",
+          "policy": {
+            "content_index": 1,
+            "initially_collapsed": true,
+            "expand_label": "Mostra",
+            "collapse_label": "Nascondi",
+            "focus": null,
+            "placement": "float_right",
+            "foreground": {
+              "kind": "rgb",
+              "value": "#000000"
+            },
+            "direction": "ltr",
+            "expand_run": {
+              "start": 0,
+              "end": 6,
+              "paint": {
+                "normal": {
+                  "foreground": "#000000",
+                  "underline": false
+                },
+                "hover": {
+                  "foreground": "#000000",
+                  "underline": false
+                },
+                "active": {
+                  "foreground": "#000000",
+                  "underline": false
+                },
+                "hover_active": {
+                  "foreground": "#000000",
+                  "underline": false
+                },
+                "underline_on_focus": false
+              }
+            },
+            "collapse_run": {
+              "start": 0,
+              "end": 8,
+              "paint": {
+                "normal": {
+                  "foreground": "#000000",
+                  "underline": false
+                },
+                "hover": {
+                  "foreground": "#000000",
+                  "underline": false
+                },
+                "active": {
+                  "foreground": "#000000",
+                  "underline": false
+                },
+                "hover_active": {
+                  "foreground": "#000000",
+                  "underline": false
+                },
+                "underline_on_focus": false
+              }
+            },
+            "button": {
+              "font_family": {
+                "name": "Arial"
+              },
+              "appearance": "native_button",
+              "font_size": {
+                "unit": "px",
+                "value": 13.3333
+              },
+              "font_weight": 400,
+              "font_italic": false,
+              "line_height": {
+                "normal": {}
+              },
+              "padding": {
+                "top": {
+                  "unit": "px",
+                  "value": 1.0
+                },
+                "right": {
+                  "unit": "px",
+                  "value": 6.0
+                },
+                "bottom": {
+                  "unit": "px",
+                  "value": 1.0
+                },
+                "left": {
+                  "unit": "px",
+                  "value": 6.0
+                }
+              },
+              "normal": {
+                "background": {
+                  "kind": "rgb",
+                  "value": "#efefef"
+                },
+                "border": {
+                  "top": {
+                    "outset": {
+                      "width": {
+                        "unit": "px",
+                        "value": 2.0
+                      },
+                      "paint": {
+                        "rgb": "#000000"
+                      }
+                    }
+                  },
+                  "right": {
+                    "outset": {
+                      "width": {
+                        "unit": "px",
+                        "value": 2.0
+                      },
+                      "paint": {
+                        "rgb": "#000000"
+                      }
+                    }
+                  },
+                  "bottom": {
+                    "outset": {
+                      "width": {
+                        "unit": "px",
+                        "value": 2.0
+                      },
+                      "paint": {
+                        "rgb": "#000000"
+                      }
+                    }
+                  },
+                  "left": {
+                    "outset": {
+                      "width": {
+                        "unit": "px",
+                        "value": 2.0
+                      },
+                      "paint": {
+                        "rgb": "#000000"
+                      }
+                    }
+                  }
+                }
+              },
+              "hover": {
+                "background": {
+                  "kind": "rgb",
+                  "value": "#efefef"
+                },
+                "border": {
+                  "top": {
+                    "outset": {
+                      "width": {
+                        "unit": "px",
+                        "value": 2.0
+                      },
+                      "paint": {
+                        "rgb": "#000000"
+                      }
+                    }
+                  },
+                  "right": {
+                    "outset": {
+                      "width": {
+                        "unit": "px",
+                        "value": 2.0
+                      },
+                      "paint": {
+                        "rgb": "#000000"
+                      }
+                    }
+                  },
+                  "bottom": {
+                    "outset": {
+                      "width": {
+                        "unit": "px",
+                        "value": 2.0
+                      },
+                      "paint": {
+                        "rgb": "#000000"
+                      }
+                    }
+                  },
+                  "left": {
+                    "outset": {
+                      "width": {
+                        "unit": "px",
+                        "value": 2.0
+                      },
+                      "paint": {
+                        "rgb": "#000000"
+                      }
+                    }
+                  }
+                }
+              },
+              "active": {
+                "background": {
+                  "kind": "rgb",
+                  "value": "#efefef"
+                },
+                "border": {
+                  "top": {
+                    "inset": {
+                      "width": {
+                        "unit": "px",
+                        "value": 2.0
+                      },
+                      "paint": {
+                        "rgb": "#000000"
+                      }
+                    }
+                  },
+                  "right": {
+                    "inset": {
+                      "width": {
+                        "unit": "px",
+                        "value": 2.0
+                      },
+                      "paint": {
+                        "rgb": "#000000"
+                      }
+                    }
+                  },
+                  "bottom": {
+                    "inset": {
+                      "width": {
+                        "unit": "px",
+                        "value": 2.0
+                      },
+                      "paint": {
+                        "rgb": "#000000"
+                      }
+                    }
+                  },
+                  "left": {
+                    "inset": {
+                      "width": {
+                        "unit": "px",
+                        "value": 2.0
+                      },
+                      "paint": {
+                        "rgb": "#000000"
+                      }
+                    }
+                  }
+                }
+              },
+              "hover_active": {
+                "background": {
+                  "kind": "rgb",
+                  "value": "#efefef"
+                },
+                "border": {
+                  "top": {
+                    "inset": {
+                      "width": {
+                        "unit": "px",
+                        "value": 2.0
+                      },
+                      "paint": {
+                        "rgb": "#000000"
+                      }
+                    }
+                  },
+                  "right": {
+                    "inset": {
+                      "width": {
+                        "unit": "px",
+                        "value": 2.0
+                      },
+                      "paint": {
+                        "rgb": "#000000"
+                      }
+                    }
+                  },
+                  "bottom": {
+                    "inset": {
+                      "width": {
+                        "unit": "px",
+                        "value": 2.0
+                      },
+                      "paint": {
+                        "rgb": "#000000"
+                      }
+                    }
+                  },
+                  "left": {
+                    "inset": {
+                      "width": {
+                        "unit": "px",
+                        "value": 2.0
+                      },
+                      "paint": {
+                        "rgb": "#000000"
+                      }
+                    }
+                  }
+                }
+              },
+              "focus_visible": {
+                "mode": "ua_auto",
+                "outline": {
+                  "width": {
+                    "unit": "px",
+                    "value": 1.0
+                  },
+                  "color": {
+                    "kind": "rgb",
+                    "value": "#3366cc"
+                  },
+                  "radius": {
+                    "unit": "px",
+                    "value": 0.0
+                  },
+                  "offset": {
+                    "unit": "px",
+                    "value": 0.0
+                  }
+                }
+              }
+            }
+          },
+          "reference": {
+            "scope": "controlled_component_current_initializer_css",
+            "full_page_cascade_qualified": false,
+            "historical_deployment_qualified": false,
+            "observed_html_sha256": "ff20c95d47a76a2ea6c39eaae3787024bb2a696f9940446dbdc1d41088db300c",
+            "actual_reference_sha256": "d0a1fd80bb73d443b072ec3a4250a27cd8d9348b52e97a6f42346b0296d6aa28",
+            "capture_binding_sha256": "d4bdfdc6b6088626013fe27d86aab596b59a95997d0f90fd66065d0441255f6a"
+          }
+        }
+      ]
+    }
+  ]
+}
