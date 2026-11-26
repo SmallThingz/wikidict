@@ -95,3 +95,23 @@ custom-property background is null, not an inferred palette value.
 
 Content is by [Wiktionary contributors](https://zh.wiktionary.org/w/index.php?title=chèng-khì&action=history),
 under [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/).
+
+# Public IT disclosure button
+
+`it-public-button/capture-public.dpr` is the unchanged 910-byte `DPRa` fixture
+for a captured Italian disclosure button in a **synthetic surrounding content
+graph**. The unchanged `capture-public.json` is the 17,103-byte typed oracle;
+the unit test hashes it for provenance and does not decode JSON into the model.
+
+- DPRa SHA-256: `27031256936c60f44ab50494bc2854b404ea6b556b60c1cecbdf91b86b889502`.
+- Typed JSON SHA-256: `9c345a9612c878a35fd61e7487776d06fca51bebf2cb138bb3c1a182a6eb5703`.
+- Public wire contract SHA-256: `d0953f130cb7bd916be113ab9de9947b5424e9b12044b5cc0adb84d8e577eff2`.
+
+`ContainerDisclosurePublicFixtureTest` reads both as unit-test resources and
+passes the complete DPRa record through production `BlobDecoder.decode`.
+Its expected graph retains the italic hidden-text span, the `Target` link,
+nullable fields, captured button metrics and paint, and the full entry envelope
+checks. The old private `DPR!` envelope is rejected. Eight value/geometry and
+six synthetic private-Reader controls accompany this complete-entry control.
+These fixtures qualify decoder/model behavior; they do not establish browser
+UA appearance, font identity, Android rendering, or whole-edition acceptance.

@@ -9,9 +9,10 @@ import android.graphics.RectF
  * original used box. Text, actions, source offsets and the original painter keep one owner.
  */
 internal class NativeSurfaceGeometry(val content: FloatTextGeometry,
-    val surface: NativeSurfaceBox = NativeSurfaceBox.from(content.extents)) : FloatTextGeometry {
-    private val dx = -surface.left.toFloat()
-    private val dy = -surface.top.toFloat()
+    val surface: NativeSurfaceBox = NativeSurfaceBox.from(content.extents),
+    contentOffsetX: Float = 0f, contentOffsetY: Float = 0f) : FloatTextGeometry {
+    private val dx = contentOffsetX - surface.left.toFloat()
+    private val dy = contentOffsetY - surface.top.toFloat()
     override val text: CharSequence get() = content.text
     override val width: Int get() = surface.width
     override val height: Int get() = surface.height

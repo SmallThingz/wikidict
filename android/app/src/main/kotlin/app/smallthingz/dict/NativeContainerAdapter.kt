@@ -708,9 +708,9 @@ internal fun prepareNativeContainerTree(blocks: List<Block>, path: String, gridP
                                 width = { it }, gapAfter = 0f, floatSide = side, logicalObject = false,
                                 exactWidth = { containing -> nativeDisclosureWidth(containing, toggle.intrinsic) },
                                 exactMeasure = { width ->
-                                    val geometry = toggle.measure(width)
-                                    NativeExactChildMeasure(NativeBlockMeasure(width, toggle.intrinsic.minimum, geometry.textBottom),
-                                        geometry.extents.ink)
+                                    val measured = toggle.measureBox(width)
+                                    NativeExactChildMeasure(NativeBlockMeasure(width, toggle.intrinsic.minimum, measured.logicalHeight),
+                                        measured.ink)
                                 }, content = { width -> toggle.Content(width) })
                         }
                     }

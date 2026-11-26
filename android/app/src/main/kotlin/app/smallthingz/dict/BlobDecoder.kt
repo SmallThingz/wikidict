@@ -1081,6 +1081,48 @@ object BlobDecoder {
                 LinkState(normal, flags and 1 != 0), LinkState(hover, flags and 2 != 0),
                 LinkState(active, flags and 4 != 0), LinkState(hoverActive, flags and 8 != 0), flags and 16 != 0))
         }
+        private fun containerDisclosureButtonState() = ContainerDisclosureButtonState(figureColor(),
+            StyleBorder.ResolvedEdges(resolvedStyleBorderEdge(), resolvedStyleBorderEdge(),
+                resolvedStyleBorderEdge(), resolvedStyleBorderEdge()))
+
+        /** Public DPRa disclosure-local bit 0x10, A2 contract d0953f13. No new header bits. */
+        private fun containerDisclosureButton(): ContainerDisclosureButton {
+            require(positionedContainers && resolvedStyleBorders && containerFonts && remainingItems > 0) {
+                "Disclosure button requires positioned/resolved-style capabilities and item budget"
+            }
+            remainingItems--
+            val appearance = ContainerDisclosureButtonAppearance.entries.getOrNull(byte())
+                ?: error("Unknown disclosure button appearance")
+            val family = ContainerDisclosureNamedFont(string())
+            val size = styleLength()
+            val weight = u16()
+            val italic = presence()
+            val lineHeight = containerLineHeight()
+            val padding = styleEdges()
+            val normal = containerDisclosureButtonState()
+            val hover = containerDisclosureButtonState()
+            val active = containerDisclosureButtonState()
+            val hoverActive = containerDisclosureButtonState()
+            val fields = byte().also { require(it and 3 == it) { "Unknown disclosure button fields" } }
+            val focus = if (fields and 1 != 0) {
+                require(remainingItems > 0) { "Disclosure button focus exhausted item budget" }
+                remainingItems--
+                val mode = ContainerDisclosureFocusMode.entries.getOrNull(byte())
+                    ?: error("Unknown disclosure button focus mode")
+                ContainerDisclosureButtonFocus(mode,
+                    FigureFocusOutline(styleLength(), figureColor(), styleLength(), containerMarginLength()))
+            } else null
+            val colors = if (fields and 2 != 0) {
+                require(remainingItems > 0) { "Disclosure button outline colors exhausted item budget" }
+                remainingItems--
+                ContainerDisclosureButtonOutlineColors(figureColor(), figureColor())
+            } else null
+            return ContainerDisclosureButton(appearance, family, size, weight, italic, lineHeight,
+                padding, normal, hover, active, hoverActive, focus, colors).also {
+                // The carrier itself requires the capability, including four none/hidden states.
+                hasResolvedStyleBorder = true
+            }
+        }
         private fun containerDisclosure(): ContainerDisclosure {
             require(positionedContainers && remainingItems > 0 && buffer.remaining() >= 18) {
                 "Truncated disclosure or exhausted budget"
@@ -1095,14 +1137,15 @@ object BlobDecoder {
                     ?: error("Unknown disclosure focus mode"), if (presence()) figureColor() else null)
             } else null
             val placement = ContainerDisclosurePlacement.entries.getOrNull(byte()) ?: error("Unknown disclosure placement")
-            val fields = byte().also { require(it and 15 == it) { "Unknown disclosure fields" } }
+            val fields = byte().also { require(it and 0x1f == it) { "Unknown disclosure fields" } }
             val foreground = if (fields and 1 != 0) figureColor() else null
             val direction = if (fields and 2 != 0) BidiResolvedDirection.entries.getOrNull(byte())
                 ?: error("Unknown disclosure direction") else null
             val expandRun = if (fields and 4 != 0) containerDisclosureLabelRun() else null
             val collapseRun = if (fields and 8 != 0) containerDisclosureLabelRun() else null
+            val button = if (fields and 0x10 != 0) containerDisclosureButton() else null
             return ContainerDisclosure(index, collapsed, expand, collapse, focus, placement, foreground,
-                direction, expandRun, collapseRun).also { hasPositionedContainers = true }
+                direction, expandRun, collapseRun, button).also { hasPositionedContainers = true }
         }
         private fun containerStyle(readDisclosure: ((ContainerDisclosure) -> Unit)? = null): ContainerStyle {
             val flags = if (containerFonts) u32().also {

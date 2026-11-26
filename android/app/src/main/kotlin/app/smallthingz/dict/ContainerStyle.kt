@@ -413,9 +413,11 @@ data class ContainerDisclosure(val contentIndex: Long, val initiallyCollapsed: B
     val expandLabel: String, val collapseLabel: String, val focus: ContainerDisclosureFocusPaint? = null,
     val placement: ContainerDisclosurePlacement = ContainerDisclosurePlacement.InlineFlow,
     val foreground: FigureColor? = null, val direction: BidiResolvedDirection? = null,
-    val expandRun: ContainerDisclosureLabelRun? = null, val collapseRun: ContainerDisclosureLabelRun? = null) {
+    val expandRun: ContainerDisclosureLabelRun? = null, val collapseRun: ContainerDisclosureLabelRun? = null,
+    val button: ContainerDisclosureButton? = null) {
     init {
         require(contentIndex in 0..0xffff_ffffL) { "Invalid disclosure child index" }
+        require(button == null || focus == null) { "Button focus belongs to its own value record" }
         require(listOf(expandLabel, collapseLabel).all { label -> label.isNotEmpty() &&
             validPresentationString(label) && label.none { it.code < 0x20 || it.code == 0x7f } }) {
             "Invalid complete disclosure label"
