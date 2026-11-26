@@ -1,3 +1,4 @@
+import {fontFamilyCSS,validateFontFamily} from './font-family.js';
 const canonicalRGB=value=>typeof value==='string'&&value.length===7&&/^#[0-9a-f]{6}$/.test(value);
 const rgbBytes=color=>[1,3,5].map(at=>parseInt(color.slice(at,at+2),16));
 const luminance=rgb=>rgb.reduce((sum,value,i)=>{
@@ -348,6 +349,7 @@ function connectExteriorBoxes(article,projections){
 
 export function spans(values = [], onLink = () => {}, preserve = false, explanations = null, withinSummary = false, cellBackground = null, rubyFontContext = null, darkReadingSurface = null, normalizedEmphasis = false, runStarts = null) {
   if(runStarts&&!preserve)throw Error('Inline destination requires complete serialized runs');
+  for(const value of values)if(value.font_family!=null)validateFontFamily(value.font_family);
   for(const value of values)if(value.target_fragment!=null){if(value.kind!=='link')throw Error('Invalid target fragment kind');linkTargetParts(value.target,value.target_fragment);}
   if (!preserve && values.some(isPoem)) return poemSpans(values,onLink,explanations,withinSummary,cellBackground);
   const fragment = document.createDocumentFragment();
@@ -410,7 +412,7 @@ export function spans(values = [], onLink = () => {}, preserve = false, explanat
     }
     let el = node('span', span.text || '');
     const textStart=el.firstChild;
-    if(span.font_family!=null){if(span.font_family!=='sans_serif')throw Error('Unsupported span font family');el.style.fontFamily='sans-serif';}
+    if(span.font_family!=null)el.style.fontFamily=fontFamilyCSS(span.font_family);
     if(span.clipped_absolute)el.append(spans(span.clipped_absolute.children,onLink,true,explanations,withinSummary,cellBackground,span));
     if(span.ruby!=null)el.append(rubySpans(span.ruby,onLink,explanations,withinSummary,cellBackground,span));
     if(span.inline_action_group!=null)el.append(spans(span.inline_action_group.spans,onLink,true,explanations,withinSummary,cellBackground,span));
@@ -628,6 +630,7 @@ function validateRichEntry(entry){
   };
   const span=value=>{
     if(!value||typeof value!=='object')richError();
+    if(value.font_family!=null)validateFontFamily(value.font_family);
     if(value.clipped_absolute!=null){
       validateClippedSpan(value);charge(value.clipped_absolute.children.length);
       for(const child of value.clipped_absolute.children)span(child);
@@ -974,9 +977,7 @@ function responsiveCaptionView(table,value){
   caption.style.lineHeight=`calc(var(--wikidict-normal-body-size) * ${box.line.height.length.value})`;
   caption.style.fontWeight=font.bold?'bold':'normal';caption.style.fontStyle=font.italic?'italic':'normal';
   caption.style.fontFeatureSettings=font.font_features==='normal'?'normal':'"liga" 1, "clig" 1, "kern" 1, "ccmp" 1, "dist" 1, "mark" 1, "mkmk" 1';
-  const quote=name=>'"'+name.replaceAll('\\','\\\\').replaceAll('"','\\"')+'"';
-  caption.style.fontFamily=font.font_family==='sans_serif'?'sans-serif':
-    [...font.font_family.stack.names.map(quote),font.font_family.stack.fallback==='serif'?'serif':'sans-serif'].join(',');
+  caption.style.fontFamily=fontFamilyCSS(font.font_family);
   caption.lang=font.language;
   for(const block of caption.querySelectorAll('.block'))if(block.closest('table')===table&&!block.classList.contains('heading')){
     // Ordinary paragraph defaults inherit the caption/nearest typed container.

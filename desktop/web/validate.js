@@ -1,3 +1,4 @@
+import {validateFontFamily} from './font-family.js';
 import {validateContainerDisclosure} from './container-disclosure.js';
 const forbidden = new Set(['source','source_base64','payload_base64','unexpanded_templates','rendered_templates','expansion','deferred','content']);
 const kinds = new Set(['text','link','external_link','line_break']);
@@ -21,6 +22,7 @@ export function validate(value) {
       if (forbidden.has(key)) throw Error(`Uncompiled field: ${key}`);
       if (key === 'spans' || key === 'display_title' || key === 'preamble_spans') {
         if (!Array.isArray(child) || child.some(s => !s || !kinds.has(s.kind ?? 'text') || typeof s.text !== 'string' || (s.target_fragment!=null&&(s.kind!=='link'||!validTargetFragment(s.target_fragment))))) throw Error('Invalid compiled spans.');
+        for(const span of child)if(span.font_family!=null)validateFontFamily(span.font_family);
       }
       if (key === 'colspan' || key === 'rowspan') if (!Number.isInteger(child) || child < 1 || child > 100) throw Error('Invalid table span.');
       visit(child, depth + 1);
@@ -253,15 +255,7 @@ export function validateResponsiveCaptionTable(table){
   object(f,ff,ff);for(const k of flags)if(typeof f[k]!=='boolean')fail();
   if(f.small||f.superscript||f.subscript||f.font_normalized||f.code||f.classes!==''||f.role!=='normal'||f.font_scale!==strut.font_scale||f.font_scale_basis!==strut.font_scale_basis)fail();
   text(f.language);if(!f.language.length||f.language.includes('\0')||!['normal','seven_on'].includes(f.font_features))fail();
-  if(f.font_family!=='sans_serif'){
-    object(f.font_family,['stack'],['stack']);const stack=f.font_family.stack;
-    object(stack,['names','fallback'],['names','fallback']);
-    if(!Array.isArray(stack.names)||stack.names.length>16||!['sans_serif','serif'].includes(stack.fallback))fail();
-    const generics=new Set(['serif','sans-serif','sans serif','sans','monospace','cursive','fantasy','system','system-ui','ui-serif','ui-sans-serif','ui-monospace','ui-rounded','emoji','math','fangsong']);
-    for(const name of stack.names){
-      if(typeof name!=='string'||!name.length||name.length>128||/[^\x20-\x7e]|[\[\]]/.test(name)||name.trim()!==name||generics.has(name.toLowerCase().replace(/ +/g,' ')))fail();
-    }
-  }
+  validateFontFamily(f.font_family);
   if(p.focus_paint!=null){
     const focus=p.focus_paint;object(focus,['mode','color'],['mode']);
     if(!['authored_none','ua_auto'].includes(focus.mode))fail();

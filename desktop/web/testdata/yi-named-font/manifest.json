@@ -1,0 +1,120 @@
+{
+  "wikisource": {
+    "edition": "yi",
+    "ns": 0,
+    "page_id": 1745,
+    "revision_id": 15812,
+    "title": "טאָג",
+    "raw_sha256": "bee3c981aa03aea680ae2bf4da8ded548314087c1228c1bf6711bd0ac4c1b40e",
+    "expanded_sha256": "08ddf821edbb2a535c716831d844d735615fa9df8976b1f4f11346c77c10cef3"
+  },
+  "retained_parent_archive": {
+    "sha256": "44096ac4451cf87d93278ce175e952215709ae82ffe4ada2fb055bbb3e1721cf",
+    "bytes": 1124747
+  },
+  "member": "languages/1372a3810da5224a8d1007de41ff5f9bc16030f824f09ed65e954e00a1ade1a6.wikblb",
+  "member_pin": {
+    "sha256": "7b5b4a356d525498045c553413c8604722b6c6860b01b0f6559a75f30924010d",
+    "bytes": 1989459
+  },
+  "compiled_language": {
+    "code": "",
+    "heading": "Unclassified"
+  },
+  "direct_entry_schema_family": "dict.presentation.v3",
+  "record_offset_in_member": 769945,
+  "record_length": 17433,
+  "record_capability_magic": "DPRP",
+  "dprp_single_feature_byte_after_media": 4,
+  "raw_named_stack_markers": [
+    {
+      "family_union_tag": 1,
+      "generic_fallback_tag": 2,
+      "fallback_offset_in_dpr": 510
+    }
+  ],
+  "exact_decoded_caption_link_candidates": [
+    {
+      "path": [
+        "sections",
+        0,
+        "blocks",
+        0,
+        "flow",
+        0,
+        "figure",
+        "caption_blocks",
+        0,
+        "flow",
+        0,
+        "scope",
+        "parts",
+        0,
+        "spans",
+        0
+      ],
+      "span": {
+        "kind": "link",
+        "text": "ײִדיש לעבט",
+        "target": "װיקיװערטערבוך:ײִדיש לעבט",
+        "trail": "",
+        "language": "",
+        "classes": "",
+        "direction": "rtl",
+        "explanation": "",
+        "tooltip": null,
+        "foreground": null,
+        "font_scale": 16,
+        "font_scale_basis": "css_px",
+        "font_family": {
+          "stack": {
+            "names": [
+              "Times New Roman"
+            ],
+            "fallback": "css_default"
+          }
+        },
+        "inline_style": {
+          "decoration": null,
+          "line_height": {
+            "computed": {
+              "value": 20,
+              "font_scale_basis": "css_px"
+            }
+          },
+          "baseline_shift": null,
+          "font_normalized": true,
+          "cursor": null
+        },
+        "bold": false,
+        "italic": false,
+        "code": false,
+        "small": false,
+        "superscript": false,
+        "subscript": false,
+        "strike": false,
+        "underline": false,
+        "role": "normal"
+      }
+    }
+  ],
+  "named_general_span_count": 1,
+  "exact_codec_source": {
+    "renderer/src/format/alias_codec.zig": "498b379745adee59d84966238ad613ef57c1e0afb6aa39aebdb951822b3a09d8",
+    "renderer/src/format/blob_catalog.zig": "99de831b37dbac03d498db1bf7469b637617737b477b39650ceff33516bf0371",
+    "renderer/src/format/blob_files.zig": "08c4daceaf15eeeabd7042ea1b3787c161123bfce52ca4406b9ef5b98161f27f",
+    "renderer/src/format/blob_format.zig": "85ee9551cc4ba7efc10f431ad90babd901792db170d8c8e8d2ad8905399c2828",
+    "renderer/src/format/blob_root.zig": "be7006057a5904406ef579e8869b9f5188faf12496b7646b8c79d8f6846463ed",
+    "renderer/src/format/document_ir.zig": "d85781610973a5b0bdf11b786c39b0a339ebf30f8ff95478fe557406d987d4a4",
+    "renderer/src/format/namespace_coverage.zig": "38f10060131fa826d039774cadf1075b1341df559dc6d5335f7b4a5f630a5797",
+    "renderer/src/format/part_kind.zig": "929c9accfaaf07ca2eb72c43ff6a2c1b33662ec656fee5ea8d8e57fe74ccf0d3",
+    "renderer/src/format/presentation_codec.zig": "ec8357e8abe69e4c997ebb4f10b203c4b7670c4fcca3d6af9de501e31fe97a06",
+    "renderer/src/format/presentation_types.zig": "ac93d3798969c46df755bf8ccbd3c0c9e32f9929f73bce47d95d9a1873e8b394",
+    "renderer/src/format/wikitext_syntax.zig": "018b9c79022ddf6f8b5464bd98daa9cf493810f84af9875cd0d8063b7fb762ca"
+  },
+  "record_sha256": "351046ab2224cd239539115b2b6b7a43bcf8377265c56b90e1f6b3a6d1b03f26",
+  "source_url": "https://yi.wiktionary.org/w/index.php?oldid=15812",
+  "scope": "Genuine compiled page caption fixture from a private YI producer candidate. It establishes this named-font/RTL/link request; whole-entry semantic and rendering qualification remains open.",
+  "producer_candidate_patch_sha256": "93bc17b211c1c06dbce842661ebbe2ed983c3a09d1eac4a82b79f855fe5389b9",
+  "native_decoder_json_sha256": "7a1fb78b0329e0b4526be94d946f340f399fff652e6aa8585bbafcf75c4279fc"
+}

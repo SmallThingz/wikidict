@@ -1,3 +1,4 @@
+import {validateFontFamily} from './font-family.js';
 // WIKBLB08 contains compiled semantic pages or typed DAL1 redirect envelopes.
 // A leading U+FEFF belongs to a compiled title or field, not a file BOM.
 import {validateDescriptionBody,validateDarkForeground,validateContainerBlock,validateCellMetrics,validateRuby,validateRubyOwner,validateRubySpan,validateActionGroupSpan,validateInlineBoxSpan,validateFigureIntrinsicSize,validateClippedSpan,validateAudioControl,validateWrappedHeading,validateTableDisclosure} from './validate.js';
@@ -24,7 +25,7 @@ const supportedWideFeatures=features=>(features&(resolvedBorderFeature|responsiv
   (features&~(0x2184|imageOccurrenceFeature|containerOwnerFontFeature|resolvedBorderFeature|responsiveFlowFeature|sourceAnchorFeature|inlineDestinationFeature|responsiveCaptionTableFeature))===0&&
   (!(features&resolvedBorderFeature)||!!(features&0x100))&&
   (!(features&containerOwnerFontFeature)||!!(features&sourceAnchorFeature)&&!!(features&0x100));
-const magicStrings = new Set('23456789ABCDEFGHIJKLMSVYZa'.split('').map(version=>'DPR'+version));
+const magicStrings = new Set('23456789ABCDEFGHIJKLMPSVYZa'.split('').map(version=>'DPR'+version));
 const require = (ok, message='Invalid compiled dictionary') => { if (!ok) throw Error(message); };
 function presentationHeaderSize(magic) {
   if (magic === 'DPRY') return 5;
@@ -95,6 +96,15 @@ export function decode(bytes, metadata) {
   const indices=limit=>list(4,()=>index(limit));
   const rgb=()=>{if(!presence())return null;const value=string();require(value.length===7&&/^#[0-9a-f]{6}$/.test(value));return value;};
   const audioSpans=[];
+  let namedSpanFontsEnabled=false,namedSpanFontCount=0;
+  const namedSpanFontFamily=()=>{
+    const kind=tag(['sans_serif','stack']);
+    if(kind==='sans_serif')return kind;
+    const n=count(4);require(n<=16,'Too many named font families');
+    const names=Array.from({length:n},()=>{const n=u32();require(n>0&&n<=128,'Invalid named font length');return text(n);});
+    const value={stack:{names,fallback:tag(['sans_serif','serif','css_default'])}};
+    validateFontFamily(value);return value;
+  };
   let clippedEnabled=false,insideClipped=false,clipCount=0;
   let imageOccurrences=false,imageOccurrenceCount=0,responsiveFlowEnabled=false,responsiveFlowCount=0;
   let audioEnabled=false,positionedHeadings=false,positionedBody=false,containerOwnerFonts=false,containerOwnerFontCount=0;
@@ -123,11 +133,11 @@ export function decode(bytes, metadata) {
     if(actionGroupDepth||boxActionDepth)require(kind==='text'&&s.target==='','An inline action child cannot own an action');
     const fontFields=scaled?(containerFonts?byte():(presence()?1:0)):0;
     const atomicFont=inlineBoxGroups&&(!!(fontFields&0x40)||atomicBoxDepth>0);
-    require((fontFields&~(inlineBoxGroups?(atomicFont?0x7b:0x6b):positionedHeadings?0x1b:(audioEnabled||clippedEnabled||imageOccurrences)?0x0b:1))===0,'Unsupported span font policy');
+    require((fontFields&~(inlineBoxGroups?(atomicFont?0x7b:0x6b):(positionedHeadings||namedSpanFontsEnabled)?0x1b:(audioEnabled||clippedEnabled||imageOccurrences)?0x0b:1))===0,'Unsupported span font policy');
     if(fontFields&1){declaredSpanFontScales.add(s);const value=f32();require(Number.isFinite(value)&&value>=0,'Invalid semantic font scale');s.font_scale=value;if(based){const basis=tag(containerFonts?['context','normal_body','css_px']:['context','normal_body']);if(basis!=='context')s.font_scale_basis=basis;if(tooltips&&value===1&&basis==='context')delete s.font_scale;}}
     if(fontFields&2)s.font_features=tag(['normal','seven_on']);
     if(fontFields&8)s.inline_style=inlineTextStyle(atomicFont);
-    if(fontFields&16)s.font_family=tag(['sans_serif']);
+    if(fontFields&16){s.font_family=namedSpanFontsEnabled?namedSpanFontFamily():tag(['sans_serif']);if(namedSpanFontsEnabled)namedSpanFontCount++;}
     if(referenceBlocks&&presence()){
       require(kind!=='line_break'&&s.text===''&&s.trail===''&&(kind==='text'?s.target==='':s.target.length>0));const image={file:string()},flags=byte();require((flags&~(inlineTableStyles?127:rich?63:imageBorder?31:15))===0&&validInlineImageFile(image.file));
       for(const [bit,key] of [[1,'width_px'],[2,'height_px']])if(flags&bit){image[key]=u32();require(image[key]>0);}
@@ -236,6 +246,7 @@ export function decode(bytes, metadata) {
   };
   const inlineTextStyle=(atomicFont=false)=>{
     const flags=byte();require(flags&&(flags&~(positionedHeadings?0x7f:0x3f))===0);
+    if(namedSpanFontsEnabled)require(!(flags&32),'Unsupported DPRP text flow');
     const decoration=flags&1?{style:tag(['solid','dotted']),color:presence()?rgbValue():null,thickness:presence()?styleLength():null}:null;
     const line_height=flags&2?(tag(['computed','font_relative'])==='computed'?{computed:computed()}:{font_relative:{factor:f32(),font:rubyFontSnapshot(atomicFont)}}):null;
     if(line_height?.font_relative)require(Number.isFinite(line_height.font_relative.factor)&&line_height.font_relative.factor>=0);
@@ -254,6 +265,8 @@ export function decode(bytes, metadata) {
       const font=style.line_height.font_relative.font;
       require((font.font_scale??1)===(s.font_scale??1)&&(font.font_scale_basis??'context')===(s.font_scale_basis??'context')&&font.font_normalized===style.font_normalized);
       for(const key of ['small','superscript','subscript','bold','italic','code','language','classes','role','font_features'])require((font[key]??null)===(s[key]??null));
+      // Snapshot families currently permit only null or the sans_serif tag.
+      require((font.font_family??null)===(s.font_family??null),'Inconsistent shifted font family');
     }
   };
   const rubyFontSnapshot=(heading=false)=>{
@@ -602,7 +615,7 @@ export function decode(bytes, metadata) {
       });
       validateContainerBlock(value,{containerFonts,positioned:positionedHeadings,parentStyle,containerDisclosureButtons:disclosureButtonsEnabled});
     }
-    if(rubyEnabled&&kind==='rule')require(byte()===0,'Unsupported ruby-record rule style');
+    if((rubyEnabled||namedSpanFontsEnabled)&&kind==='rule')require(byte()===0,'Unsupported record rule style');
     // Historical blocks can carry inert anchor metadata. The extended writers
     // require an advertised, validated source owner for a nonheading destination.
     if((magic==='DPRY'||magic==='DPRZ'||magic==='DPRa')&&kind!=='heading'&&(value.anchor||value.anchor_fallback)){
@@ -624,6 +637,7 @@ export function decode(bytes, metadata) {
   };
   const contentContext=value=>['list_item','definition','example','quotation','term','list_detail','indent'].includes(value.kind)||(value.kind==='paragraph'&&value.depth===0&&value.path==='');
   const magic=text(4);
+  namedSpanFontsEnabled=magic==='DPRP';
   require(magicStrings.has(magic),'Dictionary contains uncompiled records');
   const headerSize = presentationHeaderSize(magic);
   const features = headerSize > 4 ? presentationFeatures(magic, bytes) : 0;
@@ -645,7 +659,7 @@ export function decode(bytes, metadata) {
     inlineBoxGroups=!!(features&4);
     containerOwnerFonts=!!(features&containerOwnerFontFeature);
   }
-  actionGroupsEnabled=['DPRV','DPRY','DPRZ','DPRa'].includes(magic);rubyEnabled=magic==='DPRS'||actionGroupsEnabled;containerFonts=magic==='DPRM'||rubyEnabled;containers=magic==='DPRL'||containerFonts;inlineTableStyles=magic==='DPRK'||containers;rich=magic==='DPRJ'||inlineTableStyles;blockGeometry=magic==='DPRI'||rich;tooltips=magic==='DPRH'||blockGeometry;dynamicCatalogue=magic==='DPRG'||tooltips;componentTargets=magic==='DPRF'||dynamicCatalogue;aligned=magic==='DPRE'||componentTargets;imageBorder=magic==='DPRD'||aligned;referenceBlocks=magic==='DPRC'||imageBorder;based=magic==='DPRB'||referenceBlocks;scaled=magic==='DPRA'||based;referenceItems=magic==='DPR9'||scaled;ordered=magic==='DPR8'||referenceItems;nested=magic==='DPR7'||ordered;if(nested)budget=1<<20;painted=magic==='DPR6'||nested;anchored=magic==='DPR5'||painted;colored=magic==='DPR4'||anchored;explained=magic!=='DPR2';
+  actionGroupsEnabled=['DPRV','DPRY','DPRZ','DPRa'].includes(magic);rubyEnabled=magic==='DPRS'||actionGroupsEnabled;containerFonts=magic==='DPRM'||namedSpanFontsEnabled||rubyEnabled;containers=magic==='DPRL'||containerFonts;inlineTableStyles=magic==='DPRK'||containers;rich=magic==='DPRJ'||inlineTableStyles;blockGeometry=magic==='DPRI'||rich;tooltips=magic==='DPRH'||blockGeometry;dynamicCatalogue=magic==='DPRG'||tooltips;componentTargets=magic==='DPRF'||dynamicCatalogue;aligned=magic==='DPRE'||componentTargets;imageBorder=magic==='DPRD'||aligned;referenceBlocks=magic==='DPRC'||imageBorder;based=magic==='DPRB'||referenceBlocks;scaled=magic==='DPRA'||based;referenceItems=magic==='DPR9'||scaled;ordered=magic==='DPR8'||referenceItems;nested=magic==='DPR7'||ordered;if(nested)budget=1<<20;painted=magic==='DPR6'||nested;anchored=magic==='DPR5'||painted;colored=magic==='DPR4'||anchored;explained=magic!=='DPR2';
   const entry={...metadata,presentation_version:magic,display_title:spans(),sections:list(anchored?17:9,()=>({level:byte(),title:string(),anchor:anchored?string():'',anchor_fallback:anchored?string():'',blocks:list(blockMinimum(),()=>block(0,null,true))})),preamble_spans:spans()};
   const childPath=(values,root)=>{
     const n=count(4);require(n<=16);let value=values[root];
@@ -678,13 +692,15 @@ export function decode(bytes, metadata) {
     return reference;
   });
   entry.media=list(9,()=>({file:string(),kind:tag(['image','audio']),caption:string()}));
-  if(rubyEnabled){
+  if(rubyEnabled||namedSpanFontsEnabled){
     const pending=byte();
     // The required caption full font owns both legacy pending debts:
     // cell_owner_fonts(0x80) and extended_font_families(0x04). Count only
     // validated actual owners; do not mask unknown or unrelated pending bits.
     const captionPending=responsiveCaptionTableCount>0?0x84:0;
-    if(positionedHeadings){
+    if(namedSpanFontsEnabled){
+      require(pending===4&&namedSpanFontCount>0,'Unsupported or missing DPRP font feature');
+    }else if(positionedHeadings){
       if(pending===(0x16|captionPending))readWrappedHeadings(entry.sections);
       else require(pending===captionPending&&positionedBody,'Unsupported positioned body or heading fields');
     }else require(pending===captionPending,'Unsupported extended-record body feature');
@@ -705,7 +721,7 @@ export function decode(bytes, metadata) {
     }
     if(clippedEnabled)require(clipCount>0,'Missing clipped absolute payload');
     if(inlineBoxGroups)require(boxCount>0,'Missing inline box payload');
-    else if(!clippedEnabled&&!audioEnabled&&!positionedHeadings&&!imageOccurrences&&!responsiveFlowEnabled&&!sourceAnchorsEnabled&&!inlineDestinationsEnabled&&!responsiveCaptionTablesEnabled)require(actionGroupsEnabled?actionGroupCount>0:rubyCount>0,actionGroupsEnabled?'DPRV requires inline action payload':'DPRS requires ruby payload');
+    else if(!namedSpanFontsEnabled&&!clippedEnabled&&!audioEnabled&&!positionedHeadings&&!imageOccurrences&&!responsiveFlowEnabled&&!sourceAnchorsEnabled&&!inlineDestinationsEnabled&&!responsiveCaptionTablesEnabled)require(actionGroupsEnabled?actionGroupCount>0:rubyCount>0,actionGroupsEnabled?'DPRV requires inline action payload':'DPRS requires ruby payload');
   }
   const images=[];
   const inspect=values=>{for(const span of values||[])if(span.image)images.push(span.image);};
