@@ -3085,10 +3085,14 @@ fn appendQuoteMappedBuffer(a: A, out: *missing_dependency.Builder, buffer: *miss
     child.copies.clearRetainingCapacity(); child.generated.clearRetainingCapacity(); child.has_literal_quote_edits = false; child.output = "";
     buffer.* = .{};
 }
-fn quoteTransitionMapped(out: *missing_dependency.Builder, buffer: *missing_dependency.Builder, a: A, state: *QuoteState, run: usize, out_map: ?*QuoteSourceMap, buffer_map: ?*QuoteSourceMap, origin: QuoteSourceOrigin) Error!void {
+fn quoteTransitionMapped(out: *missing_dependency.Builder, buffer: *missing_dependency.Builder, a: A, state: *QuoteState, run: usize, out_map: ?*QuoteSourceMap, buffer_map: ?*QuoteSourceMap, origin: QuoteSourceOrigin, pending_origin: ?QuoteSourceOrigin) Error!void {
     if (out_map == null) return quoteTransitionMissing(out, buffer, a, state, run);
     const transition = quoteTransitionValue(state.*, run);
-    try appendQuoteGenerated(a, out, out_map, transition.prefix, origin);
+    // A deferred five-apostrophe opening is emitted only at the next quote
+    // transition. Its tags belong to the saved opening run, not the closing
+    // run that decides their nesting. A seeded state with no observed opening
+    // keeps an explicit unmapped prefix rather than inventing provenance.
+    try appendQuoteGenerated(a, out, out_map, transition.prefix, if (state.* == .both) pending_origin else origin);
     if (state.* == .both) try appendQuoteMappedBuffer(a, out, buffer, out_map, buffer_map);
     try appendQuoteGenerated(a, out, out_map, transition.suffix, origin);
     state.* = transition.state;
@@ -3241,7 +3245,7 @@ fn normalizeWikiQuotesPreparedMappedInDomain(a: A, source: MissingText, depth: u
                     mapping.has_literal_quote_edits = true;
                 };
                 const origin: QuoteSourceOrigin = .{ .first = cursor, .last = quote.end };
-                try quoteTransitionMapped(&out, &buffer, a, &state, normalized, out_mapping, buffer_mapping, origin);
+                try quoteTransitionMapped(&out, &buffer, a, &state, normalized, out_mapping, buffer_mapping, origin, last_quote_origin);
                 last_quote_origin = origin;
                 cursor = quote.end;
             } else {
@@ -18114,23 +18118,44 @@ pub const Renderer = struct {
         return selected;
     }
 
-    fn mediaSourceRootLanguage(self: *Renderer, source: []const u8, tracked: MissingText) Error!?*const SourceRootLanguageProof {
-        const selected = (self.mediaRootLanguageCarrier(tracked) catch return self.figureUnavailable()) orelse return null;
+    fn mediaSourceRootLanguage(self: *Renderer, source: []const u8, tracked: MissingText, caption: ?[]const u8) Error!?*const SourceRootLanguageProof {
+        const selected = (self.mediaRootLanguageCarrier(tracked) catch |failure| {
+            if (comptime @import("builtin").is_test) std.debug.print(
+                "FR root-language refusal stage=carrier_error error={s} source_bytes={d} tracked_bytes={d} tracked_unknown={any} lost_range={any}\n",
+                .{ @errorName(failure), source.len, tracked.bytes.len, tracked.unknown, tracked.lost_missing_range });
+            return self.figureUnavailable();
+        }) orelse return null;
         const proof = selected.source_root_language.?;
         // This exact File token must survive the ordinary preparation mapping.
         // A same-byte detached token, reference body or foreign fragment cannot
         // borrow the document observation merely because its title agrees.
         const original = self.boundSourceOriginal(source, selected) orelse
-            self.rootLanguageQuotedOriginal(source, selected) orelse return self.figureUnavailable();
-        if (original.len == 0 or !wikiClassContains(selected.source, original)) return self.figureUnavailable();
-        if (self.figurePageLanguage()) |language| if (!std.ascii.eqlIgnoreCase(language, proof.language))
+            self.rootLanguageQuotedOriginal(source, selected) orelse
+            (if (caption) |value| self.rootLanguageQuotedCaptionOriginal(source, value, selected) else null) orelse {
+                if (comptime @import("builtin").is_test) std.debug.print(
+                    "FR root-language refusal stage=both_original_mappings_absent direct=false quoted=false caption=false source_bytes={d} selected_bytes={d} quote_domain_present={any}\n",
+                    .{ source.len, selected.source.len, self.root_language_quote_source != null });
+                return self.figureUnavailable();
+            };
+        if (original.len == 0 or !wikiClassContains(selected.source, original)) {
+            if (comptime @import("builtin").is_test) std.debug.print(
+                "FR root-language refusal stage=original_empty_or_not_contained original_bytes={d} selected_bytes={d} empty={any}\n",
+                .{ original.len, selected.source.len, original.len == 0 });
             return self.figureUnavailable();
+        }
+        if (self.figurePageLanguage()) |language| if (!std.ascii.eqlIgnoreCase(language, proof.language)) {
+            if (comptime @import("builtin").is_test) std.debug.print(
+                "FR root-language refusal stage=language_mismatch page_language={s} proof_language={s}\n",
+                .{ language, proof.language });
+            return self.figureUnavailable();
+        };
         return proof;
     }
 
     const FigureRootLanguageSource = struct {
         source: []const u8,
         tracked: MissingText,
+        caption: []const u8,
         proof: ?*const SourceRootLanguageProof = null,
     };
     fn makeFigure(self: *Renderer, choice: FigureChoice, parent: Style, tracked: MissingText) Error!*const Figure {
@@ -18240,7 +18265,7 @@ pub const Renderer = struct {
         // snapshot for closer language overrides. Keep its prior conservative
         // ancestry query unless the consumed caption excludes those overrides.
         const root_language: ?[]const u8 = if (own_style == null and caption_no_language_override) if (source_root_language) |binding| language: {
-            binding.proof = try self.mediaSourceRootLanguage(binding.source, binding.tracked);
+            binding.proof = try self.mediaSourceRootLanguage(binding.source, binding.tracked, binding.caption);
             break :language if (binding.proof) |proof| proof.language else null;
         } else null else null;
         if (resolved_choice.content == .missing and (resolved_choice.content.missing.link_paint == null or
@@ -39928,7 +39953,8 @@ pub const Renderer = struct {
                             // Retain the parsed token before provenance slicing can
                             // copy it. Ordinary geometry may consume its root language;
                             // an independently observed own-style path stays unchanged.
-                            var source_language: FigureRootLanguageSource = .{ .source = source, .tracked = prepared_missing };
+                            var source_language: FigureRootLanguageSource = .{ .source = source, .tracked = prepared_missing,
+                                .caption = figure_choice.caption };
                             // The iterator caption borrows this exact token. Provenance
                             // slicing can copy its bytes even for an unrelated range.
                             // Bind before that copy, then carry only the verified offset.
@@ -39958,7 +39984,7 @@ pub const Renderer = struct {
                             // allocate or mutate borrowed inputs. Refuse stale proof
                             // before attaching the Figure to the emitted scratch span.
                             if (source_language.proof) |proof| {
-                                if ((try self.mediaSourceRootLanguage(source_language.source, source_language.tracked)) != proof)
+                                if ((try self.mediaSourceRootLanguage(source_language.source, source_language.tracked, source_language.caption)) != proof)
                                     return self.figureUnavailable();
                             }
                             self.spans.items[self.spans.items.len - 1].pending_figure = pending;
@@ -45964,6 +45990,72 @@ pub const Renderer = struct {
         return .{ .map = map, .original = original, .output = output, .original_source = original_source,
             .proof = proof, .digest = nativeQuoteMapDigest(map), .parent = parent };
     }
+
+    // Only the issued final caption may contain quote-generated bytes. The
+    // complete File operation still needs one monotone source occurrence;
+    // target/options and closing delimiter must remain exact authored copies.
+    fn rootLanguageQuotedCaptionOriginal(self: *Renderer, part: []const u8, caption: []const u8,
+        selected: TableContainingDirectionSource) ?[]const u8
+    {
+        if (part.len < 6 or caption.len == 0 or !wikiClassContains(part, caption) or
+            !starts(part, "[[") or !std.mem.endsWith(u8, part, "]]")) return null;
+        const before = @intFromPtr(caption.ptr) - @intFromPtr(part.ptr);
+        const after = before + caption.len;
+        if (before < 3 or after != part.len - 2 or part[before - 1] != '|') return null;
+        var iterator: ir.InlineIterator = .{ .input = part, .renderer_boundaries = true,
+            .link_trail = self.context.link_trail };
+        const node = iterator.next() orelse return null;
+        if (node.kind != .link or iterator.cursor != part.len or !node.link_has_pipe or
+            node.link_label_restored_close or node.trail.len != 0 or starts(node.target, ":") or
+            self.namespaceOfTarget(node.target) != 6) return null;
+        // Re-identify the caption with the same option classification as
+        // figureChoice, without invoking geometry or observation callbacks.
+        const mode = mediaOptionMode(node.target, false);
+        if (mode != .image and mode != .svg) return null;
+        var seen_format = false;
+        var pos: usize = 0;
+        var parsed_caption: ?[]const u8 = null;
+        while (pos <= node.text.len) {
+            const end = syntax.delimiter(node.text, "|", pos) orelse node.text.len;
+            if (self.mediaOption(node.text[pos..end], mode, &seen_format) == null)
+                parsed_caption = node.text[pos..end];
+            if (end == node.text.len) break;
+            pos = end + 1;
+        }
+        const issued_caption = parsed_caption orelse return null;
+        if (issued_caption.ptr != caption.ptr or issued_caption.len != caption.len) return null;
+        var next = self.root_language_quote_source;
+        var remaining: usize = max_depth + 1;
+        while (next) |domain| : (next = domain.parent) {
+            if (remaining == 0) return null;
+            remaining -= 1;
+            if (!wikiClassContains(domain.output.bytes, part)) continue;
+            if (selected.source_root_language != domain.proof or
+                self.rootLanguageQuoteInputProof(domain.original) != domain.proof or
+                !nativeSourceClassClean(domain.output) or
+                domain.map.original.ptr != domain.original.bytes.ptr or domain.map.original.len != domain.original.bytes.len or
+                domain.map.output.ptr != domain.output.bytes.ptr or domain.map.output.len != domain.output.bytes.len or
+                !rootLanguageQuoteMapClean(domain.map) or
+                !std.mem.eql(u8, &domain.digest, &nativeQuoteMapDigest(domain.map))) return null;
+            const current_original = self.boundSourceOriginal(domain.original.bytes, selected) orelse return null;
+            if (current_original.ptr != domain.original_source.ptr or current_original.len != domain.original_source.len) return null;
+            const original = domain.map.coveredOriginal(part, domain.map.original) orelse return null;
+            const prefix = domain.map.copiedOriginal(part[0..before]) orelse return null;
+            const suffix = domain.map.copiedOriginal(part[after..]) orelse return null;
+            if (prefix.ptr != original.ptr or prefix.len >= original.len or suffix.len >= original.len - prefix.len or
+                suffix.ptr != original[original.len - suffix.len ..].ptr) return null;
+            var original_iterator: ir.InlineIterator = .{ .input = original, .renderer_boundaries = true,
+                .link_trail = self.context.link_trail };
+            const original_node = original_iterator.next() orelse return null;
+            if (original_node.kind != .link or original_iterator.cursor != original.len or
+                !original_node.link_has_pipe or original_node.link_label_restored_close or original_node.trail.len != 0 or
+                !std.mem.eql(u8, original_node.target, node.target) or self.namespaceOfTarget(original_node.target) != 6)
+                return null;
+            return self.boundSourceOriginal(original, selected);
+        }
+        return null;
+    }
+
 
     fn rootLanguageQuotedOriginal(self: *Renderer, part: []const u8, selected: TableContainingDirectionSource) ?[]const u8 {
         var next = self.root_language_quote_source;
@@ -134193,15 +134285,15 @@ test "ordinary thumbnail quote transport rejects detached occurrences and callba
     f.renderer.root_language_quote_source = &domain;
     defer f.renderer.root_language_quote_source = null;
     const token = quoted.bytes[0..T.token.len];
-    try std.testing.expect((try f.renderer.mediaSourceRootLanguage(token, quoted)) == f.proof);
+    try std.testing.expect((try f.renderer.mediaSourceRootLanguage(token, quoted, null)) == f.proof);
     const detached = try a.dupe(u8, token);
-    try std.testing.expectError(error.UncompiledPresentation, f.renderer.mediaSourceRootLanguage(detached, quoted));
+    try std.testing.expectError(error.UncompiledPresentation, f.renderer.mediaSourceRootLanguage(detached, quoted, null));
     var unknown = quoted;
     unknown.unknown = true;
-    try std.testing.expectError(error.UncompiledPresentation, f.renderer.mediaSourceRootLanguage(token, unknown));
+    try std.testing.expectError(error.UncompiledPresentation, f.renderer.mediaSourceRootLanguage(token, unknown, null));
     var lost = quoted;
     lost.lost_missing_range = true;
-    try std.testing.expectError(error.UncompiledPresentation, f.renderer.mediaSourceRootLanguage(token, lost));
+    try std.testing.expectError(error.UncompiledPresentation, f.renderer.mediaSourceRootLanguage(token, lost, null));
     const no_media = try T.init(a, "ordinary text", &profile, "fr");
     const unchanged_fallbacks = no_media.renderer.fallbacks;
     try std.testing.expect(!unchanged_fallbacks.any());
@@ -134216,6 +134308,162 @@ test "ordinary thumbnail quote transport rejects detached occurrences and callba
     try std.testing.expect(!Renderer.rootLanguageQuoteMapClean(&literal_map));
     try std.testing.expect(literal.renderer.rootLanguageQuoteDomainInit(&literal_map, literal.tracked,
         literal_output, literal.proof, null) == null);
+}
+
+test "FR caption quote custody rejects unbound and malformed operation mappings" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const T = OrdinaryFigureRootLanguageControl;
+    const source = "[[File:MARK TWAIN(1883) p072 - THE TOWN DRUNKARD ASLEEP ONCE MORE.jpg|thumb|upright|Un '''''borracho'''''.]]";
+    var profile = try table_style_profile.parseForTargetAlloc(a, T.css, .screen);
+    defer profile.deinit();
+    const f = try T.init(a, source, &profile, "fr");
+    var map: QuoteSourceMap = .{};
+    defer map.deinit(a);
+    const quoted = try normalizeWikiQuotesPreparedMappedInDomain(a, f.tracked, 0, false,
+        f.renderer.context, null, &map, false);
+    try std.testing.expectEqual(@as(usize, 108), f.source.len);
+    try std.testing.expectEqual(@as(usize, 112), quoted.bytes.len);
+    // The two delayed opening tags must name the actual opening five-quote
+    // run. Closing tags name the later run; equal output alone is insufficient.
+    const opening_quote = std.mem.indexOf(u8, f.tracked.bytes, "'''''") orelse return error.TestUnexpectedResult;
+    const closing_quote = std.mem.lastIndexOf(u8, f.tracked.bytes, "'''''") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(opening_quote < closing_quote);
+    try std.testing.expectEqual(@as(usize, 4), map.generated.items.len);
+    for (map.generated.items, 0..) |generated, index| {
+        const expected = if (index < 2) opening_quote else closing_quote;
+        try std.testing.expectEqual(expected, generated.quote_start);
+        try std.testing.expectEqual(expected + 5, generated.quote_end);
+    }
+    var domain = f.renderer.rootLanguageQuoteDomainInit(&map, f.tracked, quoted, f.proof, null) orelse
+        return error.TestUnexpectedResult;
+    f.renderer.root_language_quote_source = &domain;
+    defer f.renderer.root_language_quote_source = null;
+    const at = std.mem.indexOf(u8, quoted.bytes, "Un <i><b>borracho</b></i>.") orelse return error.TestUnexpectedResult;
+    const caption = quoted.bytes[at .. quoted.bytes.len - 2];
+    const selected = f.renderer.boundSourceCarrier() orelse return error.TestUnexpectedResult;
+    // This is precisely the formerly refused 112-to-108-byte operation. Its
+    // whole token is not an unchanged copy, but every quote edit is in caption.
+    try std.testing.expect(map.copiedOriginal(quoted.bytes) == null);
+    try std.testing.expect(f.renderer.boundSourceOriginal(quoted.bytes, selected) == null);
+    try std.testing.expect(f.renderer.rootLanguageQuotedOriginal(quoted.bytes, selected) == null);
+    const original = f.renderer.rootLanguageQuotedCaptionOriginal(quoted.bytes, caption, selected) orelse
+        return error.TestUnexpectedResult;
+    try std.testing.expect(original.ptr == f.original.ptr and original.len == f.original.len);
+    try std.testing.expect((try f.renderer.mediaSourceRootLanguage(quoted.bytes, quoted, caption)) == f.proof);
+    // Missing authority and equal-but-detached bytes cannot borrow the map.
+    f.renderer.root_language_quote_source = null;
+    try std.testing.expectError(error.UncompiledPresentation,
+        f.renderer.mediaSourceRootLanguage(quoted.bytes, quoted, caption));
+    f.renderer.root_language_quote_source = &domain;
+    const detached = try a.dupe(u8, quoted.bytes);
+    try std.testing.expectError(error.UncompiledPresentation,
+        f.renderer.mediaSourceRootLanguage(detached, quoted, detached[at .. detached.len - 2]));
+    const detached_caption = try a.dupe(u8, caption);
+    try std.testing.expectError(error.UncompiledPresentation,
+        f.renderer.mediaSourceRootLanguage(quoted.bytes, quoted, detached_caption));
+    try std.testing.expectError(error.UncompiledPresentation,
+        f.renderer.mediaSourceRootLanguage(quoted.bytes, quoted, null));
+    try std.testing.expect(f.renderer.rootLanguageQuotedCaptionOriginal(quoted.bytes, caption[1..], selected) == null);
+    const options_at = std.mem.indexOf(u8, quoted.bytes, "thumb|") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(f.renderer.rootLanguageQuotedCaptionOriginal(quoted.bytes,
+        quoted.bytes[options_at .. quoted.bytes.len - 2], selected) == null);
+    try std.testing.expect(f.renderer.rootLanguageQuotedCaptionOriginal(quoted.bytes,
+        quoted.bytes[at .. quoted.bytes.len - 1], selected) == null);
+    try std.testing.expect(f.renderer.rootLanguageQuotedCaptionOriginal(quoted.bytes[0 .. quoted.bytes.len - 1],
+        caption, selected) == null);
+    // Even a freshly digested malformed map cannot invent operation coverage.
+    const first_generated = map.generated.items[0];
+    map.generated.items[0].quote_start += 1;
+    domain.digest = Renderer.nativeQuoteMapDigest(&map);
+    try std.testing.expectError(error.UncompiledPresentation,
+        f.renderer.mediaSourceRootLanguage(quoted.bytes, quoted, caption));
+    map.generated.items[0] = first_generated;
+    domain.digest = Renderer.nativeQuoteMapDigest(&map);
+    // Mutation after issuance must fail the original digest check.
+    map.generated.items[0].quote_end -= 1;
+    try std.testing.expectError(error.UncompiledPresentation,
+        f.renderer.mediaSourceRootLanguage(quoted.bytes, quoted, caption));
+    map.generated.items[0] = first_generated;
+    var unknown = quoted;
+    unknown.unknown = true;
+    try std.testing.expectError(error.UncompiledPresentation,
+        f.renderer.mediaSourceRootLanguage(quoted.bytes, unknown, caption));
+    try std.testing.expect((try f.renderer.mediaSourceRootLanguage(quoted.bytes, quoted, caption)) == f.proof);
+}
+
+
+test "FR case2 isolated nested caption reports first inner error" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const T = OrdinaryFigureRootLanguageControl;
+    const Observation = struct {
+        const file = "MARK TWAIN(1883) p072 - THE TOWN DRUNKARD ASLEEP ONCE MORE.jpg";
+        const options = "thumb|upright|Un <i><b>borracho</b></i>.";
+        calls: usize = 0,
+        matched: bool = false,
+
+        fn resolve(raw: ?*const anyopaque, _: A, filename: []const u8,
+            format_value: presentation_types.FigureFormat, options_value: []const u8,
+            default_width: u32) A.Error!?u32
+        {
+            const self: *@This() = @ptrCast(@alignCast(@constCast(raw.?)));
+            self.calls += 1;
+            self.matched = std.mem.eql(u8, filename, file) and
+                std.mem.eql(u8, options_value, options) and
+                format_value == .thumbnail and default_width == 275;
+            // This is the retained component observation, not page geometry.
+            return if (self.matched) 190 else null;
+        }
+    };
+    const source = "[[File:" ++ Observation.file ++ "|thumb|upright|Un '''''borracho'''''.]]";
+    var profile = try table_style_profile.parseForTargetAlloc(a, T.css, .screen);
+    defer profile.deinit();
+    const actual = try T.init(a, source, &profile, "fr");
+    var observation: Observation = .{};
+    actual.renderer.context.figure_sizing.?.page_observation_ctx = &observation;
+    actual.renderer.context.figure_sizing.?.resolve_observed_width_fn = Observation.resolve;
+    std.debug.print("FR case2 isolated actual operand begin; no reference or prior cases\n", .{});
+    const blocks = actual.renderer.renderBodyWithHeadingOffsets(actual.tracked) catch |failure| {
+        // Dump the live error-return trace before further fallible diagnostics.
+        // The selected prepared test root must enable error tracing. An absent
+        // trace is explicitly inconclusive, never an inferred inner cause.
+        if (@errorReturnTrace()) |trace| {
+            std.debug.dumpErrorReturnTrace(trace);
+        } else {
+            std.debug.print("FR case2 first-inner trace UNAVAILABLE\n", .{});
+        }
+        std.debug.print("FR case2 actual failure={s} observed_calls={d} observation_matched={any}\n",
+            .{ @errorName(failure), observation.calls, observation.matched });
+        return failure;
+    };
+    try std.testing.expectEqual(@as(usize, 1), observation.calls);
+    try std.testing.expect(observation.matched and !actual.renderer.fallbacks.any());
+    const figure = try FigureProducerTest.find(blocks);
+    try std.testing.expect(figure.content == .image);
+    const image = figure.content.image.span.image orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings(Observation.file, image.file);
+    try std.testing.expectEqual(@as(?u32, 190), image.width_px);
+    try std.testing.expectEqualStrings("Un borracho.", try plainText(a, figure.caption));
+    var nested_emphasis = false;
+    for (figure.caption) |span| {
+        if (std.mem.eql(u8, span.text, "borracho"))
+            nested_emphasis = span.flags.bold and span.flags.italic;
+    }
+    try std.testing.expect(nested_emphasis);
+    try std.testing.expect(actual.renderer.root_language_quote_source == null);
+    try std.testing.expect(actual.renderer.tableDirectionSource() == null and
+        actual.renderer.source_element_binding == null and actual.renderer.native_source_class_range == null);
+    const stored = try T.stored(a, actual, blocks);
+    const codec = @import("blob_encoder").presentation_codec;
+    const bytes = try codec.encodeAlloc(a, stored);
+    const decoded = try codec.decodeAlloc(a, bytes, stored.entry.title, .language,
+        .{ .heading = stored.entry.language.?, .code = stored.entry.language_code });
+    try std.testing.expectEqualDeep(stored, decoded);
+    try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, decoded));
+    std.debug.print("FR case2 isolated current-source component completed; no whole-page grant\n", .{});
 }
 
 test "ordinary thumbnail consumes exact direct root language with complete Figure Stored action and codec parity" {
