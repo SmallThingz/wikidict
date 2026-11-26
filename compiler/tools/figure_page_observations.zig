@@ -1212,6 +1212,9 @@ const Occurrence = struct {
     missing_content: ?ObservedMissing = null,
     static_poster: ?encoder.presentation_types.StaticPoster = null,
 };
+const SuppliedClassCapture = struct {
+    source: []const u8, html: []const u8, page_id: u64, revision_id: u64, namespace_id: i32, raw_sha256: []const u8,
+};
 const Page = struct {
     namespace_id: i32,
     page_id: u64,
@@ -1219,6 +1222,7 @@ const Page = struct {
     title: []const u8,
     raw_sha256: []const u8,
     source: []const u8,
+    supplied_class_html: ?[]const u8 = null,
     image_map_no_link: ?ImageMapError = null,
     source_siblings: []const profile.SourceSiblingProof = &.{},
     source_root_tables: []const profile.SourceRootTableProof = &.{},
@@ -1233,6 +1237,7 @@ const Page = struct {
 };
 const SelectedOccurrence = struct { source: *const Occurrence, stage_options: []const u8, svg_upright_fit: bool = false };
 pub const SelectedPage = struct {
+    supplied_class_capture: ?SuppliedClassCapture = null,
     text_class_scope: ?profile.BoundedTextClassScope = null,
     // Exact caller-owned complete original expansion, populated only by select.
     text_class_scope_source: ?[]const u8 = null,
@@ -5240,6 +5245,7 @@ pub const Book = struct {
                     .missing_content = image.missing_content, .static_poster = poster };
             }
             out.* = .{ .namespace_id = page.namespace_id, .page_id = page.page_id, .revision_id = page.revision_id, .title = page.title,
+                .supplied_class_html = if (equal(doc.schema, "wikidict.figure-page-observations.v1")) source_and_html.html else null,
                 .raw_sha256 = page.raw_sha256, .source = source_and_html.source, .image_map_no_link = image_map_error, .occurrences = occurrences, .text_class_scope = text_scope, .source_siblings = source_siblings, .source_root_tables = source_root_tables, .page_styles = page_styles, .source_root_children = source_root_children, .source_literal_divs = source_literal_divs, .source_div_parent_tags = source_div_parent_tags, .source_root_parent_groups = source_root_parent_groups,
                 .root_attributes = if (has_page_styles and observed_nodes.items.len != 0) observed_nodes.items[0].attributes else null };
         }
@@ -5551,7 +5557,10 @@ pub const Book = struct {
                     !missingThumbnailOptionsForOccurrence(context.image_options.?, slot.stage_options, occurrence.*))) return null;
             }
             const result = try a.create(SelectedPage);
-            result.* = .{ .namespace_catalog = ns, .file_registry = self.file_registry, .default_width = default_width, .page_title = title, .occurrences = selected, .image_map_no_link = if (page.image_map_no_link) |proof| .{ .body = expanded[proof.body_start..][0..proof.body.len], .body_start = proof.body_start, .line = proof.line, .text = proof.text } else null, .missing_link_paint = self.missing_link_paint,
+            result.* = .{ .supplied_class_capture = if (page.supplied_class_html) |html| .{
+                .source = expanded, .html = html, .page_id = page.page_id, .revision_id = page.revision_id,
+                .namespace_id = page.namespace_id, .raw_sha256 = page.raw_sha256 } else null,
+                .namespace_catalog = ns, .file_registry = self.file_registry, .default_width = default_width, .page_title = title, .occurrences = selected, .image_map_no_link = if (page.image_map_no_link) |proof| .{ .body = expanded[proof.body_start..][0..proof.body.len], .body_start = proof.body_start, .line = proof.line, .text = proof.text } else null, .missing_link_paint = self.missing_link_paint,
                 .text_class_scope = page.text_class_scope, .text_class_scope_source = if (page.text_class_scope != null) expanded else null };
             if (result.text_class_scope) |*scope| if (page.source_siblings.len != 0) {
                 scope.source_siblings = page.source_siblings;
@@ -22200,6 +22209,99 @@ test "normal text source scanner never reduces a manual marker in an action targ
         var digest: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(source, &digest, .{});
         try std.testing.expect((try normalTextSourceComparison(a, source, digest, 0, source.len, f.context)) == null);
     }
+}
+
+
+// This joins two different, explicit capture roles. The supplied-page POST
+// authenticates the COMPLETE selected expansion and its returned subtree; the
+// direct GET authenticates the current same-revision outer path. Unioning ALL
+// classes from both bodies, the outer path, authored source and theme variants
+// is absence-only: it never identifies a table, matches a positive selector,
+// supplies missing stylesheets, or asserts historical render equivalence.
+pub fn bindWikiTableClassAbsenceAlloc(a: A, media: *const SelectedPage,
+    capsule: *const @import("page_language.zig").SourceParentCapsule,
+    source: []const u8, ns: *const namespaces.Registry, styles: *const profile.Profile,
+    selected: compiler.TableContainingDirectionSource) !compiler.TableContainingDirectionSource
+{
+    const captured = media.supplied_class_capture orelse return selected;
+    if (selected.observe_wiki_table_classes != null or styles.page_style_parent != null or
+        selected.source.ptr != source.ptr or selected.source.len != source.len or
+        media.namespace_catalog != ns or captured.source.ptr != source.ptr or captured.source.len != source.len or
+        capsule.styles.responses.len != 0 or capsule.styles.receipt.len != 0 or
+        captured.page_id != capsule.page.id or captured.revision_id != capsule.page.revision or
+        captured.namespace_id != capsule.page.namespace or !equal(media.page_title, capsule.page.title) or
+        !equal(captured.raw_sha256, capsule.page.raw_sha256) or
+        !std.mem.eql(u8, &capsule.namespace_sha256, &ns.source_sha256) or
+        !digestMatches(source, capsule.page.expanded_sha256 orelse return invalid) or
+        !digestMatches(capsule.response, &capsule.response_sha256)) return invalid;
+    const root_proof = selected.source_root_language orelse return invalid;
+    if (!root_proof.current(source, ns.source_sha256, capsule.page.title, styles)) return invalid;
+    const outer = try observedOuterPrefix(a, capsule.response, true);
+    const root_start = outer.root_start orelse return invalid;
+    const root_end = outer.root_open_end orelse return invalid;
+    const root_attributes = outer.root orelse return invalid;
+    if (!equal(capsule.prefix, capsule.response[0..root_end]) or
+        !equal(root_attributes.get("lang") orelse return invalid, capsule.root_language) or
+        outer.ancestors.len == 0 or !equal(outer.ancestors[0].tag, "html")) return invalid;
+    var get_end: usize = 0;
+    const get_scope = try observedClassRootTokens(a, ns, capsule.response[root_start..], null, &get_end,
+        false, outer.root, true, true, true);
+    if (get_end == 0 or root_start + get_end != try sourceParentOwnedRootEnd(capsule.response, capsule.prefix)) return invalid;
+    const post_scope = try observedClassRootTokens(a, ns, captured.html, null, null,
+        false, null, false, true, true);
+    var outer_classes: std.ArrayList(u8) = .empty;
+    defer outer_classes.deinit(a);
+    for (outer.ancestors) |node| {
+        // The prefix/transport parser accepts unknown quoted attributes.
+        // Class-changing handlers invalidate a static absence inventory even
+        // on an ancestor whose original class list is empty.
+        for (node.attributes.attributes) |attribute|
+            if (attribute.name.len >= 2 and std.ascii.eqlIgnoreCase(attribute.name[0..2], "on")) return invalid;
+        try appendOuterClasses(a, &outer_classes, node.attributes.get("class") orelse "");
+    }
+    try appendOuterClasses(a, &outer_classes, get_scope.root_classes);
+    try appendOuterClasses(a, &outer_classes, get_scope.subtree_classes);
+    const schemes = (try selectedVectorSchemeClasses(a, capsule.response, ns.wiki,
+        outer.ancestors[0].attributes.get("class") orelse return invalid)) orelse return selected;
+    try appendOuterClasses(a, &outer_classes, schemes.day);
+    try appendOuterClasses(a, &outer_classes, schemes.night);
+    const classes = try completeObservedTextClassSuperset(a, post_scope, outer_classes.items, source);
+    const Bound = struct {
+        source: []const u8, source_digest: [32]u8, post: []const u8, post_digest: [32]u8,
+        get: []const u8, get_digest: [64]u8, title: []const u8,
+        ns: *const namespaces.Registry, ns_digest: [32]u8, styles: *const profile.Profile,
+        root: *const compiler.SourceRootLanguageProof, classes: []const u8,
+        fn observe(raw: ?*const anyopaque, _: A, operation: compiler.NormalTextClassOperation) A.Error!?compiler.NormalTextClassObservation {
+            const self: *const @This() = @ptrCast(@alignCast(raw orelse return null));
+            if (operation.source.ptr != self.source.ptr or operation.source.len != self.source.len or
+                operation.profile != self.styles or !equal(operation.title, self.title) or
+                !std.mem.eql(u8, &operation.namespace_sha256, &self.ns.source_sha256) or
+                !std.mem.eql(u8, &operation.namespace_sha256, &self.ns_digest) or
+                !self.root.current(self.source, self.ns_digest, self.title, self.styles) or
+                !digestMatches(self.get, &self.get_digest)) return null;
+            var digest: [32]u8 = undefined;
+            std.crypto.hash.sha2.Sha256.hash(self.source, &digest, .{});
+            if (!std.mem.eql(u8, &digest, &self.source_digest)) return null;
+            std.crypto.hash.sha2.Sha256.hash(self.post, &digest, .{});
+            if (!std.mem.eql(u8, &digest, &self.post_digest)) return null;
+            const offset = std.math.sub(usize, @intFromPtr(operation.opening.ptr), @intFromPtr(self.source.ptr)) catch return null;
+            if (offset >= self.source.len or operation.opening.len > self.source.len - offset or
+                (offset != 0 and self.source[offset - 1] != '\n') or !std.mem.startsWith(u8, operation.opening, "{|")) return null;
+            const end = std.mem.indexOfScalarPos(u8, self.source, offset, '\n') orelse return null;
+            if (end - offset != operation.opening.len) return null;
+            return .{ .opening = operation.opening, .complete_ancestor_class_superset = self.classes };
+        }
+    };
+    const bound = try a.create(Bound);
+    bound.* = .{ .source = source, .source_digest = undefined, .post = captured.html, .post_digest = undefined,
+        .get = capsule.response, .get_digest = capsule.response_sha256, .title = try a.dupe(u8, capsule.page.title),
+        .ns = ns, .ns_digest = ns.source_sha256, .styles = styles, .root = root_proof, .classes = classes };
+    std.crypto.hash.sha2.Sha256.hash(source, &bound.source_digest, .{});
+    std.crypto.hash.sha2.Sha256.hash(captured.html, &bound.post_digest, .{});
+    var result = selected;
+    result.wiki_table_class_context = bound;
+    result.observe_wiki_table_classes = Bound.observe;
+    return result;
 }
 
 // Direct root language is separate from served CSS and observed parent style.

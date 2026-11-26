@@ -21065,6 +21065,13 @@ fn bindSourceRootTextContext(a: std.mem.Allocator, codes: *encoder.blob_builder.
             .image_options = codes.image_options, .link_trail = codes.link_trail,
             .local_link_targets = codes.local_link_targets, .content_conversion = true,
         }, direction) else direction;
+    if (sizing.page_observation_ctx) |raw_media| {
+        const media: *const figure_page_observations.SelectedPage = @ptrCast(@alignCast(raw_media));
+        sizing.table_containing_direction = figure_page_observations.bindWikiTableClassAbsenceAlloc(a, media, root,
+            expanded, ns, styles, sizing.table_containing_direction.?) catch |err| switch (err) {
+                error.OutOfMemory => return err, else => sizing.table_containing_direction.?,
+            };
+    }
     return true;
 }
 
@@ -73463,4 +73470,172 @@ test "captured normal text packet refuses unknown fields duplicate identities an
     }
     const duplicate = try std.mem.concat(a, u8, &.{ "{\"normal_text_get_contexts\":[],", CapturedNormalTextTest.packet[1..] });
     try std.testing.expectError(error.InvalidPageLanguageSource, page_source_context.Registry.init(a, duplicate, "", null, &ns));
+}
+
+test "FR18 genuine paired captures bind wiki table alignment absence and preserve custody" {
+    var checkpoint: []const u8 = "exact retained inputs";
+    errdefer {
+        if (@errorReturnTrace()) |trace| std.debug.dumpErrorReturnTrace(trace);
+        std.debug.print("FR full borracho checkpoint={s}; Common.css and controlled file rows only\n", .{checkpoint});
+    }
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    const output = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
+    const raw = @embedFile("testdata/figure-page-observations/fr-borracho/page.raw.wikitext");
+    const source = @embedFile("testdata/figure-page-observations/fr-borracho/expanded.wikitext");
+    try std.testing.expectEqualStrings("364ee45f604489915d3a1a58ea0be14afacccb242ddef5c2cd100f784c491421", &std.fmt.bytesToHex(figure_page_observations.Testing.hash(raw), .lower));
+    try std.testing.expectEqualStrings("cbe2925704897feefbd00e44b02ab7534e590239e13ff3b853ad0b9a14669f31", &std.fmt.bytesToHex(figure_page_observations.Testing.hash(source), .lower));
+    try std.testing.expectEqual(@as(usize, 980), raw.len);
+    try std.testing.expectEqual(@as(usize, 4248), source.len);
+    var ns = try namespace_registry.Registry.init(a, @embedFile("testdata/figure-page-observations/fr-borracho/namespace-registry.tsv")); defer ns.deinit();
+    try ns.attachInterwikiMap(@embedFile("testdata/fr-abbreviations116/interwiki-map.tsv"));
+    try ns.attachLanguageConversion(@embedFile("testdata/fr-abbreviations116/namespace-siteinfo.raw.json"));
+    const site_bytes = @embedFile("testdata/figure-page-observations/fr-cauannos-alias/figure-siteinfo.raw.json");
+    var isolated = try namespace_registry.Registry.init(a, @embedFile("testdata/figure-page-observations/fr-borracho/namespace-registry.tsv")); defer isolated.deinit();
+    const site_page = try parseSiteMainPage(a, site_bytes, &isolated);
+    try isolated.attachLanguageConversion(site_bytes);
+    const site: FigureSite = .{ .source_context = .{ .namespace_sha256 = ns.source_sha256, .defaults = isolated.figure_source_defaults.? },
+        .core_revision = site_page.figure_core_revision.?, .source_sha256 = site_page.digest };
+    const book_bytes = @embedFile("testdata/figure-page-observations/fr-borracho/figure-page-observations.json");
+    const doc = try figure_page_observations.Testing.document(a, "fr-borracho");
+    try std.testing.expectEqualStrings(source, try figure_page_observations.Testing.source(a, doc));
+    // Existing controlled validator rows preserve exact captured file identity
+    // and dimensions; this test does not qualify a normal file-metadata loader.
+    var files = try figure_page_observations.Testing.registry(a, &ns, doc); defer files.deinit();
+    var book = try figure_page_observations.Book.init(a, book_bytes, &ns, &files, site.source_sha256,
+        site.source_context.defaults.default_thumbnail_width.?); defer book.deinit();
+    const behavior_bytes = @embedFile("testdata/figure-page-observations/fr-cauannos-alias/behavior-switches.tsv");
+    var behavior = try namespace_registry.behavior_switches.Registry.init(a, behavior_bytes, ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256); defer behavior.deinit();
+    var images = try namespace_registry.image_options.Registry.init(a, @embedFile("testdata/figure-page-observations/fr-cauannos-alias/image-options.tsv"), ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256, figure_page_observations.Testing.hash(behavior_bytes)); defer images.deinit();
+    // The exact available Common.css is retained. Missing gadget styles are
+    // not fabricated or treated as proved absent; all fallback output survives.
+    var styles = try encoder.table_style_profile.parseForTargetAlloc(a, @embedFile("testdata/fr-abbreviations116/common.css"), .screen); defer styles.deinit();
+    var registry = language_registry.Registry.empty(a); defer registry.deinit();
+    try registry.addTsv(@embedFile("testdata/fr-abbreviations116/language-registry.tsv"));
+    try registry.trustAutonymSnapshot(@embedFile("testdata/fr-abbreviations116/language-names.tsv"), ns.wiki, ns.dump_date, ns.content_language);
+    var codes = languageCodes(&registry, &ns);
+    codes.behavior_switches = &behavior; codes.image_options = &images; codes.table_styles = &styles;
+    codes.figure_sizing = .{ .ctx = &files, .resolve_fn = figure_sizing.Registry.resolve,
+        .resolve_canonical_file_fn = figure_sizing.Registry.resolveCanonicalFile, .source_context = try figureSourceContext(site, null) };
+    checkpoint = "exact complete-page FigureBook selection";
+    try attachFigurePageObservation(a, &codes, &book, site.source_sha256, 0, 1501218, 38755465, "borracho", raw, source);
+    try std.testing.expect(codes.figure_sizing.?.page_observation_ctx != null);
+    const packet = @embedFile("testdata/figure-page-observations/fr-borracho/page-language.json");
+    const response_role = "";
+    try std.testing.expectEqual(@as(usize, 0), response_role.len);
+    var roots = try page_source_context.Registry.init(a, packet, response_role, null, &ns); defer roots.deinit();
+    const root = roots.lookupSourceRootLanguage(1501218, 38755465, 0, "borracho", raw, source,
+        .{ .normal_no_target = true, .interface_message = false }) orelse return error.TestUnexpectedResult;
+    // Observe the exact current SourceRootLanguageProof.bind refusal inputs; no bypass.
+    std.debug.print("FR root proof operands source={d} title={d} language={s} language_len={d} target={s} globally_unresolved={any} page_style_parent={any}\n", .{
+        source.len, @as(usize, "borracho".len), root.root_language, root.root_language.len,
+        @tagName(styles.reading_target), styles.globally_unresolved, styles.page_style_parent != null });
+    try std.testing.expect(try bindSourceRootTextContext(a, &codes, root, source, "borracho"));
+    checkpoint = "paired complete class inventory";
+    const C = encoder.presentation_compile;
+    var direction = codes.figure_sizing.?.table_containing_direction.?;
+    const callback = direction.observe_wiki_table_classes orelse return error.MissingWikiTableClassProof;
+    const start = std.mem.indexOf(u8, source, "{|class=\"wikitable flextable flextable-es-mfsp\"").?;
+    const end = std.mem.indexOfScalarPos(u8, source, start, '\n').?;
+    const opening = source[start..end];
+    const operation: C.NormalTextClassOperation = .{ .source = source, .opening = opening,
+        .title = "borracho", .namespace_sha256 = ns.source_sha256, .profile = &styles };
+    const actual = (try callback(direction.wiki_table_class_context, a, operation)) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(!encoder.table_style_profile.Profile.hasClass(actual.complete_ancestor_class_superset, "boite"));
+    try std.testing.expect(encoder.table_style_profile.Profile.hasClass(actual.complete_ancestor_class_superset, "wikitable"));
+    try std.testing.expect(encoder.table_style_profile.Profile.hasClass(actual.complete_ancestor_class_superset, "mw-parser-output"));
+    // Equal bytes at a new address are not the selected original source.
+    var changed = operation;
+    changed.source = try a.dupe(u8, source);
+    try std.testing.expect((try callback(direction.wiki_table_class_context, a, changed)) == null);
+    changed = operation; changed.opening = try a.dupe(u8, opening);
+    try std.testing.expect((try callback(direction.wiki_table_class_context, a, changed)) == null);
+    changed = operation; changed.opening = opening[1..];
+    try std.testing.expect((try callback(direction.wiki_table_class_context, a, changed)) == null);
+    changed = operation; changed.title = "another page";
+    try std.testing.expect((try callback(direction.wiki_table_class_context, a, changed)) == null);
+    changed = operation; changed.namespace_sha256[0] ^= 1;
+    try std.testing.expect((try callback(direction.wiki_table_class_context, a, changed)) == null);
+    var other_styles = try encoder.table_style_profile.parseForTargetAlloc(a, @embedFile("testdata/fr-abbreviations116/common.css"), .screen);
+    defer other_styles.deinit();
+    changed = operation; changed.profile = &other_styles;
+    try std.testing.expect((try callback(direction.wiki_table_class_context, a, changed)) == null);
+    // The loader owns this allocated document. A post-bind mutation remains
+    // unknown even outside the selected body; restore before the actual flow.
+    {
+        const mutable = @constCast(root.response);
+        const last = mutable.len - 1; const previous = mutable[last];
+        defer mutable[last] = previous;
+        mutable[last] ^= 1;
+        try std.testing.expect((try callback(direction.wiki_table_class_context, a, operation)) == null);
+    }
+    // Synthetic changed-capture refusal, not a new transport observation.
+    // Typed identity alone accepts arbitrary outer attributes; the absence
+    // issuer must independently reject class-changing handlers there.
+    {
+        var bad_outer = root.*;
+        const old_html = "<html ";
+        const new_html = "<html oNcLiCk=\"this.classList.add('boite')\" ";
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, root.response, old_html));
+        bad_outer.response = try std.mem.replaceOwned(u8, a, root.response, old_html, new_html);
+        bad_outer.prefix = bad_outer.response[0..root.prefix.len + new_html.len - old_html.len];
+        bad_outer.response_sha256 = std.fmt.bytesToHex(figure_page_observations.Testing.hash(bad_outer.response), .lower);
+        var unbound = direction; unbound.wiki_table_class_context = null; unbound.observe_wiki_table_classes = null;
+        const media: *const figure_page_observations.SelectedPage = @ptrCast(@alignCast(codes.figure_sizing.?.page_observation_ctx.?));
+        try std.testing.expectError(error.InvalidFigurePageObservations,
+            figure_page_observations.bindWikiTableClassAbsenceAlloc(a, media, &bad_outer, source, &ns, &styles, unbound));
+    }
+    // A class introduced only inside either captured body must withhold
+    // ancestor absence. These edited inputs are synthetic refusal controls.
+    {
+        const media: *const figure_page_observations.SelectedPage = @ptrCast(@alignCast(codes.figure_sizing.?.page_observation_ctx.?));
+        var unbound = direction; unbound.wiki_table_class_context = null; unbound.observe_wiki_table_classes = null;
+        const before_class = "class=\"wikitable flextable";
+        const after_class = "class=\"boite wikitable flextable";
+        for (0..2) |arm| {
+            var changed_media = media.*; var changed_root = root.*;
+            if (arm == 0) {
+                changed_media.supplied_class_capture.?.html = try std.mem.replaceOwned(u8, a,
+                    media.supplied_class_capture.?.html, before_class, after_class);
+                try std.testing.expect(!std.mem.eql(u8, changed_media.supplied_class_capture.?.html, media.supplied_class_capture.?.html));
+            } else {
+                changed_root.response = try std.mem.replaceOwned(u8, a, root.response, before_class, after_class);
+                try std.testing.expect(!std.mem.eql(u8, changed_root.response, root.response));
+                changed_root.prefix = changed_root.response[0..root.prefix.len];
+                changed_root.response_sha256 = std.fmt.bytesToHex(figure_page_observations.Testing.hash(changed_root.response), .lower);
+            }
+            const negative = try figure_page_observations.bindWikiTableClassAbsenceAlloc(a, &changed_media,
+                &changed_root, source, &ns, &styles, unbound);
+            const observed = (try negative.observe_wiki_table_classes.?(negative.wiki_table_class_context, a, operation)).?;
+            try std.testing.expect(encoder.table_style_profile.Profile.hasClass(observed.complete_ancestor_class_superset, "boite"));
+            const query: encoder.table_style_profile.TextElement = .{ .tag = "table", .classes = "wikitable flextable flextable-es-mfsp",
+                .complete_ancestor_classes = observed.complete_ancestor_class_superset };
+            try std.testing.expect((try styles.resolveAlignmentIn(a, &query, null, "")).unresolved);
+        }
+    }
+    const Counter = struct {
+        original: C.TableContainingDirectionSource, queries: usize = 0, returned: usize = 0,
+        fn observe(raw_counter: ?*const anyopaque, alloc: std.mem.Allocator, op: C.NormalTextClassOperation) std.mem.Allocator.Error!?C.NormalTextClassObservation {
+            const self: *@This() = @ptrCast(@alignCast(@constCast(raw_counter.?)));
+            self.queries += 1;
+            const result = try self.original.observe_wiki_table_classes.?(self.original.wiki_table_class_context, alloc, op);
+            if (result != null) self.returned += 1;
+            return result;
+        }
+    };
+    var counter = Counter{ .original = direction };
+    direction.wiki_table_class_context = &counter;
+    direction.observe_wiki_table_classes = Counter.observe;
+    codes.figure_sizing.?.table_containing_direction = direction;
+    checkpoint = "new ordinary table-ancestry consumer";
+    var writer = try encoder.blob_builder.Writer.init(io, a, output); defer writer.deinit();
+    writer.language_codes = codes;
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "borracho", source, raw, null);
+    const stats = try writer.finish(codes);
+    std.debug.print("FR16 table queries={d} returned={d} Writer stats={any}; all remaining fallbacks retained\n", .{counter.queries,counter.returned,stats});
+    try std.testing.expectEqual(@as(usize, 2), counter.queries);
+    try std.testing.expectEqual(@as(usize, 2), counter.returned);
+    // No caption/readback/style15 replay, no missing stylesheet default, no
+    // publication/render/full-page acceptance from this absence-only check.
 }

@@ -1154,6 +1154,9 @@ pub const TableContainingDirectionSource = struct {
     // A root-language receipt conveys no table observation or parent CSS.
     root_language_only: bool = false,
     source_root_language: ?*const SourceRootLanguageProof = null,
+    // Independent, alignment-only absence evidence for an owned wiki table opening.
+    wiki_table_class_context: ?*const anyopaque = null,
+    observe_wiki_table_classes: ?*const fn (?*const anyopaque, A, NormalTextClassOperation) A.Error!?NormalTextClassObservation = null,
     normal_text_context: ?*const anyopaque = null,
     observe_normal_text_classes: ?*const fn (?*const anyopaque, A, NormalTextClassOperation) A.Error!?NormalTextClassObservation = null,
     observe_normal_link_classes: ?*const fn (?*const anyopaque, A, NormalTextLinkClassOperation) A.Error!?NormalTextLinkClassObservation = null,
@@ -19470,6 +19473,58 @@ pub const Renderer = struct {
             return profile.resolveAlignmentIn(self.a, query, legacy, css);
         }
         return table_style_profile.resolveInlineAlignmentAlloc(self.a, legacy, css);
+    }
+
+
+    // A query-local class overapproximation cannot become table geometry,
+    // parent paint or a reusable child certificate. Every opening is rebound
+    // through the current source carrier before this alignment query alone.
+    fn wikiTableTextAlignment(self: *Renderer, source: []const u8, start: usize,
+        tag: syntax.Tag, visible: bool, inherited: ?presentation_types.CellTextAlign) Error!?presentation_types.CellTextAlign
+    {
+        const previous = try self.alignmentResolution(tag);
+        if (!previous.unresolved) return if (previous.specified) previous.value else inherited;
+        const refined = if (visible) try self.wikiTableAlignmentAbsence(source, start, tag) else null;
+        const resolved = refined orelse previous;
+        self.fallbacks.unresolved_table_style = self.fallbacks.unresolved_table_style or
+            self.traceUnresolvedTableStyle(resolved.unresolved, "htmlTextAlignment.1", tag.attrs);
+        return if (resolved.specified) resolved.value else inherited;
+    }
+
+    fn wikiTableAlignmentAbsence(self: *Renderer, source: []const u8, start: usize,
+        tag: syntax.Tag) Error!?table_style_profile.AlignmentResolution
+    {
+        if (!self.wikiClassOrdinaryDomain() or self.typed_table_depth != 1 or !tag.is("table") or tag.closing or tag.self_closing or self.content_root != .parser_output or
+            self.in_reference or self.in_template_literal_scope or start >= source.len or
+            (start != 0 and source[start - 1] != '\n') or !starts(source[start..], "{|")) return null;
+        const profile = self.context.table_styles orelse return null;
+        if (profile.page_style_parent != null) return null;
+        const tracked = self.inline_missing orelse self.body_missing orelse return null;
+        const selected = (self.mediaRootLanguageCarrier(tracked) catch return null) orelse return null;
+        const observe = selected.observe_wiki_table_classes orelse return null;
+        const ns = self.context.namespace_catalog orelse return null;
+        const root = selected.source_root_language orelse return null;
+        if (!root.current(selected.source, ns.source_sha256, self.context.title, profile)) return null;
+        const end = std.mem.indexOfScalarPos(u8, source, start, '\n') orelse return null;
+        const live = source[start..end];
+        if (!std.mem.eql(u8, tag.attrs, std.mem.trimEnd(u8, live[2..], "\r"))) return null;
+        const original = self.boundSourceOriginal(live, selected) orelse return null;
+        if (!std.mem.eql(u8, original, live)) return null;
+        const observation = (try observe(selected.wiki_table_class_context, self.a, .{ .source = selected.source,
+            .opening = original, .title = self.context.title, .namespace_sha256 = ns.source_sha256, .profile = profile })) orelse return null;
+        if (observation.opening.ptr != original.ptr or observation.opening.len != original.len or
+            observation.complete_ancestor_class_superset.len > 65536 or
+            !std.unicode.utf8ValidateSlice(observation.complete_ancestor_class_superset) or
+            std.mem.indexOfScalar(u8, observation.complete_ancestor_class_superset, 0) != null or
+            !root.current(selected.source, ns.source_sha256, self.context.title, profile)) return null;
+        const language_parent = if (self.body_language_direction) |style| style.text_element else null;
+        var query: table_style_profile.TextElement = .{ .tag = "table",
+            .classes = (try self.semanticAttribute(tag, "class")) orelse "",
+            .id = (try self.semanticAttribute(tag, "id")) orelse "",
+            .parent = language_parent orelse self.body_formatting_attributes.text_element,
+            .complete_ancestor_classes = observation.complete_ancestor_class_superset };
+        if (!normalTextClassesCoverRepresented(&query, observation.complete_ancestor_class_superset)) return null;
+        return try profile.resolveAlignmentIn(self.a, &query, null, (try self.semanticAttribute(tag, "style")) orelse "");
     }
 
     fn htmlTextAlignment(self: *Renderer, tag: syntax.Tag, inherited: ?presentation_types.CellTextAlign) Error!?presentation_types.CellTextAlign {
@@ -50257,7 +50312,7 @@ pub const Renderer = struct {
         self.typed_table_depth += 1;
         defer self.typed_table_depth -= 1;
         // Alignment belongs to cells; fostered text keeps its outer body scope.
-        const table_alignment = if (viewport != null) self.body_formatting_attributes.text_align else try self.htmlTextAlignment(opening, self.body_formatting_attributes.text_align);
+        const table_alignment = if (viewport != null) self.body_formatting_attributes.text_align else try self.wikiTableTextAlignment(source, opening_start, opening, class_source_visible, self.body_formatting_attributes.text_align);
         var resolved: table_style_profile.TableResolution = if (viewport) |known| .{ .style = known.wide_style,
             .block_viewport = known.policy, .float_viewport = known.float_policy, .scope = known.profile.classScope((try self.semanticAttribute(opening, "class")) orelse ""),
             .unresolved = false, .background_specified = true, .width_specified = true }

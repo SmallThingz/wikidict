@@ -1,0 +1,32 @@
+== {{langue|es}} ==
+
+=== {{S|étymologie}} ===
+: De ''{{lien|borracha|es}}'' (« outre »), d'origine inconnue. {{cf|sac à vin|lang=fr}} en français.
+
+=== {{S|adjectif|es}} ===
+{{es-accord-oa|borrach|boˈra.t͡ʃ}}
+'''borracho''' {{pron|boˈra.t͡ʃo|es}} {{m}}
+# [[saoul#fr|Saoul]], [[ivre#Adjectif|ivre]].
+
+==== {{S|synonymes}} ====
+* [[ebrio]]
+* [[briago]], [[pedo]] {{Mexique|nocat=1}}
+
+==== {{S|dérivés}} ====
+* [[emborrachar]]
+* [[borrachera]]
+
+=== {{S|nom|es}} ===
+{{es-accord-oa|borrach|boˈra.t͡ʃ}}
+'''borracho''' {{pron|boˈra.t͡ʃo|es}} {{m}}
+[[File:MARK TWAIN(1883) p072 - THE TOWN DRUNKARD ASLEEP ONCE MORE.jpg|thumb|upright|Un '''borracho'''.]]
+# Personne [[saoul]]e, [[ivre]].
+# [[ivrogne|Ivrogne]], [[buveur]], [[alcoolique]].
+
+==== {{S|synonymes}} ====
+* [[ebrio]]
+
+=== {{S|prononciation}} ===
+* {{écouter|Carthagène des Indes (Colombie)||lang=es|audio=LL-Q1321 (spa)-AdrianAbdulBaha-borracho.wav}}
+
+[[Catégorie:Lexique en espagnol de l’alcoolisme]]
