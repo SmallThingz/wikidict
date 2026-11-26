@@ -11145,7 +11145,7 @@ test "percentage radius Output retains two authored e advisories thin spaces sma
         const group = circle.inline_box_group.?;
         try std.testing.expectEqual(RubyTypes.StyleWidth{ .unit = .percent, .value = 50 }, group.radius.?);
         try std.testing.expectEqualDeep(first_group.border, group.border);
-        try std.testing.expect(group.overlays.len == 0 and !@hasField(@TypeOf(group.*), "atomic_layout"));
+        try std.testing.expect(group.overlays.len == 0 and group.atomic_layout == null);
         try std.testing.expectEqual(@as(usize, 1), group.spans.len);
         try std.testing.expectEqualDeep(child, group.spans[0]);
     }

@@ -637,6 +637,11 @@ fn visitRubyFallbackInner(spans: anytype, context: anytype, comptime emit: anyty
         if (comptime @hasField(@TypeOf(span), "inline_box_group")) if (span.inline_box_group) |group| {
             if (gap or content_depth >= max_content_depth or !validInlineBoxGroupOwner(span)) return error.InvalidPresentation;
             try budget.items(group.overlays.len);
+            if (inlineBoxAtomicLayout(group.*) != null) {
+                if (inherited_action != null or inside_group or ruby_depth != 0 or
+                    budget.inline_box_depth != 0 or budget.action_group_depth != 0) return error.InvalidPresentation;
+                try budget.items(1);
+            }
             if (group.spans.len == 0) {
                 // This source box occupies an inline position but contributes
                 // neither semantic text nor an action or a ruby text leaf.
@@ -897,7 +902,100 @@ pub fn validInlineBoxOverlayContent(value: anytype) bool {
     }
     return true;
 }
-/// A non-atomic ordinary inline box, using CSS slice decoration and native
+/// Fixed-size content within one atom. Margins enter normal line layout and the
+/// last ordinary in-flow child line supplies the baseline. Em lengths use the
+/// normalized declaring font, independently of the enclosing paragraph font.
+pub const InlineBoxAtomicLayout = struct {
+    width: StyleLength,
+    height: StyleLength,
+    margins: StyleEdges,
+    box_sizing: ContainerBoxSizing,
+    text_align: InlineBoxOverlayTextAlign,
+    wrap: TextWrap,
+    line_height: ?InlineLineHeight = null,
+};
+
+pub fn inlineBoxAtomicLayout(value: anytype) ?InlineBoxAtomicLayout {
+    return if (comptime @hasField(@TypeOf(value), "atomic_layout")) value.atomic_layout else null;
+}
+
+fn validInlineBoxAtomicLayout(layout: InlineBoxAtomicLayout) bool {
+    return layout.width.value > 0 and layout.height.value > 0 and
+        validStyleLength(layout.width) and validStyleLength(layout.height) and validStyleEdges(layout.margins) and
+        (layout.line_height == null or validInlineTextStyle(.{ .line_height = layout.line_height }));
+}
+
+fn atomicInlineFont(span: anytype, layout: InlineBoxAtomicLayout) ?InlineFontSnapshot {
+    if (comptime !@hasField(@TypeOf(span), "inline_style") or !@hasField(@TypeOf(span), "font_scale") or
+        !@hasField(@TypeOf(span), "font_scale_basis")) return null;
+    const style = span.inline_style orelse return null;
+    const scale = span.font_scale orelse return null;
+    if (!style.font_normalized or scale <= 0 or span.font_scale_basis == .context or
+        style.decoration != null or style.baseline_shift != null or style.cursor != null or
+        (style.wrap != null and style.wrap != layout.wrap)) return null;
+    if (style.line_height) |line| {
+        const other = layout.line_height orelse return null;
+        if (std.meta.activeTag(line) != std.meta.activeTag(other)) return null;
+        switch (line) {
+            .computed => |height| if (!std.meta.eql(height, other.computed)) return null,
+            .font_relative => |height| if (height.factor != other.font_relative.factor or
+                !rubyFontSnapshotEqual(height.font, other.font_relative.font)) return null,
+        }
+    }
+    inline for (.{ "small", "superscript", "subscript", "underline", "strike" }) |field|
+        if (RubyFallbackDecoration.flag(span, @field(RubyFallbackDecoration.Field, field))) return null;
+    var font: InlineFontSnapshot = .{ .font_scale = scale, .font_scale_basis = span.font_scale_basis, .font_normalized = true };
+    // Build Spans use their own role enum. Compare the semantic tag across
+    // the Writer and Reader instead of assigning between different enum types.
+    if (comptime @hasField(@TypeOf(span), "role"))
+        font.role = std.meta.stringToEnum(Role, @tagName(span.role)) orelse return null;
+    inline for (.{ "language", "classes", "font_features", "font_family" }) |field|
+        if (comptime @hasField(@TypeOf(span), field)) { @field(font, field) = @field(span, field); };
+    inline for (.{ "bold", "italic", "code" }) |field|
+        @field(font, field) = RubyFallbackDecoration.flag(span, @field(RubyFallbackDecoration.Field, field));
+    return if (validInlineFontSnapshot(font)) font else null;
+}
+
+fn atomicInlineOrdinary(span: anytype) bool {
+    if (!std.mem.eql(u8, @tagName(span.kind), "text") or span.target.len != 0) return false;
+    inline for (.{ "target_fragment", "link_paint", "audio_control", "citation_marker" }) |field|
+        if (comptime @hasField(@TypeOf(span), field)) if (@field(span, field) != null) return false;
+    if (comptime @hasField(@TypeOf(span), "trail")) if (span.trail.len != 0) return false;
+    return true;
+}
+
+fn validAtomicInlineChildren(group: anytype, layout: InlineBoxAtomicLayout) bool {
+    if (!validInlineBoxAtomicLayout(layout) or group.overlays.len != 0 or inlineBoxRadius(group) != null or
+        group.spans.len == 0) return false;
+    var noncollapsible = false;
+    for (group.spans) |child| {
+        if (!atomicInlineOrdinary(child) or !validRubyBodyChild(child) or spanHasRuby(child) or
+            spanHasInlinePaddingGroup(child) or spanHasInlineActionGroup(child) or spanHasInlineBoxGroup(child) or
+            spanHasClippedAbsolute(child) or child.text.len == 0 or atomicInlineFont(child, layout) == null) return false;
+        var iterator = (std.unicode.Utf8View.init(child.text) catch return false).iterator();
+        while (iterator.nextCodepoint()) |cp| {
+            if (cp < 0x20 or cp == 0x7f or cp == 0x2028 or cp == 0x2029) return false;
+            if (cp != ' ') noncollapsible = true;
+        }
+    }
+    return noncollapsible;
+}
+
+fn validAtomicInlineOwner(span: anytype, group: anytype, layout: InlineBoxAtomicLayout) bool {
+    if (!atomicInlineOrdinary(span)) return false;
+    const font = atomicInlineFont(span, layout) orelse return false;
+    const direction: []const u8 = if (comptime @hasField(@TypeOf(span), "direction")) span.direction else "";
+    if (direction.len != 0 and !std.mem.eql(u8, direction, "ltr") and !std.mem.eql(u8, direction, "rtl")) return false;
+    if (layout.line_height) |line| if (line == .font_relative and !rubyFontSnapshotEqual(font, line.font_relative.font)) return false;
+    for (group.spans) |child| {
+        const child_direction: []const u8 = if (comptime @hasField(@TypeOf(child), "direction")) child.direction else "";
+        if (!std.mem.eql(u8, direction, child_direction) or
+            !rubyFontSnapshotEqual(font, atomicInlineFont(child, layout) orelse return false)) return false;
+    }
+    return true;
+}
+
+/// The ordinary form uses CSS slice decoration and native
 /// parent progression. The owner font governs geometry; child font scales keep
 /// their established original-root Context/normal-body/CSS-pixel semantics and
 /// are never multiplied by the owner. Horizontal padding affects fitting once;
@@ -919,6 +1017,7 @@ pub fn InlineBoxGroup(comptime Child: type) type {
         // Null keeps square geometry. Em remains unsupported; all four borders
         // must be equal solid or equal dotted RGB, with no overlays.
         radius: ?StyleWidth = null,
+        atomic_layout: ?InlineBoxAtomicLayout = null,
         pub fn jsonStringify(self: @This(), jw: anytype) !void {
             try jw.beginObject();
             try jw.objectField("padding"); try jw.write(self.padding);
@@ -926,6 +1025,7 @@ pub fn InlineBoxGroup(comptime Child: type) type {
             try jw.objectField("overlays"); try jw.write(self.overlays);
             try jw.objectField("spans"); try jw.write(self.spans);
             if (self.radius) |radius| { try jw.objectField("radius"); try jw.write(radius); }
+            if (self.atomic_layout) |layout| { try jw.objectField("atomic_layout"); try jw.write(layout); }
             try jw.endObject();
         }
     };
@@ -983,6 +1083,9 @@ fn emptyInlineTopEdge(value: anytype) bool {
         value.border.right == .none and value.border.bottom == .none and value.border.left == .none;
 }
 pub fn validInlineBoxGroup(value: anytype) bool {
+    if (inlineBoxAtomicLayout(value)) |layout| {
+        if (!validAtomicInlineChildren(value, layout)) return false;
+    }
     if (inlineBoxRadius(value)) |radius| {
         if (!validInlineBoxRadius(radius) or value.overlays.len != 0) return false;
         const line = switch (value.border.top) { .solid, .dotted => |border_line| border_line, else => return false };
@@ -1059,7 +1162,9 @@ pub fn validInlineBoxGroupOwner(span: anytype) bool {
                 if (!std.mem.eql(u8, span.tooltip.?, child.tooltip.?)) return false;
             } else return false;
         }
-        return validInlineBoxGroup(group);
+        if (!validInlineBoxGroup(group)) return false;
+        if (inlineBoxAtomicLayout(group)) |layout| return validAtomicInlineOwner(span, group, layout);
+        return true;
     }
     return false;
 }
@@ -4129,6 +4234,10 @@ pub const DeepTableWork = struct {
                 if (self.discover_inline_box_group) return error.InvalidPresentation;
                 if (content_depth >= max_content_depth or !validInlineBoxGroupOwner(value)) return error.InvalidPresentation;
                 try self.take(group.overlays.len);
+                if (inlineBoxAtomicLayout(group.*)) |layout| {
+                    try self.take(1);
+                    if (layout.line_height) |height| if (height == .font_relative) self.inlineFeatures(height.font_relative.font);
+                }
                 for (group.overlays) |overlay| if (overlay.content) |content| {
                     self.inlineFeatures(content.owner_font);
                     if (content.line_height) |height| if (height == .font_relative) self.inlineFeatures(height.font_relative.font);
@@ -4632,6 +4741,10 @@ fn validateSpanColors(spans: []const Span, media: *ImageValidation) ValidationEr
             if (!validInlineBoxGroupOwner(span) or media.content_depth >= max_content_depth or
                 (!media.in_inline_box_group and !media.in_inline_padding_group and !media.in_inline_action_group and media.ruby_depth == 0 and !media.maps.items(1)) or
                 !media.maps.items(group.overlays.len) or !media.maps.items(group.spans.len)) return error.InvalidPresentation;
+            if (inlineBoxAtomicLayout(group.*) != null) {
+                if (media.in_inline_box_group or media.in_inline_padding_group or media.in_inline_action_group or
+                    media.inline_padding_action != null or !media.maps.items(1)) return error.InvalidPresentation;
+            }
             try validateInlineBoxGroupTree(span, media.content_depth, media.ruby_depth);
             const previous_action = media.inline_padding_action;
             const previous_group = media.in_inline_box_group;

@@ -17,9 +17,9 @@ const cleanBorder=[0,0,0,0];
 const zero=length(0);
 const padding=cat(zero,zero,zero,zero);
 const nb='\u00a0'.repeat(4);
-const run=({kind=0,text='sample',target='',background=null,box=null,style=null,radius=false,fragment=null}={})=>cat(
+const run=({kind=0,text='sample',target='',background=null,box=null,style=null,radius=false,atomic=false,scale=null,basis=1,fragment=null,family=false}={})=>cat(
   [kind,0,0],string(text),string(target),string(''),string(''),string(''),string(''),string(''),
-  [0],background?cat([1],string(background)):[0],[(style?8:0)|(radius?32:0)],style??[],[0],
+  [0],background?cat([1],string(background)):[0],[(style?8:0)|(family?16:0)|(radius?32:0)|(atomic?64:0)|(scale===null?0:1)],scale===null?[]:cat(f(scale),[basis]),style??[],family?[0]:[],[0],
   fragment===null?[0]:cat([1],string(fragment)),[0,0,0,0],box?cat([1],box):[0]);
 const box=(children,{overlay=[],radius=null,borders=border}={})=>cat(padding,borders,list(overlay),list(children),radius??[]);
 const block=values=>cat([0,0,0],list(values),[0],string(''),string(''),[0],string(''),string(''),[0,0,0,0]);
@@ -142,3 +142,144 @@ test('DPRY clipped absolute distinguishes initial and article exterior on each o
   assert.throws(()=>decode(valid.subarray(0,at+3),{}));
   assert.throws(()=>decode(stored([before,after]),{}));
 });
+
+
+test('fixed atomic inline box reads the Android geometry suffix and preserves the separate source label',()=>dom(()=>{
+  const geometry=cat(length(1.5,1),length(1.5,1),length(1),zero,length(1),zero,[0,0,0,0]);
+  assert.equal(geometry.length,34);
+  const child=run({text:'\u00a0',scale:.9,style:[8]});
+  const owner=(suffix=geometry)=>run({text:'',background:'#ff0000',scale:.9,style:[8],atomic:true,
+      box:cat(box([child]),suffix)});
+  const after=run({text:'\u00a0Oxygen'});
+  const [atom,label]=decodeSpans(wire([owner(),after]));
+  assert.equal(atom.inline_box_group.spans[0].text,'\u00a0');
+  assert.equal(label.text,'\u00a0Oxygen');
+  assert.deepEqual(atom.inline_box_group.atomic_layout.width,{unit:'em',value:1.5});
+  const result=spans([atom,label]),element=all(result).find(n=>n.className==='compiled-inline-box');
+  assert.deepEqual([element.style.display,element.style.verticalAlign,element.style.boxSizing,
+      element.style.width,element.style.height,element.style.marginTop,element.style.marginBottom,
+      element.style.backgroundColor,element.textContent],
+      ['inline-block','baseline','content-box','1.5em','1.5em','1px','1px','#ff0000','\u00a0']);
+  assert.equal(result.textContent,'\u00a0\u00a0Oxygen');
+  assert.equal(result.children[0].style.fontSize,'min(10000px, calc(var(--wikidict-normal-body-size) * '+atom.font_scale+'))');
+  const ordinary=run({text:'',background:'#ff0000',scale:.9,style:[8],box:box([child])});
+  assert.equal(decodeSpans(wire([ordinary,after]))[0].inline_box_group.atomic_layout,undefined);
+  assert.throws(()=>decodeSpans(wire([owner(geometry.subarray(0,-1)),after])));
+  assert.throws(()=>decodeSpans(wire([owner(cat(length(0,1),geometry.subarray(5))),after])));
+  assert.throws(()=>decodeSpans(wire([run({text:'forged',scale:.9,style:[8],atomic:true}),ordinary])));
+}));
+
+
+test('atomic inline box uses its selected normal or font-relative baseline strut',()=>dom(()=>{
+  const geometry=cat(length(1.5,1),length(1.5,1),length(1),zero,length(1),zero,[0,2,0]);
+  const snapshot=scale=>cat([17],f(scale),[1,16],string(''),string(''),[0,0]);
+  const child=run({text:'\u00a0',scale:.9,family:true,style:[8]});
+  const member=(suffix)=>wire([run({text:'',background:'#ff0000',scale:.9,family:true,style:[8],atomic:true,
+      box:cat(box([child]),geometry,suffix)}),run({text:'\u00a0Oxygen'})]);
+  const boxElement=data=>all(spans(decodeSpans(data))).find(n=>n.className==='compiled-inline-box');
+  const normal=boxElement(member([0]));
+  assert.equal(normal.style.lineHeight,'normal');
+  assert.equal(normal.style.whiteSpace,'normal');
+  const inherited=boxElement(member(cat([2],f(1.6),snapshot(.9))));
+  assert.ok(Math.abs(Number(inherited.style.lineHeight)-1.6)<1e-6);
+  assert.equal(inherited.style.fontFamily,'sans-serif');
+  assert.equal(inherited.style.textAlign,'center');
+  const absolute=boxElement(member(cat([1],f(18.25),[2])));
+  assert.equal(absolute.style.lineHeight,'18.25px');
+  const bodyRelative=boxElement(member(cat([1],f(1.25),[1])));
+  assert.equal(bodyRelative.style.lineHeight,'calc(var(--wikidict-normal-body-size) * 1.25)');
+  assert.throws(()=>decodeSpans(member(cat([2],f(1.6),snapshot(1)))));
+}));
+
+
+test('fixed atomic geometry uses its declaring font and keeps the exterior label separate',()=>dom(()=>{
+  const geometry=cat(length(2,1),length(1.5,1),length(.25,1),zero,length(.5,1),zero,[1,3,1,0]);
+  const emEdge=cat([2],length(.125,1),[0]);
+  const emPadding=cat(...Array.from({length:4},()=>length(.25,1)));
+  const children=list([run({text:'\u00a0',scale:18,basis:2,style:[8]})]);
+  const group=cat(emPadding,emEdge,emEdge,emEdge,emEdge,list([]),children,geometry);
+  const values=decodeSpans(wire([
+    run({text:'',scale:18,basis:2,style:[8],atomic:true,box:group}),
+    run({text:'\u00a0Oxygen'}),
+  ]));
+  const rendered=spans(values),element=all(rendered).find(n=>n.className==='compiled-inline-box');
+  assert.equal(rendered.children[0].style.fontSize,'min(10000px, 18px)');
+  assert.equal(element.style.width,'2em');
+  assert.equal(element.style.paddingLeft,'0.25em');
+  assert.equal(element.style['border-left'],'0.125em solid currentColor');
+  assert.equal(element.style.marginTop,'0.25em');
+  assert.equal(element.style.marginBottom,'0.5em');
+  assert.equal(element.style.verticalAlign,'baseline');
+  assert.equal(element.style.boxSizing,'border-box');
+  assert.equal(element.style.textAlign,'right');
+  assert.equal(element.style.overflowWrap,'break-word');
+  assert.equal(element.textContent,'\u00a0');
+  assert.equal(rendered.textContent,'\u00a0\u00a0Oxygen');
+}));
+
+test('fixed atomic validation rejects unsupported geometry and mismatched declaring fonts',()=>{
+  const geometry=cat(length(1.5,1),length(1.5,1),padding,[0,0,0,0]);
+  const child=run({text:'\u00a0',scale:.9,style:[8]});
+  const owner=(suffix=geometry,options={})=>run({
+    text:'',scale:.9,style:[8],atomic:true,box:cat(box([child]),suffix),...options,
+  });
+  const decoded=()=>decodeSpans(wire([owner()]))[0];
+  const reject=mutate=>{const value=decoded();mutate(value);assert.throws(()=>validateInlineBoxSpan(value));};
+  for(const field of ['radius','atomic_auto_layout','intrinsic_lines_layout','vertical_align'])
+    reject(value=>{value.inline_box_group[field]={};});
+  for(const axis of ['width','height']){
+    for(const amount of [0,-1,NaN,Infinity])reject(value=>{value.inline_box_group.atomic_layout[axis].value=amount;});
+    reject(value=>{value.inline_box_group.atomic_layout[axis].unit='percent';});
+  }
+  for(const [key,value] of [['box_sizing','auto'],['text_align','justify'],['wrap','anywhere'],['vertical_align','bottom']])
+    reject(owner=>{owner.inline_box_group.atomic_layout[key]=value;});
+  for(const field of ['small','superscript','underline','strike'])
+    reject(value=>{value[field]=true;});
+  for(const field of ['font_scale','font_scale_basis','direction','font_family'])
+    reject(value=>{value.inline_box_group.spans[0][field]=field==='font_scale'?1:'invalid';});
+  for(const text of ['', ' ', '\n', '\u2028'])reject(value=>{value.inline_box_group.spans[0].text=text;});
+  reject(value=>{value.inline_box_group.spans[0].inline_box_group=structuredClone(value.inline_box_group);});
+  reject(value=>{value.inline_style.font_normalized=false;});
+  reject(value=>{value.inline_style.baseline_shift={value:1,font_scale_basis:'css_px'};});
+  reject(value=>{value.inline_box_group.atomic_layout.margins.top.value=-1;});
+  reject(value=>{value.kind='link';value.target='Oxygen';});
+  assert.throws(()=>decodeSpans(wire([owner(geometry,{radius:true})])));
+  assert.throws(()=>decodeSpans(wire([owner(geometry,{kind:1,target:'Oxygen'})])));
+  assert.throws(()=>decodeSpans(wire([run({text:'',box:box([owner()])})])));
+  assert.throws(()=>decodeSpans(wire([run({family:true}),swatch()])),/font policy/);
+  for(const feature of [0x20000,0x80000,0x400000]){
+    const fixed=wire([owner()]);
+    const unsupported=cat(Buffer.from('DPRa'),u(4|feature),fixed.subarray(5));
+    assert.throws(()=>decodeSpans(unsupported),/Unsupported responsive presentation features/);
+  }
+  for(const [offset,invalid] of [[0,2],[30,2],[31,4],[32,2],[33,3]]){
+    const suffix=Buffer.from(geometry);suffix[offset]=invalid;
+    assert.throws(()=>decodeSpans(wire([owner(suffix)])));
+  }
+  for(let end=0;end<geometry.length;end++)
+    assert.throws(()=>decodeSpans(wire([owner(geometry.subarray(0,end))])));
+});
+
+test('fixed atomic matching line heights accept field order and reject snapshot or style mismatches',()=>dom(()=>{
+  const geometry=cat(length(1.5,1),length(1.5,1),padding,[0,0,0]);
+  const snapshot=cat([17],f(.9),[1,16],string(''),string(''),[0,0]);
+  const line=cat(f(1.6),snapshot);
+  const style=cat([10,1],line);
+  const child=run({text:'\u00a0',scale:.9,family:true,style});
+  const data=wire([run({text:'',scale:.9,family:true,style,atomic:true,
+    box:cat(box([child]),geometry,[2],line)})]);
+  const owner=decodeSpans(data)[0];
+  owner.inline_style.line_height.font_relative={font:owner.inline_style.line_height.font_relative.font,
+    factor:owner.inline_style.line_height.font_relative.factor};
+  validateInlineBoxSpan(owner);
+  const element=all(spans([owner])).find(n=>n.className==='compiled-inline-box');
+  assert.ok(Math.abs(Number(element.style.lineHeight)-1.6)<1e-6);
+  for(const mutate of [
+    value=>{value.inline_box_group.atomic_layout.line_height.font_relative.font.small=true;},
+    value=>{value.inline_box_group.atomic_layout.line_height.font_relative.factor=-1;},
+    value=>{value.inline_box_group.atomic_layout.line_height.font_relative.font.font_normalized=false;},
+    value=>{value.inline_box_group.spans[0].inline_style.line_height.font_relative.factor=2;},
+  ]){
+    const invalid=decodeSpans(data)[0];mutate(invalid);assert.throws(()=>validateInlineBoxSpan(invalid));
+  }
+}));

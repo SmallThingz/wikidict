@@ -624,6 +624,34 @@ export function validateInlineBoxSpan(owner) {
       if(color.kind==='light_dark')check(inlineBoxRgb(color.light)&&inlineBoxRgb(color.dark));
     }
   };
+  const atomicFont=value=>[
+    value.font_scale,value.font_scale_basis,value.font_features??null,value.font_family??null,
+    !!value.bold,!!value.italic,!!value.code,!!value.small,!!value.superscript,!!value.subscript,
+    value.language??'',value.classes??'',value.role??'normal'
+  ];
+  const sameFields=(a,b)=>a.every((item,index)=>item===b[index]);
+  const sameAtomicHeight=(first,second)=>{
+    if(first==null||second==null)return first==null&&second==null;
+    if(first.computed)return second.computed!=null&&
+      first.computed.value===second.computed.value&&
+      first.computed.font_scale_basis===second.computed.font_scale_basis;
+    return first.font_relative!=null&&second.font_relative!=null&&
+      first.font_relative.factor===second.font_relative.factor&&
+      first.font_relative.font.font_normalized===second.font_relative.font.font_normalized&&
+      sameFields(atomicFont(first.font_relative.font),atomicFont(second.font_relative.font));
+  };
+  const atomicStyle=(value,atomic)=>{
+    const style=value.inline_style;
+    check(value.kind==='text'&&!value.target&&value.target_fragment==null&&!value.link_paint&&
+      !value.small&&!value.superscript&&!value.subscript&&!value.underline&&!value.strike&&
+      value.citation_marker==null&&!value.audio_control&&
+      [null,'normal','seven_on'].includes(value.font_features??null)&&
+      [null,'sans_serif'].includes(value.font_family??null)&&
+      typeof value.font_scale==='number'&&Number.isFinite(value.font_scale)&&value.font_scale>0&&
+      ['normal_body','css_px'].includes(value.font_scale_basis)&&style?.font_normalized===true&&
+      !style.decoration&&!style.baseline_shift&&!style.cursor&&(!style.wrap||style.wrap===atomic.wrap));
+    if(style.line_height!=null)check(sameAtomicHeight(style.line_height,atomic.line_height));
+  };
   const span=(value,depth,inAction)=>{
     check(value && depth<=16 && --budget>=0 && ['text','link','external_link'].includes(value.kind));
     check(typeof value.text==='string'&&typeof value.target==='string'&&typeof (value.trail??'')==='string');
@@ -642,6 +670,45 @@ export function validateInlineBoxSpan(owner) {
     budget-=group.overlays.length;check(budget>=0);
     for(const side of inlineBoxSides)length(group.padding?.[side],['px','em']);
     borders(group.border);
+    const atomic=group.atomic_layout;
+    if(atomic!=null){
+      check(depth===0&&!action&&!inAction&&group.radius==null&&group.overlays.length===0&&--budget>=0);
+      check(group.atomic_auto_layout==null&&group.intrinsic_lines_layout==null&&group.vertical_align==null);
+      const geometryKeys=['width','height','margins','box_sizing','text_align','wrap'];
+      containerObject(atomic,[...geometryKeys,'line_height'],geometryKeys);
+      length(atomic.width,['px','em']);length(atomic.height,['px','em']);
+      check(atomic.width.value>0&&atomic.height.value>0&&['content_box','border_box'].includes(atomic.box_sizing)&&
+        ['start','left','center','right'].includes(atomic.text_align)&&['normal','break_word'].includes(atomic.wrap));
+      for(const side of inlineBoxSides)length(atomic.margins?.[side],['px','em']);
+      atomicStyle(value,atomic);
+      const direction=value.direction??'';
+      check(['','ltr','rtl'].includes(direction));
+      const height=atomic.line_height;
+      if(height!=null){
+        containerObject(height,['computed','font_relative'],[]);
+        check(Object.keys(height).length===1);
+        if(height.computed){
+          containerObject(height.computed,['value','font_scale_basis'],['value','font_scale_basis']);
+          check(Number.isFinite(height.computed.value)&&height.computed.value>=0&&
+            ['normal_body','css_px'].includes(height.computed.font_scale_basis));
+        }else{
+          const item=height.font_relative;
+          containerObject(item,['factor','font'],['factor','font']);
+          // Reuse the snapshot validator while allowing the fixed atom's font policies.
+          validateFontSnapshot({...item.font,font_features:null,font_family:null});
+          check(item?.font?.font_normalized===true&&Number.isFinite(item.factor)&&item.factor>=0&&
+            sameFields(atomicFont(value),atomicFont(item.font)));
+        }
+      }
+      check(group.spans.some(child=>/[^ ]/u.test(child.text??'')));
+      for(const child of group.spans){
+        check(child&&typeof child.text==='string'&&!!child.text&&!child.trail&&!/[\x00-\x1f\x7f\u2028\u2029]/u.test(child.text)&&
+          !child.inline_box_group&&!child.inline_action_group&&!child.inline_padding_group&&!child.ruby&&
+          !child.clipped_absolute&&!child.image&&!child.audio_control&&child.citation_marker==null&&
+          (child.direction??'')===direction&&sameFields(atomicFont(value),atomicFont(child)));
+        atomicStyle(child,atomic);
+      }
+    }
     if(group.spans.length===0){
       const top=group.border.top;
       check(depth===0&&!action&&!inAction&&value.tooltip==null&&value.inline_style==null&&!(value.explanation??'')&&

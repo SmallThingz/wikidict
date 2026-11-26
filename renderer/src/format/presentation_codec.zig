@@ -411,7 +411,10 @@ const Encoder = struct {
         const family = spanFontFamily(value);
         const box_radius: ?types.StyleWidth = if (comptime @hasField(@TypeOf(value), "inline_box_group"))
             (if (value.inline_box_group) |group| types.inlineBoxRadius(group.*) else null) else null;
-        if (box_radius != null and (!self.capability_p or !self.inline_box_groups or self.version != .container_fonts)) return error.InvalidPresentation;
+        const box_atomic = if (comptime @hasField(@TypeOf(value), "inline_box_group"))
+            (if (value.inline_box_group) |group| types.inlineBoxAtomicLayout(group.*) != null else false) else false;
+        if ((box_radius != null or box_atomic) and
+            (!self.capability_p or !self.inline_box_groups or self.version != .container_fonts)) return error.InvalidPresentation;
         if (family != null and (!self.capability_p or self.version != .container_fonts)) return error.InvalidPresentation;
         if (inline_style != null and (!self.inline_styles or self.version != .container_fonts)) return error.InvalidPresentation;
         if ((features != null or link_paint != null) and self.version != .container_fonts) return error.InvalidPresentation;
@@ -421,7 +424,7 @@ const Encoder = struct {
             const font_fields: u8 = @as(u8, @intFromBool(scale != null)) |
                 (if (features != null) @as(u8, 2) else 0) | (if (link_paint != null) @as(u8, 4) else 0) |
                 (if (inline_style != null) @as(u8, 8) else 0) | (if (family != null) @as(u8, 16) else 0) |
-                (if (box_radius != null) @as(u8, 0x20) else 0);
+                (if (box_radius != null) @as(u8, 0x20) else 0) | (if (box_atomic) @as(u8, 0x40) else 0);
             try self.byte(font_fields);
             if (scale) |n| {
                 try self.writeU32(@bitCast(n));
@@ -574,6 +577,25 @@ const Encoder = struct {
         // Same-owner font_fields bit 0x20 announces this exact five-byte suffix.
         // A null radius writes no byte and retains the historical square shape.
         if (types.inlineBoxRadius(value)) |radius| try self.styleWidth(radius);
+        if (types.inlineBoxAtomicLayout(value)) |atom| {
+            if (!self.capability_p or self.version != .container_fonts or self.remaining_items == 0)
+                return error.InvalidPresentation;
+            self.remaining_items -= 1;
+            try self.styleLength(atom.width);
+            try self.styleLength(atom.height);
+            inline for (.{ "top", "right", "bottom", "left" }) |edge| try self.styleLength(@field(atom.margins, edge));
+            try self.enumByte(types.ContainerBoxSizing, atom.box_sizing);
+            try self.enumByte(types.InlineBoxOverlayTextAlign, atom.text_align);
+            try self.enumByte(types.TextWrap, atom.wrap);
+            if (atom.line_height) |height| switch (height) {
+                .computed => |computed| {
+                    try self.byte(1); try self.inlineComputedLength(computed);
+                },
+                .font_relative => |relative| {
+                    try self.byte(2); try self.writeU32(@bitCast(relative.factor)); try self.inlineFontSnapshot(relative.font);
+                },
+            } else try self.byte(0);
+        }
     }
     fn inlineActionGroup(self: *Encoder, value: anytype, action: types.InlinePaddingGroupAction) error{ OutOfMemory, InvalidPresentation, PresentationTooLarge, UncompiledTemplate }!void {
         if (!types.validInlineActionGroup(value) or self.content_depth >= types.max_content_depth) return error.InvalidPresentation;
@@ -2244,12 +2266,16 @@ const Reader = struct {
             } else null,
         };
         var inline_box_radius = false;
+        var inline_box_atomic = false;
         if (hasFontScaleFields(self.version)) {
             const font_fields = try self.byte();
-            const unknown_mask: u8 = if (self.capability_p) (if (self.inline_box_groups) @as(u8, 0xc0) else 0xe0) else if (self.version == .container_fonts) (if (self.inline_styles) @as(u8, 0xf0) else 0xf8) else 0xfe;
+            const unknown_mask: u8 = if (self.capability_p) (if (self.inline_box_groups) @as(u8, 0x80) else 0xe0) else if (self.version == .container_fonts) (if (self.inline_styles) @as(u8, 0xf0) else 0xf8) else 0xfe;
             if (font_fields & unknown_mask != 0) return error.InvalidPresentation;
             inline_box_radius = font_fields & 0x20 != 0;
-            if (inline_box_radius and (!self.inline_box_groups or self.version != .container_fonts)) return error.InvalidPresentation;
+            inline_box_atomic = font_fields & 0x40 != 0;
+            if ((inline_box_radius or inline_box_atomic) and
+                (!self.inline_box_groups or self.version != .container_fonts)) return error.InvalidPresentation;
+            if (inline_box_radius and inline_box_atomic) return error.InvalidPresentation;
             if (font_fields & 1 != 0) {
                 const n: f32 = @bitCast(try self.readU32());
                 if (!std.math.isFinite(n) or n < 0) return error.InvalidPresentation;
@@ -2272,8 +2298,9 @@ const Reader = struct {
         if (self.capability_s and try self.presence()) result.ruby = try self.ruby();
         if (self.capability_u and try self.presence()) result.inline_padding_group = try self.inlinePaddingGroup(types.InlinePaddingGroupAction.from(result));
         if (self.capability_v and try self.presence()) result.inline_action_group = try self.inlineActionGroup(types.InlinePaddingGroupAction.from(result) orelse return error.InvalidPresentation);
-        if (self.inline_box_groups and try self.presence()) result.inline_box_group = try self.inlineBoxGroupWithRadius(types.InlinePaddingGroupAction.from(result), inline_box_radius);
-        if (inline_box_radius and result.inline_box_group == null) return error.InvalidPresentation;
+        if (self.inline_box_groups and try self.presence()) result.inline_box_group = try self.inlineBoxGroupWithGeometry(
+            types.InlinePaddingGroupAction.from(result), inline_box_radius, inline_box_atomic);
+        if ((inline_box_radius or inline_box_atomic) and result.inline_box_group == null) return error.InvalidPresentation;
         if (self.audio_controls and try self.presence()) result.audio_control = try self.audioControl();
         if (!types.validSpanAudioControl(result)) return error.InvalidPresentation;
         if (self.clipped_absolute_enabled and try self.presence()) result.clipped_absolute = try self.clippedAbsolute(types.InlinePaddingGroupAction.from(result));
@@ -2373,7 +2400,13 @@ const Reader = struct {
         return self.inlineBoxGroupWithRadius(action, false);
     }
     fn inlineBoxGroupWithRadius(self: *Reader, action: ?types.InlinePaddingGroupAction, radius_present: bool) error{ OutOfMemory, InvalidPresentation }!*const types.InlineBoxGroup(types.Span) {
-        const minimum: usize = 32 + (if (radius_present) @as(usize, 5) else 0);
+        return self.inlineBoxGroupWithGeometry(action, radius_present, false);
+    }
+    fn inlineBoxGroupWithGeometry(self: *Reader, action: ?types.InlinePaddingGroupAction, radius_present: bool, atomic_present: bool) error{ OutOfMemory, InvalidPresentation }!*const types.InlineBoxGroup(types.Span) {
+        const minimum: usize = 32 + (if (radius_present) @as(usize, 5) else 0) + (if (atomic_present) @as(usize, 34) else 0);
+        if (atomic_present and (!self.capability_p or self.version != .container_fonts or radius_present or
+            self.in_inline_box_group or self.inline_padding_action != null or action != null or self.in_inline_action_group or self.ruby_depth != 0))
+            return error.InvalidPresentation;
         if (!self.inline_box_groups or self.content_depth >= types.max_content_depth or self.remaining() < minimum) return error.InvalidPresentation;
         const previous_group = self.in_inline_box_group;
         const previous_action = self.inline_padding_action;
@@ -2406,7 +2439,27 @@ const Reader = struct {
         const children = try self.spans();
         const radius: ?types.StyleWidth = if (radius_present) try self.styleWidth() else null;
         if (radius) |present| if (!types.validInlineBoxRadius(present)) return error.InvalidPresentation;
-        const value: types.InlineBoxGroup(types.Span) = .{ .padding = padding, .border = border, .overlays = overlays, .spans = children, .radius = radius };
+        const atomic_layout: ?types.InlineBoxAtomicLayout = if (atomic_present) blk: {
+            if (self.remaining_items == 0) return error.InvalidPresentation;
+            self.remaining_items -= 1;
+            const width = try self.styleLength();
+            const height = try self.styleLength();
+            var margins: types.StyleEdges = undefined;
+            inline for (.{ "top", "right", "bottom", "left" }) |edge| @field(margins, edge) = try self.styleLength();
+            const sizing = try self.enumValue(types.ContainerBoxSizing);
+            const alignment = try self.enumValue(types.InlineBoxOverlayTextAlign);
+            const wrap = try self.enumValue(types.TextWrap);
+            const line: ?types.InlineLineHeight = switch (try self.byte()) {
+                0 => null,
+                1 => .{ .computed = try self.inlineComputedLength() },
+                2 => .{ .font_relative = .{ .factor = @bitCast(try self.readU32()), .font = try self.inlineFontSnapshot() } },
+                else => return error.InvalidPresentation,
+            };
+            break :blk .{ .width = width, .height = height, .margins = margins, .box_sizing = sizing,
+                .text_align = alignment, .wrap = wrap, .line_height = line };
+        } else null;
+        const value: types.InlineBoxGroup(types.Span) = .{ .padding = padding, .border = border, .overlays = overlays,
+            .spans = children, .radius = radius, .atomic_layout = atomic_layout };
         if (!types.validInlineBoxGroup(value)) return error.InvalidPresentation;
         const result = try self.a.create(types.InlineBoxGroup(types.Span)); result.* = value;
         return result;
@@ -19381,6 +19434,90 @@ test "ordered list owns each source item marker and original example path with e
     var foreign=li_style;foreign.ordered_marker_weight=.bold;try std.testing.expect(!types.validContainerStyle(foreign));
     var missing=ol_style;missing.ordered_marker_weight=null;try std.testing.expect(!types.validContainerStyle(missing));
     var malformed=ol_style;malformed.padding=null;try std.testing.expect(!types.validContainerStyle(malformed));
+}
+
+
+test "fixed atomic inline box uses the Android same-owner geometry bytes and keeps exterior text" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const px: types.StyleLength = .{ .unit = .px, .value = 0 };
+    const em: types.StyleLength = .{ .unit = .em, .value = 1.5 };
+    const child: types.Span = .{ .text = "\u{a0}", .role = .label, .font_scale = 0.9, .font_scale_basis = .normal_body,
+        .inline_style = .{ .font_normalized = true } };
+    const edge: types.InlineBoxBorderEdge = .{ .solid = .{ .width = .{ .unit = .px, .value = 1 }, .color = .{ .rgb = "#000000" } } };
+    var group: types.InlineBoxGroup(types.Span) = .{ .padding = .all(px), .border = .all(edge), .spans = &.{child},
+        .atomic_layout = .{ .width = em, .height = em, .margins = .{ .top = .{ .unit = .px, .value = 1 },
+            .right = px, .bottom = .{ .unit = .px, .value = 1 }, .left = px },
+            .box_sizing = .content_box, .text_align = .start, .wrap = .normal } };
+    var span = child; span.text = ""; span.background = "#ff0000"; span.inline_box_group = &group;
+    const stored: types.Stored = .{ .entry = .{ .title = "fixed atomic box", .kind = .supplemental,
+        .display_title = &.{ span, .{ .text = "\u{a0}Oxygen" } } } };
+    const payload = try encodeAlloc(a, stored);
+    const decoded = try decodeAlloc(a, payload, stored.entry.title, stored.entry.kind, null);
+    const T = RoundedInlineBox39CodecTest;
+    var raw = T.encoder(a); defer raw.deinit();
+    try raw.span(span);
+    try std.testing.expectEqual(@as(u8, 0x40), raw.out.items[try T.fontFieldsOffset(a, raw.out.items)] & 0x60);
+    const geometry = [_]u8{ 1, 0, 0, 192, 63, 1, 0, 0, 192, 63, 0, 0, 0, 128, 63,
+        0, 0, 0, 0, 0, 0, 0, 0, 128, 63, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+    try std.testing.expectEqualSlices(u8, &geometry, raw.out.items[raw.out.items.len - geometry.len ..]);
+    try std.testing.expectEqualDeep(group.atomic_layout, decoded.entry.display_title[0].inline_box_group.?.atomic_layout);
+    try std.testing.expectEqualStrings("\u{a0}", decoded.entry.display_title[0].inline_box_group.?.spans[0].text);
+    try std.testing.expectEqualStrings("\u{a0}Oxygen", decoded.entry.display_title[1].text);
+    const BuildRole = enum { normal, label };
+    const BuildSpan = struct {
+        kind: types.InlineKind = .text, role: BuildRole = .normal,
+        flags: packed struct(u8) { bold: bool = false, italic: bool = false, code: bool = false,
+            small: bool = false, superscript: bool = false, subscript: bool = false,
+            strike: bool = false, underline: bool = false } = .{},
+        text: []const u8 = "", target: []const u8 = "", language: []const u8 = "",
+        classes: []const u8 = "", direction: []const u8 = "", background: ?[]const u8 = null,
+        font_scale: ?f32 = null, font_scale_basis: types.FontScaleBasis = .context,
+        inline_style: ?types.InlineTextStyle = null,
+        inline_box_group: ?*const types.InlineBoxGroup(@This()) = null,
+    };
+    const build_child: BuildSpan = .{ .text = child.text, .role = .label, .font_scale = child.font_scale,
+        .font_scale_basis = child.font_scale_basis, .inline_style = child.inline_style };
+    const build_group: types.InlineBoxGroup(BuildSpan) = .{ .padding = group.padding, .border = group.border,
+        .atomic_layout = group.atomic_layout, .spans = &.{build_child} };
+    var build_owner = build_child;
+    build_owner.text = "";
+    build_owner.background = span.background;
+    build_owner.inline_box_group = &build_group;
+    const build_spans = [_]BuildSpan{ build_owner, .{ .text = "\u{a0}Oxygen" } };
+    try std.testing.expectEqualSlices(u8, payload, try encodeBuildAlloc(a, &build_spans,
+        stored.entry.sections, stored.entry.organization, stored.entry.references, stored.entry.media));
+
+    // Every shortened fixed suffix must fail before a partial atom is accepted.
+    for (1..geometry.len + 1) |missing| {
+        var truncated = T.reader(a, raw.out.items[0 .. raw.out.items.len - missing]);
+        try std.testing.expectError(error.InvalidPresentation, truncated.span());
+    }
+    const font_fields_at = try T.fontFieldsOffset(a, raw.out.items);
+    const conflicting_radius = try a.dupe(u8, raw.out.items);
+    conflicting_radius[font_fields_at] |= 0x20;
+    var conflicting_input = T.reader(a, conflicting_radius);
+    try std.testing.expectError(error.InvalidPresentation, conflicting_input.span());
+
+    // Change only the declaring font and retain the original normalized child.
+    const inconsistent_font = try a.dupe(u8, raw.out.items);
+    std.mem.writeInt(u32, inconsistent_font[font_fields_at + 1 ..][0..4],
+        @bitCast(@as(f32, 1.1)), .little);
+    var inconsistent_input = T.reader(a, inconsistent_font);
+    try std.testing.expectError(error.InvalidPresentation, inconsistent_input.span());
+    var inconsistent_child = child;
+    inconsistent_child.font_scale = 1.1;
+    group.spans = &.{inconsistent_child};
+    try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, stored));
+    group.spans = &.{child};
+
+    group.radius = .{ .unit = .px, .value = 0 };
+    try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, stored));
+    group.radius = null;
+    var unsafe_child = child; unsafe_child.text = " ";
+    group.spans = &.{unsafe_child};
+    try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, stored));
 }
 
 test "responsive container flow prefix is closed and capability gated" {

@@ -176,14 +176,14 @@ function rubySpans(value,onLink,explanations,withinSummary,cellBackground,contex
   return out;
 }
 const inlineBoxEdges=['top','right','bottom','left'];
-function inlineBoxBorders(element,border){
+function inlineBoxBorders(element,border,resolveLength=styleLength){
   for(const side of inlineBoxEdges){
     const edge=border[side];
     let value=edge.kind;
     if(edge.width){
       const color=edge.color;
       const ink=color.kind==='rgb'?color.value:color.kind==='light_dark'?`light-dark(${color.light}, ${color.dark})`:color.kind==='current_color'?'currentColor':'transparent';
-      value=`${styleLength(edge.width)} ${edge.kind} ${ink}`;
+      value=`${resolveLength(edge.width)} ${edge.kind} ${ink}`;
     }
     element.style.setProperty('border-'+side,value);
   }
@@ -192,8 +192,23 @@ function applyInlineBox(element,group){
   element.classList.add('compiled-inline-box');
   element.style.boxDecorationBreak='slice';
   element.style.boxSizing='content-box';
-  styleEdges(element,'padding',group.padding);
-  inlineBoxBorders(element,group.border);
+  const atomic=group.atomic_layout;
+  const length=atomic?value=>value.value+value.unit:styleLength;
+  if(atomic){
+    element.style.display='inline-block';
+    element.style.verticalAlign='baseline';
+    element.style.boxSizing=atomic.box_sizing.replace('_','-');
+    element.style.width=length(atomic.width);
+    element.style.height=length(atomic.height);
+    element.style.textAlign=atomic.text_align;
+    element.style.overflowWrap=atomic.wrap.replace('_','-');
+    element.style.whiteSpace='normal';
+    if(!atomic.line_height)element.style.lineHeight='normal';
+    else if(atomic.line_height.font_relative)element.style.lineHeight=String(atomic.line_height.font_relative.factor);
+    styleEdges(element,'margin',atomic.margins,length);
+  }
+  styleEdges(element,'padding',group.padding,length);
+  inlineBoxBorders(element,group.border,length);
   if(group.radius)element.style.borderRadius=group.radius.value+(group.radius.unit==='percent'?'%':'px');
   if(group.overlays.length)element.style.position='relative';
   for(const overlay of group.overlays){
@@ -403,7 +418,9 @@ export function spans(values = [], onLink = () => {}, preserve = false, explanat
       applyInlineBox(el,span.inline_box_group);
     }
     const creditSup=explanations?.audioCredit===span?node('sup'):null;
-    applyInlineTextStyle(el,span,creditSup??el);
+    const atom=span.inline_box_group?.atomic_layout;
+    applyInlineTextStyle(el,atom?{...span,inline_style:{...span.inline_style,line_height:
+      atom.line_height?.computed?atom.line_height:null}}:span,creditSup??el);
     if(rubyFontContext||normalizedEmphasis){el.style.fontWeight=span.bold?'bold':'normal';el.style.fontStyle=span.italic?'italic':'normal';}
     if(span.image){const image=inlineImageElement(span.image,explanations?.inlineImage,{sizing:explanations?.figureSizing,figureImage:explanations?.figureImage,intrinsic_size:explanations?.figureIntrinsicSize});el.append(span.image.map?mappedImage(image,span.image,onLink,explanations):image);}
     colorSpan(el,span);
@@ -850,7 +867,7 @@ function applyStyleBorder(el, value) {
     el.style.border = borderLineCSS(value, false);
   }
 }
-function styleEdges(el,name,value){if(!value||typeof value!=='object'||Array.isArray(value))throw Error('Invalid style edges');for(const side of ['top','right','bottom','left'])el.style[name+side[0].toUpperCase()+side.slice(1)]=styleLength(value[side]);}
+function styleEdges(el,name,value,resolveLength=styleLength){if(!value||typeof value!=='object'||Array.isArray(value))throw Error('Invalid style edges');for(const side of ['top','right','bottom','left'])el.style[name+side[0].toUpperCase()+side.slice(1)]=resolveLength(value[side]);}
 function applyTableStyle(el,value){
   const s=styleObject(value);if(!s)return;
   for(const key of Object.keys(s))if(!['background','border','collapse','margins','float_side','width','padding','clear','display','vertical_align','line_height'].includes(key))throw Error('Invalid table style field');

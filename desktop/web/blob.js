@@ -50,7 +50,7 @@ function presentationFeatures(magic, header) {
 }
 
 export function decode(bytes, metadata) {
-  let p=0, budget=1000000, explained=false, colored=false, anchored=false, painted=false, nested=false, ordered=false, scaled=false, based=false, referenceItems=false, referenceBlocks=false, imageBorder=false, aligned=false, componentTargets=false, dynamicCatalogue=false, tooltips=false, blockGeometry=false, rich=false, inlineTableStyles=false, containers=false, containerFonts=false, contentDepth=0, rubyDepth=0, rubyCount=0, rubyEnabled=false, actionGroupsEnabled=false, actionGroupCount=0, actionGroupDepth=0, inlineBoxGroups=false, boxCount=0, boxDepth=0, boxActionDepth=0, mapStringBudget=32*1024*1024;
+  let p=0, budget=1000000, explained=false, colored=false, anchored=false, painted=false, nested=false, ordered=false, scaled=false, based=false, referenceItems=false, referenceBlocks=false, imageBorder=false, aligned=false, componentTargets=false, dynamicCatalogue=false, tooltips=false, blockGeometry=false, rich=false, inlineTableStyles=false, containers=false, containerFonts=false, contentDepth=0, rubyDepth=0, rubyCount=0, rubyEnabled=false, actionGroupsEnabled=false, actionGroupCount=0, actionGroupDepth=0, inlineBoxGroups=false, boxCount=0, boxDepth=0, boxActionDepth=0, atomicBoxDepth=0, mapStringBudget=32*1024*1024;
   const view=new DataView(bytes.buffer,bytes.byteOffset,bytes.byteLength);
   function advance(length) {
     require(length >= 0 && length <= bytes.length - p);
@@ -118,10 +118,11 @@ export function decode(bytes, metadata) {
     const s={kind,role,text:string(),target:string(),trail:string(),language:string(),classes:string(),direction:string(),explanation:explained?string():'',foreground:colored?rgb():null,background:painted?rgb():null};
     if(actionGroupDepth||boxActionDepth)require(kind==='text'&&s.target==='','An inline action child cannot own an action');
     const fontFields=scaled?(containerFonts?byte():(presence()?1:0)):0;
-    require((fontFields&~(inlineBoxGroups?0x2b:positionedHeadings?0x1b:(audioEnabled||clippedEnabled||imageOccurrences)?0x0b:1))===0,'Unsupported span font policy');
+    const atomicFont=inlineBoxGroups&&(!!(fontFields&0x40)||atomicBoxDepth>0);
+    require((fontFields&~(inlineBoxGroups?(atomicFont?0x7b:0x6b):positionedHeadings?0x1b:(audioEnabled||clippedEnabled||imageOccurrences)?0x0b:1))===0,'Unsupported span font policy');
     if(fontFields&1){declaredSpanFontScales.add(s);const value=f32();require(Number.isFinite(value)&&value>=0,'Invalid semantic font scale');s.font_scale=value;if(based){const basis=tag(containerFonts?['context','normal_body','css_px']:['context','normal_body']);if(basis!=='context')s.font_scale_basis=basis;if(tooltips&&value===1&&basis==='context')delete s.font_scale;}}
     if(fontFields&2)s.font_features=tag(['normal','seven_on']);
-    if(fontFields&8)s.inline_style=inlineTextStyle();
+    if(fontFields&8)s.inline_style=inlineTextStyle(atomicFont);
     if(fontFields&16)s.font_family=tag(['sans_serif']);
     if(referenceBlocks&&presence()){
       require(kind!=='line_break'&&s.text===''&&s.trail===''&&(kind==='text'?s.target==='':s.target.length>0));const image={file:string()},flags=byte();require((flags&~(inlineTableStyles?127:rich?63:imageBorder?31:15))===0&&validInlineImageFile(image.file));
@@ -149,9 +150,13 @@ export function decode(bytes, metadata) {
     if(inlineBoxGroups&&presence()){
       require(rubyDepth===0&&!actionGroupDepth&&!s.ruby&&!s.inline_action_group,'Unsupported inline box context');
       const linked=kind==='link'||kind==='external_link';
+      const atomic=!!(fontFields&0x40);
+      require(!atomic||(!linked&&!boxDepth&&!(fontFields&0x20)), 'Unsupported atomic inline box context');
       boxCount++;boxDepth++;if(linked)boxActionDepth++;
-      try{s.inline_box_group=content(()=>inlineBoxGroup(!!(fontFields&0x20)));}finally{boxDepth--;if(linked)boxActionDepth--;}
-    }else require(!(fontFields&0x20),'Inline box radius without box');
+      if(atomic)atomicBoxDepth++;
+      try{s.inline_box_group=content(()=>inlineBoxGroup(!!(fontFields&0x20),atomic));}
+      finally{boxDepth--;if(linked)boxActionDepth--;if(atomic)atomicBoxDepth--;}
+    }else require(!(fontFields&0x60),'Inline box geometry without box');
     if(audioEnabled&&presence()){
       require(!rubyDepth,'Audio is not a ruby child');
       s.audio_control=audioControl();
@@ -194,8 +199,8 @@ export function decode(bytes, metadata) {
     const kind=tag(['none','hidden','solid','dotted']);
     return [side,kind==='solid'||kind==='dotted'?{kind,width:styleLength(),color:boxColor()}:{kind}];
   }));
-  const inlineBoxGroup=radiusPresent=>{
-    require(bytes.length-p>=32+(radiusPresent?5:0));
+  const inlineBoxGroup=(radiusPresent,atomicPresent)=>{
+    require(bytes.length-p>=32+(radiusPresent?5:0)+(atomicPresent?34:0));
     const padding=edges(),border=boxBorders();
     const overlays=list(15,()=>{
       const flags=byte();require((flags&~15)===0&&(flags&5)!==0&&(flags&10)!==0,'Unsupported inline overlay content');
@@ -208,16 +213,27 @@ export function decode(bytes, metadata) {
     const children=spans();
     let radius=null;
     if(radiusPresent){const unit=tag(['px','em','percent']),value=f32();require(unit!=='em'&&Number.isFinite(value)&&value>=0);radius={unit,value};}
-    return {padding,border,overlays,spans:children,radius};
+    const group={padding,border,overlays,spans:children,radius};
+    if(atomicPresent){
+      charge();
+      const width=styleLength(),height=styleLength(),margins=edges();
+      const box_sizing=tag(['content_box','border_box']);
+      const text_align=tag(['start','left','center','right']),wrap=tag(['normal','break_word']);
+      const lineType=tag(['normal','computed','font_relative']);
+      const line_height=lineType==='normal'?null:lineType==='computed'?{computed:computed()}:
+        {font_relative:{factor:f32(),font:rubyFontSnapshot(true)}};
+      group.atomic_layout={width,height,margins,box_sizing,text_align,wrap,line_height};
+    }
+    return group;
   };
   const computed=(signed=false)=>{
     const value=f32(),font_scale_basis=tag(['context','normal_body','css_px']);
     require(Number.isFinite(value)&&(signed||value>=0)&&font_scale_basis!=='context');return {value,font_scale_basis};
   };
-  const inlineTextStyle=()=>{
+  const inlineTextStyle=(atomicFont=false)=>{
     const flags=byte();require(flags&&(flags&~(positionedHeadings?0x7f:0x3f))===0);
     const decoration=flags&1?{style:tag(['solid','dotted']),color:presence()?rgbValue():null,thickness:presence()?styleLength():null}:null;
-    const line_height=flags&2?(tag(['computed','font_relative'])==='computed'?{computed:computed()}:{font_relative:{factor:f32(),font:rubyFontSnapshot()}}):null;
+    const line_height=flags&2?(tag(['computed','font_relative'])==='computed'?{computed:computed()}:{font_relative:{factor:f32(),font:rubyFontSnapshot(atomicFont)}}):null;
     if(line_height?.font_relative)require(Number.isFinite(line_height.font_relative.factor)&&line_height.font_relative.factor>=0);
     const baseline_shift=flags&4?computed(true):null;
     const cursor=flags&16?tag(['help']):null,wrap=flags&32?tag(['normal','break_word']):null;
