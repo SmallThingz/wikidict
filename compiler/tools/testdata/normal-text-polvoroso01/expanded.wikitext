@@ -1,0 +1,13 @@
+==西班牙語==
+
+===詞源===
+源自<i class="Latn mention" lang="es">-{[[:pólvora#西班牙語|-{pólvora}-]]}-</i> +&lrm; <i class="Latn mention nowrap" lang="es">-{[[:-oso#西班牙語|-{-oso}-]]}-</i>[[Category:含有後綴-oso的西班牙語詞|POLVOROSO]]。
+
+===形容詞===
+<span class="headword-line"><strong class="Latn headword" lang="es">-{polvoroso}-</strong> (陰性-{ <b class="Latn form-of lang-es f|s-form-of" lang="es">[[:polvorosa#西班牙語|-{polvorosa}-]]</b>}-，陽性複數-{ <b class="Latn form-of lang-es m|p-form-of" lang="es">[[:polvorosos#西班牙語|-{polvorosos}-]]</b>}-，陰性複數-{ <b class="Latn form-of lang-es f|p-form-of" lang="es">[[:polvorosas#西班牙語|-{polvorosas}-]]</b>}-)</span>[[Category:西班牙語詞元|POLVOROSO]][[Category:西班牙語形容詞|POLVOROSO]][[Category:標題行有紅鏈的西班牙語形容詞|POLVOROSO]][[Category:有詞條的頁面|POLVOROSO]][[Category:有1個詞條的頁面|POLVOROSO]]
+
+# 佈滿[[灰塵]]的
+#: <span class="nyms 近義詞"><span style="font-size: smaller">近義詞：</span><span class="Latn" lang="es">-{[[:polvoriento#西班牙語|-{polvoriento}-]]}-</span></span>
+
+====派生詞====
+* <span class="Latn" lang="es">-{[[:poner pies en polvorosa#西班牙語|-{poner pies en polvorosa}-]]}-</span>

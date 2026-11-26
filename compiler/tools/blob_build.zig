@@ -3508,15 +3508,8 @@ const ExpansionSlot = struct {
                 if (languages.lookupSourceRootLanguage(self.job.page_id, self.job.revision_id, page_namespace,
                     self.job.title, self.job.source, expanded.source,
                     .{ .source_core_revision = self.page_language_core, .normal_no_target = true, .interface_message = false })) |root| {
-                    if (codes.figure_sizing) |*sizing| if (codes.table_styles) |styles| {
-                        const ns = codes.namespace_catalog orelse { self.compile_failure = error.InvalidNamespace; return; };
-                        if (!std.mem.eql(u8, &root.namespace_sha256, &ns.source_sha256)) {
-                            self.compile_failure = error.InvalidPageLanguageSource; return;
-                        }
-                        sizing.table_containing_direction = figure_page_observations.bindSourceRootLanguageAlloc(self.arena.allocator(),
-                            expanded.source, ns, self.job.title, root.root_language, styles, sizing.table_containing_direction) catch |err| {
-                                self.compile_failure = err; return;
-                            };
+                    _ = bindSourceRootTextContext(self.arena.allocator(), &codes, root, expanded.source, self.job.title) catch |err| {
+                        self.compile_failure = err; return;
                     };
                 }
             }
@@ -20976,6 +20969,105 @@ fn openLanguageTemplateSourceWithDigest(io: std.Io, a: std.mem.Allocator, root: 
     return result;
 }
 
+// One separately composed, current observation input. It never replaces a
+// historical normal role or changes the audit/source/layout identity checks.
+const captured_normal_text_names = [_][]const u8{ "page-language.json", "page-language.raw.json", "page-language.html" };
+
+fn capturedNormalTextWithin(path: []const u8, root: []const u8) bool {
+    return std.mem.eql(u8, path, root) or (std.mem.startsWith(u8, path, root) and
+        (std.mem.eql(u8, root, "/") or (path.len > root.len and path[root.len] == '/')));
+}
+
+fn capturedWriterNormalTextFile(a: std.mem.Allocator, request: CapturedWriterRequest) !?CapturedWriterFile {
+    const file = request.normal_text_context_snapshot orelse return null;
+    if (!std.mem.eql(u8, request.schema, "wikidict.captured-writer.request.v3") or request.audit_capture == null or
+        !std.fs.path.isAbsolute(file.path) or file.bytes == 0 or file.bytes > page_language.max_index_bytes)
+        return error.InvalidCapturedWriterNormalTextContext;
+    const normalized = try std.fs.path.resolve(a, &.{file.path}); defer a.free(normalized);
+    const root = try std.fs.path.resolve(a, &.{request.expander_root}); defer a.free(root);
+    if (!std.mem.eql(u8, normalized, file.path) or capturedNormalTextWithin(normalized, root))
+        return error.InvalidCapturedWriterNormalTextContext;
+    if (request.figure_input_root) |figure_root| {
+        const resolved = try std.fs.path.resolve(a, &.{figure_root}); defer a.free(resolved);
+        if (capturedNormalTextWithin(normalized, resolved)) return error.InvalidCapturedWriterNormalTextContext;
+    }
+    if (!capturedWriterSameFile(file, try capturedWriterDependency(request, file.path)))
+        return error.InvalidCapturedWriterNormalTextContext;
+    for (captured_normal_text_names) |name| {
+        const path = try std.fs.path.join(a, &.{ request.expander_root, name }); defer a.free(path);
+        var absent: usize = 0;
+        for (request.absent_dependencies) |declared| if (std.mem.eql(u8, declared, path)) { absent += 1; };
+        if (absent != 1) return error.InvalidCapturedWriterNormalTextContext;
+        for (request.dependencies) |declared| if (std.mem.eql(u8, declared.path, path))
+            return error.InvalidCapturedWriterNormalTextContext;
+    }
+    for (request.absent_dependencies) |declared| if (std.mem.eql(u8, declared, file.path))
+        return error.InvalidCapturedWriterNormalTextContext;
+    return file;
+}
+
+fn capturedWriterCheckNormalTextFile(io: std.Io, a: std.mem.Allocator, request: CapturedWriterRequest) !void {
+    const file = (try capturedWriterNormalTextFile(a, request)) orelse return;
+    try capturedWriterCheckFile(io, a, file);
+    // Lexical separation alone cannot authenticate a symlink into the original
+    // root. The existing input custody independently checks the opened inode.
+    const actual = try std.Io.Dir.cwd().realPathFileAlloc(io, file.path, a); defer a.free(actual);
+    const root = try std.Io.Dir.cwd().realPathFileAlloc(io, request.expander_root, a); defer a.free(root);
+    if (capturedNormalTextWithin(actual, root)) return error.InvalidCapturedWriterNormalTextContext;
+    if (request.figure_input_root) |figure_root| {
+        const resolved = try std.Io.Dir.cwd().realPathFileAlloc(io, figure_root, a); defer a.free(resolved);
+        if (capturedNormalTextWithin(actual, resolved)) return error.InvalidCapturedWriterNormalTextContext;
+    }
+}
+
+fn capturedWriterNormalTextCapsule(registry: *const page_source_context.Registry, ns: *const namespace_registry.Registry,
+    request: CapturedWriterRequest, raw: []const u8, expanded: []const u8) !*const page_language.SourceParentCapsule
+{
+    if (registry.entries.len != 0 or registry.metadata.exteriors.len != 0 or registry.core_revision != null or
+        registry.direct_entries.len != 1) return error.InvalidCapturedWriterNormalTextContext;
+    const capsule = registry.lookupSourceRootLanguage(request.page.page_id, request.page.revision_id,
+        std.math.cast(i32, request.page.namespace) orelse return error.InvalidCapturedWriterNormalTextContext,
+        request.page.title, raw, expanded, .{ .normal_no_target = true, .interface_message = false })
+        orelse return error.InvalidCapturedWriterNormalTextContext;
+    if (capsule.observation_kind != .selected_oldid_normal_text or
+        !std.mem.eql(u8, &capsule.namespace_sha256, &ns.source_sha256)) return error.InvalidCapturedWriterNormalTextContext;
+    return capsule;
+}
+
+fn capturedWriterLoadNormalText(io: std.Io, a: std.mem.Allocator, request: CapturedWriterRequest,
+    ns: *const namespace_registry.Registry, raw: []const u8, expanded: []const u8) !?page_source_context.Registry
+{
+    const file = (try capturedWriterNormalTextFile(a, request)) orelse return null;
+    try capturedWriterCheckNormalTextFile(io, a, request);
+    const bytes = try capturedWriterRead(io, a, file, page_language.max_index_bytes); defer a.free(bytes);
+    // Exact existing typed loader: unknown/duplicate fields and transport role
+    // collisions remain errors. No API response, stylesheet or fake FigureBook.
+    var registry = try page_source_context.Registry.init(a, bytes, "", null, ns);
+    errdefer registry.deinit();
+    _ = try capturedWriterNormalTextCapsule(&registry, ns, request, raw, expanded);
+    return registry;
+}
+
+// Shared ordinary/captured consumer. This attaches only query-time absence
+// evidence for individually matched openings; it cannot qualify the whole page.
+fn bindSourceRootTextContext(a: std.mem.Allocator, codes: *encoder.blob_builder.LanguageCodes,
+    root: *const page_language.SourceParentCapsule, expanded: []const u8, title: []const u8) !bool
+{
+    const sizing = if (codes.figure_sizing) |*value| value else return false;
+    const styles = codes.table_styles orelse return false;
+    const ns = codes.namespace_catalog orelse return error.InvalidNamespace;
+    if (!std.mem.eql(u8, &root.namespace_sha256, &ns.source_sha256)) return error.InvalidPageLanguageSource;
+    const direction = try figure_page_observations.bindSourceRootLanguageAlloc(a, expanded, ns, title,
+        root.root_language, styles, sizing.table_containing_direction);
+    sizing.table_containing_direction = if (root.observation_kind == .selected_oldid_normal_text)
+        try figure_page_observations.bindNormalTextClassesAlloc(a, root, expanded, ns, styles, .{
+            .title = title, .namespace_catalog = ns, .behavior_switches = codes.behavior_switches,
+            .image_options = codes.image_options, .link_trail = codes.link_trail,
+            .local_link_targets = codes.local_link_targets, .content_conversion = true,
+        }, direction) else direction;
+    return true;
+}
+
 const CapturedWriterFile = struct { path: []const u8, bytes: usize, sha256: []const u8 };
 const CapturedWriterRequest = struct {
     schema: []const u8,
@@ -20989,6 +21081,9 @@ const CapturedWriterRequest = struct {
     capture_receipt: CapturedWriterFile,
     audit_capture: ?CapturedWriterAuditCapture = null,
     figure_page_observations_root: ?[]const u8 = null,
+    // Current typed normal-text observation, independently composed with the
+    // original indexed inputs; never a replacement historical capture role.
+    normal_text_context_snapshot: ?CapturedWriterFile = null,
     original_error_name: []const u8,
     // Fixed normal input roles only. Actual module/template reads are observed
     // during the unchanged normal loader; unused module bodies are not scanned.
@@ -21055,6 +21150,7 @@ fn capturedWriterCheckInputs(io: std.Io, a: std.mem.Allocator, request: Captured
         try capturedWriterCheckFile(io, a, audit.summary);
     }
     _ = try capturedWriterObservationRoot(request, a);
+    try capturedWriterCheckNormalTextFile(io, a, request);
     if (request.language_registry_root) |profile_root| {
         if (!std.fs.path.isAbsolute(profile_root)) return error.InvalidCapturedWriterRegistryProfile;
         try capturedWriterCheckFile(io, a, request.language_registry_manifest orelse return error.InvalidCapturedWriterRegistryProfile);
@@ -21093,7 +21189,7 @@ fn capturedWriterValidateRequest(request: CapturedWriterRequest, compiled_source
     const first_capture = std.mem.eql(u8, request.schema, "wikidict.captured-writer.request.v2");
     const audit_capture = std.mem.eql(u8, request.schema, "wikidict.captured-writer.request.v3");
     if ((!first_capture and !audit_capture) or
-        (first_capture and (request.audit_capture != null or request.figure_page_observations_root != null)) or
+        (first_capture and (request.audit_capture != null or request.figure_page_observations_root != null or request.normal_text_context_snapshot != null)) or
         (audit_capture and request.audit_capture == null) or
         !std.mem.eql(u8, request.source_fingerprint, compiled_source_fingerprint) or
         !std.fs.path.isAbsolute(request.expander_root) or !request.page.ordinary_page_reply or
@@ -21648,6 +21744,8 @@ fn capturedWriterRun(io: std.Io, a: std.mem.Allocator, request: CapturedWriterRe
         .missing_dependency_metadata = try capturedWriterOptional(io, a, request.page.missing_dependency_metadata),
         .unsupported_parser_function = request.page.unsupported_parser_function,
     };
+    var normal_text_context = try capturedWriterLoadNormalText(io, a, request, namespaces, raw, expanded.source);
+    defer if (normal_text_context) |*value| value.deinit();
     if (codes.figure_sizing) |*sizing| {
         if (std.math.cast(i32, page.ns)) |page_language_namespace| {
             sizing.page_language = capturedPageLanguage(&page_languages, page.page_id, page.revision_id, page_language_namespace, page.title, raw, expanded.source,
@@ -21662,6 +21760,24 @@ fn capturedWriterRun(io: std.Io, a: std.mem.Allocator, request: CapturedWriterRe
         page.page_id, page.revision_id, page.title, raw, expanded.source);
     bindRevisionExterior(&codes, &page_languages.metadata, page.page_id, page.revision_id,
         std.math.cast(i32, page.ns) orelse return error.InvalidNamespace, page.title, raw, expanded.source);
+    if (normal_text_context) |*value| {
+        const capsule = try capturedWriterNormalTextCapsule(value, namespaces, request, raw, expanded.source);
+        if (!try bindSourceRootTextContext(a, &codes, capsule, expanded.source, page.title))
+            return error.InvalidCapturedWriterNormalTextContext;
+        try writeDiagnosticJson(io, a, output_root, "normal-text-context-selection.json", .{
+            .schema = "wikidict.captured-normal-text-composition.v1",
+            .original_expander_root = root, .original_capture_receipt = request.capture_receipt,
+            .original_audit = request.audit_capture, .original_page_language_roles_absent = true,
+            .selected_current_snapshot = request.normal_text_context_snapshot,
+            .source_fingerprint = request.source_fingerprint,
+            .namespace_registry_sha256 = std.fmt.bytesToHex(namespaces.source_sha256, .lower),
+            .page_id = page.page_id, .revision_id = page.revision_id, .title = page.title,
+            .raw = request.page.raw, .expanded = request.page.expanded,
+            .observation_kind = capsule.observation_kind, .document_sha256 = capsule.response_sha256,
+            .historical_css_loaded_proved = false, .all_occurrences_qualified = false,
+            .semantic_acceptance = false,
+        }, 64 * 1024);
+    }
     if (figure_inputs) |inputs| try inputs.verify();
     stage.* = "writer-init";
     const data_root = try std.fs.path.join(a, &.{ output_root, "data" });
@@ -73226,4 +73342,125 @@ test "ordinary fixed atom Tools callback is reset before an absent next page" {
     try std.testing.expect(codes.figure_sizing.?.authored_fixed_inline_box_ctx == null);
     try std.testing.expect(codes.figure_sizing.?.resolve_authored_fixed_inline_box_fn == null);
     try std.testing.expect(codes.table_styles == &parent and codes.page_style_parent == null);
+}
+
+const CapturedNormalTextTest = struct {
+    const packet = @embedFile("testdata/normal-text-polvoroso01/page-language.json");
+    const raw = @embedFile("testdata/normal-text-polvoroso01/raw.wikitext");
+    const expanded = @embedFile("testdata/normal-text-polvoroso01/expanded.wikitext");
+    fn fixture(io: std.Io, a: std.mem.Allocator, root: []const u8) !CapturedWriterAuditTest.Fixture {
+        const original = try std.fs.path.join(a, &.{ root, "original" });
+        try std.Io.Dir.cwd().createDirPath(io, original);
+        const first = try CapturedWriterCliTest.fixture(io, a, original);
+        var audit = try CapturedWriterAuditTest.make(io, a, original, first);
+        const snapshot = try CapturedWriterCliTest.put(io, a, root, "normal-text-context.json", packet);
+        audit.request.normal_text_context_snapshot = snapshot;
+        audit.request.dependencies = try std.mem.concat(a, CapturedWriterFile, &.{ audit.request.dependencies, &.{snapshot} });
+        return audit;
+    }
+    fn selected(original: CapturedWriterRequest) CapturedWriterRequest {
+        // Select only the real retained identity for the typed loader controls.
+        // This is NOT a joined historical audit or an original Writer replay.
+        var request = original;
+        request.page.page_id = 1513544; request.page.revision_id = 6045117;
+        request.page.namespace = 0; request.page.title = "polvoroso";
+        return request;
+    }
+};
+
+test "captured normal text snapshot preserves historical audit absences and exact input roles" {
+    const io = std.testing.io;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(io, ".", a);
+    const audit = try CapturedNormalTextTest.fixture(io, a, root);
+    const request = audit.request;
+    const file = request.normal_text_context_snapshot.?;
+    try capturedWriterValidateRequest(request, CapturedWriterCliTest.fingerprint);
+    try capturedWriterCheckInputs(io, a, request);
+    try capturedWriterJoinAudit(a, request, audit.inputs, audit.summary, audit.row);
+    try std.testing.expect(capturedWriterSameFile(file, (try capturedWriterNormalTextFile(a, request)).?));
+    var legacy = request; legacy.normal_text_context_snapshot = null;
+    try std.testing.expect((try capturedWriterNormalTextFile(a, legacy)) == null);
+    var wrong = request; wrong.source_fingerprint = "wrong";
+    try std.testing.expectError(error.InvalidCapturedWriterRequest, capturedWriterValidateRequest(wrong, CapturedWriterCliTest.fingerprint));
+    wrong = request; wrong.schema = "wikidict.captured-writer.request.v2"; wrong.audit_capture = null;
+    try std.testing.expectError(error.InvalidCapturedWriterRequest, capturedWriterValidateRequest(wrong, CapturedWriterCliTest.fingerprint));
+    try std.testing.expectError(error.InvalidCapturedWriterNormalTextContext, capturedWriterNormalTextFile(a, wrong));
+    wrong = request; wrong.audit_capture = null;
+    try std.testing.expectError(error.InvalidCapturedWriterNormalTextContext, capturedWriterNormalTextFile(a, wrong));
+    wrong = request; wrong.dependencies = request.dependencies[0 .. request.dependencies.len - 1];
+    try std.testing.expectError(error.UnpinnedCapturedWriterSourceDependency, capturedWriterNormalTextFile(a, wrong));
+    wrong = request; wrong.dependencies = try std.mem.concat(a, CapturedWriterFile, &.{ request.dependencies, &.{file} });
+    try std.testing.expectError(error.InvalidCapturedWriterDependencies, capturedWriterNormalTextFile(a, wrong));
+    wrong = request; wrong.normal_text_context_snapshot.?.bytes += 1;
+    try std.testing.expectError(error.InvalidCapturedWriterNormalTextContext, capturedWriterNormalTextFile(a, wrong));
+    wrong = request; wrong.normal_text_context_snapshot.?.path = try std.fs.path.join(a, &.{ request.expander_root, "new-context.json" });
+    try std.testing.expectError(error.InvalidCapturedWriterNormalTextContext, capturedWriterNormalTextFile(a, wrong));
+    wrong = request; wrong.absent_dependencies = request.absent_dependencies[0 .. request.absent_dependencies.len - 1];
+    try std.testing.expectError(error.InvalidCapturedWriterNormalTextContext, capturedWriterNormalTextFile(a, wrong));
+    wrong = request; wrong.absent_dependencies = try std.mem.concat(a, []const u8, &.{ request.absent_dependencies, &.{file.path} });
+    try std.testing.expectError(error.InvalidCapturedWriterNormalTextContext, capturedWriterNormalTextFile(a, wrong));
+    // A currently materialized old normal role cannot masquerade as absent.
+    _ = try CapturedWriterCliTest.put(io, a, request.expander_root, "page-language.json", "{}");
+    try std.testing.expectError(error.CapturedWriterUnexpectedDependency, capturedWriterCheckInputs(io, a, request));
+}
+
+test "captured normal text typed snapshot binds actual oldid namespace raw expansion and isolated role" {
+    const io = std.testing.io;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(io, ".", a);
+    const fixture = try CapturedNormalTextTest.fixture(io, a, root);
+    const request = CapturedNormalTextTest.selected(fixture.request);
+    var ns = try namespace_registry.Registry.init(a, @embedFile("testdata/normal-text-polvoroso01/namespace-registry.tsv")); defer ns.deinit();
+    var selected = (try capturedWriterLoadNormalText(io, a, request, &ns, CapturedNormalTextTest.raw, CapturedNormalTextTest.expanded)).?;
+    defer selected.deinit();
+    const capsule = try capturedWriterNormalTextCapsule(&selected, &ns, request, CapturedNormalTextTest.raw, CapturedNormalTextTest.expanded);
+    try std.testing.expect(capsule.observation_kind == .selected_oldid_normal_text and capsule.styles.responses.len == 0);
+    inline for (.{ "page_id", "revision_id", "namespace" }) |field| {
+        var wrong = request; @field(wrong.page, field) += 1;
+        try std.testing.expectError(error.InvalidCapturedWriterNormalTextContext,
+            capturedWriterNormalTextCapsule(&selected, &ns, wrong, CapturedNormalTextTest.raw, CapturedNormalTextTest.expanded));
+    }
+    var wrong = request; wrong.page.title = "foreign page";
+    try std.testing.expectError(error.InvalidCapturedWriterNormalTextContext,
+        capturedWriterNormalTextCapsule(&selected, &ns, wrong, CapturedNormalTextTest.raw, CapturedNormalTextTest.expanded));
+    try std.testing.expectError(error.InvalidCapturedWriterNormalTextContext,
+        capturedWriterNormalTextCapsule(&selected, &ns, request, "changed raw", CapturedNormalTextTest.expanded));
+    try std.testing.expectError(error.InvalidCapturedWriterNormalTextContext,
+        capturedWriterNormalTextCapsule(&selected, &ns, request, CapturedNormalTextTest.raw, "changed expanded"));
+    var foreign_ns = try namespace_registry.Registry.init(a, namespace_registry.english_test_fixture); defer foreign_ns.deinit();
+    try std.testing.expectError(error.InvalidCapturedWriterNormalTextContext,
+        capturedWriterNormalTextCapsule(&selected, &foreign_ns, request, CapturedNormalTextTest.raw, CapturedNormalTextTest.expanded));
+    var legacy = request; legacy.normal_text_context_snapshot = null;
+    try std.testing.expect((try capturedWriterLoadNormalText(io, a, legacy, &ns, CapturedNormalTextTest.raw, CapturedNormalTextTest.expanded)) == null);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = request.normal_text_context_snapshot.?.path, .data = "changed" });
+    try std.testing.expectError(error.CapturedWriterFileMismatch,
+        capturedWriterLoadNormalText(io, a, request, &ns, CapturedNormalTextTest.raw, CapturedNormalTextTest.expanded));
+}
+
+test "captured normal text packet refuses unknown fields duplicate identities and legacy roles" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespace_registry.Registry.init(a, @embedFile("testdata/normal-text-polvoroso01/namespace-registry.tsv")); defer ns.deinit();
+    for (0..3) |index| {
+        const parsed = try std.json.parseFromSlice(std.json.Value, a, CapturedNormalTextTest.packet, .{ .allocate = .alloc_always });
+        var value = parsed.value;
+        switch (index) {
+            0 => try value.object.put(a, "unknown_context_role", .{ .bool = true }),
+            1 => {
+                const rows = value.object.getPtr("normal_text_get_contexts").?;
+                try rows.array.append(rows.array.items[0]);
+            },
+            2 => {
+                const rows = value.object.getPtr("normal_text_get_contexts").?;
+                try rows.array.items[0].object.put(a, "profile", .{ .string = "source-parent-direct-get-v1" });
+            },
+            else => unreachable,
+        }
+        const changed = try std.json.Stringify.valueAlloc(a, value, .{});
+        try std.testing.expectError(error.InvalidPageLanguageSource, page_source_context.Registry.init(a, changed, "", null, &ns));
+    }
+    const duplicate = try std.mem.concat(a, u8, &.{ "{\"normal_text_get_contexts\":[],", CapturedNormalTextTest.packet[1..] });
+    try std.testing.expectError(error.InvalidPageLanguageSource, page_source_context.Registry.init(a, duplicate, "", null, &ns));
 }

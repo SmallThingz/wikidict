@@ -328,3 +328,143 @@ pub fn validateCompleteCssSource(source: V) !void {
     if (try integer(source, "status") != 200 or try integer(source, "request_count") != 1 or
         !directTimestamp(try str(source, "retrieved_utc")) or (try str(source, "file")).len == 0) return invalid;
 }
+
+
+// Independently typed, complete identity-encoded GET evidence for an ordinary
+// text-context issuer. This is not the legacy/gzip direct-parent receipt and
+// grants neither source/DOM equivalence nor complete ancestor classes.
+pub const NormalTextIdentityGet = struct {
+    profile: []const u8,
+    page: Page,
+    mode: enum { @"historical-oldid", @"current-canonical" },
+    plan: []const u8,
+    request: []const u8,
+    receipt: []const u8,
+    response: []const u8,
+    prefix: []const u8,
+};
+pub const NormalTextIdentityTransport = struct {
+    document_url: []const u8,
+    identity: prefix_parser.Observation,
+};
+
+fn normalTextDescriptor(raw: []const u8, value: V) !void {
+    try directDescriptor(value);
+    if (try integer(value, "bytes") != raw.len or !matches(raw, try str(value, "sha256"))) return invalid;
+}
+fn normalTextHeader(headers: V, name: []const u8) !?[]const u8 {
+    if (headers != .array or headers.array.items.len > 100) return invalid;
+    var result: ?[]const u8 = null;
+    var total: usize = 0;
+    for (headers.array.items) |row| {
+        if (row != .array or row.array.items.len != 2 or row.array.items[0] != .string or row.array.items[1] != .string) return invalid;
+        const key = row.array.items[0].string;
+        const value = row.array.items[1].string;
+        if (key.len == 0 or std.mem.indexOfAny(u8, key, "\x00\r\n") != null or
+            std.mem.indexOfAny(u8, value, "\x00\r\n") != null or key.len > 65536 or value.len > 65536) return invalid;
+        total += key.len + value.len;
+        if (total > 65536) return invalid;
+        if (std.ascii.eqlIgnoreCase(key, name)) {
+            if (result != null) return invalid;
+            result = value;
+        }
+    }
+    return result;
+}
+
+pub fn validateNormalTextIdentityTransport(a: A, ns: *const namespaces.Registry,
+    record: NormalTextIdentityGet) !NormalTextIdentityTransport
+{
+    if (!eq(record.profile, "normal-text-selected-oldid-identity-get-v1") or
+        record.mode != .@"historical-oldid" or record.page.namespace != 0 or !validPage(record.page) or
+        record.response.len == 0 or record.response.len > 2 * 1024 * 1024 or
+        record.prefix.len == 0 or record.prefix.len > 512 * 1024 or
+        !std.mem.startsWith(u8, record.response, record.prefix) or
+        !std.unicode.utf8ValidateSlice(record.response) or std.mem.indexOfScalar(u8, record.response, 0) != null or
+        record.plan.len == 0 or record.plan.len > 65536 or record.request.len == 0 or record.request.len > 65536 or
+        record.receipt.len == 0 or record.receipt.len > 128 * 1024) return invalid;
+    const plan = try parse(a, record.plan);
+    const request = try parse(a, record.request);
+    const receipt = try parse(a, record.receipt);
+    if (!eq(try str(plan, "schema"), "wikidict.normal-text-context-acquisition-plan.v1") or
+        !eq(try str(receipt, "schema"), "wikidict.normal-text-context-http-observation.v1") or
+        !matches(record.plan, try str(receipt, "plan_sha256"))) return invalid;
+    try directFlag(plan, "authority_issued", false);
+    try directFlag(plan, "semantic_acceptance", false);
+    const original = try field(plan, "original");
+    if (!eq(try str(original, "wiki"), ns.wiki) or try integer(original, "page_id") != record.page.id or
+        try integer(original, "revision_id") != record.page.revision or !eq(try str(original, "title"), record.page.title) or
+        !eq(try str(original, "expanded_sha256"), record.page.expanded_sha256.?) or
+        !lowerHash(try str(original, "source_fingerprint"))) return invalid;
+    // The normal registry must still rebind raw/expanded/namespace/normal input
+    // bytes. A matching plan fingerprint is not that source capability.
+    const pins = try field(plan, "input_pins");
+    if (pins != .array or pins.array.items.len == 0 or pins.array.items.len > 64) return invalid;
+    var raw_seen = false;
+    for (pins.array.items) |pin| {
+        const path = try str(pin, "path");
+        if (std.mem.endsWith(u8, path, "-raw.wikitext") and eq(try str(pin, "sha256"), record.page.raw_sha256)) {
+            if (raw_seen or try integer(pin, "bytes") <= 0) return invalid;
+            raw_seen = true;
+        }
+    }
+    if (!raw_seen) return invalid;
+    const planned = try field(plan, "request");
+    const url = try str(planned, "url");
+    try directDocumentUrl(a, ns, record, url);
+    if (!eq(try str(planned, "method"), "GET") or try integer(planned, "request_count") != 1 or
+        try integer(planned, "retries") != 0 or try integer(planned, "maximum_body_bytes") != 2097152 or
+        try integer(planned, "maximum_headers_bytes") != 65536) return invalid;
+    try directFlag(planned, "redirects", false);
+    const planned_headers = try field(planned, "headers");
+    try directKeys(planned_headers, &.{ "Accept", "Accept-Encoding" });
+    if (!eq(try str(planned_headers, "Accept"), "text/html") or
+        !eq(try str(planned_headers, "Accept-Encoding"), "identity")) return invalid;
+    try directKeys(request, &.{ "url", "method", "headers" });
+    if (!eq(try str(request, "url"), url) or !eq(try str(request, "method"), "GET")) return invalid;
+    const request_headers = try field(request, "headers");
+    if (request_headers != .array or request_headers.array.items.len != 3 or
+        !eq((try normalTextHeader(request_headers, "Accept")) orelse return invalid, "text/html") or
+        !eq((try normalTextHeader(request_headers, "Accept-Encoding")) orelse return invalid, "identity") or
+        !eq((try normalTextHeader(request_headers, "User-Agent")) orelse return invalid,
+            "WikiDict source verification/1.0 (read-only source evidence)")) return invalid;
+    try normalTextDescriptor(record.request, try field(receipt, "request"));
+    if (try integer(receipt, "status") != 200 or !eq(try str(receipt, "final_url"), url) or
+        try integer(receipt, "request_count") != 1 or try integer(receipt, "redirects_followed") != 0 or
+        try integer(receipt, "retries") != 0 or try integer(receipt, "subresources_requested") != 0 or
+        try integer(receipt, "wire_bytes") != record.response.len or
+        !matches(record.response, try str(receipt, "wire_sha256"))) return invalid;
+    for ([_][]const u8{ "complete", "inputs_unchanged", "body_eof_observed", "response_framing_complete" }) |key|
+        try directFlag(receipt, key, true);
+    for ([_][]const u8{ "document_identity_qualified", "source_occurrences_qualified", "context_authority_issued",
+        "historical_css_loaded_proved", "semantic_acceptance" }) |key| try directFlag(receipt, key, false);
+    for ([_][]const u8{ "failure", "postverify_error", "request_deadline_expired", "incomplete_read_partial_bytes" }) |key|
+        if (receipt.object.contains(key)) return invalid;
+    try directNonnegativeNumber(receipt, "started_unix", true);
+    try directNonnegativeNumber(receipt, "finished_unix", true);
+    const headers = try field(receipt, "headers");
+    if (!std.ascii.eqlIgnoreCase((try normalTextHeader(headers, "Content-Type")) orelse return invalid,
+        "text/html; charset=UTF-8")) return invalid;
+    if (try normalTextHeader(headers, "Content-Encoding")) |coding|
+        if (!std.ascii.eqlIgnoreCase(std.mem.trim(u8, coding, " \t"), "identity")) return invalid;
+    const length = try normalTextHeader(headers, "Content-Length");
+    const transfer = try normalTextHeader(headers, "Transfer-Encoding");
+    if (length != null and transfer != null) return invalid;
+    const framing = try str(receipt, "response_framing");
+    if (length) |value| {
+        const digits = std.mem.trim(u8, value, " \t");
+        if (digits.len == 0 or digits.len > 20) return invalid;
+        for (digits) |byte| if (!std.ascii.isDigit(byte)) return invalid;
+        const size = std.fmt.parseInt(u64, digits, 10) catch return invalid;
+        if (size != record.response.len or try integer(receipt, "declared_content_length") != size or
+            !eq(framing, "content-length")) return invalid;
+    } else if (transfer) |value| {
+        if (!std.ascii.eqlIgnoreCase(std.mem.trim(u8, value, " \t"), "chunked") or !eq(framing, "chunked") or
+            !eq(try str(receipt, "chunked_completion_witness"), "ordinary-parser+chunk-CRLF+terminal-trailer-CRLF")) return invalid;
+    } else if (!eq(framing, "close-delimited")) return invalid;
+    // This selected-oldid API intentionally does not assert selected==current.
+    // Unsupported observed preludes still refuse under the maintained parser.
+    const identity = try prefix_parser.parseNormalTextOldidAlloc(a, record.prefix,
+        record.page.id, record.page.revision, record.page.namespace, record.page.title, ns.wiki);
+    return .{ .document_url = url, .identity = identity };
+}

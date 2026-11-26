@@ -21664,6 +21664,544 @@ fn sourceParentClosedShape(a: A, html: []const u8, image: syntax.Tag,
     return .{ .map = map, .areas = try areas.toOwnedSlice(a), .caption = caption };
 }
 
+// A distinct, build-only selected-oldid normal-text role. This issues ONLY a
+// conservative class superset for individually joined literal source openings.
+// It does not issue positive ancestry, inherited language, served CSS, File,
+// geometry, historical deployment or arbitrary descendants' authority.
+const NormalTextOpening = struct { start: usize, end: usize, inner_end: usize, closing_end: usize, attributes: Inventory };
+const NormalTextJoinedOpening = struct { opening: []const u8, observed: usize, owner: usize };
+
+fn normalTextInlineTag(tag: syntax.Tag) bool {
+    for ([_][]const u8{ "span", "b", "i", "em", "strong", "small", "sup", "sub", "abbr", "u", "s", "mark", "ruby", "rt", "rp" }) |name|
+        if (tag.is(name)) return true;
+    return false;
+}
+
+// The whole authored domain must have explicit balanced inline HTML. Refuse
+// protected, opaque and block scopes rather than discovering a literal token
+// inside one and accidentally treating it as an emitted element.
+fn normalTextSourceOpenings(a: A, source: []const u8) !?[]const NormalTextOpening {
+    if (source.len == 0 or source.len > 256 * 1024 or !std.unicode.utf8ValidateSlice(source) or
+        std.mem.indexOfScalar(u8, source, 0) != null or std.mem.indexOf(u8, source, "{{") != null or
+        std.mem.indexOf(u8, source, "{|") != null or std.mem.indexOf(u8, source, "<!--") != null or
+        std.mem.indexOf(u8, source, "__") != null) return null;
+    var values: std.ArrayList(NormalTextOpening) = .empty;
+    var stack: [64]usize = undefined; var depth: usize = 0; var at: usize = 0;
+    while (std.mem.indexOfScalarPos(u8, source, at, '<')) |start| {
+        const tag = syntax.tagAt(source, start) orelse return null;
+        if (!normalTextInlineTag(tag) or tag.self_closing or std.mem.indexOfScalar(u8, source[start..tag.end], '\n') != null) return null;
+        if (tag.closing) {
+            if (depth == 0 or tag.attrs.len != 0) return null;
+            const i = stack[depth - 1];
+            const opening = syntax.tagAt(source, values.items[i].start) orelse return null;
+            if (!std.ascii.eqlIgnoreCase(opening.name, tag.name)) return null;
+            values.items[i].inner_end = start; values.items[i].closing_end = tag.end; depth -= 1;
+        } else {
+            if (depth == stack.len or values.items.len == 1024) return null;
+            const attrs = sourceInventoryWithRepeatedClass(a, tag, false) catch |err| switch (err) { error.OutOfMemory => return err, else => return null };
+            for (attrs.attributes) |attr|
+                if (attr.name.len >= 2 and std.ascii.eqlIgnoreCase(attr.name[0..2], "on")) return null;
+            stack[depth] = values.items.len; depth += 1;
+            try values.append(a, .{ .start = start, .end = tag.end, .inner_end = 0, .closing_end = 0, .attributes = attrs });
+        }
+        at = tag.end;
+    }
+    if (depth != 0) return null;
+    return try values.toOwnedSlice(a);
+}
+
+fn normalTextSourceComparison(a: A, source: []const u8, digest: [32]u8, start: usize, end: usize, context: compiler.Context) !?[]const u8 {
+    if (start > end or end > source.len or end - start > 32768) return null;
+    var out: std.ArrayList(u8) = .empty; var at = start;
+    while (at < end) {
+        if (source[at] == '<') {
+            const tag = syntax.tagAt(source, at) orelse return null;
+            if (tag.end > end) return null;
+            try out.appendSlice(a, source[at..tag.end]); at = tag.end;
+        } else if (std.mem.startsWith(u8, source[at..end], "[[")) {
+            const link = syntax.balanced(source, at) orelse return null;
+            if (link.end > end) return null;
+            const token = source[at..link.end];
+            if (std.mem.indexOf(u8, token, "-{") != null or std.mem.indexOf(u8, token, "}-") != null) {
+                // The maintained proof must own the COMPLETE link, so a
+                // target-position marker can never become a rewritten action.
+                const compared = (try compiler.normalTextLinkComparisonAlloc(a, source, digest, at, link.end, context)) orelse return null;
+                try out.appendSlice(a, compared);
+            } else try out.appendSlice(a, token);
+            at = link.end;
+        } else if (std.mem.startsWith(u8, source[at..end], "-{")) {
+            const compared = (try compiler.normalTextManualComparisonAlloc(a, source, digest, at, context, true)) orelse return null;
+            if (compared.end > end) return null;
+            try out.appendSlice(a, compared.comparison); at = compared.end;
+        } else {
+            if (std.mem.startsWith(u8, source[at..end], "}-")) return null;
+            try out.append(a, source[at]); at += 1;
+        }
+    }
+    return try out.toOwnedSlice(a);
+}
+
+fn normalTextQuoted(a: A, bytes: []const u8) ![]const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    for (bytes) |byte| switch (byte) {
+        '&' => try out.appendSlice(a, "&amp;"), '"' => try out.appendSlice(a, "&quot;"),
+        '<' => try out.appendSlice(a, "&lt;"), '>' => try out.appendSlice(a, "&gt;"),
+        else => try out.append(a, byte),
+    };
+    return try out.toOwnedSlice(a);
+}
+
+// Comparison-only accommodation for the exact selected ZH GET tooltip form.
+// Preserve original HTML and target, query, class and complete visible label.
+// The old Table/POST comparator and its accepted tooltip forms are untouched.
+fn normalTextObservedComparison(a: A, ns: *const namespaces.Registry, html: []const u8) !?[]const u8 {
+    if (html.len > 65536) return null;
+    var out: std.ArrayList(u8) = .empty; var at: usize = 0;
+    const suffix = "（页面不存在）";
+    while (std.mem.indexOfScalarPos(u8, html, at, '<')) |start| {
+        try out.appendSlice(a, html[at..start]);
+        const tag = currentLiteralHtmlTagAt(html, start) orelse return null;
+        var adapted = false;
+        if (tag.is("a") and !tag.closing and !tag.self_closing) {
+            const attrs = inventory(a, tag) catch |err| switch (err) { error.OutOfMemory => return err, else => return null };
+            if (equal(attrs.get("class") orelse "", "new") and std.mem.endsWith(u8, attrs.get("title") orelse "", suffix)) {
+                if (!equal(ns.wiki, "zhwiktionary") or !equal(ns.content_language, "zh") or attrs.attributes.len != 3) return null;
+                const href = attrs.get("href") orelse return null;
+                const title = attrs.get("title") orelse return null;
+                const prefix = "/w/index.php?title="; const edit = "&action=edit&redlink=1";
+                if (!std.mem.startsWith(u8, href, prefix) or !std.mem.endsWith(u8, href, edit)) return null;
+                const encoded = href[prefix.len..href.len-edit.len];
+                if (encoded.len == 0 or std.mem.indexOfAny(u8, encoded, "&#?") != null) return null;
+                const decoded = (try noteUrlDecoded(a, encoded)) orelse return null;
+                const page = ns.normalizeTitle(a, decoded, 0, .any) catch |err| switch (err) { error.OutOfMemory => return err, else => return null };
+                if (!equal(title[0..title.len-suffix.len], page)) return null;
+                const comparison_title = try std.mem.concat(a, u8, &.{ page, " (missing)" });
+                try out.appendSlice(a, try std.fmt.allocPrint(a, "<a href=\"{s}\" class=\"new\" title=\"{s}\">",
+                    .{ try normalTextQuoted(a, href), try normalTextQuoted(a, comparison_title) }));
+                adapted = true;
+            }
+        }
+        if (!adapted) try out.appendSlice(a, html[start..tag.end]);
+        at = tag.end;
+    }
+    try out.appendSlice(a, html[at..]);
+    return try out.toOwnedSlice(a);
+}
+
+const NormalTextOwnerLine = struct { start: usize, end: usize, kind: enum { paragraph, bullet, definition } };
+fn normalTextOwnerLine(source: []const u8, opening: NormalTextOpening) ?NormalTextOwnerLine {
+    const start = if (std.mem.lastIndexOfScalar(u8, source[0..opening.start], '\n')) |at| at + 1 else 0;
+    const end = std.mem.indexOfScalarPos(u8, source, start, '\n') orelse source.len;
+    if (opening.closing_end > end) return null;
+    const line = source[start..end];
+    if (std.mem.startsWith(u8, line, "* ")) return .{ .start = start + 2, .end = end, .kind = .bullet };
+    if (std.mem.startsWith(u8, line, "#: ")) return .{ .start = start + 3, .end = end, .kind = .definition };
+    if (line.len == 0 or std.mem.indexOfScalar(u8, " *#:;=|!", line[0]) != null) return null;
+    if (start != 0 and (start < 2 or source[start - 2] != '\n')) {
+        // A complete plain source heading also ends the preceding block.
+        // Reuse the maintained heading predicate; ordinary/malformed lines
+        // still cannot manufacture a paragraph boundary.
+        const previous_end = start - 1;
+        const previous_start = if (std.mem.lastIndexOfScalar(u8, source[0..previous_end], '\n')) |at| at + 1 else 0;
+        if (previous_start != previous_end and !tableDirectionPlainHeading(source[previous_start..previous_end])) return null;
+    }
+    if (end != source.len and end + 1 < source.len and source[end + 1] != '\n') return null;
+    return .{ .start = start, .end = end, .kind = .paragraph };
+}
+
+fn normalTextOwnerNode(nodes: []const ObservedSiblingNode, selected: usize, kind: @FieldType(NormalTextOwnerLine, "kind")) ?usize {
+    var current = nodes[selected].parent; var depth: usize = 0;
+    while (current) |index| {
+        if (index >= nodes.len or depth == 64) return null; depth += 1;
+        const node = nodes[index];
+        if (normalTextInlineTag(node.tag)) { current = node.parent; continue; }
+        if (node.attributes.attributes.len != 0) return null;
+        switch (kind) {
+            .paragraph => if (!node.tag.is("p") or node.parent != 0) return null,
+            .bullet => {
+                if (!node.tag.is("li")) return null;
+                const ul = nodes[node.parent orelse return null];
+                if (!ul.tag.is("ul") or ul.parent != 0 or ul.attributes.attributes.len != 0) return null;
+            },
+            .definition => {
+                if (!node.tag.is("dd")) return null;
+                const dl = nodes[node.parent orelse return null];
+                const li = nodes[dl.parent orelse return null];
+                const ol = nodes[li.parent orelse return null];
+                if (!dl.tag.is("dl") or !li.tag.is("li") or !ol.tag.is("ol") or ol.parent != 0 or
+                    dl.attributes.attributes.len != 0 or li.attributes.attributes.len != 0 or ol.attributes.attributes.len != 0) return null;
+            },
+        }
+        return index;
+    }
+    return null;
+}
+
+fn normalTextBodyMatches(a: A, ns: *const namespaces.Registry, source: []const u8, source_digest: [32]u8,
+    start: usize, end: usize, html: []const u8, context: compiler.Context, paragraph: bool) !bool
+{
+    const expected = (try normalTextSourceComparison(a, source, source_digest, start, end, context)) orelse return false;
+    var body = html;
+    // Parser paragraph serialization adds one final LF before </p>. No other
+    // whitespace or visible source byte is silently removed.
+    if (paragraph and std.mem.endsWith(u8, body, "\n")) body = body[0..body.len-1];
+    const observed = (try normalTextObservedComparison(a, ns, body)) orelse return false;
+    return noteInlineCorrespondsIn(a, ns, expected, observed, 0, false, true, context, null);
+}
+
+// Collect only complete internal-link tokens from an already matched owner.
+// HTML attributes and link targets/labels are never scanned for nested tokens.
+// A manual frame must pass the maintained whole-frame proof before recursion.
+fn normalTextOwnedLinks(a: A, source: []const u8, digest: [32]u8, start: usize, end: usize,
+    context: compiler.Context, out: *std.ArrayList([]const u8), depth: usize) !bool
+{
+    if (depth > 64 or start > end or end > source.len or end - start > 32768) return false;
+    var at = start;
+    while (at < end) {
+        if (source[at] == '<') {
+            const tag = syntax.tagAt(source, at) orelse return false;
+            if (tag.end > end or !normalTextInlineTag(tag)) return false;
+            at = tag.end;
+        } else if (std.mem.startsWith(u8, source[at..end], "[[")) {
+            const pair = syntax.balanced(source, at) orelse return false;
+            if (pair.end > end) return false;
+            const token = source[at..pair.end];
+            if (std.mem.indexOf(u8, token, "-{") != null or std.mem.indexOf(u8, token, "}-") != null)
+                if ((try compiler.normalTextLinkComparisonAlloc(a, source, digest, at, pair.end, context)) == null) return false;
+            const body = token[2..token.len-2];
+            const raw_target = body[0..std.mem.indexOfScalar(u8, body, '|') orelse body.len];
+            const destination = (try compiler.literalSourceLinkDestinationAlloc(a, context.namespace_catalog orelse return false, raw_target)) orelse {
+                at = pair.end; continue;
+            };
+            if (destination.external) { at = pair.end; continue; }
+            var found = false;
+            for (out.items) |prior| if (prior.ptr == token.ptr and prior.len == token.len) { found = true; break; };
+            if (!found) {
+                if (out.items.len == 1024) return false;
+                try out.append(a, token);
+            }
+            at = pair.end;
+        } else if (std.mem.startsWith(u8, source[at..end], "-{")) {
+            const frame = (try compiler.normalTextManualComparisonAlloc(a, source, digest, at, context, true)) orelse return false;
+            if (frame.end > end or !try normalTextOwnedLinks(a, source, digest, at + 2, frame.end - 2, context, out, depth + 1)) return false;
+            at = frame.end;
+        } else {
+            if (std.mem.startsWith(u8, source[at..end], "}-")) return false;
+            at += 1;
+        }
+    }
+    return true;
+}
+
+pub fn bindNormalTextClassesAlloc(a: A, capsule: *const @import("page_language.zig").SourceParentCapsule,
+    source: []const u8, ns: *const namespaces.Registry, styles: *const profile.Profile,
+    context: compiler.Context, selected: compiler.TableContainingDirectionSource) !compiler.TableContainingDirectionSource
+{
+    if (capsule.observation_kind != .selected_oldid_normal_text or capsule.styles.responses.len != 0 or capsule.styles.receipt.len != 0 or
+        selected.source.ptr != source.ptr or selected.source.len != source.len or selected.observe_normal_text_classes != null or selected.observe_normal_link_classes != null or
+        context.namespace_catalog != ns or !equal(context.title, capsule.page.title) or capsule.page.namespace != 0 or
+        !std.mem.eql(u8, &capsule.namespace_sha256, &ns.source_sha256) or
+        !digestMatches(source, capsule.page.expanded_sha256 orelse return invalid) or
+        !digestMatches(capsule.response, &capsule.response_sha256)) return invalid;
+    const root_proof = selected.source_root_language orelse return invalid;
+    if (!root_proof.current(source, ns.source_sha256, context.title, styles)) return invalid;
+    const authored = (try normalTextSourceOpenings(a, source)) orelse return selected;
+    const outer = try observedOuterPrefix(a, capsule.response, true);
+    const root_start = outer.root_start orelse return invalid;
+    const root_open_end = outer.root_open_end orelse return invalid;
+    const root_inventory = outer.root orelse return invalid;
+    if (!equal(capsule.prefix, capsule.response[0..root_open_end]) or
+        !equal(root_inventory.get("lang") orelse return invalid, capsule.root_language)) return invalid;
+    const html = capsule.response[root_start..];
+    var nodes: std.ArrayList(ObservedSiblingNode) = .empty; var root_end: usize = 0;
+    _ = try observedClassRootTokens(a, ns, html, &nodes, &root_end, false, outer.root, false, true, true);
+    if (root_end == 0 or root_start + root_end != try sourceParentOwnedRootEnd(capsule.response, capsule.prefix)) return invalid;
+    var classes: std.ArrayList(u8) = .empty;
+    // Include the subject and all captured parser-subtree classes, not merely
+    // its strict ancestors. This overapproximation can only withhold absence.
+    for (nodes.items) |node| try appendOuterClasses(a, &classes, node.attributes.get("class") orelse "");
+    for (outer.ancestors) |node| try appendOuterClasses(a, &classes, node.attributes.get("class") orelse "");
+    for (authored) |node| try appendOuterClasses(a, &classes, node.attributes.get("class") orelse "");
+    if (outer.ancestors.len == 0 or !equal(outer.ancestors[0].tag, "html")) return invalid;
+    const schemes = (try selectedVectorSchemeClasses(a, capsule.response, ns.wiki,
+        outer.ancestors[0].attributes.get("class") orelse return invalid)) orelse return selected;
+    try appendOuterClasses(a, &classes, schemes.day); try appendOuterClasses(a, &classes, schemes.night);
+    var source_digest: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(source, &source_digest, .{});
+    var joined: std.ArrayList(NormalTextJoinedOpening) = .empty;
+    var links: std.ArrayList([]const u8) = .empty;
+    for (authored) |opening| {
+        const tag = syntax.tagAt(source, opening.start) orelse return invalid;
+        const line = normalTextOwnerLine(source, opening) orelse continue;
+        var candidate: ?usize = null; var count: usize = 0;
+        for (nodes.items, 0..) |node, index| {
+            if (!std.ascii.eqlIgnoreCase(tag.name, node.tag.name) or
+                !orderedInlineAttributesCorrespond(opening.attributes, node.attributes)) continue;
+            const inner_end = node.inner_end orelse continue;
+            if (!try normalTextBodyMatches(a, ns, source, source_digest, opening.end, opening.inner_end,
+                html[node.tag.end..inner_end], context, false)) continue;
+            count += 1; candidate = index;
+        }
+        if (count != 1) continue;
+        const index = candidate.?; const node = nodes.items[index];
+        // No ordinal guessing when two authored occurrences could explain one
+        // returned node, even if their surrounding paragraphs differ.
+        var source_count: usize = 0;
+        for (authored) |other| {
+            const other_tag = syntax.tagAt(source, other.start) orelse return invalid;
+            if (!std.ascii.eqlIgnoreCase(tag.name, other_tag.name) or
+                !orderedInlineAttributesCorrespond(other.attributes, node.attributes)) continue;
+            if (try normalTextBodyMatches(a, ns, source, source_digest, other.end, other.inner_end,
+                html[node.tag.end..node.inner_end.?], context, false)) source_count += 1;
+        }
+        if (source_count != 1) continue;
+        const owner = normalTextOwnerNode(nodes.items, index, line.kind) orelse continue;
+        const owner_node = nodes.items[owner];
+        if (!try normalTextBodyMatches(a, ns, source, source_digest, line.start, line.end,
+            html[owner_node.tag.end..owner_node.inner_end orelse continue], context, line.kind == .paragraph)) continue;
+        var item_links: std.ArrayList([]const u8) = .empty;
+        defer item_links.deinit(a);
+        if (!try normalTextOwnedLinks(a, source, source_digest, line.start, line.end, context, &item_links, 0)) continue;
+        if (line.kind == .definition) {
+            // The containing numbered item is also an actual source-generated
+            // owner, not an edge inferred merely from a matching DD body.
+            const line_start = line.start - 3;
+            if (line_start == 0) continue;
+            const preceding_end = line_start - 1;
+            const preceding_start = if (std.mem.lastIndexOfScalar(u8, source[0..preceding_end], '\n')) |at| at + 1 else 0;
+            if (!std.mem.startsWith(u8, source[preceding_start..preceding_end], "# ")) continue;
+            const dl = nodes.items[owner_node.parent.?];
+            const li = nodes.items[dl.parent.?];
+            if (!try normalTextBodyMatches(a, ns, source, source_digest, preceding_start + 2, preceding_end,
+                html[li.tag.end..dl.start], context, true)) continue;
+            if (!try normalTextOwnedLinks(a, source, source_digest, preceding_start + 2, preceding_end, context, &item_links, 0)) continue;
+        }
+        for (item_links.items) |token| {
+            var found = false;
+            for (links.items) |prior| if (prior.ptr == token.ptr and prior.len == token.len) { found = true; break; };
+            if (!found) try links.append(a, token);
+        }
+        try joined.append(a, .{ .opening = source[opening.start..opening.end], .observed = index, .owner = owner });
+    }
+    if (joined.items.len == 0) return selected;
+    const Bound = struct {
+        source: []const u8, digest: [32]u8, document: []const u8, document_digest: [64]u8, title: []const u8,
+        namespace_digest: [32]u8,
+        ns: *const namespaces.Registry, styles: *const profile.Profile, root: *const compiler.SourceRootLanguageProof,
+        openings: []const NormalTextJoinedOpening, links: []const []const u8, classes: []const u8,
+        fn observe(raw: ?*const anyopaque, _: A, operation: compiler.NormalTextClassOperation) A.Error!?compiler.NormalTextClassObservation {
+            const self: *const @This() = @ptrCast(@alignCast(raw orelse return null));
+            if (operation.source.ptr != self.source.ptr or operation.source.len != self.source.len or
+                operation.profile != self.styles or !equal(operation.title, self.title) or
+                !std.mem.eql(u8, &operation.namespace_sha256, &self.ns.source_sha256) or
+                !std.mem.eql(u8, &operation.namespace_sha256, &self.namespace_digest) or
+                !self.root.current(self.source, self.ns.source_sha256, operation.title, self.styles) or
+                !digestMatches(self.document, &self.document_digest)) return null;
+            var now: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(self.source, &now, .{});
+            if (!std.mem.eql(u8, &now, &self.digest)) return null;
+            for (self.openings) |item| if (operation.opening.ptr == item.opening.ptr and operation.opening.len == item.opening.len)
+                return .{ .opening = item.opening, .complete_ancestor_class_superset = self.classes };
+            return null;
+        }
+        fn observeLink(raw: ?*const anyopaque, _: A, operation: compiler.NormalTextLinkClassOperation) A.Error!?compiler.NormalTextLinkClassObservation {
+            const self: *const @This() = @ptrCast(@alignCast(raw orelse return null));
+            if (operation.source.ptr != self.source.ptr or operation.source.len != self.source.len or
+                operation.profile != self.styles or !equal(operation.title, self.title) or
+                !std.mem.eql(u8, &operation.namespace_sha256, &self.ns.source_sha256) or
+                !std.mem.eql(u8, &operation.namespace_sha256, &self.namespace_digest) or
+                !self.root.current(self.source, self.ns.source_sha256, operation.title, self.styles) or
+                !digestMatches(self.document, &self.document_digest)) return null;
+            var now: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(self.source, &now, .{});
+            if (!std.mem.eql(u8, &now, &self.digest)) return null;
+            for (self.links) |token| if (operation.token.ptr == token.ptr and operation.token.len == token.len)
+                return .{ .token = token, .complete_ancestor_class_superset = self.classes };
+            return null;
+        }
+    };
+    const bound = try a.create(Bound);
+    bound.* = .{ .source = source, .digest = source_digest, .document = capsule.response,
+        .document_digest = capsule.response_sha256, .title = try a.dupe(u8, capsule.page.title),
+        .namespace_digest = ns.source_sha256, .ns = ns, .styles = styles,
+        .root = root_proof, .openings = try joined.toOwnedSlice(a), .links = try links.toOwnedSlice(a), .classes = try classes.toOwnedSlice(a) };
+    var result = selected;
+    result.normal_text_context = bound; result.observe_normal_text_classes = Bound.observe;
+    result.observe_normal_link_classes = Bound.observeLink;
+    return result;
+}
+
+const NormalTextPolvorosoTest = struct {
+    const L = @import("page_language.zig");
+    const source = @embedFile("testdata/normal-text-polvoroso01/expanded.wikitext");
+    const raw = @embedFile("testdata/normal-text-polvoroso01/raw.wikitext");
+    const first = "<i class=\"Latn mention\" lang=\"es\">";
+    ns: *namespaces.Registry,
+    styles: *profile.Profile,
+    capsule: *const L.SourceParentCapsule,
+    context: compiler.Context,
+    selected: compiler.TableContainingDirectionSource,
+
+    fn init(a: A) !@This() {
+        const ns = try a.create(namespaces.Registry);
+        ns.* = try namespaces.Registry.init(a, @embedFile("testdata/normal-text-polvoroso01/namespace-registry.tsv"));
+        try ns.attachLanguageConversion(@embedFile("testdata/normal-text-polvoroso01/namespace-siteinfo.raw.json"));
+        const registry = try a.create(L.Registry);
+        registry.* = try L.Registry.init(a, @embedFile("testdata/normal-text-polvoroso01/page-language.json"), "", null, ns);
+        const capsule = registry.lookupSourceCapsule(1513544, 6045117, 0, "polvoroso", raw, source,
+            .{ .normal_no_target = true, .interface_message = false }) orelse return error.TestUnexpectedResult;
+        const styles = try a.create(profile.Profile);
+        styles.* = try profile.parseForTargetAlloc(a, @embedFile("testdata/normal-text-polvoroso01/site-font-reset.css"), .screen);
+        const selected = try bindSourceRootLanguageAlloc(a, source, ns, "polvoroso", capsule.root_language, styles, null);
+        return .{ .ns = ns, .styles = styles, .capsule = capsule, .selected = selected,
+            .context = .{ .title = "polvoroso", .namespace_catalog = ns, .content_conversion = true } };
+    }
+    fn bind(self: @This(), a: A, capsule: *const L.SourceParentCapsule) !compiler.TableContainingDirectionSource {
+        return bindNormalTextClassesAlloc(a, capsule, source, self.ns, self.styles, self.context, self.selected);
+    }
+    fn opening() []const u8 {
+        const start = std.mem.indexOf(u8, source, first).?;
+        return source[start..][0..first.len];
+    }
+    fn observe(self: @This(), a: A, selected: compiler.TableContainingDirectionSource, opening_value: []const u8) !?compiler.NormalTextClassObservation {
+        const callback = selected.observe_normal_text_classes orelse return null;
+        return callback(selected.normal_text_context, a, .{ .source = source, .opening = opening_value,
+            .title = "polvoroso", .namespace_sha256 = self.ns.source_sha256, .profile = self.styles });
+    }
+    // Explicitly synthetic changed-document controls, never new HTTP evidence.
+    fn changedDocument(self: @This(), a: A, html: []const u8) !*L.SourceParentCapsule {
+        const copy = try a.create(L.SourceParentCapsule); copy.* = self.capsule.*;
+        copy.response = html;
+        var digest: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(html, &digest, .{});
+        copy.response_sha256 = std.fmt.bytesToHex(digest, .lower);
+        const outer = try observedOuterPrefix(a, html, true);
+        copy.prefix = html[0..outer.root_open_end orelse return error.TestUnexpectedResult];
+        return copy;
+    }
+};
+
+test "normal text authentic polvoroso GET joins exact literal owners and retains indexed CSS uncertainty boundary" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = NormalTextPolvorosoTest; const f = try T.init(a);
+    const selected = try f.bind(a, f.capsule);
+    const openings = (try normalTextSourceOpenings(a, T.source)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 11), openings.len);
+    // The captured href %E7%81%B0%E5%A1%B5 is 灰塵 (U+5875), exactly
+    // equal to the source action/title/label. No target conversion is used.
+    for (openings) |item| {
+        try std.testing.expect((try f.observe(a, selected, T.source[item.start..item.end])) != null);
+    }
+    const first = (try f.observe(a, selected, T.opening())) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(!profile.Profile.hasClass(first.complete_ancestor_class_superset, "Hani"));
+    try std.testing.expect(profile.Profile.hasClass(first.complete_ancestor_class_superset, "Latn"));
+    try std.testing.expect(profile.Profile.hasClass(first.complete_ancestor_class_superset, "mention"));
+    try std.testing.expect(profile.Profile.hasClass(first.complete_ancestor_class_superset, "mw-parser-output"));
+    var element: profile.TextElement = .{ .tag = "i", .classes = "Latn mention", .language = "es", .own_language_attribute = "es" };
+    const before = try f.styles.resolveTextPaint(a, &element, "");
+    try std.testing.expect(before.font_style != null and before.font_style.? == .unknown);
+    element.complete_ancestor_classes = first.complete_ancestor_class_superset;
+    try std.testing.expect((try f.styles.resolveTextPaint(a, &element, "")).font_style == null);
+    element.complete_ancestor_classes = null;
+    const withdrawn = try f.styles.resolveTextPaint(a, &element, "");
+    try std.testing.expect(withdrawn.font_style != null and withdrawn.font_style.? == .unknown);
+}
+
+test "normal text issuer refuses changed source roles actions ambiguity identity and stale callbacks" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = NormalTextPolvorosoTest; const f = try T.init(a);
+    const selected = try f.bind(a, f.capsule);
+    try std.testing.expect((try f.observe(a, selected, T.opening())) != null);
+    var bad = f.capsule.*;
+    bad.observation_kind = .direct_parent;
+    try std.testing.expectError(invalid, f.bind(a, &bad));
+    bad = f.capsule.*; bad.namespace_sha256[0] ^= 1;
+    try std.testing.expectError(invalid, f.bind(a, &bad));
+    bad = f.capsule.*; bad.page.title = "another";
+    try std.testing.expectError(invalid, f.bind(a, &bad));
+    bad = f.capsule.*; bad.page.expanded_sha256 = "0000000000000000000000000000000000000000000000000000000000000000";
+    try std.testing.expectError(invalid, f.bind(a, &bad));
+    bad = f.capsule.*; bad.response_sha256[0] ^= 1;
+    try std.testing.expectError(invalid, f.bind(a, &bad));
+    bad = f.capsule.*; bad.root_language = "vi";
+    try std.testing.expectError(invalid, f.bind(a, &bad));
+    // An equal copied opening has no original-source pointer custody.
+    try std.testing.expect((try f.observe(a, selected, try a.dupe(u8, T.opening()))) == null);
+    const callback = selected.observe_normal_text_classes orelse return error.TestUnexpectedResult;
+    var operation: compiler.NormalTextClassOperation = .{ .source = T.source, .opening = T.opening(),
+        .title = "polvoroso", .namespace_sha256 = f.ns.source_sha256, .profile = f.styles };
+    operation.title = "other";
+    try std.testing.expect((try callback(selected.normal_text_context, a, operation)) == null);
+    operation.title = "polvoroso"; operation.namespace_sha256[0] ^= 1;
+    try std.testing.expect((try callback(selected.normal_text_context, a, operation)) == null);
+    operation.namespace_sha256 = f.ns.source_sha256;
+    var other_styles = try profile.parseForTargetAlloc(a, "i{font-style:normal}", .screen); defer other_styles.deinit();
+    operation.profile = &other_styles;
+    try std.testing.expect((try callback(selected.normal_text_context, a, operation)) == null);
+    const wrong_action = try std.mem.replaceOwned(u8, a, f.capsule.response,
+        "/wiki/p%C3%B3lvora#西班牙語", "/wiki/other#西班牙語");
+    const changed = try f.changedDocument(a, wrong_action);
+    try std.testing.expect((try f.observe(a, try f.bind(a, changed), T.opening())) == null);
+    const duplicated = try std.mem.replaceOwned(u8, a, f.capsule.response, "源自<i", "源自<i class=\"Latn mention\" lang=\"es\"><a href=\"/wiki/p%C3%B3lvora#西班牙語\" title=\"pólvora\">pólvora</a></i><i");
+    try std.testing.expect((try f.observe(a, try f.bind(a, try f.changedDocument(a, duplicated)), T.opening())) == null);
+    const hani = try std.mem.replaceOwned(u8, a, f.capsule.response, "class=\"mw-page-container\"", "class=\"mw-page-container Hani\"");
+    const hani_selected = try f.bind(a, try f.changedDocument(a, hani));
+    const hani_proof = (try f.observe(a, hani_selected, T.opening())) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(profile.Profile.hasClass(hani_proof.complete_ancestor_class_superset, "Hani"));
+    const bad_tooltip = try std.mem.replaceOwned(u8, a, f.capsule.response, "-oso（页面不存在）", "wrong（页面不存在）");
+    try std.testing.expect((try f.observe(a, try f.bind(a, try f.changedDocument(a, bad_tooltip)), T.opening())) == null);
+    // A source/title-preserving change to simplified 尘 (U+5C18) must
+    // still refuse the three descendants of that changed numbered owner.
+    const gray_action = try std.mem.replaceOwned(u8, a, f.capsule.response,
+        "/wiki/%E7%81%B0%E5%A1%B5", "/wiki/%E7%81%B0%E5%B0%98");
+    try std.testing.expect(!equal(gray_action, f.capsule.response));
+    const gray_selected = try f.bind(a, try f.changedDocument(a, gray_action));
+    const openings = (try normalTextSourceOpenings(a, T.source)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 11), openings.len);
+    for (openings, 0..) |item, ordinal| {
+        const actual = try f.observe(a, gray_selected, T.source[item.start..item.end]);
+        try std.testing.expectEqual(!(ordinal >= 7 and ordinal <= 9), actual != null);
+    }
+    // The boundary operation does not replace the actual body/owner join.
+    // Start, blank line and complete plain headings are legitimate boundaries.
+    for ([_][]const u8{ "", "\n", "preceding\n\n", "===詞源===\n", "==西班牙語==\n===形容詞===\n" }) |prefix| {
+        const value = try std.mem.concat(a, u8, &.{ prefix, "body<i>x</i>\n\n" });
+        const authored = (try normalTextSourceOpenings(a, value)) orelse return error.TestUnexpectedResult;
+        const owner = normalTextOwnerLine(value, authored[0]) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(@as(usize, prefix.len), owner.start);
+        try std.testing.expectEqualStrings("body<i>x</i>", value[owner.start..owner.end]);
+        try std.testing.expect(owner.kind == .paragraph);
+    }
+    for ([_][]const u8{
+        "ordinary paragraph\n", "===詞源\n", "===詞源==\n", "==詞源===\n",
+        "===詞=源===\n", "=== ===\n", "===詞源=== trailing\n", "===詞源===\r\n",
+        "===[[詞源]]===\n", "==={{詞源}}===\n",
+    }) |prefix| {
+        const value = try std.mem.concat(a, u8, &.{ prefix, "body<i>x</i>\n\n" });
+        // Use the one authentic-shaped opening; the source-domain scanner
+        // can independently refuse opaque syntax before the boundary query.
+        const start = std.mem.indexOf(u8, value, "<i>").?;
+        const tag = syntax.tagAt(value, start).?;
+        const opening: NormalTextOpening = .{ .start = start, .end = tag.end,
+            .inner_end = tag.end + 1, .closing_end = tag.end + 5,
+            .attributes = try sourceInventoryWithRepeatedClass(a, tag, false) };
+        try std.testing.expect(normalTextOwnerLine(value, opening) == null);
+    }
+    const continued = "===詞源===\nbody<i>x</i>\nordinary continuation";
+    const continued_openings = (try normalTextSourceOpenings(a, continued)) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(normalTextOwnerLine(continued, continued_openings[0]) == null);
+    // A proved callback rechecks its original document digest after issuance.
+    const mutable = try a.dupe(u8, f.capsule.response);
+    const held = try f.bind(a, try f.changedDocument(a, mutable));
+    mutable[mutable.len - 2] ^= 1;
+    try std.testing.expect((try f.observe(a, held, T.opening())) == null);
+}
+
+test "normal text source scanner never reduces a manual marker in an action target" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const f = try NormalTextPolvorosoTest.init(a);
+    for ([_][]const u8{ "[[foo-{bar}-|label]]", "[[foo#-{bar}-|label]]", "[[foo|label-{T|title}-]]" }) |source| {
+        var digest: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(source, &digest, .{});
+        try std.testing.expect((try normalTextSourceComparison(a, source, digest, 0, source.len, f.context)) == null);
+    }
+}
+
 // Direct root language is separate from served CSS and observed parent style.
 pub fn bindSourceRootLanguageAlloc(a: A, source: []const u8, ns: *const namespaces.Registry,
     title: []const u8, language: []const u8, styles: *const profile.Profile,
@@ -30517,6 +31055,107 @@ test "page stylesheet join bounds emitted parent and authored selector groups se
 
 test "nested Table font owners compare independently cloned names and retain all other distinctions" {
     try compiler.verifyTableNestedFontOwnerEqualityForTesting();
+}
+
+const NormalTextLinkRenderTest = struct {
+    fn noSizing(_: ?*const anyopaque, _: A, _: []const u8, _: encoder.presentation_types.FigureFormat,
+        _: ?u32, _: ?u32) A.Error!?encoder.presentation_types.FigureSizingPolicy { return null; }
+    const Result = struct { stored: encoder.presentation_types.Stored, unresolved: bool };
+    fn render(a: A, f: NormalTextPolvorosoTest, selected: compiler.TableContainingDirectionSource) !Result {
+        var context = f.context;
+        context.table_styles = f.styles; context.text_paint_styles = f.styles;
+        context.observe_source_elements = true;
+        context.figure_sizing = .{ .resolve_fn = noSizing, .table_containing_direction = selected };
+        const prepared = try compiler.preparePageExternalLinksWithMissingAlloc(a,
+            compiler.MissingText.untracked(NormalTextPolvorosoTest.source), context);
+        var projection = prepared.source_element_projection orelse return error.TestUnexpectedResult;
+        const tracked = prepared.missing;
+        context.citations = prepared.citations; context.content_conversion = prepared.content_conversion; context.poem_phase = prepared.poem_phase;
+        var renderer: compiler.Renderer = .{ .a = a, .context = context, .content_root = .parser_output,
+            .native_body_language = "es", .body_missing = tracked,
+            .table_direction_binding = .{ .projection = &projection, .owner = tracked, .page_start = 0 } };
+        renderer.fallbacks.merge(prepared.fallbacks);
+        var host: compiler.NativeArticleHost = .{ .renderer = &renderer, .source = tracked, .title = "polvoroso", .language_code = "es",
+            .active_source = tracked, .active_snapshot = compiler.NativeArticleHost.snapshot(tracked), .active_whole_page = true,
+            .native_paragraph_css_subjects = true, .external_id_subjects_absent = true, .external_heading_subjects_absent = true };
+        renderer.native_article_host = &host;
+        const blocks = try renderer.renderBodyWithMissing(tracked);
+        const bytes = try encoder.presentation_codec.encodeBuildAlloc(a, &[_]compiler.Span{},
+            &[_]struct { level: u8 = 2, title: []const u8 = "Spanish", blocks: []const compiler.Block }{.{ .blocks = blocks }},
+            encoder.presentation_types.Layout{}, try renderer.finishReferences(), renderer.media.items);
+        return .{ .stored = try encoder.presentation_codec.decodeAlloc(a, bytes, "polvoroso", .language,
+            .{ .code = "es", .heading = "Spanish" }), .unresolved = renderer.fallbacks.unresolved_table_style };
+    }
+};
+
+test "normal text exact generated links query current owner without inherited class grants" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = NormalTextPolvorosoTest; const f = try T.init(a);
+    const selected = try f.bind(a, f.capsule);
+    const callback = selected.observe_normal_link_classes orelse return error.TestUnexpectedResult;
+    const tokens = [_][]const u8{
+        "[[:pólvora#西班牙語|-{pólvora}-]]", "[[:-oso#西班牙語|-{-oso}-]]",
+        "[[:polvorosa#西班牙語|-{polvorosa}-]]", "[[:polvorosos#西班牙語|-{polvorosos}-]]",
+        "[[:polvorosas#西班牙語|-{polvorosas}-]]", "[[灰塵]]",
+        "[[:polvoriento#西班牙語|-{polvoriento}-]]", "[[:poner pies en polvorosa#西班牙語|-{poner pies en polvorosa}-]]",
+    };
+    for (tokens) |text| {
+        const offset = std.mem.indexOf(u8, T.source, text) orelse return error.TestUnexpectedResult;
+        const token = T.source[offset..][0..text.len];
+        var operation: compiler.NormalTextLinkClassOperation = .{ .source = T.source, .token = token,
+            .title = "polvoroso", .namespace_sha256 = f.ns.source_sha256, .profile = f.styles };
+        const actual = (try callback(selected.normal_text_context, a, operation)) orelse return error.TestUnexpectedResult;
+        try std.testing.expect(actual.token.ptr == token.ptr and actual.token.len == token.len);
+        try std.testing.expect(!profile.Profile.hasClass(actual.complete_ancestor_class_superset, "Hani"));
+        operation.token = try a.dupe(u8, token);
+        try std.testing.expect((try callback(selected.normal_text_context, a, operation)) == null);
+        operation.token = token[0..token.len-1];
+        try std.testing.expect((try callback(selected.normal_text_context, a, operation)) == null);
+        operation.token = token; operation.title = "foreign";
+        try std.testing.expect((try callback(selected.normal_text_context, a, operation)) == null);
+        operation.title = "polvoroso"; operation.namespace_sha256[0] ^= 1;
+        try std.testing.expect((try callback(selected.normal_text_context, a, operation)) == null);
+    }
+    const actual = try NormalTextLinkRenderTest.render(a, f, selected);
+    var withdrawn = selected; withdrawn.observe_normal_link_classes = null;
+    const prior = try NormalTextLinkRenderTest.render(a, f, withdrawn);
+    try std.testing.expect(prior.unresolved);
+    try std.testing.expect(!actual.unresolved);
+    try std.testing.expectEqualDeep(prior.stored, actual.stored);
+    try std.testing.expectEqualSlices(u8, try encoder.presentation_codec.encodeAlloc(a, prior.stored),
+        try encoder.presentation_codec.encodeAlloc(a, actual.stored));
+    var text: std.ArrayList(u8) = .empty; var actions: std.ArrayList([]const u8) = .empty;
+    var tables: usize = 0; var painted: usize = 0;
+    try OrderedLiteralDivRenderTesting.inspect(actual.stored.entry.sections[0].blocks, &text, a, &actions, &tables, &painted);
+    try std.testing.expectEqual(@as(usize, 8), actions.items.len);
+    for (actions.items, [_][]const u8{ "pólvora#西班牙語", "-oso#西班牙語", "polvorosa#西班牙語",
+        "polvorosos#西班牙語", "polvorosas#西班牙語", "灰塵", "polvoriento#西班牙語", "poner pies en polvorosa#西班牙語" }) |actual_target, expected|
+        try std.testing.expectEqualStrings(expected, actual_target);
+    const changed_html = try std.mem.replaceOwned(u8, a, f.capsule.response, "class=\"mw-page-container\"", "class=\"mw-page-container Hani\"");
+    const changed = try f.bind(a, try f.changedDocument(a, changed_html));
+    try std.testing.expect((try NormalTextLinkRenderTest.render(a, f, changed)).unresolved);
+}
+
+test "normal text link owner scanning refuses target labels and unproved manual frames" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const f = try NormalTextPolvorosoTest.init(a);
+    for ([_][]const u8{ "[[foo-{bar}-|label]]", "[[foo#-{bar}-|label]]",
+        "-{T|[[x]]}-", "-{zh-hans:[[x]];zh-hant:[[y]];}-", "-{[[x|-{label]]}-" }) |source| {
+        var digest: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(source, &digest, .{});
+        var tokens: std.ArrayList([]const u8) = .empty;
+        try std.testing.expect(!try normalTextOwnedLinks(a, source, digest, 0, source.len, f.context, &tokens, 0));
+    }
+    const source = "<i title=\"[[attribute]]\">-{[[target|label]]}-</i>";
+    var digest: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(source, &digest, .{});
+    var tokens: std.ArrayList([]const u8) = .empty;
+    try std.testing.expect(try normalTextOwnedLinks(a, source, digest, 0, source.len, f.context, &tokens, 0));
+    try std.testing.expectEqual(@as(usize, 1), tokens.items.len);
+    try std.testing.expectEqualStrings("[[target|label]]", tokens.items[0]);
+    const category = "[[Category:test]]";
+    std.crypto.hash.sha2.Sha256.hash(category, &digest, .{});
+    tokens.clearRetainingCapacity();
+    try std.testing.expect(try normalTextOwnedLinks(a, category, digest, 0, category.len, f.context, &tokens, 0));
+    try std.testing.expectEqual(@as(usize, 0), tokens.items.len);
 }
 
 fn crossedObservedNavFrames(a: A, body: LiteralObservedBody) ![]const u8 {

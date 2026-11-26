@@ -1,0 +1,13 @@
+==西班牙語==
+
+===詞源===
+源自{{affix|es|pólvora|-oso}}。
+
+===形容詞===
+{{es-adj}}
+
+# 佈滿[[灰塵]]的
+#: {{syn|es|polvoriento}}
+
+====派生詞====
+* {{l|es|poner pies en polvorosa}}

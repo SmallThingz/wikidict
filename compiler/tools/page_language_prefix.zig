@@ -87,6 +87,8 @@ fn configuration(a: A, text: []const u8, page_id: u64, revision_id: u64) !bool {
 const SelectedPage = struct { namespace_id: i32, title: []const u8, sr_wmf5_prelude: bool = false,
     is_screen_prelude: bool = false,
     selected_get_wiki: ?[]const u8 = null,
+    // Only the separately typed normal-text identity path supplies this wiki.
+    normal_text_wiki: ?[]const u8 = null,
     exterior: ?struct { wiki: []const u8, tags: *std.ArrayList([]const u8) } = null };
 // Both retained EN Vector 2022 and HU legacy GETs have this complete static
 // program. Only the literal class suffix and site cookie vary. Matching these
@@ -122,8 +124,13 @@ fn configurationForSelectedPage(a: A, text: []const u8, page_id: u64, revision_i
     const exterior = if (selected) |record| record.exterior else null;
     // For exterior evidence, compare the whole reviewed static program after
     // binding its single site-cookie literal to the selected namespace registry.
-    const exterior_program = if (exterior) |record| program: {
-        const cookie = try std.mem.concat(a, u8, &.{ record.wiki, "mwclientpreferences" });
+    const program_wiki = if (exterior) |record| record.wiki else
+        if (selected) |record| record.normal_text_wiki else null;
+    const exterior_program = if (program_wiki != null and (exterior != null or at != 0)) program: {
+        const wiki = program_wiki.?;
+        if (wiki.len == 0 or wiki.len > 128) return invalid;
+        for (wiki) |byte| if (!std.ascii.isAlphanumeric(byte) and byte != '_') return invalid;
+        const cookie = try std.mem.concat(a, u8, &.{ wiki, "mwclientpreferences" });
         defer a.free(cookie);
         if (at == 0 or at > 2048 or std.mem.count(u8, text[0..at], cookie) != 1) return invalid;
         const normalized = try std.mem.replaceOwned(u8, a, text[0..at], cookie, "srwiktionarymwclientpreferences");
@@ -251,6 +258,18 @@ pub fn parseSelectedGetOldidAlloc(a: A, bytes: []const u8, page_id: u64, revisio
     if (namespace_id != 0) return invalid;
     return parseForSelectedPage(a, bytes, page_id, revision_id, null,
         .{ .namespace_id = namespace_id, .title = title, .selected_get_wiki = wiki });
+}
+
+// A new normal-text identity role may bind the exact maintained static
+// prelude after substituting only its selected wiki cookie literal. Existing
+// selected-oldid/style/exterior entry points retain their earlier contracts.
+// This supplies identity/root language only, never ancestor or CSS authority.
+pub fn parseNormalTextOldidAlloc(a: A, bytes: []const u8, page_id: u64, revision_id: u64,
+    namespace_id: i32, title: []const u8, wiki: []const u8) !Observation
+{
+    if (namespace_id != 0) return invalid;
+    return parseForSelectedPage(a, bytes, page_id, revision_id, null,
+        .{ .namespace_id = namespace_id, .title = title, .normal_text_wiki = wiki });
 }
 
 pub fn parseStylesheetOldidAlloc(a: A, bytes: []const u8, page_id: u64, revision_id: u64,
@@ -795,4 +814,36 @@ test "selected GET hu authentic fixed prelude binds identity and rejects crossed
     // Selected oldid does not require the wiki's latest revision to be identical.
     const newer = try std.mem.replaceOwned(u8, a, bytes, "\"wgCurRevisionId\":3518053", "\"wgCurRevisionId\":3518054");
     _ = try parseSelectedGetOldidAlloc(a, newer, 609, 3518053, 0, "víz", "huwiktionary");
+}
+
+test "normal text actual selected oldid prelude binds wiki and preserves prior refusal" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const bytes = @embedFile("testdata/normal-text-polvoroso01/response.prefix.html");
+    var digest: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
+    try std.testing.expectEqualStrings("a82d4134c3f47d42afe41fb65f2ad9757d5e150cfa05b248df71ffc3e6df2436", &std.fmt.bytesToHex(digest, .lower));
+    const observed = try parseNormalTextOldidAlloc(a, bytes, 1513544, 6045117, 0, "polvoroso", "zhwiktionary");
+    try std.testing.expectEqualStrings("zh", observed.root_language);
+    try std.testing.expectEqual(@as(usize, 8), observed.outer_languages.len);
+    for (observed.outer_languages) |lang| try std.testing.expectEqualStrings("zh", lang);
+    try std.testing.expectError(invalid, parseSelectedOldidAlloc(a, bytes, 1513544, 6045117, 0, "polvoroso"));
+    try std.testing.expectError(invalid, parseNormalTextOldidAlloc(a, bytes, 1513544, 6045117, 0, "polvoroso", "srwiktionary"));
+    try std.testing.expectError(invalid, parseNormalTextOldidAlloc(a, bytes, 1513544, 6045116, 0, "polvoroso", "zhwiktionary"));
+    try std.testing.expectError(invalid, parseNormalTextOldidAlloc(a, bytes, 1513545, 6045117, 0, "polvoroso", "zhwiktionary"));
+    try std.testing.expectError(invalid, parseNormalTextOldidAlloc(a, bytes, 1513544, 6045117, 1, "polvoroso", "zhwiktionary"));
+    try std.testing.expectError(invalid, parseNormalTextOldidAlloc(a, bytes, 1513544, 6045117, 0, "other", "zhwiktionary"));
+    // Selected-oldid is intentionally not a current-revision equality claim.
+    const newer = try std.mem.replaceOwned(u8, a, bytes, "\"wgCurRevisionId\":6045117", "\"wgCurRevisionId\":6045118");
+    _ = try parseNormalTextOldidAlloc(a, newer, 1513544, 6045117, 0, "polvoroso", "zhwiktionary");
+    for ([_][2][]const u8{
+        .{ "zhwiktionarymwclientpreferences", "zzwiktionarymwclientpreferences" },
+        .{ "document.documentElement.className=className", "document.documentElement.className=otherName" },
+        .{ "class=\"client-nojs ", "class=\"invented-nojs " },
+        .{ "RLCONF=", "if(false)RLCONF=" },
+        .{ "\"wgRevisionId\":6045117", "\"wgRevisionId\":\"6045117\"" },
+        .{ "\"wgAction\":\"view\"", "\"wgAction\":\"edit\"" },
+    }) |change| {
+        const altered = try std.mem.replaceOwned(u8, a, bytes, change[0], change[1]);
+        try std.testing.expect(!std.mem.eql(u8, bytes, altered));
+        try std.testing.expectError(invalid, parseNormalTextOldidAlloc(a, altered, 1513544, 6045117, 0, "polvoroso", "zhwiktionary"));
+    }
 }

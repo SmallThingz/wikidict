@@ -983,10 +983,180 @@ pub const SourceRootLanguageProof = struct {
     }
 };
 
+// Build-only comparison output. This scratch buffer is never emitted and is
+// not a source/DOM or ancestry certificate. Its caller must join the exact
+// original occurrence, resulting links/text and complete observed ancestors.
+pub const NormalTextManualComparison = struct {
+    original_frame: []const u8,
+    comparison: []const u8,
+    end: usize,
+    nested_frames: usize,
+};
+pub fn normalTextManualComparisonAlloc(a: A, source: []const u8, expected_sha256: [32]u8,
+    opening: usize, context: Context, allow_links: bool) Error!?NormalTextManualComparison
+{
+    if (source.len == 0 or source.len > 4 * 1024 * 1024 or opening >= source.len or
+        context.content_conversion != true) return null;
+    var digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(source, &digest, .{});
+    if (!std.mem.eql(u8, &digest, &expected_sha256)) return null;
+    var renderer: Renderer = .{ .a = a, .context = context };
+    if (!renderer.sourceRecursiveManualContext()) return null;
+    const frame = Renderer.manualConversionExtent(source, opening) orelse return null;
+    if (frame.opening != opening or frame.closing + 2 > source.len or
+        frame.closing + 2 - opening > 16 * 1024) return null;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(a);
+    var children: usize = 0;
+    // Reuse the exact maintained child-first semantic proof, including link
+    // ownership, flags/choices refusal and independently balanced child scopes.
+    if (!try renderer.appendRecursiveRuleFreeProof(&output, frame.body(source), allow_links, 0, &children)) return null;
+    return .{ .original_frame = source[opening..frame.closing + 2],
+        .comparison = try output.toOwnedSlice(a), .end = frame.closing + 2, .nested_frames = children };
+}
+
+pub const NormalTextClassOperation = struct {
+    source: []const u8,
+    opening: []const u8,
+    title: []const u8,
+    namespace_sha256: [32]u8,
+    profile: *const table_style_profile.Profile,
+};
+// A separate operation for one generated internal A. The issuer joins the
+// complete authored token inside a matched owner body; this is not inheritance
+// from a previously queried literal opening.
+pub const NormalTextLinkClassOperation = struct {
+    source: []const u8, token: []const u8, title: []const u8,
+    namespace_sha256: [32]u8, profile: *const table_style_profile.Profile,
+};
+pub const NormalTextLinkClassObservation = struct {
+    token: []const u8, complete_ancestor_class_superset: []const u8,
+};
+pub const NormalTextClassObservation = struct {
+    opening: []const u8,
+    complete_ancestor_class_superset: []const u8,
+};
+
+// A captured class superset may refute only classes absent from BOTH the
+// captured source domain and every currently represented generated ancestor.
+// Alternative paths and an unbounded/cyclic chain retain the old unknown result.
+fn normalTextClassesCoverRepresented(element: *const table_style_profile.TextElement, classes: []const u8) bool {
+    var cursor: ?*const table_style_profile.TextElement = element;
+    var remaining: usize = 128;
+    while (cursor) |node| {
+        if (remaining == 0 or node.alternative_ancestry != null) return false;
+        remaining -= 1;
+        var names = std.mem.tokenizeAny(u8, node.classes, " \t\r\n\x0c");
+        while (names.next()) |name|
+            if (!table_style_profile.Profile.hasClass(classes, name)) return false;
+        cursor = node.parent;
+    }
+    return true;
+}
+
+test "normal text class absence refuses represented generated ancestors alternatives and cycles" {
+    var parent: table_style_profile.TextElement = .{ .tag = "div", .classes = "Hani generated" };
+    var child: table_style_profile.TextElement = .{ .tag = "i", .classes = "Latn mention", .parent = &parent };
+    try std.testing.expect(!normalTextClassesCoverRepresented(&child, "Latn mention mw-parser-output"));
+    try std.testing.expect(normalTextClassesCoverRepresented(&child, "Latn mention Hani generated mw-parser-output"));
+    var alternative: table_style_profile.TextElement = .{ .tag = "div", .classes = "other" };
+    parent.alternative_ancestry = &alternative;
+    try std.testing.expect(!normalTextClassesCoverRepresented(&child, "Latn mention Hani generated other"));
+    parent.alternative_ancestry = null;
+    parent.parent = &child;
+    try std.testing.expect(!normalTextClassesCoverRepresented(&child, "Latn mention Hani generated"));
+    parent.parent = null;
+    // The original query node and its parent remain untouched.
+    try std.testing.expect(child.complete_ancestor_classes == null and parent.complete_ancestor_classes == null);
+}
+
+test "normal text comparison reuses pinned recursive proof without granting emission or ancestry" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const NS = @import("namespace_registry");
+    var ns = try NS.Registry.init(a, NS.english_test_fixture); defer ns.deinit();
+    ns.content_language = "zh";
+    ns.language_conversion = &.{ "zh", "zh-hans", "zh-hant" };
+    ns.manual_conversion_context = SourceRecursiveManualTest.profile();
+    var context: Context = .{ .namespace_catalog = &ns, .content_conversion = true };
+    const source = "before -{[[:pólvora#西班牙語|-{pólvora}-]]}- after";
+    var digest: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(source, &digest, .{});
+    const start = "before ".len;
+    const proved = (try normalTextManualComparisonAlloc(a, source, digest, start, context, true)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("[[:pólvora#西班牙語|pólvora]]", proved.comparison);
+    try std.testing.expect(proved.original_frame.ptr == source[start..].ptr);
+    try std.testing.expectEqualStrings(" after", source[proved.end..]);
+    try std.testing.expect(proved.nested_frames > 0);
+    var wrong_digest = digest; wrong_digest[0] ^= 1;
+    try std.testing.expect((try normalTextManualComparisonAlloc(a, source, wrong_digest, start, context, true)) == null);
+    context.content_conversion = false;
+    try std.testing.expect((try normalTextManualComparisonAlloc(a, source, digest, start, context, true)) == null);
+    context.content_conversion = true;
+    for (0..3) |i| {
+        ns.manual_conversion_context = SourceRecursiveManualTest.profile();
+        switch (i) {
+            0 => ns.manual_conversion_context.?.source_core = "wrong core",
+            1 => ns.manual_conversion_context.?.source_converter_sha256 = "wrong converter",
+            2 => ns.manual_conversion_context.?.base = "es",
+            else => unreachable,
+        }
+        try std.testing.expect((try normalTextManualComparisonAlloc(a, source, digest, start, context, true)) == null);
+    }
+    ns.manual_conversion_context = SourceRecursiveManualTest.profile();
+    for ([_][]const u8{
+        "-{[[:x|-{label]]}-", "-{zh-hans:简;zh-hant:繁;}-", "-{T|title}-",
+        "-{H|word}-", "-{[[:x|-{label}-] ]}-", "-{[[:x|label]]",
+    }) |bad| {
+        std.crypto.hash.sha2.Sha256.hash(bad, &digest, .{});
+        try std.testing.expect((try normalTextManualComparisonAlloc(a, bad, digest, 0, context, true)) == null);
+    }
+}
+
+// The whole link is the comparison owner. Never reduce markers by scanning a
+// link target independently. Existing recursive proof checks the target, label,
+// nested frames, flags, choices and balanced scopes before producing scratch.
+pub fn normalTextLinkComparisonAlloc(a: A, source: []const u8, expected_sha256: [32]u8,
+    start: usize, end: usize, context: Context) Error!?[]const u8
+{
+    if (source.len == 0 or source.len > 4 * 1024 * 1024 or start >= end or end > source.len or
+        end - start > 16384 or context.content_conversion != true or !std.mem.startsWith(u8, source[start..end], "[[")) return null;
+    var digest: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(source, &digest, .{});
+    if (!std.mem.eql(u8, &digest, &expected_sha256)) return null;
+    const pair = syntax.balanced(source, start) orelse return null;
+    if (pair.end != end) return null;
+    var renderer: Renderer = .{ .a = a, .context = context };
+    if (!renderer.sourceRecursiveManualContext()) return null;
+    var output: std.ArrayList(u8) = .empty; defer output.deinit(a);
+    var children: usize = 0;
+    if (!try renderer.appendRecursiveRuleFreeProof(&output, source[start..end], true, 0, &children)) return null;
+    return try output.toOwnedSlice(a);
+}
+
+test "normal text complete link comparison refuses target-position conversion and preserves actions" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const NS = @import("namespace_registry");
+    var ns = try NS.Registry.init(a, NS.english_test_fixture); defer ns.deinit();
+    ns.content_language = "zh"; ns.language_conversion = &.{ "zh", "zh-hans", "zh-hant" };
+    ns.manual_conversion_context = SourceRecursiveManualTest.profile();
+    const context: Context = .{ .namespace_catalog = &ns, .content_conversion = true };
+    const good = "[[:polvorosa#西班牙語|-{polvorosa}-]]";
+    var digest: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(good, &digest, .{});
+    const compared = (try normalTextLinkComparisonAlloc(a, good, digest, 0, good.len, context)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("[[:polvorosa#西班牙語|polvorosa]]", compared);
+    for ([_][]const u8{ "[[foo-{bar}-|label]]", "[[-{foo}-|label]]", "[[foo#-{section}-|label]]",
+        "[[foo|-{T|label}-]]", "[[foo|-{zh-hans:x;zh-hant:y;}-]]", "[[foo|-{label]]}-" }) |bad| {
+        std.crypto.hash.sha2.Sha256.hash(bad, &digest, .{});
+        try std.testing.expect((try normalTextLinkComparisonAlloc(a, bad, digest, 0, bad.len, context)) == null);
+    }
+}
+
+
 pub const TableContainingDirectionSource = struct {
     // A root-language receipt conveys no table observation or parent CSS.
     root_language_only: bool = false,
     source_root_language: ?*const SourceRootLanguageProof = null,
+    normal_text_context: ?*const anyopaque = null,
+    observe_normal_text_classes: ?*const fn (?*const anyopaque, A, NormalTextClassOperation) A.Error!?NormalTextClassObservation = null,
+    observe_normal_link_classes: ?*const fn (?*const anyopaque, A, NormalTextLinkClassOperation) A.Error!?NormalTextLinkClassObservation = null,
     intrinsic_viewport: bool = false,
     prefix_viewport: bool = false,
     article_origin: ?[]const u8 = null,
@@ -11741,7 +11911,9 @@ pub const Renderer = struct {
             // unknown, including when only display rules are selected.
             if (self.textPaintProfile()) |profile| if (profile.hasTextPaint()) {
             var query = anchor.*;
-            query.complete_ancestor_classes = try self.negativePaintQueryClasses(self.ordinaryLinkAncestorClasses(original, source) orelse anchor.complete_ancestor_classes, anchor);
+            var complete = self.ordinaryLinkAncestorClasses(original, source) orelse anchor.complete_ancestor_classes;
+            if (complete == null) complete = try self.normalTextLinkAncestorClasses(original, destination, source, anchor);
+            query.complete_ancestor_classes = try self.negativePaintQueryClasses(complete, anchor);
             const paint = try profile.resolveTextPaint(self.a, &query, "");
             self.textPaintForeground(paint, original, &style);
             if (paint.font_style) |font_style| switch (font_style) {
@@ -21438,6 +21610,80 @@ pub const Renderer = struct {
         result.text_element = bound;
         return result;
     }
+    // Query-only absence. Do not attach these facts to textElement caches,
+    // parent nodes or generated descendants; each original opening must earn
+    // its own current callback result under the live source projection.
+    fn normalTextAncestorClasses(self: *Renderer, tag: syntax.Tag, element: *const table_style_profile.TextElement) Error!?[]const u8 {
+        if (tag.closing or tag.self_closing or self.content_root != .parser_output or
+            self.in_reference or self.in_template_literal_scope) return null;
+        const tracked = self.inline_missing orelse self.body_missing orelse return null;
+        const selected = (self.mediaRootLanguageCarrier(tracked) catch return null) orelse return null;
+        const observe = selected.observe_normal_text_classes orelse return null;
+        const profile = self.textPaintProfile() orelse return null;
+        const ns = self.context.namespace_catalog orelse return null;
+        const root = selected.source_root_language orelse return null;
+        if (!root.current(selected.source, ns.source_sha256, self.context.title, profile)) return null;
+        const name = self.boundSourceOriginal(tag.name, selected) orelse
+            self.rootLanguageQuotedOriginal(tag.name, selected) orelse return null;
+        const attrs = self.boundSourceOriginal(tag.attrs, selected) orelse
+            self.rootLanguageQuotedOriginal(tag.attrs, selected) orelse return null;
+        const offset = std.math.sub(usize, @intFromPtr(name.ptr), @intFromPtr(selected.source.ptr)) catch return null;
+        if (offset == 0 or offset >= selected.source.len) return null;
+        const original = syntax.tagAt(selected.source, offset - 1) orelse return null;
+        if (original.closing or original.self_closing or original.name.ptr != name.ptr or original.name.len != name.len or
+            original.attrs.ptr != attrs.ptr or original.attrs.len != attrs.len or
+            !std.mem.eql(u8, name, tag.name) or !std.mem.eql(u8, attrs, tag.attrs)) return null;
+        const opening = selected.source[offset - 1..original.end];
+        const observed = (try observe(selected.normal_text_context, self.a, .{ .source = selected.source,
+            .opening = opening, .title = self.context.title, .namespace_sha256 = ns.source_sha256, .profile = profile })) orelse return null;
+        if (observed.opening.ptr != opening.ptr or observed.opening.len != opening.len or
+            observed.complete_ancestor_class_superset.len > 65536 or
+            !std.unicode.utf8ValidateSlice(observed.complete_ancestor_class_superset) or
+            std.mem.indexOfScalar(u8, observed.complete_ancestor_class_superset, 0) != null or
+            !root.current(selected.source, ns.source_sha256, self.context.title, profile)) return null;
+        if (!normalTextClassesCoverRepresented(element, observed.complete_ancestor_class_superset)) return null;
+        return observed.complete_ancestor_class_superset;
+    }
+
+    fn normalTextLinkAncestorClasses(self: *Renderer, original: Style, destination: LinkDestination,
+        source: ?[]const u8, anchor: *const table_style_profile.TextElement) Error!?[]const u8
+    {
+        if (original.provenance != .parsed or original.kind != .text or original.target.len != 0 or
+            original.self_link_target != null or original.code or original.preserve_whitespace or original.missing_nonaction or
+            destination.external or destination.interwiki or destination.target.len == 0 or
+            self.typed_table_depth != 0 or self.figure_caption_depth != 0 or self.in_reference or self.in_template_literal_scope)
+            return null;
+        const token = source orelse return null;
+        const tracked = self.inline_missing orelse self.body_missing orelse return null;
+        if (!wikiClassContains(tracked.bytes, token)) return null;
+        const selected = (self.mediaRootLanguageCarrier(tracked) catch return null) orelse return null;
+        const observe = selected.observe_normal_link_classes orelse return null;
+        const profile = self.textPaintProfile() orelse return null;
+        const ns = self.context.namespace_catalog orelse return null;
+        const root = selected.source_root_language orelse return null;
+        if (!root.current(selected.source, ns.source_sha256, self.context.title, profile)) return null;
+        const authored = self.boundSourceOriginal(token, selected) orelse
+            self.rootLanguageQuotedOriginal(token, selected) orelse return null;
+        if (!std.mem.eql(u8, authored, token)) return null;
+        var iterator: ir.InlineIterator = .{ .input = authored, .renderer_boundaries = true, .link_trail = self.context.link_trail };
+        const authored_link = iterator.next() orelse return null;
+        if (authored_link.kind != .link or authored_link.link_label_restored_close or authored_link.trail.len != 0 or iterator.cursor != authored.len)
+            return null;
+        // Keep the ordinary namespace/target normalization and refuse any
+        // redirect/variant/provider action substitution not proved by this role.
+        const expected = (try literalSourceLinkDestinationAlloc(self.a, ns, authored_link.target)) orelse return null;
+        if (expected.external or !std.mem.eql(u8, expected.target, destination.target)) return null;
+        const observed = (try observe(selected.normal_text_context, self.a, .{ .source = selected.source,
+            .token = authored, .title = self.context.title, .namespace_sha256 = ns.source_sha256, .profile = profile })) orelse return null;
+        if (observed.token.ptr != authored.ptr or observed.token.len != authored.len or
+            observed.complete_ancestor_class_superset.len > 65536 or
+            !std.unicode.utf8ValidateSlice(observed.complete_ancestor_class_superset) or
+            std.mem.indexOfScalar(u8, observed.complete_ancestor_class_superset, 0) != null or
+            !root.current(selected.source, ns.source_sha256, self.context.title, profile) or
+            !normalTextClassesCoverRepresented(anchor, observed.complete_ancestor_class_superset)) return null;
+        return observed.complete_ancestor_class_superset;
+    }
+
     fn textPaint(self: *Renderer, tag: syntax.Tag, parent: ?*const table_style_profile.TextElement, inherited_language: []const u8) Error!table_style_profile.TextPaint {
         return self.textPaintWithCustom(tag, parent, inherited_language, null);
     }
@@ -21454,9 +21700,19 @@ pub const Renderer = struct {
         if (!fontStyleListComplete(css)) return .{ .color = .unknown, .weight = .unknown, .font_style = .unknown, .color_inline = true, .weight_inline = true, .font_style_inline = true };
         const state = self.currentLiteralParentState();
         const paint_node = (try self.literalFirstDivQuery(tag, element, state, element)) orelse element;
-        var paint = if (element.source_root_child != null or element.source_literal_div != null)
-            try profile.resolveTextPaintWithObservedInheritance(self.a, element, css, environment)
-        else try profile.resolveTextPaintWithCustom(self.a, paint_node, css, environment);
+        const observed_inheritance = element.source_root_child != null or element.source_literal_div != null;
+        const subject = if (observed_inheritance) element else paint_node;
+        var query = subject.*;
+        if (query.complete_ancestor_classes == null) {
+            if (try self.normalTextAncestorClasses(tag, subject)) |classes| {
+                query.complete_ancestor_classes = classes;
+            }
+        }
+        // Preserve the existing literal/observed subject selection. These
+        // absence facts remain in this temporary query, never a cached parent.
+        var paint = if (observed_inheritance)
+            try profile.resolveTextPaintWithObservedInheritance(self.a, &query, css, environment)
+        else try profile.resolveTextPaintWithCustom(self.a, &query, css, environment);
         // Only the independently proved foreground replaces this weak generic
         // query. Weight and italic evaluation, errors and refusals stay intact.
         if (self.tableConstructedForegroundForTag(tag)) |color| {

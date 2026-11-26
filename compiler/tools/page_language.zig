@@ -61,6 +61,8 @@ const Packet = struct {
     records: []const Record,
     revision_exteriors: []const RevisionExterior = &.{},
     direct_get_contexts: []const DirectGetContext = &.{},
+    // Separately typed identity GETs have no served-style authority.
+    normal_text_get_contexts: []const direct_source_get.NormalTextIdentityGet = &.{},
 };
 const RevisionExterior = struct { page: Page, request: []const u8, receipt: []const u8, response: []const u8, prefix_bytes: u32 };
 const ExteriorEntry = struct { page: Page, tags: []const []const u8 };
@@ -135,6 +137,7 @@ const directGetTransport = direct_source_get.validatePageLanguageTransport;
 // This owned capsule is transport evidence only. It has no Profile/Compiler or
 // source-parent authority; the Writer eagerly constructs every parent first.
 pub const SourceParentCapsule = struct {
+    observation_kind: enum { direct_parent, selected_oldid_normal_text } = .direct_parent,
     page: Page,
     prefix: []const u8,
     response: []const u8,
@@ -452,12 +455,13 @@ pub const Registry = struct {
         };
         const raw = response_bytes orelse return invalid;
         const has_api = doc.records.len != 0;
-        const has_direct = doc.direct_get_contexts.len != 0;
+        const has_direct = doc.direct_get_contexts.len != 0 or doc.normal_text_get_contexts.len != 0;
         if (raw.len > max_payload_bytes or (if (prefix_bytes) |p| p.len == 0 or p.len > max_payload_bytes else false) or
             !eq(doc.schema, "wikidict.page-language-index.v1") or !eq(doc.wiki, ns.wiki) or
             !eq(doc.namespace_registry_sha256, &std.fmt.bytesToHex(ns.source_sha256, .lower)) or doc.historical_page_language_proven or
             (!has_api and !has_direct and doc.revision_exteriors.len == 0) or doc.revision_exteriors.len > 256 or doc.records.len > max_records or doc.responses.len > max_responses or
-            doc.direct_get_contexts.len > 256 or
+            doc.direct_get_contexts.len > 256 or doc.normal_text_get_contexts.len > 256 or
+            doc.direct_get_contexts.len + doc.normal_text_get_contexts.len > 256 or
             (has_api and (raw.len == 0 or doc.responses.len == 0)) or
             (!has_api and (raw.len != 0 or doc.responses.len != 0 or prefix_bytes != null or
                 doc.core_revision != null or doc.source_profile != .null))) return invalid;
@@ -519,9 +523,9 @@ pub const Registry = struct {
             entries[record_index].context.prefix_observed_utc = try a.dupe(u8, p.observed_utc);
         };
         if (prefix_end != (if (prefix_bytes) |p| p.len else 0)) return invalid;
-        const direct_entries = try a.alloc(DirectEntry, doc.direct_get_contexts.len);
+        const direct_entries = try a.alloc(DirectEntry, doc.direct_get_contexts.len + doc.normal_text_get_contexts.len);
         var previous_direct: u64 = 0;
-        for (doc.direct_get_contexts, direct_entries, 0..) |record, *entry, direct_index| {
+        for (doc.direct_get_contexts, direct_entries[0..doc.direct_get_contexts.len], 0..) |record, *entry, direct_index| {
             if (record.page.id <= previous_direct) return invalid;
             previous_direct = record.page.id;
             for (doc.records) |api| if (api.page.id == record.page.id) return invalid;
@@ -546,12 +550,47 @@ pub const Registry = struct {
                 .body_skin_responsive = transport.observation.body_skin_responsive };
             entry.* = .{ .page = owned, .capsule = capsule };
         }
+        // Validate and own the new transport role independently. A capsule
+        // binds selected identity/raw/expansion only; it is NOT an ancestor,
+        // generated-wrapper, source-occurrence or historical CSS certificate.
+        previous_direct = 0;
+        for (doc.normal_text_get_contexts, direct_entries[doc.direct_get_contexts.len..], 0..) |record, *entry, direct_index| {
+            if (record.page.id <= previous_direct) return invalid;
+            previous_direct = record.page.id;
+            for (doc.records) |api| if (api.page.id == record.page.id or eq(api.page.title, record.page.title)) return invalid;
+            for (doc.direct_get_contexts) |old| if (old.page.id == record.page.id or eq(old.page.title, record.page.title)) return invalid;
+            for (doc.normal_text_get_contexts[0..direct_index]) |previous|
+                if (eq(previous.page.title, record.page.title)) return invalid;
+            var temporary = std.heap.ArenaAllocator.init(backing); defer temporary.deinit();
+            const transport = direct_source_get.validateNormalTextIdentityTransport(temporary.allocator(), ns, record) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory, else => return invalid,
+            };
+            const owned: Page = .{ .id = record.page.id, .revision = record.page.revision, .namespace = record.page.namespace,
+                .model = "wikitext", .title = try a.dupe(u8, record.page.title), .raw_sha256 = try a.dupe(u8, record.page.raw_sha256),
+                .expanded_sha256 = try a.dupe(u8, record.page.expanded_sha256.?) };
+            const html = try a.dupe(u8, record.response);
+            const capsule = try a.create(SourceParentCapsule);
+            capsule.* = .{ .observation_kind = .selected_oldid_normal_text,
+                .page = owned, .prefix = try a.dupe(u8, record.prefix), .response = html,
+                .document_url = try a.dupe(u8, transport.document_url),
+                .styles = .{ .responses = &.{}, .receipt = "" },
+                .response_sha256 = digest(html), .namespace_sha256 = ns.source_sha256,
+                .root_language = try a.dupe(u8, transport.identity.root_language),
+                .body_skin_responsive = transport.identity.body_skin_responsive };
+            entry.* = .{ .page = owned, .capsule = capsule };
+        }
+        // The two individually ordered domains share the existing binary lookup.
+        // Duplicate IDs/titles were rejected above; no transport role is replaced.
+        std.mem.sort(DirectEntry, direct_entries, {}, struct {
+            fn less(_: void, left: DirectEntry, right: DirectEntry) bool { return left.page.id < right.page.id; }
+        }.less);
         const exteriors = try a.alloc(ExteriorEntry, doc.revision_exteriors.len);
         for (doc.revision_exteriors, exteriors, 0..) |row, *entry, i| {
             if (!exteriorPageValid(row.page) or (i > 0 and doc.revision_exteriors[i-1].page.id >= row.page.id)) return invalid;
             for (doc.revision_exteriors[0..i]) |other| if (eq(other.page.title, row.page.title)) return invalid;
             for (doc.records) |other| if (!exteriorPageCompatible(row.page, other.page)) return invalid;
             for (doc.direct_get_contexts) |other| if (!exteriorPageCompatible(row.page, other.page)) return invalid;
+            for (doc.normal_text_get_contexts) |other| if (!exteriorPageCompatible(row.page, other.page)) return invalid;
             const tags = try exteriorTags(index_allocator, ns.wiki, row);
             var page = row.page;
             page.model = "wikitext";
@@ -1607,4 +1646,108 @@ test "revision exterior replays original Armenian page, binds both sources and r
         prefix_parser.revisionExteriorTagsAlloc(a, crossed, original.page.id, original.page.revision, original.page.title, ns.wiki));
     try std.testing.expectError(error.InvalidPageLanguagePrefix,
         prefix_parser.revisionExteriorTagsAlloc(a, prefix, original.page.id, original.page.revision, original.page.title, "srwiktionary"));
+}
+
+// Controlled transport envelopes around an existing retained HU body. These
+// are unit-test inputs, not newly observed HTTP or ZH/context authority.
+fn normalTextControlledPacket(a: A) !Packet {
+    const original = try std.json.parseFromSlice(Packet, a, DirectGetFixture.packet, .{ .allocate = .alloc_always });
+    const old = original.value.direct_get_contexts[0];
+    const url = try std.fmt.allocPrint(a, "https://hu.wiktionary.org/w/index.php?oldid={d}", .{old.page.revision});
+    const request = try std.json.Stringify.valueAlloc(a, .{
+        .url = url, .method = "GET",
+        .headers = [_][2][]const u8{
+            .{ "Accept", "text/html" }, .{ "Accept-Encoding", "identity" },
+            .{ "User-Agent", "WikiDict source verification/1.0 (read-only source evidence)" },
+        },
+    }, .{});
+    const plan = try std.json.Stringify.valueAlloc(a, .{
+        .schema = "wikidict.normal-text-context-acquisition-plan.v1",
+        .authority_issued = false, .semantic_acceptance = false,
+        .original = .{ .wiki = "huwiktionary", .page_id = old.page.id, .revision_id = old.page.revision,
+            .title = old.page.title, .expanded_sha256 = old.page.expanded_sha256.?,
+            .source_fingerprint = "0000000000000000000000000000000000000000000000000000000000000000" },
+        .input_pins = .{.{ .path = "controlled/1153-raw.wikitext", .sha256 = old.page.raw_sha256,
+            .bytes = DirectGetFixture.pages[0][3].len }},
+        .request = .{ .url = url, .method = "GET", .request_count = @as(u8, 1), .retries = @as(u8, 0),
+            .maximum_body_bytes = @as(u32, 2097152), .maximum_headers_bytes = @as(u32, 65536), .redirects = false,
+            .headers = .{ .Accept = "text/html", .@"Accept-Encoding" = "identity" } },
+    }, .{});
+    const receipt = try std.json.Stringify.valueAlloc(a, .{
+        .schema = "wikidict.normal-text-context-http-observation.v1", .plan_sha256 = &digest(plan),
+        .request = .{ .path = "controlled/request.json", .bytes = request.len, .sha256 = &digest(request) },
+        .status = @as(u16, 200), .final_url = url, .request_count = @as(u8, 1),
+        .redirects_followed = @as(u8, 0), .retries = @as(u8, 0), .subresources_requested = @as(u8, 0),
+        .wire_bytes = old.response.len, .wire_sha256 = &digest(old.response),
+        .complete = true, .inputs_unchanged = true, .body_eof_observed = true, .response_framing_complete = true,
+        .document_identity_qualified = false, .source_occurrences_qualified = false,
+        .context_authority_issued = false, .historical_css_loaded_proved = false, .semantic_acceptance = false,
+        .started_unix = @as(u32, 1), .finished_unix = @as(u32, 2),
+        .headers = [_][2][]const u8{ .{ "Content-Type", "text/html; charset=UTF-8" },
+            .{ "Content-Length", try std.fmt.allocPrint(a, "{d}", .{old.response.len}) } },
+        .response_framing = "content-length", .declared_content_length = old.response.len,
+    }, .{});
+    const rows = try a.alloc(direct_source_get.NormalTextIdentityGet, 1);
+    rows[0] = .{ .profile = "normal-text-selected-oldid-identity-get-v1", .page = old.page,
+        .mode = .@"historical-oldid", .plan = plan, .request = request, .receipt = receipt,
+        .response = old.response, .prefix = old.prefix };
+    return .{ .schema = "wikidict.page-language-index.v1", .wiki = original.value.wiki,
+        .core_revision = null, .namespace_registry_sha256 = original.value.namespace_registry_sha256,
+        .historical_page_language_proven = false, .source_profile = .null, .records = &.{}, .responses = &.{},
+        .normal_text_get_contexts = rows };
+}
+
+test "normal text selected oldid capsule owns exact sources and grants no served styles" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, DirectGetFixture.namespace_bytes); defer ns.deinit();
+    const packet = try normalTextControlledPacket(a);
+    const input = try std.json.Stringify.valueAlloc(std.testing.allocator, packet, .{});
+    var registry = Registry.init(std.testing.allocator, input, "", null, &ns) catch |err| {
+        std.testing.allocator.free(input); return err;
+    };
+    defer registry.deinit();
+    std.testing.allocator.free(input);
+    const page = DirectGetFixture.pages[0];
+    const capsule = registry.lookupSourceCapsule(page[0], page[1], 0, page[2], page[3], page[4], DirectGetFixture.normal)
+        orelse return error.TestUnexpectedResult;
+    try std.testing.expect(capsule.observation_kind == .selected_oldid_normal_text);
+    try std.testing.expect(capsule.styles.responses.len == 0 and capsule.styles.receipt.len == 0);
+    try std.testing.expect(std.mem.eql(u8, capsule.response, packet.normal_text_get_contexts[0].response));
+    try std.testing.expect(capsule.response.ptr != packet.normal_text_get_contexts[0].response.ptr);
+    try std.testing.expect(registry.lookup(page[0], page[1], 0, page[2], page[3], DirectGetFixture.normal) == null);
+    try std.testing.expect(registry.lookupSourceCapsule(page[0] + 1, page[1], 0, page[2], page[3], page[4], DirectGetFixture.normal) == null);
+    try std.testing.expect(registry.lookupSourceCapsule(page[0], page[1] + 1, 0, page[2], page[3], page[4], DirectGetFixture.normal) == null);
+    try std.testing.expect(registry.lookupSourceCapsule(page[0], page[1], 1, page[2], page[3], page[4], DirectGetFixture.normal) == null);
+    try std.testing.expect(registry.lookupSourceCapsule(page[0], page[1], 0, "changed title", page[3], page[4], DirectGetFixture.normal) == null);
+    try std.testing.expect(registry.lookupSourceCapsule(page[0], page[1], 0, page[2], "changed raw", page[4], DirectGetFixture.normal) == null);
+    try std.testing.expect(registry.lookupSourceCapsule(page[0], page[1], 0, page[2], page[3], "changed expansion", DirectGetFixture.normal) == null);
+    var abnormal = DirectGetFixture.normal; abnormal.normal_no_target = false;
+    try std.testing.expect(registry.lookupSourceCapsule(page[0], page[1], 0, page[2], page[3], page[4], abnormal) == null);
+    abnormal = DirectGetFixture.normal; abnormal.variant_override = "zh-hant";
+    try std.testing.expect(registry.lookupSourceCapsule(page[0], page[1], 0, page[2], page[3], page[4], abnormal) == null);
+}
+
+test "normal text selected oldid registry refuses transport role collisions and changed envelopes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, DirectGetFixture.namespace_bytes); defer ns.deinit();
+    const old = try std.json.parseFromSlice(Packet, a, DirectGetFixture.packet, .{ .allocate = .alloc_always });
+    inline for (0..7) |case| {
+        var packet = try normalTextControlledPacket(a);
+        const rows = try a.dupe(direct_source_get.NormalTextIdentityGet, packet.normal_text_get_contexts);
+        packet.normal_text_get_contexts = rows;
+        switch (case) {
+            0 => packet.direct_get_contexts = old.value.direct_get_contexts,
+            1 => packet.normal_text_get_contexts = try a.dupe(direct_source_get.NormalTextIdentityGet, &.{rows[0], rows[0]}),
+            2 => rows[0].mode = .@"current-canonical",
+            3 => rows[0].profile = "source-parent-direct-get-v1",
+            4 => rows[0].response = try std.mem.concat(a, u8, &.{rows[0].response, "x"}),
+            5 => rows[0].page.revision += 1,
+            6 => packet.namespace_registry_sha256 = "0000000000000000000000000000000000000000000000000000000000000000",
+            else => unreachable,
+        }
+        const encoded = try std.json.Stringify.valueAlloc(a, packet, .{});
+        try std.testing.expectError(invalid, Registry.init(a, encoded, "", null, &ns));
+    }
 }
