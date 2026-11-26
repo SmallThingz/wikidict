@@ -190,6 +190,7 @@ pub fn build(b: *std.Build) void {
     addPublicRunStep(b, "build-blobs", "Encode blobs with an already compiled bundle expander", addRunArtifactCommand(b, blob_build_exe, &.{}), &.{});
     blob_build_exe.root_module.addImport("namespace_registry", namespace_registry_mod);
     blob_build_exe.root_module.addImport("missing_dependency", missing_dependency_mod);
+    const writer_strip = b.option(bool, "writer-strip", "Omit Writer debug metadata without changing its optimization or safety mode") orelse false;
     const blob_merge_exe = addCliExecutable(b, "dict-blob-merge", b.path("compiler/tools/blob_merge.zig"), target, optimize, &.{
         .{ .name = "encoder", .module = blob_encoder_mod },
     });
@@ -207,7 +208,10 @@ pub fn build(b: *std.Build) void {
     const prepare_blob_tools = b.step("prepare-blob-tools", "Prepare native blob build, merge and verification tools");
     const prepare_blob_verify = b.step("prepare-blob-verify", "Prepare only the existing native blob verification tool");
     for ([_]*std.Build.Step.Compile{ blob_build_exe, blob_merge_exe, blob_verify_exe }) |artifact| {
-        const install = b.addInstallArtifact(artifact, .{});
+        // InstallArtifact snapshots PDB production before the late Writer clone.
+        const install = b.addInstallArtifact(artifact, .{
+            .pdb_dir = if (artifact == blob_build_exe and writer_strip) .disabled else .default,
+        });
         prepare_blob_tools.dependOn(&install.step);
         if (artifact == blob_build_exe) {
             prepare_captured_writer.dependOn(&install.step);
@@ -908,11 +912,16 @@ pub fn build(b: *std.Build) void {
     if (target.result.os.tag == b.graph.host.result.os.tag and target.result.cpu.arch == b.graph.host.result.cpu.arch)
         test_step.dependOn(if (test_step_memory != 0) storage_test_step else &storage_run.step);
 
+    // Snapshot Writer imports only after all ordinary graph wiring, including
+    // encoder -> blob_files, is complete. Prepared early returns come below.
+    blob_build_exe.root_module = artifactStripRoot(b, blob_build_exe.root_module, writer_strip);
+
     // Only prepared artifacts use these filters. The public full test graph
     // above remains unfiltered, including when these options are supplied.
     const prepare_group = b.option(PreparedTestGroup, "prepare-test-group", "Compile only this prepare-tests group");
     const requested_filters = b.option([]const []const u8, "prepare-test-filter", "Repeat to compile named tests in the selected prepare-tests group") orelse &.{};
     const prepare_error_tracing = b.option(bool, "prepare-test-error-tracing", "Enable error-return traces for selected prepared test roots") orelse false;
+    const prepare_strip = b.option(bool, "prepare-test-strip", "Omit debug metadata from selected prepared tests; retain optimization and error tracing") orelse false;
     const prepare_baseline_cpu = b.option(bool, "prepare-test-baseline-cpu", "Use baseline CPU features for the selected pure-Zig Tools test graph") orelse false;
     if (prepare_baseline_cpu and prepare_group != .tools) {
         std.log.err("baseline prepared CPU requires the Tools group", .{});
@@ -1021,6 +1030,7 @@ pub fn build(b: *std.Build) void {
     if (prepare_group == .encoder and prepare_filters.len != 0) {
         var options = preparedTestOptions(encoder_tests[0], prepare_filters);
         options.root_module = preparedRoot(b, options.root_module, prepare_error_tracing);
+        options.root_module = artifactStripRoot(b, options.root_module, prepare_strip);
         const compiled = b.addTest(options);
         if (prepare_no_emit) {
             // No artifact consumer: Zig performs semantic analysis without emitting a binary.
@@ -1047,6 +1057,7 @@ pub fn build(b: *std.Build) void {
             b.invalid_user_input = true;
             return;
         };
+        options.root_module = artifactStripRoot(b, options.root_module, prepare_strip);
         const compiled = b.addTest(options);
         if (cache_report) |report| {
             report.addArg(@tagName(prepared.group));
@@ -1290,6 +1301,31 @@ fn isEncoderPartition(group: PreparedTestGroup) bool {
         .encoder_compile, .encoder_document, .encoder_writer, .encoder_support => true,
         else => false,
     };
+}
+
+// Opt-in per-artifact copy: normal/full-test/shared module graphs stay intact.
+// Preserve targets, optimization, safety, tracing, unwind and link inputs. Copy
+// cycles/shared imports so no back-edge reintroduces an unstripped module.
+fn artifactStripRoot(b: *std.Build, original: *std.Build.Module, strip: bool) *std.Build.Module {
+    if (!strip) return original;
+    var copies: std.AutoHashMapUnmanaged(*std.Build.Module, *std.Build.Module) = .empty;
+    defer copies.deinit(b.allocator);
+    return artifactStripModule(b, original, &copies) catch @panic("OOM");
+}
+
+fn artifactStripModule(b: *std.Build, original: *std.Build.Module,
+    copies: *std.AutoHashMapUnmanaged(*std.Build.Module, *std.Build.Module)) anyerror!*std.Build.Module
+{
+    if (copies.get(original)) |known| return known;
+    const copy = try b.allocator.create(std.Build.Module);
+    copy.init(b, .{ .existing = original });
+    copy.import_table = try original.import_table.clone(b.allocator);
+    copy.cached_graph = .{ .modules = &.{}, .names = &.{} };
+    copy.strip = true;
+    try copies.put(b.allocator, original, copy);
+    for (copy.import_table.values()) |*dependency|
+        dependency.* = try artifactStripModule(b, dependency.*, copies);
+    return copy;
 }
 
 fn preparedRoot(b: *std.Build, original: *std.Build.Module, tracing: bool) *std.Build.Module {
