@@ -1,0 +1,44 @@
+{
+  "schema": "wikidict.hu.selected-get-body-fixture.v1",
+  "fixture": {
+    "file": "viz-oldid3518053.html",
+    "bytes": 457270,
+    "sha256": "aadfbf84363a866683ca1c175c172aee3b700dc00d009585c924fa06b59a3439",
+    "trailing_newline": false,
+    "byte_preservation": "Exact original response bytes; no trimming, rewriting, resource loading, or HTML repair."
+  },
+  "capture_receipt_sha256": "2443ecb92cf15bba5d02847686809790991f7ec463834cd430e53661e3706bcd",
+  "capture": {
+    "accepted": true,
+    "bytes": 457270,
+    "content_type": "text/html; charset=UTF-8",
+    "date": "Tue, 24 Nov 2026 11:08:06 GMT",
+    "legend_labels": [
+      true,
+      true
+    ],
+    "page_id": 609,
+    "request_id": "41f837cb-7eae-4450-b3eb-3e1de1454d2b",
+    "revision_id": 3518053,
+    "scope": "current rendered oldid source oracle only",
+    "sha256": "aadfbf84363a866683ca1c175c172aee3b700dc00d009585c924fa06b59a3439",
+    "started_utc": "2026-11-24T11:08:05.994208+00:00",
+    "status": 200,
+    "title": "víz",
+    "url": "https://hu.wiktionary.org/w/index.php?title=v%C3%ADz&oldid=3518053&useskin=vector"
+  },
+  "namespace": {
+    "repository_path": "compiler/tools/testdata/hu-direct-source-context01/namespace-registry.tsv",
+    "bytes": 2504,
+    "sha256": "68c76ee3cf6c32dcbccccd6afa6be303d4066e78b08eb9fd96fc06bb82c2d3cf"
+  },
+  "qualification": {
+    "test": "HU selected GET body binds actual root and quoted SECTION without whole body grant",
+    "exit_code": 0,
+    "actual_closure_sha256": "39cd10063552f76721bc76d7a5354541b9691dd11c05acb756f2608005587003",
+    "source_selection": "Exact passing helper/test selection; only its two runtime input path literals made repository-relative.",
+    "path_only_successor_native_replayed": false
+  },
+  "scope": "Current-rendered oldid capture. Root range, quoted SECTION inventory and conservative complete-body refusal only. No historical snapshot parity, full body, stylesheet profile, Book, Writer, geometry, or whole-edition grant.",
+  "temporary_receipts_required_at_test_runtime": false
+}

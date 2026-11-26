@@ -90,6 +90,76 @@ fn selectedGetRoot(page: RawPage) bool {
     return if (page.outer_context) |outer| outer.selected_body != null else false;
 }
 
+const hu_selected_get_profile = "mediawiki-vector-legacy-1.48.0-wmf.5";
+fn selectedHuLegacyGet(page: RawPage) bool {
+    const outer = page.outer_context orelse return false;
+    return equal(outer.profile, hu_selected_get_profile) and outer.selected_body == .full_get_root and
+        outer.current_identity == null and page.current_get_literal == null;
+}
+
+// Physical captured ancestry only. Shared selected-GET parsing owns identity;
+// this never evaluates cookie state or turns static classes into browser state.
+fn validateHuSelectedGetOuterPrefix(wiki: []const u8, language: []const u8,
+    namespace_id: i32, observed: OuterObservedPrefix) !void
+{
+    if (!equal(wiki, "huwiktionary") or !equal(language, "hu") or namespace_id != 0 or
+        !equal(observed.generator, "MediaWiki 1.48.0-wmf.5") or observed.ancestors.len != 5 or
+        !equal(observed.ancestors[0].tag, "html") or !equal(observed.ancestors[1].tag, "body")) return invalid;
+    const html = observed.ancestors[0].attributes;
+    const body = observed.ancestors[1].attributes;
+    if (!equal(html.get("lang") orelse "", "hu") or !equal(html.get("dir") orelse "", "ltr") or
+        !profile.Profile.hasClass(body.get("class") orelse "", "skin-vector-legacy") or
+        profile.Profile.hasClass(body.get("class") orelse "", "skin-vector-2022")) return invalid;
+    for (observed.ancestors[2..], [_][]const u8{ "content", "bodyContent", "mw-content-text" },
+        [_][]const u8{ "mw-body", "vector-body", "mw-body-content" }) |node, id, class|
+    {
+        if (!equal(node.tag, "div") or !equal(node.attributes.get("id") orelse "", id) or
+            !profile.Profile.hasClass(node.attributes.get("class") orelse "", class)) return invalid;
+    }
+    const root = observed.root orelse return invalid;
+    if (root.attributes.len != 5 or !equal(root.get("class") orelse "", "mw-content-ltr mw-parser-output") or
+        !equal(root.get("lang") orelse "", "hu") or !equal(root.get("dir") orelse "", "ltr") or
+        !equal(root.get("data-mw-parsoid-version") orelse "", "0.25.0.0-alpha3") or
+        !equal(root.get("data-mw-html-version") orelse "", "2.8.0")) return invalid;
+}
+
+
+// Both selectedGetBody and Book's second inventory must consume the same
+// retained GET root. Book owns transport/identity authentication; these checks
+// bind its existing bytes and root inventory, and grant no new authority.
+fn selectedHuGetBodyInput(a: A, ns: *const namespaces.Registry, page: RawPage,
+    html: []const u8) !struct { body: []const u8, root: Inventory }
+{
+    if (!selectedHuLegacyGet(page)) return invalid;
+    const outer = page.outer_context orelse return invalid;
+    const prefix = try observedOuterPrefix(a, outer.response, true);
+    try validateHuSelectedGetOuterPrefix(ns.wiki, ns.content_language, page.namespace_id, prefix);
+    const start = prefix.root_start orelse return invalid;
+    const open_end = prefix.root_open_end orelse return invalid;
+    if (start >= open_end or open_end > outer.response.len) return invalid;
+    const end = try sourceParentOwnedRootEnd(outer.response, outer.response[0..open_end]);
+    if (end < open_end or end > outer.response.len) return invalid;
+    const body = outer.response[start..end];
+    // First read receives the original response tail; the second receives the
+    // exact already-closed body. A shortened, shifted or crossed view refuses.
+    if (html.ptr != body.ptr or (html.len != body.len and html.len != outer.response.len - start)) return invalid;
+    return .{ .body = body, .root = prefix.root orelse return invalid };
+}
+
+fn observedHuSelectedGetBodyScope(a: A, ns: *const namespaces.Registry, page: RawPage,
+    html: []const u8, nodes: ?*std.ArrayList(ObservedSiblingNode), root_end: ?*usize) !profile.BoundedTextClassScope
+{
+    const input = try selectedHuGetBodyInput(a, ns, page, html);
+    var end: usize = 0;
+    // Independent maintained options; current_literal remains false.
+    // Unsupported MAP/AREA/INPUT/LABEL and all other grammar rules stay intact.
+    const scope = try observedClassRootTokens(a, ns, input.body, nodes, &end,
+        false, input.root, true, true, true);
+    if (end != input.body.len) return invalid;
+    if (root_end) |out| out.* = end;
+    return scope;
+}
+
 fn selectedPageHead(a: A, page: RawPage) ![]const u8 {
     if (!selectedGetRoot(page)) return suppliedPageHead(a, page);
     const outer = page.outer_context orelse return invalid;
@@ -32575,4 +32645,66 @@ test "ordinary fixed atom callback binds current row span token and both origina
     source[source.len - 1] = saved;
     try std.testing.expect(fixedAtomOperationRanges(source, source[0..0]) == null);
     try std.testing.expect(fixedAtomOperationRanges(source, source[0..t.source_rows[0].len]) == null);
+}
+
+test "HU selected GET body binds actual root and quoted SECTION without whole body grant" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const html = try std.Io.Dir.cwd().readFileAlloc(std.testing.io,
+        "compiler/tools/testdata/hu-selected-get-body01/viz-oldid3518053.html",
+        a, .limited(512 * 1024));
+    const namespace_bytes = try std.Io.Dir.cwd().readFileAlloc(std.testing.io,
+        "compiler/tools/testdata/hu-direct-source-context01/namespace-registry.tsv",
+        a, .limited(4096));
+    try std.testing.expect(digestMatches(html, "aadfbf84363a866683ca1c175c172aee3b700dc00d009585c924fa06b59a3439"));
+    try std.testing.expect(digestMatches(namespace_bytes, "68c76ee3cf6c32dcbccccd6afa6be303d4066e78b08eb9fd96fc06bb82c2d3cf"));
+    var ns = try namespaces.Registry.init(a, namespace_bytes); defer ns.deinit();
+    // This is a body-range test input, never a constructed/authenticated Book.
+    const page: RawPage = .{ .namespace_id = 0, .page_id = 609, .revision_id = 3518053,
+        .title = "víz", .raw_sha256 = "", .occurrences = &.{},
+        .outer_context = .{ .profile = hu_selected_get_profile, .selected_body = .full_get_root, .response = html } };
+    const input = try selectedHuGetBodyInput(a, &ns, page, html[14372..]);
+    try std.testing.expect(input.body.ptr == html.ptr + 14372 and input.body.len == 391206 - 14372);
+    const second = try selectedHuGetBodyInput(a, &ns, page, html[14372..391206]);
+    try std.testing.expect(second.body.ptr == input.body.ptr and second.body.len == input.body.len);
+    try std.testing.expect(sameSiblingAttributes(second.root, input.root));
+    try std.testing.expectError(invalid, selectedHuGetBodyInput(a, &ns, page, html[14508..]));
+    try std.testing.expectError(invalid, selectedHuGetBodyInput(a, &ns, page, html[14372..391205]));
+    var crossed_page = page; crossed_page.outer_context.?.selected_body = null;
+    try std.testing.expectError(invalid, selectedHuGetBodyInput(a, &ns, crossed_page, html[14372..]));
+
+    const opening_slice = html[14372..22997];
+    try std.testing.expect(digestMatches(html[14508..22997],
+        "cfb410fd845b110e1fa1725e37a78b2976bbc6f4b1e3db5986e8b143e99ee2d8"));
+    var nodes: std.ArrayList(ObservedSiblingNode) = .empty;
+    var end: usize = 0;
+    // These are two authentic opening tags, with no fabricated closing tags.
+    // Parse both inventories, then require refusal of the unclosed body.
+    try std.testing.expectError(invalid, observedClassRootTokens(a, &ns, opening_slice,
+        &nodes, &end, false, input.root, true, true, true));
+    try std.testing.expectEqual(@as(usize, 2), nodes.items.len);
+    try std.testing.expectEqual(@as(usize, 0), end);
+    try std.testing.expectEqual(@as(usize, 5), nodes.items[0].attributes.attributes.len);
+    try std.testing.expect(nodes.items[1].tag.is("section"));
+    try std.testing.expectEqual(@as(usize, 136), nodes.items[1].start);
+    try std.testing.expectEqual(opening_slice.len, nodes.items[1].tag.end);
+    try std.testing.expect(nodes.items[0].inner_end == null and nodes.items[1].inner_end == null);
+    try std.testing.expect(std.mem.indexOf(u8, nodes.items[1].attributes.get("data-mw").?, "H<sub>2</sub>O") != null);
+    // Turning off only the returned-attribute option rejects the actual '>'
+    // at absolute byte15482, before any SECTION node is retained.
+    var strict: std.ArrayList(ObservedSiblingNode) = .empty;
+    try std.testing.expectError(invalid, observedClassRootTokens(a, &ns, opening_slice,
+        &strict, &end, false, input.root, true, true, false));
+    try std.testing.expectEqual(@as(usize, 1), strict.items.len);
+    const attrs = try a.dupe(Attribute, input.root.attributes);
+    for (attrs) |*attr| if (equal(attr.name, "lang")) { attr.value = "crossed"; };
+    var wrong_root: std.ArrayList(ObservedSiblingNode) = .empty;
+    try std.testing.expectError(invalid, observedClassRootTokens(a, &ns, opening_slice,
+        &wrong_root, &end, false, .{ .attributes = attrs }, true, true, true));
+    try std.testing.expectEqual(@as(usize, 0), wrong_root.items.len);
+    // The complete original remains unsupported; no MAP/AREA/INPUT/LABEL is
+    // erased or admitted. A partial inventory is never a completed scope.
+    var full: std.ArrayList(ObservedSiblingNode) = .empty;
+    try std.testing.expectError(invalid, observedHuSelectedGetBodyScope(a, &ns, page, input.body, &full, &end));
+    try std.testing.expectEqual(@as(usize, 0), end);
 }
