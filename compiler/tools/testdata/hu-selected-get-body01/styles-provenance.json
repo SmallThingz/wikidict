@@ -1,0 +1,26 @@
+{
+  "schema": "wikidict.hu-selected-get-styles-test-fixture.v1",
+  "fixture": "styles-receipt.json",
+  "sha256": "552ad9aacc6b9fed016db4c84ebf475e842b9a07f7f221f72015772602b42957",
+  "bytes": 18898,
+  "original_locator": ".tmp/completion-council/HU-action-owner/viz-hu02/source/viz-logical-styles01/receipt.json",
+  "paired_html": {
+    "path": "viz-oldid3518053.html",
+    "sha256": "aadfbf84363a866683ca1c175c172aee3b700dc00d009585c924fa06b59a3439"
+  },
+  "selected_page": {
+    "wiki": "huwiktionary",
+    "title": "víz",
+    "page_id": 609,
+    "revision_id": 3518053
+  },
+  "fixture_unchanged": true,
+  "test_consumption": "shots.get only: eight ordered inline descriptors and two linked URL syntax checks; original POST metadata remains unmodified but is not qualified by this control.",
+  "actual_test": {
+    "closure": ".tmp/s6-en-font-family-cloud01/normal-page01/native21/actual-closure01.json",
+    "sha256": "1081d00104bc662df66a6e3573511b0b317fbc08fd6f719ff30dc286ffb14c59",
+    "selector": "HU selected GET outer and captured style shape preserve original legacy inputs",
+    "exit_code": 0
+  },
+  "limits": "No new fetch, redirects proof, historical CSS deployment, computed-style, Book routing, whole body, ordinary Writer or geometry authority."
+}

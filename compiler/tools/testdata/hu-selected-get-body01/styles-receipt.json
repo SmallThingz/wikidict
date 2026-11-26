@@ -1,0 +1,419 @@
+{
+  "page_id": 609,
+  "post_response_sha256": "e2266f0028f3f2f783c0b2451bbbfb6d0a027c3022db3a29b3f363788932a8d3",
+  "post_returned_revision": null,
+  "post_wikitext_sha256": "8d7e4d11612774935779d88c3c0ea9432c1126e396ce95e6a3c4b8a314ece6ba",
+  "revision_authority": "oldid GET and dated raw; POST is a page-bound exact expansion echo",
+  "revision_id": 3518053,
+  "shots": {
+    "get": {
+      "html_sha256": "aadfbf84363a866683ca1c175c172aee3b700dc00d009585c924fa06b59a3439",
+      "inline": [
+        {
+          "attrs": {
+            "about": "#mwt2",
+            "data-mw": "{\"name\":\"templatestyles\",\"attrs\":{\"src\":\"Chembox/styles.css\"}}",
+            "data-mw-deduplicate": "TemplateStyles:r3516873",
+            "typeof": "mw:Extension/templatestyles"
+          },
+          "bytes": 1030,
+          "file": "get-inline-1.css",
+          "order": 1,
+          "position": [
+            55,
+            16439
+          ],
+          "sha256": "7b95ad57a5b2e458249f61f3cbad884ca0d8575e11de5ae77a61b35ab7527c3f"
+        },
+        {
+          "attrs": {
+            "about": "#mwt3",
+            "data-mw": "{\"name\":\"templatestyles\",\"attrs\":{\"src\":\"Plainlist/styles.css\"},\"body\":{\"extsrc\":\"\"}}",
+            "data-mw-deduplicate": "TemplateStyles:r3506340",
+            "typeof": "mw:Extension/templatestyles"
+          },
+          "bytes": 205,
+          "file": "get-inline-2.css",
+          "order": 2,
+          "position": [
+            84,
+            71
+          ],
+          "sha256": "caf64e905e8da95cb6f896d10daab9b5446a9c721bb50397012f2958849838a5"
+        },
+        {
+          "attrs": {
+            "about": "#mwt45",
+            "data-mw": "{\"name\":\"templatestyles\",\"attrs\":{\"src\":\"NFPA 704 diamond/styles.css\"}}",
+            "data-mw-deduplicate": "TemplateStyles:r3514229",
+            "typeof": "mw:Extension/templatestyles"
+          },
+          "bytes": 1671,
+          "file": "get-inline-3.css",
+          "order": 3,
+          "position": [
+            289,
+            4
+          ],
+          "sha256": "e3bb29bf3c55cf2e44e00dfb7ff3f9f2c327ced444c3702473892e7519e6e238"
+        },
+        {
+          "attrs": {
+            "about": "#mwt51",
+            "data-mw": "{\"name\":\"templatestyles\",\"attrs\":{\"src\":\"categorize/styles.css\"},\"parts\":[{\"template\":{\"target\":{\"wt\":\"hunfn\",\"href\":\"./Sablon:hunfn\"},\"params\":{},\"i\":0}}]}",
+            "data-mw-deduplicate": "TemplateStyles:r3520432",
+            "id": "mwPg",
+            "typeof": "mw:Extension/templatestyles mw:Transclusion"
+          },
+          "bytes": 120,
+          "file": "get-inline-4.css",
+          "order": 4,
+          "position": [
+            323,
+            0
+          ],
+          "sha256": "de6f38d9926c230f056b143ba79c2300b07de5445b292b69996d51359869a866"
+        },
+        {
+          "attrs": {
+            "about": "#mwt53",
+            "data-mw": "{\"name\":\"templatestyles\",\"attrs\":{\"src\":\"Modul:scripts/style.css\"},\"body\":{\"extsrc\":\"\"}}",
+            "data-mw-deduplicate": "TemplateStyles:r2400657",
+            "id": "mwSA",
+            "typeof": "mw:Extension/templatestyles"
+          },
+          "bytes": 25972,
+          "file": "get-inline-5.css",
+          "order": 5,
+          "position": [
+            327,
+            261
+          ],
+          "sha256": "aa907007258276860597dfa43e70a4b004ac97a9da800a93e913826857b32b99"
+        },
+        {
+          "attrs": {
+            "about": "#mwt57",
+            "data-mw": "{\"name\":\"templatestyles\",\"attrs\":{\"src\":\"NavFrame/style.css\"}}",
+            "data-mw-deduplicate": "TemplateStyles:r3450892",
+            "typeof": "mw:Extension/templatestyles"
+          },
+          "bytes": 618,
+          "file": "get-inline-6.css",
+          "order": 6,
+          "position": [
+            675,
+            0
+          ],
+          "sha256": "8999be1b717aa7b2485b041c9ff049f72b17c6ef9181101c6148d29e62e78335"
+        },
+        {
+          "attrs": {
+            "about": "#mwt58",
+            "data-mw": "{\"name\":\"templatestyles\",\"attrs\":{\"src\":\"trans-top/style.css\"}}",
+            "data-mw-deduplicate": "TemplateStyles:r3450893",
+            "typeof": "mw:Extension/templatestyles"
+          },
+          "bytes": 1081,
+          "file": "get-inline-7.css",
+          "order": 7,
+          "position": [
+            675,
+            804
+          ],
+          "sha256": "484400fe3c6bb4e7c4c80aab3751ba689f80ffa21f51086b3574030f9c615fe5"
+        },
+        {
+          "attrs": {
+            "about": "#mwt499",
+            "data-mw": "{\"name\":\"templatestyles\",\"attrs\":{\"src\":\"acol/styles.css\"}}",
+            "data-mw-deduplicate": "TemplateStyles:r3244136",
+            "typeof": "mw:Extension/templatestyles"
+          },
+          "bytes": 1220,
+          "file": "get-inline-8.css",
+          "order": 8,
+          "position": [
+            889,
+            7
+          ],
+          "sha256": "e67c5be063b70b882152986e248234bc400e4240cba6ef50e1878b78dc9440bc"
+        }
+      ],
+      "linked": [
+        {
+          "attrs": {
+            "href": "/w/load.php?lang=hu&modules=ext.cite.parsoid.styles%7Cext.cite.styles%7Cext.imagemap.styles%7Cext.uls.interlanguage%7Cext.visualEditor.desktopArticleTarget.noscript%7Cext.wikihiero%7Cjquery.makeCollapsible.styles%7Cmediawiki.action.styles%7Cmediawiki.codex.messagebox.styles%7Cmediawiki.interface.helpers.linker.styles%7Cmediawiki.interface.helpers.styles%7Cskins.vector.styles.legacy&only=styles&skin=vector",
+            "rel": "stylesheet"
+          },
+          "bytes": 95066,
+          "file": "get-link-1.css",
+          "href": "/w/load.php?lang=hu&modules=ext.cite.parsoid.styles%7Cext.cite.styles%7Cext.imagemap.styles%7Cext.uls.interlanguage%7Cext.visualEditor.desktopArticleTarget.noscript%7Cext.wikihiero%7Cjquery.makeCollapsible.styles%7Cmediawiki.action.styles%7Cmediawiki.codex.messagebox.styles%7Cmediawiki.interface.helpers.linker.styles%7Cmediawiki.interface.helpers.styles%7Cskins.vector.styles.legacy&only=styles&skin=vector",
+          "observed_from": "2026-11-24T13:25:56.664207+00:00",
+          "observed_utc": "2026-11-24T13:26:05.355095+00:00",
+          "order": 1,
+          "response_headers": {
+            "accept-ranges": "bytes",
+            "access-control-allow-origin": "*",
+            "age": "0",
+            "cache-control": "public, max-age=300, s-maxage=300, stale-while-revalidate=60",
+            "connection": "close",
+            "content-type": "text/css; charset=utf-8",
+            "date": "Tue, 24 Nov 2026 13:26:02 GMT",
+            "etag": "W/\"6sz0t\"",
+            "expires": "Tue, 24 Nov 2026 13:31:03 GMT",
+            "link": "</static/images/project-logos/huwiktionary.png>;rel=preload;as=image;media=not all and (min-resolution: 2dppx),</static/images/project-logos/huwiktionary-2x.png>;rel=preload;as=image;media=(min-resolution: 2dppx)",
+            "nel": "{ \"report_to\": \"wm_nel\", \"max_age\": 604800, \"failure_fraction\": 0.05, \"success_fraction\": 0.0}",
+            "report-to": "{ \"group\": \"wm_nel\", \"max_age\": 604800, \"endpoints\": [{ \"url\": \"https://intake-logging.wikimedia.org/v1/events?stream=w3c.reportingapi.network_error&schema_uri=/w3c/reportingapi/network_error/1.0.0\" }] }",
+            "server": "mw-web.eqiad.main-697b479d57-zz8t8",
+            "server-timing": "cache;desc=\"miss\", host;desc=\"cp5023\",co_id;desc=\"1618528718\"",
+            "set-cookie": "WMF-Last-Access=24-Nov-2026;Path=/;HttpOnly;secure;Expires=Sat, 26 Dec 2026 12:00:00 GMT",
+            "strict-transport-security": "max-age=106384710; includeSubDomains; preload",
+            "transfer-encoding": "chunked",
+            "vary": "Accept-Encoding,User-Agent",
+            "x-analytics": "",
+            "x-cache": "cp5023 miss, cp5023 miss",
+            "x-cache-status": "miss",
+            "x-client-ip": "193.116.96.94",
+            "x-content-type-options": "nosniff",
+            "x-request-id": "452109d5-f0fc-4eac-97fe-f1f9dd77573a"
+          },
+          "sha256": "ef2f5635e3b01b283ac789827c9e00eded7093f31554313148cd27049edd42f0",
+          "status": 200,
+          "url": "https://hu.wiktionary.org/w/load.php?lang=hu&modules=ext.cite.parsoid.styles%7Cext.cite.styles%7Cext.imagemap.styles%7Cext.uls.interlanguage%7Cext.visualEditor.desktopArticleTarget.noscript%7Cext.wikihiero%7Cjquery.makeCollapsible.styles%7Cmediawiki.action.styles%7Cmediawiki.codex.messagebox.styles%7Cmediawiki.interface.helpers.linker.styles%7Cmediawiki.interface.helpers.styles%7Cskins.vector.styles.legacy&only=styles&skin=vector"
+        },
+        {
+          "attrs": {
+            "href": "/w/load.php?lang=hu&modules=site.styles&only=styles&skin=vector",
+            "rel": "stylesheet"
+          },
+          "bytes": 4442,
+          "file": "get-link-2.css",
+          "href": "/w/load.php?lang=hu&modules=site.styles&only=styles&skin=vector",
+          "observed_from": "2026-11-24T13:26:05.355251+00:00",
+          "observed_utc": "2026-11-24T13:26:08.760008+00:00",
+          "order": 2,
+          "response_headers": {
+            "accept-ranges": "bytes",
+            "access-control-allow-origin": "*",
+            "age": "0",
+            "cache-control": "public, max-age=300, s-maxage=300, stale-while-revalidate=60",
+            "connection": "close",
+            "content-type": "text/css; charset=utf-8",
+            "date": "Tue, 24 Nov 2026 13:26:08 GMT",
+            "etag": "W/\"1iry0\"",
+            "expires": "Tue, 24 Nov 2026 13:31:08 GMT",
+            "nel": "{ \"report_to\": \"wm_nel\", \"max_age\": 604800, \"failure_fraction\": 0.05, \"success_fraction\": 0.0}",
+            "report-to": "{ \"group\": \"wm_nel\", \"max_age\": 604800, \"endpoints\": [{ \"url\": \"https://intake-logging.wikimedia.org/v1/events?stream=w3c.reportingapi.network_error&schema_uri=/w3c/reportingapi/network_error/1.0.0\" }] }",
+            "server": "mw-web.eqiad.main-697b479d57-bpdsj",
+            "server-timing": "cache;desc=\"miss\", host;desc=\"cp5023\",co_id;desc=\"2634930464\"",
+            "set-cookie": "WMF-Last-Access=24-Nov-2026;Path=/;HttpOnly;secure;Expires=Sat, 26 Dec 2026 12:00:00 GMT",
+            "strict-transport-security": "max-age=106384710; includeSubDomains; preload",
+            "transfer-encoding": "chunked",
+            "vary": "X-Subdomain, Accept-Encoding,User-Agent",
+            "x-analytics": "",
+            "x-cache": "cp5023 miss, cp5023 miss",
+            "x-cache-status": "miss",
+            "x-client-ip": "193.116.96.94",
+            "x-content-type-options": "nosniff",
+            "x-request-id": "4fb8e120-1caa-42a3-be9b-249ead4f6f85"
+          },
+          "sha256": "00cd5ed289ed78a431528b4a252260d20cf48759997d977b5ad640c6f83c28ef",
+          "status": 200,
+          "url": "https://hu.wiktionary.org/w/load.php?lang=hu&modules=site.styles&only=styles&skin=vector"
+        }
+      ]
+    },
+    "post": {
+      "html_sha256": "c60cc25580c389679ed2608b0c60507e2b8d6aaaf23dc9099d21ee255dc8d637",
+      "inline": [
+        {
+          "attrs": {
+            "data-mw-deduplicate": "TemplateStyles:r3516873"
+          },
+          "bytes": 1030,
+          "file": "post-inline-1.css",
+          "order": 1,
+          "position": [
+            31,
+            65
+          ],
+          "sha256": "7b95ad57a5b2e458249f61f3cbad884ca0d8575e11de5ae77a61b35ab7527c3f"
+        },
+        {
+          "attrs": {
+            "data-mw-deduplicate": "TemplateStyles:r3506340"
+          },
+          "bytes": 205,
+          "file": "post-inline-2.css",
+          "order": 2,
+          "position": [
+            65,
+            71
+          ],
+          "sha256": "caf64e905e8da95cb6f896d10daab9b5446a9c721bb50397012f2958849838a5"
+        },
+        {
+          "attrs": {
+            "data-mw-deduplicate": "TemplateStyles:r3514229"
+          },
+          "bytes": 1671,
+          "file": "post-inline-3.css",
+          "order": 3,
+          "position": [
+            347,
+            4
+          ],
+          "sha256": "e3bb29bf3c55cf2e44e00dfb7ff3f9f2c327ced444c3702473892e7519e6e238"
+        },
+        {
+          "attrs": {
+            "data-mw-deduplicate": "TemplateStyles:r3520432"
+          },
+          "bytes": 120,
+          "file": "post-inline-4.css",
+          "order": 4,
+          "position": [
+            385,
+            0
+          ],
+          "sha256": "de6f38d9926c230f056b143ba79c2300b07de5445b292b69996d51359869a866"
+        },
+        {
+          "attrs": {
+            "data-mw-deduplicate": "TemplateStyles:r2400657"
+          },
+          "bytes": 25972,
+          "file": "post-inline-5.css",
+          "order": 5,
+          "position": [
+            389,
+            159
+          ],
+          "sha256": "aa907007258276860597dfa43e70a4b004ac97a9da800a93e913826857b32b99"
+        },
+        {
+          "attrs": {
+            "data-mw-deduplicate": "TemplateStyles:r3450892"
+          },
+          "bytes": 618,
+          "file": "post-inline-6.css",
+          "order": 6,
+          "position": [
+            749,
+            0
+          ],
+          "sha256": "8999be1b717aa7b2485b041c9ff049f72b17c6ef9181101c6148d29e62e78335"
+        },
+        {
+          "attrs": {
+            "data-mw-deduplicate": "TemplateStyles:r3450893"
+          },
+          "bytes": 1081,
+          "file": "post-inline-7.css",
+          "order": 7,
+          "position": [
+            749,
+            679
+          ],
+          "sha256": "484400fe3c6bb4e7c4c80aab3751ba689f80ffa21f51086b3574030f9c615fe5"
+        },
+        {
+          "attrs": {
+            "data-mw-deduplicate": "TemplateStyles:r3244136"
+          },
+          "bytes": 1220,
+          "file": "post-inline-8.css",
+          "order": 8,
+          "position": [
+            964,
+            0
+          ],
+          "sha256": "e67c5be063b70b882152986e248234bc400e4240cba6ef50e1878b78dc9440bc"
+        }
+      ],
+      "linked": [
+        {
+          "attrs": {
+            "href": "/w/load.php?lang=hu&modules=ext.cite.styles%7Cext.wikihiero%7Cext.wikimediamessages.styles%7Cskins.vector.icons%2Cstyles%7Cskins.vector.search.codex.styles&only=styles&skin=vector-2022",
+            "rel": "stylesheet"
+          },
+          "bytes": 194123,
+          "file": "post-link-1.css",
+          "href": "/w/load.php?lang=hu&modules=ext.cite.styles%7Cext.wikihiero%7Cext.wikimediamessages.styles%7Cskins.vector.icons%2Cstyles%7Cskins.vector.search.codex.styles&only=styles&skin=vector-2022",
+          "observed_from": "2026-11-24T13:26:08.792511+00:00",
+          "observed_utc": "2026-11-24T13:26:12.940418+00:00",
+          "order": 1,
+          "response_headers": {
+            "accept-ranges": "bytes",
+            "access-control-allow-origin": "*",
+            "age": "0",
+            "cache-control": "public, max-age=300, s-maxage=300, stale-while-revalidate=60",
+            "connection": "close",
+            "content-type": "text/css; charset=utf-8",
+            "date": "Tue, 24 Nov 2026 13:26:09 GMT",
+            "etag": "W/\"1i9sw\"",
+            "expires": "Tue, 24 Nov 2026 13:31:10 GMT",
+            "nel": "{ \"report_to\": \"wm_nel\", \"max_age\": 604800, \"failure_fraction\": 0.05, \"success_fraction\": 0.0}",
+            "report-to": "{ \"group\": \"wm_nel\", \"max_age\": 604800, \"endpoints\": [{ \"url\": \"https://intake-logging.wikimedia.org/v1/events?stream=w3c.reportingapi.network_error&schema_uri=/w3c/reportingapi/network_error/1.0.0\" }] }",
+            "server": "mw-web.eqiad.main-697b479d57-9sk87",
+            "server-timing": "cache;desc=\"miss\", host;desc=\"cp5023\",co_id;desc=\"1432048520\"",
+            "set-cookie": "WMF-Last-Access=24-Nov-2026;Path=/;HttpOnly;secure;Expires=Sat, 26 Dec 2026 12:00:00 GMT",
+            "strict-transport-security": "max-age=106384710; includeSubDomains; preload",
+            "transfer-encoding": "chunked",
+            "vary": "Accept-Encoding,User-Agent",
+            "x-analytics": "",
+            "x-cache": "cp5023 miss, cp5023 miss",
+            "x-cache-status": "miss",
+            "x-client-ip": "193.116.96.94",
+            "x-content-type-options": "nosniff",
+            "x-request-id": "d51aa2c3-98bf-4d96-8607-f814b555c004"
+          },
+          "sha256": "b8164420b712d7e540fe76255ac56b2845c8c5c28e5e9bf73ba563da3aa8472e",
+          "status": 200,
+          "url": "https://hu.wiktionary.org/w/load.php?lang=hu&modules=ext.cite.styles%7Cext.wikihiero%7Cext.wikimediamessages.styles%7Cskins.vector.icons%2Cstyles%7Cskins.vector.search.codex.styles&only=styles&skin=vector-2022"
+        },
+        {
+          "attrs": {
+            "href": "/w/load.php?lang=hu&modules=site.styles&only=styles&skin=vector-2022",
+            "rel": "stylesheet"
+          },
+          "bytes": 4442,
+          "file": "post-link-2.css",
+          "href": "/w/load.php?lang=hu&modules=site.styles&only=styles&skin=vector-2022",
+          "observed_from": "2026-11-24T13:26:12.940581+00:00",
+          "observed_utc": "2026-11-24T13:26:14.919067+00:00",
+          "order": 2,
+          "response_headers": {
+            "accept-ranges": "bytes",
+            "access-control-allow-origin": "*",
+            "age": "0",
+            "cache-control": "public, max-age=300, s-maxage=300, stale-while-revalidate=60",
+            "connection": "close",
+            "content-length": "4442",
+            "content-type": "text/css; charset=utf-8",
+            "date": "Tue, 24 Nov 2026 13:24:31 GMT",
+            "etag": "W/\"17pnf\"",
+            "expires": "Tue, 24 Nov 2026 13:29:31 GMT",
+            "nel": "{ \"report_to\": \"wm_nel\", \"max_age\": 604800, \"failure_fraction\": 0.05, \"success_fraction\": 0.0}",
+            "report-to": "{ \"group\": \"wm_nel\", \"max_age\": 604800, \"endpoints\": [{ \"url\": \"https://intake-logging.wikimedia.org/v1/events?stream=w3c.reportingapi.network_error&schema_uri=/w3c/reportingapi/network_error/1.0.0\" }] }",
+            "server": "ATS/9.2.16",
+            "server-timing": "cache;desc=\"hit-front\", host;desc=\"cp5023\",co_id;desc=\"3334556303\"",
+            "set-cookie": "WMF-Last-Access=24-Nov-2026;Path=/;HttpOnly;secure;Expires=Sat, 26 Dec 2026 12:00:00 GMT",
+            "strict-transport-security": "max-age=106384710; includeSubDomains; preload",
+            "vary": "X-Subdomain,User-Agent",
+            "x-analytics": "",
+            "x-cache": "cp5023 hit, cp5023 hit/2",
+            "x-cache-status": "hit-front",
+            "x-client-ip": "193.116.96.94",
+            "x-content-type-options": "nosniff",
+            "x-request-id": "7c000626-a75c-4af0-98ab-9ce3d9107245"
+          },
+          "sha256": "00cd5ed289ed78a431528b4a252260d20cf48759997d977b5ad640c6f83c28ef",
+          "status": 200,
+          "url": "https://hu.wiktionary.org/w/load.php?lang=hu&modules=site.styles&only=styles&skin=vector-2022"
+        }
+      ]
+    }
+  }
+}

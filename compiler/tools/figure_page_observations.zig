@@ -160,6 +160,20 @@ fn observedHuSelectedGetBodyScope(a: A, ns: *const namespaces.Registry, page: Ra
     return scope;
 }
 
+fn observedHuRetainedAuxiliaryBodyScope(a: A, ns: *const namespaces.Registry, page: RawPage,
+    html: []const u8, nodes: ?*std.ArrayList(ObservedSiblingNode), root_end: ?*usize) !profile.BoundedTextClassScope
+{
+    const input = try selectedHuGetBodyInput(a, ns, page, html);
+    var end: usize = 0;
+    // The selected-HU policy retains checked auxiliary nodes and their
+    // original attributes; it grants no source/action or geometry authority.
+    const scope = try observedClassRootTokensIn(a, ns, input.body, nodes, &end,
+        false, input.root, true, true, true, true);
+    if (end != input.body.len) return invalid;
+    if (root_end) |out| out.* = end;
+    return scope;
+}
+
 fn selectedPageHead(a: A, page: RawPage) ![]const u8 {
     if (!selectedGetRoot(page)) return suppliedPageHead(a, page);
     const outer = page.outer_context orelse return invalid;
@@ -6225,6 +6239,9 @@ fn missingStyleOrigin(a: A, wiki: []const u8) !struct { origin: []const u8, lang
     return .{ .origin = try std.fmt.allocPrint(a, "https://{s}.wiktionary.org", .{language}), .language = language };
 }
 fn missingStyleUrl(a: A, url: []const u8, origin: []const u8, language: []const u8) !void {
+    return missingStyleUrlForSkin(a, url, origin, language, "vector-2022");
+}
+fn missingStyleUrlForSkin(a: A, url: []const u8, origin: []const u8, language: []const u8, skin: []const u8) !void {
     const prefix = try std.mem.concat(a, u8, &.{ origin, "/w/load.php?" });
     if (!std.mem.startsWith(u8, url, prefix) or std.mem.indexOfAny(u8, url, "#\r\n\t\\") != null) return invalid;
     var pairs = std.mem.splitScalar(u8, url[prefix.len..], '&');
@@ -6238,7 +6255,7 @@ fn missingStyleUrl(a: A, url: []const u8, origin: []const u8, language: []const 
             for (value) |byte| if (!std.ascii.isAlphanumeric(byte) and std.mem.indexOfScalar(u8, "._-,|", byte) == null) return invalid;
             module_seen = true;
         } else if (equal(name, "only")) { if (only_seen or !equal(value, "styles")) return invalid; only_seen = true; }
-        else if (equal(name, "skin")) { if (skin_seen or !equal(value, "vector-2022")) return invalid; skin_seen = true; }
+        else if (equal(name, "skin")) { if (skin_seen or !equal(value, skin)) return invalid; skin_seen = true; }
         else return invalid;
     }
     if (!lang_seen or !module_seen or !only_seen or !skin_seen) return invalid;
@@ -6900,6 +6917,10 @@ fn appendObservedPageStyles(a: A, sources: *std.ArrayList(profile.Source), html:
     return appendObservedPageStylesIn(a, sources, html, false);
 }
 fn appendObservedPageStylesIn(a: A, sources: *std.ArrayList(profile.Source), html: []const u8, current_literal: bool) !void {
+    return appendObservedPageStylesForCapture(a, sources, html, current_literal, false);
+}
+fn appendObservedPageStylesForCapture(a: A, sources: *std.ArrayList(profile.Source), html: []const u8,
+    current_literal: bool, generated_metadata: bool) !void {
     // Caller has already validated the complete body through observedTextClassScope.
     // This pass inventories only stylesheet-bearing tags and dedup references.
     var ids: std.ArrayList([]const u8) = .empty;
@@ -6912,9 +6933,14 @@ fn appendObservedPageStylesIn(a: A, sources: *std.ArrayList(profile.Source), htm
         if (html[at] != '<') { at += 1; continue; }
         const tag = (if (current_literal) currentLiteralHtmlTagAt(html, at) else syntax.tagAt(html, at)) orelse return invalid;
         if (tag.end <= at) return invalid;
-        const inv = try inventoryReturnedMode(a, tag, false, false, current_literal);
+        const inv = if (generated_metadata) try outerInventoryReturned(a, tag, true)
+            else try inventoryReturnedMode(a, tag, false, false, current_literal);
         if (!tag.closing and tag.is("style")) {
-            for (inv.attributes) |attr| if (!equal(attr.name, "data-mw-deduplicate")) return invalid;
+            // Inert generated metadata stays in the original observed graph.
+            // This scanner extracts CSS bytes only; it does not certify nodes.
+            for (inv.attributes) |attr| if (!equal(attr.name, "data-mw-deduplicate") and
+                !(generated_metadata and (equal(attr.name, "about") or equal(attr.name, "typeof") or
+                    equal(attr.name, "data-mw") or equal(attr.name, "id")))) return invalid;
             if (inv.get("data-mw-deduplicate")) |id| {
                 if (id.len == 0 or id.len > 1024) return invalid;
                 for (ids.items) |old| if (equal(old, id)) return invalid;
@@ -6947,7 +6973,17 @@ fn appendObservedPageStylesIn(a: A, sources: *std.ArrayList(profile.Source), htm
                 continue;
             }
             // No unrepresented body stylesheet, alternate, media, or URL context.
-            if (!equal(inv.get("rel") orelse "", "mw-deduplicated-inline-style") or inv.attributes.len != 2) return invalid;
+            if (!equal(inv.get("rel") orelse "", "mw-deduplicated-inline-style")) return invalid;
+            // Retained Parsoid metadata is inert here, just as on STYLE above.
+            // Only the exact mw-data target of a previously seen sheet is used;
+            // complete-body validation still owns every original LINK node.
+            if (!generated_metadata) {
+                // Keep the original default domain, including case-insensitive
+                // REL/HREF lookup through Inventory.get.
+                if (inv.attributes.len != 2) return invalid;
+            } else for (inv.attributes) |attr| if (!std.ascii.eqlIgnoreCase(attr.name, "rel") and
+                !std.ascii.eqlIgnoreCase(attr.name, "href") and !equal(attr.name, "about") and
+                !equal(attr.name, "typeof") and !equal(attr.name, "data-mw") and !equal(attr.name, "id")) return invalid;
             const href = inv.get("href") orelse return invalid;
             if (!std.mem.startsWith(u8, href, "mw-data:")) return invalid;
             var found = false;
@@ -7426,6 +7462,15 @@ fn observedTextClassScopeToEndWithRootOptions(a: A, ns: *const namespaces.Regist
 fn observedClassRootTokens(a: A, ns: *const namespaces.Registry, html: []const u8,
     nodes: ?*std.ArrayList(ObservedSiblingNode), root_end: ?*usize, current_literal: bool, expected_root: ?Inventory, retain_sections: bool, returned_html_comments: bool, quoted_html_attributes: bool) !profile.BoundedTextClassScope
 {
+    return observedClassRootTokensIn(a, ns, html, nodes, root_end, current_literal, expected_root,
+        retain_sections, returned_html_comments, quoted_html_attributes, false);
+}
+
+fn observedClassRootTokensIn(a: A, ns: *const namespaces.Registry, html: []const u8,
+    nodes: ?*std.ArrayList(ObservedSiblingNode), root_end: ?*usize, current_literal: bool, expected_root: ?Inventory, retain_sections: bool, returned_html_comments: bool, quoted_html_attributes: bool, retained_hu_auxiliary: bool) !profile.BoundedTextClassScope
+{
+    if (retained_hu_auxiliary and (current_literal or expected_root == null or !retain_sections or
+        !returned_html_comments or !quoted_html_attributes)) return invalid;
     if (html.len == 0 or html.len > max_response or !std.unicode.utf8ValidateSlice(html) or std.mem.indexOfScalar(u8, html, 0) != null) return invalid;
     var stack: [128]ObservedOpenNode = undefined;
     var depth: usize = 0;
@@ -7486,7 +7531,10 @@ fn observedClassRootTokens(a: A, ns: *const namespaces.Registry, html: []const u
         }
         elements += 1;
         if (elements > 16384) return invalid;
-        var ordinary = retain_sections and tag.is("section");
+        const auxiliary: RetainedHuAuxiliary = if (retained_hu_auxiliary)
+            try retainedHuAuxiliaryOpening(a, html, stack[0..depth], at, tag) else .none;
+        if (retained_hu_auxiliary and depth > 0 and stack[depth - 1].tag.is("map") and !tag.is("area")) return invalid;
+        var ordinary = auxiliary != .none or (retain_sections and tag.is("section"));
         if (current_literal and tag.is("section")) {
             try currentLiteralSectionOpening(stack[0..depth], inv);
             ordinary = true;
@@ -7496,7 +7544,7 @@ fn observedClassRootTokens(a: A, ns: *const namespaces.Registry, html: []const u
             "ul", "ol", "li", "dl", "dt", "dd", "table", "thead", "tbody", "tfoot", "tr", "th", "td", "caption",
             "col", "colgroup", "br", "hr", "wbr", "u", "s", "code", "pre", "font", "center", "audio", "source", "mark", "ruby", "rp", "rt" }) |name|
             if (tag.is(name)) { ordinary = true; break; };
-        const is_void = tag.is("img") or tag.is("meta") or tag.is("link") or tag.is("col") or tag.is("br") or tag.is("hr") or tag.is("wbr") or tag.is("source");
+        const is_void = auxiliary == .area or auxiliary == .toc_input or tag.is("img") or tag.is("meta") or tag.is("link") or tag.is("col") or tag.is("br") or tag.is("hr") or tag.is("wbr") or tag.is("source");
         if (!ordinary or ((tag.self_closing or html[tag.end - 2] == '/') and !is_void)) return invalid;
         const audio_child = depth > 0 and stack[depth - 1].tag.is("audio");
         if ((audio_child and !tag.is("source")) or (tag.is("source") and !audio_child)) return invalid;
@@ -7565,7 +7613,7 @@ fn observedClassRootTokens(a: A, ns: *const namespaces.Registry, html: []const u
         }
         if (!is_void) {
             if (depth == stack.len) return invalid;
-            stack[depth] = .{ .tag = tag, .attributes = inv };
+            stack[depth] = .{ .tag = tag, .attributes = inv, .start = if (retained_hu_auxiliary) at else 0 };
             depth += 1;
         }
         at = tag.end;
@@ -32908,4 +32956,704 @@ test "HU selected GET body binds actual root and quoted SECTION without whole bo
     var full: std.ArrayList(ObservedSiblingNode) = .empty;
     try std.testing.expectError(invalid, observedHuSelectedGetBodyScope(a, &ns, page, input.body, &full, &end));
     try std.testing.expectEqual(@as(usize, 0), end);
+}
+
+const LocalTocControlRetention = struct {
+    capture: []const u8,
+    owner: ObservedOpenNode,
+    owner_end: usize,
+    input: ObservedOpenNode,
+    title: ObservedOpenNode,
+    toggle_span: ObservedOpenNode,
+    label: ObservedOpenNode,
+    label_close: syntax.Tag,
+
+    fn inputBytes(self: @This()) []const u8 {
+        return self.capture[self.input.start..self.input.tag.end];
+    }
+    fn labelBytes(self: @This()) []const u8 {
+        return self.capture[self.label.start..self.label_close.end];
+    }
+};
+
+const RetainedHuAuxiliary = enum { none, map, area, toc_input, toc_label };
+
+fn localTocOpening(a: A, html: []const u8, start: usize) !ObservedOpenNode {
+    const tag = currentLiteralHtmlTagAt(html, start) orelse return invalid;
+    if (tag.closing or (!tag.is("input") and html[tag.end - 2] == '/')) return invalid;
+    const attrs = try inventoryReturnedMode(a, tag, false, false, true);
+    for (attrs.attributes) |attr| if ((attr.name.len >= 2 and std.ascii.eqlIgnoreCase(attr.name[0..2], "on")) or
+        std.ascii.eqlIgnoreCase(attr.name, "contenteditable")) return invalid;
+    return .{ .tag = tag, .start = start, .attributes = attrs };
+}
+
+fn localTocClose(html: []const u8, start: usize, name: []const u8) !syntax.Tag {
+    const tag = currentLiteralHtmlTagAt(html, start) orelse return invalid;
+    if (!tag.closing or !tag.is(name) or tag.self_closing or html[tag.end - 2] == '/' or
+        std.mem.trim(u8, tag.attrs, " \t\r\n").len != 0) return invalid;
+    return tag;
+}
+
+fn localTocAttrs(node: ObservedOpenNode, name: []const u8, expected: []const Attribute) !void {
+    if (!node.tag.is(name) or (!node.tag.is("input") and node.tag.self_closing) or
+        !sameSiblingAttributes(node.attributes, .{ .attributes = expected })) return invalid;
+}
+
+fn retainLocalTocControls(a: A, html: []const u8,
+    owner_path: []const ObservedOpenNode) !LocalTocControlRetention
+{
+    if (owner_path.len == 0 or owner_path.len > 128 or html.len > max_response) return invalid;
+    // Bind every supplied opening to THIS buffer. This checks records, not
+    // whether their ancestry has independently been established by a caller.
+    var previous_end: usize = 0;
+    for (owner_path) |open| {
+        const fresh = try localTocOpening(a, html, open.start);
+        if (open.start < previous_end or fresh.tag.name.ptr != open.tag.name.ptr or
+            fresh.tag.attrs.ptr != open.tag.attrs.ptr or fresh.tag.end != open.tag.end or
+            !sameSiblingAttributes(fresh.attributes, open.attributes)) return invalid;
+        previous_end = fresh.tag.end;
+    }
+    const owner = owner_path[owner_path.len - 1];
+    try localTocAttrs(owner, "div", &.{
+        .{ .name = "id", .value = "toc" }, .{ .name = "class", .value = "toc" },
+        .{ .name = "role", .value = "navigation" }, .{ .name = "aria-labelledby", .value = "mw-toc-heading" },
+    });
+    const owner_end = try sourceParentOwnedRootEnd(html, html[0..owner.tag.end]);
+    if (owner_end <= owner.tag.end or owner_end - owner.start > 16 * 1024) return invalid;
+    const bounded = html[0..owner_end];
+    const input = try localTocOpening(a, bounded, owner.tag.end);
+    try localTocAttrs(input, "input", &.{
+        .{ .name = "type", .value = "checkbox" }, .{ .name = "role", .value = "button" },
+        .{ .name = "id", .value = "toctogglecheckbox" }, .{ .name = "class", .value = "toctogglecheckbox" },
+        .{ .name = "style", .value = "display:none" },
+    });
+    const title = try localTocOpening(a, bounded, input.tag.end);
+    try localTocAttrs(title, "div", &.{
+        .{ .name = "class", .value = "toctitle" }, .{ .name = "lang", .value = "hu" },
+        .{ .name = "dir", .value = "ltr" },
+    });
+    const heading = try localTocOpening(a, bounded, title.tag.end);
+    try localTocAttrs(heading, "h2", &.{.{ .name = "id", .value = "mw-toc-heading" }});
+    const heading_close_at = std.mem.indexOfPos(u8, bounded, heading.tag.end, "<") orelse return invalid;
+    if (heading_close_at == heading.tag.end) return invalid;
+    const heading_close = try localTocClose(bounded, heading_close_at, "h2");
+    const span = try localTocOpening(a, bounded, heading_close.end);
+    try localTocAttrs(span, "span", &.{.{ .name = "class", .value = "toctogglespan" }});
+    const label = try localTocOpening(a, bounded, span.tag.end);
+    try localTocAttrs(label, "label", &.{
+        .{ .name = "class", .value = "toctogglelabel" },
+        .{ .name = "for", .value = input.attributes.get("id") orelse return invalid },
+    });
+    // Immediate closing, including zero text bytes, is part of the evidence.
+    const label_close = try localTocClose(bounded, label.tag.end, "label");
+    const span_close = try localTocClose(bounded, label_close.end, "span");
+    const title_close = try localTocClose(bounded, span_close.end, "div");
+    const list = try localTocOpening(a, bounded, title_close.end);
+    try localTocAttrs(list, "ul", &.{});
+    const list_pair = syntax.matchingTag(bounded, list.tag) orelse return invalid;
+    const list_close = try localTocClose(bounded, list_pair.inner_end, "ul");
+    if (list_close.end != list_pair.end) return invalid;
+    try retainedHuTocNavigation(a, bounded, list.tag, list_close.end);
+    const owner_close = try localTocClose(bounded, list_close.end, "div");
+    if (owner_close.end != owner_end) return invalid;
+
+    // This census retains the original bytes and does not build or qualify
+    // a DOM. Refuse raw-text/foreign/comment forms rather than interpret them.
+    // The unchanged general body grammar still rejects INPUT/LABEL.
+    var at = owner.tag.end;
+    var tokens: usize = 0;
+    while (at < owner_end) {
+        at = std.mem.indexOfPos(u8, bounded, at, "<") orelse return invalid;
+        const tag = currentLiteralHtmlTagAt(bounded, at) orelse return invalid;
+        const attrs = try inventoryReturnedMode(a, tag, false, false, true);
+        tokens += 1;
+        if (tokens > 2048) return invalid;
+        var known = false;
+        for ([_][]const u8{ "div", "input", "h2", "span", "label", "ul", "li", "a" }) |name|
+            if (tag.is(name)) { known = true; break; };
+        if (!known) return invalid;
+        if (tag.closing) {
+            if (tag.is("input") or tag.self_closing or bounded[tag.end - 2] == '/' or attrs.attributes.len != 0) return invalid;
+        } else {
+            if ((tag.is("input") and at != input.start) or (tag.is("label") and at != label.start)) return invalid;
+            for (attrs.attributes) |attr| {
+                if ((attr.name.len >= 2 and std.ascii.eqlIgnoreCase(attr.name[0..2], "on")) or
+                    std.ascii.eqlIgnoreCase(attr.name, "contenteditable") or
+                    std.ascii.eqlIgnoreCase(attr.name, "tabindex") or
+                    std.ascii.eqlIgnoreCase(attr.name, "form") or
+                    std.ascii.eqlIgnoreCase(attr.name, "autofocus")) return invalid;
+            }
+            if (tag.is("a")) {
+                const href = attrs.get("href") orelse return invalid;
+                if (href.len < 2 or href[0] != '#' or std.mem.indexOfAny(u8, href, "\x00\r\n\t\\") != null) return invalid;
+            }
+            if (attrs.get("id")) |id| {
+                if (equal(id, "toc") or (equal(id, "toctogglecheckbox") and at != input.start) or
+                    (equal(id, "mw-toc-heading") and at != heading.start)) return invalid;
+            }
+            if (attrs.get("for")) |target| {
+                if (at != label.start or !equal(target, input.attributes.get("id").?)) return invalid;
+            }
+        }
+        at = tag.end;
+    }
+    return .{ .capture = html, .owner = owner, .owner_end = owner_end, .input = input,
+        .title = title, .toggle_span = span, .label = label, .label_close = label_close };
+}
+
+fn retainedHuMapOpening(a: A, html: []const u8, stack: []const ObservedOpenNode,
+    at: usize, opening: syntax.Tag) !void
+{
+    try retainedHuMapAncestors(stack);
+    const frame = stack[stack.len - 1];
+    if (!frame.tag.is("figure") or !equal(frame.attributes.get("class") orelse "", "noresize") or
+        !equal(frame.attributes.get("typeof") orelse "", "mw:File mw:Extension/imagemap")) return invalid;
+    const raw_metadata = frame.attributes.get("data-mw") orelse return invalid;
+    if (raw_metadata.len > 256 * 1024) return invalid;
+    const metadata = try json(a, raw_metadata);
+    if (metadata != .object or metadata.object.count() != 3) return invalid;
+    const name = metadata.object.get("name") orelse return invalid;
+    const attrs = metadata.object.get("attrs") orelse return invalid;
+    const body = metadata.object.get("body") orelse return invalid;
+    if (name != .string or !equal(name.string, "imagemap") or attrs != .object or attrs.object.count() != 0 or
+        body != .object or body.object.count() != 1) return invalid;
+    const original = body.object.get("extsrc") orelse return invalid;
+    if (original != .string or original.string.len == 0) return invalid;
+    // The exact local shape is FIGURE > SPAN > IMG, then MAP and an empty
+    // FIGCAPTION. Source correspondence is still a separate consumer check.
+    const parent = currentLiteralHtmlTagAt(html, frame.tag.end) orelse return invalid;
+    if (!parent.is("span") or parent.closing or parent.self_closing) return invalid;
+    const image = currentLiteralHtmlTagAt(html, parent.end) orelse return invalid;
+    if (!image.is("img") or image.closing) return invalid;
+    const parent_close = currentLiteralHtmlTagAt(html, image.end) orelse return invalid;
+    if (!parent_close.is("span") or !parent_close.closing or parent_close.attrs.len != 0 or parent_close.end != at) return invalid;
+    if (!opening.is("map") or opening.closing or opening.self_closing) return invalid;
+    const map_attrs = try outerInventoryReturned(a, opening, true);
+    if (map_attrs.attributes.len != 2 or map_attrs.get("name") == null or map_attrs.get("id") == null) return invalid;
+    var cursor = opening.end;
+    var areas: usize = 0;
+    while (true) {
+        const area = currentLiteralHtmlTagAt(html, cursor) orelse return invalid;
+        if (area.closing) {
+            if (!area.is("map") or area.attrs.len != 0) return invalid;
+            break;
+        }
+        if (!area.is("area") or areas == 512) return invalid;
+        const area_attrs = try outerInventoryReturned(a, area, true);
+        if (area_attrs.attributes.len != 6 or area_attrs.get("id") == null or
+            !equal(area_attrs.get("shape") orelse "", "poly") or
+            !equal(area_attrs.get("alt") orelse return invalid, area_attrs.get("title") orelse return invalid)) return invalid;
+        const href = area_attrs.get("href") orelse return invalid;
+        const coordinates = area_attrs.get("coords") orelse return invalid;
+        if (!std.mem.startsWith(u8, href, "https://hu.wiktionary.org/wiki/") or
+            href.len <= "https://hu.wiktionary.org/wiki/".len or
+            std.mem.indexOfAny(u8, href, "\\\r\n\t\x00") != null or
+            coordinates.len == 0 or coordinates.len > 4096) return invalid;
+        // Coordinate bytes remain data; no scale, clipping or source match is
+        // inferred by this lexical retention path.
+        areas += 1;
+        cursor = area.end;
+    }
+    if (areas == 0) return invalid;
+    const closed = try sourceParentClosedShape(a, html, image, parent.name, parent.end, parent.end, areas);
+    if (closed.map.name.ptr != opening.name.ptr or closed.map.attrs.ptr != opening.attrs.ptr or
+        closed.map.end != opening.end) return invalid;
+}
+
+fn retainedHuAuxiliaryOpening(a: A, html: []const u8, stack: []const ObservedOpenNode,
+    at: usize, opening: syntax.Tag) !RetainedHuAuxiliary
+{
+    if (opening.is("map")) {
+        try retainedHuMapOpening(a, html, stack, at, opening);
+        return .map;
+    }
+    if (opening.is("area")) {
+        // The maintained balanced scanner already admitted this exact MAP
+        // through the complete local shape above. AREA remains a void node.
+        if (stack.len < 2 or !stack[stack.len - 1].tag.is("map") or
+            !stack[stack.len - 2].tag.is("figure")) return invalid;
+        return .area;
+    }
+    if (opening.is("input") or opening.is("label")) {
+        const input = opening.is("input");
+        if (stack.len < (if (input) @as(usize, 2) else 4)) return invalid;
+        const owner_depth = stack.len - (if (input) @as(usize, 0) else 2);
+        if (!stack[0].tag.is("div")) return invalid;
+        for (stack[1 .. owner_depth - 1]) |ancestor| if (!ancestor.tag.is("section")) return invalid;
+        const local = try retainLocalTocControls(a, html, stack[0..owner_depth]);
+        const expected = if (input) local.input else local.label;
+        if (at != expected.start or opening.name.ptr != expected.tag.name.ptr or
+            opening.attrs.ptr != expected.tag.attrs.ptr or opening.end != expected.tag.end) return invalid;
+        return if (input) .toc_input else .toc_label;
+    }
+    return .none;
+}
+
+fn retainedHuMapAncestors(stack: []const ObservedOpenNode) !void {
+    if (stack.len < 8 or stack.len > 128 or !stack[0].tag.is("div")) return invalid;
+    var at: usize = 1;
+    while (at < stack.len and stack[at].tag.is("section")) : (at += 1) {}
+    if (at == 1) return invalid;
+    for ([_][]const u8{ "table", "tbody", "tr", "td" }) |name| {
+        if (at == stack.len or !stack[at].tag.is(name)) return invalid;
+        at += 1;
+    }
+    const first_div = at;
+    while (at < stack.len and stack[at].tag.is("div")) : (at += 1) {}
+    if (at == first_div or at + 1 != stack.len or !stack[at].tag.is("figure")) return invalid;
+}
+
+fn retainedHuTocNavigation(a: A, html: []const u8, list: syntax.Tag, expected_end: usize) !void {
+    const Frame = struct { tag: syntax.Tag, children: usize = 0, text: bool = false };
+    if (!list.is("ul") or list.closing or list.self_closing or list.end > expected_end or expected_end > html.len) return invalid;
+    var stack: [128]Frame = undefined;
+    stack[0] = .{ .tag = list };
+    var depth: usize = 1;
+    var at = list.end;
+    var tokens: usize = 0;
+    while (at < expected_end) {
+        const next = std.mem.indexOfPos(u8, html[0..expected_end], at, "<") orelse return invalid;
+        const text = std.mem.trim(u8, html[at..next], " \t\r\n\x0c");
+        if (depth == 0) return invalid;
+        if (stack[depth - 1].tag.is("span")) {
+            stack[depth - 1].text = stack[depth - 1].text or text.len != 0;
+        } else if (text.len != 0) return invalid;
+        const tag = currentLiteralHtmlTagAt(html[0..expected_end], next) orelse return invalid;
+        if (tag.self_closing or html[tag.end - 2] == '/') return invalid;
+        const attrs = try inventoryReturnedMode(a, tag, false, false, true);
+        tokens += 1;
+        if (tokens > 2048) return invalid;
+        if (tag.closing) {
+            const frame = stack[depth - 1];
+            if (attrs.attributes.len != 0 or !tag.is(frame.tag.name)) return invalid;
+            if ((tag.is("ul") and frame.children == 0) or
+                (tag.is("li") and (frame.children < 1 or frame.children > 2)) or
+                (tag.is("a") and frame.children != 2) or
+                (tag.is("span") and (!frame.text or frame.children != 0))) return invalid;
+            depth -= 1;
+            if (depth == 0) {
+                if (tag.end != expected_end) return invalid;
+                return;
+            }
+        } else {
+            const parent = &stack[depth - 1];
+            if (parent.tag.is("ul")) {
+                if (!tag.is("li") or attrs.attributes.len != 1 or attrs.get("class") == null) return invalid;
+            } else if (parent.tag.is("li")) {
+                if (parent.children == 0) {
+                    if (!tag.is("a") or attrs.attributes.len != 1) return invalid;
+                    const href = attrs.get("href") orelse return invalid;
+                    if (href.len < 2 or href[0] != '#' or std.mem.indexOfAny(u8, href, "\x00\r\n\t\\") != null) return invalid;
+                } else if (parent.children == 1) {
+                    if (!tag.is("ul") or attrs.attributes.len != 0) return invalid;
+                } else return invalid;
+            } else if (parent.tag.is("a")) {
+                if (!tag.is("span") or parent.children >= 2 or attrs.attributes.len != 1 or
+                    !equal(attrs.get("class") orelse return invalid,
+                        if (parent.children == 0) "tocnumber" else "toctext")) return invalid;
+            } else return invalid;
+            parent.children += 1;
+            if (depth == stack.len) return invalid;
+            stack[depth] = .{ .tag = tag };
+            depth += 1;
+        }
+        at = tag.end;
+    }
+    return invalid;
+}
+
+test "HU captured TOC retains empty controls and refuses crossed duplicate active tuples" {
+    var diagnostic_stage: []const u8 = "fixtures";
+    errdefer std.debug.print("[HU toc] stage={s}\n", .{diagnostic_stage});
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const html = try std.Io.Dir.cwd().readFileAlloc(std.testing.io,
+        "compiler/tools/testdata/hu-selected-get-body01/viz-oldid3518053.html",
+        a, .limited(512 * 1024));
+    try std.testing.expect(digestMatches(html, "aadfbf84363a866683ca1c175c172aee3b700dc00d009585c924fa06b59a3439"));
+    // Actual captured openings, including SECTION. These are local records;
+    // this control deliberately makes no full-body/ancestor-graph assertion.
+    diagnostic_stage = "owner-records";
+    const path = [_]ObservedOpenNode{
+        try localTocOpening(a, html, 14372),
+        try localTocOpening(a, html, 14508),
+        try localTocOpening(a, html, 95606),
+    };
+    try std.testing.expect(path[1].tag.is("section"));
+    diagnostic_stage = "positive-local-toc";
+    const retained = try retainLocalTocControls(a, html, &path);
+    diagnostic_stage = "positive-values";
+    try std.testing.expectEqual(@as(usize, 103715), retained.owner_end);
+    try std.testing.expect(digestMatches(html[retained.owner.start..retained.owner_end],
+        "a14c6e620f00415ca232c440652950d3c502ff73c4d46ac13ad5285b1330d8b4"));
+    try std.testing.expectEqual(@as(usize, 95683), retained.input.start);
+    try std.testing.expectEqual(@as(usize, 95791), retained.input.tag.end);
+    try std.testing.expectEqual(@as(usize, 95906), retained.label.start);
+    try std.testing.expectEqual(@as(usize, 95960), retained.label.tag.end);
+    try std.testing.expectEqual(@as(usize, 95968), retained.label_close.end);
+    try std.testing.expectEqual(@as(usize, 5), retained.input.attributes.attributes.len);
+    try std.testing.expectEqual(@as(usize, 2), retained.label.attributes.attributes.len);
+    try std.testing.expectEqualStrings("toctogglecheckbox", retained.label.attributes.get("for").?);
+    try std.testing.expectEqualStrings("display:none", retained.input.attributes.get("style").?);
+    try std.testing.expect(retained.capture.ptr == html.ptr);
+    try std.testing.expect(retained.inputBytes().ptr == html[95683..].ptr);
+    try std.testing.expect(retained.labelBytes().ptr == html[95906..].ptr);
+    try std.testing.expectEqualStrings(html[95683..95791], retained.inputBytes());
+    try std.testing.expectEqualStrings(html[95906..95968], retained.labelBytes());
+    try std.testing.expectError(invalid, retainLocalTocControls(a, html, path[0..2]));
+    try std.testing.expectError(invalid, retainLocalTocControls(a, html[0..103714], &path));
+
+    // Tiny negative controls in RAM only; never copy the full capture or TOC.
+    diagnostic_stage = "tuple-negatives";
+    const Case = struct { input: []const u8, label: []const u8, extra: []const u8 = "" };
+    const input = retained.inputBytes();
+    const label = retained.labelBytes();
+    const cases = [_]Case{
+        .{ .input = input, .label = "<label class='toctogglelabel' for='foreign'></label>" },
+        .{ .input = input, .label = "<div><label class='toctogglelabel' for='toctogglecheckbox'></label></div>" },
+        .{ .input = input, .label = "<label class='toctogglelabel' for='toctogglecheckbox'> </label>" },
+        .{ .input = "<input type='checkbox' role='button' id='toctogglecheckbox' class='toctogglecheckbox' style='display:none' onclick='x'/>", .label = label },
+        .{ .input = input, .label = label, .extra = "<li id='toctogglecheckbox'></li>" },
+        .{ .input = input, .label = label, .extra = input },
+        .{ .input = input, .label = label, .extra = label },
+        .{ .input = input, .label = label, .extra = "<li><button>active</button></li>" },
+    };
+    for (cases, 0..) |case, diagnostic_case| {
+        errdefer std.debug.print("[HU toc] tuple_case={d}\n", .{diagnostic_case});
+        const changed = try std.mem.concat(a, u8, &.{
+            html[95606..95683], case.input, html[95791..95906], case.label,
+            "</span></div><ul>", case.extra, "</ul></div>",
+        });
+        try std.testing.expect(changed.len < 1024);
+        const changed_owner = [_]ObservedOpenNode{try localTocOpening(a, changed, 0)};
+        try std.testing.expectError(invalid, retainLocalTocControls(a, changed, &changed_owner));
+        // A token record from another capture cannot be reused by offset.
+        try std.testing.expectError(invalid, retainLocalTocControls(a, html, &changed_owner));
+    }
+    // Balanced source tokens are insufficient when HTML would repair their
+    // parent relationships. Keep this test within the new local TOC domain.
+    diagnostic_stage = "navigation-negatives";
+    const navigation_cases = [_][]const u8{
+        "<li class='toclevel-1'><a href='#a'><span class='tocnumber'>1</span><span class='toctext'>A</span><a href='#b'><span class='tocnumber'>2</span><span class='toctext'>B</span></a></a></li>",
+        "<li class='toclevel-1'><li class='toclevel-2'><a href='#a'><span class='tocnumber'>1</span><span class='toctext'>A</span></a></li></li>",
+        "<a href='#a'><span class='tocnumber'>1</span><span class='toctext'>A</span></a>",
+        "orphan text<li class='toclevel-1'><a href='#a'><span class='tocnumber'>1</span><span class='toctext'>A</span></a></li>",
+        "<li class='toclevel-1'><a href='#a'><span class='toctext'>A</span><span class='tocnumber'>1</span></a></li>",
+        "<li class='toclevel-1'><a href='https://example.invalid'><span class='tocnumber'>1</span><span class='toctext'>A</span></a></li>",
+    };
+    for (navigation_cases, 0..) |navigation, diagnostic_case| {
+        errdefer std.debug.print("[HU toc] navigation_case={d}\n", .{diagnostic_case});
+        const changed = try std.mem.concat(a, u8, &.{
+            html[95606..95985], navigation, "</ul></div>",
+        });
+        const owner = [_]ObservedOpenNode{try localTocOpening(a, changed, 0)};
+        try std.testing.expectError(invalid, retainLocalTocControls(a, changed, &owner));
+    }
+
+}
+
+test "HU retained imagemap closure preserves four actions without issuing map geometry" {
+    var diagnostic_stage: []const u8 = "fixtures";
+    errdefer std.debug.print("[HU map] stage={s}\n", .{diagnostic_stage});
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const html = try std.Io.Dir.cwd().readFileAlloc(std.testing.io,
+        "compiler/tools/testdata/hu-selected-get-body01/viz-oldid3518053.html",
+        a, .limited(512 * 1024));
+    const source = try std.Io.Dir.cwd().readFileAlloc(std.testing.io,
+        "compiler/src/encoder/testdata/hu-viz609-hu02/expanded.wikitext",
+        a, .limited(128 * 1024));
+    try std.testing.expect(digestMatches(html, "aadfbf84363a866683ca1c175c172aee3b700dc00d009585c924fa06b59a3439"));
+    try std.testing.expect(digestMatches(source, "8d7e4d11612774935779d88c3c0ea9432c1126e396ce95e6a3c4b8a314ece6ba"));
+    try std.testing.expect(digestMatches(html[82441..85155],
+        "d8071d097073d158714de9461a48c7bf0cf6da3cfb11c9e935eb6f4201bfbf76"));
+    try std.testing.expectEqualStrings("<imagemap>", source[15918..15928]);
+    try std.testing.expectEqualStrings("</imagemap>", source[16545..16556]);
+    try std.testing.expect(std.mem.indexOfPos(u8, source, 15928, "<imagemap>") == null);
+
+    diagnostic_stage = "map-openings";
+    const frame = currentLiteralHtmlTagAt(html, 82441) orelse return error.TestUnexpectedResult;
+    const parent = currentLiteralHtmlTagAt(html, frame.end) orelse return error.TestUnexpectedResult;
+    const image = currentLiteralHtmlTagAt(html, parent.end) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(frame.is("figure") and parent.is("span") and image.is("img"));
+    try std.testing.expectEqual(@as(usize, 83216), frame.end);
+    try std.testing.expectEqual(@as(usize, 83232), parent.end);
+    const frame_attrs = try outerInventoryReturned(a, frame, true);
+    diagnostic_stage = "source-metadata";
+    const metadata = try json(a, frame_attrs.get("data-mw") orelse return error.TestUnexpectedResult);
+    try std.testing.expect(metadata == .object);
+    const name = metadata.object.get("name") orelse return error.TestUnexpectedResult;
+    const body = metadata.object.get("body") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(name == .string and equal(name.string, "imagemap") and body == .object);
+    const extsrc = body.object.get("extsrc") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(extsrc == .string);
+    try std.testing.expectEqualStrings(source[15928..16545], extsrc.string);
+
+    diagnostic_stage = "closed-map-positive";
+    const closed = try sourceParentClosedShape(a, html, image, parent.name, parent.end, parent.end, 4);
+    try std.testing.expectEqual(@as(usize, 4), closed.areas.len);
+    try std.testing.expectEqual(@as(usize, 83935), closed.map.end);
+    try std.testing.expectEqual(@as(usize, 85133), closed.caption.end);
+    const map_attrs = try outerInventoryReturned(a, closed.map, true);
+    const image_attrs = try outerInventoryReturned(a, image, true);
+    try std.testing.expectEqualStrings("ImageMap_f33b7681e809ece7", map_attrs.get("name").?);
+    try std.testing.expectEqualStrings("#ImageMap_f33b7681e809ece7", image_attrs.get("usemap").?);
+    try std.testing.expectEqualStrings("80", image_attrs.get("width").?);
+    try std.testing.expectEqualStrings("80", image_attrs.get("height").?);
+    try std.testing.expectEqualStrings("512", image_attrs.get("data-file-width").?);
+    try std.testing.expectEqualStrings("512", image_attrs.get("data-file-height").?);
+    const expected = [_]struct { target: []const u8, coords: []const u8, label: []const u8 }{
+        .{ .target = "Blue", .coords = "23,23,47,47,23,70,0,47",
+            .label = "Health 0: Exposure under fire conditions would offer no hazard beyond that of ordinary combustible material. E.g. sodium chloride" },
+        .{ .target = "Red", .coords = "47,0,70,23,47,47,23,23",
+            .label = "Flammability 0: Will not burn. E.g. water" },
+        .{ .target = "Yellow", .coords = "70,23,94,47,70,70,47,47",
+            .label = "Instability 0: Normally stable, even under fire exposure conditions, and is not reactive with water. E.g. liquid nitrogen" },
+        .{ .target = "White", .coords = "47,47,70,70,47,94,23,70",
+            .label = "Special hazards (white): no code" },
+    };
+    diagnostic_stage = "four-region-values";
+    for (closed.areas, expected, 0..) |area, wanted, diagnostic_case| {
+        errdefer std.debug.print("[HU map] region={d}\n", .{diagnostic_case});
+        try std.testing.expect(area.is("area") and area.self_closing and !area.closing);
+        const attrs = try outerInventoryReturned(a, area, true);
+        try std.testing.expectEqual(@as(usize, 6), attrs.attributes.len);
+        try std.testing.expectEqualStrings("poly", attrs.get("shape").?);
+        try std.testing.expectEqualStrings(wanted.coords, attrs.get("coords").?);
+        try std.testing.expectEqualStrings(wanted.label, attrs.get("alt").?);
+        try std.testing.expectEqualStrings(wanted.label, attrs.get("title").?);
+        try std.testing.expectEqualStrings(try std.mem.concat(a, u8, &.{
+            "https://hu.wiktionary.org/wiki/NFPA_704#", wanted.target }), attrs.get("href").?);
+    }
+    // Shape validation must not silently lose a region, cross the image's
+    // selected map, accept an active handler, or erase visible caption text.
+    diagnostic_stage = "shape-negatives";
+    try std.testing.expectError(invalid, sourceParentClosedShape(a, html, image, parent.name, parent.end, parent.end, 3));
+    try std.testing.expectError(invalid, sourceParentClosedShape(a, html, image, parent.name, parent.end, parent.end, 5));
+    try std.testing.expectError(invalid, sourceParentClosedShape(a, html, image, parent.name, parent.end + 1, parent.end, 4));
+    const crossed = try a.dupe(u8, html);
+    const map_name = std.mem.indexOfPos(u8, crossed, 83887, "ImageMap_f33b7681e809ece7") orelse return error.TestUnexpectedResult;
+    crossed[map_name] = 'X';
+    try std.testing.expectError(invalid, sourceParentClosedShape(a, crossed, image, parent.name, parent.end, parent.end, 4));
+    const area_insert = closed.areas[0].end - 2;
+    const active = try std.mem.concat(a, u8, &.{ html[0..area_insert], " onclick=\"x\"", html[area_insert..] });
+    try std.testing.expectError(invalid, sourceParentClosedShape(a, active, image, parent.name, parent.end, parent.end, 4));
+    const caption_text = try std.mem.concat(a, u8, &.{ html[0..closed.caption.end], "visible", html[closed.caption.end..] });
+    try std.testing.expectError(invalid, sourceParentClosedShape(a, caption_text, image, parent.name, parent.end, parent.end, 4));
+
+    // A closed retained shape is not a source-action/coordinate certificate.
+    // The helper intentionally retains altered attributes; a later source
+    // join must reject them before issuing any map or geometry capability.
+    diagnostic_stage = "changed-coordinate-retained-shape";
+    const changed = try a.dupe(u8, html);
+    const coord_start = std.mem.indexOfPos(u8, changed, 83935, "coords=\"23,") orelse return error.TestUnexpectedResult;
+    changed[coord_start + "coords=\"2".len] = '4';
+    const altered = try sourceParentClosedShape(a, changed, image, parent.name, parent.end, parent.end, 4);
+    const altered_attrs = try outerInventoryReturned(a, altered.areas[0], true);
+    try std.testing.expectEqualStrings("24,23,47,47,23,70,0,47", altered_attrs.get("coords").?);
+    try std.testing.expect(!equal(expected[0].coords, altered_attrs.get("coords").?));
+    try std.testing.expectEqualStrings("noresize", frame_attrs.get("class").?);
+    try std.testing.expect(!sourceParentHasClass(frame_attrs.get("class").?, "mw-halign-left") and
+        !sourceParentHasClass(frame_attrs.get("class").?, "mw-halign-right"));
+    // These are the exact already-captured ancestor openings. The predicate
+    // consumes the scanner's stack in production; this direct control isolates
+    // its refusal of paragraph, anchor and incomplete-table contexts.
+    diagnostic_stage = "exact-map-ancestors";
+    const map_offsets = [_]usize{ 14372, 14508, 32104, 32179, 80065, 80407,
+        82277, 82315, 82356, 82407, 82441 };
+    var map_path: [map_offsets.len]ObservedOpenNode = undefined;
+    for (map_offsets, 0..) |offset, index| map_path[index] = try localTocOpening(a, html, offset);
+    try retainedHuMapAncestors(&map_path);
+    diagnostic_stage = "ancestor-negatives";
+    for ([_][]const u8{ "<p>", "<a href='#bad'>", "<table>" }) |bad_parent| {
+        var changed_path = map_path;
+        changed_path[6] = try localTocOpening(a, bad_parent, 0);
+        try std.testing.expectError(invalid, retainedHuMapAncestors(&changed_path));
+    }
+    diagnostic_stage = "missing-table-cell-negative";
+    var no_cell = map_path;
+    no_cell[5] = try localTocOpening(a, "<tr>", 0);
+    try std.testing.expectError(invalid, retainedHuMapAncestors(&no_cell));
+
+}
+
+test "HU retained auxiliary body keeps four map areas and TOC controls in its original graph" {
+    var diagnostic_stage: []const u8 = "fixtures";
+    errdefer std.debug.print("[HU body] stage={s}\n", .{diagnostic_stage});
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const html = try std.Io.Dir.cwd().readFileAlloc(std.testing.io,
+        "compiler/tools/testdata/hu-selected-get-body01/viz-oldid3518053.html",
+        a, .limited(512 * 1024));
+    const namespace_bytes = try std.Io.Dir.cwd().readFileAlloc(std.testing.io,
+        "compiler/tools/testdata/hu-direct-source-context01/namespace-registry.tsv",
+        a, .limited(4096));
+    try std.testing.expect(digestMatches(html, "aadfbf84363a866683ca1c175c172aee3b700dc00d009585c924fa06b59a3439"));
+    try std.testing.expect(digestMatches(namespace_bytes, "68c76ee3cf6c32dcbccccd6afa6be303d4066e78b08eb9fd96fc06bb82c2d3cf"));
+    var ns = try namespaces.Registry.init(a, namespace_bytes); defer ns.deinit();
+    // Only the body adapter is under test, not authenticated Book admission.
+    const page: RawPage = .{ .namespace_id = 0, .page_id = 609, .revision_id = 3518053,
+        .title = "víz", .raw_sha256 = "", .occurrences = &.{},
+        .outer_context = .{ .profile = hu_selected_get_profile, .selected_body = .full_get_root, .response = html } };
+    diagnostic_stage = "root-range";
+    const input = try selectedHuGetBodyInput(a, &ns, page, html[14372..]);
+    diagnostic_stage = "full-body-scan";
+    var nodes: std.ArrayList(ObservedSiblingNode) = .empty;
+    errdefer {
+        std.debug.print("[HU body] retained_nodes={d}\n", .{nodes.items.len});
+        if (nodes.items.len != 0) {
+            const last = nodes.items[nodes.items.len - 1];
+            std.debug.print("[HU body] last_retained_tag={s} body_offset={d}\n", .{ last.tag.name, last.start });
+        }
+    }
+    var end: usize = 0;
+    const scope = try observedHuRetainedAuxiliaryBodyScope(a, &ns, page, input.body, &nodes, &end);
+    diagnostic_stage = "full-body-boundary";
+    try std.testing.expectEqual(input.body.len, end);
+    try std.testing.expect(nodes.items.len > 0 and nodes.items[0].parent == null);
+    try std.testing.expectEqualStrings("div", scope.root_tag);
+    try std.testing.expect(profile.Profile.hasClass(scope.subtree_classes, "toctogglecheckbox"));
+    try std.testing.expect(profile.Profile.hasClass(scope.subtree_classes, "toctogglelabel"));
+    var maps: usize = 0; var areas: usize = 0; var inputs: usize = 0; var labels: usize = 0;
+    var map_index: ?usize = null;
+    diagnostic_stage = "retained-node-assertions";
+    for (nodes.items, 0..) |node, index| {
+        errdefer std.debug.print("[HU body] checked_node={d} tag={s} body_offset={d}\n", .{ index, node.tag.name, node.start });
+        if (node.tag.is("map")) {
+            maps += 1; map_index = index;
+            try std.testing.expectEqual(@as(usize, 83887), node.start + 14372);
+            try std.testing.expectEqualStrings("ImageMap_f33b7681e809ece7", node.attributes.get("name").?);
+            try std.testing.expect(nodes.items[node.parent orelse return error.TestUnexpectedResult].tag.is("figure"));
+        } else if (node.tag.is("area")) {
+            const expected_starts = [_]usize{83935, 84323, 84534, 84909};
+            try std.testing.expect(areas < expected_starts.len);
+            try std.testing.expectEqual(expected_starts[areas], node.start + 14372);
+            try std.testing.expectEqual(map_index orelse return error.TestUnexpectedResult, node.parent.?);
+            try std.testing.expectEqual(@as(usize, 6), node.attributes.attributes.len);
+            try std.testing.expectEqualStrings(node.attributes.get("alt").?, node.attributes.get("title").?);
+            areas += 1;
+        } else if (node.tag.is("input")) {
+            inputs += 1;
+            try std.testing.expectEqual(@as(usize, 95683), node.start + 14372);
+            try std.testing.expectEqualStrings("toctogglecheckbox", node.attributes.get("id").?);
+            try std.testing.expectEqualStrings("toc", nodes.items[node.parent.?].attributes.get("id").?);
+            try std.testing.expect(node.first_child == null);
+        } else if (node.tag.is("label")) {
+            labels += 1;
+            try std.testing.expectEqual(@as(usize, 95906), node.start + 14372);
+            try std.testing.expectEqual(node.tag.end, node.inner_end orelse return error.TestUnexpectedResult);
+            try std.testing.expectEqualStrings("toctogglecheckbox", node.attributes.get("for").?);
+            try std.testing.expectEqualStrings("toctogglespan", nodes.items[node.parent.?].attributes.get("class").?);
+        } else continue;
+        const original = currentLiteralHtmlTagAt(html, node.start + 14372) orelse return error.TestUnexpectedResult;
+        try std.testing.expect(original.name.ptr == node.tag.name.ptr and original.attrs.ptr == node.tag.attrs.ptr);
+        try std.testing.expect(sameSiblingAttributes(try outerInventoryReturned(a, original, true), node.attributes));
+    }
+    diagnostic_stage = "auxiliary-counts";
+    try std.testing.expectEqual(@as(usize, 1), maps);
+    try std.testing.expectEqual(@as(usize, 4), areas);
+    try std.testing.expectEqual(@as(usize, 1), inputs);
+    try std.testing.expectEqual(@as(usize, 1), labels);
+    // Other callers keep the unchanged strict grammar and cannot borrow this
+    // selected-HU policy simply by supplying the same bytes/root attributes.
+    diagnostic_stage = "strict-default-negatives";
+    var strict_end: usize = 0;
+    try std.testing.expectError(invalid, observedClassRootTokens(a, &ns, input.body, null,
+        &strict_end, false, input.root, true, true, true));
+    try std.testing.expectEqual(@as(usize, 0), strict_end);
+    try std.testing.expectError(invalid, observedClassRootTokensIn(a, &ns, input.body, null,
+        &strict_end, true, input.root, true, true, true, true));
+}
+
+test "HU selected GET outer and captured style shape preserve original legacy inputs" {
+    var diagnostic_stage: []const u8 = "inputs";
+    errdefer std.debug.print("[HU profile] stage={s}\n", .{diagnostic_stage});
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const root = "compiler/tools/testdata/hu-selected-get-body01/";
+    const html = try std.Io.Dir.cwd().readFileAlloc(std.testing.io,
+        root ++ "viz-oldid3518053.html", a, .limited(512 * 1024));
+    const metadata = try std.Io.Dir.cwd().readFileAlloc(std.testing.io,
+        root ++ "styles-receipt.json", a, .limited(32 * 1024));
+    try std.testing.expect(digestMatches(html, "aadfbf84363a866683ca1c175c172aee3b700dc00d009585c924fa06b59a3439"));
+    try std.testing.expect(digestMatches(metadata, "552ad9aacc6b9fed016db4c84ebf475e842b9a07f7f221f72015772602b42957"));
+    diagnostic_stage = "outer-prefix";
+    const observed = try observedOuterPrefix(a, html, true);
+    diagnostic_stage = "legacy-outer-shape";
+    try validateHuSelectedGetOuterPrefix("huwiktionary", "hu", 0, observed);
+    try std.testing.expectEqualStrings("vector-body", observed.ancestors[3].attributes.get("class").?);
+    try std.testing.expectError(invalid, validateHuSelectedGetOuterPrefix("srwiktionary", "hu", 0, observed));
+    var crossed = observed; crossed.ancestors = observed.ancestors[0..2];
+    try std.testing.expectError(invalid, validateHuSelectedGetOuterPrefix("huwiktionary", "hu", 0, crossed));
+    diagnostic_stage = "root-close";
+    const end = try sourceParentOwnedRootEnd(html, html[0..observed.root_open_end.?]);
+    var sheets: std.ArrayList(profile.Source) = .empty;
+    diagnostic_stage = "captured-stylesheet-scan";
+    appendObservedPageStylesForCapture(a, &sheets, html[observed.root_start.?..end], true, true) catch |err| {
+        std.debug.print("[HU profile] retained_sheets={d}\n", .{sheets.items.len});
+        return err;
+    };
+    diagnostic_stage = "stylesheet-descriptors";
+    const get = try field(try field(try json(a, metadata), "shots"), "get");
+    const inline_styles = try field(get, "inline");
+    try std.testing.expect(inline_styles == .array and inline_styles.array.items.len == 8);
+    try std.testing.expectEqual(@as(usize, 8), sheets.items.len);
+    var previous: usize = 0;
+    for (sheets.items, inline_styles.array.items, 0..) |sheet, record, index| {
+        errdefer std.debug.print("[HU profile] inline_index={d}\n", .{index});
+        try descriptor(sheet.css, record);
+        try std.testing.expect(sheet.byte_start > previous);
+        previous = sheet.byte_start;
+    }
+    diagnostic_stage = "linked-urls";
+    const linked = try field(get, "linked");
+    try std.testing.expect(linked == .array and linked.array.items.len == 2);
+    for (linked.array.items, 0..) |record, index| {
+        errdefer std.debug.print("[HU profile] linked_index={d}\n", .{index});
+        const url = try string(record, "url");
+        try missingStyleUrlForSkin(a, url, "https://hu.wiktionary.org", "hu", "vector");
+        try std.testing.expectError(invalid, missingStyleUrl(a, url, "https://hu.wiktionary.org", "hu"));
+        try std.testing.expect(!record.object.contains("final_url"));
+    }
+    diagnostic_stage = "captured-dedup-link";
+    const captured_style = html[38407..38820];
+    const captured_link = html[40209..40437];
+    try std.testing.expect(digestMatches(captured_style, "24f344f1aff4085098db4c58ed7bd3fbeb863b5bf596ebfbe91839f003349542"));
+    try std.testing.expect(digestMatches(captured_link, "114ce3dfb5163a358c9c69754face38f31b8e96292657b4b38445d646cfbdf4a"));
+    const captured_pair = try std.mem.concat(a, u8, &.{ captured_style, captured_link });
+    var pair_sheets: std.ArrayList(profile.Source) = .empty;
+    try appendObservedPageStylesForCapture(a, &pair_sheets, captured_pair, true, true);
+    try std.testing.expectEqual(@as(usize, 1), pair_sheets.items.len);
+    try descriptor(pair_sheets.items[0].css, inline_styles.array.items[1]);
+    const seed = "<style data-mw-deduplicate=\"TemplateStyles:r3506340\">.x{}</style>";
+    const strict_pair = try std.mem.concat(a, u8, &.{ seed, captured_link });
+    var strict_sheets: std.ArrayList(profile.Source) = .empty;
+    try std.testing.expectError(invalid, appendObservedPageStylesIn(a, &strict_sheets, strict_pair, true));
+    diagnostic_stage = "default-case-insensitive-link";
+    const uppercase_pair = seed ++ "<link REL=\"mw-deduplicated-inline-style\" HREF=\"mw-data:TemplateStyles:r3506340\"/>";
+    var uppercase_sheets: std.ArrayList(profile.Source) = .empty;
+    try appendObservedPageStylesIn(a, &uppercase_sheets, uppercase_pair, true);
+    try std.testing.expectEqual(@as(usize, 1), uppercase_sheets.items.len);
+    diagnostic_stage = "dedup-link-negatives";
+    for ([_][]const u8{
+        "<link rel=\"mw-deduplicated-inline-style\" href=\"mw-data:TemplateStyles:r3506340\" onclick=\"x\"/>",
+        "<link rel=\"mw-deduplicated-inline-style\" href=\"mw-data:TemplateStyles:r3506340\" media=\"print\"/>",
+        "<link rel=\"mw-deduplicated-inline-style\" href=\"mw-data:missing\" about=\"#mwt4\"/>",
+        "<link rel=\"mw-deduplicated-inline-style\" href=\"https://example.invalid/x.css\" about=\"#mwt4\"/>",
+    }, 0..) |link, index| {
+        errdefer std.debug.print("[HU profile] dedup_negative={d}\n", .{index});
+        var rejected: std.ArrayList(profile.Source) = .empty;
+        try std.testing.expectError(invalid, appendObservedPageStylesForCapture(a, &rejected,
+            try std.mem.concat(a, u8, &.{ seed, link }), true, true));
+    }
+    diagnostic_stage = "style-attribute-negatives";
+    // Scanner negatives do not change a full payload or authenticate a Book.
+    var bad: std.ArrayList(profile.Source) = .empty;
+    try std.testing.expectError(invalid, appendObservedPageStylesForCapture(a, &bad,
+        "<style media=\"print\">.x{color:red}</style>", true, true));
+    try std.testing.expectError(invalid, appendObservedPageStylesForCapture(a, &bad,
+        "<style onclick=\"x\">.x{color:red}</style>", true, true));
+    // This positive shape test is not a complete-body parser, transport,
+    // computed-style, selected source-parent, or Writer qualification.
 }
