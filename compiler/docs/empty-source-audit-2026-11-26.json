@@ -1,0 +1,1311 @@
+{
+  "schema": "wikidict.dated-empty-source-audit.v1",
+  "created_utc": "2026-11-26T07:45:56.597509+00:00",
+  "summary": {
+    "scope": "Independent exact public dated source joins for all21 historical empty editions",
+    "acceptance_sha256": "8e6091654abc053df6804f41933f441209247f827674ae8a4d4c21ed53801b4c",
+    "statuses": {
+      "EXACT_DATED_SOURCE_JOIN_PASS": 21
+    },
+    "editions": [
+      "aawiktionary",
+      "akwiktionary",
+      "avwiktionary",
+      "bhwiktionary",
+      "biwiktionary",
+      "bmwiktionary",
+      "bowiktionary",
+      "bswiktionary",
+      "chwiktionary",
+      "crwiktionary",
+      "dzwiktionary",
+      "mhwiktionary",
+      "piwiktionary",
+      "rmwiktionary",
+      "rnwiktionary",
+      "scwiktionary",
+      "snwiktionary",
+      "towiktionary",
+      "twwiktionary",
+      "xhwiktionary",
+      "yowiktionary"
+    ],
+    "elapsed_seconds": 1.5675322720198892,
+    "memory_limit_bytes": 536870912,
+    "max_parallel_downloads": 4,
+    "per_source_download_cap_bytes": 8388608,
+    "disk_floor_bytes": 1073741824,
+    "whole_task_pass": false,
+    "peak_rss_kib": 134560,
+    "compressed_source_bytes": 1017315,
+    "public_sources_downloaded": 42,
+    "exact_selected_revision_count": 44,
+    "parent_body_review": {
+      "reviewed_utc": "2026-11-26T07:43:48.033069+00:00",
+      "all_selected_bodies_read": true,
+      "finding": "All44 selected revisions are empty text, navigation redirects, closed/reserved-project notices, welcome/navigation text, or an article-count statistic. No excluded lexical entry was found. Three editions have no namespace0 pages.",
+      "source_exclusion_scope": "All21 dated source audits match their original retained exclusion records; publication metadata and client acceptance are separate."
+    }
+  },
+  "method": {
+    "script_path": ".tmp/parent-empty-source-audit01.py",
+    "script_sha256": "4e94f97ae1f7829a97c856577d40c9f6434819c88105a95cf90fae8f07cdf51c",
+    "source": "Exact original20261001 XML and redirect SQL from the officially listed Your.org mirror, SHA256 matched to retained acceptance-v2 source audit. All XML pages streamed to EOF; complete namespace counts and all main/project-terminal revisions compared.",
+    "client_or_native_reexecution": false,
+    "independent_review": {
+      "reviewer": "A3 Zeno",
+      "agent": "6b05d50c-96b8-83ec-9564-dc19e90c30a9",
+      "decision": "Approved for persistence; no blocking findings; source exclusion only",
+      "reviewed_document_sha256": "3e0de473b822be9b8318c93a02c082a9fb63bc7c0e724e640776556b2e093282",
+      "verified_source_hashes": 42,
+      "complete_page_count": 3585,
+      "selected_revisions": 44,
+      "redirect_sql_joins": 27,
+      "unaccounted_namespace0_pages": 0,
+      "excluded_lexical_entries_found": 0
+    }
+  },
+  "editions": [
+    {
+      "edition": "aawiktionary",
+      "status": "EXACT_DATED_SOURCE_JOIN_PASS",
+      "sources": [
+        {
+          "path": "data/inputs/dumps/aawiktionary/20261001/aawiktionary-20261001-pages-meta-current.xml.bz2",
+          "sha256": "4d478703ca41d704e2c52fe012eab4c5282f3bacbbd78b835dec1aa489a2208c",
+          "bytes": 37583,
+          "url": "https://dumps.wikimedia.your.org/aawiktionary/20261001/aawiktionary-20261001-pages-meta-current.xml.bz2",
+          "reused": false
+        },
+        {
+          "path": "data/inputs/dumps/aawiktionary/20261001/aawiktionary-20261001-redirect.sql.gz",
+          "sha256": "92d02c366f9d595f10a54cb78b4b3ca94acd70cfff537b768eb95ff0f46bff81",
+          "bytes": 1047,
+          "url": "https://dumps.wikimedia.your.org/aawiktionary/20261001/aawiktionary-20261001-redirect.sql.gz",
+          "reused": false
+        }
+      ],
+      "total_pages": 101,
+      "namespace_counts": {
+        "10": 20,
+        "8": 13,
+        "2": 31,
+        "0": 2,
+        "3": 32,
+        "4": 2,
+        "14": 1
+      },
+      "matched_pages": [
+        {
+          "title": "main Page",
+          "namespace": 0,
+          "page_id": 941,
+          "revision_id": 6285,
+          "source_sha256": "8bbe77874f0628e274c3f56f6000ec621327db880e9dbf300ae38596daa01798",
+          "decoded_utf8_bytes": 22,
+          "redirect_target": "Main Page",
+          "retained_disposition": "site_metadata",
+          "retained_finding": "Navigation redirect to the identified nonlexical terminal revision.",
+          "all_declared_fields_match": true
+        },
+        {
+          "title": "Main Page",
+          "namespace": 0,
+          "page_id": 1511,
+          "revision_id": 6705,
+          "source_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "decoded_utf8_bytes": 0,
+          "redirect_target": null,
+          "retained_disposition": "site_metadata",
+          "retained_finding": "Original revision contains zero text bytes. The XML text hash matches the empty string.",
+          "all_declared_fields_match": true
+        }
+      ],
+      "xml_eof": true,
+      "limits": "Authenticates every namespace-0 and declared project-terminal revision against retained exclusion audit. Does not regenerate publication manifests or establish new client/render qualification."
+    },
+    {
+      "edition": "akwiktionary",
+      "status": "EXACT_DATED_SOURCE_JOIN_PASS",
+      "sources": [
+        {
+          "path": "data/inputs/dumps/akwiktionary/20261001/akwiktionary-20261001-pages-meta-current.xml.bz2",
+          "sha256": "ae8c3eb8307e846b58c0a87033392456e29dccb41ad21fd50f50258c083014d9",
+          "bytes": 17432,
+          "url": "https://dumps.wikimedia.your.org/akwiktionary/20261001/akwiktionary-20261001-pages-meta-current.xml.bz2",
+          "reused": false
+        },
+        {
+          "path": "data/inputs/dumps/akwiktionary/20261001/akwiktionary-20261001-redirect.sql.gz",
+          "sha256": "faefe22982d994d660f98f162ce58f171adbda7b936e144ccebb0baefc9cbf98",
+          "bytes": 896,
+          "url": "https://dumps.wikimedia.your.org/akwiktionary/20261001/akwiktionary-20261001-redirect.sql.gz",
+          "reused": false
+        }
+      ],
+      "total_pages": 81,
+      "namespace_counts": {
+        "2": 36,
+        "3": 27,
+        "1": 1,
+        "10": 11,
+        "4": 2,
+        "5": 1,
+        "14": 1,
+        "8": 2
+      },
+      "matched_pages": [],
+      "xml_eof": true,
+      "limits": "Authenticates every namespace-0 and declared project-terminal revision against retained exclusion audit. Does not regenerate publication manifests or establish new client/render qualification."
+    },
+    {
+      "edition": "avwiktionary",
+      "status": "EXACT_DATED_SOURCE_JOIN_PASS",
+      "sources": [
+        {
+          "path": "data/inputs/dumps/avwiktionary/20261001/avwiktionary-20261001-pages-meta-current.xml.bz2",
+          "sha256": "c7b566aa1eeaf0c8cb5f2c6cfa7e8967307e470544e7d3517a77d9eff07ca4ce",
+          "bytes": 16756,
+          "url": "https://dumps.wikimedia.your.org/avwiktionary/20261001/avwiktionary-20261001-pages-meta-current.xml.bz2",
+          "reused": false
+        },
+        {
+          "path": "data/inputs/dumps/avwiktionary/20261001/avwiktionary-20261001-redirect.sql.gz",
+          "sha256": "e1c84d5d882029e3c9f15ecb11e4546d0d855b346f64a075fd9f62d0273ca458",
+          "bytes": 938,
+          "url": "https://dumps.wikimedia.your.org/avwiktionary/20261001/avwiktionary-20261001-redirect.sql.gz",
+          "reused": false
+        }
+      ],
+      "total_pages": 74,
+      "namespace_counts": {
+        "0": 4,
+        "2": 32,
+        "3": 21,
+        "1": 1,
+        "10": 12,
+        "14": 1,
+        "4": 1,
+        "8": 2
+      },
+      "matched_pages": [
+        {
+          "title": "заглавная страница",
+          "namespace": 0,
+          "page_id": 1,
+          "revision_id": 4757,
+          "source_sha256": "1fd365ec54696bb7376cb97d80ec0d0540fe77d3f0dea355d9a47f12a734fcf7",
+          "decoded_utf8_bytes": 1737,
+          "redirect_target": null,
+          "retained_disposition": "reviewed_nonlexical",
+          "retained_finding": "Reservation and contributor invitation for the Avar Wiktionary followed by project and interlanguage navigation.",
+          "all_declared_fields_match": true
+        },
+        {
+          "title": "main Page",
+          "namespace": 0,
+          "page_id": 1475,
+          "revision_id": 4759,
+          "source_sha256": "ec4fa6cfb4491e4e5193298e4a60edd93c8fdb0959c66e7fd5901b87a3652f2f",
+          "decoded_utf8_bytes": 49,
+          "redirect_target": "заглавная страница",
+          "retained_disposition": "reviewed_nonlexical",
+          "retained_finding": "Navigation redirect to the identified nonlexical terminal revision.",
+          "all_declared_fields_match": true
+        },
+        {
+          "title": "Main Page",
+          "namespace": 0,
+          "page_id": 1480,
+          "revision_id": 4758,
+          "source_sha256": "ec4fa6cfb4491e4e5193298e4a60edd93c8fdb0959c66e7fd5901b87a3652f2f",
+          "decoded_utf8_bytes": 49,
+          "redirect_target": "заглавная страница",
+          "retained_disposition": "reviewed_nonlexical",
+          "retained_finding": "Navigation redirect to the identified nonlexical terminal revision.",
+          "all_declared_fields_match": true
+        },
+        {
+          "title": "Заглавная страница",
+          "namespace": 0,
+          "page_id": 1481,
+          "revision_id": 4066,
+          "source_sha256": "ec4fa6cfb4491e4e5193298e4a60edd93c8fdb0959c66e7fd5901b87a3652f2f",
+          "decoded_utf8_bytes": 49,
+          "redirect_target": "заглавная страница",
+          "retained_disposition": "reviewed_nonlexical",
+          "retained_finding": "Navigation redirect to the identified nonlexical terminal revision.",
+          "all_declared_fields_match": true
+        }
+      ],
+      "xml_eof": true,
+      "limits": "Authenticates every namespace-0 and declared project-terminal revision against retained exclusion audit. Does not regenerate publication manifests or establish new client/render qualification."
+    },
+    {
+      "edition": "bhwiktionary",
+      "status": "EXACT_DATED_SOURCE_JOIN_PASS",
+      "sources": [
+        {
+          "path": "data/inputs/dumps/bhwiktionary/20261001/bhwiktionary-20261001-pages-meta-current.xml.bz2",
+          "sha256": "15a55939926d000518457fd129c4a0da9f8f34624867cf2acb830fc85a062469",
+          "bytes": 61424,
+          "url": "https://dumps.wikimedia.your.org/bhwiktionary/20261001/bhwiktionary-20261001-pages-meta-current.xml.bz2",
+          "reused": false
+        },
+        {
+          "path": "data/inputs/dumps/bhwiktionary/20261001/bhwiktionary-20261001-redirect.sql.gz",
+          "sha256": "8ddeb0df7e667244ad041c66f55b725a36fb2f5def96af91edae3929d476866c",
+          "bytes": 1534,
+          "url": "https://dumps.wikimedia.your.org/bhwiktionary/20261001/bhwiktionary-20261001-redirect.sql.gz",
+          "reused": false
+        }
+      ],
+      "total_pages": 230,
+      "namespace_counts": {
+        "10": 90,
+        "8": 75,
+        "2": 33,
+        "3": 24,
+        "0": 3,
+        "14": 4,
+        "4": 1
+      },
+      "matched_pages": [
+        {
+          "title": "main Page",
+          "namespace": 0,
+          "page_id": 1637,
+          "revision_id": 4494,
+          "source_sha256": "092459e6580c894efd4eb2b0ac45312c91267832302bfa859a226757c77eb73b",
+          "decoded_utf8_bytes": 23,
+          "redirect_target": "Main Page",
+          "retained_disposition": "site_metadata",
+          "retained_finding": "Navigation redirect to the identified nonlexical terminal revision.",
+          "all_declared_fields_match": true
+        },
+        {
+          "title": "मुख्य पन्ना",
+          "namespace": 0,
+          "page_id": 1640,
+          "revision_id": 4806,
+          "source_sha256": "be8b071377c580351f0e696897d5827e5c03c9c5d8d002fb6ec6a2e8e82fbd8d",
+          "decoded_utf8_bytes": 259,
+          "redirect_target": null,
+          "retained_disposition": "site_metadata",
+          "retained_finding": "Bihari Wiktionary closure notice links to the closure discussion and Wikimedia Incubator.",
+          "all_declared_fields_match": true
+        },
+        {
+          "title": "Main Page",
+          "namespace": 0,
+          "page_id": 1987,
+          "revision_id": 4807,
+          "source_sha256": "345a0e00d870b237d65a90583668d41179f61bb30ec000f21cf8f826358c90e6",
+          "decoded_utf8_bytes": 45,
+          "redirect_target": "मुख्य पन्ना",
+          "retained_disposition": "site_metadata",
+          "retained_finding": "Navigation redirect to the identified nonlexical terminal revision.",
+          "all_declared_fields_match": true
+        }
+      ],
+      "xml_eof": true,
+      "limits": "Authenticates every namespace-0 and declared project-terminal revision against retained exclusion audit. Does not regenerate publication manifests or establish new client/render qualification."
+    },
+    {
+      "edition": "biwiktionary",
+      "status": "EXACT_DATED_SOURCE_JOIN_PASS",
+      "sources": [
+        {
+          "path": "data/inputs/dumps/biwiktionary/20261001/biwiktionary-20261001-pages-meta-current.xml.bz2",
+          "sha256": "e1252d9fa97840500fa93830880c1ae105e9ab9d165f3ac6dc1f6fb214297544",
+          "bytes": 55851,
+          "url": "https://dumps.wikimedia.your.org/biwiktionary/20261001/biwiktionary-20261001-pages-meta-current.xml.bz2",
+          "reused": false
+        },
+        {
+          "path": "data/inputs/dumps/biwiktionary/20261001/biwiktionary-20261001-redirect.sql.gz",
+          "sha256": "ce091546fa14bbda3dd28651fab15c28ab740ef247f5584671aa03f1b6297f44",
+          "bytes": 1455,
+          "url": "https://dumps.wikimedia.your.org/biwiktionary/20261001/biwiktionary-20261001-redirect.sql.gz",
+          "reused": false
+        }
+      ],
+      "total_pages": 215,
+      "namespace_counts": {
+        "10": 89,
+        "8": 76,
+        "2": 25,
+        "3": 23,
+        "4": 1,
+        "14": 1
+      },
+      "matched_pages": [],
+      "xml_eof": true,
+      "limits": "Authenticates every namespace-0 and declared project-terminal revision against retained exclusion audit. Does not regenerate publication manifests or establish new client/render qualification."
+    },
+    {
+      "edition": "bmwiktionary",
+      "status": "EXACT_DATED_SOURCE_JOIN_PASS",
+      "sources": [
+        {
+          "path": "data/inputs/dumps/bmwiktionary/20261001/bmwiktionary-20261001-pages-meta-current.xml.bz2",
+          "sha256": "b379fe12bd729f07c1065488b90412431b6a3ac95528163c676688503d4d92e4",
+          "bytes": 20276,
+          "url": "https://dumps.wikimedia.your.org/bmwiktionary/20261001/bmwiktionary-20261001-pages-meta-current.xml.bz2",
+          "reused": false
+        },
+        {
+          "path": "data/inputs/dumps/bmwiktionary/20261001/bmwiktionary-20261001-redirect.sql.gz",
+          "sha256": "765f97403be6cffcec15c69d1742bb537c2f33492fd81b7e06418351dda5cbb8",
+          "bytes": 903,
+          "url": "https://dumps.wikimedia.your.org/bmwiktionary/20261001/bmwiktionary-20261001-redirect.sql.gz",
+          "reused": false
+        }
+      ],
+      "total_pages": 88,
+      "namespace_counts": {
+        "0": 4,
+        "2": 27,
+        "4": 3,
+        "10": 13,
+        "3": 38,
+        "14": 1,
+        "8": 2
+      },
+      "matched_pages": [
+        {
+          "title": "main Page",
+          "namespace": 0,
+          "page_id": 1,
+          "revision_id": 3920,
+          "source_sha256": "d5872e65cc752a342bf3dfd671185220a349a0e7447d85569aa6da6205d11971",
+          "decoded_utf8_bytes": 25,
+          "redirect_target": "Nyɛ fɔlɔ",
+          "retained_disposition": "site_metadata",
+          "retained_finding": "Navigation redirect to the identified nonlexical terminal revision.",
+          "all_declared_fields_match": true
+        },
+        {
+          "title": "Nyɛ fɔlɔ",
+          "namespace": 0,
+          "page_id": 925,
+          "revision_id": 4026,
+          "source_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "decoded_utf8_bytes": 0,
+          "redirect_target": null,
+          "retained_disposition": "site_metadata",
+          "retained_finding": "Original revision contains zero text bytes. The XML text hash matches the empty string.",
+          "all_declared_fields_match": true
+        },
+        {
+          "title": "Accueil",
+          "namespace": 0,
+          "page_id": 1475,
+          "revision_id": 3462,
+          "source_sha256": "633f5906a8e52e8cc164499d887e3a2038b5b025458bc47f068e628a5093e5cc",
+          "decoded_utf8_bytes": 25,
+          "redirect_target": "Nyɛ fɔlɔ",
+          "retained_disposition": "site_metadata",
+          "retained_finding": "Navigation redirect to the identified nonlexical terminal revision.",
+          "all_declared_fields_match": true
+        },
+        {
+          "title": "Main Page",
+          "namespace": 0,
+          "page_id": 1477,
+          "revision_id": 3921,
+          "source_sha256": "633f5906a8e52e8cc164499d887e3a2038b5b025458bc47f068e628a5093e5cc",
+          "decoded_utf8_bytes": 25,
+          "redirect_target": "Nyɛ fɔlɔ",
+          "retained_disposition": "site_metadata",
+          "retained_finding": "Navigation redirect to the identified nonlexical terminal revision.",
+          "all_declared_fields_match": true
+        }
+      ],
+      "xml_eof": true,
+      "limits": "Authenticates every namespace-0 and declared project-terminal revision against retained exclusion audit. Does not regenerate publication manifests or establish new client/render qualification."
+    },
+    {
+      "edition": "bowiktionary",
+      "status": "EXACT_DATED_SOURCE_JOIN_PASS",
+      "sources": [
+        {
+          "path": "data/inputs/dumps/bowiktionary/20261001/bowiktionary-20261001-pages-meta-current.xml.bz2",
+          "sha256": "aa1f2f7711762e88f495920a85a665a555b1071aa676a69f8c43c012522582f4",
+          "bytes": 52386,
+          "url": "https://dumps.wikimedia.your.org/bowiktionary/20261001/bowiktionary-20261001-pages-meta-current.xml.bz2",
+          "reused": false
+        },
+        {
+          "path": "data/inputs/dumps/bowiktionary/20261001/bowiktionary-20261001-redirect.sql.gz",
+          "sha256": "223a76dde3a55e69e66cf779c91c32c2e9ac5bf67be2a26cf66fec03370674d7",
+          "bytes": 1438,
+          "url": "https://dumps.wikimedia.your.org/bowiktionary/20261001/bowiktionary-20261001-redirect.sql.gz",
+          "reused": false
+        }
+      ],
+      "total_pages": 168,
+      "namespace_counts": {
+        "10": 52,
+        "8": 76,
+        "2": 19,
+        "3": 18,
+        "4": 1,
+        "0": 1,
+        "14": 1
+      },
+      "matched_pages": [
+        {
+          "title": "Wiktionary:Main Page",
+          "namespace": 4,
+          "page_id": 1639,
+          "revision_id": 4737,
+          "source_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "decoded_utf8_bytes": 0,
+          "redirect_target": null,
+          "retained_disposition": null,
+          "retained_finding": "Project homepage with a zero-byte revision.",
+          "all_declared_fields_match": true
+        },
+        {
+          "title": "Main Page",
+          "namespace": 0,
+          "page_id": 1954,
+          "revision_id": 4704,
+          "source_sha256": "5573fb23731feeda61ae1dca8e309bc9436e2433d86c77c1bcd61d931809089c",
+          "decoded_utf8_bytes": 34,
+          "redirect_target": "Wiktionary:Main Page",
+          "retained_disposition": "site_metadata",
+          "retained_finding": "Navigation redirect to the identified nonlexical terminal revision.",
+          "all_declared_fields_match": true
+        }
+      ],
+      "xml_eof": true,
+      "limits": "Authenticates every namespace-0 and declared project-terminal revision against retained exclusion audit. Does not regenerate publication manifests or establish new client/render qualification."
+    },
+    {
+      "edition": "bswiktionary",
+      "status": "EXACT_DATED_SOURCE_JOIN_PASS",
+      "sources": [
+        {
+          "path": "data/inputs/dumps/bswiktionary/20261001/bswiktionary-20261001-pages-meta-current.xml.bz2",
+          "sha256": "67924906207014d6a5fdb8e23ca9c9d855266cbb2e1658a61ee355c4262ec23b",
+          "bytes": 267219,
+          "url": "https://dumps.wikimedia.your.org/bswiktionary/20261001/bswiktionary-20261001-pages-meta-current.xml.bz2",
+          "reused": false
+        },
+        {
+          "path": "data/inputs/dumps/bswiktionary/20261001/bswiktionary-20261001-redirect.sql.gz",
+          "sha256": "50eddf908f27e03167d170294e3a375234fc6e2750cde51f5e98115917a820af",
+          "bytes": 2012,
+          "url": "https://dumps.wikimedia.your.org/bswiktionary/20261001/bswiktionary-20261001-redirect.sql.gz",
+          "reused": false
+        }
+      ],
+      "total_pages": 872,
+      "namespace_counts": {
+        "8": 13,
+        "0": 1,
+        "3": 379,
+        "2": 420,
+        "4": 4,
+        "14": 9,
+        "10": 46
+      },
+      "matched_pages": [
+        {
+          "title": "Početna strana",
+          "namespace": 0,
+          "page_id": 851,
+          "revision_id": 72913,
+          "source_sha256": "0947c9ecaf0ab65f8d7a8360afb66c80000ebec91e7d9e3fb35431beb910d0da",
+          "decoded_utf8_bytes": 726,
+          "redirect_target": null,
+          "retained_disposition": "site_metadata",
+          "retained_finding": "Bosnian and English notices describe the merger into Serbo-Croatian Wiktionary and direct contributors there.",
+          "all_declared_fields_match": true
+        }
+      ],
+      "xml_eof": true,
+      "limits": "Authenticates every namespace-0 and declared project-terminal revision against retained exclusion audit. Does not regenerate publication manifests or establish new client/render qualification."
+    },
+    {
+      "edition": "chwiktionary",
+      "status": "EXACT_DATED_SOURCE_JOIN_PASS",
+      "sources": [
+        {
+          "path": "data/inputs/dumps/chwiktionary/20261001/chwiktionary-20261001-pages-meta-current.xml.bz2",
+          "sha256": "bed5e1cdeb8d9952749b7846da01e7d5d3e112dd825d97a3d2b5fabab5c523d6",
+          "bytes": 14472,
+          "url": "https://dumps.wikimedia.your.org/chwiktionary/20261001/chwiktionary-20261001-pages-meta-current.xml.bz2",
+          "reused": false
+        },
+        {
+          "path": "data/inputs/dumps/chwiktionary/20261001/chwiktionary-20261001-redirect.sql.gz",
+          "sha256": "53cd7bbe9d351d5c661f5b3f0c254e3c66a925d94e4cd8789db7dd6718b340e5",
+          "bytes": 893,
+          "url": "https://dumps.wikimedia.your.org/chwiktionary/20261001/chwiktionary-20261001-redirect.sql.gz",
+          "reused": false
+        }
+      ],
+      "total_pages": 69,
+      "namespace_counts": {
+        "0": 3,
+        "2": 33,
+        "3": 21,
+        "4": 2,
+        "8": 2,
+        "10": 8
+      },
+      "matched_pages": [
+        {
+          "title": "Fanhaluman",
+          "namespace": 0,
+          "page_id": 1,
+          "revision_id": 3400,
+          "source_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "decoded_utf8_bytes": 0,
+          "redirect_target": null,
+          "retained_disposition": "site_metadata",
+          "retained_finding": "Original revision contains zero text bytes. The XML text hash matches the empty string.",
+          "all_declared_fields_match": true
+        },
+        {
+          "title": "main Page",
+          "namespace": 0,
+          "page_id": 1648,
+          "revision_id": 3375,
+          "source_sha256": "c9c47b4197659deab591a7db197392f5e65f3284ced3f81801487c2ba691f75a",
+          "decoded_utf8_bytes": 24,
+          "redirect_target": "Fanhaluman",
+          "retained_disposition": "site_metadata",
+          "retained_finding": "Navigation redirect to the identified nonlexical terminal revision.",
+          "all_declared_fields_match": true
+        },
+        {
+          "title": "Main Page",
+          "namespace": 0,
+          "page_id": 1784,
+          "revision_id": 3374,
+          "source_sha256": "c9c47b4197659deab591a7db197392f5e65f3284ced3f81801487c2ba691f75a",
+          "decoded_utf8_bytes": 24,
+          "redirect_target": "Fanhaluman",
+          "retained_disposition": "site_metadata",
+          "retained_finding": "Navigation redirect to the identified nonlexical terminal revision.",
+          "all_declared_fields_match": true
+        }
+      ],
+      "xml_eof": true,
+      "limits": "Authenticates every namespace-0 and declared project-terminal revision against retained exclusion audit. Does not regenerate publication manifests or establish new client/render qualification."
+    },
+    {
+      "edition": "crwiktionary",
+      "status": "EXACT_DATED_SOURCE_JOIN_PASS",
+      "sources": [
+        {
+          "path": "data/inputs/dumps/crwiktionary/20261001/crwiktionary-20261001-pages-meta-current.xml.bz2",
+          "sha256": "3c994fea3c3e682266760209737fb708fb1a973c246e441a2b96dcefff4998d4",
+          "bytes": 16583,
+          "url": "https://dumps.wikimedia.your.org/crwiktionary/20261001/crwiktionary-20261001-pages-meta-current.xml.bz2",
+          "reused": false
+        },
+        {
+          "path": "data/inputs/dumps/crwiktionary/20261001/crwiktionary-20261001-redirect.sql.gz",
+          "sha256": "d4eb79faa5316a4d71d9ee196f9441e1ce3978add2a24847c7747c8bf1ec51c3",
+          "bytes": 868,
+          "url": "https://dumps.wikimedia.your.org/crwiktionary/20261001/crwiktionary-20261001-redirect.sql.gz",
+          "reused": false
+        }
+      ],
+      "total_pages": 75,
+      "namespace_counts": {
+        "2": 30,
+        "12": 1,
+        "3": 31,
+        "4": 2,
+        "10": 9,
+        "8": 2
+      },
+      "matched_pages": [],
+      "xml_eof": true,
+      "limits": "Authenticates every namespace-0 and declared project-terminal revision against retained exclusion audit. Does not regenerate publication manifests or establish new client/render qualification."
+    },
+    {
+      "edition": "dzwiktionary",
+      "status": "EXACT_DATED_SOURCE_JOIN_PASS",
+      "sources": [
+        {
+          "path": "data/inputs/dumps/dzwiktionary/20261001/dzwiktionary-20261001-pages-meta-current.xml.bz2",
+          "sha256": "5ab740a8fc758196d51cceb54fbbea4b3fa903e33beeac677e2d05a87bef985f",
+          "bytes": 59068,
+          "url": "https://dumps.wikimedia.your.org/dzwiktionary/20261001/dzwiktionary-20261001-pages-meta-current.xml.bz2",
+          "reused": false
+        },
+        {
+          "path": "data/inputs/dumps/dzwiktionary/20261001/dzwiktionary-20261001-redirect.sql.gz",
+          "sha256": "e605283db0bdcb4c584cbaab506b1fd585744ee5a9bd30f47d453e5d851f8eb8",
+          "bytes": 1498,
+          "url": "https://dumps.wikimedia.your.org/dzwiktionary/20261001/dzwiktionary-20261001-redirect.sql.gz",
+          "reused": false
+        }
+      ],
+      "total_pages": 229,
+      "namespace_counts": {
+        "10": 88,
+        "8": 74,
+        "4": 3,
+        "2": 35,
+        "3": 27,
+        "0": 1,
+        "14": 1
+      },
+      "matched_pages": [
+        {
+          "title": "Main Page",
+          "namespace": 0,
+          "page_id": 1620,
+          "revision_id": 4774,
+          "source_sha256": "83e166ff661f3915bacb1500b3e55fa97a8a9af706de6f20f1ee9d3e276841a2",
+          "decoded_utf8_bytes": 31,
+          "redirect_target": "མ་ཤོག།",
+          "retained_disposition": "reviewed_nonlexical",
+          "retained_finding": "Redirect only. The dated SQL and XML point to the declared local homepage, which has no page in the original dump.",
+          "all_declared_fields_match": true
+        }
+      ],
+      "xml_eof": true,
+      "limits": "Authenticates every namespace-0 and declared project-terminal revision against retained exclusion audit. Does not regenerate publication manifests or establish new client/render qualification."
+    },
+    {
+      "edition": "mhwiktionary",
+      "status": "EXACT_DATED_SOURCE_JOIN_PASS",
+      "sources": [
+        {
+          "path": "data/inputs/dumps/mhwiktionary/20261001/mhwiktionary-20261001-pages-meta-current.xml.bz2",
+          "sha256": "8219d0da1fc00269600298fde46f4c680753f70ab397c3e84dd78e5f00dca48c",
+          "bytes": 13850,
+          "url": "https://dumps.wikimedia.your.org/mhwiktionary/20261001/mhwiktionary-20261001-pages-meta-current.xml.bz2",
+          "reused": false
+        },
+        {
+          "path": "data/inputs/dumps/mhwiktionary/20261001/mhwiktionary-20261001-redirect.sql.gz",
+          "sha256": "66d812d22b798577a403166e5ba659a447bfe52cc651301690a59515ecdced55",
+          "bytes": 854,
+          "url": "https://dumps.wikimedia.your.org/mhwiktionary/20261001/mhwiktionary-20261001-redirect.sql.gz",
+          "reused": false
+        }
+      ],
+      "total_pages": 56,
+      "namespace_counts": {
+        "0": 2,
+        "2": 21,
+        "3": 16,
+        "10": 9,
+        "14": 1,
+        "4": 2,
+        "8": 4,
+        "1": 1
+      },
+      "matched_pages": [
+        {
+          "title": "Main Page",
+          "namespace": 0,
+          "page_id": 1,
+          "revision_id": 3327,
+          "source_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "decoded_utf8_bytes": 0,
+          "redirect_target": null,
+          "retained_disposition": "site_metadata",
+          "retained_finding": "Original revision contains zero text bytes. The XML text hash matches the empty string.",
+          "all_declared_fields_match": true
+        },
+        {
+          "title": "main Page",
+          "namespace": 0,
+          "page_id": 1630,
+          "revision_id": 3008,
+          "source_sha256": "c7c9ec03c409235a3c3f40779438fa6cf5d8571dae23b90d019b223077f3cf26",
+          "decoded_utf8_bytes": 23,
+          "redirect_target": "Main Page",
+          "retained_disposition": "site_metadata",
+          "retained_finding": "Navigation redirect to the identified nonlexical terminal revision.",
+          "all_declared_fields_match": true
+        }
+      ],
+      "xml_eof": true,
+      "limits": "Authenticates every namespace-0 and declared project-terminal revision against retained exclusion audit. Does not regenerate publication manifests or establish new client/render qualification."
+    },
+    {
+      "edition": "piwiktionary",
+      "status": "EXACT_DATED_SOURCE_JOIN_PASS",
+      "sources": [
+        {
+          "path": "data/inputs/dumps/piwiktionary/20261001/piwiktionary-20261001-pages-meta-current.xml.bz2",
+          "sha256": "c55ea2821fc7e08a5b5fa6d630e346d8724b13248d18f9882915b30bd623dd4d",
+          "bytes": 13751,
+          "url": "https://dumps.wikimedia.your.org/piwiktionary/20261001/piwiktionary-20261001-pages-meta-current.xml.bz2",
+          "reused": false
+        },
+        {
+          "path": "data/inputs/dumps/piwiktionary/20261001/piwiktionary-20261001-redirect.sql.gz",
+          "sha256": "fa2e6125b3ae1d8fdea0cbd9d52ab0da7c0946ed19098a4dbbfcc5aefeb9d3ec",
+          "bytes": 889,
+          "url": "https://dumps.wikimedia.your.org/piwiktionary/20261001/piwiktionary-20261001-redirect.sql.gz",
+          "reused": false
+        }
+      ],
+      "total_pages": 55,
+      "namespace_counts": {
+        "0": 3,
+        "2": 22,
+        "3": 17,
+        "10": 9,
+        "14": 1,
+        "4": 1,
+        "8": 2
+      },
+      "matched_pages": [
+        {
+          "title": "Main Page",
+          "namespace": 0,
+          "page_id": 1,
+          "revision_id": 3278,
+          "source_sha256": "6dce0720251fc4af3cf898e2ba50965e2de2d3197cbceb37cd33482b11b58339",
+          "decoded_utf8_bytes": 2182,
+          "redirect_target": null,
+          "retained_disposition": "site_metadata",
+          "retained_finding": "Pali Wiktionary masthead, welcome and contribution text, project links and interlanguage navigation. Its local list links to an absent title. This page gives no dictionary entry for that target.",
+          "all_declared_fields_match": true
+        },
+        {
+          "title": "main Page",
+          "namespace": 0,
+          "page_id": 1634,
+          "revision_id": 3032,
+          "source_sha256": "c7c9ec03c409235a3c3f40779438fa6cf5d8571dae23b90d019b223077f3cf26",
+          "decoded_utf8_bytes": 23,
+          "redirect_target": "Main Page",
+          "retained_disposition": "site_metadata",
+          "retained_finding": "Navigation redirect to the identified nonlexical terminal revision.",
+          "all_declared_fields_match": true
+        },
+        {
+          "title": "पमुख पत्त",
+          "namespace": 0,
+          "page_id": 1813,
+          "revision_id": 3274,
+          "source_sha256": "c7c9ec03c409235a3c3f40779438fa6cf5d8571dae23b90d019b223077f3cf26",
+          "decoded_utf8_bytes": 23,
+          "redirect_target": "Main Page",
+          "retained_disposition": "site_metadata",
+          "retained_finding": "Navigation redirect to the identified nonlexical terminal revision.",
+          "all_declared_fields_match": true
+        }
+      ],
+      "xml_eof": true,
+      "limits": "Authenticates every namespace-0 and declared project-terminal revision against retained exclusion audit. Does not regenerate publication manifests or establish new client/render qualification."
+    },
+    {
+      "edition": "rmwiktionary",
+      "status": "EXACT_DATED_SOURCE_JOIN_PASS",
+      "sources": [
+        {
+          "path": "data/inputs/dumps/rmwiktionary/20261001/rmwiktionary-20261001-pages-meta-current.xml.bz2",
+          "sha256": "cfb4bae16f25185beb008b4136b3f094d221feb327a24fe99cdb5e30250fc2be",
+          "bytes": 17202,
+          "url": "https://dumps.wikimedia.your.org/rmwiktionary/20261001/rmwiktionary-20261001-pages-meta-current.xml.bz2",
+          "reused": false
+        },
+        {
+          "path": "data/inputs/dumps/rmwiktionary/20261001/rmwiktionary-20261001-redirect.sql.gz",
+          "sha256": "41a1b7792340d08503cff7faf31a7e662bab13f9863daed31cc0b2658570f863",
+          "bytes": 1485,
+          "url": "https://dumps.wikimedia.your.org/rmwiktionary/20261001/rmwiktionary-20261001-redirect.sql.gz",
+          "reused": false
+        }
+      ],
+      "total_pages": 122,
+      "namespace_counts": {
+        "8": 76,
+        "4": 1,
+        "2": 15,
+        "3": 17,
+        "0": 2,
+        "10": 10,
+        "14": 1
+      },
+      "matched_pages": [
+        {
+          "title": "Wiktionary:Pagina principala",
+          "namespace": 4,
+          "page_id": 1082,
+          "revision_id": 4768,
+          "source_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "decoded_utf8_bytes": 0,
+          "redirect_target": null,
+          "retained_disposition": null,
+          "retained_finding": "Project homepage with a zero-byte revision.",
+          "all_declared_fields_match": true
+        },
+        {
+          "title": "Main Page",
+          "namespace": 0,
+          "page_id": 1646,
+          "revision_id": 4533,
+          "source_sha256": "8e9f344601c4cb6f0ea08279e0eb50610a1ec224c4cee8c4e3b3a5769d0b5bf4",
+          "decoded_utf8_bytes": 31,
+          "redirect_target": "Pagina principala",
+          "retained_disposition": "site_metadata",
+          "retained_finding": "Navigation redirect to the identified nonlexical terminal revision.",
+          "all_declared_fields_match": true
+        },
+        {
+          "title": "Pagina principala",
+          "namespace": 0,
+          "page_id": 1958,
+          "revision_id": 4749,
+          "source_sha256": "3c542fd3ddbc2240cda02f4d21d02df3ff92d7d6364921bc5b33f52ebbd82f85",
+          "decoded_utf8_bytes": 42,
+          "redirect_target": "Wiktionary:Pagina principala",
+          "retained_disposition": "site_metadata",
+          "retained_finding": "Navigation redirect to the identified nonlexical terminal revision.",
+          "all_declared_fields_match": true
+        }
+      ],
+      "xml_eof": true,
+      "limits": "Authenticates every namespace-0 and declared project-terminal revision against retained exclusion audit. Does not regenerate publication manifests or establish new client/render qualification."
+    },
+    {
+      "edition": "rnwiktionary",
+      "status": "EXACT_DATED_SOURCE_JOIN_PASS",
+      "sources": [
+        {
+          "path": "data/inputs/dumps/rnwiktionary/20261001/rnwiktionary-20261001-pages-meta-current.xml.bz2",
+          "sha256": "d80ae37a2ead5dc6266802fa807c854550eb7a738bd252d692ec39cf529d9718",
+          "bytes": 16781,
+          "url": "https://dumps.wikimedia.your.org/rnwiktionary/20261001/rnwiktionary-20261001-pages-meta-current.xml.bz2",
+          "reused": false
+        },
+        {
+          "path": "data/inputs/dumps/rnwiktionary/20261001/rnwiktionary-20261001-redirect.sql.gz",
+          "sha256": "7f20c5b54d8bea0ba68f161237ce8b4c6b06e3a10af5a15400def0ba3f838428",
+          "bytes": 886,
+          "url": "https://dumps.wikimedia.your.org/rnwiktionary/20261001/rnwiktionary-20261001-redirect.sql.gz",
+          "reused": false
+        }
+      ],
+      "total_pages": 64,
+      "namespace_counts": {
+        "2": 30,
+        "3": 18,
+        "0": 2,
+        "10": 9,
+        "14": 1,
+        "4": 2,
+        "8": 2
+      },
+      "matched_pages": [
+        {
+          "title": "Main Page",
+          "namespace": 0,
+          "page_id": 1560,
+          "revision_id": 4669,
+          "source_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "decoded_utf8_bytes": 0,
+          "redirect_target": null,
+          "retained_disposition": "reviewed_nonlexical",
+          "retained_finding": "Original revision contains zero text bytes. The XML text hash matches the empty string.",
+          "all_declared_fields_match": true
+        },
+        {
+          "title": "main Page",
+          "namespace": 0,
+          "page_id": 1728,
+          "revision_id": 4404,
+          "source_sha256": "c7c9ec03c409235a3c3f40779438fa6cf5d8571dae23b90d019b223077f3cf26",
+          "decoded_utf8_bytes": 23,
+          "redirect_target": "Main Page",
+          "retained_disposition": "reviewed_nonlexical",
+          "retained_finding": "Navigation redirect to the identified nonlexical terminal revision.",
+          "all_declared_fields_match": true
+        }
+      ],
+      "xml_eof": true,
+      "limits": "Authenticates every namespace-0 and declared project-terminal revision against retained exclusion audit. Does not regenerate publication manifests or establish new client/render qualification."
+    },
+    {
+      "edition": "scwiktionary",
+      "status": "EXACT_DATED_SOURCE_JOIN_PASS",
+      "sources": [
+        {
+          "path": "data/inputs/dumps/scwiktionary/20261001/scwiktionary-20261001-pages-meta-current.xml.bz2",
+          "sha256": "c65425c758f084f17ec22d3c483e849f2f9150b0d794a45f9de6455b6adba0aa",
+          "bytes": 25834,
+          "url": "https://dumps.wikimedia.your.org/scwiktionary/20261001/scwiktionary-20261001-pages-meta-current.xml.bz2",
+          "reused": false
+        },
+        {
+          "path": "data/inputs/dumps/scwiktionary/20261001/scwiktionary-20261001-redirect.sql.gz",
+          "sha256": "dbbbe1ea7f9e509c378a96bb248dafad8ca6d594df645687fac7324daf6dd04a",
+          "bytes": 931,
+          "url": "https://dumps.wikimedia.your.org/scwiktionary/20261001/scwiktionary-20261001-redirect.sql.gz",
+          "reused": false
+        }
+      ],
+      "total_pages": 96,
+      "namespace_counts": {
+        "8": 3,
+        "4": 7,
+        "2": 22,
+        "0": 3,
+        "3": 31,
+        "10": 11,
+        "1": 3,
+        "14": 16
+      },
+      "matched_pages": [
+        {
+          "title": "Pàgina printzipale",
+          "namespace": 0,
+          "page_id": 1598,
+          "revision_id": 5978,
+          "source_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "decoded_utf8_bytes": 0,
+          "redirect_target": null,
+          "retained_disposition": "site_metadata",
+          "retained_finding": "Original revision contains zero text bytes. The XML text hash matches the empty string.",
+          "all_declared_fields_match": true
+        },
+        {
+          "title": "Main Page",
+          "namespace": 0,
+          "page_id": 3124,
+          "revision_id": 5952,
+          "source_sha256": "41cc248344ef632018e192331d826f36bdbb5421d6f6c2206c13173f19b462ff",
+          "decoded_utf8_bytes": 33,
+          "redirect_target": "Pàgina printzipale",
+          "retained_disposition": "site_metadata",
+          "retained_finding": "Navigation redirect to the identified nonlexical terminal revision.",
+          "all_declared_fields_match": true
+        },
+        {
+          "title": "Pagina Printzipale",
+          "namespace": 0,
+          "page_id": 3125,
+          "revision_id": 5796,
+          "source_sha256": "41cc248344ef632018e192331d826f36bdbb5421d6f6c2206c13173f19b462ff",
+          "decoded_utf8_bytes": 33,
+          "redirect_target": "Pàgina printzipale",
+          "retained_disposition": "site_metadata",
+          "retained_finding": "Navigation redirect to the identified nonlexical terminal revision.",
+          "all_declared_fields_match": true
+        }
+      ],
+      "xml_eof": true,
+      "limits": "Authenticates every namespace-0 and declared project-terminal revision against retained exclusion audit. Does not regenerate publication manifests or establish new client/render qualification."
+    },
+    {
+      "edition": "snwiktionary",
+      "status": "EXACT_DATED_SOURCE_JOIN_PASS",
+      "sources": [
+        {
+          "path": "data/inputs/dumps/snwiktionary/20261001/snwiktionary-20261001-pages-meta-current.xml.bz2",
+          "sha256": "df4637f9bb2f999a3552d23bd1bbfa275d608fadd770cb9ec446049daaa60bee",
+          "bytes": 58601,
+          "url": "https://dumps.wikimedia.your.org/snwiktionary/20261001/snwiktionary-20261001-pages-meta-current.xml.bz2",
+          "reused": false
+        },
+        {
+          "path": "data/inputs/dumps/snwiktionary/20261001/snwiktionary-20261001-redirect.sql.gz",
+          "sha256": "9becb44a4e1a0bead5c07c92f91c67e8d33fe8ff2d666cc7b5227ac7e579659f",
+          "bytes": 1570,
+          "url": "https://dumps.wikimedia.your.org/snwiktionary/20261001/snwiktionary-20261001-redirect.sql.gz",
+          "reused": false
+        }
+      ],
+      "total_pages": 234,
+      "namespace_counts": {
+        "10": 89,
+        "8": 75,
+        "2": 30,
+        "3": 35,
+        "11": 1,
+        "14": 1,
+        "4": 1,
+        "0": 2
+      },
+      "matched_pages": [
+        {
+          "title": "Peji Rekutanga",
+          "namespace": 0,
+          "page_id": 1996,
+          "revision_id": 4872,
+          "source_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "decoded_utf8_bytes": 0,
+          "redirect_target": null,
+          "retained_disposition": "site_metadata",
+          "retained_finding": "Original revision contains zero text bytes. The XML text hash matches the empty string.",
+          "all_declared_fields_match": true
+        },
+        {
+          "title": "Main Page",
+          "namespace": 0,
+          "page_id": 2003,
+          "revision_id": 4873,
+          "source_sha256": "e00729926885650acd9c324dc45254da9dfe39f4563caa8e95e45886a57e0f80",
+          "decoded_utf8_bytes": 28,
+          "redirect_target": "Peji Rekutanga",
+          "retained_disposition": "site_metadata",
+          "retained_finding": "Navigation redirect to the identified nonlexical terminal revision.",
+          "all_declared_fields_match": true
+        }
+      ],
+      "xml_eof": true,
+      "limits": "Authenticates every namespace-0 and declared project-terminal revision against retained exclusion audit. Does not regenerate publication manifests or establish new client/render qualification."
+    },
+    {
+      "edition": "towiktionary",
+      "status": "EXACT_DATED_SOURCE_JOIN_PASS",
+      "sources": [
+        {
+          "path": "data/inputs/dumps/towiktionary/20261001/towiktionary-20261001-pages-meta-current.xml.bz2",
+          "sha256": "a1aad26bfdfdea48e6e5acbc3e39e7fafbc46f836577559520f5687e6fd3726f",
+          "bytes": 55538,
+          "url": "https://dumps.wikimedia.your.org/towiktionary/20261001/towiktionary-20261001-pages-meta-current.xml.bz2",
+          "reused": false
+        },
+        {
+          "path": "data/inputs/dumps/towiktionary/20261001/towiktionary-20261001-redirect.sql.gz",
+          "sha256": "0ee454bfb87f00f7d9e83e9774e3c5083dec4e6cdb1ffaf4dfaef94544e5d99f",
+          "bytes": 1493,
+          "url": "https://dumps.wikimedia.your.org/towiktionary/20261001/towiktionary-20261001-redirect.sql.gz",
+          "reused": false
+        }
+      ],
+      "total_pages": 216,
+      "namespace_counts": {
+        "10": 87,
+        "8": 76,
+        "2": 27,
+        "0": 3,
+        "3": 21,
+        "14": 1,
+        "4": 1
+      },
+      "matched_pages": [
+        {
+          "title": "Peesi tali fiefia",
+          "namespace": 0,
+          "page_id": 1557,
+          "revision_id": 4820,
+          "source_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "decoded_utf8_bytes": 0,
+          "redirect_target": null,
+          "retained_disposition": "site_metadata",
+          "retained_finding": "Original revision contains zero text bytes. The XML text hash matches the empty string.",
+          "all_declared_fields_match": true
+        },
+        {
+          "title": "Main Page",
+          "namespace": 0,
+          "page_id": 1644,
+          "revision_id": 4524,
+          "source_sha256": "b8f7c7ea58ef0c66c6d354a07628745861053b92354dfd0d9d61663d1a5483a0",
+          "decoded_utf8_bytes": 31,
+          "redirect_target": "Peesi tali fiefia",
+          "retained_disposition": "site_metadata",
+          "retained_finding": "Navigation redirect to the identified nonlexical terminal revision.",
+          "all_declared_fields_match": true
+        },
+        {
+          "title": "main Page",
+          "namespace": 0,
+          "page_id": 1809,
+          "revision_id": 4526,
+          "source_sha256": "b8f7c7ea58ef0c66c6d354a07628745861053b92354dfd0d9d61663d1a5483a0",
+          "decoded_utf8_bytes": 31,
+          "redirect_target": "Peesi tali fiefia",
+          "retained_disposition": "site_metadata",
+          "retained_finding": "Navigation redirect to the identified nonlexical terminal revision.",
+          "all_declared_fields_match": true
+        }
+      ],
+      "xml_eof": true,
+      "limits": "Authenticates every namespace-0 and declared project-terminal revision against retained exclusion audit. Does not regenerate publication manifests or establish new client/render qualification."
+    },
+    {
+      "edition": "twwiktionary",
+      "status": "EXACT_DATED_SOURCE_JOIN_PASS",
+      "sources": [
+        {
+          "path": "data/inputs/dumps/twwiktionary/20261001/twwiktionary-20261001-pages-meta-current.xml.bz2",
+          "sha256": "512521390c7d7f944dbed4ca996205667c846b2caa0a5c57822386ddfd632891",
+          "bytes": 57035,
+          "url": "https://dumps.wikimedia.your.org/twwiktionary/20261001/twwiktionary-20261001-pages-meta-current.xml.bz2",
+          "reused": false
+        },
+        {
+          "path": "data/inputs/dumps/twwiktionary/20261001/twwiktionary-20261001-redirect.sql.gz",
+          "sha256": "3c8a2f7e7232fcb2c0acb3ed212025f9743554b45fffc2347fd9f20505d78a57",
+          "bytes": 1538,
+          "url": "https://dumps.wikimedia.your.org/twwiktionary/20261001/twwiktionary-20261001-redirect.sql.gz",
+          "reused": false
+        }
+      ],
+      "total_pages": 225,
+      "namespace_counts": {
+        "10": 89,
+        "8": 74,
+        "2": 29,
+        "0": 2,
+        "4": 2,
+        "3": 23,
+        "14": 6
+      },
+      "matched_pages": [
+        {
+          "title": "Main Page",
+          "namespace": 0,
+          "page_id": 1082,
+          "revision_id": 4781,
+          "source_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "decoded_utf8_bytes": 0,
+          "redirect_target": null,
+          "retained_disposition": "reviewed_nonlexical",
+          "retained_finding": "Original revision contains zero text bytes. The XML text hash matches the empty string.",
+          "all_declared_fields_match": true
+        },
+        {
+          "title": "main Page",
+          "namespace": 0,
+          "page_id": 1801,
+          "revision_id": 4484,
+          "source_sha256": "c7c9ec03c409235a3c3f40779438fa6cf5d8571dae23b90d019b223077f3cf26",
+          "decoded_utf8_bytes": 23,
+          "redirect_target": "Main Page",
+          "retained_disposition": "reviewed_nonlexical",
+          "retained_finding": "Navigation redirect to the identified nonlexical terminal revision.",
+          "all_declared_fields_match": true
+        }
+      ],
+      "xml_eof": true,
+      "limits": "Authenticates every namespace-0 and declared project-terminal revision against retained exclusion audit. Does not regenerate publication manifests or establish new client/render qualification."
+    },
+    {
+      "edition": "xhwiktionary",
+      "status": "EXACT_DATED_SOURCE_JOIN_PASS",
+      "sources": [
+        {
+          "path": "data/inputs/dumps/xhwiktionary/20261001/xhwiktionary-20261001-pages-meta-current.xml.bz2",
+          "sha256": "1ad8b2e3f155cbe53297522cc24ce323a43729ab681700d37fdaad59193d61fa",
+          "bytes": 55628,
+          "url": "https://dumps.wikimedia.your.org/xhwiktionary/20261001/xhwiktionary-20261001-pages-meta-current.xml.bz2",
+          "reused": false
+        },
+        {
+          "path": "data/inputs/dumps/xhwiktionary/20261001/xhwiktionary-20261001-redirect.sql.gz",
+          "sha256": "c3abee1396bb335dd6ee3fe086d947b4350e9a3d62aeb74fee22149a9614e4c2",
+          "bytes": 939,
+          "url": "https://dumps.wikimedia.your.org/xhwiktionary/20261001/xhwiktionary-20261001-redirect.sql.gz",
+          "reused": false
+        }
+      ],
+      "total_pages": 105,
+      "namespace_counts": {
+        "10": 26,
+        "8": 6,
+        "2": 32,
+        "3": 35,
+        "0": 3,
+        "4": 2,
+        "14": 1
+      },
+      "matched_pages": [
+        {
+          "title": "main Page",
+          "namespace": 0,
+          "page_id": 1830,
+          "revision_id": 4582,
+          "source_sha256": "c7c9ec03c409235a3c3f40779438fa6cf5d8571dae23b90d019b223077f3cf26",
+          "decoded_utf8_bytes": 23,
+          "redirect_target": "Main Page",
+          "retained_disposition": "site_metadata",
+          "retained_finding": "Navigation redirect to the identified nonlexical terminal revision.",
+          "all_declared_fields_match": true
+        },
+        {
+          "title": "Iphepha Elingundoqo",
+          "namespace": 0,
+          "page_id": 2119,
+          "revision_id": 5041,
+          "source_sha256": "c7c9ec03c409235a3c3f40779438fa6cf5d8571dae23b90d019b223077f3cf26",
+          "decoded_utf8_bytes": 23,
+          "redirect_target": "Main Page",
+          "retained_disposition": "site_metadata",
+          "retained_finding": "Navigation redirect to the identified nonlexical terminal revision.",
+          "all_declared_fields_match": true
+        },
+        {
+          "title": "Main Page",
+          "namespace": 0,
+          "page_id": 2134,
+          "revision_id": 5066,
+          "source_sha256": "89fb11e6bd54e61bbef967896539b863f02f3a496333d0a80286a310aa4e39db",
+          "decoded_utf8_bytes": 249,
+          "redirect_target": null,
+          "retained_disposition": "site_metadata",
+          "retained_finding": "Xhosa and English welcome, Incubator contribution link and instructions for reopening the project.",
+          "all_declared_fields_match": true
+        }
+      ],
+      "xml_eof": true,
+      "limits": "Authenticates every namespace-0 and declared project-terminal revision against retained exclusion audit. Does not regenerate publication manifests or establish new client/render qualification."
+    },
+    {
+      "edition": "yowiktionary",
+      "status": "EXACT_DATED_SOURCE_JOIN_PASS",
+      "sources": [
+        {
+          "path": "data/inputs/dumps/yowiktionary/20261001/yowiktionary-20261001-pages-meta-current.xml.bz2",
+          "sha256": "55cde05d8599efa4b75eaceed58733e8a4f2fb72104a29e5676e12521231e69d",
+          "bytes": 58477,
+          "url": "https://dumps.wikimedia.your.org/yowiktionary/20261001/yowiktionary-20261001-pages-meta-current.xml.bz2",
+          "reused": false
+        },
+        {
+          "path": "data/inputs/dumps/yowiktionary/20261001/yowiktionary-20261001-redirect.sql.gz",
+          "sha256": "624ada875a1fc5547d7e324af1a9478c10143a1414b04152e98cc5bad33a5c72",
+          "bytes": 1501,
+          "url": "https://dumps.wikimedia.your.org/yowiktionary/20261001/yowiktionary-20261001-redirect.sql.gz",
+          "reused": false
+        }
+      ],
+      "total_pages": 210,
+      "namespace_counts": {
+        "10": 90,
+        "8": 74,
+        "2": 21,
+        "0": 1,
+        "3": 22,
+        "14": 1,
+        "4": 1
+      },
+      "matched_pages": [
+        {
+          "title": "Main Page",
+          "namespace": 0,
+          "page_id": 1082,
+          "revision_id": 4859,
+          "source_sha256": "154146cf1e8a180c5f8bf09d2a34eda45c914c520d80ef3981475a7dda5b830f",
+          "decoded_utf8_bytes": 1370,
+          "redirect_target": null,
+          "retained_disposition": "reviewed_nonlexical",
+          "retained_finding": "Article-count magic word and interlanguage links. The expansion is a statistic.",
+          "all_declared_fields_match": true
+        }
+      ],
+      "xml_eof": true,
+      "limits": "Authenticates every namespace-0 and declared project-terminal revision against retained exclusion audit. Does not regenerate publication manifests or establish new client/render qualification."
+    }
+  ]
+}
