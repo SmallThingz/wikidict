@@ -1735,7 +1735,7 @@ pub const Registry = struct {
         return matched[0] and matched[1] and counts[0] == expected[0].? and counts[1] == expected[1].?;
     }
 
-    /// Promote installed captured autonyms and their existing same-code ASCII
+    /// Promote installed captured autonyms and their existing same-code
     /// first-letter capitals. Translated UI profiles are not heading proof.
     pub fn trustAutonymSnapshot(self: *Registry, source: []const u8, wiki: []const u8, date: []const u8, language: []const u8) !void {
         if (source.len > 32 * 1024 * 1024 or !std.unicode.utf8ValidateSlice(source)) return error.InvalidLanguageNameSnapshot;
@@ -1845,6 +1845,8 @@ pub const Registry = struct {
         // Validate the complete selected profile before changing any trust.
         // A code alias, missing label, ambiguous name or later local conflict
         // cannot acquire authority from this independent spelling evidence.
+        var autonym_upper: ?PreferredUpper = null;
+        defer if (autonym_upper) |*mapper| mapper.deinit();
         for (pending.items) |row| {
             if (self.english_added_aliases.contains(row.name)) continue;
             if (!validLocalHeading(row.name) or !self.codes.contains(row.code) or self.ambiguous.contains(row.name)) continue;
@@ -1864,6 +1866,9 @@ pub const Registry = struct {
                 const value = try a.dupe(u8, row.name);
                 value[0] = std.ascii.toUpper(value[0]);
                 break :first_capital value;
+            } else if (row.name[0] >= 0x80) first_capital: {
+                if (autonym_upper == null) autonym_upper = try PreferredUpper.init();
+                break :first_capital try autonym_upper.?.firstAlloc(a, row.name);
             } else row.name;
             for ([_][]const u8{ row.name, capitalized }) |label| {
                 if (self.english_added_aliases.contains(label)) continue;
@@ -5571,12 +5576,20 @@ test "captured TT full profile admits installed first-letter capital without col
     try r.addTsv(registry);
     try std.testing.expectEqualStrings("tt-latn", r.resolve("Tatarça").?.code);
     try std.testing.expect(r.resolveTrusted("Tatarça") == null);
+    try std.testing.expectEqualStrings("tt-cyrl", r.resolve("Татарча").?.code);
+    try std.testing.expect(r.resolveTrusted("Татарча") == null);
     try r.trustAutonymSnapshot(names, "ttwiktionary", "20261001", "tt");
     for ([_][]const u8{ "tatarça", "Tatarça" }) |label| {
         const owner = r.resolveTrusted(label) orelse return error.TestUnexpectedResult;
         try std.testing.expectEqualStrings("tt-latn", owner.code);
         try std.testing.expectEqualStrings("татарский (латинский алфавит)", owner.heading);
     }
+    for ([_][]const u8{ "татарча", "Татарча" }) |label| {
+        const owner = r.resolveTrusted(label) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualStrings("tt-cyrl", owner.code);
+        try std.testing.expectEqualStrings("татарский (кириллица)", owner.heading);
+    }
+    try std.testing.expect(r.resolveTrusted("ТАТАРЧА") == null);
     try std.testing.expectEqualStrings("tt", r.resolveTrusted("татарча / tatarça").?.code);
     try std.testing.expect(r.resolveTrusted("TATARÇA") == null);
     try std.testing.expect(r.resolveTrusted("Tatarça ") == null);
