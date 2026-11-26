@@ -468,6 +468,18 @@ export function spans(values = [], onLink = () => {}, preserve = false, explanat
       link.addEventListener('click', event => { event.preventDefault(); if(withinSummary)event.stopPropagation(); if(span.target_fragment==null)onLink(span.target);else onLink(span.target,span.target_fragment); }); link.append(el); el = link;
     } else if (span.kind === 'external_link' && safeURL(span.target) && !span.image?.map) {
       const link = node('a'); link.href = safeURL(span.target); link.rel = 'noopener noreferrer'; link.target = '_blank';
+      // Prefer URL separators to emergency breaks inside a displayed address.
+      if (!preserve && textStart && span.text === span.target && /^https?:\/\//i.test(span.target)) {
+        const parts = span.text.split(/(?<!:\/\/)(?<=[/?&#])(?=[^/?&#])/u);
+        if (parts.length > 1) {
+          const label = document.createDocumentFragment();
+          for (const [index, part] of parts.entries()) {
+            if (index > 0) label.append(node('wbr'));
+            label.append(part);
+          }
+          textStart.replaceWith(label);
+        }
+      }
       if(!span.image&&!span.ruby&&!span.clipped_absolute&&!el.textContent.trim()&&!span.tooltip?.trim())link.setAttribute('aria-label',span.explanation?.trim()||safeURL(span.target));
       if(withinSummary)link.addEventListener('click',event=>event.stopPropagation()); link.append(el); el = link;
     }
