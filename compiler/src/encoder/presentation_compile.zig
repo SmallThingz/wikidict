@@ -1550,7 +1550,24 @@ pub fn normalTitleDefaults(title: []const u8, namespace_catalog: ?*const @import
         // and DisableTitleConversion=false; LanguageConverter then uses static.
         .config_sha256 = "3431088101d64e88c2da66453929f942b72b6e7fc540ecb289a21015cd97848a" };
 }
+// Build-only captures. The caller must bind their immutable reference/cascade
+// provenance in its input manifest. These rows are not inferred from a class,
+// a nullable default, a title, or a hash of unrelated equal source bytes.
+// Offsets belong to the exact borrowed source passed to this compilation.
+pub const ContainerDisclosureCapture = struct {
+    owner_start: usize,
+    owner_end: usize,
+    content_start: usize,
+    content_end: usize,
+    policy: presentation_types.ContainerDisclosure,
+};
+pub const ContainerDisclosureSource = struct {
+    source: []const u8,
+    captures: []const ContainerDisclosureCapture,
+};
+
 pub const Context = struct {
+    container_disclosures: ?*const ContainerDisclosureSource = null,
     body_link_continuations: ?*const BodyLinkContinuations = null,
     normal_title_defaults: ?NormalTitleDefaults = null,
     display_title_precedence: ?DisplayTitlePrecedence = null,
@@ -9518,6 +9535,7 @@ pub const Renderer = struct {
     block_limit_reached: bool = false,
     body_depth: usize = 0,
     container_child_positions: ?ContainerChildPositions = null,
+    generic_disclosure_child_binding: ?*GenericDisclosureChildBinding = null,
     container_parent_flex: bool = false,
     // Exact original DIV -> single physical list edge, never inferred from
     // inherited style ancestry or generated block owners.
@@ -45197,7 +45215,7 @@ pub const Renderer = struct {
                         try observer.enter(observer.ctx, input, origin, offset, offset + tag.end, offset + pair.inner_end, offset + pair.end, true, kind, self.block_formatting, "", self.observerFormattingAttributes());
                     };
                     var container_resolution = try self.containerResolution(tag, parent_language_direction orelse .{}, scoped_style);
-                    const force_container_owner = self.container_parent_flex;
+                    const force_container_owner = self.container_parent_flex or self.genericDisclosureTargetChild(input, wrapper_source[0..pair.end]);
                     const previous_parent_flex = self.container_parent_flex;
                     defer self.container_parent_flex = previous_parent_flex;
                     self.container_parent_flex = false;
@@ -45222,22 +45240,53 @@ pub const Renderer = struct {
                     defer self.display_parent_region = previous_display_region;
                     self.display_parent_region = self.makeDisplayParentRegion(wrapper_source[0..pair.end]);
                     const owner_positioned_diagnostic = self.positionedContainerDiagnosticFor(tag.attrs);
+                    const disclosure_source = try self.genericDisclosureSourceQuery(tag, wrapper_source[0..pair.end]);
+                    const disclosure_capture = if (disclosure_source) |query| try self.genericDisclosureCapture(query) else null;
+                    var disclosure_binding: ?GenericDisclosureChildBinding = if (disclosure_source) |query|
+                        .{ .parent_inner = query.parent_inner, .content_source = query.content_source } else null;
                     const wrapper_blocks = children: {
                         const previous_child = self.terminal_grid_child;
                         self.terminal_grid_child = if (grid_tail) |tail| tail.direct_child else null;
                         defer self.terminal_grid_child = previous_child;
+                        const previous_disclosure = self.generic_disclosure_child_binding;
+                        defer self.generic_disclosure_child_binding = previous_disclosure;
+                        if (disclosure_binding) |*binding| self.generic_disclosure_child_binding = binding;
                         break :children try self.renderBodySlice(wrapper_source[tag.end..pair.inner_end], true, false, if (origin) |base| base + (@intFromPtr(wrapper_source.ptr) - @intFromPtr(input.ptr)) + tag.end else null, scoped_quote);
                     };
+                    const disclosure: ?presentation_types.ContainerDisclosure = if (disclosure_source) |query| resolved: {
+                        const index = try self.genericDisclosureBoundChild(query, &disclosure_binding.?, wrapper_blocks);
+                        break :resolved try self.genericDisclosurePolicy(query, disclosure_capture.?, index);
+                    } else null;
                     self.positioned_container_query_diagnostic = owner_positioned_diagnostic;
                     if (flex_children and !container_resolution.unresolved) {
                         if (wrapper_blocks.len != self.container_child_positions.?.items.len) container_resolution.unresolved = true;
                         for (wrapper_blocks) |item| if (item.kind != .container or item.container == null) { container_resolution.unresolved = true; };
                     }
-                    if (try self.selectedTermOwner(wrapper_source[0..pair.end],wrapper_blocks)) |term_owner| {
+                    if (disclosure) |policy| {
+                        const selected_term = try self.selectedTermOwner(wrapper_source[0..pair.end], wrapper_blocks);
+                        if (selected_term != null)
+                            return self.containerUnavailableAt("generic_disclosure_owner_conflict", wrapper_source[0..pair.end]);
+                        var container = (try self.containerGeometry(tag, parent_language_direction orelse .{}, scoped_style,
+                            wrapper_source[tag.end..pair.inner_end], wrapper_blocks, container_resolution, true)) orelse
+                            return self.containerUnavailableAt("generic_disclosure_owner_geometry", wrapper_source[0..pair.end]);
+                        if (container.style.layout) |layout| if (layout != .flow)
+                            return self.containerUnavailableAt("generic_disclosure_owner_layout", wrapper_source[0..pair.end]);
+                        container.disclosure = policy;
+                        if (!presentation_types.validContainerDisclosureOwner(container))
+                            return self.containerUnavailableAt("generic_disclosure_owner_binding", wrapper_source[0..pair.end]);
+                        const accepted_source = try self.retainAuthoredRuleContainerSource(scoped_style, container);
+                        const emitted_index = blocks.items.len;
+                        try self.appendBlockBudgeted(&blocks, .{ .kind = .container, .container = container, .authored_rule_container_source = accepted_source });
+                        if (blocks.items.len == emitted_index + 1)
+                            self.noteGenericDisclosureChild(input, wrapper_source[0..pair.end], emitted_index, container);
+                    } else if (try self.selectedTermOwner(wrapper_source[0..pair.end],wrapper_blocks)) |term_owner| {
                         try self.appendBlockBudgeted(&blocks,term_owner);
                     } else if (try self.containerGeometry(tag, parent_language_direction orelse .{}, scoped_style, wrapper_source[tag.end..pair.inner_end], wrapper_blocks, container_resolution, force_container_owner)) |container| {
                         const accepted_source = try self.retainAuthoredRuleContainerSource(scoped_style, container);
+                        const emitted_index = blocks.items.len;
                         try self.appendBlockBudgeted(&blocks, .{ .kind = .container, .container = container, .authored_rule_container_source = accepted_source });
+                        if (blocks.items.len == emitted_index + 1)
+                            self.noteGenericDisclosureChild(input, wrapper_source[0..pair.end], emitted_index, container);
                     } else if (try self.blockGeometry(tag, parent_language_direction orelse .{}, scoped_style, wrapper_source[tag.end..pair.inner_end], wrapper_blocks)) |geometry| {
                         var owned_block = wrapper_blocks[0];
                         owned_block.style = geometry;
@@ -47108,6 +47157,198 @@ pub const Renderer = struct {
                 !normalizeContainerLineHeight(&screen.line_height, scale) or !normalizeContainerScreenMargins(&screen.margins, scale)) return false;
         }
         return presentation_types.validContainerStyle(value.*);
+    }
+
+    // A source query is not a ContainerDisclosure or initializer/paint authority.
+    // In particular it has no nullable paint/direction fields that could silently
+    // acquire the format's defaults before the reference contract is bound.
+    const GenericDisclosureSource = struct {
+        owner_source: []const u8,
+        parent_inner: []const u8,
+        content_source: []const u8,
+        expand_label: []const u8,
+        collapse_label: []const u8,
+        initially_collapsed: bool,
+    };
+    const GenericDisclosureChildBinding = struct {
+        parent_inner: []const u8,
+        content_source: []const u8,
+        output_index: ?usize = null,
+        child_blocks: ?[]const Block = null,
+        ambiguous: bool = false,
+    };
+    fn genericDisclosureClass(classes: []const u8, wanted: []const u8) bool {
+        var tokens = std.mem.tokenizeAny(u8, classes, " \t\r\n\x0c");
+        while (tokens.next()) |token| if (std.mem.eql(u8, token, wanted)) return true;
+        return false;
+    }
+    // Validation only: decoding remains semanticAttribute's existing job.
+    // This narrow source shape admits only distinct, quoted known attributes.
+    fn genericDisclosureAttributes(attrs: []const u8, owner: bool) bool {
+        var rest = attrs;
+        var seen: u8 = 0;
+        while (true) {
+            rest = std.mem.trimStart(u8, rest, " \t\r\n\x0c");
+            if (rest.len == 0) return true;
+            var end: usize = 0;
+            while (end < rest.len and nativeClassAttributeNameByte(rest[end])) : (end += 1) {}
+            if (end == 0) return false;
+            const name = rest[0..end];
+            const bit: u8 = if (std.ascii.eqlIgnoreCase(name, "class")) 1 else
+                if (std.ascii.eqlIgnoreCase(name, "id")) 2 else
+                if (std.ascii.eqlIgnoreCase(name, "style")) 4 else
+                if (owner and std.ascii.eqlIgnoreCase(name, "data-expandtext")) 8 else
+                if (owner and std.ascii.eqlIgnoreCase(name, "data-collapsetext")) 16 else return false;
+            if (seen & bit != 0) return false;
+            seen |= bit;
+            rest = std.mem.trimStart(u8, rest[end..], " \t\r\n\x0c");
+            if (rest.len < 3 or rest[0] != '=') return false;
+            rest = std.mem.trimStart(u8, rest[1..], " \t\r\n\x0c");
+            if (rest.len < 2 or (rest[0] != '\'' and rest[0] != '"')) return false;
+            const quote = rest[0];
+            const close = std.mem.indexOfScalarPos(u8, rest, 1, quote) orelse return false;
+            rest = rest[close + 1 ..];
+            if (rest.len != 0 and !std.ascii.isWhitespace(rest[0])) return false;
+        }
+    }
+    fn genericDisclosureLabel(label: []const u8) bool {
+        if (label.len == 0 or !std.unicode.utf8ValidateSlice(label)) return false;
+        for (label) |byte| if (byte < 0x20 or byte == 0x7f) return false;
+        return true;
+    }
+    fn genericDisclosureSourceQuery(self: *Renderer, tag: syntax.Tag, whole: []const u8) Error!?GenericDisclosureSource {
+        if (!tag.is("div")) return null;
+        const classes = (try self.semanticAttribute(tag, "class")) orelse return null;
+        if (!genericDisclosureClass(classes, "mw-collapsible")) return null;
+        // Query bounds only; no execution/resource limit is changed.
+        if (whole.len == 0 or whole.len > 65536 or tag.closing or tag.self_closing or tag.html_pre or
+            !formattingAngleAttributesBalanced(tag.attrs) or !genericDisclosureAttributes(tag.attrs, true))
+            return self.containerUnavailableAt("generic_disclosure_owner_shape", whole);
+        const opening = syntax.tagAt(whole, 0) orelse return self.containerUnavailableAt("generic_disclosure_owner_shape", whole);
+        const pair = syntax.matchingTag(whole, opening) orelse return self.containerUnavailableAt("generic_disclosure_owner_shape", whole);
+        if (opening.name.ptr != tag.name.ptr or opening.end != tag.end or pair.end != whole.len)
+            return self.containerUnavailableAt("generic_disclosure_source_identity", whole);
+        const closing = syntax.tagAt(whole, pair.inner_end) orelse return self.containerUnavailableAt("generic_disclosure_owner_shape", whole);
+        if (!closing.closing or !closing.is("div") or trim(closing.attrs).len != 0)
+            return self.containerUnavailableAt("generic_disclosure_owner_shape", whole);
+        if (try self.semanticAttribute(tag, "id")) |id| if (std.mem.startsWith(u8, id, "mw-customcollapsible-"))
+            return self.containerUnavailableAt("generic_disclosure_custom_toggle", whole);
+        const expand = (try self.semanticAttribute(tag, "data-expandtext")) orelse
+            return self.containerUnavailableAt("generic_disclosure_explicit_labels", whole);
+        const collapse = (try self.semanticAttribute(tag, "data-collapsetext")) orelse
+            return self.containerUnavailableAt("generic_disclosure_explicit_labels", whole);
+        if (!genericDisclosureLabel(expand) or !genericDisclosureLabel(collapse))
+            return self.containerUnavailableAt("generic_disclosure_explicit_labels", whole);
+        const inner = whole[opening.end..pair.inner_end];
+        const at = std.mem.indexOfScalar(u8, inner, '<') orelse
+            return self.containerUnavailableAt("generic_disclosure_direct_child", whole);
+        // Only the retained leading plain caption + one final direct DIV shape.
+        // No list/table/custom-toggle/nested-only or implicit wrapInner promotion.
+        if (trim(inner[0..at]).len == 0 or std.mem.indexOfAny(u8, inner[0..at], "{}[]") != null)
+            return self.containerUnavailableAt("generic_disclosure_caption_shape", whole);
+        const child = syntax.tagAt(inner, at) orelse return self.containerUnavailableAt("generic_disclosure_direct_child", whole);
+        if (!child.is("div") or child.closing or child.self_closing or child.html_pre or
+            !formattingAngleAttributesBalanced(child.attrs) or !genericDisclosureAttributes(child.attrs, false))
+            return self.containerUnavailableAt("generic_disclosure_direct_child", whole);
+        const child_classes = (try self.semanticAttribute(child, "class")) orelse "";
+        if (!genericDisclosureClass(child_classes, "mw-collapsible-content") or genericDisclosureClass(child_classes, "mw-collapsible"))
+            return self.containerUnavailableAt("generic_disclosure_direct_child", whole);
+        const child_pair = syntax.matchingTag(inner, child) orelse return self.containerUnavailableAt("generic_disclosure_direct_child", whole);
+        const child_close = syntax.tagAt(inner, child_pair.inner_end) orelse return self.containerUnavailableAt("generic_disclosure_direct_child", whole);
+        if (!child_close.closing or !child_close.is("div") or trim(child_close.attrs).len != 0 or trim(inner[child_pair.end..]).len != 0)
+            return self.containerUnavailableAt("generic_disclosure_direct_child", whole);
+        return .{ .owner_source = whole, .parent_inner = inner, .content_source = inner[at..child_pair.end],
+            .expand_label = expand, .collapse_label = collapse,
+            .initially_collapsed = genericDisclosureClass(classes, "mw-collapsed") };
+    }
+    fn noteGenericDisclosureChild(self: *Renderer, input: []const u8, source: []const u8, index: usize, child: Container) void {
+        const binding = self.generic_disclosure_child_binding orelse return;
+        if (input.ptr != binding.parent_inner.ptr or input.len != binding.parent_inner.len or
+            source.ptr != binding.content_source.ptr or source.len != binding.content_source.len) return;
+        if (binding.output_index != null) { binding.ambiguous = true; return; }
+        binding.output_index = index;
+        binding.child_blocks = child.blocks;
+    }
+    fn genericDisclosureBoundChild(self: *Renderer, query: GenericDisclosureSource,
+        binding: *const GenericDisclosureChildBinding, children: []const Block) Error!u32
+    {
+        if (query.parent_inner.ptr != binding.parent_inner.ptr or query.parent_inner.len != binding.parent_inner.len or
+            query.content_source.ptr != binding.content_source.ptr or query.content_source.len != binding.content_source.len or binding.ambiguous)
+            return self.containerUnavailableAt("generic_disclosure_child_binding", query.parent_inner);
+        const index = binding.output_index orelse return self.containerUnavailableAt("generic_disclosure_child_binding", query.parent_inner);
+        const emitted = binding.child_blocks orelse return self.containerUnavailableAt("generic_disclosure_child_binding", query.parent_inner);
+        if (index > std.math.maxInt(u32) or index >= children.len or emitted.len == 0 or
+            children[index].kind != .container or children[index].container == null)
+            return self.containerUnavailableAt("generic_disclosure_child_binding", query.parent_inner);
+        const actual = children[index].container.?.blocks;
+        if (actual.ptr != emitted.ptr or actual.len != emitted.len)
+            return self.containerUnavailableAt("generic_disclosure_child_binding", query.parent_inner);
+        // A second output owner sharing this capture would make the index ambiguous.
+        for (children, 0..) |item, i| if (i != index) if (item.container) |other|
+            if (other.blocks.ptr == emitted.ptr and other.blocks.len == emitted.len)
+                return self.containerUnavailableAt("generic_disclosure_child_binding", query.parent_inner);
+        return @intCast(index);
+    }
+    fn genericDisclosureOffset(root: []const u8, part: []const u8) ?usize {
+        const root_address = @intFromPtr(root.ptr);
+        const part_address = @intFromPtr(part.ptr);
+        if (part_address < root_address) return null;
+        const offset = part_address - root_address;
+        if (offset > root.len or part.len > root.len - offset) return null;
+        return offset;
+    }
+    fn genericDisclosureTargetChild(self: *const Renderer, input: []const u8, source: []const u8) bool {
+        const binding = self.generic_disclosure_child_binding orelse return false;
+        return input.ptr == binding.parent_inner.ptr and input.len == binding.parent_inner.len and
+            source.ptr == binding.content_source.ptr and source.len == binding.content_source.len;
+    }
+    fn genericDisclosureCapture(self: *Renderer, query: GenericDisclosureSource) Error!*const ContainerDisclosureCapture {
+        const held = self.context.container_disclosures orelse
+            return self.containerUnavailableAt("generic_disclosure_paint_authority_unbound", query.owner_source);
+        // A finite source table, not a renderer-wide style default or a callback.
+        if (held.source.len == 0 or held.captures.len == 0 or held.captures.len > 4096)
+            return self.containerUnavailableAt("generic_disclosure_capture_scope", query.owner_source);
+        const owner_start = genericDisclosureOffset(held.source, query.owner_source) orelse
+            return self.containerUnavailableAt("generic_disclosure_capture_source", query.owner_source);
+        const content_start = genericDisclosureOffset(held.source, query.content_source) orelse
+            return self.containerUnavailableAt("generic_disclosure_capture_source", query.owner_source);
+        const owner_end = owner_start + query.owner_source.len;
+        const content_end = content_start + query.content_source.len;
+        var found: ?*const ContainerDisclosureCapture = null;
+        for (held.captures) |*capture| {
+            if (capture.owner_start >= capture.owner_end or capture.owner_end > held.source.len or
+                capture.content_start < capture.owner_start or capture.content_start >= capture.content_end or
+                capture.content_end > capture.owner_end)
+                return self.containerUnavailableAt("generic_disclosure_capture_bounds", query.owner_source);
+            if (capture.owner_start != owner_start) continue;
+            if (found != null or capture.owner_end != owner_end or
+                capture.content_start != content_start or capture.content_end != content_end)
+                return self.containerUnavailableAt("generic_disclosure_capture_ambiguous", query.owner_source);
+            found = capture;
+        }
+        const capture = found orelse
+            return self.containerUnavailableAt("generic_disclosure_capture_missing", query.owner_source);
+        const value = capture.policy;
+        if (!std.mem.eql(u8, value.expand_label, query.expand_label) or
+            !std.mem.eql(u8, value.collapse_label, query.collapse_label) or
+            value.initially_collapsed != query.initially_collapsed)
+            return self.containerUnavailableAt("generic_disclosure_capture_semantics", query.owner_source);
+        // Complete explicit native-button data must reach the shared validator.
+        // Presence of a text label or an old ua_auto flag is not a box/font proof.
+        if (value.button == null or value.direction == null or value.foreground == null or
+            value.expand_run == null or value.collapse_run == null or
+            !presentation_types.validContainerDisclosure(value))
+            return self.containerUnavailableAt("generic_disclosure_capture_paint", query.owner_source);
+        return capture;
+    }
+    fn genericDisclosurePolicy(self: *Renderer, query: GenericDisclosureSource,
+        capture: *const ContainerDisclosureCapture, index: u32) Error!presentation_types.ContainerDisclosure
+    {
+        // Rejoin the same immutable row after the real child compilation.
+        const current = try self.genericDisclosureCapture(query);
+        if (current != capture or capture.policy.content_index != index)
+            return self.containerUnavailableAt("generic_disclosure_capture_child", query.owner_source);
+        return capture.policy;
     }
 
     fn containerGeometry(self: *Renderer, tag: syntax.Tag, parent: Style, scoped: Style, inner_source: []const u8, children: []const Block, resolution: table_style_profile.ContainerResolution, force_owner: bool) Error!?Container {
@@ -137339,6 +137580,188 @@ test "observed fixed atom callback emits only the exact agreeing owner and leave
         fixture.tracked.bytes[fixture.pair.end..].ptr);
     try std.testing.expect(fixture.renderer.context.figure_sizing.?.resolve_authored_element_style_fn == null);
     try presentation_types.validateInlineBoxGroupTree(owner, 0, 0);
+}
+
+test "A1 generic disclosure source query binds authentic direct child without paint defaults" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const source = @embedFile("a1_it_cediglia_disclosure_source03.html");
+    const query = (try r.genericDisclosureSourceQuery(syntax.tagAt(source, 0).?, source)).?;
+    try std.testing.expect(query.initially_collapsed);
+    try std.testing.expectEqualStrings("Mostra", query.expand_label);
+    try std.testing.expectEqualStrings("Nascondi", query.collapse_label);
+    try std.testing.expect(std.mem.startsWith(u8, query.parent_inner, "Vedi le traduzioni\n"));
+    try std.testing.expect(std.mem.indexOf(u8, query.content_source, "cedilo") != null);
+    try std.testing.expect(std.mem.indexOf(u8, query.content_source, "cedilla") != null);
+    try std.testing.expect(!@hasField(@TypeOf(query), "focus"));
+    try std.testing.expect(!@hasField(@TypeOf(query), "direction"));
+    try std.testing.expect(!@hasField(@TypeOf(query), "foreground"));
+}
+
+test "A1 generic disclosure expanded and ordinary queries remain distinct" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const expanded = "<div class='mw-collapsible' data-expandtext='Show &amp; more' data-collapsetext='Hide'>Caption<div class='mw-collapsible-content'>Body</div></div>";
+    const query = (try r.genericDisclosureSourceQuery(syntax.tagAt(expanded, 0).?, expanded)).?;
+    try std.testing.expect(!query.initially_collapsed);
+    try std.testing.expectEqualStrings("Show & more", query.expand_label);
+    const ordinary = "<div class='mw-collapsible-other'>Caption<div>Body</div></div>";
+    try std.testing.expect((try r.genericDisclosureSourceQuery(syntax.tagAt(ordinary, 0).?, ordinary)) == null);
+    try std.testing.expect(!r.fallbacks.unsupported_element);
+}
+
+test "A1 generic disclosure rejects ambiguous source topology and label authority" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cases = [_][]const u8{
+        "<div class='mw-collapsible' data-expandtext='Show' data-collapsetext='Hide'>Caption<div class='mw-collapsible-content'>A</div><div class='mw-collapsible-content'>B</div></div>",
+        "<div class='mw-collapsible' data-expandtext='Show' data-collapsetext='Hide'>Caption<div><div class='mw-collapsible-content'>A</div></div></div>",
+        "<div class='mw-collapsible' id='mw-customcollapsible-x' data-expandtext='Show' data-collapsetext='Hide'>Caption<div class='mw-collapsible-content'>A</div></div>",
+        "<div class='mw-collapsible' class='other' data-expandtext='Show' data-collapsetext='Hide'>Caption<div class='mw-collapsible-content'>A</div></div>",
+        "<div class='mw-collapsible' data-expandtext='' data-collapsetext='Hide'>Caption<div class='mw-collapsible-content'>A</div></div>",
+        "<div class='mw-collapsible' data-collapsetext='Hide'>Caption<div class='mw-collapsible-content'>A</div></div>",
+        "<div class='mw-collapsible' data-expandtext='Show' data-collapsetext='Hide'>Caption<span class='mw-collapsible-toggle-placeholder'></span><div class='mw-collapsible-content'>A</div></div>",
+    };
+    for (cases) |source| {
+        var r: Renderer = .{ .a = a, .context = .{} };
+        try std.testing.expectError(error.UncompiledPresentation, r.genericDisclosureSourceQuery(syntax.tagAt(source, 0).?, source));
+        try std.testing.expect(r.fallbacks.unsupported_element);
+    }
+}
+
+test "A1 generic disclosure binding requires same source pass and unique emitted container" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const source = @embedFile("a1_it_cediglia_disclosure_source03.html");
+    const query = (try r.genericDisclosureSourceQuery(syntax.tagAt(source, 0).?, source)).?;
+    const body = [_]Block{.{ .kind = .paragraph }};
+    const child: Container = .{ .blocks = &body };
+    const children = [_]Block{ .{ .kind = .paragraph }, .{ .kind = .container, .container = child } };
+    var binding: Renderer.GenericDisclosureChildBinding = .{ .parent_inner = query.parent_inner, .content_source = query.content_source };
+    r.generic_disclosure_child_binding = &binding;
+    const copied = try a.dupe(u8, query.parent_inner);
+    r.noteGenericDisclosureChild(copied, query.content_source, 1, child);
+    try std.testing.expectError(error.UncompiledPresentation, r.genericDisclosureBoundChild(query, &binding, &children));
+    r.noteGenericDisclosureChild(query.parent_inner, query.content_source, 1, child);
+    try std.testing.expectEqual(@as(u32, 1), try r.genericDisclosureBoundChild(query, &binding, &children));
+    const shifted = [_]Block{children[1], children[0]};
+    try std.testing.expectError(error.UncompiledPresentation, r.genericDisclosureBoundChild(query, &binding, &shifted));
+    const duplicated = [_]Block{children[1], children[1]};
+    try std.testing.expectError(error.UncompiledPresentation, r.genericDisclosureBoundChild(query, &binding, &duplicated));
+    r.noteGenericDisclosureChild(query.parent_inner, query.content_source, 1, child);
+    try std.testing.expectError(error.UncompiledPresentation, r.genericDisclosureBoundChild(query, &binding, &children));
+}
+
+test "A1 generic disclosure captured button reaches real pipeline with strict source and child custody" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = @embedFile("a1_it_cediglia_disclosure_source03.html");
+    // Actual S4 reference05 data; not a manually initialized HTML fixture.
+    const policy = try std.json.parseFromSliceLeaky(presentation_types.ContainerDisclosure, a,
+        @embedFile("a1_it_disclosure_button05.json"), .{});
+    var query_renderer: Renderer = .{ .a = a, .context = .{} };
+    const query = (try query_renderer.genericDisclosureSourceQuery(syntax.tagAt(source, 0).?, source)).?;
+    const child_start = Renderer.genericDisclosureOffset(source, query.content_source).?;
+    const captured: ContainerDisclosureCapture = .{ .owner_start = 0, .owner_end = source.len,
+        .content_start = child_start, .content_end = child_start + query.content_source.len, .policy = policy };
+    const rows = [_]ContainerDisclosureCapture{captured};
+    const scope: ContainerDisclosureSource = .{ .source = source, .captures = &rows };
+    var r: Renderer = .{ .a = a, .context = .{ .container_disclosures = &scope } };
+    const blocks = try r.renderBody(source);
+    try std.testing.expectEqual(@as(usize, 1), blocks.len);
+    const owner = blocks[0].container.?;
+    try std.testing.expect(presentation_types.validContainerDisclosureOwner(owner));
+    try std.testing.expectEqualDeep(policy, owner.disclosure.?);
+    try std.testing.expect(owner.disclosure.?.button != null);
+    try std.testing.expect(owner.blocks[policy.content_index].container.?.blocks.len != 0);
+    try std.testing.expect(r.generic_disclosure_child_binding == null);
+    try std.testing.expect(!r.fallbacks.unsupported_element);
+
+    // Equal bytes at another address cannot borrow this capture.
+    const copied = try a.dupe(u8, source);
+    var wrong_source: Renderer = .{ .a = a, .context = .{ .container_disclosures = &scope } };
+    try std.testing.expectError(error.UncompiledPresentation, wrong_source.renderBody(copied));
+    try std.testing.expect(wrong_source.generic_disclosure_child_binding == null);
+    var absent: Renderer = .{ .a = a, .context = .{} };
+    try std.testing.expectError(error.UncompiledPresentation, absent.renderBody(source));
+
+    // Every refusal goes through the same real renderBody entry, not only the
+    // source-query helper. Nothing is published from a failed return.
+    for (0..5) |case| {
+        var bad = captured;
+        switch (case) {
+            0 => bad.policy.content_index += 1,
+            1 => bad.policy.expand_label = "not the source label",
+            2 => bad.policy.button = null,
+            3 => bad.content_end -= 1,
+            4 => bad.policy.direction = null,
+            else => unreachable,
+        }
+        const bad_rows = [_]ContainerDisclosureCapture{bad};
+        const bad_scope: ContainerDisclosureSource = .{ .source = source, .captures = &bad_rows };
+        var failed: Renderer = .{ .a = a, .context = .{ .container_disclosures = &bad_scope } };
+        try std.testing.expectError(error.UncompiledPresentation, failed.renderBody(source));
+        try std.testing.expect(failed.generic_disclosure_child_binding == null);
+        try std.testing.expect(failed.fallbacks.unsupported_element);
+    }
+    const duplicate_rows = [_]ContainerDisclosureCapture{ captured, captured };
+    const duplicate_scope: ContainerDisclosureSource = .{ .source = source, .captures = &duplicate_rows };
+    var duplicate: Renderer = .{ .a = a, .context = .{ .container_disclosures = &duplicate_scope } };
+    try std.testing.expectError(error.UncompiledPresentation, duplicate.renderBody(source));
+    try std.testing.expect(duplicate.generic_disclosure_child_binding == null);
+}
+test "IT public disclosure producer preserves captured button and body through Stored wire" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = @embedFile("a1_it_cediglia_disclosure_source03.html");
+    const policy = try std.json.parseFromSliceLeaky(presentation_types.ContainerDisclosure, a,
+        @embedFile("a1_it_disclosure_button05.json"), .{});
+    var query_renderer: Renderer = .{ .a = a, .context = .{} };
+    const query = (try query_renderer.genericDisclosureSourceQuery(syntax.tagAt(source, 0).?, source)).?;
+    const child_start = Renderer.genericDisclosureOffset(source, query.content_source).?;
+    const captures = [_]ContainerDisclosureCapture{.{
+        .owner_start = 0, .owner_end = source.len,
+        .content_start = child_start, .content_end = child_start + query.content_source.len,
+        .policy = policy,
+    }};
+    const capture_source: ContainerDisclosureSource = .{ .source = source, .captures = &captures };
+    var renderer: Renderer = .{ .a = a, .context = .{ .container_disclosures = &capture_source } };
+    const blocks = try renderer.renderBody(source);
+    try std.testing.expectEqual(@as(usize, 1), blocks.len);
+    try std.testing.expectEqualDeep(policy, blocks[0].container.?.disclosure.?);
+    try std.testing.expect(!renderer.fallbacks.unsupported_element);
+
+    // New current-public boundary: the older five controls stopped at the
+    // producer and used a private model. This must preserve the button in the
+    // maintained build encoder, public wire, decoder and Stored representation.
+    const stored = try FormattingScopeTest.encode(a, &renderer, blocks);
+    const codec = @import("blob_encoder").presentation_codec;
+    const encoded = try codec.encodeAlloc(a, stored);
+    try std.testing.expect(encoded.len >= 4);
+    try std.testing.expectEqualStrings("DPRa", encoded[0..4]);
+    const decoded = try codec.decodeAlloc(a, encoded, "formatting scope", .language,
+        .{ .heading = "English", .code = "en" });
+    try std.testing.expectEqualDeep(stored, decoded);
+    try std.testing.expectEqualSlices(u8, encoded, try codec.encodeAlloc(a, decoded));
+    const owner = decoded.entry.sections[0].blocks[0].container.?;
+    try std.testing.expect(presentation_types.validContainerDisclosureOwner(owner));
+    try std.testing.expectEqualDeep(policy, owner.disclosure.?);
+    try std.testing.expect(owner.disclosure.?.button != null);
+    try std.testing.expect(owner.blocks[policy.content_index].container.?.blocks.len != 0);
+    try std.testing.expectEqualStrings("Mostra", owner.disclosure.?.expand_label);
+    try std.testing.expectEqualStrings("Nascondi", owner.disclosure.?.collapse_label);
+    std.debug.print("IT_PUBLIC_BUTTON_STORED bytes={d} content_index={d} body_blocks={d}\n", .{
+        encoded.len, policy.content_index, owner.blocks[policy.content_index].container.?.blocks.len,
+    });
 }
 
 test "observed fixed atom callback refuses line height mismatch stale ranges and unproved native parent" {
