@@ -3146,6 +3146,49 @@ const QuoteSourceMap = struct {
             !std.mem.eql(u8, self.output[record.output_start .. record.output_start + spelling.len], spelling) or name[0] != spelling[name_at]) return null;
         return record;
     }
+    fn tagOriginal(self: *const @This(), tag: syntax.Tag) ?struct {
+        original: []const u8,
+        source_key: usize,
+        generated: bool,
+    } {
+        if (self.copiedOriginal(tag.name)) |original_name| {
+            const original_at = @intFromPtr(original_name.ptr) - @intFromPtr(self.original.ptr);
+            const prefix: usize = if (tag.closing) 2 else 1;
+            if (original_at < prefix) return null;
+            const original_start = original_at - prefix;
+            const original = syntax.tagAt(self.original, original_start) orelse return null;
+            if (original.name.ptr != original_name.ptr or original.name.len != tag.name.len or
+                original.closing != tag.closing or original.self_closing != tag.self_closing or original.html_pre != tag.html_pre or
+                !std.mem.eql(u8, original.attrs, tag.attrs)) return null;
+            const output_at = @intFromPtr(tag.name.ptr) - @intFromPtr(self.output.ptr);
+            if (output_at < prefix) return null;
+            const output_start = output_at - prefix;
+            const token_len = original.end - original_start;
+            if (output_start > self.output.len or token_len > self.output.len - output_start) return null;
+            const copied = self.copiedOriginal(self.output[output_start .. output_start + token_len]) orelse return null;
+            if (copied.ptr != self.original[original_start..].ptr or copied.len != token_len) return null;
+            const output = syntax.tagAt(self.output, output_start) orelse return null;
+            if (output.name.ptr != tag.name.ptr or output.name.len != tag.name.len or output.attrs.ptr != tag.attrs.ptr or
+                output.attrs.len != tag.attrs.len or output.closing != tag.closing or output.self_closing != tag.self_closing or
+                output.html_pre != tag.html_pre or output.end != output_start + token_len) return null;
+            return .{ .original = self.original[original_start..original.end],
+                .source_key = @intFromPtr(original.name.ptr), .generated = false };
+        }
+        if (self.generatedForName(tag.name)) |generated| {
+            if (tag.attrs.len != 0 or tag.self_closing or tag.html_pre or generated.quote_end <= generated.quote_start or
+                generated.quote_end > self.original.len) return null;
+            const token = generated.token.bytes();
+            const closing = generated.token == .b_close or generated.token == .i_close;
+            const expected_name: []const u8 = switch (generated.token) { .b_open, .b_close => "b", .i_open, .i_close => "i" };
+            if (tag.closing != closing or !std.mem.eql(u8, tag.name, expected_name)) return null;
+            const observed = syntax.tagAt(self.output, generated.output_start) orelse return null;
+            if (observed.name.ptr != tag.name.ptr or observed.attrs.ptr != tag.attrs.ptr or observed.attrs.len != 0 or
+                observed.end != generated.output_start + token.len) return null;
+            return .{ .original = self.original[generated.quote_start..generated.quote_end],
+                .source_key = @intFromPtr(tag.name.ptr), .generated = true };
+        }
+        return null;
+    }
     // A bounded operation-coverage query, not class or HTML ancestry authority.
     // Both ends must remain authored copies; only complete, monotone quote-token
     // groups may replace original bytes between them. Ambiguous/deferred flows
@@ -9667,6 +9710,7 @@ pub const Renderer = struct {
     caption_class_source: ?[]const u8 = null,
     caption_no_li_source: ?[]const u8 = null,
     quote_class_source: ?*const QuoteClassSource = null,
+    page_style_quote_source: ?PageStyleQuoteSource = null,
     // Data-only quote operation map; consumed only for a complete File token.
     figure_caption_quote_source: ?*const QuoteClassSource = null,
     bounded_text_class_source: ?[]const u8 = null,
@@ -12825,6 +12869,8 @@ pub const Renderer = struct {
             (try self.nativeSourceClassQueryDiagnosed(tag, selected_profile, element, style.native_inline_motion, source_diagnostic)) orelse element
         else element;
         var authored_query = source_query.*;
+        const quote_first_child = profile != null and !static_decoration and self.quoteFirstInlineChild(tag, element);
+        if (quote_first_child) authored_query.source_literal_previous = .{ .tag = "" };
         if (profile != null) {
             if (static_decoration) {
                 // Only the physical declaring SPAN's fragment-target fact is needed
@@ -12868,7 +12914,7 @@ pub const Renderer = struct {
             if (self.inline_box_root_list != null and authored_query.source_direct_parent_classes == null)
                 authored_query.source_direct_parent_classes = self.inlineBoxListLiteralParent(element, style.native_inline_motion);
         }
-        const query_element: *const table_style_profile.TextElement = if (authored_query.source_nonlink_element or authored_query.source_fragment_target_absent or
+        const query_element: *const table_style_profile.TextElement = if (quote_first_child or authored_query.source_nonlink_element or authored_query.source_fragment_target_absent or
             authored_query.source_direct_parent_not_li or authored_query.source_direct_parent_classes != null or local_classes != null) &authored_query else source_query;
         if (!static_decoration and query_element != element and self.inline_box_owner == null and
             !try profile.?.hasInlineBoxCandidateIn(self.a, query_element, css)) return .{};
@@ -19716,6 +19762,62 @@ pub const Renderer = struct {
         if (restored.ptr != original.ptr or restored.len != original.len) return null;
         return observed.source[start..][0..original.len];
     }
+    const PageStyleQuoteSource = struct {
+        map: *const QuoteSourceMap,
+        owner: []const u8,
+    };
+
+    fn pageStyleQuoteOwner(self: *const Renderer, source: []const u8) ?[]const u8 {
+        const domain = self.pageStyleDomain() orelse return null;
+        if (self.source_element_binding == null) return null;
+        // A paragraph may cross generated citation attributes. The producer's
+        // exact copy maps into the prepared owner; each tag must separately
+        // round-trip through the original-page projection.
+        return self.registeredOriginalInterval(source, domain.owner);
+    }
+
+    // A quote-normalized tag borrows only the distant root of its source.
+    // It gains no class census, physical edge, or sibling position.
+    fn pageStyleQuotedTag(self: *const Renderer, tag: syntax.Tag) ?struct { anchor: []const u8, generated: bool } {
+        const held = self.page_style_quote_source orelse return null;
+        if (tag.closing or self.pageStyleDomain() == null) return null;
+        const binding = self.source_element_binding orelse return null;
+        const mapped = held.map.tagOriginal(tag) orelse return null;
+        if (mapped.generated and ((mapped.original.len != 2 and mapped.original.len != 3 and mapped.original.len != 5) or
+            !std.mem.allEqual(u8, mapped.original, '\''))) return null;
+        const at = @intFromPtr(mapped.original.ptr) - @intFromPtr(held.map.original.ptr);
+        const anchor = held.owner[at..][0..mapped.original.len];
+        if (!std.mem.eql(u8, anchor, mapped.original)) return null;
+        const start = binding.originalRange(anchor) orelse return null;
+        const restored = binding.ownerRange(start, anchor.len) orelse return null;
+        if (restored.ptr != anchor.ptr) return null;
+        return .{ .anchor = anchor, .generated = mapped.generated };
+    }
+
+    fn quoteFirstInlineChild(self: *const Renderer, tag: syntax.Tag, element: *const table_style_profile.TextElement) bool {
+        if (!tag.is("span") or element.alternative_ancestry != null or
+            element.page_style_root == null or !self.currentAncestorScope(element)) return false;
+        const parent = element.parent orelse return false;
+        if (!std.ascii.eqlIgnoreCase(parent.tag, "i") or parent.alternative_ancestry != null or
+            parent.page_style_root != element.page_style_root or !self.currentAncestorScope(parent)) return false;
+        const held = self.page_style_quote_source orelse return false;
+        const opening = held.map.outputOffset(tag.name) orelse return false;
+        // Exact generated <i> followed immediately by this copied opener.
+        // No source bytes or parser-emitted elements can intervene here.
+        if (opening < 4 or !std.mem.eql(u8, held.map.output[opening - 4..opening], "<i><")) return false;
+        const parent_tag = syntax.tagAt(held.map.output, opening - 4) orelse return false;
+        const pair = syntax.matchingTag(held.map.output, parent_tag) orelse return false;
+        if (opening >= pair.inner_end) return false;
+        if (parent.source_key != @intFromPtr(parent_tag.name.ptr)) return false;
+        const parent_origin = self.pageStyleQuotedTag(parent_tag) orelse return false;
+        const child_origin = self.pageStyleQuotedTag(tag) orelse return false;
+        const parent_anchor = parent.page_style_anchor orelse return false;
+        const child_anchor = element.page_style_anchor orelse return false;
+        return parent_origin.generated and !child_origin.generated and
+            inlineOverlaySameSourceSlice(parent_origin.anchor, parent_anchor) and
+            inlineOverlaySameSourceSlice(child_origin.anchor, child_anchor);
+    }
+
     fn pageStyleQuoteAnchor(self: *const Renderer, known: QuoteClassTag) ?[]const u8 {
         if (self.pageStyleOriginalAnchor(known.original)) |anchor| return anchor;
         const original = self.quoteClassPageOriginal(known.scope, known.original) orelse return null;
@@ -19788,46 +19890,11 @@ pub const Renderer = struct {
             const original_domain = self.quoteClassOriginal(domain, domain.map.original) orelse continue;
             if (selected.selected.ptr != domain.selected.ptr or selected.selected.len != domain.selected.len or
                 selected.scope != domain.scope or self.figureClassScopeForOriginal(original_domain) != domain.scope) continue;
-            if (domain.map.copiedOriginal(tag.name)) |original_name| {
-                const original_at = @intFromPtr(original_name.ptr) - @intFromPtr(domain.map.original.ptr);
-                const prefix: usize = if (tag.closing) 2 else 1;
-                if (original_at < prefix) continue;
-                const original_start = original_at - prefix;
-                const original = syntax.tagAt(domain.map.original, original_start) orelse continue;
-                if (original.name.ptr != original_name.ptr or original.name.len != tag.name.len or
-                    original.closing != tag.closing or original.self_closing != tag.self_closing or original.html_pre != tag.html_pre or
-                    !std.mem.eql(u8, original.attrs, tag.attrs)) continue;
-                const output_at = @intFromPtr(tag.name.ptr) - @intFromPtr(domain.map.output.ptr);
-                if (output_at < prefix) continue;
-                const output_start = output_at - prefix;
-                const token_len = original.end - original_start;
-                if (output_start > domain.map.output.len or token_len > domain.map.output.len - output_start) continue;
-                const copied = domain.map.copiedOriginal(domain.map.output[output_start .. output_start + token_len]) orelse continue;
-                if (copied.ptr != domain.map.original[original_start..].ptr or copied.len != token_len) continue;
-                const output = syntax.tagAt(domain.map.output, output_start) orelse continue;
-                if (output.name.ptr != tag.name.ptr or output.name.len != tag.name.len or output.attrs.ptr != tag.attrs.ptr or
-                    output.attrs.len != tag.attrs.len or output.closing != tag.closing or output.self_closing != tag.self_closing or
-                    output.html_pre != tag.html_pre or output.end != output_start + token_len) continue;
-                const selected_opening = self.quoteClassOriginal(domain, domain.map.original[original_start..original.end]) orelse continue;
-                if (self.figureClassScopeForOriginal(selected_opening) != domain.scope) continue;
-                return .{ .scope = domain.scope, .source_key = @intFromPtr(original.name.ptr), .generated = false, .original = selected_opening };
-            }
-            if (domain.map.generatedForName(tag.name)) |generated| {
-                if (tag.attrs.len != 0 or tag.self_closing or tag.html_pre or generated.quote_end <= generated.quote_start or
-                    generated.quote_end > domain.map.original.len) continue;
-                const token = generated.token.bytes();
-                const closing = generated.token == .b_close or generated.token == .i_close;
-                const expected_name: []const u8 = switch (generated.token) { .b_open, .b_close => "b", .i_open, .i_close => "i" };
-                if (tag.closing != closing or !std.mem.eql(u8, tag.name, expected_name)) continue;
-                const observed = syntax.tagAt(domain.map.output, generated.output_start) orelse continue;
-                if (observed.name.ptr != tag.name.ptr or observed.attrs.ptr != tag.attrs.ptr or observed.attrs.len != 0 or
-                    observed.end != generated.output_start + token.len) continue;
-                const selected_quotes = self.quoteClassOriginal(domain, domain.map.original[generated.quote_start..generated.quote_end]) orelse continue;
-                if (self.figureClassScopeForOriginal(selected_quotes) != domain.scope) continue;
-                // This is the normalizer's explicit classless b/i token, not an
-                // authored tag occurrence or a sibling-position certificate.
-                return .{ .scope = domain.scope, .source_key = @intFromPtr(tag.name.ptr), .generated = true, .original = selected_quotes };
-            }
+            const mapped = domain.map.tagOriginal(tag) orelse continue;
+            const original = self.quoteClassOriginal(domain, mapped.original) orelse continue;
+            if (self.figureClassScopeForOriginal(original) != domain.scope) continue;
+            return .{ .scope = domain.scope, .source_key = mapped.source_key,
+                .generated = mapped.generated, .original = original };
         }
         return null;
     }
@@ -20544,7 +20611,8 @@ pub const Renderer = struct {
             if (parent != issued_parent or !std.ascii.eqlIgnoreCase(issued_parent.tag, "table") or
                 issued_parent.page_style_root != domain.scope.page_style_root or !self.currentAncestorScope(issued_parent)) return null;
         };
-        if (self.pageStyleCopiedDivRange(tag, false) != null) return domain.scope.page_style_root;
+        if (self.pageStyleCopiedDivRange(tag, false) != null or self.pageStyleQuotedTag(tag) != null)
+            return domain.scope.page_style_root;
         if (self.quoteClassTag(tag)) |known| if (known.scope == domain.scope and
             self.pageStyleQuoteAnchor(known) != null) return domain.scope.page_style_root;
         if (!tag.closing and wikiClassContains(domain.owner, tag.name)) {
@@ -20980,7 +21048,9 @@ pub const Renderer = struct {
         const literal_div: ?LiteralDivContext = if (self.literalDivContextForTag(tag)) |known| (if (self.literalDivParent(known, literal_parent)) known else null) else null;
         const absence_scope = self.boundedTextClassScopeFor(tag) orelse if (literal_div != null) self.pageStyleDomain().?.scope else null;
         const key = if (quoted_tag) |known| known.source_key else @intFromPtr(tag.name.ptr);
+        const page_style_quote = self.pageStyleQuotedTag(tag);
         const element_index = if ((quoted_tag != null and quoted_tag.?.generated) or
+            (page_style_quote != null and page_style_quote.?.generated) or
             (literal_div != null and literal_div.?.proof.parent_start == null)) null
             else self.containerElementIndexForTag(tag, key, literal_parent, literal_div);
         if (parent) |current| if (current.source_key == key and std.ascii.eqlIgnoreCase(current.tag, tag.name)) {
@@ -21042,7 +21112,8 @@ pub const Renderer = struct {
         const page_root = self.literalDivPageStyleRootForTag(tag, parent);
         const own_language = try self.semanticAttribute(tag, "lang");
         element.* = .{ .page_style_root = page_root, .page_style_source = if (page_root != null) self.pageStyleDomain().?.source else null,
-            .page_style_anchor = if (page_root != null) (if (quoted_tag) |known| self.pageStyleQuoteAnchor(known)
+            .page_style_anchor = if (page_root != null) (if (page_style_quote) |known| known.anchor
+                else if (quoted_tag) |known| self.pageStyleQuoteAnchor(known)
                 else if (literal_div) |known| known.opening else self.pageStyleCopiedDivRange(tag, false) orelse self.pageStyleWikiOpening(tag) orelse self.pageStyleCopiedWikiCellAttrs(tag) orelse (if (wikiClassContains(self.pageStyleDomain().?.owner, tag.name)) tag.name else tag.attrs)) else null,
             .complete_ancestor_classes = ancestor_classes, .complete_ancestor_ids = ancestor_ids, .ancestor_class_scope = provenance, .ancestor_class_source = provenance_source,
             .tag = tag.name, .own_language_attribute = own_language,
@@ -41189,6 +41260,7 @@ pub const Renderer = struct {
         var quote_map: QuoteSourceMap = .{ .original = "", .output = "" };
         defer quote_map.deinit(self.a);
         var quote_scope: ?*const table_style_profile.BoundedTextClassScope = null;
+        var page_style_quote_owner: ?[]const u8 = null;
         var figure_quote_input_live = false;
         var table_link_quote_live = false;
         var selected_table_quote_source = false;
@@ -41227,6 +41299,10 @@ pub const Renderer = struct {
                 comparisons.source.bytes.ptr == unmatched.bytes.ptr and comparisons.source.bytes.len == unmatched.bytes.len and
                 table_tails.source.bytes.ptr == unmatched.bytes.ptr and table_tails.source.bytes.len == unmatched.bytes.len;
             const raw_paragraph = prepared.source.bytes;
+            if (ordinary and figure_quote_input_live and self.source_element_binding != null and
+                QuoteSourceMap.cleanLocal(prepared.source) and
+                std.mem.indexOf(u8, raw_paragraph, "''") != null)
+                page_style_quote_owner = self.pageStyleQuoteOwner(raw_paragraph);
             const quoted_candidate = starts(raw_paragraph, "'''");
             const literal_candidate = self.dispatched_static_paragraph != null and
                 std.mem.indexOf(u8, raw_paragraph, "''") == null and table_style_profile.staticInlineOwnerCandidate(raw_paragraph);
@@ -41278,7 +41354,7 @@ pub const Renderer = struct {
             };
             const output = try normalizeWikiQuotesPreparedMappedInDomain(self.a, prepared.source, 0, false, self.context,
                 if (table_tails.seed) |seed| prepared.forwardSeed(comparisons.forwardSeed(seed)) else null,
-                if (phonos_quote_input or heading_quote_input or paragraph_parent_input or list_quote_operation != null or quote_scope != null or table_link_quote_live or local_target_quote_live or native_quote_input_live or decorated_quote_root != null or box_quote_input_live or literal_paragraph_live or root_language_quote_proof != null or
+                if (page_style_quote_owner != null or phonos_quote_input or heading_quote_input or paragraph_parent_input or list_quote_operation != null or quote_scope != null or table_link_quote_live or local_target_quote_live or native_quote_input_live or decorated_quote_root != null or box_quote_input_live or literal_paragraph_live or root_language_quote_proof != null or
                     (ordinary and figure_quote_input_live and (figure_source_domain != null or self.context.body_link_continuations != null))) &quote_map else null,
                 phonos_quote_input or heading_quote_input or paragraph_parent_input or list_quote_operation != null or selected_quote_source or selected_table_quote_source);
             prepared.release(self.a, comparisons.source, output);
@@ -41286,6 +41362,15 @@ pub const Renderer = struct {
             table_tails.release(self.a, unmatched, output);
             break :quoted output;
         };
+        const previous_page_style_quotes = self.page_style_quote_source;
+        if (page_style_quote_owner) |owner| {
+            if (quote_map.generated.items.len != 0 and QuoteSourceMap.cleanLocal(quoted) and
+                inlineOverlaySameSourceSlice(quote_map.original, unmatched.bytes) and
+                inlineOverlaySameSourceSlice(quote_map.output, quoted.bytes) and
+                owner.len == quote_map.original.len and std.mem.eql(u8, owner, quote_map.original))
+                self.page_style_quote_source = .{ .map = &quote_map, .owner = owner };
+        }
+        defer self.page_style_quote_source = previous_page_style_quotes;
         const previous_phonos_quotes = self.selected_inline_quote_source;
         self.selected_inline_quote_source = if (phonos_quote_input and QuoteSourceMap.cleanLocal(quoted) and
             inlineOverlaySameSourceSlice(quote_map.original, unmatched.bytes) and

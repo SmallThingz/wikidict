@@ -7938,6 +7938,9 @@ const ContainerSelector = struct {
     // Necessary types in two plain compounds separated by + with a terminal
     // :last-child. Neither the sibling relation nor the pseudo is inferred.
     last_child_adjacent_types: ?struct { previous: []const u8, subject: []const u8 } = null,
+    // A terminal + with a positive ancestor prefix requires a previous element.
+    // This structure supplies only a refusal for a proved first child.
+    terminal_adjacent_subject: ?TextCompound = null,
     // Exact single-compound inner-control pseudo: absence on a known non-control
     // host refutes only this candidate, without granting attribute or ancestry facts.
     control_pseudo_host: bool = false,
@@ -8059,6 +8062,10 @@ const ContainerSelector = struct {
     fn matchBranch(self: @This(), element: *const TextElement, original: *const TextElement, page_scoped: bool) ContainerSelectorMatch {
         if (element.literal_subject_bound) if (element.observed_region_classes) |classes|
             if (self.absentFromCompleteClasses(classes)) return .no;
+        if (self.terminal_adjacent_subject) |subject| if (element.source_literal_previous) |observed| {
+            if (page_scoped and element.page_style_root != null and subject.matches(element))
+                if (observed.tag) |previous| if (previous.len == 0) return .no;
+        };
         if (self.adjacent_sibling) |adjacent| if (element.source_literal_previous) |observed| {
             if (adjacent.previous.tag) |required| if (observed.tag) |previous|
                 if (!std.ascii.eqlIgnoreCase(previous, required)) return .no;
@@ -12793,6 +12800,10 @@ const Builder = struct {
                         .specificity = (@as(u64, @intCast(l.ids.len + r.ids.len)) << 42) +
                             (@as(u64, @intCast(l.classes.len + r.classes.len)) << 21) +
                             @intFromBool(l.tag != null) + @intFromBool(r.tag != null) };
+                } else if (right) |r| {
+                    const prefix = try self.containerNecessaryChain(trim(text[0..plus]));
+                    if (prefix.len > 1)
+                        result.terminal_adjacent_subject = .{ .tag = r.tag, .classes = r.classes, .ids = r.ids };
                 }
             }
         }
