@@ -15,6 +15,7 @@ const language_registry = @import("language_registry.zig");
 comptime {
     if (@import("builtin").is_test) {
         _ = language_registry;
+        _ = source_language_banner;
         _ = source_table_styles;
         _ = page_language;
         _ = page_source_context;

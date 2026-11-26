@@ -1,0 +1,11 @@
+{
+  "wiki": "glwiktionary",
+  "page_id": 95529,
+  "revision_id": 663469,
+  "role": "canonical language names loaded by the ordinary registry",
+  "file": "canonical-names.lua",
+  "sha256": "0548154fb41d840330544aadb64f8a02a275e677b88ee27b0099c7078347bbb8",
+  "retained_source": ".tmp/completion-council/S2-pending-candidate/gl-category-controls-cloud01/source/testdata/gl-servizo-owner124/canonical-names.lua",
+  "qualification": ".tmp/completion-council/S2-pending-candidate/gl-category-controls-cloud01/actual-closure07.json",
+  "qualification_sha256": "05049a73f1b6dc6b6cef62de75eeb19566ddf7f40fae1644b85f5ef5d78ceb44"
+}

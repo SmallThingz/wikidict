@@ -481,8 +481,19 @@ fn categoryRoleHash(source: []const u8, expected: []const u8) bool {
     std.crypto.hash.sha2.Sha256.hash(source, &digest, .{});
     return std.mem.eql(u8, &std.fmt.bytesToHex(digest, .lower), expected);
 }
+// The caller authenticates the indexed NS10 source and its code-named title.
+// A bare call has no other emitted content. Retain the exact legacy body too.
+fn categoryH1WrapperSourceMatches(wrapper: []const u8, code: []const u8) bool {
+    const call = "{{-lingua-|";
+    if (code.len == 0 or !std.mem.startsWith(u8, wrapper, call)) return false;
+    const end = std.mem.indexOf(u8, wrapper, "}}") orelse return false;
+    if (end < call.len or !std.mem.eql(u8, wrapper[call.len..end], code)) return false;
+    return end + 2 == wrapper.len or
+        categoryRoleHash(wrapper, "81378725d19d6ef9825d615c24cf3b9ede71f20be1de3ff45fd8765620c374a2");
+}
+
 pub fn categoryH1ProofAlloc(a: std.mem.Allocator, wrapper: []const u8, formatter: []const u8, names: []const u8, ns: *const namespaces.Registry, registry: *const languages.Registry, code: []const u8) !?languages.SourceLanguageBanner {
-    if (!categoryRoleHash(wrapper, "81378725d19d6ef9825d615c24cf3b9ede71f20be1de3ff45fd8765620c374a2") or
+    if (!categoryH1WrapperSourceMatches(wrapper, code) or
         !categoryRoleHash(formatter, "b3f929541a6e16f654ce30f05ce8edfd6caa72597b41d6bb4a57366b4c59748c") or
         !categoryRoleHash(names, "5580cf3a6bdef83cb2e3be22fb14e8fcb37e200f398b2e58c15cf8957a836757")) return null;
     const call = "{{-lingua-|";
@@ -509,6 +520,46 @@ pub fn categoryH1ProofAlloc(a: std.mem.Allocator, wrapper: []const u8, formatter
     const close = std.mem.indexOfScalar(u8, formatter, '>') orelse { a.free(label); return null; };
     const heading = try std.fmt.allocPrint(a, "{s}[[Categoría:{s}]]<span class=\"bluetogreen\">[[:Categoría:{s}|{s}]]</span></h1>", .{ formatter[0 .. close + 1], label, label, label });
     return .{ .heading = heading, .level = 1, .target = label, .label = label };
+}
+
+test "category H1 current registry binds bare and legacy source owners" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile("testdata/gl-servizo-owner124/namespace-registry.tsv"));
+    defer ns.deinit();
+    var registry = languages.Registry.empty(a);
+    defer registry.deinit();
+    try registry.addTsv(@embedFile("testdata/gl-servizo-owner124/language-registry.tsv"));
+    // Match the ordinary loader's authenticated canonical-name source. A TSV
+    // name alone does not grant the source-trusted language owner.
+    const canonical_names = @embedFile("testdata/gl-servizo-owner124/canonical-names.lua");
+    try std.testing.expect(categoryRoleHash(canonical_names, "0548154fb41d840330544aadb64f8a02a275e677b88ee27b0099c7078347bbb8"));
+    try registry.addLua(canonical_names);
+    const formatter = @embedFile("testdata/gl-servizo-owner124/formatter.wikitext");
+    const names = @embedFile("testdata/gl-servizo-owner124/names.wikitext");
+    const cases = [_]struct { wrapper: []const u8, code: []const u8, label: []const u8 }{
+        .{ .wrapper = "{{-lingua-|sxr}}", .code = "sxr", .label = "Saaroa" },
+        .{ .wrapper = @embedFile("testdata/gl-servizo-owner124/wrapper.wikitext"), .code = "gl", .label = "Galego" },
+    };
+    for (cases) |case| {
+        const proof = (try categoryH1ProofAlloc(a, case.wrapper, formatter, names, &ns, &registry, case.code)) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualStrings(case.label, proof.label);
+        try std.testing.expectEqualStrings(case.label, proof.target);
+        try std.testing.expectEqual(@as(u8, 1), proof.level);
+        try registry.addSourceLanguageBanner(case.code, proof);
+        try std.testing.expect(registry.matchesSourceLanguageBanner(case.code, proof.heading, 1));
+        try std.testing.expect(!registry.matchesSourceLanguageBanner(case.code, proof.heading, 2));
+        const other = if (std.mem.eql(u8, case.code, "sxr")) "gl" else "sxr";
+        try std.testing.expect(!registry.matchesSourceLanguageBanner(other, proof.heading, 1));
+        try std.testing.expect((try categoryH1ProofAlloc(a, case.wrapper, formatter, names, &ns, &registry, other)) == null);
+        const changed = try std.mem.concat(a, u8, &.{case.wrapper, "extra"});
+        try std.testing.expect((try categoryH1ProofAlloc(a, changed, formatter, names, &ns, &registry, case.code)) == null);
+    }
+    try std.testing.expect((try categoryH1ProofAlloc(a, "{{-lingua-|sxr}}", formatter ++ " ", names, &ns, &registry, "sxr")) == null);
+    try std.testing.expect((try categoryH1ProofAlloc(a, "{{-lingua-|sxr}}", formatter, names ++ "\n", &ns, &registry, "sxr")) == null);
+    try registry.addLua("return { [\"Saaroa\"] = \"gl\" }");
+    try std.testing.expect((try categoryH1ProofAlloc(a, "{{-lingua-|sxr}}", formatter, names, &ns, &registry, "sxr")) == null);
 }
 
 
