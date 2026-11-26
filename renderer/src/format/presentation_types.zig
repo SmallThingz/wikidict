@@ -2584,13 +2584,29 @@ pub const ContainerLineHeight = union(enum) {
     pub fn jsonStringify(self: ContainerLineHeight, jw: anytype) !void {
         try jw.beginObject();
         switch (self) {
-            .normal => { try jw.objectField("normal"); try jw.write(.{}); },
+            .normal => { try jw.objectField("normal"); try jw.beginObject(); try jw.endObject(); },
             .multiplier => |value| { try jw.objectField("multiplier"); try jw.write(@as(f64, value)); },
             .length => |value| { try jw.objectField("length"); try jw.write(value); },
         }
         try jw.endObject();
     }
 };
+test "container line height JSON preserves tagged union payloads" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const normal = try std.json.Stringify.valueAlloc(a, @as(ContainerLineHeight, .normal), .{});
+    try std.testing.expectEqualStrings("{\"normal\":{}}", normal);
+    for ([_]ContainerLineHeight{ .normal, .{ .multiplier = 1.25 }, .{ .length = .{ .unit = .px, .value = 16 } } }) |height| {
+        const json = try std.json.Stringify.valueAlloc(a, height, .{});
+        try std.testing.expectEqualDeep(height, try std.json.parseFromSliceLeaky(ContainerLineHeight, a, json, .{}));
+        const value = try std.json.parseFromSliceLeaky(std.json.Value, a, json, .{});
+        try std.testing.expectEqualDeep(height, try std.json.parseFromValueLeaky(ContainerLineHeight, a, value, .{}));
+    }
+    try std.testing.expectError(error.UnexpectedToken,
+        std.json.parseFromSliceLeaky(ContainerLineHeight, a, "{\"normal\":[]}", .{}));
+}
+
 pub const ContainerFloatOverride = enum { none, left, right };
 pub const ContainerMargin = union(enum) { auto, length: StyleLength };
 pub const ContainerMargins = struct {
