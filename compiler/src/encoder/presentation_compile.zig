@@ -6193,6 +6193,45 @@ fn staticInlineFrame(owner: Span, group: presentation_types.InlineBoxGroup(Span)
     return presentation_types.validInlineBoxGroupOwner(owner);
 }
 
+// Called only after the ordinary source/style gates and owned payload emission.
+// A literal empty paint-only span may vanish only when it adds no metric,
+// action, advisory metadata or edge. The wire's empty-group rule stays strict.
+fn staticEmptyFrameCanOmit(owner: Span, group: *const presentation_types.InlineBoxGroup(Span),
+    effective: Style, inherited: Style) bool
+{
+    if (owner.inline_box_group != group or group.spans.len != 0 or group.radius != null or group.overlays.len != 0 or
+        !staticInlineOrdinarySpan(owner) or owner.kind != .text or owner.text.len != 0 or owner.target.len != 0 or
+        owner.background == null or owner.tooltip != null or owner.tooltip_set or owner.explanation.len != 0 or owner.explanation_set or
+        owner.inline_style != null or owner.link_paint != null or owner.font_size_unknown or owner.self_link or
+        owner.flags.superscript or owner.flags.subscript or owner.flags.underline or owner.flags.strike or
+        owner.generated_link != null or owner.generated_diagnostic or owner.target_fragment != null or
+        owner.ordinary_action_origin != null or owner.ordinary_action_entity != null or owner.ordinary_action_script != null or
+        inlineBoxHasAudioControl(owner) or presentation_types.spanHasClippedAbsolute(owner)) return false;
+    inline for (.{ "top", "right", "bottom", "left" }) |side| {
+        if (@field(group.padding, side).value != 0 or @field(group.padding, side).unit != .px or
+            @field(group.border, side) != .none) return false;
+    }
+    for ([_]Style{ effective, inherited }) |s| {
+        if (s.kind != .text or s.target.len != 0 or s.self_link_target != null or s.image != null or
+            s.tooltip != null or s.tooltip_set or s.explanation.len != 0 or s.explanation_set or
+            s.ordinary_action_origin != null or s.ordinary_action_entity != null or s.ordinary_action_script != null or
+            s.ordinary_link_paint != null or s.link_paint != null or s.table_link_source != null or s.table_link_wrap != null or
+            s.ruby_unitless_line_height != null or s.ruby_unitless_metric or s.font_size_unknown or s.ruby_script_ambiguous or
+            s.direction.len != 0 or s.captured_direction != null or s.preserve_whitespace or s.missing_nonaction or
+            s.authored_link_font_override or s.cell_policy_inherited_font or s.relative_context_own or
+            s.positioned_container_resolution != null or s.positioned_container_opening != null) return false;
+    }
+    // Both styles receive the same body-font defaults in owned emission. Exact
+    // equality here therefore also preserves the eventual inherited strut.
+    inline for (.{ "font_scale", "font_scale_basis", "font_scale_set", "font_features", "font_family",
+        "bold", "italic", "code", "small", "superscript", "subscript", "underline", "strike",
+        "language", "classes", "role", "heading", "foreground", "foreground_set" }) |field| {
+        if (!Renderer.sameFigurePreparationValue(@field(effective, field), @field(inherited, field))) return false;
+    }
+    return true;
+}
+
+
 // Keep the paragraph's direction scan continuous across declaring boundaries.
 // Only neutral-border frames recurse. Bordered children retain the established
 // metric/slice proof and detached overlay content cannot enter this subtree.
@@ -13429,6 +13468,16 @@ pub const Renderer = struct {
             self.spans.items[before].static_frame_entity = held;
         }
         const emitted = self.spans.items[before];
+        // Keep all source/style and owned-action validation above this point.
+        // No reconstructed Missing range or nonempty authored body is elided.
+        if (body.len == 0 and !tracked.unknown and !source.unknown and
+            htmlNestedAttributes(tag.attrs, &.{"style"}) and
+            staticEmptyFrameCanOmit(emitted, interval, effective, inherited)) {
+            self.spans.items.len = before;
+            self.a.destroy(interval);
+            self.a.free(children);
+            return true;
+        }
         if (emitted.inline_box_group != interval or !staticInlineFrame(emitted, interval.*)) return error.UncompiledPresentation;
         var text_scan: StaticInlineTextScan = .{};
         var remaining = presentation_types.max_presentation_items;
@@ -136712,4 +136761,149 @@ test "paired advisory circle emits owner and text family through Stored codec" {
         try std.testing.expect(span.inline_style.?.cursor == .help);
     }
     try std.testing.expectEqualSlices(u8, encoded, try codec.encodeAlloc(a, decoded));
+}
+
+
+test "RU p933 empty paint owner omits only custody-checked metric-neutral emptiness" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // Exact unique 47-byte occurrence at byte 1219 in retained p933 expanded
+    // cb5131476ba7a0d82dedd5a00598c049e07c55d6b750f2f2c122f3950c750f08.
+    // This isolates a typed predicate; the page's original style context is
+    // unavailable here and no page/cascade/first-cause equivalence is claimed.
+    const source = "<span style=\"background-color:#BBEEEE;\"></span>";
+    const tag = syntax.tagAt(source, 0) orelse return error.TestUnexpectedResult;
+    const pair = syntax.matchingTag(source, tag) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(tag.is("span") and !tag.closing and !tag.self_closing);
+    try std.testing.expectEqual(@as(usize, 47), source.len);
+    try std.testing.expectEqual(source.len, pair.end);
+    try std.testing.expectEqual(tag.end, pair.inner_end);
+    const css = tag.attr("style") orelse return error.TestUnexpectedResult;
+    const paint = (try table_style_profile.staticInlineOwnerValues(a, css, .{})) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("#bbeeee", paint.background.?);
+    inline for (.{ "top", "right", "bottom", "left" }) |side|
+        try std.testing.expectEqual(@as(f32, 0), @field(paint.padding, side).value);
+    try std.testing.expect(paint.padding.left.unit == .px and paint.padding.right.unit == .px);
+
+    // Same group/owner shape as the current producer immediately before its
+    // first validation, with its earlier source/style gates assumed satisfied.
+    var group: presentation_types.InlineBoxGroup(Span) = .{
+        .padding = paint.padding, .border = .all(.none), .spans = &.{},
+    };
+    const owner: Span = .{ .text = "", .background = paint.background, .inline_box_group = &group };
+    try std.testing.expect(owner.inline_box_group == &group);
+    try std.testing.expect(!presentation_types.validInlineBoxGroup(group));
+    try std.testing.expect(!presentation_types.validInlineBoxGroupOwner(owner));
+    try std.testing.expect(!staticInlineFrame(owner, group));
+    try std.testing.expectError(error.InvalidPresentation, presentation_types.validateInlineBoxGroupTree(owner, 0, 0));
+
+    // Change only the child inventory: same background, neutral border and
+    // padding. This proves that the rejected empty inventory is discriminating.
+    const children = [_]Span{.{ .text = "x" }};
+    group.spans = &children;
+    try std.testing.expect(presentation_types.validInlineBoxGroup(group));
+    try std.testing.expect(presentation_types.validInlineBoxGroupOwner(owner));
+    try std.testing.expect(staticInlineFrame(owner, group));
+    try presentation_types.validateInlineBoxGroupTree(owner, 0, 0);
+    std.debug.print("RU_P933_TYPED_PREDICATE empty_neutral=false one_child=true source_scope=isolated_no_page_style\n", .{});
+
+    // Exercise the narrow producer omission only after its existing gates.
+    // The original complete page/style context remains a separate obligation.
+    var renderer: Renderer = .{
+        .a = a, .content_root = .parser_output,
+        .context = .{ .table_viewport_trace = true }, .document_body_trace = true,
+    };
+    const empty_blocks = try renderer.renderBody(source);
+    try std.testing.expectEqual(@as(usize, 0), empty_blocks.len);
+    var nonempty: Renderer = .{ .a = a, .content_root = .parser_output, .context = .{} };
+    const blocks = try nonempty.renderBody("<span style=\"background-color:#BBEEEE;\">x</span>");
+    try std.testing.expectEqual(@as(usize, 1), blocks.len);
+    try std.testing.expectEqual(@as(usize, 1), blocks[0].spans.len);
+    const actual_owner = blocks[0].spans[0];
+    const actual_group = actual_owner.inline_box_group orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 1), actual_group.spans.len);
+    try std.testing.expectEqualStrings("x", actual_group.spans[0].text);
+    try std.testing.expect(staticInlineFrame(actual_owner, actual_group.*));
+    try presentation_types.validateInlineBoxGroupTree(actual_owner, 0, 0);
+    // The predicate retains the format refusal; only the producer may omit its
+    // checked zero-extent owner. Poison one relevant operand at a time.
+    group.spans = &.{};
+    const plain: Style = .{};
+    const painted: Style = .{ .background = paint.background };
+    try std.testing.expect(staticEmptyFrameCanOmit(owner, &group, painted, plain));
+    var changed = painted;
+    changed.font_scale = 2;
+    try std.testing.expect(!staticEmptyFrameCanOmit(owner, &group, changed, plain));
+    changed = painted; changed.font_family = .sans_serif;
+    try std.testing.expect(!staticEmptyFrameCanOmit(owner, &group, changed, plain));
+    changed = painted; changed.language = "ru";
+    try std.testing.expect(!staticEmptyFrameCanOmit(owner, &group, changed, plain));
+    var bad = owner; bad.target = "Target";
+    try std.testing.expect(!staticEmptyFrameCanOmit(bad, &group, painted, plain));
+    bad = owner; bad.tooltip = "hint";
+    try std.testing.expect(!staticEmptyFrameCanOmit(bad, &group, painted, plain));
+    // The pointer is only rejected for presence, never treated as authority.
+    var action: OrdinaryActionGroupBinding = undefined;
+    bad = owner; bad.ordinary_action_origin = &action;
+    try std.testing.expect(!staticEmptyFrameCanOmit(bad, &group, painted, plain));
+    group.padding.left.value = 1;
+    try std.testing.expect(!staticEmptyFrameCanOmit(owner, &group, painted, plain));
+    group.padding.left.value = 0;
+
+    // Elision keeps the authored text-node segmentation and all non-text state.
+    // The retained browser control separately checks glyph pixels, not caret equivalence.
+    var around: Renderer = .{ .a = a, .content_root = .parser_output, .context = .{} };
+    var baseline: Renderer = .{ .a = a, .content_root = .parser_output, .context = .{} };
+    const around_blocks = try around.renderBody("A" ++ source ++ "B");
+    const baseline_blocks = try baseline.renderBody("A<span></span>B");
+    const codec = @import("blob_encoder").presentation_codec;
+    try std.testing.expectEqual(@as(usize, 1), around_blocks.len);
+    try std.testing.expectEqual(@as(usize, 1), baseline_blocks.len);
+    try std.testing.expectEqual(@as(usize, 2), around_blocks[0].spans.len);
+    try std.testing.expectEqual(@as(usize, 2), baseline_blocks[0].spans.len);
+    try std.testing.expectEqualStrings("AB", try FormattingScopeTest.text(a, around_blocks[0].spans));
+    // Same authored boundaries as the candidate, with an unstyled empty span.
+    // Every surrounding field (including actions and metric state) must match.
+    for (around_blocks[0].spans, baseline_blocks[0].spans, [_][]const u8{ "A", "B" }) |span, expected_span, text| {
+        try std.testing.expectEqualStrings(text, span.text);
+        try std.testing.expectEqualDeep(expected_span, span);
+    }
+    const stored = try FormattingScopeTest.encode(a, &around, around_blocks);
+    const expected_stored = try FormattingScopeTest.encode(a, &baseline, baseline_blocks);
+    try std.testing.expectEqualDeep(expected_stored, stored);
+    const wire = try codec.encodeAlloc(a, stored);
+    const restored = try codec.decodeAlloc(a, wire, stored.entry.title, .language,
+        .{ .heading = stored.entry.language.?, .code = stored.entry.language_code });
+    try std.testing.expectEqualDeep(stored, restored);
+    for ([_][]const u8{
+        "<span style=\"background-color:#BBEEEE;padding-left:1px;\"></span>",
+        "<span style=\"background-color:#BBEEEE;font-size:200%;\"></span>",
+        "<span title=\"hint\" style=\"background-color:#BBEEEE;\"></span>",
+    }) |refused| {
+        var negative: Renderer = .{ .a = a, .content_root = .parser_output, .context = .{} };
+        try std.testing.expectError(error.UncompiledPresentation, negative.renderBody(refused));
+    }
+    // A nonempty whitespace body is valid existing content, not an omission.
+    var spaced: Renderer = .{ .a = a, .content_root = .parser_output, .context = .{} };
+    const spaced_blocks = try spaced.renderBody("<span style=\"background-color:#BBEEEE;\"> </span>");
+    try std.testing.expectEqual(@as(usize, 1), spaced_blocks.len);
+    try std.testing.expectEqual(@as(usize, 1), spaced_blocks[0].spans.len);
+    const spaced_owner = spaced_blocks[0].spans[0];
+    const spaced_group = spaced_owner.inline_box_group orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 1), spaced_group.spans.len);
+    try std.testing.expectEqualStrings(" ", spaced_group.spans[0].text);
+    try std.testing.expectEqualStrings(paint.background.?, spaced_owner.background.?);
+    try std.testing.expect(staticInlineFrame(spaced_owner, spaced_group.*));
+    try presentation_types.validateInlineBoxGroupTree(spaced_owner, 0, 0);
+    var missing = MissingText.untracked(source); missing.unknown = true;
+    var unknown: Renderer = .{ .a = a, .content_root = .parser_output, .context = .{} };
+    try std.testing.expectError(error.UncompiledPresentation, unknown.renderBodyWithMissing(missing));
+    var poisoned = try table_style_profile.parseForTargetAlloc(a, "", .screen);
+    defer poisoned.deinit();
+    poisoned.globally_unresolved = true;
+    var styled: Renderer = .{ .a = a, .content_root = .parser_output,
+        .context = .{ .text_paint_styles = &poisoned } };
+    try std.testing.expectError(error.UncompiledPresentation, styled.renderBody(source));
+
 }
