@@ -461,13 +461,13 @@ export function spans(values = [], onLink = () => {}, preserve = false, explanat
         link.href = '#' + (span.target ? encodeURIComponent(span.target) + '#' : '') + encodeURIComponent(span.target_fragment);
       }
       // Some table and thumbnail links contain only a space. Keep its layout and name the action.
-      if (!span.image && !span.ruby && !span.clipped_absolute && !inlineText([span]).trim() && !span.tooltip?.trim()) {
+      if (!span.image && !span.ruby && !span.clipped_absolute && !el.textContent.trim() && !span.tooltip?.trim()) {
         link.setAttribute('aria-label', span.explanation?.trim() || (span.target_fragment ? `${span.target}#${span.target_fragment}` : span.target));
       }
       link.addEventListener('click', event => { event.preventDefault(); if(withinSummary)event.stopPropagation(); if(span.target_fragment==null)onLink(span.target);else onLink(span.target,span.target_fragment); }); link.append(el); el = link;
     } else if (span.kind === 'external_link' && safeURL(span.target) && !span.image?.map) {
       const link = node('a'); link.href = safeURL(span.target); link.rel = 'noopener noreferrer'; link.target = '_blank';
-      if((span.inline_action_group||span.inline_box_group)&&!inlineText([span]).trim()&&!span.tooltip?.trim())link.setAttribute('aria-label',span.explanation?.trim()||safeURL(span.target));
+      if(!span.image&&!span.ruby&&!span.clipped_absolute&&!el.textContent.trim()&&!span.tooltip?.trim())link.setAttribute('aria-label',span.explanation?.trim()||safeURL(span.target));
       if(withinSummary)link.addEventListener('click',event=>event.stopPropagation()); link.append(el); el = link;
     }
     if(described.has(i) && el.tagName==='A')el.setAttribute('aria-describedby',described.get(i));
