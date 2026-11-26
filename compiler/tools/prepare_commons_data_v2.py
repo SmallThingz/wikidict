@@ -23,10 +23,11 @@ API = 'https://commons.wikimedia.org/w/api.php'
 MAX_MANIFEST = 64 * 1024
 MAX_RESPONSE = 2 * 1024 * 1024
 MAX_TITLES = 128
+EXTENDED_SCHEMA = 'wikidict.commons-data-capture.v3'
+TITLE_LIMITS = {SCHEMA: MAX_TITLES, EXTENDED_SCHEMA: 384}
 MAX_INDEX = 4 * 1024 * 1024
 MAX_CONFIGURATION = 256 * 1024
 MAX_TSV = 64 * 1024 * 1024
-MAX_ARTIFACTS = 3 + 9 * MAX_TITLES
 INDEX = 'commons-data.evidence.json'
 INDEX_SCHEMA = 'wikidict.commons-data-evidence.v2'
 COMPLETE = 'commons-data.complete.json'
@@ -207,10 +208,10 @@ def observe(root, number, title, transport, sleep, deadline, delay):
             sleep(wait)
 
 
-def payload_inventory(root):
+def payload_inventory(root, *, schema=SCHEMA):
     files = [p for p in sorted(root.iterdir())
              if p.name not in ('commons-data.manifest.json', COMPLETE, INDEX)]
-    if len(files) > MAX_ARTIFACTS:
+    if len(files) > 3 + 9 * TITLE_LIMITS[schema]:
         raise ValueError('Commons artifact inventory exceeds limit')
     return {p.name: evidence.digest(evidence.small(p)) for p in files}
 
@@ -235,13 +236,16 @@ def read_index(root, manifest):
 
 
 def capture(args, transport=None, sleep=time.sleep):
+    schema = getattr(args, 'capture_schema', SCHEMA)
+    if not isinstance(schema, str) or schema not in TITLE_LIMITS:
+        raise ValueError('Unsupported Commons capture schema')
     datetime.strptime(args.date, '%Y%m%d')
     if not re.fullmatch(r'[a-z0-9_-]+wiktionary', args.wiki):
         raise ValueError('Invalid target wiki')
     if not 0 <= args.delay <= 60 or not 1 <= args.wall_seconds <= 3600:
         raise ValueError('Invalid capture time bounds')
     titles = sorted(set(checked_title(x) for x in args.title))
-    if not 1 <= len(titles) <= MAX_TITLES:
+    if not 1 <= len(titles) <= TITLE_LIMITS[schema]:
         raise ValueError('Invalid bounded Commons title inventory')
     namespace = evidence.small(args.namespace_registry)
     stamp = evidence.stamp(args.namespace_registry)
@@ -278,12 +282,12 @@ def capture(args, transport=None, sleep=time.sleep):
                  'requests': requests,
                  'records': [{k: v for k, v in records[t].items() if k != 'compact_source'}
                              for t in sorted(records)],
-                 'artifacts': payload_inventory(root)}
+                 'artifacts': payload_inventory(root, schema=schema)}
         encoded_index = evidence.encoded(index)
         if len(encoded_index) > MAX_INDEX:
             raise ValueError('Commons evidence index exceeds limit')
         evidence.put(root / INDEX, encoded_index)
-        manifest = {'schema': SCHEMA,
+        manifest = {'schema': schema,
                     **{k: v for k, v in configuration.items() if k != 'titles'}, **identity,
                     'source_url': API, 'dump_date': None, 'temporal_scope': 'current-api-observation',
                     'started_utc': started, 'retrieved_utc': evidence.utc(),
@@ -297,7 +301,7 @@ def capture(args, transport=None, sleep=time.sleep):
             raise ValueError('Commons manifest exceeds consumer limit')
         evidence.put(root / 'commons-data.manifest.json', encoded)
         verify(root, require_complete=False)
-        evidence.document(root / COMPLETE, {'schema': SCHEMA, 'manifest_sha256': evidence.digest(encoded)})
+        evidence.document(root / COMPLETE, {'schema': schema, 'manifest_sha256': evidence.digest(encoded)})
         return manifest
     except BaseException as error:
         for name in (COMPLETE, 'commons-data.tsv', 'commons-data.manifest.json'):
@@ -314,10 +318,12 @@ def verify(root, require_complete=True):
         raise ValueError('Unsafe Commons capture root')
     raw_manifest = evidence.small(root / 'commons-data.manifest.json', MAX_MANIFEST)
     manifest = evidence.decode(raw_manifest)
-    if not isinstance(manifest, dict) or manifest.get('schema') != SCHEMA:
+    if (not isinstance(manifest, dict) or not isinstance(manifest.get('schema'), str)
+            or manifest['schema'] not in TITLE_LIMITS):
         raise ValueError('Unsupported Commons manifest')
+    schema = manifest['schema']
     if require_complete and evidence.decode(evidence.small(root / COMPLETE)) != {
-            'schema': SCHEMA, 'manifest_sha256': evidence.digest(raw_manifest)}:
+            'schema': schema, 'manifest_sha256': evidence.digest(raw_manifest)}:
         raise ValueError('Commons completion mismatch')
     validate_producer_provenance(manifest)
     if (manifest.get('source_url') != API or manifest.get('dump_date') is not None
@@ -327,7 +333,7 @@ def verify(root, require_complete=True):
         raise ValueError('Unsupported Commons provenance scope')
     index = read_index(root, manifest)
     inventory = index.get('artifacts')
-    if not isinstance(inventory, dict) or inventory != payload_inventory(root):
+    if not isinstance(inventory, dict) or inventory != payload_inventory(root, schema=schema):
         raise ValueError('Commons payload inventory mismatch')
     for name, sha in inventory.items():
         if Path(name).name != name or not re.fullmatch('[0-9a-f]{64}', sha):
@@ -345,7 +351,7 @@ def verify(root, require_complete=True):
             or configuration['namespace_registry_sha256'] != evidence.digest(namespace)):
         raise ValueError('Commons namespace proof mismatch')
     titles = configuration['titles']
-    if (not isinstance(titles, list) or not 1 <= len(titles) <= MAX_TITLES
+    if (not isinstance(titles, list) or not 1 <= len(titles) <= TITLE_LIMITS[schema]
             or titles != sorted(set(checked_title(x) for x in titles))
             or not isinstance(index.get('requests'), list) or len(index['requests']) != len(titles)):
         raise ValueError('Commons request inventory mismatch')
@@ -403,6 +409,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest='command', required=True)
     cap = commands.add_parser('capture')
+    cap.add_argument('--capture-schema', choices=tuple(TITLE_LIMITS), default=SCHEMA)
     cap.add_argument('--wiki', required=True)
     cap.add_argument('--date', required=True)
     cap.add_argument('--namespace-registry', type=Path, required=True)

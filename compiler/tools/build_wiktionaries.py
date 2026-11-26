@@ -1323,16 +1323,17 @@ def auxiliary_capture_helper(name, path):
         explicit_states=header==b'# wikidict-commons-data-v2'
         manifest=path.with_name(auxiliary_manifest_filename(name))
         if not (manifest.exists() or manifest.is_symlink()):
-            if explicit_states:raise ValueError('Explicit Commons states require a v2 capture manifest')
+            if explicit_states:raise ValueError('Explicit Commons states require a v2 capture manifest or a v3 capture manifest')
             return None
         record=read_small_json(manifest)
         if not isinstance(record,dict):raise ValueError('Invalid Commons-data provenance')
-        if explicit_states and record.get('schema')!='wikidict.commons-data-capture.v2':
-            raise ValueError('Explicit Commons states require a v2 capture manifest')
+        capture_schemas = ('wikidict.commons-data-capture.v2', 'wikidict.commons-data-capture.v3')
+        if explicit_states and record.get('schema') not in capture_schemas:
+            raise ValueError('Explicit Commons states require a v2 capture manifest or a v3 capture manifest')
         # Explicit capture schemas must pass replay, including unknown schemas.
         # Only schema-less legacy snapshots use generic manifest validation.
         if 'schema' not in record:return None
-        if record.get('schema')=='wikidict.commons-data-capture.v2':
+        if record.get('schema') in capture_schemas:
             import prepare_commons_data_v2
             return prepare_commons_data_v2
         import prepare_commons_data
