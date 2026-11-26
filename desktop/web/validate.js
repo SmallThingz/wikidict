@@ -393,6 +393,28 @@ export function validateDarkForeground(span){
   containerRGB(dark);
 }
 
+// Match the native Phonos credit contract. The compiler owns namespace and
+// source-origin proof; readers only bind the typed destination to its audio file.
+function validPhonosCredit(button,credit){
+  const title=credit.tooltip,target=credit.target;
+  if(credit.text!=='ⓘ'||credit.target_fragment!=null||typeof title!=='string'||typeof target!=='string'||
+     /[?#\\\r\n\t ]/.test(target))return false;
+  const route=/^https:\/\/([a-z][a-z0-9]*(?:-[a-z0-9]+)*)\.wiktionary\.org\/wiki\/([\s\S]*)$/.exec(target);
+  const colon=title.indexOf(':');
+  if(!route||colon<=0||colon===title.length-1)return false;
+  try{if(decodeURIComponent(route[2]).replaceAll('_',' ')!==title.replaceAll('_',' '))return false;}
+  catch{return false;}
+  const file=title.slice(colon+1),tokens=(button.classes??'').split(/[ \t\r\n\v\f]+/);
+  if(!tokens.includes('wikidict-media'))return false;
+  const prefix='wikidict-media-file-',owners=tokens.filter(token=>token.startsWith(prefix));
+  if(owners.length>1)return false;
+  if(owners.length===1){
+    const expected=Array.from(fragmentUtf8.encode(file),byte=>byte.toString(16).padStart(2,'0')).join('');
+    return owners[0].slice(prefix.length)===expected;
+  }
+  return typeof button.target==='string'&&button.target.startsWith('File:')&&button.target.slice(5).replaceAll('_',' ')===file;
+}
+
 export function validateDescriptionBody(block){
   const path=block.path??block.list_path;
   if(!((block.kind==='example'&&path==='#:')||(block.kind==='indent'&&path===':'))||
@@ -421,8 +443,9 @@ export function validateDescriptionBody(block){
     if(!style.line_height.multiplier||block.kind!=='indent'||box.blocks.length!==1||line.kind!=='paragraph'||line.spans?.length!==2)containerError();
     const [button,credit]=line.spans;
     const strut=credit?.inline_style?.line_height?.font_relative;
-    if(button?.kind!=='link'||button.audio_control?.presentation!=='phonos_button'||credit?.kind!=='link'||credit.audio_control!=null||
+    if(button?.kind!=='link'||button.audio_control?.presentation!=='phonos_button'||!['link','external_link'].includes(credit?.kind)||credit.audio_control!=null||
        !credit.superscript||!strut?.font?.superscript||!Number.isFinite(strut.factor)||strut.factor<=0)containerError();
+    if(credit.kind==='external_link'&&!validPhonosCredit(button,credit))containerError();
   }
 }
 
