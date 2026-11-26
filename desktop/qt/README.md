@@ -52,11 +52,12 @@ Qt source archive or binaries have been reproduced. `manifest.json` records each
 upstream and qualified file hash. The new private logical-flow, inline-style and Ruby headers are included in the
 renderer patch.
 
-Apply these three patches, in order, to that QtBase source:
+Apply these four patches, in order, to that QtBase source:
 
 1. `0001-logical-flow-renderer.patch`: the 27 renderer source files.
 2. `0002-layout-regressions.patch`: the native regression target and tests.
 3. `0003-bounded-gcc-link-policy.patch`: the separately maintained GNU LTO policy.
+4. `0005-export-fractional-css-edge.patch`: export the existing fractional CSS edge helper.
 
 The companion modules use these exact upstream commits:
 
@@ -70,6 +71,22 @@ Apply `0004-shadertools-private-namespace.patch` to qtshadertools. It gives the
 bundled SPIRV-Cross SPIR-V types their own namespace consistently across translation
 units. The qualified multimedia build uses the resulting `qsb` and generated
 shaders. Do not substitute a system `qsb` or mix Qt module builds.
+
+## Fractional CSS edge export
+
+Patch `0005` adds `Q_GUI_EXPORT` to the existing private `qDrawEdge` declaration.
+Its `qreal` parameters and implementation are unchanged. This makes the helper
+available to the native disclosure border painter without rounding its coordinates.
+
+Qt35 rebuilt Gui and Widgets successfully: exactly this symbol was added to the
+exports, no prior exports disappeared, and the function body remained identical.
+App36 then linked the shared product archive and A1 empty-edition harness. The
+separate A1 runtime38 result records cold, persisted-recovery and reopen passes;
+it does not qualify PNG rendering or a whole page. S2 disclosure controls remain
+separate. Exact headers, artifacts and result receipts are pinned under
+`qualification.fractional_css_edge_export` in `manifest.json`. Earlier binary
+results retain their original variant and scope; this packaging does not publish
+a release or extend their rendering claims.
 
 ## Scoped plain-flow Containers
 
@@ -690,11 +707,13 @@ QtBase checkout, check and apply the patches with ordinary Git:
 git -C "$qt_sources/qtbase" apply --check \
   "$patch_dir/0001-logical-flow-renderer.patch" \
   "$patch_dir/0002-layout-regressions.patch" \
-  "$patch_dir/0003-bounded-gcc-link-policy.patch"
+  "$patch_dir/0003-bounded-gcc-link-policy.patch" \
+  "$patch_dir/0005-export-fractional-css-edge.patch"
 git -C "$qt_sources/qtbase" apply \
   "$patch_dir/0001-logical-flow-renderer.patch" \
   "$patch_dir/0002-layout-regressions.patch" \
-  "$patch_dir/0003-bounded-gcc-link-policy.patch"
+  "$patch_dir/0003-bounded-gcc-link-policy.patch" \
+  "$patch_dir/0005-export-fractional-css-edge.patch"
 git -C "$qt_sources/qtshadertools" apply \
   "$patch_dir/0004-shadertools-private-namespace.patch"
 ```

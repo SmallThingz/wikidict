@@ -282,6 +282,20 @@
           "bytes": 33792
         }
       ]
+    },
+    {
+      "file": "0005-export-fractional-css-edge.patch",
+      "sha256": "f9e8ceb435a388ce6967e5aefe13fc1e129d486f9461aeed14717f85062f4450",
+      "bytes": 484,
+      "files": [
+        {
+          "path": "src/gui/painting/qcssutil_p.h",
+          "new_file": false,
+          "upstream_sha256": "60910355ec8d154db76d41b187517add5a644d26ad23ac3b81729a25abf986d5",
+          "qualified_sha256": "6bf89fde988f8195bc0ffddabf164d1187162bac87974ccbcef033e28d384d24",
+          "bytes": 1468
+        }
+      ]
     }
   ],
   "qualification": {
@@ -8658,6 +8672,150 @@
         "No online artwork or external-media activation was qualified.",
         "Canonical binary and full suite were not rebuilt; private scoped native/App/package and actual installed GUI evidence are distinct.",
         "The parent image viewer showed only a top strip for es-compact-body-frame despite its 640x600 PNG metadata; parent visual acceptance instead uses the independently viewed full history-forward frame and verified compact/wide frames."
+      ]
+    },
+    "fractional_css_edge_export": {
+      "date": "2026-11-26",
+      "scope": "Export the existing private qDrawEdge symbol with its unchanged fractional-coordinate signature and implementation.",
+      "header_evidence": {
+        "before": {
+          "path": ".tmp/parent-qt-local01/qcssutil_p.before34.h",
+          "sha256": "60910355ec8d154db76d41b187517add5a644d26ad23ac3b81729a25abf986d5",
+          "bytes": 1455
+        },
+        "after": {
+          "path": ".tmp/parent-qt-local01/qcssutil_p.after34.h",
+          "sha256": "6bf89fde988f8195bc0ffddabf164d1187162bac87974ccbcef033e28d384d24",
+          "bytes": 1468
+        },
+        "basis": "Retained QtBase pre-export header at the maintained source pin; patches 0001-0003 do not modify this path. The pinned upstream Git object was not independently revalidated in this packaging step.",
+        "function_body_sha256": "1ef3b512b17307869127c3a66cfd87d757da799cb2f9cff917619a77cab8618e",
+        "source_change": {
+          "path": ".tmp/parent-qt-local01/qt-edge-export34.json",
+          "sha256": "d95f0223be4def84549a1fa637b9afe5d73b1519c8ab4ab94b36aafc3981299a",
+          "bytes": 1189
+        },
+        "source_review": {
+          "path": ".tmp/a3-focused-fixes-20261126/it-public-qt/fractional-edge-export-review06.json",
+          "sha256": "bdb36cb9a62e82536cbe04b528409fe9d82ad4e71856bf767b358f2ed2a1d696",
+          "bytes": 3757
+        }
+      },
+      "qt35": {
+        "result": {
+          "path": ".tmp/parent-qt-local01/qt-edge-result35.json",
+          "sha256": "124609cf88be6fc18c0d7c8cab7ff188f7a9c805b6d8453d6ca50c664049f974",
+          "bytes": 1000
+        },
+        "guard": {
+          "path": ".tmp/parent-qt-local01/qt-edge-guard35.json",
+          "sha256": "6f3e509c277baf47b3565a75ae654cfddb19ff7123a5eaba152a03424659630b",
+          "bytes": 3863
+        },
+        "build_exit": 0,
+        "sources_unchanged": true,
+        "cleanup_complete": true,
+        "exports_added": [
+          [
+            "T",
+            "_Z9qDrawEdgeP8QPainterddddddN4QCss4EdgeENS1_11BorderStyleE6QBrush@@Qt_6"
+          ]
+        ],
+        "prior_exports_missing": [],
+        "qcssutil_body_unchanged": true,
+        "artifacts": [
+          {
+            "path": "/workspace/wikidict/.tmp/parent-qt-local01/qt-build/qtbase/lib/libQt6Gui.so.6.12.0",
+            "sha256": "07db6a5adf3652f6fb23fcfc503ce536187e917fc291d9c215137a1ff9890b68",
+            "bytes": 14459648
+          },
+          {
+            "path": "/workspace/wikidict/.tmp/parent-qt-local01/qt-build/qtbase/lib/libQt6Widgets.so.6.12.0",
+            "sha256": "177601971676b68c72ef8aae8ccf35244c80ffa8c9d519487ea9176e745c765f",
+            "bytes": 10413872
+          }
+        ]
+      },
+      "app36": {
+        "result": {
+          "path": ".tmp/parent-qt-local01/joint-product-36-result.json",
+          "sha256": "373d20e7e8ccbc8f99cd1ffff9d0b560f70bd4db4eb4d7a1e79796bf5d661e95",
+          "bytes": 780
+        },
+        "guard": {
+          "path": ".tmp/parent-qt-local01/joint-product-36-build-guard.json",
+          "sha256": "2d8e70214eff55f8d3614e9c9f778e4a3b808d60b0a305f84426ef07f1b3dd29",
+          "bytes": 3348
+        },
+        "build_exit": 0,
+        "sources_unchanged": true,
+        "cleanup_complete": true,
+        "targets": [
+          "wikidict-empty21-check"
+        ],
+        "product_archive": {
+          "path": "/workspace/wikidict/.tmp/parent-qt-local01/joint-product-build/src/libwikidict-product.a",
+          "sha256": "7415edbaeb9b3098a46f6e96392cda0617ed2ea1ff0b8ab49d65277f4b67054a",
+          "bytes": 12123266
+        },
+        "a1_harness": {
+          "path": "/workspace/wikidict/.tmp/parent-qt-local01/joint-product-build/bin/wikidict-empty21-check",
+          "sha256": "dc74077ca96b112e0526cd35ff83a86de5cff2e6257d837935e8e64052a3ae43",
+          "bytes": 43151336
+        },
+        "s2_harness_built": false
+      },
+      "a1_runtime38": {
+        "result": {
+          "path": ".tmp/parent-qt-local01/a1-runtime-38-result.json",
+          "sha256": "6a1ee3229019412405c89bccbb971b67da6c31e24a7922cf1d5170c63a95f09b",
+          "bytes": 8375
+        },
+        "evidence_basis": "Existing Parent runtime result adopted; no A3 runtime invocation or independent phase-body review.",
+        "phases": [
+          {
+            "phase": "cold",
+            "status": "PASS",
+            "exit": 0,
+            "receipt": {
+              "path": "/workspace/wikidict/.tmp/parent-qt-local01/a1-run38/cold.json",
+              "sha256": "55cbe178329e5164739de4990f0a35e8df7db606781575d42c7b6eb52fdd0344",
+              "bytes": 37196
+            }
+          },
+          {
+            "phase": "persisted-recovery",
+            "status": "PASS",
+            "exit": 0,
+            "receipt": {
+              "path": "/workspace/wikidict/.tmp/parent-qt-local01/a1-run38/persisted-recovery.json",
+              "sha256": "a65aa208cfa14d49c729755b5e18a80ed0c94b000c8094120ca0d8500ea403d0",
+              "bytes": 38734
+            }
+          },
+          {
+            "phase": "reopen",
+            "status": "PASS",
+            "exit": 0,
+            "receipt": {
+              "path": "/workspace/wikidict/.tmp/parent-qt-local01/a1-run38/reopen.json",
+              "sha256": "cc3c66bcca65e298ff32d3958422bb8b116506d63c4ceb188f8bb275421c175e",
+              "bytes": 37562
+            }
+          }
+        ],
+        "cleanup_complete": true,
+        "binding_unchanged": true,
+        "png_credit": false,
+        "whole_grant": false
+      },
+      "rendering_qualified": false,
+      "release_qualified": false,
+      "limitations": [
+        "Only the existing symbol visibility changes; no function body, parameter type, layout, or integer-coordinate substitution.",
+        "Earlier binary qualifications remain evidence for their recorded variants, not automatic qualification of this rebuilt variant.",
+        "A1 cold/persisted-recovery/reopen scopes remain distinct from S2 disclosure methods and full client or rendered-page qualification.",
+        "No new native run, test replay, release, or distribution-source equivalence is claimed by this source packaging."
       ]
     }
   },
