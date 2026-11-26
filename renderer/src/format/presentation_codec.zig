@@ -1503,6 +1503,40 @@ const Encoder = struct {
         }
         try self.byte(flags);
     }
+    fn containerDisclosureButton(self: *Encoder, value: types.ContainerDisclosureButton) !void {
+        if (!self.positioned_containers_enabled or !self.resolved_style_borders_enabled or
+            self.version != .container_fonts or !types.validContainerDisclosureButton(value)) return error.InvalidPresentation;
+        const items = types.containerDisclosureButtonItems(value);
+        if (self.remaining_items < items) return error.PresentationTooLarge;
+        self.remaining_items -= items;
+        try self.enumByte(types.ContainerDisclosureButtonAppearance, value.appearance);
+        try self.string(value.font_family.name);
+        try self.styleLength(value.font_size);
+        try self.writeU16(value.font_weight);
+        try self.byte(@intFromBool(value.font_italic));
+        try self.containerLineHeight(value.line_height);
+        try self.styleEdges(value.padding);
+        inline for (.{ "normal", "hover", "active", "hover_active" }) |name| {
+            const state = @field(value, name);
+            try self.figureColor(state.background);
+            inline for (.{ "top", "right", "bottom", "left" }) |side|
+                try self.resolvedStyleBorderEdge(@field(state.border, side));
+        }
+        const fields: u8 = @as(u8, @intFromBool(value.focus_visible != null)) |
+            (@as(u8, @intFromBool(value.outline_colors != null)) << 1);
+        try self.byte(fields);
+        if (value.focus_visible) |focus| {
+            try self.enumByte(types.ContainerDisclosureFocusMode, focus.mode);
+            try self.styleLength(focus.outline.width);
+            try self.figureColor(focus.outline.color);
+            try self.styleLength(focus.outline.radius);
+            try self.containerMarginLength(focus.outline.offset);
+        }
+        if (value.outline_colors) |colors| {
+            try self.figureColor(colors.unfocused);
+            try self.figureColor(colors.focused);
+        }
+    }
     fn containerDisclosure(self: *Encoder, value: types.ContainerDisclosure) !void {
         if (!self.positioned_containers_enabled or self.version != .container_fonts or
             !types.validContainerDisclosure(value)) return error.InvalidPresentation;
@@ -1524,12 +1558,14 @@ const Encoder = struct {
         const fields: u8 = @as(u8, @intFromBool(value.foreground != null)) |
             (@as(u8, @intFromBool(value.direction != null)) << 1) |
             (@as(u8, @intFromBool(value.expand_run != null)) << 2) |
-            (@as(u8, @intFromBool(value.collapse_run != null)) << 3);
+            (@as(u8, @intFromBool(value.collapse_run != null)) << 3) |
+            (@as(u8, @intFromBool(value.button != null)) << 4);
         try self.byte(fields);
         if (value.foreground) |color| try self.figureColor(color);
         if (value.direction) |direction| try self.enumByte(types.BidiResolvedDirection, direction);
         if (value.expand_run) |run| try self.containerDisclosureLabelRun(run);
         if (value.collapse_run) |run| try self.containerDisclosureLabelRun(run);
+        if (value.button) |button| try self.containerDisclosureButton(button);
     }
     fn containerStyle(self: *Encoder, value: types.ContainerStyle) !void {
         if (value.width) |width| if (width == .max_content) return error.InvalidPresentation;
@@ -3385,6 +3421,44 @@ const Reader = struct {
         if (!types.validContainerDisclosureTextPaint(paint)) return error.InvalidPresentation;
         return .{ .start = start, .end = end, .paint = paint };
     }
+    fn containerDisclosureButton(self: *Reader) !types.ContainerDisclosureButton {
+        if (!self.positioned_containers_enabled or !self.resolved_style_borders_enabled or
+            self.version != .container_fonts or self.remaining_items == 0) return error.InvalidPresentation;
+        self.remaining_items -= 1;
+        if (self.metrics) |metrics| metrics.total_items = std.math.add(u64, metrics.total_items, 1) catch return error.InvalidPresentation;
+        var value: types.ContainerDisclosureButton = .{
+            .appearance = try self.enumValue(types.ContainerDisclosureButtonAppearance),
+            .font_family = .{ .name = try self.string() },
+            .font_size = try self.styleLength(),
+            .font_weight = try self.readU16(),
+            .font_italic = try self.presence(),
+            .line_height = try self.containerLineHeight(),
+            .padding = try self.styleEdges(),
+            .normal = undefined, .hover = undefined, .active = undefined, .hover_active = undefined,
+        };
+        inline for (.{ "normal", "hover", "active", "hover_active" }) |name| {
+            const state = &@field(value, name);
+            state.background = try self.figureColor();
+            inline for (.{ "top", "right", "bottom", "left" }) |side|
+                @field(state.border, side) = try self.resolvedStyleBorderEdge();
+        }
+        const fields = try self.byte();
+        if (fields & ~@as(u8, 3) != 0) return error.InvalidPresentation;
+        const optional_items: usize = @popCount(fields);
+        if (self.remaining_items < optional_items) return error.InvalidPresentation;
+        self.remaining_items -= optional_items;
+        if (self.metrics) |metrics| metrics.total_items = std.math.add(u64, metrics.total_items, optional_items) catch return error.InvalidPresentation;
+        if (fields & 1 != 0) value.focus_visible = .{
+            .mode = try self.enumValue(types.ContainerDisclosureFocusMode),
+            .outline = .{ .width = try self.styleLength(), .color = try self.figureColor(),
+                .radius = try self.styleLength(), .offset = try self.containerMarginLength() },
+        };
+        if (fields & 2 != 0) value.outline_colors = .{
+            .unfocused = try self.figureColor(), .focused = try self.figureColor(),
+        };
+        if (!types.validContainerDisclosureButton(value)) return error.InvalidPresentation;
+        return value;
+    }
     fn containerDisclosure(self: *Reader) !types.ContainerDisclosure {
         // u32 index, bool, two nonempty length-prefixed labels, focus presence.
         if (!self.positioned_containers_enabled or self.version != .container_fonts or
@@ -3405,11 +3479,12 @@ const Reader = struct {
                 .color = if (try self.presence()) try self.figureColor() else null };
         }
         value.placement = try self.enumValue(types.ContainerDisclosurePlacement);
-        const fields = try self.byte(); if (fields & ~@as(u8, 15) != 0) return error.InvalidPresentation;
+        const fields = try self.byte(); if (fields & ~@as(u8, 31) != 0) return error.InvalidPresentation;
         if (fields & 1 != 0) value.foreground = try self.figureColor();
         if (fields & 2 != 0) value.direction = try self.enumValue(types.BidiResolvedDirection);
         if (fields & 4 != 0) value.expand_run = try self.containerDisclosureLabelRun();
         if (fields & 8 != 0) value.collapse_run = try self.containerDisclosureLabelRun();
+        if (fields & 16 != 0) value.button = try self.containerDisclosureButton();
         if (!types.validContainerDisclosure(value)) return error.InvalidPresentation;
         return value;
     }
@@ -20035,4 +20110,238 @@ test "responsive caption recursive owner census and finite budgets preserve sema
     var too_deep: Reader = .{ .a = a, .bytes = full.out.items, .version = .container_fonts,
         .capability_p = true, .responsive_caption_tables_enabled = true, .table_depth = types.max_table_depth };
     try std.testing.expectError(error.InvalidPresentation, too_deep.table());
+}
+
+// These controls qualify the public button record with captured IT control data.
+// The surrounding content is a small codec fixture, with no geometry claim.
+const PublicITButtonTest = struct {
+    fn capture(a: A) !types.ContainerDisclosure {
+        return std.json.parseFromSliceLeaky(types.ContainerDisclosure, a, @embedFile("testdata/it-disclosure-button-captured.json"), .{});
+    }
+    fn owner(policy: types.ContainerDisclosure) types.Block {
+        var block = ContainerDisclosureCodecTesting.owner;
+        block.container.?.disclosure = policy;
+        return block;
+    }
+    fn encoder(a: A) Encoder {
+        var out = ContainerDisclosureCodecTesting.encoder(a);
+        out.resolved_style_borders_enabled = true;
+        return out;
+    }
+    fn reader(a: A, bytes: []const u8) Reader {
+        var input = ContainerDisclosureCodecTesting.reader(a, bytes);
+        input.resolved_style_borders_enabled = true;
+        return input;
+    }
+    fn stored(sections: []const types.Section) types.Stored {
+        return ContainerDisclosureCodecTesting.stored(sections, &.{});
+    }
+};
+
+test "IT public disclosure button captured JSON roundtrip both writers and full metrics" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const T = PublicITButtonTest;
+    const policy = try T.capture(a);
+    const sections = [_]types.Section{.{ .level = 2, .title = "body", .blocks = &.{T.owner(policy)} }};
+    const original = T.stored(&sections);
+    const e = original.entry;
+    try types.validateStored(a, original, e.title, e.kind, null);
+    const bytes = try encodeAlloc(a, original);
+    try std.testing.expectEqualStrings("DPRa", bytes[0..4]);
+    try std.testing.expectEqual(@as(u32, positioned_containers_feature | resolved_style_borders_feature), std.mem.readInt(u32, bytes[4..8], .little));
+    var metrics: DecodeMetrics = .{};
+    const decoded = try decodeWithMetricsAlloc(a, bytes, e.title, e.kind, null, &metrics);
+    try std.testing.expectEqualDeep(original, decoded);
+    try std.testing.expectEqualSlices(u8, bytes, try encodeAlloc(a, decoded));
+    try std.testing.expectEqualSlices(u8, bytes, try encodeBuildAlloc(a, e.display_title, e.sections, e.organization, e.references, e.media));
+    var work: types.DeepTableWork = .{};
+    try work.entry(e.display_title, e.sections, e.preamble_spans, e.references);
+    try std.testing.expectEqual(@as(u64, max_items - work.remaining), metrics.total_items);
+    try std.testing.expectEqual(@as(u64, 13), metrics.total_items);
+    try std.testing.expectEqual(@as(usize, 0), metrics.tables);
+    try std.testing.expectEqual(@as(usize, "Notes outside content".len), metrics.largest_string_bytes);
+    const json = try std.json.Stringify.valueAlloc(a, decoded, .{});
+    try std.testing.expectEqualDeep(original, try std.json.parseFromSliceLeaky(types.Stored, a, json, .{}));
+    const private_wire = try a.dupe(u8, bytes); @memcpy(private_wire[0..4], "DPR!");
+    try std.testing.expectError(error.UnsupportedPresentationVersion, decodeAlloc(a, private_wire, e.title, e.kind, null));
+    const hex = try a.alloc(u8, bytes.len * 2);
+    const digits = "0123456789abcdef";
+    for (bytes, 0..) |byte, i| { hex[i * 2] = digits[byte >> 4]; hex[i * 2 + 1] = digits[byte & 15]; }
+    const record = try std.json.Stringify.valueAlloc(a, .{
+        .scope = "captured IT button in a synthetic surrounding content graph",
+        .dpr_hex = hex, .stored = original, .metrics = metrics,
+    }, .{});
+    std.debug.print("IT_PUBLIC_BUTTON_FIXTURE {s}\n", .{record});
+}
+
+test "IT public disclosure button none hidden borders keep capability discovery and exact budgets" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const T = PublicITButtonTest;
+    const captured = try T.capture(a);
+    for ([_]types.ResolvedStyleBorderEdge{ .none, .hidden }) |edge| {
+        var policy = captured;
+        inline for (.{ "normal", "hover", "active", "hover_active" }) |name|
+            @field(policy.button.?, name).border = .all(edge);
+        policy.button.?.outline_colors = .{ .unfocused = .{ .kind = .rgb, .value = "#000000" },
+            .focused = .{ .kind = .rgb, .value = "#3366cc" } };
+        const sections = [_]types.Section{.{ .level = 2, .title = "body", .blocks = &.{T.owner(policy)} }};
+        const original = T.stored(&sections); const e = original.entry;
+        try std.testing.expect(types.DeepTableWork.hasResolvedStyleBorders(e.display_title, e.sections, e.preamble_spans, e.references));
+        const bytes = try encodeAlloc(a, original);
+        try std.testing.expectEqualStrings("DPRa", bytes[0..4]);
+        try std.testing.expectEqualDeep(original, try decodeAlloc(a, bytes, e.title, e.kind, null));
+        var work: types.DeepTableWork = .{};
+        try work.entry(e.display_title, e.sections, e.preamble_spans, e.references);
+        const used = max_items - work.remaining;
+        try std.testing.expectEqual(@as(usize, 14), used);
+        try std.testing.expect(work.resolved_style_border_found);
+        var exact_work: types.DeepTableWork = .{ .remaining = used };
+        try exact_work.entry(e.display_title, e.sections, e.preamble_spans, e.references);
+        try std.testing.expectEqual(@as(usize, 0), exact_work.remaining);
+        var short_work: types.DeepTableWork = .{ .remaining = used - 1 };
+        try std.testing.expectError(error.PresentationTooLarge, short_work.entry(e.display_title, e.sections, e.preamble_spans, e.references));
+        for ([_]u32{ positioned_containers_feature, resolved_style_borders_feature }) |flag| {
+            const debt = try a.dupe(u8, bytes);
+            std.mem.writeInt(u32, debt[4..8], std.mem.readInt(u32, debt[4..8], .little) & ~flag, .little);
+            try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, debt, e.title, e.kind, null));
+        }
+        var invalid = policy; invalid.button.?.font_weight = 500;
+        const bad_sections = [_]types.Section{.{ .level = 2, .title = "body", .blocks = &.{T.owner(invalid)} }};
+        var checking: types.DeepTableWork = .{ .discover_resolved_style_border = false };
+        try std.testing.expectError(error.InvalidPresentation, checking.entry(e.display_title, &bad_sections, e.preamble_spans, e.references));
+        var unsupported = T.encoder(a); defer unsupported.deinit(); unsupported.resolved_style_borders_enabled = false;
+        try std.testing.expectError(error.InvalidPresentation, unsupported.containerDisclosure(policy));
+    }
+}
+
+test "IT public disclosure button optional focus and outline colors consume identical items" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const T = PublicITButtonTest;
+    const captured = try T.capture(a);
+    for (0..4) |combination| {
+        var policy = captured;
+        if (combination & 1 == 0) policy.button.?.focus_visible = null;
+        if (combination & 2 != 0) policy.button.?.outline_colors = .{
+            .unfocused = .{ .kind = .rgb, .value = "#123456" }, .focused = .{ .kind = .rgb, .value = "#abcdef" } };
+        const count = 4 + @as(usize, @popCount(combination));
+        try std.testing.expectEqual(count, types.containerDisclosureItems(policy));
+        var out = T.encoder(a); defer out.deinit(); out.remaining_items = count;
+        try out.containerDisclosure(policy);
+        try std.testing.expectEqual(@as(usize, 0), out.remaining_items);
+        var metrics: DecodeMetrics = .{};
+        var input = T.reader(a, out.out.items); input.metrics = &metrics; input.remaining_items = count;
+        try std.testing.expectEqualDeep(policy, try input.containerDisclosure());
+        try std.testing.expectEqual(@as(usize, 0), input.remaining_items);
+        try std.testing.expectEqual(@as(u64, count), metrics.total_items);
+        try std.testing.expectEqual(out.out.items.len, input.pos);
+        for (0..count) |remaining| {
+            var short = T.reader(a, out.out.items); short.remaining_items = remaining;
+            try std.testing.expectError(error.InvalidPresentation, short.containerDisclosure());
+            var short_out = T.encoder(a); defer short_out.deinit(); short_out.remaining_items = remaining;
+            try std.testing.expectError(error.PresentationTooLarge, short_out.containerDisclosure(policy));
+        }
+        const button = policy.button.?;
+        try std.testing.expectError(error.InvalidPresentation, types.containerDisclosureButtonOutlineColor(button, false, true));
+        const visible = try types.containerDisclosureButtonOutlineColor(button, true, true);
+        const focused = try types.containerDisclosureButtonOutlineColor(button, true, false);
+        const unfocused = try types.containerDisclosureButtonOutlineColor(button, false, false);
+        try std.testing.expectEqualDeep(if (button.focus_visible) |focus| @as(?types.FigureColor, focus.outline.color) else if (button.outline_colors) |colors| @as(?types.FigureColor, colors.focused) else null, visible);
+        try std.testing.expectEqualDeep(if (button.outline_colors) |colors| @as(?types.FigureColor, colors.focused) else null, focused);
+        try std.testing.expectEqualDeep(if (button.outline_colors) |colors| @as(?types.FigureColor, colors.unfocused) else null, unfocused);
+        for ([_]bool{false, true}) |hover| for ([_]bool{false, true}) |active|
+            try std.testing.expectEqualDeep(if (active) (if (hover) button.hover_active else button.active) else if (hover) button.hover else button.normal,
+                types.containerDisclosureButtonState(button, hover, active));
+    }
+}
+
+test "IT public disclosure button rejects local flags malformed fields truncation and ambiguous focus" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const T = PublicITButtonTest;
+    const captured = try T.capture(a);
+    var out = T.encoder(a); defer out.deinit(); try out.containerDisclosure(captured);
+    for (0..out.out.items.len) |end| {
+        var truncated = T.reader(a, out.out.items[0..end]);
+        try std.testing.expectError(error.InvalidPresentation, truncated.containerDisclosure());
+    }
+    const fields_at = 4 + 1 + 4 + captured.expand_label.len + 4 + captured.collapse_label.len + 1 + 1;
+    try std.testing.expectEqual(@as(u8, 31), out.out.items[fields_at]);
+    for ([_]u8{ 0x20, 0x40, 0x80 }) |flag| {
+        const bad = try a.dupe(u8, out.out.items); bad[fields_at] |= flag;
+        var input = T.reader(a, bad);
+        try std.testing.expectError(error.InvalidPresentation, input.containerDisclosure());
+    }
+    var plain_button = captured.button.?; plain_button.focus_visible = null;
+    var leaf = T.encoder(a); defer leaf.deinit(); try leaf.containerDisclosureButton(plain_button);
+    // Appearance, UTF-8 length/name, font size, weight, boolean, line height, padding.
+    const name_at = 5;
+    const size_at = name_at + plain_button.font_family.name.len;
+    const weight_at = size_at + 5;
+    const italic_at = weight_at + 2;
+    const line_at = italic_at + 1;
+    const padding_at = line_at + 1;
+    for (0..13) |mode| {
+        const bad = try a.dupe(u8, leaf.out.items);
+        switch (mode) {
+            0 => bad[0] = 99,
+            1 => std.mem.writeInt(u32, bad[1..5], std.math.maxInt(u32), .little),
+            2 => bad[name_at] = 0xff,
+            3 => bad[size_at] = @intFromEnum(types.StyleLengthUnit.em),
+            4 => std.mem.writeInt(u32, bad[size_at + 1 ..][0..4], @bitCast(std.math.nan(f32)), .little),
+            5 => std.mem.writeInt(u16, bad[weight_at..][0..2], 500, .little),
+            6 => bad[italic_at] = 1,
+            7 => bad[italic_at] = 2,
+            8 => bad[line_at] = 99,
+            9 => bad[padding_at] = @intFromEnum(types.StyleLengthUnit.em),
+            10 => bad[padding_at + 20] = 99,
+            11 => bad[padding_at + 20 + 12] = 99,
+            12 => bad[bad.len - 1] = 4,
+            else => unreachable,
+        }
+        var input = T.reader(a, bad);
+        try std.testing.expectError(error.InvalidPresentation, input.containerDisclosureButton());
+    }
+    var ambiguity = captured; ambiguity.focus = .{ .mode = .ua_auto };
+    try std.testing.expect(!types.validContainerDisclosure(ambiguity));
+    var invalid = T.encoder(a); defer invalid.deinit();
+    try std.testing.expectError(error.InvalidPresentation, invalid.containerDisclosure(ambiguity));
+    var bad_focus = captured.button.?; bad_focus.focus_visible.?.mode = .authored_none;
+    try std.testing.expectError(error.InvalidPresentation, invalid.containerDisclosureButton(bad_focus));
+    var multiplier = captured.button.?; multiplier.line_height = .{ .multiplier = 1.0 };
+    try std.testing.expectError(error.InvalidPresentation, invalid.containerDisclosureButton(multiplier));
+    var raw_focus = T.encoder(a); defer raw_focus.deinit(); try raw_focus.containerDisclosureButton(captured.button.?);
+    const bad_mode = try a.dupe(u8, raw_focus.out.items); bad_mode[leaf.out.items.len] = 99;
+    var mode_input = T.reader(a, bad_mode);
+    try std.testing.expectError(error.InvalidPresentation, mode_input.containerDisclosureButton());
+    var unsupported = T.reader(a, leaf.out.items); unsupported.positioned_containers_enabled = false;
+    try std.testing.expectError(error.InvalidPresentation, unsupported.containerDisclosureButton());
+    unsupported = T.reader(a, leaf.out.items); unsupported.resolved_style_borders_enabled = false;
+    try std.testing.expectError(error.InvalidPresentation, unsupported.containerDisclosureButton());
+}
+
+test "IT public disclosure button JSON omits absent carriers and keeps strict parsing" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const T = PublicITButtonTest;
+    const policy = try T.capture(a);
+    const button_json = try std.json.Stringify.valueAlloc(a, policy.button.?, .{});
+    try std.testing.expect(std.mem.indexOf(u8, button_json, "outline_colors") == null);
+    const extra = try std.fmt.allocPrint(a, "{s},\"unknown\":1}}", .{button_json[0 .. button_json.len - 1]});
+    try std.testing.expectError(error.UnknownField, std.json.parseFromSliceLeaky(types.ContainerDisclosureButton, a, extra, .{ .ignore_unknown_fields = true }));
+    const duplicate = try std.fmt.allocPrint(a, "{s},\"font_weight\":400}}", .{button_json[0 .. button_json.len - 1]});
+    try std.testing.expectError(error.DuplicateField, std.json.parseFromSliceLeaky(types.ContainerDisclosureButton, a, duplicate, .{ .duplicate_field_behavior = .use_last }));
+    const value = try std.json.parseFromSliceLeaky(std.json.Value, a, extra, .{});
+    try std.testing.expectError(error.UnknownField, std.json.parseFromValueLeaky(types.ContainerDisclosureButton, a, value, .{ .ignore_unknown_fields = true }));
+    var absent = policy; absent.button = null;
+    const json = try std.json.Stringify.valueAlloc(a, absent, .{});
+    try std.testing.expect(std.mem.indexOf(u8, json, "button") == null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"focus\":null") != null);
+    var legacy = T.encoder(a); defer legacy.deinit();
+    try legacy.writeU32(absent.content_index); try legacy.byte(@intFromBool(absent.initially_collapsed));
+    try legacy.string(absent.expand_label); try legacy.string(absent.collapse_label);
+    try legacy.byte(0); try legacy.enumByte(types.ContainerDisclosurePlacement, absent.placement);
+    try legacy.byte(15); try legacy.figureColor(absent.foreground.?);
+    try legacy.enumByte(types.BidiResolvedDirection, absent.direction.?);
+    try legacy.containerDisclosureLabelRun(absent.expand_run.?); try legacy.containerDisclosureLabelRun(absent.collapse_run.?);
+    var present = T.encoder(a); defer present.deinit(); try present.containerDisclosure(absent);
+    try std.testing.expectEqualSlices(u8, legacy.out.items, present.out.items);
+    try std.testing.expectEqual(legacy.remaining_items - 1, present.remaining_items);
 }

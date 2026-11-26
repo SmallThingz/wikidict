@@ -3253,7 +3253,132 @@ pub fn containerDisclosureTextState(value: ContainerDisclosureTextPaint, hover: 
 }
 pub fn containerDisclosureItems(value: ContainerDisclosure) usize {
     return 1 + @as(usize, @intFromBool(value.focus != null)) +
-        @as(usize, @intFromBool(value.expand_run != null)) + @as(usize, @intFromBool(value.collapse_run != null));
+        @as(usize, @intFromBool(value.expand_run != null)) + @as(usize, @intFromBool(value.collapse_run != null)) +
+        (if (value.button) |button| containerDisclosureButtonItems(button) else @as(usize, 0));
+}
+// Private IT/ZH composition: a source-bound native BUTTON, not a generic
+// authored box or an inherited owner font. Consumers must bind the named font
+// and qualify native appearance; this record does not confer platform equality.
+pub const ContainerDisclosureNamedFont = struct { name: []const u8 };
+pub const ContainerDisclosureButtonAppearance = enum(u8) { native_button = 0 };
+pub const ContainerDisclosureButtonState = struct {
+    background: FigureColor,
+    border: ResolvedStyleBorderEdges,
+};
+pub const ContainerDisclosureButtonFocus = struct {
+    mode: ContainerDisclosureFocusMode,
+    outline: FigureFocusOutline,
+};
+// Explicit source-derived computed colors for focus, including invisible focus.
+// No defaults, stylesheet source or executable behavior is stored in the reader.
+pub const ContainerDisclosureButtonOutlineColors = struct {
+    unfocused: FigureColor,
+    focused: FigureColor,
+};
+pub const ContainerDisclosureButton = struct {
+    appearance: ContainerDisclosureButtonAppearance,
+    font_family: ContainerDisclosureNamedFont,
+    font_size: StyleLength,
+    font_weight: u16,
+    font_italic: bool,
+    line_height: ContainerLineHeight,
+    padding: StyleEdges,
+    normal: ContainerDisclosureButtonState,
+    hover: ContainerDisclosureButtonState,
+    active: ContainerDisclosureButtonState,
+    hover_active: ContainerDisclosureButtonState,
+    focus_visible: ?ContainerDisclosureButtonFocus = null,
+    // null preserves the legacy unspecified carrier, not known CSS absence.
+    outline_colors: ?ContainerDisclosureButtonOutlineColors = null,
+    pub fn jsonStringify(self: @This(), jw: anytype) !void {
+        try jw.beginObject();
+        inline for (@typeInfo(@This()).@"struct".field_names) |field_name| {
+            if (comptime std.mem.eql(u8, field_name, "outline_colors")) {
+                if (self.outline_colors) |colors| { try jw.objectField("outline_colors"); try jw.write(colors); }
+            } else { try jw.objectField(field_name); try jw.write(@field(self, field_name)); }
+        }
+        try jw.endObject();
+    }
+    const JsonFields = struct {
+        appearance: ContainerDisclosureButtonAppearance,
+        font_family: ContainerDisclosureNamedFont,
+        font_size: StyleLength,
+        font_weight: u16,
+        font_italic: bool,
+        line_height: ContainerLineHeight,
+        padding: StyleEdges,
+        normal: ContainerDisclosureButtonState,
+        hover: ContainerDisclosureButtonState,
+        active: ContainerDisclosureButtonState,
+        hover_active: ContainerDisclosureButtonState,
+        focus_visible: ?ContainerDisclosureButtonFocus = null,
+        outline_colors: ?ContainerDisclosureButtonOutlineColors = null,
+    };
+    pub fn jsonParse(a: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) std.json.ParseError(@TypeOf(source.*))!@This() {
+        var strict = options; strict.ignore_unknown_fields = false; strict.duplicate_field_behavior = .@"error";
+        return fromJson(try std.json.innerParse(JsonFields, a, source, strict));
+    }
+    pub fn jsonParseFromValue(a: std.mem.Allocator, source: std.json.Value, options: std.json.ParseOptions) std.json.ParseFromValueError!@This() {
+        var strict = options; strict.ignore_unknown_fields = false; strict.duplicate_field_behavior = .@"error";
+        return fromJson(try std.json.innerParseFromValue(JsonFields, a, source, strict));
+    }
+    fn fromJson(value: JsonFields) error{UnexpectedToken}!@This() {
+        var result: @This() = undefined;
+        inline for (@typeInfo(JsonFields).@"struct".field_names) |field_name| @field(result, field_name) = @field(value, field_name);
+        if (!validContainerDisclosureButton(result)) return error.UnexpectedToken;
+        return result;
+    }
+};
+pub fn validContainerDisclosureButton(value: ContainerDisclosureButton) bool {
+    if (value.appearance != .native_button or !validFontFamilyName(value.font_family.name) or
+        value.font_size.unit != .px or !validStyleLength(value.font_size) or value.font_size.value <= 0 or
+        value.font_weight != 400 or value.font_italic or !validContainerLineHeight(value.line_height) or
+        !validStyleEdges(value.padding)) return false;
+    switch (value.line_height) {
+        .normal => {},
+        .length => |length| if (length.unit != .px or length.value <= 0) return false,
+        .multiplier => return false,
+    }
+    inline for (.{ "top", "right", "bottom", "left" }) |side|
+        if (@field(value.padding, side).unit != .px) return false;
+    inline for (.{ "normal", "hover", "active", "hover_active" }) |state_name| {
+        const state = @field(value, state_name);
+        if (!validFigureColor(state.background) or
+            (state.background.kind != .rgb and state.background.kind != .transparent) or
+            !validResolvedStyleBorderEdges(state.border)) return false;
+        inline for (.{ "top", "right", "bottom", "left" }) |side| switch (@field(state.border, side)) {
+            .none, .hidden => {},
+            .solid, .dotted, .inset, .outset => |line|
+                if (line.width.unit != .px or line.paint != .rgb) return false,
+        };
+    }
+    if (value.outline_colors) |colors| {
+        inline for (.{ "unfocused", "focused" }) |name| {
+            const color = @field(colors, name);
+            if (color.kind != .rgb or !validFigureColor(color)) return false;
+        }
+    }
+    if (value.focus_visible) |focus| {
+        const outline = focus.outline;
+        if (focus.mode != .ua_auto or !validFigureFocusOutline(outline) or outline.color.kind != .rgb or
+            outline.width.unit != .px or outline.width.value <= 0 or
+            outline.radius.unit != .px or outline.radius.value != 0 or outline.offset.unit != .px) return false;
+    }
+    return true;
+}
+pub fn containerDisclosureButtonState(value: ContainerDisclosureButton, hover: bool, active: bool) ContainerDisclosureButtonState {
+    return if (active) (if (hover) value.hover_active else value.active) else if (hover) value.hover else value.normal;
+}
+pub fn containerDisclosureButtonOutlineColor(value: ContainerDisclosureButton, focused: bool, focus_visible: bool) error{InvalidPresentation}!?FigureColor {
+    if (!validContainerDisclosureButton(value) or (focus_visible and !focused)) return error.InvalidPresentation;
+    if (focus_visible) if (value.focus_visible) |visible| return visible.outline.color;
+    if (value.outline_colors) |colors| return if (focused) colors.focused else colors.unfocused;
+    return null;
+}
+pub fn containerDisclosureButtonItems(value: ContainerDisclosureButton) usize {
+    // Fixed four-state values and four edges are not additional sequences.
+    return 1 + @as(usize, @intFromBool(value.focus_visible != null)) +
+        @as(usize, @intFromBool(value.outline_colors != null));
 }
 pub const ContainerDisclosure = struct {
     content_index: u32,
@@ -3266,6 +3391,17 @@ pub const ContainerDisclosure = struct {
     direction: ?BidiResolvedDirection = null,
     expand_run: ?ContainerDisclosureLabelRun = null,
     collapse_run: ?ContainerDisclosureLabelRun = null,
+    button: ?ContainerDisclosureButton = null,
+    // Preserve every historical field, order and null when the new field is absent.
+    pub fn jsonStringify(self: @This(), jw: anytype) !void {
+        try jw.beginObject();
+        inline for (@typeInfo(@This()).@"struct".field_names) |field_name| {
+            if (comptime std.mem.eql(u8, field_name, "button")) {
+                if (self.button) |button| { try jw.objectField("button"); try jw.write(button); }
+            } else { try jw.objectField(field_name); try jw.write(@field(self, field_name)); }
+        }
+        try jw.endObject();
+    }
     const JsonFields = struct {
         content_index: u32,
         initially_collapsed: bool,
@@ -3277,6 +3413,7 @@ pub const ContainerDisclosure = struct {
         direction: ?BidiResolvedDirection = null,
         expand_run: ?ContainerDisclosureLabelRun = null,
         collapse_run: ?ContainerDisclosureLabelRun = null,
+        button: ?ContainerDisclosureButton = null,
     };
     pub fn jsonParse(a: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) std.json.ParseError(@TypeOf(source.*))!@This() {
         var strict = options; strict.ignore_unknown_fields = false; strict.duplicate_field_behavior = .@"error";
@@ -3290,7 +3427,7 @@ pub const ContainerDisclosure = struct {
         const result: @This() = .{ .content_index = value.content_index, .initially_collapsed = value.initially_collapsed,
             .expand_label = value.expand_label, .collapse_label = value.collapse_label, .focus = value.focus,
             .placement = value.placement, .foreground = value.foreground, .direction = value.direction,
-            .expand_run = value.expand_run, .collapse_run = value.collapse_run };
+            .expand_run = value.expand_run, .collapse_run = value.collapse_run, .button = value.button };
         if (!validContainerDisclosure(result)) return error.UnexpectedToken;
         return result;
     }
@@ -3301,6 +3438,7 @@ fn validContainerDisclosureLabel(value: []const u8) bool {
     return true;
 }
 pub fn validContainerDisclosure(value: ContainerDisclosure) bool {
+    if (value.button) |button| if (value.focus != null or !validContainerDisclosureButton(button)) return false;
     if (!validContainerDisclosureLabel(value.expand_label) or !validContainerDisclosureLabel(value.collapse_label)) return false;
     if (value.foreground) |color| if (!validFigureColor(color) or (color.kind != .rgb and color.kind != .transparent)) return false;
     if (value.expand_run) |run| if (!validContainerDisclosureRun(value.expand_label, run)) return false;
@@ -4472,6 +4610,12 @@ pub const DeepTableWork = struct {
                     if (!validContainerStyle(box.style)) return error.InvalidPresentation;
                 }
                 if (containerDisclosure(box)) |disclosure| {
+                    // Every button carries resolved border edges, including none/hidden.
+                    // Discovery must retain that capability independently of visible paint.
+                    if (disclosure.button != null) {
+                        self.resolved_style_border_found = true;
+                        if (self.discover_resolved_style_border) return error.InvalidPresentation;
+                    }
                     if (!validContainerDisclosureOwner(box)) return error.InvalidPresentation;
                     try self.take(containerDisclosureItems(disclosure));
                 }
