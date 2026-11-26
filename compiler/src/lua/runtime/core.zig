@@ -4251,19 +4251,30 @@ pub const Context = struct {
         };
     }
 
+    const TemplateDependencyVisit = enum { active, checked };
+
     fn templateDependencyPristine(
         self: *const Context,
         source: *const Context,
         module_id: u32,
-        seen: *std.AutoHashMapUnmanaged(u32, void),
+        seen: *std.AutoHashMapUnmanaged(u32, TemplateDependencyVisit),
     ) anyerror!bool {
         const visited = try seen.getOrPut(std.heap.smp_allocator, module_id);
-        if (visited.found_existing) return true;
+        if (visited.found_existing) {
+            if (visited.value_ptr.* == .checked) return true;
+            // An installed target already terminates the clone walk. A
+            // back-edge to a module that the clone still has to install does
+            // not prove a usable cache, even when its prototype has a value.
+            const installed = self.moduleStateConst(module_id) orelse return false;
+            return installed.value != null;
+        }
+        visited.value_ptr.* = .active;
         const prototype = source.moduleStateConst(module_id) orelse return false;
         if (prototype.value == null and prototype.preinitialized == null) return false;
         if (prototype.template_invocation_dependent or
             !self.templateLibrariesPristine(prototype.template_library_dependencies)) return false;
         if (self.moduleStateConst(module_id)) |state| {
+            if (state.loading and state.value == null) return false;
             if (state.value != null or state.preinitialized != null) {
                 if (state.template_origin_context != source or state.template_invocation_dependent or !state.template_value_guard.pristine() or
                     (module_id < self.module_template_rejected.len and self.module_template_rejected[module_id])) return false;
@@ -4272,6 +4283,7 @@ pub const Context = struct {
         var requirements = source.templateRequirementsFor(module_id);
         while (requirements.next()) |requirement|
             if (!try self.templateRequirementPristine(source, requirement, seen)) return false;
+        seen.getPtr(module_id).?.* = .checked;
         return true;
     }
 
@@ -4279,7 +4291,7 @@ pub const Context = struct {
         self: *const Context,
         source: *const Context,
         requirement: ModuleRequirement,
-        seen: *std.AutoHashMapUnmanaged(u32, void),
+        seen: *std.AutoHashMapUnmanaged(u32, TemplateDependencyVisit),
     ) !bool {
         const expected = self.preparedModuleValue(requirement.module_id);
         const requested = if (self.package_loaded) |loaded|
@@ -4294,8 +4306,9 @@ pub const Context = struct {
 
     fn templateDependenciesPristine(self: *const Context, module_id: u32) !bool {
         const source = self.module_template_context orelse return true;
-        var seen: std.AutoHashMapUnmanaged(u32, void) = .empty;
+        var seen: std.AutoHashMapUnmanaged(u32, TemplateDependencyVisit) = .empty;
         defer seen.deinit(std.heap.smp_allocator);
+        try seen.putNoClobber(std.heap.smp_allocator, module_id, .active);
         var requirements = source.templateRequirementsFor(module_id);
         while (requirements.next()) |requirement|
             if (!try self.templateRequirementPristine(source, requirement, &seen)) return false;
@@ -10843,6 +10856,41 @@ const BetweenProbeDependencyFixture = struct {
         return value.table.rawGet(.{ .string = "saved" }) orelse .nil;
     }
 };
+
+test "warm module template declines observed dependency cycles before installing aliases" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var prototype = try Context.initProgram(a, 0, 3);
+    defer prototype.deinit();
+    var live = try Context.initProgram(a, 0, 3);
+    defer live.deinit();
+    live.module_template_context = &prototype;
+    var eligible = [_]bool{ true, true, true };
+    live.module_template_eligible = &eligible;
+
+    const root = try prototype.ensureModuleState(0);
+    const left = try prototype.ensureModuleState(1);
+    const right = try prototype.ensureModuleState(2);
+    root.value = .{ .number = 7 };
+    left.value = .{ .number = 10 };
+    right.value = .{ .number = 12 };
+    const to_left = [_]ModuleRequirement{.{ .module_id = 1, .requested = "Module:Left" }};
+    const to_right = [_]ModuleRequirement{.{ .module_id = 2, .requested = "Module:Right" }};
+    root.template_observed_requirements = &to_left;
+    left.template_observed_requirements = &to_right;
+    right.template_observed_requirements = &to_left;
+    try std.testing.expect(!try live.templateDependenciesPristine(0));
+    try std.testing.expect((try live.instantiateModuleTemplate(0, null)) == null);
+    for (0..3) |i| try std.testing.expect(live.moduleStateConst(@intCast(i)) == null);
+    try std.testing.expect(live.module_template_clone_source == null);
+
+    right.template_observed_requirements = &.{};
+    try std.testing.expect(try live.templateDependenciesPristine(0));
+    const loading = try live.ensureModuleState(2);
+    loading.loading = true;
+    try std.testing.expect(!try live.templateDependenciesPristine(0));
+}
 
 test "warm template dependency guard rejects between probe descendants and retains unchanged specialization" {
     const F = BetweenProbeDependencyFixture;
