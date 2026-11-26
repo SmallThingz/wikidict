@@ -38,7 +38,7 @@ test('DPRa source-anchor header and census reject malformed original-derived pay
     const changed=Buffer.from(bytes);changed.writeUInt32LE(word,4);return changed;
   };
   const widePredecessor=Buffer.concat([Buffer.from('DPRa'),Buffer.alloc(4),previous.payload.subarray(6)]);
-  const badHeaders=[0x00000101,0x08800101,0x18000101];
+  const badHeaders=[0x00000101,0x08800101];
   for(const word of badHeaders){
     const changed=withWord(current.payload,word);
     assert.throws(()=>decode(changed,current.context));
@@ -46,6 +46,13 @@ test('DPRa source-anchor header and census reject malformed original-derived pay
     changed.subarray(0,8).copy(raw,current.row.offset);
     await assert.rejects(()=>indexMember(raw));
   }
+  // Indexing accepts the supported inline-destination header. Its advertised
+  // per-block destination lists are absent from this unchanged source-anchor body.
+  const unusedDestination=withWord(current.payload,0x18000101);
+  const indexedDestination=Buffer.from(current.raw);
+  unusedDestination.subarray(0,8).copy(indexedDestination,current.row.offset);
+  await assert.doesNotReject(()=>indexMember(indexedDestination));
+  assert.throws(()=>decode(unusedDestination,current.context));
   const narrow=Buffer.concat([Buffer.from('DPRZ'),current.payload.subarray(4,6),current.payload.subarray(8)]);
   for(const changed of [withWord(widePredecessor,0x08000101),narrow,current.payload.subarray(0,7),
     withWord(current.payload,0x09000101)]){

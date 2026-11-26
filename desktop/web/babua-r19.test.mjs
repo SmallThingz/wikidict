@@ -68,12 +68,18 @@ test('the genuine Babua payload retains the responsive owner, icon, ordered list
 });
 
 test('index and decode both refuse bad feature headers, and decode enforces the responsive band census', async () => {
-  for (const mask of [0x2120, 0x01202120, 0x01402120, 0x01802120, 0x11002120, 0x01002121]) {
+  for (const mask of [0x2120, 0x01202120, 0x01402120, 0x01802120, 0x01002121]) {
     const changed = Buffer.from(original.raw);
     changed.writeUInt32LE(mask, original.offset + 4);
     await assert.rejects(indexRaw(changed), /Unsupported responsive presentation features/);
     assert.throws(() => decode(changed.subarray(original.offset), original.context), /Unsupported responsive presentation features/);
   }
+  // Inline destinations now have a supported header. This header-only mutation
+  // omits the per-block destination lists required by its advertised body grammar.
+  const unusedDestination = Buffer.from(original.raw);
+  unusedDestination.writeUInt32LE(0x11002120, original.offset + 4);
+  await assert.doesNotReject(indexRaw(unusedDestination));
+  assert.throws(() => decode(unusedDestination.subarray(original.offset), original.context));
   for (const flags of [0, 0x40]) {
     const header = Buffer.from([0x44, 0x50, 0x52, 0x59, flags]);
     await assert.rejects(indexRaw(dictionaryBlob(7, [['Header', header]])), /Unsupported owner geometry features/);
