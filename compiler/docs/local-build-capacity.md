@@ -96,9 +96,10 @@ publishes only after verification.
 The fresh original-archive path hashes the block directory incrementally and
 releases the producer's parsed directory before authenticated readback. This
 avoids a second complete JSON string/byte buffer and overlapping parsed trees;
-it does not change the block-directory format or archive verification. Actual
-block-directory bytes and peak benefit remain unmeasured until the first Italian
-archive stage can run; this source change does not earn a capacity credit.
+it does not change the block-directory format or archive verification. The first
+Italian archive index measured 27,117 bytes; no matched peak-memory
+comparison was performed, so the incremental JSON change still earns no
+measured capacity credit.
 
 Snapshot pinning retains `shutil.copyfile`, allowing Python's platform kernel
 fast-copy path, followed by the existing SHA-256 validation. It does not hardlink
@@ -115,6 +116,30 @@ Preserve the source data, verified work and failure receipts when resuming or
 handing off an edition. For an existing qualified and armed corpus
 configuration, `corpus_controller.py --config "$config" --phase all
 --max-editions 1` uses its durable queue and closes at most one edition per run.
+
+## Measured Cloud stages, 26 November 2026
+
+The exact Italian 20261001 archive was recovered from the officially listed
+Your.org mirror after the primary dated URL returned 404. Its 77,749,469 bytes
+match SHA-1 `21a188ba7f6f900978195ee3b1e296b647e39981`. The ordinary original-archive
+indexer completed with 798,596 pages, 958 blocks and 871,355,086 decoded XML
+bytes. Its block directory is 27,117 bytes, SHA-256
+`16293f3fd4033d043acea8ed404765801da22b85b4da4b1ad30891205e47b373`.
+No plain XML or second Zstd archive was created. The guarded job took 189.72
+seconds and peaked at 83,528,704 bytes of process-tree PSS under a 512 MiB
+allocation. This is indexing evidence, not a complete Italian build footprint.
+The receipt is
+`data/inputs/itwiktionary-20261001-original/metadata-20261126-01/original-index-result03.json`.
+
+The normal Writer also compiled successfully in Cloud with a 4 GiB allocation
+and 1 GiB reserve. It took 519.75 seconds, peaked at 4,014,874,624 bytes PSS,
+and retained at least 1,562,087,424 bytes of free disk during the run. Its
+61,783,560-byte executable has SHA-256
+`a50fbf5cf7c071320b69b863e457fd83c702c00a0a716a6858728e516644b138`.
+The result and exact source/cache provenance are under
+`.tmp/s1-el-writer-cloud01/`. Reuse that executable only with its recorded
+source scope and compatible runtime inputs; compilation alone does not
+qualify an edition. Neither measurement changes an already admitted job.
 
 ## Retained largest-edition evidence, 26 November 2026
 
