@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QtGui/private/qtextinlinebox_p.h>
+#include "CompiledDisclosureModel.hpp"
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QStringList>
@@ -1005,8 +1006,13 @@ inline QJsonObject containerBlock(const QJsonObject &block, int depth = 1) {
     }
     for (const auto &key : {QStringLiteral("feature"), QStringLiteral("table"), QStringLiteral("text_align"),
          QStringLiteral("style"), QStringLiteral("figure"), QStringLiteral("flow")}) require(!present(block.value(key)));
-    const auto owned = containerObject(block.value(QStringLiteral("container")), {QStringLiteral("blocks"), QStringLiteral("style")}, {QStringLiteral("blocks")});
+    const auto owned = containerObject(block.value(QStringLiteral("container")), {QStringLiteral("blocks"), QStringLiteral("style"), QStringLiteral("disclosure")}, {QStringLiteral("blocks")});
     require(owned.value(QStringLiteral("blocks")).isArray() && owned.value(QStringLiteral("blocks")).toArray().size() <= (1 << 20));
+    if (present(owned.value(QStringLiteral("disclosure")))) {
+        const auto disclosure = CompiledDisclosure::parse(owned);
+        // Legacy disclosure has no Qt native paint implementation. Preserve refusal.
+        require(disclosure.button.has_value());
+    }
     const auto style = containerStyle(owned.value(QStringLiteral("style")));
     translatedContainerBody(style, owned.value(QStringLiteral("blocks")).toArray());
     if (style.contains(QStringLiteral("flex_edge"))) require(owned.value(QStringLiteral("blocks")).toArray().isEmpty());

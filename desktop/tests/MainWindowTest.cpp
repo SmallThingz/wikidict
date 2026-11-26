@@ -15,6 +15,7 @@
 #include "InlineAudioControls.hpp"
 #include <QSlider>
 #include "CompiledContent.hpp"
+#include "CompiledDisclosureHost.hpp"
 #include "ReferenceRendering.hpp"
 #include "LogicalFlow.hpp"
 #include "FlowConstruction.hpp"
@@ -818,7 +819,393 @@ private:
         )).object();
     }
 
+    // c5b0 source data, not an encoder-produced public DPRa fixture.
+    static QJsonObject itButtonSourceDisclosure() {
+        QFile input(QFINDTESTDATA("fixtures/it_public_disclosure_button_source01.json"));
+        CompiledContent::require(input.open(QIODevice::ReadOnly));
+        const auto bytes = input.read(6243);
+        CompiledContent::require(input.atEnd() && bytes.size() == 6242);
+        CompiledContent::require(QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex()
+            == QByteArrayLiteral("c5b0e5998409bf5f26dae8d7dbb9160402b4ea016e07356e317a0e4f94873c4e"));
+        QJsonParseError error;
+        const auto document = QJsonDocument::fromJson(bytes, &error);
+        CompiledContent::require(error.error == QJsonParseError::NoError && document.isObject());
+        return document.object();
+    }
+    static QJsonObject itButtonPublicStored() {
+        QFile input(QFINDTESTDATA("fixtures/it_public_disclosure_button_public01.json"));
+        CompiledContent::require(input.open(QIODevice::ReadOnly));
+        const auto bytes = input.read(17104);
+        CompiledContent::require(input.atEnd() && bytes.size() == 17103);
+        CompiledContent::require(QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex()
+            == QByteArrayLiteral("9c345a9612c878a35fd61e7487776d06fca51bebf2cb138bb3c1a182a6eb5703"));
+        QJsonParseError error;
+        const auto document = QJsonDocument::fromJson(bytes, &error);
+        CompiledContent::require(error.error == QJsonParseError::NoError && document.isObject());
+        CompiledContent::require(document.object().value("metrics").toObject().value("total_items").toInt() == 13);
+        const auto stored = document.object().value("stored").toObject();
+        CompiledContent::require(stored.value("schema") == QStringLiteral("dict.presentation.v3"));
+        const auto entry = stored.value("entry").toObject();
+        CompiledContent::require(entry.value("title") == QStringLiteral("disclosure")
+            && entry.value("kind") == QStringLiteral("supplemental"));
+        CompiledContent::require(entry.value("language").isNull() && entry.value("language_code") == QStringLiteral(""));
+        return stored;
+    }
+    static QJsonObject itButtonPublicOwner() {
+        const auto entry = itButtonPublicStored().value("entry").toObject();
+        const auto sections = entry.value("sections").toArray();
+        CompiledContent::require(sections.size() == 1);
+        const auto blocks = sections[0].toObject().value("blocks").toArray();
+        CompiledContent::require(blocks.size() == 1 && blocks[0].toObject().value("kind") == QStringLiteral("container"));
+        return blocks[0].toObject().value("container").toObject();
+    }
+    static QJsonObject itButtonPublicDisclosure() { return itButtonPublicOwner().value("disclosure").toObject(); }
+    static QJsonObject itButtonSyntheticOwner(const QJsonObject &disclosure) {
+        // Deliberately synthetic siblings test original-index custody only.
+        const QJsonObject target{{"kind", "container"}, {"container", QJsonObject{{"blocks", QJsonArray{}}}}};
+        return {{"blocks", QJsonArray{QJsonObject{{"kind", "paragraph"}, {"spans", QJsonArray{}}}, target,
+                    QJsonObject{{"kind", "paragraph"}, {"spans", QJsonArray{}}}}},
+                {"style", QJsonObject{}}, {"disclosure", disclosure}};
+    }
+
 private slots:
+    void itPublicDisclosureActualFixtureBindingAndCustody() {
+        using namespace CompiledDisclosure;
+        QFile wireInput(QFINDTESTDATA("fixtures/it_public_disclosure_button_public01.dpr"));
+        QVERIFY(wireInput.open(QIODevice::ReadOnly));
+        const auto wire = wireInput.read(911);
+        QVERIFY(wireInput.atEnd()); QCOMPARE(wire.size(), 910);
+        QCOMPARE(QCryptographicHash::hash(wire, QCryptographicHash::Sha256).toHex(),
+            QByteArrayLiteral("27031256936c60f44ab50494bc2854b404ea6b556b60c1cecbdf91b86b889502"));
+        QCOMPARE(wire.left(4), QByteArrayLiteral("DPRa"));
+        // Qt receives decoder JSON through dict_lookup_json. This test binds
+        // the actual wire/Stored pair; it does not implement a second decoder.
+        const auto source = itButtonPublicDisclosure();
+        auto captured = itButtonSourceDisclosure();
+        auto capturedButton = captured.value("button").toObject();
+        auto capturedSize = capturedButton.value("font_size").toObject();
+        capturedSize.insert("value", double(float(capturedSize.value("value").toDouble())));
+        capturedButton.insert("font_size", capturedSize); captured.insert("button", capturedButton);
+        QCOMPARE(source, captured); // The public model stores StyleLength.value as f32.
+        const auto owner = itButtonPublicOwner();
+        const auto model = parse(owner);
+        QCOMPARE(model.source, owner);
+        QCOMPARE(model.contentIndex, quint32(1));
+        QVERIFY(model.initiallyCollapsed && model.button && model.expandRun && model.collapseRun);
+        QCOMPARE(model.expandLabel, QStringLiteral("Mostra"));
+        QCOMPARE(model.collapseLabel, QStringLiteral("Nascondi"));
+        QCOMPARE(model.placement, QStringLiteral("float_right"));
+        QCOMPARE(model.direction.value(), Qt::LeftToRight);
+        QCOMPARE(model.foreground.value(), QColor("#000000"));
+        const auto &button = *model.button;
+        QCOMPARE(button.appearance, QStringLiteral("native_button"));
+        QCOMPARE(button.fontFamily, QStringLiteral("Arial"));
+        QCOMPARE(button.fontSize, qreal(float(13.3333)));
+        QCOMPARE(button.fontWeight, 400); QVERIFY(!button.fontItalic && !button.lineHeight);
+        const std::array<qreal, 4> padding{1, 6, 1, 6};
+        QVERIFY(button.padding == padding);
+        for (int state = 0; state < 4; ++state) {
+            QCOMPARE(button.states[state].background, QColor("#efefef"));
+            for (const auto &edge : button.states[state].border) {
+                QVERIFY(edge.kind == (state < 2 ? BorderKind::Outset : BorderKind::Inset));
+                QCOMPARE(edge.width, qreal(2)); QCOMPARE(edge.color, QColor("#000000"));
+            }
+        }
+        QVERIFY(button.focusVisible && !button.outlineColors);
+        QCOMPARE(button.focusVisible->width, qreal(1));
+        QCOMPARE(button.focusVisible->radius, qreal(0));
+        QCOMPARE(button.focusVisible->offset, qreal(0));
+        const auto hidden = visibleChildren(model, false), expanded = visibleChildren(model, true);
+        QCOMPARE(hidden.size(), 1); QCOMPARE(expanded.size(), 2);
+        QCOMPARE(hidden[0].index, 0);
+        QCOMPARE(expanded[1].index, 1);
+        QCOMPARE(expanded[1].block, owner.value("blocks").toArray()[1].toObject());
+        QCOMPARE(model.source.value("disclosure").toObject(), source);
+        const auto syntheticHidden = visibleChildren(parse(itButtonSyntheticOwner(source)), false);
+        QCOMPARE(syntheticHidden.size(), 2); QCOMPARE(syntheticHidden[1].index, 2);
+        auto legacy = source; legacy.remove("button");
+        const auto oldOwner = itButtonSyntheticOwner(legacy);
+        const auto oldModel = parse(oldOwner);
+        QVERIFY(!oldModel.button); QCOMPARE(oldModel.source, oldOwner);
+        QVERIFY(!oldModel.source.value("disclosure").toObject().contains("button"));
+        legacy.insert("button", QJsonValue(QJsonValue::Null));
+        const auto explicitNullOwner = itButtonSyntheticOwner(legacy);
+        QCOMPARE(parse(explicitNullOwner).source, explicitNullOwner);
+        QVERIFY(!parse(explicitNullOwner).button);
+        auto bad = source; bad.insert("content_index", 0);
+        QVERIFY_EXCEPTION_THROWN(parse(itButtonSyntheticOwner(bad)), std::runtime_error);
+        bad.insert("content_index", 3);
+        QVERIFY_EXCEPTION_THROWN(parse(itButtonSyntheticOwner(bad)), std::runtime_error);
+    }
+
+    void itPublicDisclosureFourStatesAndFocus() {
+        using namespace CompiledDisclosure;
+        auto sourceButton = itButtonPublicDisclosure().value("button").toObject();
+        const QStringList names{"normal", "hover", "active", "hover_active"};
+        const QStringList colors{"#112233", "#223344", "#334455", "#445566"};
+        for (int i = 0; i < 4; ++i) {
+            auto state = sourceButton.value(names[i]).toObject();
+            state.insert("background", QJsonObject{{"kind", "rgb"}, {"value", colors[i]}});
+            sourceButton.insert(names[i], state);
+        }
+        auto model = buttonModel(sourceButton);
+        QCOMPARE(model.states[stateIndex(false, false)].background, QColor(colors[0]));
+        QCOMPARE(model.states[stateIndex(true, false)].background, QColor(colors[1]));
+        QCOMPARE(model.states[stateIndex(false, true)].background, QColor(colors[2]));
+        QCOMPARE(model.states[stateIndex(true, true)].background, QColor(colors[3]));
+        auto runJson = itButtonPublicDisclosure().value("expand_run").toObject();
+        auto paint = runJson.value("paint").toObject();
+        for (int i = 0; i < 4; ++i)
+            paint.insert(names[i], QJsonObject{{"foreground", colors[3 - i]}, {"underline", false}});
+        paint.insert("underline_on_focus", true); runJson.insert("paint", paint);
+        const auto run = labelRun(runJson, QStringLiteral("Mostra"));
+        for (bool active : {false, true}) for (bool hover : {false, true}) {
+            const auto unfocused = labelPaint(*run, hover, active, false);
+            const auto focused = labelPaint(*run, hover, active, true);
+            QCOMPARE(unfocused.foreground, QColor(colors[3 - stateIndex(hover, active)]));
+            QCOMPARE(focused.foreground, unfocused.foreground);
+            QVERIFY(!unfocused.underline && focused.underline);
+        }
+        for (bool visiblePresent : {false, true}) for (bool colorsPresent : {false, true}) {
+            auto variant = sourceButton;
+            if (!visiblePresent) variant.remove("focus_visible");
+            if (colorsPresent) variant.insert("outline_colors", QJsonObject{
+                {"unfocused", QJsonObject{{"kind", "rgb"}, {"value", "#123456"}}},
+                {"focused", QJsonObject{{"kind", "rgb"}, {"value", "#654321"}}}});
+            model = buttonModel(variant);
+            const auto idle = outlineColor(model, false, false);
+            const auto focused = outlineColor(model, true, false);
+            const auto visible = outlineColor(model, true, true);
+            QCOMPARE(bool(idle), colorsPresent); QCOMPARE(bool(focused), colorsPresent);
+            if (colorsPresent) { QCOMPARE(*idle, QColor("#123456")); QCOMPARE(*focused, QColor("#654321")); }
+            QCOMPARE(bool(visible), visiblePresent || colorsPresent);
+            if (visiblePresent) QCOMPARE(*visible, QColor("#3366cc"));
+            else if (colorsPresent) QCOMPARE(*visible, QColor("#654321"));
+            QVERIFY_EXCEPTION_THROWN(outlineColor(model, false, true), std::runtime_error);
+        }
+        for (const auto &name : names) {
+            QJsonObject edges;
+            for (const auto &side : {"top", "right", "bottom", "left"})
+                edges.insert(side, QJsonObject{{name == "normal" ? "none" : "hidden", QJsonObject{}}});
+            sourceButton.insert(name, QJsonObject{{"background", QJsonObject{{"kind", "transparent"}}}, {"border", edges}});
+        }
+        model = buttonModel(sourceButton);
+        for (int i = 0; i < 4; ++i) for (const auto &edge : model.states[i].border) {
+            QVERIFY(edge.kind == (i == 0 ? BorderKind::None : BorderKind::Hidden));
+            QCOMPARE(edge.width, qreal(0));
+        }
+        // The Qt JSON consumer preserves this arm even with no visible borders.
+        // Public resolved-style-border capability discovery belongs to A2.
+    }
+
+    void itPublicDisclosureRejectsInvalidLocalData() {
+        using namespace CompiledDisclosure;
+        const auto source = itButtonPublicDisclosure();
+        const auto original = source.value("button").toObject();
+        auto rejectsButton = [&](const QJsonObject &button) {
+            auto disclosure = source; disclosure.insert("button", button);
+            try { parse(itButtonSyntheticOwner(disclosure)); return false; }
+            catch (const std::runtime_error &) { return true; }
+        };
+        auto bad = original; bad.insert("appearance", "native_theme"); QVERIFY(rejectsButton(bad));
+        bad = original; bad.insert("unknown", 1); QVERIFY(rejectsButton(bad));
+        bad = original; bad.remove("hover_active"); QVERIFY(rejectsButton(bad));
+        bad = original; bad.insert("font_weight", 401); QVERIFY(rejectsButton(bad));
+        bad = original; bad.insert("font_italic", true); QVERIFY(rejectsButton(bad));
+        bad = original; bad.insert("font_family", QJsonObject{{"name", "sans-serif"}}); QVERIFY(rejectsButton(bad));
+        bad = original; bad.insert("font_size", QJsonObject{{"unit", "px"}, {"value", 0}}); QVERIFY(rejectsButton(bad));
+        bad = original; bad.insert("font_size", QJsonObject{{"unit", "em"}, {"value", 1}}); QVERIFY(rejectsButton(bad));
+        bad = original; bad.insert("line_height", QJsonObject{{"multiplier", 1.2}}); QVERIFY(rejectsButton(bad));
+        bad = original; auto padding = bad.value("padding").toObject();
+        padding.insert("left", QJsonObject{{"unit", "px"}, {"value", -1}}); bad.insert("padding", padding); QVERIFY(rejectsButton(bad));
+        bad = original; auto focus = bad.value("focus_visible").toObject(); auto outline = focus.value("outline").toObject();
+        outline.insert("radius", QJsonObject{{"unit", "px"}, {"value", 1}}); focus.insert("outline", outline);
+        bad.insert("focus_visible", focus); QVERIFY(rejectsButton(bad));
+        bad = original; auto state = bad.value("normal").toObject();
+        state.insert("background", QJsonObject{{"kind", "rgb"}, {"value", "#ABCDEF"}}); bad.insert("normal", state); QVERIFY(rejectsButton(bad));
+        auto disclosure = source; disclosure.insert("focus", QJsonObject{{"mode", "ua_auto"}});
+        QVERIFY_EXCEPTION_THROWN(parse(itButtonSyntheticOwner(disclosure)), std::runtime_error);
+        disclosure = source; disclosure.insert("expand_label", QString::fromUtf8("Aé🙂Z"));
+        auto run = disclosure.value("expand_run").toObject(); run.insert("start", 1); run.insert("end", 7);
+        disclosure.insert("expand_run", run);
+        const auto unicode = parse(itButtonSyntheticOwner(disclosure));
+        QCOMPARE(unicode.expandLabel, QString::fromUtf8("Aé🙂Z"));
+        QCOMPARE(unicode.expandRun->utf16Start, 1); QCOMPARE(unicode.expandRun->utf16Length, 3);
+        run.insert("start", 2); disclosure.insert("expand_run", run);
+        QVERIFY_EXCEPTION_THROWN(parse(itButtonSyntheticOwner(disclosure)), std::runtime_error);
+    }
+
+    void itPublicDisclosureNativeActivation() {
+        using namespace CompiledDisclosure;
+        const auto model = parse(itButtonPublicOwner());
+        QFont declared(model.button->fontFamily); declared.setPointSizeF(model.button->fontSize * 72 / 96);
+        if (QFontInfo(declared).family().compare(model.button->fontFamily, Qt::CaseInsensitive) != 0) {
+            QVERIFY_EXCEPTION_THROWN(Button(model, Qt::black, Qt::LeftToRight), std::runtime_error);
+            QSKIP("Exact source Arial unavailable; substitution refused; native behavior remains unqualified");
+        }
+        QWidget host; Button button(model, Qt::black, Qt::LeftToRight, &host);
+        host.resize(360, 120); button.resize(button.sizeHint());
+        host.show(); host.activateWindow(); button.setFocus(Qt::TabFocusReason);
+        QTRY_VERIFY(button.hasFocus()); QVERIFY(button.focusVisible());
+        QCOMPARE(button.text(), model.expandLabel); QCOMPARE(button.accessibleName(), model.expandLabel);
+        QVERIFY(!button.isChecked());
+        int changes = 0; quint32 contentIndex = 0; bool expanded = false;
+        button.expandedChanged = [&](quint32 index, bool value) { ++changes; contentIndex = index; expanded = value; };
+        QSignalSpy clicks(&button, &QAbstractButton::clicked);
+        QTest::keyClick(&button, Qt::Key_Space);
+        QCOMPARE(changes, 1); QCOMPARE(clicks.size(), 1); QCOMPARE(contentIndex, quint32(1)); QVERIFY(expanded);
+        QCOMPARE(button.text(), model.collapseLabel); QCOMPARE(button.accessibleName(), model.collapseLabel);
+        QTest::keyClick(&button, Qt::Key_Return);
+        QCOMPARE(changes, 2); QCOMPARE(clicks.size(), 2); QVERIFY(!expanded);
+        QTest::mouseClick(&button, Qt::LeftButton);
+        QCOMPARE(changes, 3); QCOMPARE(clicks.size(), 3); QVERIFY(expanded); QVERIFY(!button.focusVisible());
+        button.setEnabled(false); QTest::mouseClick(&button, Qt::LeftButton);
+        QCOMPARE(changes, 3); QCOMPARE(clicks.size(), 3);
+        QCOMPARE(button.model().source, model.source);
+    }
+
+    void itPublicDisclosureHostAdmissionAndPathState() {
+        using namespace CompiledDisclosure;
+        const auto entry = itButtonPublicStored().value("entry").toObject();
+        const auto block = entry.value("sections").toArray()[0].toObject().value("blocks").toArray()[0].toObject();
+        QCOMPARE(CompiledContent::containerBlock(block), itButtonPublicOwner());
+        const auto model = parse(itButtonPublicOwner());
+        QCOMPARE(model.contentIndex, quint32(1));
+        const auto original = model.source.value("blocks").toArray();
+        const auto hidden = visibleChildren(model, false);
+        QCOMPARE(hidden.size(), 1); QCOMPARE(hidden[0].index, 0); QCOMPARE(hidden[0].block, original[0].toObject());
+        const auto shown = visibleChildren(model, true);
+        QCOMPARE(shown.size(), 2); QCOMPARE(shown[1].index, 1); QCOMPARE(shown[1].block, original[1].toObject());
+        Host::States states{{"first", QJsonObject{{"source", block}, {"expanded", true}}}};
+        QVERIFY(Host::expanded(states, "first", block));
+        QVERIFY(!Host::expanded(states, "second", block)); // equal source, distinct authored paths
+        auto changed = block; auto owner = itButtonPublicOwner(); auto disclosure = owner.value("disclosure").toObject();
+        disclosure.insert("expand_label", QString::fromUtf8("Più"));
+        auto run = disclosure.value("expand_run").toObject(); run.insert("end", 4); disclosure.insert("expand_run", run);
+        owner.insert("disclosure", disclosure); changed.insert("container", owner);
+        QVERIFY(!Host::expanded(states, "first", changed)); // same path, replaced owner
+        const auto unicode = parse(owner);
+        QCOMPARE(unicode.expandRun->end, quint32(4)); QCOMPARE(unicode.expandRun->utf16Length, 3);
+        disclosure.remove("button"); owner.insert("disclosure", disclosure); changed.insert("container", owner);
+        QVERIFY_EXCEPTION_THROWN(CompiledContent::containerBlock(changed), std::runtime_error);
+        owner.remove("disclosure"); changed.insert("container", owner);
+        QCOMPARE(CompiledContent::containerBlock(changed), owner); // original no-disclosure path
+    }
+
+    void itPublicDisclosureHostActualVisibilityToggleAndHistory() {
+        using namespace CompiledDisclosure;
+        MainWindow window(fixture_, "dog");
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        window.resize(960, 700); window.show(); window.activateWindow();
+        QVERIFY2(window.reading_->document()->documentLayout()->property("_wikidictPlainContainerCapability")
+            == QVariant(QStringLiteral("wikidict.plain-container/1")), "Maintained Qt capability required; no stock fallback");
+        const auto entry = itButtonPublicStored().value("entry").toObject();
+        const auto response = QJsonDocument(QJsonObject{{"entries", QJsonArray{entry}}}).toJson();
+        QVERIFY(window.renderResponse(response, false, std::nullopt, true));
+        QVERIFY(window.readingDisclosures_ && window.readingDisclosures_->current());
+        QCOMPARE(window.readingDisclosures_->occurrences.size(), 1);
+        const auto row = window.readingDisclosures_->occurrences.front();
+        const QPointer<Button> old(row.widget); QVERIFY(old); QVERIFY(!old->isEnabled());
+        QCOMPARE(old->model().contentIndex, quint32(1)); QCOMPARE(old->text(), QStringLiteral("Mostra"));
+        QCOMPARE(row.block.value("container").toObject(), itButtonPublicOwner());
+        QCOMPARE(QJsonDocument::fromJson(row.ownerBytes).object(), row.block);
+        QVERIFY(window.reading_->toPlainText().contains("Notes outside content"));
+        QVERIFY(!window.reading_->toPlainText().contains("hidden text"));
+        QCOMPARE(row.size, old->borderBoxSize()); // outline overhang is outside document flow
+        QTextCursor atom = row.cursor; atom.setPosition(atom.position() + 1, QTextCursor::KeepAnchor);
+        QCOMPARE(QSizeF(atom.charFormat().toImageFormat().width(), atom.charFormat().toImageFormat().height()), row.size);
+        QVERIFY(old->sizeHint().width() > row.size.width());
+        window.commitReadingEntry(); window.readingPaneAction_->trigger();
+        QVERIFY(old->isEnabled()); old->setFocus(Qt::OtherFocusReason); QTRY_VERIFY(old->hasFocus());
+        QTest::keyClick(old, Qt::Key_Space);
+        QTRY_VERIFY(window.readingDisclosures_->button(row.path, row.block) != old);
+        auto *expanded = window.readingDisclosures_->button(row.path, row.block); QVERIFY(expanded);
+        QCOMPARE(expanded->text(), QStringLiteral("Nascondi")); QTRY_VERIFY(expanded->hasFocus());
+        QVERIFY(window.reading_->toPlainText().contains("hidden text"));
+        QCOMPARE(window.currentEntry_, entry);
+        QVERIFY(!old || (!old->isEnabled() && !old->isVisible()));
+        window.visits_.clear(); window.visits_.append(MainWindow::Visit{}); window.visitIndex_ = 0;
+        window.saveVisit(); const auto visit = window.visits_[0];
+        QCOMPARE(visit.disclosureFocusPath, row.path); QCOMPARE(visit.disclosureFocusSource, row.block);
+        QVERIFY(visit.disclosures.value(row.path).value("expanded").toBool());
+        window.disclosureStates_.clear(); QVERIFY(window.refreshReading());
+        QVERIFY(!window.reading_->toPlainText().contains("hidden text"));
+        QVERIFY(window.restoreVisitReading(visit));
+        const QPointer<Button> restored(window.readingDisclosures_->button(row.path, row.block));
+        QVERIFY(restored);
+        QCOMPARE(restored->text(), QStringLiteral("Nascondi"));
+        QTRY_VERIFY(restored && restored->hasFocus());
+        QCOMPARE(restored->focusVisible(), visit.disclosureFocusVisible);
+        QCOMPARE(window.currentEntry_, entry);
+        // The logical label maps through one allocation atom without reinterpreting UTF-8 offsets.
+        const auto current = window.readingDisclosures_->occurrences.front();
+        const int start = window.readingDisclosures_->toSource(current.basePosition);
+        QCOMPARE(window.readingDisclosures_->text(start, start + current.text.size()), current.text);
+        QCOMPARE(window.readingDisclosures_->toBase(start + 1, false), current.basePosition);
+        QCOMPARE(window.readingDisclosures_->toBase(start + 1, true), current.basePosition + 1);
+    }
+
+    void itPublicDisclosureHostUtf8ReflowAndStaleCallbacks() {
+        using namespace CompiledDisclosure;
+        MainWindow window(fixture_, "dog");
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        window.resize(960, 700); window.show(); window.activateWindow();
+        auto entry = itButtonPublicStored().value("entry").toObject();
+        auto sections = entry.value("sections").toArray(); auto section = sections[0].toObject();
+        auto blocks = section.value("blocks").toArray(); auto block = blocks[0].toObject();
+        auto owner = block.value("container").toObject(); auto disclosure = owner.value("disclosure").toObject();
+        disclosure.insert("expand_label", QString::fromUtf8("Più"));
+        auto run = disclosure.value("expand_run").toObject(); run.insert("end", 4); disclosure.insert("expand_run", run);
+        auto button = disclosure.value("button").toObject(); auto hover = button.value("hover").toObject();
+        auto border = hover.value("border").toObject();
+        for (const auto &side : {"top", "right", "bottom", "left"}) {
+            auto edge = border.value(side).toObject().value("outset").toObject();
+            edge.insert("width", QJsonObject{{"unit", "px"}, {"value", 4}});
+            border.insert(side, QJsonObject{{"outset", edge}});
+        }
+        hover.insert("border", border); button.insert("hover", hover); disclosure.insert("button", button);
+        owner.insert("disclosure", disclosure); block.insert("container", owner); blocks[0] = block;
+        section.insert("blocks", blocks); sections[0] = section; entry.insert("sections", sections);
+        const auto response = [&](const QJsonObject &value) { return QJsonDocument(QJsonObject{{"entries", QJsonArray{value}}}).toJson(); };
+        QVERIFY(window.renderResponse(response(entry), false));
+        const auto initial = window.readingDisclosures_->occurrences.front();
+        const QPointer<Button> native(initial.widget); QVERIFY(native);
+        native->setFocus(Qt::OtherFocusReason); QTRY_VERIFY(native->hasFocus());
+        QCOMPARE(native->text(), QString::fromUtf8("Più")); QCOMPARE(native->model().expandRun->end, quint32(4));
+        const auto composition = window.readingComposition_;
+        QEvent leave(QEvent::Leave); QApplication::sendEvent(native, &leave);
+        QTRY_VERIFY(window.readingDisclosures_->occurrences.front().size == native->borderBoxSize());
+        const auto normalSize = native->borderBoxSize();
+        const QPointF inside = native->borderOrigin() + QPointF(3, 3);
+        QEnterEvent enter(inside, inside, native->mapToGlobal(inside.toPoint())); QApplication::sendEvent(native, &enter);
+        QTRY_VERIFY(window.readingDisclosures_->occurrences.front().size.width() > normalSize.width());
+        QCOMPARE(window.readingComposition_, composition);
+        QCOMPARE(window.readingDisclosures_->button(initial.path, initial.block), native.data());
+        QVERIFY(native->hasFocus()); QCOMPARE(window.currentEntry_, entry);
+        const auto row = window.readingDisclosures_->occurrences.front();
+        const int start = window.readingDisclosures_->toSource(row.basePosition);
+        QCOMPARE(window.readingDisclosures_->text(start, start + 3), QString::fromUtf8("Più"));
+        // Queue a genuine toggle, then replace the entry before its queued callback.
+        const auto stale = native->expandedChanged;
+        native->click();
+        auto replacement = entry; replacement.insert("title", "replacement disclosure entry");
+        QVERIFY(window.renderResponse(response(replacement), false));
+        QVERIFY(!native || (!native->isEnabled() && !native->isVisible()));
+        stale(1, true); QCoreApplication::processEvents();
+        QCOMPARE(window.currentEntry_, replacement); QVERIFY(window.disclosureStates_.isEmpty());
+        QVERIFY(!window.reading_->toPlainText().contains("hidden text"));
+        auto *current = window.readingDisclosures_->button(row.path, row.block); QVERIFY(current);
+        const auto staleOwner = current->expandedChanged;
+        const QPointer<Button> retired(current);
+        QTextCursor mutation(window.reading_->document()); mutation.insertText("changed source");
+        QVERIFY(window.readingDisclosures_->empty());
+        QVERIFY(!retired || (!retired->isEnabled() && !retired->isVisible()));
+        staleOwner(1, true); QCoreApplication::processEvents();
+        QVERIFY(window.disclosureStates_.isEmpty());
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        QVERIFY(!retired);
+    }
+
     void retainedSinhalaMarathiTablesKeepDefaultBorderAndFooterAction() {
         const auto path = qEnvironmentVariable("WIKIDICT_SI_MATA_ENTRY");
         if (path.isEmpty()) QSKIP("No exact selected Sinhala Reader capture supplied");

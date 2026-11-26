@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QJsonObject>
+#include <QMap>
 #include <QJsonDocument>
 #include <QColor>
 #include <QMainWindow>
@@ -22,6 +23,7 @@ class QSplitter;
 class QComboBox;
 class MediaPanel;
 class InlineAudioControls;
+namespace CompiledDisclosure { class Host; }
 class QEvent;
 class QLabel;
 class QLineEdit;
@@ -47,6 +49,15 @@ private:
     friend class MainWindowTest;
     void bindInlineImages();
     QPointer<InlineAudioControls> readingAudio_;
+    QPointer<CompiledDisclosure::Host> readingDisclosures_;
+    mutable QMap<QString, QJsonObject> disclosureSources_;
+    QMap<QString, QJsonObject> disclosureStates_;
+    QString pendingDisclosureFocusPath_;
+    QJsonObject pendingDisclosureFocusSource_;
+    bool pendingDisclosureFocusVisible_ = false;
+    std::optional<int> pendingDisclosureScroll_;
+    void queueDisclosureToggle(const QString &path, const QJsonObject &source, bool expanded);
+    void restoreDisclosureFocus();
     mutable int nextAudioOccurrence_ = 0;
     int pendingAudioFocusOrdinal_ = -1;
     QJsonObject pendingAudioFocusSource_;
@@ -77,6 +88,10 @@ private:
         QJsonObject audioFocusSource;
         QString audioFocusPart;
         QString referenceTarget;
+        QMap<QString, QJsonObject> disclosures;
+        QString disclosureFocusPath;
+        QJsonObject disclosureFocusSource;
+        bool disclosureFocusVisible = false;
     };
 
     void setupUi();
