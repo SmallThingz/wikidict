@@ -37,6 +37,16 @@ the lowest sampled free space and peak process-tree PSS. A disk delta also
 needs a baseline and comparable filesystem activity. PSS misses unmapped file
 cache and can miss brief peaks, so allow headroom above a sampled peak.
 
+Focused checks use the same accounting for each new, unstarted stage. Retain
+at least the documented 512 MiB reserve and add a measured incremental-growth
+budget with headroom. Some historical focused runners selected a 1 GiB floor;
+their guards and refusals remain unchanged, but that selection is not a global
+minimum for new jobs. A later runtime-only check against an authenticated ELF
+needs its own output budget, rather than another reservation for the completed
+compilation. Include independent metadata/browser writes that can overlap the
+native lock. Record the new profile before admission and leave admitted jobs'
+limits untouched.
+
 Check the selected allocation plus host reserve against `MemAvailable` and
 the remaining headroom under applicable cgroup limits (`memory.max` minus
 `memory.current` for a finite limit). If PSI is unavailable, record it as
