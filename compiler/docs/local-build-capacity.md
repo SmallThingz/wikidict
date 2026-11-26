@@ -1,10 +1,11 @@
 # Plan a local dictionary build
 
 Prefer the current connected Cloud checkout for compilation, translation and
-qualification. Use RD/DC for an edition whose measured peak requirements do
-not fit locally. Speed takes priority over smaller intermediate files when the
-working set fits. The user's 24 November instruction supersedes the earlier
-handoff's requirement to do all work on RD.
+qualification. Compilation, translation, staging and new source preparation
+remain Cloud-only; insufficient capacity is not permission to move the work
+to RD/DC. Speed takes priority over smaller intermediate files when the working
+set fits. The 26 November direction removes the arbitrary 25 GB cap but retains
+cleanup of unnecessary data and these Cloud-only execution requirements.
 
 Work through one edition at a time from the repository root. Reconcile any
 existing attempt for that edition before starting another. Reuse its pinned
@@ -41,8 +42,10 @@ the remaining headroom under applicable cgroup limits (`memory.max` minus
 `memory.current` for a finite limit). If PSI is unavailable, record it as
 unavailable. A build is a local candidate only when both disk and memory
 estimates fit. If either estimate is missing, record the fit as unknown and
-gather comparable evidence. If the edition exceeds local capacity, check RD/DC
-capacity and adopt a matching attempt there or stage that edition there.
+gather comparable evidence. If the edition exceeds local capacity, first reuse
+compatible local inputs and tools, reduce overlapping derived data, and
+coordinate cleanup with its owner. Leave the edition unstarted if its bounded
+working set still does not fit; do not stage a storage fallback elsewhere.
 
 ## Use the existing tools
 
@@ -77,12 +80,30 @@ python3.14 -B compiler/tools/build_wiktionaries.py \
   --zig "$zig" --input-manifest "$manifest" --input-manifest-sha256 "$manifest_sha256"
 ```
 
-Compatible new builds index the compressed original archives in place by default. When
+Compatible new builds index the compressed original archives in place by default.
+For a new archive-capable recipe, `--original-archives` makes that selection
+explicit: it creates a block directory and input marker, without materializing
+plain XML or a second Zstd dump. Full Wikibase-provider preparations that require
+the legacy sealed-generation contract may still require repacking; an explicit
+selection must not bypass that incompatibility. Existing staged coordinates and
+historical tool selections remain unchanged. When
 reusing a verified stage, pass `--staged-input-root` and, for repacked input,
 its matching `--extraction-cache-root` if available. Keep standard shard
 compression and the verified pipeline defaults unless comparable measurements
 justify a change. A sharded build admits the merge using its verified shards and
 publishes only after verification.
+
+The fresh original-archive path hashes the block directory incrementally and
+releases the producer's parsed directory before authenticated readback. This
+avoids a second complete JSON string/byte buffer and overlapping parsed trees;
+it does not change the block-directory format or archive verification. Actual
+block-directory bytes and peak benefit remain unmeasured until the first Italian
+archive stage can run; this source change does not earn a capacity credit.
+
+Snapshot pinning retains `shutil.copyfile`, allowing Python's platform kernel
+fast-copy path, followed by the existing SHA-256 validation. It does not hardlink
+inputs. An unchanged snapshot keeps its destination inode on resume. Budget a
+full physical copy on this Cloud filesystem; no copy-on-write saving is credited.
 
 If cgroup delegation is unavailable and sampled watchdog mode is approved,
 append `--resource-mode watchdog --cpu-admission affinity --threads 2
@@ -94,6 +115,72 @@ Preserve the source data, verified work and failure receipts when resuming or
 handing off an edition. For an existing qualified and armed corpus
 configuration, `corpus_controller.py --config "$config" --phase all
 --max-editions 1` uses its durable queue and closes at most one edition per run.
+
+## Retained largest-edition evidence, 26 November 2026
+
+The local nine-edition capacity comparison identifies English as its largest
+public-input and sealed-Worker row. It does **not** establish the largest working
+set across all 198 editions. The all-198 payload manifests named in the handoff
+are absent locally; assignment coverage and the historical aggregate
+13,235,967,656 compressed bytes do not supply the missing per-edition ranking.
+
+The October English continuation has these exact historical component sizes:
+
+| Component | Bytes |
+|---|---:|
+| 18 public compressed inputs | 3,741,258,947 |
+| XML subset, 9 parts (already included above) | 1,993,298,477 |
+| Repacked XML plus its compressed offset index | 2,606,776,477 |
+| Sealed Worker assets, including generated indexes and ELF | 4,112,377,401 |
+| Retained bitcode plus ordered link objects | 821,927,100 |
+| Selected captured metadata, stored representation | 822,906,419 |
+
+These are not additive peak measurements: Worker assets already contain some
+selected metadata and indexes, and the live intervals are not established.
+The cleanup inventory also measured these English components:
+
+| Component | Bytes | Measurement |
+|---|---:|---|
+| page-index.tsv | 1,584,772,730 | logical |
+| page-title-index.bin | 536,870,976 | logical |
+| Lua-program.meta | 344,084,565 | logical |
+| template-source.bin | 78,825,684 | logical |
+| Extracted Lua directory | 599,883,776 | allocated |
+
+These are retained component measurements, not a simultaneous peak. Complete cache totals and a completed
+full-edition peak remain unknown. The old attempt's 2,911,855,616-byte sampled PSS
+is not a completed-edition memory bound.
+Exact local evidence and the distinct September benchmark are recorded in
+`.tmp/cloud-corpus-working-set/S5-largest-edition.json`; the underlying capacity
+rows are `.tmp/completion-council/A2-integration/cloud-whole-size-plan.json`.
+The September category-tree snapshot alone measured 560,093,014 bytes, so treating
+all auxiliary pinning as tiny configuration copies is unsafe.
+
+The Cloud filesystem did not support the tested copy-on-write clone. Snapshot
+pinning retains Python's existing kernel-assisted copy path; budget a full copy.
+The observed free space was 2,037,321,728 bytes, below the complete English public
+input set. Remeasure capacity before each edition; this is neither a reservation
+nor an all-edition fit result.
+
+After selecting an existing local, authenticated manifest and offline snapshot
+set, the bounded new-build command shape is:
+
+```sh
+python3.14 -B compiler/tools/build_wiktionaries.py \
+  --in "$downloads" --out "$output" --wikis "$edition" \
+  --input-manifest "$manifest" --input-manifest-sha256 "$manifest_sha256" \
+  --metadata-network offline --snapshot-selection "$selection" \
+  --original-archives --compress-shards --jobs 1 --threads 1 --llvm-workers 1 \
+  --zig "$zig" --resource-mode watchdog --cpu-admission affinity \
+  --watchdog-memory-limit-mib "$watchdog_mib"
+```
+
+This is a future command, not a launch performed for the storage investigation.
+The variables must name the selected edition's actual local inputs and current
+allocation. An incompatible sealed-provider recipe must use its existing
+repack route, not bypass validation. Reuse the shared checkout/toolchain/cache;
+keep one edition's active source, verified shards and needed expander until its
+consumers finish. Coordinate obsolete-copy removal with the cleanup owner.
 
 ## Connected workspace on 24 November 2026
 

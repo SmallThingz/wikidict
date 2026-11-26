@@ -18399,6 +18399,37 @@ class MultiEditionOriginalArchiveTests(unittest.TestCase):
                 self.assertEqual(create.call_count,2);self.assertEqual(selected[:2],selected[2:])
             self.assertFalse(any(output.rglob('pages.xml.zst')))
 
+    def test_original_directory_hash_streams_and_releases_tree_before_readback(self):
+        import index_original_dump as index
+        import weakref
+        class Directory(dict):
+            pass
+        original_write = index.write_directory
+        original_read = index.prepare_build_input
+        original_dumps = json.dumps
+        references = []
+        def write(*args, **kwargs):
+            directory = Directory(original_write(*args, **kwargs))
+            references.append(weakref.ref(directory))
+            return directory
+        def dumps(value, *args, **kwargs):
+            if isinstance(value, dict) and value.get('format') == 'wikidict-bzip2-blocks-v1':
+                self.fail('whole original directory serialized in memory')
+            return original_dumps(value, *args, **kwargs)
+        def read(root, output, expected, *args, **kwargs):
+            self.assertIsNone(references[-1](), 'old directory overlaps authenticated readback')
+            self.assertEqual(expected, b.sha256_file(output))
+            return original_read(root, output, expected, *args, **kwargs)
+        with tempfile.TemporaryDirectory() as tmp:
+            item, downloads, output = self.fixture(Path(tmp))
+            with patch.object(index, 'write_directory', side_effect=write), \
+                 patch.object(index, 'prepare_build_input', side_effect=read) as checked, \
+                 patch.object(b.json, 'dumps', side_effect=dumps):
+                selected, _ = b.select_original_archive_input([item], downloads, output, 1)
+            checked.assert_called_once()
+            self.assertEqual(b.original_archive_record(selected)['source_pages'], 1)
+            self.assertFalse(any(output.rglob('pages.xml.zst')))
+
     def test_legacy_work_cache_sealed_context_and_explicit_inputs_remain_selected(self):
         import index_original_dump as index
         for mode in ('published','building','shards','explicit_cache','sealed','explicit_stage'):

@@ -7211,7 +7211,14 @@ def select_original_archive_input(items, downloads, output, workers, *, staged_i
             if any(_staged_path_stamp(path)!=stamp for path,stamp in before.items()):
                 raise ValueError('Original archives changed during indexing')
             # Bind the producer's result before changing only its final location.
-            expected=hashlib.sha256((json.dumps(directory,separators=(',',':'))+'\n').encode()).hexdigest()
+            checksum=hashlib.sha256()
+            for fragment in json.JSONEncoder(separators=(',',':')).iterencode(directory):
+                checksum.update(fragment.encode())
+            checksum.update(b'\n')
+            expected=checksum.hexdigest()
+            # The reader authenticates and parses the persisted directory next;
+            # do not overlap it with another whole JSON string/bytes or old tree.
+            del directory
             marker=index_original_dump.prepare_build_input(ready,blocks,expected,xml,Path(downloads))
             os.rename(blocks,ready/'blocks.json')
             marker['block_directory']['path']=str(selected/'blocks.json')
