@@ -1322,7 +1322,10 @@ fn loadLanguageRegistry(io: std.Io, a: std.mem.Allocator, expander_root: []const
         try loadLiteralLanguageTemplates(io, a, expander_root, namespaces, &out, .arabic);
     } else if (std.mem.eql(u8, out.content_code orelse "", "za")) {
         try loadLiteralLanguageTemplates(io, a, expander_root, namespaces, &out, .zhuang);
-    } else if (std.mem.eql(u8, out.content_code orelse "", "gor")) {
+    } else if (std.mem.eql(u8, out.content_code orelse "", "gor") or
+        (std.mem.eql(u8, out.content_code orelse "", "ps") and std.mem.eql(u8, namespaces.wiki, "pswiktionary")))
+    {
+        // Pashto's Template:en p5978/r21003 has this exact documented-literal form.
         try loadLiteralLanguageTemplates(io, a, expander_root, namespaces, &out, .documented_literal);
     } else if (std.mem.eql(u8, out.content_code orelse "", "zu") and std.mem.eql(u8, namespaces.wiki, "zuwiktionary")) {
         try loadLiteralLanguageTemplates(io, a, expander_root, namespaces, &out, .zulu);
@@ -8942,6 +8945,35 @@ test "GOR literal code template proves exact prefix and excludes complete docume
         "Label<noinclude><!-- </noinclude> -->", "Label<noinclude>nested<noinclude>other</noinclude></noinclude>",
         "Label<noinclude/>", "Label<noinclude attr='x'>docs</noinclude>", "Label\nOther<noinclude>docs</noinclude>",
     }) |source| try std.testing.expect(literalDocumentedLanguageTemplate(source) == null);
+}
+
+test "PS indexed language template attests exact English heading only" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const io = std.testing.io;
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    var namespaces = try namespace_registry.Registry.init(a, @embedFile("testdata/ps-linked-peer200/namespace-registry.tsv"));
+    defer namespaces.deinit();
+    const index_path = try std.fs.path.join(a, &.{ root, "page-index.tsv" });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = index_path, .data =
+        "0\t0\tکينډۍ:en\t\t5978\t21003\t2012-05-09T13:41:18Z\tA\twikitext\t10\t1\t0\n" });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "manifest.jsonl" }), .data = "" });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "language-registry.tsv" }), .data =
+        @embedFile("testdata/ps-linked-peer200/language-registry.tsv") });
+    var templates = try dump_source.TemplateSourceWriter.init(io, a, root);
+    defer templates.deinit();
+    // Dated original p5978/r21003, including its nontranscluded documentation.
+    try templates.append(0, 5978, 21003, "انګرېزي<noinclude>{{documentation}}</noinclude>");
+    try templates.finish(index_path);
+    var registry = try loadLanguageRegistry(io, a, root, &namespaces);
+    defer registry.deinit();
+    const english = registry.resolveTrusted("انګرېزي") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("en", english.code);
+    try std.testing.expectEqualStrings("انگليسي", english.heading);
+    try std.testing.expect(registry.resolve("انگرېزي") == null);
 }
 
 test "GOR indexed literal alias preserves ordinary aliases conflicts and edition scope" {
