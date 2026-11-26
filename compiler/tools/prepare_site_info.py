@@ -39,6 +39,12 @@ CORE_PROFILES = (CORE, '79b81ba96674efc8a803fc956bc501d347d440d2',
                  '6e76237de1cf29c08427d191f110a2c38c2b4cf9',
                  'd1919ec5e4ebd7b0dea1ff6ea1cb4347a9349ca2')
 SCRIBUNTO = 'b109cb6e5866c13871e308859ef78249b1bd3ea2'
+# This source changed appendNamespaces(), not the queried general, statistics
+# or defaultoptions methods. Keep its actual source bundle and Scribunto ID;
+# it is not a byte-identical CORE_PROFILES entry or a Figure-handler grant.
+WMF6_SITEINFO_CORE = '901a9d48bec3e17bdde40049604019ff62aa4491'
+WMF6_SITEINFO_API_SHA256 = 'c940c5a88f83d8c18e2844ff5886095c34c8f9b5dc6db657e1963b1d9723d38f'
+WMF6_SITEINFO_SCRIBUNTO = 'ce115abd8ef15beb000c375d54a3137b4e56c52b'
 FIGURE_WMF5_CORE = '87f311882d8c84ec21e288d0bde8aa289df8dc56'
 FIGURE_WMF5_SCRIBUNTO = '25f7cdefa45a3b8417d7fa296f86b76537927f43'
 # Retained CSB response: current Figure defaults only, never main site-info.
@@ -126,13 +132,23 @@ def validate_producer_provenance(manifest):
         raise ValueError('Invalid recorded site-info producer provenance')
 
 
-def primary_sources(root, prefix=''):
+def source_pins(core):
+    if core == WMF6_SITEINFO_CORE:
+        return {**SOURCE_PINS, 'ApiQuerySiteinfo.php': WMF6_SITEINFO_API_SHA256}
+    return SOURCE_PINS
+
+
+def primary_sources(root, prefix='', *, core=None):
     result = {}
-    for name, expected in SOURCE_PINS.items():
+    for name in SOURCE_PINS:
         raw = evidence.small(Path(root) / (prefix + name), MAX_RESPONSE)
-        if evidence.digest(raw) != expected:
-            raise ValueError('Unreviewed primary source: ' + name)
         result[name] = raw
+    observed = {name: evidence.digest(raw) for name, raw in result.items()}
+    # Before HTTP, accept only a complete reviewed bundle. Once the response
+    # identifies the core, capture and verify require that core's exact bundle.
+    allowed = (SOURCE_PINS, source_pins(WMF6_SITEINFO_CORE)) if core is None else (source_pins(core),)
+    if observed not in allowed:
+        raise ValueError('Unreviewed primary source bundle for selected core')
     return result
 
 
@@ -202,12 +218,14 @@ def file_defaults_observation(core, wiki):
 
 
 def reviewed_source(core, profile, wiki):
-    return (core in CORE_PROFILES
+    return (core in CORE_PROFILES or core == WMF6_SITEINFO_CORE
             or (core == SEPTEMBER_EN_CORE and wiki == 'enwiktionary' and profile in SEPTEMBER_EN_OBSERVATIONS)
             or (profile == FIGURE_PROFILE and file_defaults_observation(core, wiki) is not None))
 
 
 def scribunto_reference(core):
+    if core == WMF6_SITEINFO_CORE:
+        return WMF6_SITEINFO_SCRIBUNTO
     # These observed core revisions select Scribunto with the same pinned library leaves.
     return FIGURE_WMF5_SCRIBUNTO if core in (FIGURE_WMF5_CORE, FIGURE_MON_CORE, SEPTEMBER_EN_CORE, FIGURE_CSB_CORE) else SCRIBUNTO
 
@@ -277,6 +295,7 @@ def capture(args, transport=None, sleep=time.sleep):
                 if isinstance(data, dict) and isinstance(data.get('error'), dict):
                     retry = data['error'].get('code') in ('maxlag', 'ratelimited', 'readonly')
                 response(data, args.wiki, language, profile, raw_sha=receipt['response_sha256'], date=args.date)
+                primary_sources(root, PREFIX + 'source-', core=data['query']['general']['git-hash'])
                 receipt.update(accepted=True, ended_utc=evidence.utc())
                 evidence.document(root / (name + '.receipt.json'), receipt)
                 accepted = name + '.receipt.json'
@@ -360,6 +379,7 @@ def revalidate(root, failure_sha256):
         raise ValueError('Invalid retained refusal chronology')
     data = evidence.decode(raw)
     output = render(data, config, receipt['ended_utc'], evidence.digest(raw))
+    primary_sources(root, PREFIX + 'source-', core=data['query']['general']['git-hash'])
     reviewed = evidence.utc()
     if stamp(reviewed) < stamp(failure['ended_utc']):
         raise ValueError('Revalidation predates retained refusal')
@@ -400,7 +420,7 @@ def verify(root, require_complete=True, *, embedded=False):
         raise ValueError('Capture completion mismatch')
     if manifest.get('artifacts') != payload(root, embedded=embedded):
         raise ValueError('Capture evidence inventory mismatch')
-    primary_sources(root, PREFIX + 'source-')
+    primary_sources(root, PREFIX + 'source-', core=manifest['core'])
     namespace = evidence.small(root / (PREFIX + 'namespace-registry.tsv'), MAX_RESPONSE)
     language = namespace_identity(namespace, manifest['wiki'], manifest['date'])
     config = {k: manifest[k] for k in ('wiki', 'date', 'content_language', 'namespace_registry_sha256', 'profile')}

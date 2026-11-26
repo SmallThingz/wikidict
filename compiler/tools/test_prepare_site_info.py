@@ -70,6 +70,71 @@ class SiteInfoCaptureTests(unittest.TestCase):
         self.rebind(root)
         return s.evidence.decode((root/s.MANIFEST).read_bytes())
 
+    def wmf6_sources(self):
+        raw = b'reviewed WMF6 ApiQuerySiteinfo fixture'
+        selected = patch.object(s, 'WMF6_SITEINFO_API_SHA256', s.evidence.digest(raw))
+        selected.start()
+        self.addCleanup(selected.stop)
+        (self.primary/'ApiQuerySiteinfo.php').write_bytes(raw)
+        self.data['query']['general'].update({
+            'git-hash': s.WMF6_SITEINFO_CORE, 'thumblimits': {'0': 180, '1': 250, '2': 400}})
+        self.data['query']['defaultoptions'] = {'thumbsize': 1}
+
+    def test_wmf6_current_bundle_records_actual_core_scribunto_and_defaults(self):
+        self.wmf6_sources()
+        for figure in (False, True):
+            with self.subTest(figure=figure):
+                args = self.args('wmf6-' + str(figure))
+                args.figure_defaults = figure
+                result = s.capture(args, transport=lambda *_: (200, {}, s.evidence.encoded(self.data)))
+                self.assertEqual(s.WMF6_SITEINFO_CORE, result['core'])
+                self.assertEqual(s.WMF6_SITEINFO_SCRIBUNTO, result['scribunto'])
+                self.assertEqual(result, s.verify(args.output))
+                if figure:
+                    self.assertEqual(250, s.figure_thumbnail_width(self.data['query']))
+
+    def test_wmf6_source_bundle_cannot_be_borrowed_across_core_contexts(self):
+        old = (self.primary/'ApiQuerySiteinfo.php').read_bytes()
+        self.wmf6_sources()
+        new = (self.primary/'ApiQuerySiteinfo.php').read_bytes()
+        for index, (core, source) in enumerate(((s.WMF6_SITEINFO_CORE, old), (s.CORE, new))):
+            with self.subTest(core=core):
+                (self.primary/'ApiQuerySiteinfo.php').write_bytes(source)
+                self.data['query']['general']['git-hash'] = core
+                args = self.args('mixed-' + str(index))
+                with self.assertRaisesRegex(ValueError, 'primary source bundle'):
+                    s.capture(args, transport=lambda *_: (200, {}, s.evidence.encoded(self.data)))
+                self.assertFalse((args.output/s.COMPLETE).exists())
+        (self.primary/'ApiQuerySiteinfo.php').write_bytes(old)
+        self.data['query']['general']['git-hash'] = s.CORE
+        root, result = self.collect('legacy-after-mixed')
+        self.assertEqual(s.SCRIBUNTO, result['scribunto'])
+        self.assertEqual(result, s.verify(root))
+
+    def test_wmf6_verify_rechecks_source_bundle_after_receipt_rehash(self):
+        old = (self.primary/'ApiQuerySiteinfo.php').read_bytes()
+        self.wmf6_sources()
+        root, _ = self.collect('wmf6-rebound')
+        (root/'site-info.source-ApiQuerySiteinfo.php').write_bytes(old)
+        self.rebind(root)
+        with self.assertRaisesRegex(ValueError, 'primary source bundle'):
+            s.verify(root)
+
+    def test_wmf6_new_core_keeps_complete_response_and_integer_default_rules(self):
+        self.wmf6_sources()
+        changes = (
+            lambda d: d.update(warnings={}),
+            lambda d: d.update({'continue': {'sicontinue': 'general'}}),
+            lambda d: d['query']['statistics'].pop('admins'),
+            lambda d: d['query']['defaultoptions'].update(thumbsize=1.0),
+            lambda d: d['query']['general'].update({'git-hash': 'f' * 40}),
+        )
+        for change in changes:
+            data = copy.deepcopy(self.data)
+            change(data)
+            with self.assertRaises(ValueError):
+                s.response(data, 'testwiktionary', 'en', s.FIGURE_PROFILE)
+
     def test_historical_producer_is_preserved_and_replayed_without_old_code(self):
         root, _ = self.collect()
         expected = self.historical(root)
