@@ -251,15 +251,25 @@ pub const Registry = struct {
             std.mem.eql(u8, &std.fmt.bytesToHex(digest, .lower), "059fc0cb9a30d6d6afde9c227688fceb0b474078fbdac544e78142f9eab3aa07");
     }
 
-    pub const nn_current_figure_core = "6b357ea5fbbafe4bde3dcc705aa129afb392fdb2";
+    pub const selected_jpeg_core = "6b357ea5fbbafe4bde3dcc705aa129afb392fdb2";
 
-    // A current, separately captured thumbnail preference for the original NN
-    // dump. This admission does not cover a media handler or any file geometry.
-    pub fn isCurrentNnFigureDefaults(self: *const Registry, digest: [32]u8) bool {
-        return std.mem.eql(u8, self.wiki, "nnwiktionary") and std.mem.eql(u8, self.content_language, "nn") and
-            std.mem.eql(u8, self.dump_date, "20261001") and
-            std.mem.eql(u8, &std.fmt.bytesToHex(self.source_sha256, .lower), "16e38943d70c667e2f2be7b416c9a83e46270a1a617ff5666a6b02cb2ff09397") and
-            std.mem.eql(u8, &std.fmt.bytesToHex(digest, .lower), "8b13ffcefe09f41a76d76e4024e061f68338c3bd5bbcf384db6bf0b6b1d426e1");
+    // The current thumbnail preference is separate from file geometry.
+    pub fn isSelectedJpegFigureDefaults(self: *const Registry, digest: [32]u8) bool {
+        const editions = [_][5][]const u8{
+            .{ "nnwiktionary", "nn", "20261001",
+                "16e38943d70c667e2f2be7b416c9a83e46270a1a617ff5666a6b02cb2ff09397",
+                "8b13ffcefe09f41a76d76e4024e061f68338c3bd5bbcf384db6bf0b6b1d426e1" },
+            .{ "nahwiktionary", "nah", "20261001",
+                "ade511e7ea0b48d76c09aec23c7979caee8045db83ac1125c9077982eeb5fcb5",
+                "c5c33354501c61041d263951427ef73ead53df5fad8410c3a9e79784fb4b49f0" },
+        };
+        for (editions) |edition| {
+            if (std.mem.eql(u8, self.wiki, edition[0]) and std.mem.eql(u8, self.content_language, edition[1]) and
+                std.mem.eql(u8, self.dump_date, edition[2]) and
+                std.mem.eql(u8, &std.fmt.bytesToHex(self.source_sha256, .lower), edition[3]) and
+                std.mem.eql(u8, &std.fmt.bytesToHex(digest, .lower), edition[4])) return true;
+        }
+        return false;
     }
 
     const sd_current_figure_core = "6b357ea5fbbafe4bde3dcc705aa129afb392fdb2";
@@ -288,7 +298,7 @@ pub const Registry = struct {
         if (self.isCurrentCsbFigureDefaults(digest)) return csb_current_figure_core;
         if (self.isCurrentSdFigureDefaults(digest)) return sd_current_figure_core;
         if (self.isCurrentYiFigureDefaults(digest)) return yi_current_figure_core;
-        if (self.isCurrentNnFigureDefaults(digest)) return nn_current_figure_core;
+        if (self.isSelectedJpegFigureDefaults(digest)) return selected_jpeg_core;
         if (self.isCurrentOrFigureDefaults(digest)) return or_current_figure_core;
         return null;
     }

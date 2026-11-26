@@ -49,10 +49,12 @@ WMF6_SITEINFO_SCRIBUNTO = 'ce115abd8ef15beb000c375d54a3137b4e56c52b'
 SD_FIGURE_CORE = '6b357ea5fbbafe4bde3dcc705aa129afb392fdb2'
 SD_FIGURE_DEFAULTS = ('20261001', '2a943323f1f52c63f4665d42ce62faca3e33fdfe0da53c3e9dc5ca8bef5b0b46')
 SD_FIGURE_NAMESPACE = '1a335a658db305317b17e342af9a38fdfd12cf306244ba5e35fe102b703f1ff2'
-# NN default-options observation. The requested source leaves and Scribunto
-# registration are identical to the reviewed WMF6 bundle.
-NN_FIGURE_CORE = '6b357ea5fbbafe4bde3dcc705aa129afb392fdb2'
-NN_FIGURE_DEFAULTS = ('20261001', 'd018de55d0920199f0e5e613209f7961500ac0fce8b0b77169e32cd28f54c669')
+# Selected JPEG observations share the reviewed site-info and Scribunto leaves.
+SELECTED_JPEG_CORE = '6b357ea5fbbafe4bde3dcc705aa129afb392fdb2'
+SELECTED_JPEG_DEFAULTS = {
+    'nnwiktionary': ('20261001', 'd018de55d0920199f0e5e613209f7961500ac0fce8b0b77169e32cd28f54c669'),
+    'nahwiktionary': ('20261001', '17597ebbbbeba585bf938cf661879f16b3e13237bcc80e09c6c7e084fd4673fa'),
+}
 # Exact current Odia Figure defaults using the reviewed WMF6 source leaves.
 OR_FIGURE_DEFAULTS_CORE = '6b357ea5fbbafe4bde3dcc705aa129afb392fdb2'
 OR_FIGURE_DEFAULTS = ('20261001', 'db3b0a09923e7f718234cf8b830da3905b3b4667b67b0d2b7bf008b57f3006b7')
@@ -144,7 +146,7 @@ def validate_producer_provenance(manifest):
 
 
 def source_pins(core):
-    if core in (WMF6_SITEINFO_CORE, NN_FIGURE_CORE, SD_FIGURE_CORE):
+    if core in (WMF6_SITEINFO_CORE, SELECTED_JPEG_CORE, SD_FIGURE_CORE):
         return {**SOURCE_PINS, 'ApiQuerySiteinfo.php': WMF6_SITEINFO_API_SHA256}
     return SOURCE_PINS
 
@@ -204,7 +206,7 @@ def response(data, wiki, language, profile=PROFILE, *, raw_sha=None, date=None):
     if binding is not None:
         reviewed_date, reviewed_sha = binding
         if (raw_sha != reviewed_sha or (date is not None and date != reviewed_date)
-                or (core in (FIGURE_CSB_CORE, NN_FIGURE_CORE, SD_FIGURE_CORE) and date is None)):
+                or (core in (FIGURE_CSB_CORE, SELECTED_JPEG_CORE, SD_FIGURE_CORE) and date is None)):
             raise ValueError('Unreviewed Figure default-options observation')
     legacy.validate_server(general.get('server'))
     stamp(general.get('time'))
@@ -223,8 +225,8 @@ def response(data, wiki, language, profile=PROFILE, *, raw_sha=None, date=None):
 def file_defaults_observation(core, wiki):
     if core == OR_FIGURE_DEFAULTS_CORE and wiki == 'orwiktionary':
         return OR_FIGURE_DEFAULTS
-    if core == NN_FIGURE_CORE and wiki == 'nnwiktionary':
-        return NN_FIGURE_DEFAULTS
+    if core == SELECTED_JPEG_CORE and isinstance(wiki, str) and wiki in SELECTED_JPEG_DEFAULTS:
+        return SELECTED_JPEG_DEFAULTS[wiki]
     if core == SD_FIGURE_CORE and wiki == 'sdwiktionary':
         return SD_FIGURE_DEFAULTS
     if core == FIGURE_CSB_CORE and wiki == 'csbwiktionary':
@@ -243,7 +245,7 @@ def reviewed_source(core, profile, wiki):
 
 
 def scribunto_reference(core):
-    if core in (WMF6_SITEINFO_CORE, NN_FIGURE_CORE, SD_FIGURE_CORE):
+    if core in (WMF6_SITEINFO_CORE, SELECTED_JPEG_CORE, SD_FIGURE_CORE):
         return WMF6_SITEINFO_SCRIBUNTO
     # These observed core revisions select Scribunto with the same pinned library leaves.
     return FIGURE_WMF5_SCRIBUNTO if core in (FIGURE_WMF5_CORE, FIGURE_MON_CORE, SEPTEMBER_EN_CORE, FIGURE_CSB_CORE) else SCRIBUNTO

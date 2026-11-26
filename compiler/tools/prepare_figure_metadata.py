@@ -7,6 +7,7 @@ legacy projection and its raw authorities are replayed before normal staging.
 import argparse
 import base64
 import binascii
+from typing import NamedTuple
 import copy
 from compression import zstd
 from concurrent.futures import ThreadPoolExecutor
@@ -376,20 +377,51 @@ def bound_file_core(core, selected_core, observed, *, wiki='srwiktionary'):
     return figure_source_compatible(core, selected_core)
 
 
-# This observation supplies four exact current JPEG objects for the original
-# NN dump. The response does not establish geometry for another file or core.
-NN_FIGURE_NAMESPACE = '16e38943d70c667e2f2be7b416c9a83e46270a1a617ff5666a6b02cb2ff09397'
-NN_FIGURE_SITE = '8b13ffcefe09f41a76d76e4024e061f68338c3bd5bbcf384db6bf0b6b1d426e1'
-NN_JPEG_RESPONSES = {
-    '3a9dac99e11d001a2cb7a2fcc34cb4c2a98184e00cc26c49f5922becd4b29a16': 'Fil:Russian-Matroshka.jpg',
-    'd83074f58020853afd669bfca982569b4382f5e5972666238a4891368dd9c74c': 'Fil:NGC 4414 (NASA-med).jpg',
-    'e3e86dbbefc759aaa56ef9439941727c6b49c0456b486212f89b366e73dc7719': 'Fil:Hohenfriedeberg - Attack of Prussian Infantry - 1745.jpg',
-    'e0c3b753f5a7a0237b79e7c313646900c1c1444862bfe7f5b4932d93ab99463a': 'Fil:Sunflower sky backdrop.jpg',
+# V4 model anchors apply only to these retained, unrotated JPEGs.
+class SelectedJpegEdition(NamedTuple):
+    language: str
+    namespace: str
+    defaults: str
+    dumpstatus: str
+    # ImageInfo digest -> (localized title, original page-selection digest).
+    responses: dict[str, tuple[str, str]]
+
+
+SELECTED_JPEG_EDITIONS = {
+    'nnwiktionary': SelectedJpegEdition(
+        'nn',
+        '16e38943d70c667e2f2be7b416c9a83e46270a1a617ff5666a6b02cb2ff09397',
+        '8b13ffcefe09f41a76d76e4024e061f68338c3bd5bbcf384db6bf0b6b1d426e1',
+        '19ab1caaa054a8dea2a91fb3e54afd6511c7d838cc14515c04b081036e05dbfa',
+        {
+            '3a9dac99e11d001a2cb7a2fcc34cb4c2a98184e00cc26c49f5922becd4b29a16': (
+                'Fil:Russian-Matroshka.jpg',
+                'c913b079cebed982e0d0e84de34c4301727fc52b10fba73fd4a00b8c8569624e'),
+            'd83074f58020853afd669bfca982569b4382f5e5972666238a4891368dd9c74c': (
+                'Fil:NGC 4414 (NASA-med).jpg',
+                'baca38f6fab4534c66bb6e4a7d76930a75a0077a13620dab2e929e43535c9dc6'),
+            'e3e86dbbefc759aaa56ef9439941727c6b49c0456b486212f89b366e73dc7719': (
+                'Fil:Hohenfriedeberg - Attack of Prussian Infantry - 1745.jpg',
+                'c3ee8254fc15b03a2f1a8554101eee562acb96e34c758fefeffe303cca7cc0d8'),
+            'e0c3b753f5a7a0237b79e7c313646900c1c1444862bfe7f5b4932d93ab99463a': (
+                'Fil:Sunflower sky backdrop.jpg',
+                '788a3e6296f62f5be64f48be782d19cb007f3100bf6eb9b4ab4a85922f597a00'),
+        }),
+    'nahwiktionary': SelectedJpegEdition(
+        'nah',
+        'ade511e7ea0b48d76c09aec23c7979caee8045db83ac1125c9077982eeb5fcb5',
+        'c5c33354501c61041d263951427ef73ead53df5fad8410c3a9e79784fb4b49f0',
+        '61b126fea480ab864fe481a1708fa040ed25b02c038ad4f6b5a0f05cd15bc324',
+        {
+            '4b6c093bbc67754eef25200429e394ffceda7abcc2a222fd936799f9e25eb448': (
+                'Īxiptli:Rubythroathummer65.jpg',
+                '95bb03486fbf838244429080043921fefc24ce4633253589e7da8d7afe0dc783'),
+        }),
 }
 SD_JPEG_RESPONSE = ('3b9e78bbae62834749d361eb74116b444030cc6628650443109b1aace970ffcb', "فائل:Devil's Staircase Wales.jpg")
 SD_JPEG_DEPLOYED_SOURCES = '9641bd2cfe64f9a0cef506a6a165b818dad212b000022d643aa9ac9480f620b7'
 SD_JPEG_NAMESPACE = '1a335a658db305317b17e342af9a38fdfd12cf306244ba5e35fe102b703f1ff2'
-NN_JPEG_REGISTRATION = {
+SELECTED_JPEG_REGISTRATION = {
     'PagedTiffHandler': '0dd1254beafb560f2cd76923c1997fb7d4aacda8',
     'TimedMediaHandler': '8d9c271fb65e04e13a16acc5d5ed7da1cc51accc',
     'PDF Handler': '0ee572467a13edd54af80ab38fed86d71cab6ebf',
@@ -398,9 +430,9 @@ NN_JPEG_REGISTRATION = {
 
 
 def figure_profile(core, kind, media_extensions=None, *, wiki=None):
-    if core == site_info.NN_FIGURE_CORE:
-        if (wiki not in ('nnwiktionary', 'sdwiktionary') or kind != FIGURE_PROFILE_V4 or
-                media_extensions != NN_JPEG_REGISTRATION):
+    if core == site_info.SELECTED_JPEG_CORE:
+        if ((wiki not in SELECTED_JPEG_EDITIONS and wiki != 'sdwiktionary') or kind != FIGURE_PROFILE_V4 or
+                media_extensions != SELECTED_JPEG_REGISTRATION):
             raise ValueError('Unreviewed selected JPEG profile or registration')
         if wiki == 'sdwiktionary':
             # This single-file role attests the deployed JPEG source bundle.
@@ -408,8 +440,8 @@ def figure_profile(core, kind, media_extensions=None, *, wiki=None):
             return {'kind': FIGURE_PROFILE_V4, 'site_family': 'wikimedia-wiktionary',
                     'deployed_jpeg_sources_sha256': SD_JPEG_DEPLOYED_SOURCES,
                     'handler_families': {'image/jpeg': FIGURE_WMF4_PROFILE['handler_families']['image/jpeg']},
-                    'media_extensions': dict(NN_JPEG_REGISTRATION)}
-        return dict(FIGURE_WMF4_PROFILE, media_extensions=dict(NN_JPEG_REGISTRATION))
+                    'media_extensions': dict(SELECTED_JPEG_REGISTRATION)}
+        return dict(FIGURE_WMF4_PROFILE, media_extensions=dict(SELECTED_JPEG_REGISTRATION))
     if core == FIGURE_WMF5_ROLLOUT_CORE and (wiki == 'mnwwiktionary' or wiki in CURRENT_SQL_FILE_BINDINGS):
         if kind != FIGURE_PROFILE_V4 or media_extensions != FIGURE_WMF5_MEDIA:
             raise ValueError('Unreviewed current Figure handler profile or registration')
@@ -1645,7 +1677,7 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
     if (core in (FIGURE_RESPONSE_CORE, *FIGURE_REGISTRATION_EPOCHS, *FIGURE_WMF4_CORES, site_info.FIGURE_WMF5_CORE) or profile_kind == FIGURE_PROFILE_V5) and not allow_compatible_epochs:
         raise ValueError('Compatible response epochs require replay contract v3')
     profile = None
-    current_jpeg = core == site_info.NN_FIGURE_CORE
+    current_jpeg = core == site_info.SELECTED_JPEG_CORE
     sd_jpeg = current_jpeg and wiki == 'sdwiktionary'
     jpeg_file = None
     if current_jpeg:
@@ -1656,8 +1688,12 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
                     digest(namespace_raw) != SD_JPEG_NAMESPACE or site_sha != SD_JPEG_RESPONSE[0]):
                 raise ValueError('Unreviewed SD JPEG source binding')
             jpeg_file = SD_JPEG_RESPONSE[1]
-        elif wiki == 'nnwiktionary' and language == 'nn' and digest(namespace_raw) == NN_FIGURE_NAMESPACE:
-            jpeg_file = NN_JPEG_RESPONSES.get(site_sha)
+        else:
+            edition = SELECTED_JPEG_EDITIONS.get(wiki)
+            if edition is not None and language == edition.language and digest(namespace_raw) == edition.namespace:
+                selection = edition.responses.get(site_sha)
+                if selection is not None:
+                    jpeg_file = selection[0]
         if (date != '20261001' or not has_batches or not allow_compatible_epochs or
                 not current_file_supplements or jpeg_file is None):
             raise ValueError('Unreviewed selected JPEG source binding')
@@ -1847,6 +1883,10 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
                     state='eligible' if eligible else 'tiff_default_page' if default_tiff_page else 'unsupported', file_sha1=row['file_sha1'],
                     file_timestamp=row['file_timestamp'], original_width=row['width'],
                     original_height=row['height'], mime=mime, mediatype=row['mediatype'])
+            if current_jpeg and not sd_jpeg and (record['state'] != 'eligible' or record['canonical_file'] != jpeg_file or
+                    row['response_title'] != jpeg_file or record['mime'] != 'image/jpeg' or
+                    record['mediatype'] != 'BITMAP' or not jpeg_unrotated_metadata(info)):
+                raise ValueError('Selected JPEG lacks direct, unrotated file evidence')
             # The projection already retains these eight facts. Later SVG annotations
             # add separate keys, so the first record can serve every alias comparison.
             previous = (canonical_facts.get(record['canonical_file']) if jpeg_supplement else
@@ -3703,6 +3743,16 @@ def replay_stream_capture(root, wiki, date, defaults, namespace, general, *, ret
             inventory.get('schema') != SELECTED_PAGE_INVENTORY_SCHEMA:
         raise ValueError('Current Mon Figure facts require a selected original page')
     query_inputs = decode(small(root / QUERY_INPUTS))
+    if projection['core_revision'] == site_info.SELECTED_JPEG_CORE and wiki in SELECTED_JPEG_EDITIONS:
+        edition = SELECTED_JPEG_EDITIONS[wiki]
+        response = projection['source_profile']['site_raw_sha256']
+        filename, selection = edition.responses[response]
+        if (projection.get('replay_contract') != REPLAY_CONTRACT or observed is not None or query_inputs or
+                digest(small(root / ROLES['figure-siteinfo'], MAX_RESPONSE)) != edition.defaults or
+                inventory.get('schema') != SELECTED_PAGE_INVENTORY_SCHEMA or inventory['titles'] != [filename] or
+                inventory['dumpstatus_sha256'] != edition.dumpstatus or
+                digest(encoded(inventory['selected_page'])) != selection):
+            raise ValueError('Selected JPEG requires its own defaults and dated original page')
     if current_sql and (inventory.get('schema') != INVENTORY_SCHEMA or query_inputs):
         raise ValueError('Current full-inventory Figure requires the complete dated SQL selection')
     query_titles = provider_query_titles(root, query_inputs, namespace, wiki, date)
@@ -3730,6 +3780,10 @@ def replay_stream_capture(root, wiki, date, defaults, namespace, general, *, ret
     mode = plan.get('metadata_mode', 'full')
     if mode not in ('full', 'lean-tiff-v1', MATERIALIZED_HTTP_MODE):
         raise ValueError('Invalid archived Figure metadata mode')
+    if projection['core_revision'] == site_info.SELECTED_JPEG_CORE and wiki in SELECTED_JPEG_EDITIONS and (
+            mode != 'full' or plan.get('observed') != [] or len(plan['retained']) != 1 or
+            plan['retained'][0].get('kind') != 'retained-request'):
+        raise ValueError('Selected JPEG replay requires one retained ordinary batch')
     if current_sql and (mode not in ('full', MATERIALIZED_HTTP_MODE) or not current_sql_file_plan(plan, mode=mode)):
         raise ValueError('Current full-inventory Figure plan differs from its ordinary source')
     materialized = (materialized_origin_catalog(root,plan,wiki,date,namespace,inventory) if mode==MATERIALIZED_HTTP_MODE else None)
@@ -5310,16 +5364,16 @@ def _capture_files(args, transport=None, sleep=time.sleep, *, target_contract=RE
     current_sql = (target_contract == REPLAY_CONTRACT and current_sql_file_scope(args.wiki, args.date, profile_kind)
         and not lean and getattr(args, 'page_selection', None) is None and
         digest(small(defaults_path, MAX_RESPONSE)) == CURRENT_SQL_FILE_BINDINGS[args.wiki][1])
-    nn_jpeg_defaults = (args.wiki == 'nnwiktionary' and args.date == '20261001' and
-                        profile_kind == FIGURE_PROFILE_V4 and target_contract == REPLAY_CONTRACT and
-                        not lean and getattr(args, 'page_selection', None) is not None and
-                        digest(small(defaults_path, MAX_RESPONSE)) == NN_FIGURE_SITE)
-    defaults = site_info.validate_snapshot(defaults_path, args.wiki, args.date, file_defaults=True) if mon_current or current_sql or nn_jpeg_defaults else \
-        site_info.validate_snapshot(defaults_path, args.wiki, args.date)
+    edition = SELECTED_JPEG_EDITIONS.get(args.wiki)
+    selected_defaults = (edition is not None and args.date == site_info.SELECTED_JPEG_DEFAULTS[args.wiki][0] and
+                         profile_kind == FIGURE_PROFILE_V4 and target_contract == REPLAY_CONTRACT and
+                         not lean and getattr(args, 'page_selection', None) is not None and
+                         digest(small(defaults_path, MAX_RESPONSE)) == edition.defaults)
+    file_scope = mon_current or current_sql or selected_defaults
+    defaults = site_info.validate_snapshot(defaults_path, args.wiki, args.date, file_defaults=file_scope)
     if defaults['profile'] != site_info.FIGURE_PROFILE:
         raise ValueError('Missing Figure default-options capture')
-    artifacts = (site_info.capture_artifacts(defaults_path, defaults, file_defaults=True) if mon_current or current_sql or nn_jpeg_defaults else
-                 site_info.capture_artifacts(defaults_path, defaults))
+    artifacts = site_info.capture_artifacts(defaults_path, defaults, file_defaults=file_scope)
     saved = {name: small(defaults_root / name) for name in artifacts}
     if any(digest(saved[name]) != expected for name, expected in artifacts.items()):
         raise ValueError('Figure defaults changed before capture')
@@ -5455,9 +5509,9 @@ def _capture_files(args, transport=None, sleep=time.sleep, *, target_contract=RE
         if not supplemental:
             used.update(names)
     remaining = sorted(desired - used, key=lambda name: name.encode('utf-8'))
-    if nn_jpeg_defaults and (len(desired) != 1 or not desired.issubset(NN_JPEG_RESPONSES.values()) or
-                             remaining or len(retained) != 1 or observed):
-        raise ValueError('NN JPEG capture requires the retained ordinary one-file batch')
+    if selected_defaults and (remaining or len(retained) != 1 or observed or query_inputs or
+                              retained[0]['kind'] != 'retained-request' or desired != set(inventory['titles'])):
+        raise ValueError('Selected JPEG capture requires the retained ordinary one-file batch')
     # Reserve the full query's URL budget so even an all-TIFF response has one
     # bounded followup with the same ordered subset of at most fifty titles.
     planned = list(metadata.title_batches(args.wiki, remaining, args.batch_size, figure_axes=True))

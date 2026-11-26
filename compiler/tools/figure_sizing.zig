@@ -706,19 +706,19 @@ fn officialServer(a: A, wiki: []const u8) ![]u8 {
 fn general(value: Value, wiki: []const u8, language: []const u8, server: []const u8, core: []const u8) !Value {
     return generalWithEpoch(value, wiki, language, server, core, false, .ordinary);
 }
-const nn_jpeg_core = namespaces.Registry.nn_current_figure_core;
+const selected_jpeg_core = namespaces.Registry.selected_jpeg_core;
 
-// Exact selected-page ImageInfo bytes. These responses prove only the four
-// current JPEG objects paired with the separately reviewed NN defaults.
-fn selectedNnJpeg(site: []const u8) ?[]const u8 {
-    const observations = [_][2][]const u8{
-        .{ "3a9dac99e11d001a2cb7a2fcc34cb4c2a98184e00cc26c49f5922becd4b29a16", "Fil:Russian-Matroshka.jpg" },
-        .{ "d83074f58020853afd669bfca982569b4382f5e5972666238a4891368dd9c74c", "Fil:NGC 4414 (NASA-med).jpg" },
-        .{ "e3e86dbbefc759aaa56ef9439941727c6b49c0456b486212f89b366e73dc7719", "Fil:Hohenfriedeberg - Attack of Prussian Infantry - 1745.jpg" },
-        .{ "e0c3b753f5a7a0237b79e7c313646900c1c1444862bfe7f5b4932d93ab99463a", "Fil:Sunflower sky backdrop.jpg" },
+// Each original response identifies exactly one localized JPEG for its edition.
+fn selectedJpeg(wiki: []const u8, site: []const u8) ?[]const u8 {
+    const observations = [_][3][]const u8{
+        .{ "nnwiktionary", "3a9dac99e11d001a2cb7a2fcc34cb4c2a98184e00cc26c49f5922becd4b29a16", "Fil:Russian-Matroshka.jpg" },
+        .{ "nnwiktionary", "d83074f58020853afd669bfca982569b4382f5e5972666238a4891368dd9c74c", "Fil:NGC 4414 (NASA-med).jpg" },
+        .{ "nnwiktionary", "e3e86dbbefc759aaa56ef9439941727c6b49c0456b486212f89b366e73dc7719", "Fil:Hohenfriedeberg - Attack of Prussian Infantry - 1745.jpg" },
+        .{ "nnwiktionary", "e0c3b753f5a7a0237b79e7c313646900c1c1444862bfe7f5b4932d93ab99463a", "Fil:Sunflower sky backdrop.jpg" },
+        .{ "nahwiktionary", "4b6c093bbc67754eef25200429e394ffceda7abcc2a222fd936799f9e25eb448", "Īxiptli:Rubythroathummer65.jpg" },
     };
     for (observations) |observation| {
-        if (digestMatches(site, observation[0])) return observation[1];
+        if (equal(wiki, observation[0]) and digestMatches(site, observation[1])) return observation[2];
     }
     return null;
 }
@@ -728,7 +728,7 @@ fn selectedSdJpeg(site: []const u8) ?[]const u8 {
     return if (digestMatches(site, exact)) "فائل:Devil's Staircase Wales.jpg" else null;
 }
 
-const ImageInfoScope = enum { ordinary, rollout_base, mon_current, sql_current, nn_current_jpeg, sd_current_jpeg, svg_width, french_jpeg, hungarian_missing_ogg, greek_audio_ogg, vietnamese_svg };
+const ImageInfoScope = enum { ordinary, rollout_base, mon_current, sql_current, selected_jpeg, sd_current_jpeg, svg_width, french_jpeg, hungarian_missing_ogg, greek_audio_ogg, vietnamese_svg };
 
 // These roles use only the file state or explicit thumbnail returned by
 // ImageInfo. The deployment does not supply general file or parser authority.
@@ -763,11 +763,12 @@ fn generalWithEpoch(value: Value, wiki: []const u8, language: []const u8, server
     if (scope == .sql_current and (!equal(core, wmf5_rollout_core) or
         (!equal(wiki, "sawiktionary") and !equal(wiki, "shwiktionary")) or
         !equal(try string(item, "generator"), "MediaWiki 1.48.0-wmf.5"))) return invalid;
-    if (scope == .nn_current_jpeg and (!equal(core, nn_jpeg_core) or !equal(wiki, "nnwiktionary") or
+    if (scope == .selected_jpeg and (!equal(core, selected_jpeg_core) or
+        (!equal(wiki, "nnwiktionary") and !equal(wiki, "nahwiktionary")) or
         !equal(try string(item, "generator"), "MediaWiki 1.48.0-wmf.6"))) return invalid;
-    if (scope == .sd_current_jpeg and (!equal(core, nn_jpeg_core) or !equal(wiki, "sdwiktionary") or
+    if (scope == .sd_current_jpeg and (!equal(core, selected_jpeg_core) or !equal(wiki, "sdwiktionary") or
         !equal(try string(item, "generator"), "MediaWiki 1.48.0-wmf.6"))) return invalid;
-    if (scope == .rollout_base or scope == .mon_current or scope == .sql_current or scope == .nn_current_jpeg or scope == .sd_current_jpeg or equal(core, wmf5_imageinfo_core)) {
+    if (scope == .rollout_base or scope == .mon_current or scope == .sql_current or scope == .selected_jpeg or scope == .sd_current_jpeg or equal(core, wmf5_imageinfo_core)) {
         if (scope == .rollout_base and (!equal(core, wmf5_rollout_core) or
             (!equal(wiki, "dewiktionary") and !equal(wiki, "ruwiktionary") and !equal(wiki, "thwiktionary")) or
             !equal(try string(item, "generator"), "MediaWiki 1.48.0-wmf.5"))) return invalid;
@@ -857,7 +858,7 @@ fn mediaRevision(core: []const u8, name: []const u8, prior: []const u8) []const 
 }
 // Keep complete reviewed sets, not independently interchangeable revisions.
 fn mediaVariant(core: []const u8) ?[media_extensions.len][]const u8 {
-    if (equal(core, nn_jpeg_core)) return .{
+    if (equal(core, selected_jpeg_core)) return .{
         "0dd1254beafb560f2cd76923c1997fb7d4aacda8",
         "8d9c271fb65e04e13a16acc5d5ed7da1cc51accc",
         "0ee572467a13edd54af80ab38fed86d71cab6ebf",
@@ -875,7 +876,7 @@ fn mediaVariant(core: []const u8) ?[media_extensions.len][]const u8 {
 }
 fn mediaSetAccepted(core: []const u8, actual: [media_extensions.len][]const u8) bool {
     // This newly observed epoch proves one complete set, not the older WMF set.
-    if (equal(core, nn_jpeg_core) or equal(core, d191_core) or equal(core, wmf5_imageinfo_core) or equal(core, wmf5_rollout_core)) {
+    if (equal(core, selected_jpeg_core) or equal(core, d191_core) or equal(core, wmf5_imageinfo_core) or equal(core, wmf5_rollout_core)) {
         for (mediaVariant(core).?, actual) |expected, revision| if (!equal(expected, revision)) return false;
         return true;
     }
@@ -895,7 +896,7 @@ fn mediaProfileSet(value: Value) ![media_extensions.len][]const u8 {
     return revisions;
 }
 fn d191Profile(core: []const u8, value: Value) bool {
-    if (!equal(core, nn_jpeg_core) and !equal(core, d191_core) and !equal(core, wmf5_imageinfo_core) and !equal(core, wmf5_rollout_core)) return true;
+    if (!equal(core, selected_jpeg_core) and !equal(core, d191_core) and !equal(core, wmf5_imageinfo_core) and !equal(core, wmf5_rollout_core)) return true;
     if (value != .object) return false;
     const kind = value.object.get("kind") orelse return false;
     return kind == .string and equal(kind.string, "wikimedia-imagehandler-v4");
@@ -962,7 +963,7 @@ fn sdJpegProfile(value: Value, site: []const u8) !void {
         !equal(try string(jpeg, "handler_class"), family.handler_class) or
         !equal(try string(jpeg, "mediatype"), family.mediatype)) return invalid;
     const extensions = try mediaProfileSet(try field(value, "media_extensions"));
-    if (!mediaSetAccepted(nn_jpeg_core, extensions)) return invalid;
+    if (!mediaSetAccepted(selected_jpeg_core, extensions)) return invalid;
 }
 fn mediaRegistration(query: Value, expected: ?[media_extensions.len][]const u8) ![media_extensions.len][]const u8 {
     const core = try string(try field(query, "general"), "git-hash");
@@ -1249,14 +1250,14 @@ fn validateFileSource(a: A, doc: anytype, records_count: u64, batch_count: u64, 
     const source_core = defaults.core orelse return invalid;
     const binding = if (equal(doc.core_revision, wmf5_imageinfo_core)) ordinaryImageInfoDefaults(ns.wiki) orelse return invalid else null;
     const current = equal(doc.core_revision, wmf5_rollout_core);
-    const current_jpeg = equal(doc.core_revision, nn_jpeg_core);
+    const current_jpeg = equal(doc.core_revision, selected_jpeg_core);
     var current_scope: ImageInfoScope = .ordinary;
     if (current_jpeg) {
         const digest = defaults.sha256 orelse return invalid;
         if (!contract or !epochs or records_count != 1 or batch_count != 1 or
-            !equal(source_core, nn_jpeg_core)) return invalid;
-        if (ns.isCurrentNnFigureDefaults(digest)) {
-            current_scope = .nn_current_jpeg;
+            !equal(source_core, selected_jpeg_core)) return invalid;
+        if (ns.isSelectedJpegFigureDefaults(digest)) {
+            current_scope = .selected_jpeg;
         } else if (ns.isCurrentSdFigureDefaults(digest) and selectedSdJpeg(site) != null) {
             current_scope = .sd_current_jpeg;
         } else return invalid;
@@ -1335,7 +1336,7 @@ fn readStreamHeaders(a: A, temp: A, projection: *StreamInput, raw: *StreamInput)
         if (!nonnegativeInteger(try field(header_value, name))) return invalid;
     const contract = try explicitReplayContract(header_value);
     const header = try std.json.parseFromValueLeaky(StreamHeader, a, try replayDocumentShape(a, header_value), .{ .allocate = .alloc_always });
-    if ((equal(header.core_revision, nn_jpeg_core) or equal(header.core_revision, wmf5_imageinfo_core) or equal(header.core_revision, wmf5_rollout_core)) and
+    if ((equal(header.core_revision, selected_jpeg_core) or equal(header.core_revision, wmf5_imageinfo_core) or equal(header.core_revision, wmf5_rollout_core)) and
         (!contract or !equal(try string(header_value, "replay_contract"), replay_contract_v6))) return invalid;
     const count_u64 = std.math.add(u64, header.base_batches, header.observed_batches) catch return invalid;
     const max_requests = std.math.mul(u64, header.base_batches, 50) catch return invalid;
@@ -2326,9 +2327,9 @@ pub const Registry = struct {
             try batches.finish();
             return .{ .arena = arena.*, .namespace_catalog = ns, .records = &.{}, .file_authority = true };
         };
-        const sd_jpeg = equal(doc.core_revision, nn_jpeg_core) and equal(ns.wiki, "sdwiktionary");
-        const jpeg_file = if (equal(doc.core_revision, nn_jpeg_core))
-            (if (sd_jpeg) selectedSdJpeg(site) else selectedNnJpeg(site)) orelse return invalid else null;
+        const sd_jpeg = equal(doc.core_revision, selected_jpeg_core) and equal(ns.wiki, "sdwiktionary");
+        const jpeg_file = if (equal(doc.core_revision, selected_jpeg_core))
+            (if (sd_jpeg) selectedSdJpeg(site) else selectedJpeg(ns.wiki, site)) orelse return invalid else null;
         if (jpeg_file) |file| {
             if (!batches.streamed_v6 or !equal(doc.records[0].requested_file, file) or
                 !equal(doc.records[0].canonical_file, file) or doc.records[0].state != .eligible or
@@ -2433,9 +2434,9 @@ pub const Registry = struct {
             // rows may use the new core. The first authenticated registration, defaults
             // and every supplemental observation retain their original source rules.
             const scope: ImageInfoScope = if (jpeg_file) |file| scope: {
-                if (!equal(batch_core, nn_jpeg_core) or supplement or batch.tiff_metadata_response != null or
+                if (!equal(batch_core, selected_jpeg_core) or supplement or batch.tiff_metadata_response != null or
                     batch.requests.len != 1 or !equal(batch.requests[0], file) or !equal(batch.response, site)) return invalid;
-                break :scope if (sd_jpeg) .sd_current_jpeg else .nn_current_jpeg;
+                break :scope if (sd_jpeg) .sd_current_jpeg else .selected_jpeg;
             } else if (equal(doc.core_revision, wmf5_rollout_core)) scope: {
                 // validateFileSource already bound this exact Book defaults observation.
                 if (!batches.streamed_v6 or !equal(batch_core, wmf5_rollout_core) or supplement) return invalid;
@@ -2581,6 +2582,8 @@ pub const Registry = struct {
                 if (scope == .greek_audio_ogg and (!std.ascii.eqlIgnoreCase(requested, original_title) or
                     width != 0 or height != 0 or !equal(try string(image, "mime"), "application/ogg") or
                     !equal(try string(image, "mediatype"), "AUDIO"))) return invalid;
+                if (scope == .selected_jpeg and (!equal(requested, original_title) or
+                    !equal(requested, current) or !try jpegUnrotatedMetadata(temp, image))) return invalid;
                 const canonical = try canonicalFile(temp, ns, original_title);
                 if (!equal(canonical, fact.canonical_file) or !equal(try string(image, "sha1"), fact.file_sha1) or
                     !equal(try string(image, "timestamp"), fact.file_timestamp) or !lowerHex(fact.file_sha1, 40) or
