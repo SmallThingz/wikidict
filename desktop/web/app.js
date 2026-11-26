@@ -59,7 +59,11 @@ function renderWord(){
  });
  bookmark.setAttribute('aria-pressed',String(saved));
  actions.append(button('◖','Pronounce word offline',speak),bookmark);
- entryView.append(actions,renderEntry(current,(target,targetFragment)=>performAction(()=>openLink(target,targetFragment)),state.settings,(m,canonicalIdentity)=>mediaView(m,state.settings,current.source_edition,canonicalIdentity),(el,image,occurrence)=>loadInlineImage(el,image,state.settings,current.source_edition,occurrence),(target,targetFragment)=>inlineImageActionURL(target,current.source_edition,targetFragment)));
+ const content=renderEntry(current,(target,targetFragment)=>performAction(()=>openLink(target,targetFragment)),state.settings,(m,canonicalIdentity)=>mediaView(m,state.settings,current.source_edition,canonicalIdentity),(el,image,occurrence)=>loadInlineImage(el,image,state.settings,current.source_edition,occurrence),(target,targetFragment)=>inlineImageActionURL(target,current.source_edition,targetFragment));
+ // Keep the actions beside the heading without narrowing the whole flow root.
+ const actionParent=content.querySelector('.compiled-table-flow')??content;
+ actionParent.prepend(actions);
+ entryView.append(content);
  validateInlineDestinationLayout(entryView);
 }
 function search(){title('Find a word');const input=node('input');input.id='query';input.type='search';input.placeholder='Search your dictionaries';input.setAttribute('aria-label','Find a word');const matches=node('div',undefined,'word-list');matches.id='matches';panel.append(input,matches);input.focus();
