@@ -52,6 +52,41 @@ pub fn parse(source: []const u8, ns: *const namespaces.Registry, behavior: ?*con
     var value = result; value.emitted_prefix = declared.emitted_prefix; return value;
 }
 
+// A literal Nahuatl Wiktionary -code- provider emits a hidden category and
+// an H2 after DEFAULTSORT. Authenticate the complete emitted first prefix as
+// well as the heading. Neither the heading alone nor the sort key grants ownership.
+pub fn nahDefaultsortHeading(source: []const u8, ns: *const namespaces.Registry,
+    behavior: ?*const Behavior, registry: *const languages.Registry, code: []const u8) ?languages.SourceLanguageBanner
+{
+    if (!std.mem.eql(u8, ns.wiki, "nahwiktionary") or !std.mem.eql(u8, ns.content_language, "nah") or
+        source.len > 4096 or !registry.codes.contains(code)) return null;
+    const label = if (std.mem.eql(u8, code, "es")) "Caxtillantlahtolli" else if (std.mem.eql(u8, code, "de")) "Alemaniatlahtolli" else return null;
+    const open = "<includeonly>";
+    const sort = "{{DEFAULTSORT:{{{1|{{PAGENAME}}}}}}}</includeonly>";
+    const prelude = "__NOEDITSECTION__\n<br>";
+    if (!std.mem.startsWith(u8, source, open)) return null;
+    const category_end = std.mem.indexOf(u8, source, sort) orelse return null;
+    if (category_end < open.len) return null;
+    const category = source[open.len..category_end];
+    if (!hiddenCategory(category, ns, behavior)) return null;
+    const target = category[2 .. category.len - 2];
+    if (std.mem.indexOfAny(u8, target, "|#") != null or
+        !std.mem.eql(u8, target, std.mem.trim(u8, target, " "))) return null;
+    const category_title = ns.ofTitle(target);
+    const name = category_title.text;
+    if (category_title.id != 14 or !std.mem.eql(u8, name, label) or
+        !registry.sourceBannerCategoryNameCompatible(code, name)) return null;
+
+    const rest = source[category_end + sort.len..];
+    if (!std.mem.startsWith(u8, rest, prelude ++ "\n") or
+        (controlAt(behavior, rest, 0) catch return null) != "__NOEDITSECTION__".len) return null;
+    const line = rest[prelude.len + 1 ..];
+    if (line.len < 7 or !std.mem.startsWith(u8, line, "== ") or !std.mem.endsWith(u8, line, " ==") or
+        !std.mem.eql(u8, line[3 .. line.len - 3], name) or containsControl(behavior, name)) return null;
+    return .{ .heading = name, .level = 2, .target = name, .label = name,
+        .authority = .paired_first_category, .emitted_prefix = .{ .category = category, .suffix = rest[0..prelude.len] } };
+}
+
 // A code-named source peer emits a single ordinary link. The hyphen-code
 // banner must emit that exact link in an italic H1 and name the same hidden
 // category. The result certifies this banner and creates no heading alias.

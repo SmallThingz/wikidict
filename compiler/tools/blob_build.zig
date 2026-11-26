@@ -2403,7 +2403,13 @@ fn loadSourceLanguageBannersWithRows(io: std.Io, a: std.mem.Allocator, root: []c
                 if (source_language_banner.decoratedCategoryLabel(decoded orelse raw, namespaces, if (behavior) |*value| value else null, registry, code)) |label|
                     try registry.addSourceTemplateLabel(label, code);
             }
-            if (source_language_banner.parse(decoded orelse raw, namespaces, if (behavior) |*value| value else null, registry, code)) |proof| {
+            const reviewed_nah_provider = (std.mem.eql(u8, code, "es") and row.page_id == 1696 and row.revision_id == 76846) or
+                (std.mem.eql(u8, code, "de") and row.page_id == 1726 and row.revision_id == 76799);
+            const declared_banner = source_language_banner.parse(decoded orelse raw, namespaces, if (behavior) |*value| value else null, registry, code) orelse
+                if (reviewed_nah_provider and std.mem.eql(u8, row.content_model, "wikitext"))
+                    source_language_banner.nahDefaultsortHeading(decoded orelse raw, namespaces, if (behavior) |*value| value else null, registry, code)
+                else null;
+            if (declared_banner) |proof| {
                 try registry.addSourceLanguageBanner(code, proof);
             } else if (source_language_banner.categoryLinkedBoundary(decoded orelse raw, namespaces, if (behavior) |*value| value else null, registry, code)) |proof| {
                 try registry.addSourceLanguageBoundary(code, proof);
@@ -72529,6 +72535,114 @@ test "Sanskrit paired H1 source banner binds its first region only" {
                 };
             };
             try std.testing.expectEqual(if (is_sanskrit) [3]usize{ 1, 1, 0 } else [3]usize{ 0, 0, 1 }, words);
+        }
+    }
+}
+
+test "NAH indexed DEFAULTSORT banners require exact source revisions and emitted prefix" {
+    // Whole NS10 transclusion bodies from the 2026-10-01 NAH dump.
+    const providers = [_]struct {
+        code: []const u8,
+        label: []const u8,
+        page: u32,
+        revision: u32,
+        timestamp: []const u8,
+        source: []const u8,
+    }{
+        .{
+            .code = "es",
+            .label = "Caxtillantlahtolli",
+            .page = 1696,
+            .revision = 76846,
+            .timestamp = "2026-03-08T14:52:24Z",
+            .source = "&lt;includeonly&gt;[[Category:Caxtillantlahtolli]]{{DEFAULTSORT:{{{1|{{PAGENAME}}}}}}}&lt;/includeonly&gt;__NOEDITSECTION__\n&lt;br&gt;\n== Caxtillantlahtolli ==",
+        },
+        .{
+            .code = "de",
+            .label = "Alemaniatlahtolli",
+            .page = 1726,
+            .revision = 76799,
+            .timestamp = "2026-03-08T07:37:41Z",
+            .source = "&lt;includeonly&gt;[[Category:Alemaniatlahtolli]]{{DEFAULTSORT:{{{1|{{PAGENAME}}}}}}}&lt;/includeonly&gt;__NOEDITSECTION__\n&lt;br&gt;\n== Alemaniatlahtolli ==",
+        },
+    };
+    const namespace_bytes = "# wikidict-namespace-registry-v1\n# wiki\tnahwiktionary\n# dump-date\t20261001\n# content-language\tnah\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\t\tmain\tdictionary_entries\n" ++
+        "10\tNemachiyōtīlli\tTemplate\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\tPlantilla\n" ++
+        "14\tNeneuhcāyōtl\tCategory\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\tCategoría\n";
+    const io = std.testing.io;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var ns = try namespace_registry.Registry.init(a, namespace_bytes);
+    defer ns.deinit();
+
+    for ([_]enum { exact, wrong_revision, wrong_code }{ .exact, .wrong_revision, .wrong_code }) |identity| {
+        var tmp = std.testing.tmpDir(.{});
+        defer tmp.cleanup();
+        const root = try tmp.dir.realPathFileAlloc(io, ".", a);
+        const index = try std.fs.path.join(a, &.{root, "page-index.tsv"});
+        var rows: std.ArrayList(u8) = .empty;
+        var store = try dump_source.TemplateSourceWriter.init(io, a, root);
+        defer store.deinit();
+        for (providers, 0..) |provider, ordinal| {
+            const alter = ordinal == 0;
+            const code = if (alter and identity == .wrong_code) "fr" else provider.code;
+            const revision = if (alter and identity == .wrong_revision) provider.revision + 1 else provider.revision;
+            const row = try std.fmt.allocPrint(a, "0\t0\tNemachiyōtīlli:-{s}-\t\t{d}\t{d}\t{s}\tXochimilkatl\twikitext\t10\t1\t1\n",
+                .{ code, provider.page, revision, provider.timestamp });
+            try rows.appendSlice(a, row);
+            try store.append(ordinal, provider.page, revision, provider.source);
+        }
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = index, .data = rows.items });
+        try store.finish(index);
+        var registry = language_registry.Registry.empty(a);
+        defer registry.deinit();
+        try registry.addTsv("# content-language\tnah\n# mediawiki\nes\tespañol\nde\talemán\nfr\tfrançais\nnah\tNāhuatl\tnah\n");
+        try loadSourceLanguageBanners(io, a, root, &ns, &registry);
+
+        for (providers, 0..) |provider, ordinal| {
+            const category = try std.fmt.allocPrint(a, "[[Category:{s}]]", .{provider.label});
+            const prelude = try std.mem.concat(a, u8, &.{ category, "__NOEDITSECTION__\n<br>" });
+            try std.testing.expectEqual(identity == .exact or ordinal == 1, registry.matchesSourceLanguageBannerPrefix(provider.code, provider.label, 2, prelude));
+            try std.testing.expect(!registry.matchesSourceLanguageBannerPrefix(provider.code, provider.label, 2, category));
+            try std.testing.expect(!registry.matchesSourceLanguageBannerPrefix(provider.code, provider.label, 2, "[[Category:Alexis Wimmer]]__NOEDITSECTION__\n<br>"));
+            try std.testing.expect(!registry.matchesSourceLanguageBannerPrefix("fr", provider.label, 2, prelude));
+            try std.testing.expect(!registry.matchesSourceLanguageBanner(provider.code, provider.label, 2));
+            try std.testing.expect(registry.resolveTrusted(provider.label) == null);
+        }
+        if (identity != .exact) continue;
+
+        const output = try std.fs.path.join(a, &.{root, "blobs"});
+        const codes = languageCodes(&registry, &ns);
+        var writer = try encoder.blob_builder.Writer.init(io, a, output);
+        defer writer.deinit();
+        writer.language_codes = codes;
+        const article: encoder.blob_builder.PageNamespace = .{ .id = 0, .kind = .language };
+        // Project only the indexed -es- banner and the authored pájaro sense.
+        // The ordinary full-page worker is qualified independently.
+        const raw = "{{-es-}}\n\n{{-noun-es-}}\n;1: [[tototl]].\n";
+        const body = "\n== Caxtillantlahtolli ==\n===Tlatocaxtiliztli===\n;1: [[tototl]].\n";
+        const prefix = "[[Category:Caxtillantlahtolli]]__NOEDITSECTION__\n<br>";
+        try writer.addExpandedPage(a, article, "pájaro", prefix ++ body, raw, null);
+        try writer.addExpandedPage(a, article, "missing prefix", body, raw, null);
+        try writer.addExpandedPage(a, article, "wrong category", "[[Category:Alexis Wimmer]]__NOEDITSECTION__\n<br>" ++ body, raw, null);
+        const stats = try writer.finish(codes);
+        try std.testing.expectEqual(@as(usize, 3), stats.language_records);
+        for ([_][]const u8{ "pájaro", "missing prefix", "wrong category" }, 0..) |title, number| {
+            const positive = number == 0;
+            const stored = try MgEqualsPrefixTest.entry(a, output, if (positive) "español" else "Unclassified", title);
+            try std.testing.expectEqualStrings(if (positive) "es" else "", stored.language_code);
+            var authored_heading = false;
+            var authored_senses: usize = 0;
+            for (stored.sections) |section| {
+                authored_heading = authored_heading or std.mem.eql(u8, section.title, "Caxtillantlahtolli");
+                for (section.blocks) |block| for (block.spans) |span| {
+                    if (span.kind == .link and std.mem.eql(u8, span.target, "tototl")) authored_senses += 1;
+                };
+            }
+            try std.testing.expect(authored_heading);
+            try std.testing.expectEqual(@as(usize, 1), authored_senses);
         }
     }
 }
