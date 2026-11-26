@@ -10201,7 +10201,7 @@ test "Writer captured Nahuatl Wolke retains restored IPA close and nested child 
     try std.testing.expectEqualDeep((try GaHtmlLanguageBoundaryFixture.whole(nah_a, "Wolke", nah_expanded, &nah_ns)).sections, nah_entry.sections);
     var nah_ipa: std.ArrayList(u8) = .empty;
     var nah_visible: std.ArrayList(u8) = .empty;
-    var nah_child_seen = false;
+    var nah_children: usize = 0;
     var nah_meaning_seen = false;
     var nah_plural_seen = false;
     var nah_afi_seen = false;
@@ -10216,14 +10216,19 @@ test "Writer captured Nahuatl Wolke retains restored IPA close and nested child 
             if (std.mem.eql(u8, nah_span.target, "mixtli")) nah_meaning_seen = true;
             if (std.mem.eql(u8, nah_span.target, "miaccayotl")) nah_plural_seen = true;
             if (std.mem.eql(u8, nah_span.target, "es:AFI")) nah_afi_seen = true;
-            if (std.mem.eql(u8, nah_span.target, "'vɔlkn̩")) nah_child_seen = true;
+            if (std.mem.eql(u8, nah_span.target, "'vɔlkn̩")) {
+                try std.testing.expectEqualStrings("'vɔlkn̩ ", nah_span.text);
+                nah_children += 1;
+            }
         };
     }
     try std.testing.expectEqual(@as(usize, 3), nah_headings);
     try std.testing.expectEqualStrings("[ [ 'vɔlkə ]", nah_ipa.items);
-    try std.testing.expect(nah_meaning_seen and nah_plural_seen and nah_afi_seen and nah_child_seen);
+    try std.testing.expect(nah_meaning_seen and nah_plural_seen and nah_afi_seen);
     try std.testing.expect(std.mem.indexOf(u8, nah_visible.items, "[ [ 'vɔlkə ]]") != null);
-    try std.testing.expect(std.mem.indexOf(u8, nah_visible.items, "[malformed link]") != null);
+    try std.testing.expectEqual(@as(usize, 1), nah_children);
+    try std.testing.expect(std.mem.indexOf(u8, nah_visible.items, "[[Wiktionary:IPA|'vɔlkn̩ ]]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, nah_visible.items, "[malformed link]") == null);
 }
 
 // Append only to a private tools/blob_build.zig. Synthetic source, NOT captured

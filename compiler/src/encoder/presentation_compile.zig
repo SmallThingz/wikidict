@@ -36169,6 +36169,31 @@ pub const Renderer = struct {
         return mouth.len == 1 and (mouth[0] == ')' or mouth[0] == '(');
     }
 
+    // The NAH IPA wrapper can put the first argument's opening bracket next
+    // to its own. The source parser leaves the project-link shell as text and
+    // parses the one inner link independently (vida r88333, Wolke r93751).
+    fn preserveNahIpaLinkShell(self: *Renderer, tracked: MissingText, raw: []const u8, trail: []const u8, inherited: Style, depth: usize) Error!bool {
+        const namespaces = self.context.namespace_catalog orelse return false;
+        const shell = "[[Wiktionary:IPA|";
+        const prefix = shell ++ "[[ ";
+        const suffix = " ]]]]";
+        if (!std.mem.eql(u8, namespaces.wiki, "nahwiktionary") or self.namespaceOfTarget("Wiktionary:IPA") != 4 or
+            trail.len != 0 or !self.interruptedBodyTargetDomain() or self.inline_image_attribute or
+            inherited.provenance != .parsed or inherited.kind != .text or inherited.target.len != 0 or
+            inherited.self_link_target != null or inherited.code or inherited.preserve_whitespace or inherited.missing_nonaction or
+            raw.len <= prefix.len + suffix.len or !starts(raw, prefix) or !std.mem.endsWith(u8, raw, suffix)) return false;
+        const ipa = raw[prefix.len .. raw.len - suffix.len];
+        if (std.mem.indexOfAny(u8, ipa, "[]{}|<>&\r\n\t:#%_") != null or std.mem.indexOf(u8, ipa, "''") != null or
+            !safeInternalTarget(trim(ipa))) return false;
+        const source = try missingSlice(self.a, tracked, raw);
+        if (source.unknown or source.lost_missing_range or source.ranges.len != 0 or source.generated_links.len != 0) return false;
+        try self.protectedLiteral(shell, inherited);
+        try self.inlineNormalizedHtml(try missingSlice(self.a, source, source.bytes[shell.len .. source.bytes.len - 2]), inherited, depth + 1, true);
+        try self.protectedLiteral("]]", inherited);
+        self.fallbacks.literal_markup = true;
+        return true;
+    }
+
     fn malformedInternalBody(self: *Renderer, tracked: MissingText, body: []const u8, trail: []const u8, following: []const u8, inherited: Style, depth: usize) Error!void {
         var nonaction = inherited;
         nonaction.kind = .text;
@@ -40664,6 +40689,7 @@ pub const Renderer = struct {
                             }
                             const raw_start = token_start + std.mem.indexOf(u8, input[token_start..it.cursor], "[[").?;
                             const outer_end = it.cursor - token.trail.len;
+                            if (try self.preserveNahIpaLinkShell(prepared_missing, input[raw_start..outer_end], token.trail, s, depth)) continue;
                             try self.malformedInternalBody(prepared_missing, input[raw_start + 2 .. outer_end - 2], token.trail, input[it.cursor..], s, depth);
                             continue;
                         }
@@ -57689,6 +57715,42 @@ test "external delimiter fixture protected literals and existing URLs" {
     try freeExternalBoundaryCheck("https://example.test&lt;word", "https://example.test<word", "https://example.test");
     try externalDelimiterCheck("[https://example.test&#60;word label]", "label", "https://example.test%3Cword");
     try externalDelimiterCheck("[https://example.test&LT;word label]", "label", "https://example.test%3Cword");
+}
+
+test "NAH adjacent IPA brackets retain the visible shell and only the inner action" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // Exact header and relevant rows from the dated NAH namespace registry.
+    const registry_bytes =
+        "# wikidict-namespace-registry-v1\n" ++
+        "# wiki\tnahwiktionary\n" ++
+        "# dump-date\t20261001\n" ++
+        "# content-language\tnah\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\t\tmain\tdictionary_entries\n" ++
+        "4\tWiktionary\tProject\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\tWT\tWikipedia\n" ++
+        "10\tNemachiyōtīlli\tTemplate\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\tPlantilla\n" ++
+        "14\tNeneuhcāyōtl\tCategory\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\tCategoría\n";
+    var registry = try @import("namespace_registry").Registry.init(a, registry_bytes);
+    defer registry.deinit();
+    const cases = [_]struct { source: []const u8, visible: []const u8, target: []const u8 }{
+        .{ .source = "[[Wiktionary:IPA|[[ ˈbi.ða ]]]]", .visible = "[[Wiktionary:IPA|ˈbi.ða ]]", .target = "ˈbi.ða" },
+        .{ .source = "[[Wiktionary:IPA|[[ 'vɔlkn̩ ]]]]", .visible = "[[Wiktionary:IPA|'vɔlkn̩ ]]", .target = "'vɔlkn̩" },
+        .{ .source = "[[Wiktionary:IPA|[ [ 'vɔlkə ]]]]", .visible = "[ [ 'vɔlkə ]]", .target = "Wiktionary:IPA" },
+        .{ .source = "[[A|[[B]]]]", .visible = "A|B [malformed link]", .target = "B" },
+    };
+    for (cases) |case| {
+        var renderer: Renderer = .{ .a = a, .context = .{ .namespace_catalog = &registry } };
+        const source = try std.fmt.allocPrint(a, "<span style=\"font-family:lucida sans unicode\">{s}</span>", .{case.source});
+        const spans = try renderer.parseSpans(source, .{});
+        try std.testing.expectEqualStrings(case.visible, try flattened(a, spans));
+        var saw_link = false;
+        for (spans) |span| if (span.kind == .link) {
+            try std.testing.expectEqualStrings(case.target, span.target);
+            saw_link = true;
+        };
+        try std.testing.expect(saw_link);
+    }
 }
 
 test "nested label fixture rejected outer preserves body and independent child actions" {
