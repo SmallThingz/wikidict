@@ -13784,10 +13784,17 @@ pub const Renderer = struct {
         }
         const emitted = self.spans.items[before];
         // Keep all source/style and owned-action validation above this point.
-        // No reconstructed Missing range or nonempty authored body is elided.
-        if (body.len == 0 and !tracked.unknown and !source.unknown and
-            htmlNestedAttributes(tag.attrs, &.{"style"}) and
-            staticEmptyFrameCanOmit(emitted, interval, effective, inherited)) {
+        // The dated example fixture has a paired, attribute-free B placeholder.
+        // Without an edition style profile the exact empty example class has no
+        // independent geometry or metadata. Ignore only that class suffix for
+        // the existing neutrality check, never the computed style or content.
+        const empty_example = self.textPaintProfile() == null and
+            std.mem.eql(u8, token, "<span class=\"example-select\" style=\"background-color:#EDF0FF\"><b></b></span>");
+        var omission_style = effective;
+        if (empty_example) omission_style.classes = inherited.classes;
+        if (!tracked.unknown and !source.unknown and
+            (empty_example or (body.len == 0 and htmlNestedAttributes(tag.attrs, &.{"style"}))) and
+            staticEmptyFrameCanOmit(emitted, interval, omission_style, inherited)) {
             self.spans.items.len = before;
             self.a.destroy(interval);
             self.a.free(children);
