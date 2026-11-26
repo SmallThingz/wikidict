@@ -4,6 +4,7 @@ import {validateDescriptionBody,validateDarkForeground,validateContainerBlock,va
 import {validateSourceAnchor,validateSourceAnchorDestinations} from './validate.js';
 import {validateInlineDestinationList,validateInlineDestinationEntry} from './validate.js';
 import {validateResponsiveCaptionTable} from './validate.js';
+import {validateContainerDisclosureButton} from './container-disclosure.js';
 const utf8 = new TextDecoder('utf-8', {fatal:true,ignoreBOM:true});
 const kinds = ['language','thesaurus','citations','reconstruction','rhymes','sign_gloss','supplemental','alias'];
 const blocks = ['paragraph','blank','definition','example','quotation','list_item','list_detail','indent','term','heading','preformatted','rule','table','container'];
@@ -12,14 +13,16 @@ const roles = ['normal','label','pronunciation','headword','example','quotation'
 // DPRZ owns a two-byte mask. Each accepted feature must have a real occurrence.
 const imageOccurrenceFeature=0x20;
 const containerOwnerFontFeature=1;
+const resolvedBorderFeature=0x100000;
 const responsiveFlowFeature=0x01000000;
 const sourceAnchorFeature=0x08000000;
 const inlineDestinationFeature=0x10000000;
 const responsiveCaptionTableFeature=0x02000000;
 const supportedExtendedFeatures=features=>(features&~(0x2184|imageOccurrenceFeature|containerOwnerFontFeature))===0&&
   (features&0x2100)!==0&&(!(features&containerOwnerFontFeature)||!!(features&0x100));
-const supportedWideFeatures=features=>(features&(responsiveFlowFeature|sourceAnchorFeature|inlineDestinationFeature|responsiveCaptionTableFeature))!==0&&
-  (features&~(0x2184|imageOccurrenceFeature|containerOwnerFontFeature|responsiveFlowFeature|sourceAnchorFeature|inlineDestinationFeature|responsiveCaptionTableFeature))===0&&
+const supportedWideFeatures=features=>(features&(resolvedBorderFeature|responsiveFlowFeature|sourceAnchorFeature|inlineDestinationFeature|responsiveCaptionTableFeature))!==0&&
+  (features&~(0x2184|imageOccurrenceFeature|containerOwnerFontFeature|resolvedBorderFeature|responsiveFlowFeature|sourceAnchorFeature|inlineDestinationFeature|responsiveCaptionTableFeature))===0&&
+  (!(features&resolvedBorderFeature)||!!(features&0x100))&&
   (!(features&containerOwnerFontFeature)||!!(features&sourceAnchorFeature)&&!!(features&0x100));
 const magicStrings = new Set('23456789ABCDEFGHIJKLMSVYZa'.split('').map(version=>'DPR'+version));
 const require = (ok, message='Invalid compiled dictionary') => { if (!ok) throw Error(message); };
@@ -98,6 +101,7 @@ export function decode(bytes, metadata) {
   let sourceAnchorsEnabled=false,sourceAnchorCount=0;
   let inlineDestinationsEnabled=false;
   let responsiveCaptionTablesEnabled=false,responsiveCaptionTableCount=0;
+  let disclosureButtonsEnabled=false,disclosureButtonCount=0;
   const inlineDestinationOwners=[];
   const declaredSpanFontScales=new WeakSet();
   function audioControl() {
@@ -317,7 +321,47 @@ export function decode(bytes, metadata) {
     if(flags&128){const n=count(6);require(n>0&&n<16);value.following_rules=Array.from({length:n},()=>containerScreen(true));}
     return value;
   };
-  const containerStyle=(description=false,ordinary=false)=>{
+  const disclosureLabelRun=()=>{
+    charge();const start=u32(),end=u32(),paint={};
+    for(const name of ['normal','hover','active','hover_active'])paint[name]={foreground:rgbValue(),underline:false};
+    const flags=byte();require((flags&~31)===0,'Unknown disclosure label paint');
+    ['normal','hover','active','hover_active'].forEach((name,i)=>paint[name].underline=!!(flags&(1<<i)));
+    paint.underline_on_focus=!!(flags&16);return {start,end,paint};
+  };
+  const resolvedButtonBorder=()=>Object.fromEntries(boxEdges.map(side=>{
+    const kind=tag(['none','hidden','solid','dotted','inset','outset']);
+    if(kind==='none'||kind==='hidden')return [side,{[kind]:{}}];
+    const width=styleLength(),paintKind=byte();require(paintKind===0,'Unbound button current-color border');
+    return [side,{[kind]:{width,paint:{rgb:rgbValue()}}}];
+  }));
+  const disclosureButton=()=>{
+    require(disclosureButtonsEnabled,'Unsupported public disclosure button');charge();
+    const value={appearance:tag(['native_button']),font_family:{name:string()},font_size:styleLength(),font_weight:u16(),font_italic:presence(),line_height:containerLineHeight(),padding:edges()};
+    for(const name of ['normal','hover','active','hover_active'])value[name]={background:figureColor(),border:resolvedButtonBorder()};
+    const fields=byte();require((fields&~3)===0,'Unknown button optional fields');
+    value.focus_visible=null;
+    if(fields&1){
+      charge();value.focus_visible={mode:tag(['authored_none','ua_auto']),outline:{width:styleLength(),color:figureColor(),radius:styleLength(),offset:containerMarginLength()}};
+    }
+    if(fields&2){
+      charge();value.outline_colors={unfocused:figureColor(),focused:figureColor()};
+    }
+    validateContainerDisclosureButton(value);disclosureButtonCount++;return value;
+  };
+  const containerDisclosure=()=>{
+    // This new consumer admits complete typed buttons only. Historical generic
+    // label-only controls retain their explicit unsupported boundary.
+    require(disclosureButtonsEnabled,'Unsupported public container disclosure');charge();
+    const value={content_index:u32(),initially_collapsed:presence(),expand_label:string(),collapse_label:string(),focus:null};
+    if(presence()){charge();value.focus={mode:tag(['authored_none','ua_auto']),color:presence()?figureColor():null};}
+    value.placement=tag(['inline_flow','float_left','float_right']);
+    const flags=byte();require((flags&~31)===0,'Unknown disclosure fields');
+    value.foreground=flags&1?figureColor():null;value.direction=flags&2?tag(['ltr','rtl']):null;
+    value.expand_run=flags&4?disclosureLabelRun():null;value.collapse_run=flags&8?disclosureLabelRun():null;
+    require(flags&16,'Unsupported legacy container disclosure');
+    value.button=disclosureButton();return value;
+  };
+  const containerStyle=(description=false,ordinary=false,disclosureOwner=null)=>{
     const flags=containerFonts?u32():u16(),style={};
     const layout=()=>{
       const value=tag(positionedHeadings&&!description?['flow','flex_row',ordinary?'flex_column':null,'ordered_list']:['flow','flex_row']);
@@ -337,8 +381,10 @@ export function decode(bytes, metadata) {
     if(flags&0x1000000){charge();style.owner_font=rubyFontSnapshot(true);containerOwnerFontCount++;}
     if(positionedHeadings){
       const extension=byte();
-      require(extension===0||(authored&&extension===16),'Unsupported positioned container extension');
-      if(extension){
+      const allowed=(authored?16:0)|((authored&&disclosureOwner&&disclosureButtonsEnabled)?8:0);
+      require((extension&~allowed)===0,'Unsupported positioned container extension');
+      if(extension&8){disclosureOwner.disclosure=containerDisclosure();positionedBody=true;}
+      if(extension&16){
         positionedBody=true;
         const shape=byte();require(shape!==0&&(shape&~7)===0,'Unsupported positioned container shape');
         if(shape&1){
@@ -551,10 +597,10 @@ export function decode(bytes, metadata) {
     }
     if(kind==='container'){
       value.container=content(()=>{
-        const style=containerStyle(false,true);
-        return {style,blocks:list(blockMinimum(),()=>block(tableDepth,style))};
+        const owner={},style=containerStyle(false,true,owner);
+        return {style,blocks:list(blockMinimum(),()=>block(tableDepth,style)),...owner};
       });
-      validateContainerBlock(value,{containerFonts,positioned:positionedHeadings,parentStyle});
+      validateContainerBlock(value,{containerFonts,positioned:positionedHeadings,parentStyle,containerDisclosureButtons:disclosureButtonsEnabled});
     }
     if(rubyEnabled&&kind==='rule')require(byte()===0,'Unsupported ruby-record rule style');
     // Historical blocks can carry inert anchor metadata. The extended writers
@@ -595,6 +641,7 @@ export function decode(bytes, metadata) {
     audioEnabled=!!(features&0x2000);
     clippedEnabled=!!(features&128);
     positionedHeadings=!!(features&0x100);
+    disclosureButtonsEnabled=magic==='DPRa'&&positionedHeadings&&!!(features&resolvedBorderFeature);
     inlineBoxGroups=!!(features&4);
     containerOwnerFonts=!!(features&containerOwnerFontFeature);
   }
@@ -648,6 +695,7 @@ export function decode(bytes, metadata) {
     require(responsiveCaptionTablesEnabled===(responsiveCaptionTableCount>0),'Invalid responsive caption table feature census');
     validateInlineDestinationEntry(entry,inlineDestinationOwners);
     require(containerOwnerFonts===(containerOwnerFontCount>0),'Invalid container owner font census');
+    require(disclosureButtonsEnabled===(disclosureButtonCount>0),'Invalid disclosure button feature census');
     if(imageOccurrences)require(imageOccurrenceCount>0,'Missing inline image occurrence');
     if(audioEnabled){
       require(audioSpans.length>0,'DPRZ audio feature requires an audio control');

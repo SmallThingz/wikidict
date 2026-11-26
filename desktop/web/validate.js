@@ -1,3 +1,4 @@
+import {validateContainerDisclosure} from './container-disclosure.js';
 const forbidden = new Set(['source','source_base64','payload_base64','unexpanded_templates','rendered_templates','expansion','deferred','content']);
 const kinds = new Set(['text','link','external_link','line_break']);
 export function validateFigureIntrinsicSize(figure) {
@@ -467,9 +468,15 @@ export function validateContainerBlock(block,options){
   if(block.kind!=='container'||(block.depth??0)!==0||(block.level??0)!==0||!Array.isArray(block.spans)||block.spans.length||
     (block.path??'')!==''||(block.list_path??'')!==''||(block.number??'')!==''||(block.anchor??'')!==''||(block.anchor_fallback??'')!==''||
     ['feature','table','figure','flow','style','text_align'].some(key=>block[key]!=null))containerError();
-  const value=block.container;containerObject(value,['style','blocks'],['style','blocks']);validateContainerStyle(value.style,options);
+  const value=block.container;containerObject(value,['style','blocks','disclosure'],['style','blocks']);validateContainerStyle(value.style,options);
   if(!Array.isArray(value.blocks))containerError();
   const {style,blocks}=value;
+  if(value.disclosure!=null){
+    // Wire capability checks belong to the DPRa decoder; typed rendering opts in explicitly.
+    if(options?.containerDisclosureButtons!==true)containerError();
+    if(style.layout!=null&&style.layout!=='flow')containerError();
+    validateContainerDisclosure(value);
+  }
   if(options?.positioned)validatePositionedContainer(value,options.parentStyle);
   if(responsiveFlow(style)){
     const direct=blocks[0],child=direct?.container?.style;

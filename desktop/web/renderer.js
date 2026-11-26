@@ -21,6 +21,7 @@ import {safeURL,linkTargetParts,bookSourcesURL,validateDescriptionBody,validateD
 import {validateSourceAnchor,validateSourceAnchorDestinations} from './validate.js';
 import {validateInlineDestinationList,validateInlineDestinationEntry} from './validate.js';
 import {validateResponsiveCaptionTable} from './validate.js';
+import {containerDisclosureItems,installContainerDisclosure} from './container-disclosure.js';
 import {previewBlocks,inlineText} from './preview.js';
 import {figureImageSize,audioControlView} from './media.js';
 const node = (tag, text, cls) => { const el = document.createElement(tag); if (text != null) el.textContent = text; if (cls) el.className = cls; return el; };
@@ -719,7 +720,8 @@ function validateRichEntry(entry){
       if(block.kind==='container'||block.container!=null){
         const version=entry.presentation_version;
         const positioned=version==='DPRZ'||version==='DPRa';
-        validateContainerBlock(block,{containerFonts:positioned||['DPRM','DPRS','DPRV','DPRY'].includes(version),positioned,parentStyle});
+        validateContainerBlock(block,{containerFonts:positioned||['DPRM','DPRS','DPRV','DPRY'].includes(version),positioned,parentStyle,containerDisclosureButtons:version==='DPRa'});
+        if(block.container.disclosure!=null)charge(containerDisclosureItems(block.container));
         blocks(block.container.blocks,tableDepth,depth+1,inReference,block.container.style);
       }
       if(block.flow!=null){if(!owner||block.spans?.length||block.table!=null||block.feature!=null||block.figure!=null)richError();flow(block.flow,tableDepth,depth+1,inReference);}
@@ -1267,7 +1269,18 @@ function containerView(value,onLink,explanations,context,before=null){
   }
   el.append(style);
   if(value.style.overflow==='auto'){el.tabIndex=0;el.setAttribute('aria-label','Scrollable content');}
-  appendBlocks(el,value.blocks,block=>blockView(block,onLink,explanations,'',{...context,container:true}),explanations?.sourceAnchors);return el;
+  const target=value.disclosure==null?null:value.blocks[value.disclosure.content_index];
+  let content=null,targets=0;
+  appendBlocks(el,value.blocks,block=>{
+    const child=blockView(block,onLink,explanations,'',{...context,container:true});
+    if(target&&block===target){content=child;targets++;}
+    return child;
+  },explanations?.sourceAnchors);
+  if(value.disclosure!=null){
+    if(targets!==1||!(content instanceof Element))throw Error('Missing compiled disclosure content owner');
+    installContainerDisclosure(el,content,value);
+  }
+  return el;
 }
 // A fractional final glyph can outlive the scrollport's rounded maximum.
 // Give ordinary start-aligned PRE content only the missing fractional end gutter.
