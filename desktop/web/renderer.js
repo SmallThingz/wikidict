@@ -393,9 +393,10 @@ export function spans(values = [], onLink = () => {}, preserve = false, explanat
   };
   const explanationTag=span=>explanations?.isMediaExplanation?.(span)?'span':'abbr';
   const trailNode=(span,i)=>{
-    if(!span.explanation&&span.tooltip==null&&!inkFor(span)&&!canonicalRGB(span.background))return document.createTextNode(span.trail||'');
+    if(!span.explanation&&span.tooltip==null&&!inkFor(span)&&!canonicalRGB(span.background)&&span.font_family==null)return document.createTextNode(span.trail||'');
     if(!span.trail)return document.createTextNode('');
     const trail=node(span.explanation?explanationTag(span):'span',span.trail);
+    if(span.font_family!=null)trail.style.fontFamily=fontFamilyCSS(span.font_family);
     if(span.explanation){trail.title=span.explanation;if(described.has(i))trail.setAttribute('aria-describedby',described.get(i));}
     if(span.tooltip!=null)trail.title=span.tooltip;
     colorSpan(trail,span);
