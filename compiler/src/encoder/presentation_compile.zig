@@ -769,6 +769,7 @@ pub const MissingFigureObservation = struct {
     label: []const u8,
     href: []const u8,
     data_width: u32,
+    yi_missing_style: bool = false,
     link_paint: ?presentation_types.MissingLinkPaint = null,
     anchor_attributes: table_style_profile.AttributePresenceSource,
     element_attributes: table_style_profile.AttributePresenceSource,
@@ -1893,6 +1894,7 @@ pub const Style = struct {
     ordinary_action_origin: ?*OrdinaryActionGroupBinding = null,
     native_inline_motion: NativeInlineMotionState = .absent,
     ruby_unitless_line_height: ?NativeRubyUnitlessLineHeight = null,
+    figure_caption_line_height: ?presentation_types.ComputedLineHeight = null,
     ruby_unitless_metric: bool = false,
     // Only the source-bound Table path sets these build-time ownership facts.
     authored_link_font_override: bool = false,
@@ -1967,6 +1969,7 @@ pub const Style = struct {
 fn inheritInlineMetadata(style: *Style, parent: Style) void {
     if (style.native_inline_motion == .absent) style.native_inline_motion = parent.native_inline_motion;
     if (style.ruby_unitless_line_height == null) style.ruby_unitless_line_height = parent.ruby_unitless_line_height;
+    if (style.figure_caption_line_height == null) style.figure_caption_line_height = parent.figure_caption_line_height;
     if (style.text_element == null) style.text_element = parent.text_element;
     if (style.custom_properties == null) style.custom_properties = parent.custom_properties;
     style.relative_context_policy_present = style.relative_context_policy_present or parent.relative_context_policy_present;
@@ -7079,7 +7082,8 @@ pub const Renderer = struct {
         if (!presentation_types.validFigureGeometry(value)) return self.figureUnavailableAt("observed_missing.final_model", tracked.bytes, 0, 0);
         const caption_domain = self.observedFigureCanonicalOperation(operation) orelse return self.figureUnavailable();
         session.preflight = .{ .profile = observed.profile, .scope = caption_domain.scope,
-            .root = caption_domain.scope.page_style_root orelse return self.figureUnavailable(), .style = caption_style };
+            .root = caption_domain.scope.page_style_root orelse return self.figureUnavailable(), .style = caption_style,
+            .captured_input = if (missing.yi_missing_style) choice.caption else null };
         return .{ .value = value, .caption_style = caption_style, .missing_style = label_style,
             .observed_caption = session };
     }
@@ -7859,6 +7863,8 @@ pub const Renderer = struct {
             scope: *const table_style_profile.BoundedTextClassScope,
             root: *const table_style_profile.TextElement,
             style: Style,
+            // Live caption input already mapped by the Figure source operation.
+            captured_input: ?[]const u8 = null,
         } = null,
         italic: ?Style = null,
         bold: ?Style = null,
@@ -14534,6 +14540,15 @@ pub const Renderer = struct {
             rich.line_height = .{ .font_relative = .{ .factor = factor, .font = font } };
             inline_style = rich;
         }
+        if (s.figure_caption_line_height) |height| {
+            if (self.figure_caption_depth == 0 or s.font_size_unknown or s.image != null or ruby != null or group != null or box != null)
+                return error.UncompiledPresentation;
+            var rich = inline_style orelse presentation_types.InlineTextStyle{};
+            if (rich.line_height != null) return error.UncompiledPresentation;
+            rich.line_height = .{ .computed = height };
+            rich.font_normalized = true;
+            inline_style = rich;
+        }
         if (s.ordinary_action_script != null) {
             if (!group_paint_current or ruby != null or group != null or box != null or s.ruby_unitless_line_height != null or s.image != null)
                 return error.UncompiledPresentation;
@@ -17431,7 +17446,10 @@ pub const Renderer = struct {
                 const observed_default = missing.link_paint == null and horizontal == null and image.width_px == null;
                 const missing_width = image.width_px orelse if (observed_default)
                     (source_context.defaults.default_thumbnail_width orelse return self.figureUnavailable()) else 180;
-                if (source_context.missing_media_profile != .f45897 or (missing.link_paint == null and !observed_center and !observed_left and !observed_right and !observed_default) or
+                const yi_current_left = missing.yi_missing_style and observed_left and missing.link_paint == null and
+                    std.mem.eql(u8, namespaces.wiki, "yiwiktionary") and source_context.defaults.rtl;
+                if ((source_context.missing_media_profile != .f45897 and !yi_current_left) or
+                    (missing.link_paint == null and !observed_center and !observed_left and !observed_right and !observed_default) or
                     !std.mem.eql(u8, &source_context.namespace_sha256, &namespaces.source_sha256) or
                     chosen != .thumbnail or (horizontal != null and !std.mem.eql(u8, horizontal.?, "img_right") and !observed_center and !observed_left) or image.height_px != null or
                     ((observed_center or observed_left or (observed_right and missing.link_paint == null)) and image.width_px == null) or
@@ -19849,10 +19867,22 @@ pub const Renderer = struct {
         if (selected.scope != proof.scope or selected.scope.page_styles != proof.profile or
             selected.scope.page_style_root != proof.root) return false;
         if (!self.observedFigureCaptionLocalRange(session.operation, source, 0, source.bytes.len)) return false;
-        const original = self.figureStyleOriginalSlice(selected, source.bytes) orelse return false;
         // Only the whole caption enters this proof. Substrings, unrelated text,
         // and quote-generated output still require their existing local issuers.
-        return original.ptr == session.operation.caption.ptr and original.len == session.operation.caption.len;
+        const authored = session.operation.caption;
+        if (self.figureStyleOriginalSlice(selected, source.bytes)) |original|
+            return original.ptr == authored.ptr and original.len == authored.len;
+
+        // A selected Figure already mapped this live caption before entering
+        // its nested body. The nested entry replaces the surrounding copy
+        // relation, so bind its own complete copy back to that exact input.
+        const captured = proof.captured_input orelse return false;
+        const owner = self.body_missing orelse return false;
+        if (!std.mem.eql(u8, captured, authored) or !noLiParentSourceRange(owner, captured)) return false;
+        if (inlineOverlaySameSourceSlice(source.bytes, captured)) return true;
+        const copied = self.plain_body_source_copy orelse return false;
+        return inlineOverlaySameSourceSlice(copied.original, captured) and
+            inlineOverlaySameSourceSlice(copied.copied, source.bytes) and std.mem.eql(u8, copied.copied, captured);
     }
 
     // This cache is local to one rendering operation. Metadata is immutable;
@@ -48354,6 +48384,18 @@ pub const Renderer = struct {
         return table_style_profile.resolveInlineBorderCollapseAlloc(self.a, css, parent);
     }
 
+    fn figureCaptionOwnTypography(self: *Renderer, tag: syntax.Tag, inherited: Style) Error!?table_style_profile.FigureCaptionTypography {
+        const profile = self.context.table_styles orelse return null;
+        const css = (try self.semanticAttribute(tag, "style")) orelse return null;
+        if (tag.closing or tag.self_closing or tag.html_pre or inherited.small or inherited.superscript or inherited.subscript or
+            inherited.code or inherited.ruby_unitless_line_height != null or inherited.figure_caption_line_height != null) return null;
+        const element = try self.textElement(tag, inherited.text_element, inherited.language);
+        return table_style_profile.resolveFigureCaptionTypographyAlloc(self.a, profile, element, css) catch |err| switch (err) {
+            error.OutOfMemory => error.OutOfMemory,
+            else => null,
+        };
+    }
+
     fn htmlLanguageDirection(self: *Renderer, tag: syntax.Tag, inherited: Style) Error!Style {
         return self.htmlLanguageDirectionWithFont(tag, inherited, false);
     }
@@ -48410,7 +48452,16 @@ pub const Renderer = struct {
         } else if (if (tag.is("span") or tag.is("b") or tag.is("i")) self.tableNestedFontForTag(tag) else null) |owner| {
             result = tableNestedOwnerStyle(result, owner);
         } else if (!try self.applyObservedCellFont(tag, inherited, &result)) {
-            if (try self.htmlComputedFontSizeWithPixels(tag, inherited, own_pixels)) |resolved| {
+            const caption_font = if (tag.is("span") and self.figure_caption_depth != 0 and self.observed_figure_caption == null)
+                try self.figureCaptionOwnTypography(tag, inherited) else null;
+            if (caption_font) |known| {
+                result.font_scale = known.font_size;
+                result.font_scale_basis = .css_px;
+                result.font_scale_set = true;
+                result.font_size_unknown = false;
+                result.font_family = known.family;
+                result.figure_caption_line_height = known.line_height;
+            } else if (try self.htmlComputedFontSizeWithPixels(tag, inherited, own_pixels)) |resolved| {
                 if (resolved.css_pixels) result.font_scale_basis = .css_px;
                 if (resolved.normal_body) result.font_scale_basis = .normal_body;
                 result.font_scale = if (result.font_scale_basis == .normal_body) resolved.value orelse 1 else resolved.value;

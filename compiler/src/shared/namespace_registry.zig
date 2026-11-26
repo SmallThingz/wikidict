@@ -241,12 +241,35 @@ pub const Registry = struct {
             std.mem.eql(u8, &std.fmt.bytesToHex(digest, .lower), "9f52df7706435edde4a72d7ba32c75993206b125c0c2eab07fc540ce3e3e62bf");
     }
 
+    pub const yi_current_figure_core = "901a9d48bec3e17bdde40049604019ff62aa4491";
+
+    pub fn isCurrentYiFigureDefaults(self: *const Registry, digest: [32]u8) bool {
+        return std.mem.eql(u8, self.wiki, "yiwiktionary") and
+            std.mem.eql(u8, self.content_language, "yi") and
+            std.mem.eql(u8, self.dump_date, "20261001") and
+            std.mem.eql(u8, &std.fmt.bytesToHex(self.source_sha256, .lower), "01a98ddcb3652323f092899682abcdf64c66a11485961766afcd3b15de8d6123") and
+            std.mem.eql(u8, &std.fmt.bytesToHex(digest, .lower), "059fc0cb9a30d6d6afde9c227688fceb0b474078fbdac544e78142f9eab3aa07");
+    }
+
+    pub const nn_current_figure_core = "6b357ea5fbbafe4bde3dcc705aa129afb392fdb2";
+
+    // A current, separately captured thumbnail preference for the original NN
+    // dump. This admission does not cover a media handler or any file geometry.
+    pub fn isCurrentNnFigureDefaults(self: *const Registry, digest: [32]u8) bool {
+        return std.mem.eql(u8, self.wiki, "nnwiktionary") and std.mem.eql(u8, self.content_language, "nn") and
+            std.mem.eql(u8, self.dump_date, "20261001") and
+            std.mem.eql(u8, &std.fmt.bytesToHex(self.source_sha256, .lower), "16e38943d70c667e2f2be7b416c9a83e46270a1a617ff5666a6b02cb2ff09397") and
+            std.mem.eql(u8, &std.fmt.bytesToHex(digest, .lower), "8b13ffcefe09f41a76d76e4024e061f68338c3bd5bbcf384db6bf0b6b1d426e1");
+    }
+
     /// Preserve the exact observed core without granting File handler authority.
     pub fn currentFigureDefaultsCore(self: *const Registry, digest: [32]u8, include_sql: bool) ?[]const u8 {
         if (self.isCurrentMonFigureDefaults(digest)) return mon_current_figure_core;
         if (!include_sql) return null;
         if (self.isCurrentSqlFigureDefaults(digest)) return mon_current_figure_core;
         if (self.isCurrentCsbFigureDefaults(digest)) return csb_current_figure_core;
+        if (self.isCurrentYiFigureDefaults(digest)) return yi_current_figure_core;
+        if (self.isCurrentNnFigureDefaults(digest)) return nn_current_figure_core;
         return null;
     }
 

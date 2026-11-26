@@ -179,15 +179,27 @@ test "relative keyword native UA table interpolates computed sizes without repea
 
 
 pub fn parseCssPixels(raw: []const u8) ?f32 {
+    return parseAbsoluteFontLength(raw, false);
+}
+
+pub fn parseCssPixelOrPointFontSize(raw: []const u8) ?f32 {
+    return parseAbsoluteFontLength(raw, true);
+}
+
+fn parseAbsoluteFontLength(raw: []const u8, allow_points: bool) ?f32 {
     const value = std.mem.trim(u8, raw, " \t\r\n\x0c");
-    if (value.len <= 2 or !std.ascii.eqlIgnoreCase(value[value.len - 2 ..], "px")) return null;
+    if (value.len <= 2) return null;
+    const unit = value[value.len - 2 ..];
     const number = value[0 .. value.len - 2];
+    const pixels_per_unit: f64 = if (std.ascii.eqlIgnoreCase(unit, "px")) 1
+        else if (allow_points and std.ascii.eqlIgnoreCase(unit, "pt")) 96.0 / 72.0 else return null;
     if (!cssNumber(number)) return null;
     const parsed = std.fmt.parseFloat(f64, number) catch return null;
-    if (!std.math.isFinite(parsed) or parsed < 0 or parsed > std.math.floatMax(f32) or
-        (parsed == 0 and nonzeroMantissa(number))) return null;
-    const result: f32 = @floatCast(parsed);
-    if (parsed > 0 and result == 0) return null;
+    const pixels = parsed * pixels_per_unit;
+    if (!std.math.isFinite(pixels) or pixels < 0 or pixels > std.math.floatMax(f32) or
+        (pixels == 0 and nonzeroMantissa(number))) return null;
+    const result: f32 = @floatCast(pixels);
+    if (pixels > 0 and result == 0) return null;
     return result;
 }
 

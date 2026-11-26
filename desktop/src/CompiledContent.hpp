@@ -597,7 +597,10 @@ inline QJsonValue containerFontFamily(const QJsonValue &value) {
         && stack.value(QStringLiteral("names")).toArray().size() <= 16
         && stack.value(QStringLiteral("fallback")).isString()
         && (stack.value(QStringLiteral("fallback")) == QStringLiteral("serif")
-            || stack.value(QStringLiteral("fallback")) == QStringLiteral("sans_serif")));
+            || stack.value(QStringLiteral("fallback")) == QStringLiteral("sans_serif")
+            || stack.value(QStringLiteral("fallback")) == QStringLiteral("css_default")));
+    require(stack.value(QStringLiteral("fallback")) != QStringLiteral("css_default")
+        || !stack.value(QStringLiteral("names")).toArray().isEmpty());
     const QStringList aliases{QStringLiteral("serif"), QStringLiteral("sans-serif"), QStringLiteral("sans serif"),
         QStringLiteral("sans"), QStringLiteral("monospace"), QStringLiteral("cursive"), QStringLiteral("fantasy"),
         QStringLiteral("system"), QStringLiteral("system-ui"), QStringLiteral("ui-serif"), QStringLiteral("ui-sans-serif"),

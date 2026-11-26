@@ -20345,3 +20345,271 @@ test "IT public disclosure button JSON omits absent carriers and keeps strict pa
     try std.testing.expectEqualSlices(u8, legacy.out.items, present.out.items);
     try std.testing.expectEqual(legacy.remaining_items - 1, present.remaining_items);
 }
+
+
+// All records below are synthetic new controls. No page05 payload is held here.
+const YiNamedFont01CodecTest = struct {
+    const family: types.ContainerFontFamily = .{
+        .stack = .{ .names = &.{"Times New Roman"}, .fallback = .css_default },
+    };
+    const snapshot: types.InlineFontSnapshot = .{
+        .font_scale = 16, .font_scale_basis = .css_px, .font_normalized = true,
+        .language = "yi", .font_family = family,
+    };
+    const caption: types.Span = .{
+        .kind = .link, .text = "synthetic names-only caption", .target = "Synthetic caption target",
+        .language = "yi", .direction = "rtl", .font_scale = 16, .font_scale_basis = .css_px,
+        .font_family = family,
+        .inline_style = .{ .font_normalized = true, .line_height = .{ .computed = .{ .value = 20, .font_scale_basis = .css_px } } },
+    };
+    const snapshot_span: types.Span = .{
+        .text = "synthetic independent snapshot",
+        .inline_style = .{ .line_height = .{ .font_relative = .{ .factor = 1.25, .font = snapshot } } },
+    };
+    fn encoder(a: A) Encoder {
+        return .{ .a = a, .version = .container_fonts, .rule_styles = true, .inline_styles = true, .capability_p = true };
+    }
+    fn reader(a: A, bytes: []const u8) Reader {
+        return .{ .a = a, .version = .container_fonts, .rule_styles = true, .inline_styles = true,
+            .capability_p = true, .bytes = bytes };
+    }
+    fn figure(spans: []const types.Span) types.Figure {
+        // Minimal admitted synthetic image shape; not a YI producer decision.
+        const zero = types.StyleEdges.all(.{ .unit = .px, .value = 0 });
+        return .{
+            .content = .{ .image = .{
+                .span = .{ .image = .{ .file = "yi-named-font-synthetic.png", .width_px = 32 } },
+                .sizing = .requested_fit,
+            } },
+            .caption = spans, .format = .thumbnail, .placement = .none, .clear = .none,
+            .margins = zero, .image_insets = zero, .caption_padding = zero,
+            .caption_font_scale = 1, .caption_line_height = .{ .unit = .px, .value = 20 },
+            .frame_background = .{ .kind = .native_theme }, .frame_border = .{ .kind = .none },
+            .image_background = .{ .kind = .native_theme }, .image_border = .{ .kind = .none },
+            .caption_foreground = .{ .kind = .native_theme }, .caption_background = .{ .kind = .native_theme },
+        };
+    }
+    fn forcedP(a: A, value: types.Stored, tail_flags: u8) ![]u8 {
+        var out = encoder(a);
+        defer out.deinit();
+        try out.out.appendSlice(a, body_adjoining_magic);
+        try out.spans(value.entry.display_title);
+        try out.sections(value.entry.sections);
+        try out.spans(value.entry.preamble_spans);
+        try out.layout(value.entry.organization);
+        try out.references(value.entry.references);
+        try out.media(value.entry.media);
+        try out.byte(tail_flags);
+        return out.out.toOwnedSlice(a);
+    }
+};
+
+test "YI named-font contract01 exact stack fallback bytes bounded counts and refusals" {
+    const T = YiNamedFont01CodecTest;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // Union tag 1, two ordered names, then the independent fallback enum byte.
+    const prefix = "\x01\x02\x00\x00\x00\x0f\x00\x00\x00Times New Roman\x07\x00\x00\x00Georgia";
+    for ([_]types.GenericFontFamily{ .sans_serif, .serif, .css_default }) |fallback| {
+        const value: types.ContainerFontFamily = .{
+            .stack = .{ .names = &.{ "Times New Roman", "Georgia" }, .fallback = fallback },
+        };
+        var out = T.encoder(a);
+        defer out.deinit();
+        try out.containerFontFamily(value);
+        const expected = try a.dupe(u8, prefix ++ "\x00");
+        expected[expected.len - 1] = @intFromEnum(fallback);
+        try std.testing.expectEqualSlices(u8, expected, out.out.items);
+        var input = T.reader(a, expected);
+        try std.testing.expectEqualDeep(value, try input.containerFontFamily());
+        try std.testing.expectEqual(expected.len, input.pos);
+        var denied = T.encoder(a);
+        defer denied.deinit();
+        denied.capability_p = false;
+        try std.testing.expectError(error.InvalidPresentation, denied.containerFontFamily(value));
+        var denied_input = T.reader(a, expected);
+        denied_input.capability_p = false;
+        try std.testing.expectError(error.InvalidPresentation, denied_input.containerFontFamily());
+    }
+    // Old union tag 0 and old empty stack fallback 0/1 stay byte-exact.
+    var old = T.encoder(a);
+    defer old.deinit();
+    old.capability_p = false;
+    try old.containerFontFamily(.sans_serif);
+    try std.testing.expectEqualSlices(u8, "\x00", old.out.items);
+    var old_input = T.reader(a, "\x00");
+    old_input.capability_p = false;
+    try std.testing.expectEqualDeep(@as(types.ContainerFontFamily, .sans_serif), try old_input.containerFontFamily());
+    for ([_]types.GenericFontFamily{ .sans_serif, .serif }) |fallback| {
+        const empty: types.ContainerFontFamily = .{ .stack = .{ .names = &.{}, .fallback = fallback } };
+        var out = T.encoder(a);
+        defer out.deinit();
+        try out.containerFontFamily(empty);
+        var expected = [_]u8{ 1, 0, 0, 0, 0, 0 };
+        expected[5] = @intFromEnum(fallback);
+        try std.testing.expectEqualSlices(u8, &expected, out.out.items);
+        var input = T.reader(a, &expected);
+        try std.testing.expectEqualDeep(empty, try input.containerFontFamily());
+    }
+    const golden = prefix ++ "\x02";
+    for (0..golden.len) |end| {
+        var cut = T.reader(a, golden[0..end]);
+        try std.testing.expectError(error.InvalidPresentation, cut.containerFontFamily());
+    }
+    for (0..2) |mode| {
+        const bad = try a.dupe(u8, golden);
+        if (mode == 0) bad[0] = 2 else bad[bad.len - 1] = 3;
+        var input = T.reader(a, bad);
+        try std.testing.expectError(error.InvalidPresentation, input.containerFontFamily());
+    }
+    var empty_css = T.reader(a, "\x01\x00\x00\x00\x00\x02");
+    try std.testing.expectError(error.InvalidPresentation, empty_css.containerFontFamily());
+    var empty_out = T.encoder(a);
+    defer empty_out.deinit();
+    try std.testing.expectError(error.InvalidPresentation, empty_out.containerFontFamily(
+        .{ .stack = .{ .names = &.{}, .fallback = .css_default } }));
+    for ([_][]const u8{ "", "serif", " leading", "Bad\x00Name" }) |bad_name| {
+        var raw = T.encoder(a);
+        defer raw.deinit();
+        try raw.byte(1); try raw.count(1); try raw.string(bad_name); try raw.byte(2);
+        var input = T.reader(a, raw.out.items);
+        try std.testing.expectError(error.InvalidPresentation, input.containerFontFamily());
+    }
+    var names: [16][]const u8 = undefined;
+    @memset(&names, "Times New Roman");
+    const sixteen: types.ContainerFontFamily = .{ .stack = .{ .names = &names, .fallback = .css_default } };
+    var exact = T.encoder(a);
+    defer exact.deinit();
+    exact.remaining_items = 16;
+    try exact.containerFontFamily(sixteen);
+    try std.testing.expectEqual(@as(usize, 0), exact.remaining_items);
+    var metrics: DecodeMetrics = .{};
+    var input = T.reader(a, exact.out.items);
+    input.remaining_items = 16; input.metrics = &metrics;
+    try std.testing.expectEqualDeep(sixteen, try input.containerFontFamily());
+    try std.testing.expectEqual(@as(usize, 0), input.remaining_items);
+    try std.testing.expectEqual(@as(u64, 16), metrics.total_items);
+    var short = T.encoder(a);
+    defer short.deinit();
+    short.remaining_items = 15;
+    try std.testing.expectError(error.PresentationTooLarge, short.containerFontFamily(sixteen));
+    var short_input = T.reader(a, exact.out.items);
+    short_input.remaining_items = 15;
+    try std.testing.expectError(error.InvalidPresentation, short_input.containerFontFamily());
+    // Fully framed 17-name raw data: refusal is the count bound, not truncation.
+    var over = T.encoder(a);
+    defer over.deinit();
+    try over.byte(1); try over.count(17);
+    for (0..17) |_| try over.string("Times New Roman");
+    try over.byte(2);
+    var over_input = T.reader(a, over.out.items);
+    try std.testing.expectError(error.InvalidPresentation, over_input.containerFontFamily());
+}
+
+test "YI named-font contract01 general Span and snapshot retain existing P gates" {
+    const T = YiNamedFont01CodecTest;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var out = T.encoder(a);
+    defer out.deinit();
+    try out.inlineFontSnapshot(T.snapshot);
+    // scale+normalized, 16f32 little-endian, css_px basis, family face flag.
+    try std.testing.expectEqualSlices(u8, "\x11\x00\x00\x80\x41\x02\x10", out.out.items[0..7]);
+    try std.testing.expectEqual(@as(u8, 2), out.out.items[out.out.items.len - 1]);
+    var input = T.reader(a, out.out.items);
+    try std.testing.expectEqualDeep(T.snapshot, try input.inlineFontSnapshot());
+    try std.testing.expectEqual(out.out.items.len, input.pos);
+    var denied = T.encoder(a);
+    defer denied.deinit();
+    denied.capability_p = false;
+    try std.testing.expectError(error.InvalidPresentation, denied.inlineFontSnapshot(T.snapshot));
+    var denied_input = T.reader(a, out.out.items);
+    denied_input.capability_p = false;
+    try std.testing.expectError(error.InvalidPresentation, denied_input.inlineFontSnapshot());
+    const bad_fallback = try a.dupe(u8, out.out.items);
+    bad_fallback[bad_fallback.len - 1] = 3;
+    var unknown = T.reader(a, bad_fallback);
+    try std.testing.expectError(error.InvalidPresentation, unknown.inlineFontSnapshot());
+    for ([_]types.Span{ T.caption, T.snapshot_span }) |span| {
+        var encoded = T.encoder(a);
+        defer encoded.deinit();
+        try encoded.span(span);
+        var matched = T.reader(a, encoded.out.items);
+        try std.testing.expectEqualDeep(span, try matched.span());
+        var missing = T.reader(a, encoded.out.items);
+        missing.capability_p = false;
+        try std.testing.expectError(error.InvalidPresentation, missing.span());
+        var blocked = T.encoder(a);
+        defer blocked.deinit();
+        blocked.capability_p = false;
+        try std.testing.expectError(error.InvalidPresentation, blocked.span(span));
+    }
+}
+
+test "YI named-font contract01 synthetic Figure caption Stored roundtrip and independent P census" {
+    const T = YiNamedFont01CodecTest;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // Four independently populated cases: neither, direct only, snapshot only,
+    // both. The computed 20px height and RTL link survive every case unchanged.
+    for (0..4) |mode| {
+        var caption = [_]types.Span{ T.caption, T.snapshot_span };
+        if (mode & 1 == 0) caption[0].font_family = null;
+        if (mode & 2 == 0) caption[1].inline_style.?.line_height.?.font_relative.font.font_family = null;
+        const sections = [_]types.Section{.{ .level = 2, .title = "Synthetic Figure caption",
+            .blocks = &.{.{ .kind = .paragraph, .figure = T.figure(&caption) }} }};
+        const original: types.Stored = .{ .entry = .{
+            .title = "YI synthetic named-only wire control", .kind = .supplemental, .sections = &sections,
+            .media = &.{.{ .file = "yi-named-font-synthetic.png", .kind = .image, .caption = "synthetic media" }},
+        } };
+        try types.validateStored(a, original, original.entry.title, .supplemental, null);
+        const found = hasExtendedFontFamilies(original.entry.display_title, original.entry.sections,
+            original.entry.preamble_spans, original.entry.references);
+        try std.testing.expectEqual(mode != 0, found);
+        try std.testing.expectEqual(@as(u8, if (mode == 0) 0 else 4),
+            pendingBodyFeatures(original.entry.display_title, original.entry.sections,
+                original.entry.preamble_spans, original.entry.references, null));
+        const bytes = try encodeAlloc(a, original);
+        try std.testing.expectEqualStrings(if (mode == 0) inline_styles_magic else body_adjoining_magic, bytes[0..4]);
+        try std.testing.expectEqualSlices(u8, bytes, try encodeBuildAlloc(a, original.entry.display_title,
+            original.entry.sections, original.entry.organization, original.entry.references, original.entry.media));
+        const decoded = try decodeAlloc(a, bytes, original.entry.title, .supplemental, null);
+        try std.testing.expectEqualDeep(original, decoded);
+        const result = decoded.entry.sections[0].blocks[0].figure.?.caption;
+        try std.testing.expectEqualDeep(caption[0], result[0]);
+        try std.testing.expectEqualDeep(caption[1], result[1]);
+        try std.testing.expectEqual(@as(f32, 20), result[0].inline_style.?.line_height.?.computed.value);
+        try std.testing.expectEqual(types.FontScaleBasis.css_px, result[0].inline_style.?.line_height.?.computed.font_scale_basis);
+        try std.testing.expectEqualStrings("rtl", result[0].direction);
+        try std.testing.expectEqualSlices(u8, bytes, try encodeAlloc(a, decoded));
+        const json = try std.json.Stringify.valueAlloc(a, decoded, .{});
+        const cloned = try std.json.parseFromSliceLeaky(types.Stored, a, json,
+            .{ .ignore_unknown_fields = false, .duplicate_field_behavior = .@"error" });
+        try types.validateStored(a, cloned, original.entry.title, .supplemental, null);
+        try std.testing.expectEqualDeep(original, cloned);
+        const forced = try T.forcedP(a, original, 4);
+        if (mode == 0) {
+            // Correct P framing and absent family slots; only census is false.
+            try std.testing.expectError(error.InvalidPresentation,
+                decodeAlloc(a, forced, original.entry.title, .supplemental, null));
+        } else {
+            try std.testing.expectEqualSlices(u8, bytes, forced);
+            try std.testing.expectEqual(@as(u8, 4), bytes[bytes.len - 1]);
+            for ([_]u8{ 0, 8, 64, 68 }) |missing_or_other| {
+                const bad = try a.dupe(u8, bytes);
+                bad[bad.len - 1] = missing_or_other;
+                try std.testing.expectError(error.InvalidPresentation,
+                    decodeAlloc(a, bad, original.entry.title, .supplemental, null));
+            }
+            for ([_][]const u8{ container_fonts_magic, rule_styles_magic, inline_styles_magic }) |old_magic| {
+                const bad = try a.dupe(u8, bytes);
+                @memcpy(bad[0..4], old_magic);
+                try std.testing.expectError(error.InvalidPresentation,
+                    decodeAlloc(a, bad, original.entry.title, .supplemental, null));
+            }
+        }
+    }
+}

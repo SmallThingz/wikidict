@@ -706,7 +706,24 @@ fn officialServer(a: A, wiki: []const u8) ![]u8 {
 fn general(value: Value, wiki: []const u8, language: []const u8, server: []const u8, core: []const u8) !Value {
     return generalWithEpoch(value, wiki, language, server, core, false, .ordinary);
 }
-const ImageInfoScope = enum { ordinary, rollout_base, mon_current, sql_current, svg_width, french_jpeg, hungarian_missing_ogg, greek_audio_ogg, vietnamese_svg };
+const nn_jpeg_core = namespaces.Registry.nn_current_figure_core;
+
+// Exact selected-page ImageInfo bytes. These responses prove only the four
+// current JPEG objects paired with the separately reviewed NN defaults.
+fn selectedNnJpeg(site: []const u8) ?[]const u8 {
+    const observations = [_][2][]const u8{
+        .{ "3a9dac99e11d001a2cb7a2fcc34cb4c2a98184e00cc26c49f5922becd4b29a16", "Fil:Russian-Matroshka.jpg" },
+        .{ "d83074f58020853afd669bfca982569b4382f5e5972666238a4891368dd9c74c", "Fil:NGC 4414 (NASA-med).jpg" },
+        .{ "e3e86dbbefc759aaa56ef9439941727c6b49c0456b486212f89b366e73dc7719", "Fil:Hohenfriedeberg - Attack of Prussian Infantry - 1745.jpg" },
+        .{ "e0c3b753f5a7a0237b79e7c313646900c1c1444862bfe7f5b4932d93ab99463a", "Fil:Sunflower sky backdrop.jpg" },
+    };
+    for (observations) |observation| {
+        if (digestMatches(site, observation[0])) return observation[1];
+    }
+    return null;
+}
+
+const ImageInfoScope = enum { ordinary, rollout_base, mon_current, sql_current, nn_current_jpeg, svg_width, french_jpeg, hungarian_missing_ogg, greek_audio_ogg, vietnamese_svg };
 
 // These roles use only the file state or explicit thumbnail returned by
 // ImageInfo. The deployment does not supply general file or parser authority.
@@ -741,7 +758,9 @@ fn generalWithEpoch(value: Value, wiki: []const u8, language: []const u8, server
     if (scope == .sql_current and (!equal(core, wmf5_rollout_core) or
         (!equal(wiki, "sawiktionary") and !equal(wiki, "shwiktionary")) or
         !equal(try string(item, "generator"), "MediaWiki 1.48.0-wmf.5"))) return invalid;
-    if (scope == .rollout_base or scope == .mon_current or scope == .sql_current or equal(core, wmf5_imageinfo_core)) {
+    if (scope == .nn_current_jpeg and (!equal(core, nn_jpeg_core) or !equal(wiki, "nnwiktionary") or
+        !equal(try string(item, "generator"), "MediaWiki 1.48.0-wmf.6"))) return invalid;
+    if (scope == .rollout_base or scope == .mon_current or scope == .sql_current or scope == .nn_current_jpeg or equal(core, wmf5_imageinfo_core)) {
         if (scope == .rollout_base and (!equal(core, wmf5_rollout_core) or
             (!equal(wiki, "dewiktionary") and !equal(wiki, "ruwiktionary") and !equal(wiki, "thwiktionary")) or
             !equal(try string(item, "generator"), "MediaWiki 1.48.0-wmf.5"))) return invalid;
@@ -831,6 +850,12 @@ fn mediaRevision(core: []const u8, name: []const u8, prior: []const u8) []const 
 }
 // Keep complete reviewed sets, not independently interchangeable revisions.
 fn mediaVariant(core: []const u8) ?[media_extensions.len][]const u8 {
+    if (equal(core, nn_jpeg_core)) return .{
+        "0dd1254beafb560f2cd76923c1997fb7d4aacda8",
+        "8d9c271fb65e04e13a16acc5d5ed7da1cc51accc",
+        "0ee572467a13edd54af80ab38fed86d71cab6ebf",
+        "9d3ea849f1ebb3aafe7d4f75228d41ef018ea488",
+    };
     if (equal(core, wmf5_rollout_core) or equal(core, wmf5_imageinfo_core) or equal(core, d191_core) or equal(core, "992ad5e3679f848254828e823860ba8b3ad3b39b") or equal(core, "6c5fe215cf45da0b1448e7ece41bde087e7ef4e2") or equal(core, "f03f1fdaa2d112807b6ce63170eb50e86de615bd") or equal(core, "6e76237de1cf29c08427d191f110a2c38c2b4cf9")) return .{
         "b7208776bccdcbbfa4252f67f3e924b79b6587b9", "7755b61c361899ff83792940cf1eb20923a69bba",
         "6c890ba5064565386a35082e16c0d511b789ac6b", "43498dc2d52c37d98294e4bbf73a0e8a70bd1aea",
@@ -843,7 +868,7 @@ fn mediaVariant(core: []const u8) ?[media_extensions.len][]const u8 {
 }
 fn mediaSetAccepted(core: []const u8, actual: [media_extensions.len][]const u8) bool {
     // This newly observed epoch proves one complete set, not the older WMF set.
-    if (equal(core, d191_core) or equal(core, wmf5_imageinfo_core) or equal(core, wmf5_rollout_core)) {
+    if (equal(core, nn_jpeg_core) or equal(core, d191_core) or equal(core, wmf5_imageinfo_core) or equal(core, wmf5_rollout_core)) {
         for (mediaVariant(core).?, actual) |expected, revision| if (!equal(expected, revision)) return false;
         return true;
     }
@@ -863,7 +888,7 @@ fn mediaProfileSet(value: Value) ![media_extensions.len][]const u8 {
     return revisions;
 }
 fn d191Profile(core: []const u8, value: Value) bool {
-    if (!equal(core, d191_core) and !equal(core, wmf5_imageinfo_core) and !equal(core, wmf5_rollout_core)) return true;
+    if (!equal(core, nn_jpeg_core) and !equal(core, d191_core) and !equal(core, wmf5_imageinfo_core) and !equal(core, wmf5_rollout_core)) return true;
     if (value != .object) return false;
     const kind = value.object.get("kind") orelse return false;
     return kind == .string and equal(kind.string, "wikimedia-imagehandler-v4");
@@ -951,6 +976,11 @@ fn observedUrlBase(value: Value) ?[]const u8 {
     return base;
 }
 fn observedSvgWidth(info: Value, mime: []const u8, mediatype: []const u8, width: u32, height: u32) ?u32 {
+    const observed = svgThumbnailObservedWidth(info, mime, mediatype, width, height) orelse return null;
+    return if (observed > width) observed else null;
+}
+
+fn svgThumbnailObservedWidth(info: Value, mime: []const u8, mediatype: []const u8, width: u32, height: u32) ?u32 {
     if ((!equal(mime, "image/svg+xml") and !equal(mime, "image/svg")) or !equal(mediatype, "DRAWING") or
         width == 0 or height == 0 or info != .object or hasHidden(info) or info.object.contains("thumberror")) return null;
     const observed_value = info.object.get("thumbwidth") orelse return null;
@@ -958,7 +988,7 @@ fn observedSvgWidth(info: Value, mime: []const u8, mediatype: []const u8, width:
     if (observed_value != .integer or observed_height_value != .integer) return null;
     const observed = std.math.cast(u32, observed_value.integer) orelse return null;
     const observed_height = std.math.cast(u32, observed_height_value.integer) orelse return null;
-    if (observed <= width or observed_height == 0 or
+    if (observed == 0 or observed_height == 0 or
         (@as(u64, height) * observed + width / 2) / width != observed_height) return null;
     const attributes = info.object.get("thumbattribs") orelse return null;
     if (attributes != .object) return null;
@@ -1196,7 +1226,14 @@ fn validateFileSource(a: A, doc: anytype, records_count: u64, batch_count: u64, 
     const source_core = defaults.core orelse return invalid;
     const binding = if (equal(doc.core_revision, wmf5_imageinfo_core)) ordinaryImageInfoDefaults(ns.wiki) orelse return invalid else null;
     const current = equal(doc.core_revision, wmf5_rollout_core);
+    const nn_jpeg = equal(doc.core_revision, nn_jpeg_core);
     var current_scope: ImageInfoScope = .ordinary;
+    if (nn_jpeg) {
+        const digest = defaults.sha256 orelse return invalid;
+        if (!contract or !epochs or records_count != 1 or batch_count != 1 or
+            !equal(source_core, nn_jpeg_core) or !ns.isCurrentNnFigureDefaults(digest)) return invalid;
+        current_scope = .nn_current_jpeg;
+    }
     if (current) {
         if (!contract or !epochs or records_count == 0 or !equal(source_core, wmf5_rollout_core)) return invalid;
         const digest = defaults.sha256 orelse return invalid;
@@ -1233,12 +1270,12 @@ fn validateFileSource(a: A, doc: anytype, records_count: u64, batch_count: u64, 
             !equal(try string(empty_general, "git-hash"), doc.core_revision)) return invalid;
         return null;
     }
-    if ((binding == null and !current and !acceptedResponseCore(doc.core_revision, epochs)) or !d191Profile(source_core, doc.source_profile)) return invalid;
+    if ((binding == null and !current and !nn_jpeg and !acceptedResponseCore(doc.core_revision, epochs)) or !d191Profile(source_core, doc.source_profile)) return invalid;
     try profile(doc.source_profile, site, doc.core_revision, binding);
     if (webpProfile(doc.source_profile) and (!contract or !epochs)) return invalid;
     const gif = gifProfile(doc.source_profile);
     if ((equal(doc.core_revision, response_core) or registrationEpoch(doc.core_revision) or wmf4Epoch(doc.core_revision)) and !gif) return invalid;
-    if (gif and (!(binding != null or current or equal(doc.core_revision, current_core) or (epochs and responseEpoch(doc.core_revision))) or (!contract and !svgOccurrenceGenerator(doc.generator_sha256) and
+    if (gif and (!(binding != null or current or nn_jpeg or equal(doc.core_revision, current_core) or (epochs and responseEpoch(doc.core_revision))) or (!contract and !svgOccurrenceGenerator(doc.generator_sha256) and
         !equal(doc.generator_sha256, "7bce7ec0bd0acdf6a9d726ed50c1e85a64bc089731d0347d048f1787003d4c0b")))) return invalid;
     const server = try officialServer(a, ns.wiki);
     const site_query = try generalWithEpoch(registration, ns.wiki, ns.content_language, server, doc.core_revision, epochs, current_scope);
@@ -1269,7 +1306,7 @@ fn readStreamHeaders(a: A, temp: A, projection: *StreamInput, raw: *StreamInput)
         if (!nonnegativeInteger(try field(header_value, name))) return invalid;
     const contract = try explicitReplayContract(header_value);
     const header = try std.json.parseFromValueLeaky(StreamHeader, a, try replayDocumentShape(a, header_value), .{ .allocate = .alloc_always });
-    if ((equal(header.core_revision, wmf5_imageinfo_core) or equal(header.core_revision, wmf5_rollout_core)) and
+    if ((equal(header.core_revision, nn_jpeg_core) or equal(header.core_revision, wmf5_imageinfo_core) or equal(header.core_revision, wmf5_rollout_core)) and
         (!contract or !equal(try string(header_value, "replay_contract"), replay_contract_v6))) return invalid;
     const count_u64 = std.math.add(u64, header.base_batches, header.observed_batches) catch return invalid;
     const max_requests = std.math.mul(u64, header.base_batches, 50) catch return invalid;
@@ -1672,11 +1709,302 @@ const FigureReplayFailure = struct {
     file: []const u8 = "",
 };
 
+// Exact current ImageInfo capture. The two responses bind the file identity
+// and its one observed transform independently of the historic handler roles.
+
+
+const YiObservedThumbnail = struct {
+    const renamed_requested = "טעקע:Sparkle.jpg";
+    const renamed_canonical = "טעקע:Fire cracker stick sparkles (India, 2015).jpg";
+    const renamed_width: u32 = 130;
+    const renamed_response = "bbeb574cdeaf2193e5ae5385c742ddbeca0587b1c2c74dcd3d59d4eb7f8db2e1";
+    const expanded_default_svg = "טעקע:Jidysz.lebt.svg";
+    const default_svg_width: u32 = 250;
+    const default_svg_response = "90c9d757671241535e167666026059c9aef67f098d20ccaa0714abd541e5eabf";
+};
+
+fn yiExactThumbnailResource(info: Value, original_width: u32, original_height: u32, width: u32, default_svg: bool) !void {
+    const mime = try string(info, "mime");
+    const mediatype = try string(info, "mediatype");
+    const svg = equal(mime, "image/svg+xml") and equal(mediatype, "DRAWING");
+    const bitmap = equal(mediatype, "BITMAP") and (equal(mime, "image/jpeg") or equal(mime, "image/png") or equal(mime, "image/gif"));
+    if ((!svg and !bitmap) or hasHidden(info) or info.object.contains("thumberror")) return invalid;
+    const actual_width = try positive(info, "thumbwidth");
+    const actual_height = try positive(info, "thumbheight");
+    if (actual_width != width or (@as(u64, original_height) * actual_width + original_width / 2) / original_width != actual_height) return invalid;
+    const attributes = try field(info, "thumbattribs");
+    if (try positive(attributes, "width") != actual_width or try positive(attributes, "height") != actual_height) return invalid;
+    const original_url = try string(info, "url");
+    const thumb_url = try string(info, "thumburl");
+    const original = observedUrlBase(try field(info, "url")) orelse return invalid;
+    const thumb = observedUrlBase(try field(info, "thumburl")) orelse return invalid;
+    if (!std.mem.startsWith(u8, original, "https://upload.wikimedia.org/wikipedia/")) return invalid;
+    if (equal(original, thumb)) {
+        const first = "&utm_content=original";
+        const second = "&utm_content=thumbnail_unscaled";
+        if (!bitmap or !std.mem.endsWith(u8, original_url, first) or !std.mem.endsWith(u8, thumb_url, second) or
+            !equal(original_url[0 .. original_url.len - first.len], thumb_url[0 .. thumb_url.len - second.len])) return invalid;
+    } else {
+        if ((width > original_width and !(svg and default_svg)) or (!std.mem.startsWith(u8, thumb, "https://thumb.wikimedia.org/wikipedia/") and
+            !std.mem.startsWith(u8, thumb, "https://upload.wikimedia.org/wikipedia/"))) return invalid;
+    }
+}
+
+fn validateYiExactThumbnails(a: A, doc: Document, raw: []const u8, site: []const u8, ns: *const namespaces.Registry,
+    source_core: ?[]const u8, missing: *std.StringHashMapUnmanaged(void)) !bool
+{
+    const missing_captures = [_]struct { file: []const u8, response: []const u8 }{
+        .{ .file = "טעקע:I scream You Scream (Unsplash).jpg", .response = "aec649f8d2200a4b12bea264905c49d6f27140c4afcf269668ec06b017e57aea" },
+        .{ .file = "טעקע:Aspirin 20161209 143118.jpg", .response = "1f147fde76d77cee87d808b1e4bde04643431a9fea53cb31bc4996033dd71c88" },
+    };
+    // A Web/API response may serve a distinct MediaWiki core. These approved
+    // bytes certify only the named, explicitly requested thumbnail tuple.
+    const CapturedRequest = struct { sha: []const u8, core: []const u8, width: u32 };
+    const approved = [_]CapturedRequest{
+        .{ .sha = "978d8a1e4bba7c5fb1886ca6a5c87bb528877db9ea9b2a3d9cd0cd37065c9f49", .core = "901a9d48bec3e17bdde40049604019ff62aa4491", .width = 150 },
+        .{ .sha = "e0ef94a4dc395bbb73d18e1dbf578635fc6e17c8dea59efcf8b2d3d2f8bc08ee", .core = "266b66b328568a96e095fef97fc148c7cf86bfcc", .width = 150 },
+        .{ .sha = "1f7e4a9a61ece9e23e3bfacfb98ad19cb0f82ac97552ec5290ece05e52a8657c", .core = "6b357ea5fbbafe4bde3dcc705aa129afb392fdb2", .width = 40 },
+        .{ .sha = "bbeb574cdeaf2193e5ae5385c742ddbeca0587b1c2c74dcd3d59d4eb7f8db2e1", .core = "6b357ea5fbbafe4bde3dcc705aa129afb392fdb2", .width = 130 },
+        .{ .sha = "012695dc261169dbfb78f60d679c076fef841e2d9e3ca4da8a632739eef501f3", .core = "6b357ea5fbbafe4bde3dcc705aa129afb392fdb2", .width = 150 },
+        .{ .sha = "639e7abc9a2b47b1c097752b2650ed0bf285a4e89081d9bbcf931f0110e59c65", .core = "6b357ea5fbbafe4bde3dcc705aa129afb392fdb2", .width = 180 },
+        .{ .sha = "9af09a28275cd928c4029c9a10634c8b25ae326b260e7b034524f164213dad63", .core = "6b357ea5fbbafe4bde3dcc705aa129afb392fdb2", .width = 190 },
+        .{ .sha = "e70470978741eeb706253048ea566a236225230c3dddcd911ec6012341272ba5", .core = "6b357ea5fbbafe4bde3dcc705aa129afb392fdb2", .width = 200 },
+        .{ .sha = "fe749973904401e15883998be4ffd507200b3018ff8969db01cfbe97abf80a5f", .core = "6b357ea5fbbafe4bde3dcc705aa129afb392fdb2", .width = 200 },
+        .{ .sha = "58bf6b6cf188bc4e2f52f0efd4cecbf584049bc0eaa5259f790b39e174ca25fa", .core = "6b357ea5fbbafe4bde3dcc705aa129afb392fdb2", .width = 210 },
+        .{ .sha = "bae48630e0ab1afb14e252d00cc47dc8fd1e29ddbb3b1d0cf8040012b4ff78c0", .core = "6b357ea5fbbafe4bde3dcc705aa129afb392fdb2", .width = 220 },
+        .{ .sha = "31f4d97586df2ce967b7c34e9eab78e6aeb11bdd3d30426e148bfdb4d88dcc5d", .core = "6b357ea5fbbafe4bde3dcc705aa129afb392fdb2", .width = 230 },
+        .{ .sha = "d3b1a4a69e849631d7ff4afc7edd82a1629387bb0e80bae192e3f15c8f013983", .core = "6b357ea5fbbafe4bde3dcc705aa129afb392fdb2", .width = 230 },
+        .{ .sha = "dd2f5f5f3aae5c6e2ded94140bab1725d433a0862a6b7a4285c86a3a371566cd", .core = "6b357ea5fbbafe4bde3dcc705aa129afb392fdb2", .width = 230 },
+        .{ .sha = "aec649f8d2200a4b12bea264905c49d6f27140c4afcf269668ec06b017e57aea", .core = "6b357ea5fbbafe4bde3dcc705aa129afb392fdb2", .width = 230 },
+        .{ .sha = "78aa6fee8dc0b65755593b4b36ab333d9b2f95560e2c08d29c84038124ba70d4", .core = "6b357ea5fbbafe4bde3dcc705aa129afb392fdb2", .width = 230 },
+        .{ .sha = "6ebb7b1587bc4cdbc0a8ec1cb3b9cbfbacca2919b166cf5626f246de4e816d29", .core = "6b357ea5fbbafe4bde3dcc705aa129afb392fdb2", .width = 230 },
+        .{ .sha = "3451b626b667e0dfa7e1e7acd5c7a387940f3eb61788dac3a453911c1417f40b", .core = "6b357ea5fbbafe4bde3dcc705aa129afb392fdb2", .width = 230 },
+        .{ .sha = "1f147fde76d77cee87d808b1e4bde04643431a9fea53cb31bc4996033dd71c88", .core = "6b357ea5fbbafe4bde3dcc705aa129afb392fdb2", .width = 240 },
+        .{ .sha = "340863a324e9a6c998cc5da76bfd3b111b4d35ef21e511552bc5f5eb578d284f", .core = "6b357ea5fbbafe4bde3dcc705aa129afb392fdb2", .width = 240 },
+        .{ .sha = "d2ea68c2287c2e16dedd0e5c06e4fe395416cb986198ea6ddec7e11ccc91b57f", .core = "6b357ea5fbbafe4bde3dcc705aa129afb392fdb2", .width = 240 },
+        .{ .sha = "ae188972ec56d696e96631ad97a282dbfc8476e22650ecc2e4750e6821361de9", .core = "6b357ea5fbbafe4bde3dcc705aa129afb392fdb2", .width = 240 },
+        .{ .sha = "fc769b03bf99f71e5947aa08ceb649b0708bd6100b316deb012fba83c3c451a7", .core = "6b357ea5fbbafe4bde3dcc705aa129afb392fdb2", .width = 250 },
+        .{ .sha = "ab3a50dfb01493540d846f5737d9ca2e80468979eb7ade5d136e84c856fc76d8", .core = "6b357ea5fbbafe4bde3dcc705aa129afb392fdb2", .width = 260 },
+        .{ .sha = "2771289f73c778c57c1fdf428dd5884ba42a70f188f49874f58880eb4fe57210", .core = "6b357ea5fbbafe4bde3dcc705aa129afb392fdb2", .width = 300 },
+        .{ .sha = "9d80d189a15a80a3c859a753d92ff317606f387dffef1ced984fcec166f3d2a5", .core = "6b357ea5fbbafe4bde3dcc705aa129afb392fdb2", .width = 300 },
+        .{ .sha = "150d377a10d02b840b469cb08d12e69a4531253bf5a8d12ceffa178b4982ed72", .core = "6b357ea5fbbafe4bde3dcc705aa129afb392fdb2", .width = 300 },
+        .{ .sha = "533c6e3d6dfe6a60cf5563a243d95826a93840fa010c0fe627ae7e236bd75919", .core = "6b357ea5fbbafe4bde3dcc705aa129afb392fdb2", .width = 340 },
+        .{ .sha = "5ade2f56a582e80e85c21551358373d461a8890f931f23d844fb2128e70c8eed", .core = "6b357ea5fbbafe4bde3dcc705aa129afb392fdb2", .width = 150 },
+        .{ .sha = "fdc24a3e8e6ff54c3fabd70542fa3d2f4d7caae34b1f539b6df8f792a124800a", .core = "6b357ea5fbbafe4bde3dcc705aa129afb392fdb2", .width = 200 },
+        .{ .sha = "90c9d757671241535e167666026059c9aef67f098d20ccaa0714abd541e5eabf", .core = "6b357ea5fbbafe4bde3dcc705aa129afb392fdb2", .width = 250 },
+    };
+    const independent_site = "8eef1386e2ebc80a46575c87f3f982d8f9362639ab85b507c69999d4eb5bc08a";
+    if (!equal(doc.schema, "wikidict.figure-sizing-source.v1") or !equal(doc.wiki, "yiwiktionary") or !equal(doc.wiki, ns.wiki) or
+        !equal(doc.content_language, "yi") or !equal(doc.content_language, ns.content_language) or !equal(ns.dump_date, "20261001") or
+        !equal(doc.namespace_registry_sha256, "01a98ddcb3652323f092899682abcdf64c66a11485961766afcd3b15de8d6123") or
+        !equal(doc.namespace_registry_sha256, &std.fmt.bytesToHex(ns.source_sha256, .lower)) or
+        !equal(doc.core_revision, source_core orelse return invalid) or !equal(doc.generator_sha256, "daddc63a694d90057387325e825a92f4a7406243388e119a79611d640abf8fed") or
+        !digestMatches(raw, doc.raw_sha256) or !digestMatches(site, independent_site)) return invalid;
+    const source_profile = doc.source_profile;
+    if (source_profile != .object or source_profile.object.count() != 2 or
+        !equal(try string(source_profile, "site_raw_sha256"), independent_site)) return invalid;
+    const observed = try std.json.parseFromSliceLeaky(Value, a, raw, .{ .allocate = .alloc_always });
+    if (observed != .object or observed.object.count() != 2 or
+        !equal(try string(observed, "schema"), "wikidict.exact-thumbnail-response-set.v1")) return invalid;
+    const values = try field(observed, "responses");
+    if (values != .array or values.array.items.len != approved.len) return invalid;
+    var image_sets: [approved.len][]const Value = undefined;
+    var observed_times: [approved.len][]const u8 = undefined;
+    var latest: []const u8 = "";
+    for (approved, values.array.items, &image_sets, &observed_times) |expected, bytes, *images, *instant| {
+        if (bytes != .string or !digestMatches(bytes.string, expected.sha)) return invalid;
+        const response = try std.json.parseFromSliceLeaky(Value, a, bytes.string, .{ .allocate = .alloc_always });
+        const query = try field(response, "query");
+        const identity = try field(query, "general");
+        if (!equal(try string(identity, "wikiid"), ns.wiki) or !equal(try string(identity, "lang"), ns.content_language) or
+            !equal(try string(identity, "git-hash"), expected.core) or !equal(try string(identity, "server"), "//yi.wiktionary.org")) return invalid;
+        const pages = try field(query, "pages");
+        if (pages != .array or pages.array.items.len == 0 or pages.array.items.len > 20) return invalid;
+        instant.* = try string(response, "curtimestamp");
+        if ((try timestamp(instant.*)).fraction.len != 0) return invalid;
+        if (std.mem.order(u8, latest, instant.*) == .lt) latest = instant.*;
+        images.* = pages.array.items;
+        for (missing_captures) |capture| if (equal(capture.response, expected.sha)) {
+            var count: usize = 0;
+            for (images.*) |page| {
+                if (!equal(try string(page, "title"), capture.file)) continue;
+                const flag = try field(page, "missing");
+                if (try positive(page, "ns") != 6 or flag != .bool or !flag.bool or
+                    (try string(page, "imagerepository")).len != 0 or hasHidden(page) or
+                    page.object.contains("imageinfo") or page.object.contains("known")) return invalid;
+                count += 1;
+            }
+            if (count != 1 or missing.contains(capture.file)) return invalid;
+            try missing.put(a, capture.file, {});
+        };
+    }
+    if (missing.count() != missing_captures.len or !equal(doc.observation_utc, latest)) return invalid;
+    var rename_observed = false;
+    for (doc.records, 0..) |record, index| {
+        if (index != 0) {
+            const prior = doc.records[index - 1];
+            const order = std.mem.order(u8, prior.canonical_file, record.canonical_file);
+            if (order == .gt or (order == .eq and prior.width_px >= record.width_px)) return invalid;
+        }
+        const renamed = equal(record.proof_kind, "observed-exact-renamed-thumbnail-width");
+        const default_svg = equal(record.proof_kind, "observed-exact-site-default-svg-thumbnail");
+        if (!equal(record.canonical_file, try canonicalFile(a, ns, record.canonical_file)) or
+            record.format != .thumbnail or record.sizing != .requested_fit or record.height_px != null or
+            (!renamed and !default_svg and !equal(record.proof_kind, "observed-exact-thumbnail-width"))) return invalid;
+        if (renamed and (!equal(record.canonical_file, YiObservedThumbnail.renamed_canonical) or
+            record.width_px != YiObservedThumbnail.renamed_width)) return invalid;
+        if (default_svg and (!equal(record.canonical_file, YiObservedThumbnail.expanded_default_svg) or
+            record.width_px != YiObservedThumbnail.default_svg_width)) return invalid;
+        const requested = if (renamed) YiObservedThumbnail.renamed_requested else record.canonical_file;
+        var count: usize = 0;
+        for (approved, image_sets, observed_times) |expected, pages, instant| {
+            if (record.width_px != expected.width or
+                (renamed and !equal(expected.sha, YiObservedThumbnail.renamed_response)) or
+                (default_svg and !equal(expected.sha, YiObservedThumbnail.default_svg_response))) continue;
+            for (pages) |page| {
+                if (!equal(try string(page, "title"), requested)) continue;
+                const repository = try string(page, "imagerepository");
+                if (hasHidden(page) or try positive(page, "ns") != 6 or (!equal(repository, "shared") and !equal(repository, "local"))) return invalid;
+                const items = try field(page, "imageinfo");
+                if (items != .array or items.array.items.len != 1) return invalid;
+                const info = items.array.items[0];
+                if (!equal(try string(info, "canonicaltitle"), record.canonical_file) or
+                    !lowerHex(record.file_sha1, 40) or !equal(try string(info, "sha1"), record.file_sha1) or
+                    !equal(try string(info, "timestamp"), record.file_timestamp) or
+                    !notAfter(try timestamp(record.file_timestamp), try timestamp(instant)) or
+                    try positive(info, "width") != record.original_width or try positive(info, "height") != record.original_height) return invalid;
+                try yiExactThumbnailResource(info, record.original_width, record.original_height, record.width_px, default_svg);
+                count += 1;
+            }
+        }
+        if (count != 1) return invalid;
+        rename_observed = rename_observed or renamed;
+    }
+    return rename_observed;
+}
+
+fn validateYiObservedSvgSet(a: A, doc: Document, raw: []const u8, site: []const u8, ns: *const namespaces.Registry,
+    source_core: ?[]const u8) !void
+{
+    const retained_site = "8eef1386e2ebc80a46575c87f3f982d8f9362639ab85b507c69999d4eb5bc08a";
+    const expected_responses = [_][]const u8{
+        "978d8a1e4bba7c5fb1886ca6a5c87bb528877db9ea9b2a3d9cd0cd37065c9f49",
+        "e0ef94a4dc395bbb73d18e1dbf578635fc6e17c8dea59efcf8b2d3d2f8bc08ee",
+    };
+    const response_cores = [_][]const u8{ namespaces.Registry.yi_current_figure_core, "266b66b328568a96e095fef97fc148c7cf86bfcc" };
+    if (!equal(doc.schema, "wikidict.figure-sizing-source.v1") or !equal(doc.wiki, "yiwiktionary") or
+        !equal(doc.wiki, ns.wiki) or !equal(doc.content_language, "yi") or !equal(doc.content_language, ns.content_language) or
+        !equal(ns.dump_date, "20261001") or
+        !equal(doc.namespace_registry_sha256, "01a98ddcb3652323f092899682abcdf64c66a11485961766afcd3b15de8d6123") or
+        !equal(doc.namespace_registry_sha256, &std.fmt.bytesToHex(ns.source_sha256, .lower)) or
+        !equal(doc.core_revision, source_core orelse return invalid) or
+        !equal(doc.generator_sha256, "dc2b08eb1f95dab893621589c5f0a2af7eb02eb3187965d7c344a5b30060478a") or !digestMatches(raw, doc.raw_sha256) or
+        !digestMatches(site, retained_site) or doc.records.len != expected_responses.len) return invalid;
+    const source_profile = doc.source_profile;
+    if (source_profile != .object or source_profile.object.count() != 2 or
+        !equal(try string(source_profile, "site_raw_sha256"), retained_site)) return invalid;
+    const input = try std.json.parseFromSliceLeaky(Value, a, raw, .{ .allocate = .alloc_always });
+    if (input != .object or input.object.count() != 2 or
+        !equal(try string(input, "schema"), "wikidict.observed-svg-response-set.v1")) return invalid;
+    const responses = try field(input, "responses");
+    if (responses != .array or responses.array.items.len != expected_responses.len) return invalid;
+    const old = try std.json.parseFromSliceLeaky(Value, a, site, .{ .allocate = .alloc_always });
+    const original = try yiObservedSvgImage(old);
+    var latest: []const u8 = "";
+    for (responses.array.items, doc.records, expected_responses, response_cores, 0..) |entry, record, sha, observed_core, i| {
+        if (entry != .string or !digestMatches(entry.string, sha)) return invalid;
+        if (i != 0 and std.mem.order(u8, doc.records[i - 1].canonical_file, record.canonical_file) != .lt) return invalid;
+        const response = try std.json.parseFromSliceLeaky(Value, a, entry.string, .{ .allocate = .alloc_always });
+        const info = try yiObservedSvgImageAtCore(response, observed_core);
+        const observed = try string(response, "curtimestamp");
+        try validateYiObservedSvgRecord(a, ns, record, info, observed);
+        if (std.mem.order(u8, latest, observed) == .lt) latest = observed;
+        if (i == 0) try validateYiObservedSvgOriginal(record, original);
+    }
+    if (!equal(doc.observation_utc, latest)) return invalid;
+}
+
+fn validateYiObservedSvgOriginal(record: Record, original: Value) !void {
+    if (!equal(record.canonical_file, try string(original, "canonicaltitle")) or
+        !equal(record.file_sha1, try string(original, "sha1")) or !equal(record.file_timestamp, try string(original, "timestamp")) or
+        try positive(original, "width") != record.original_width or try positive(original, "height") != record.original_height) return invalid;
+}
+
+fn validateYiObservedSvgRecord(a: A, ns: *const namespaces.Registry, record: Record, info: Value, observed: []const u8) !void {
+    if ((try timestamp(observed)).fraction.len != 0 or
+        !notAfter(try timestamp(record.file_timestamp), try timestamp(observed)) or
+        !equal(record.canonical_file, try string(info, "canonicaltitle")) or
+        !equal(record.canonical_file, try canonicalFile(a, ns, record.canonical_file)) or
+        !lowerHex(record.file_sha1, 40) or !equal(record.file_sha1, try string(info, "sha1")) or
+        !equal(record.file_timestamp, try string(info, "timestamp")) or
+        try positive(info, "width") != record.original_width or try positive(info, "height") != record.original_height or
+        record.format != .thumbnail or record.sizing != .requested_fit or record.height_px != null or
+        !equal(record.proof_kind, "observed-svg-thumbnail-width") or record.width_px > record.original_width) return invalid;
+    const measured = svgThumbnailObservedWidth(info, try string(info, "mime"), try string(info, "mediatype"),
+        record.original_width, record.original_height) orelse return invalid;
+    if (record.width_px != measured) return invalid;
+}
+
+fn validateYiObservedSvg(a: A, doc: Document, raw: []const u8, site: []const u8, ns: *const namespaces.Registry,
+    source_core: ?[]const u8) !void
+{
+    const raw_sha = "978d8a1e4bba7c5fb1886ca6a5c87bb528877db9ea9b2a3d9cd0cd37065c9f49";
+    const site_sha = "8eef1386e2ebc80a46575c87f3f982d8f9362639ab85b507c69999d4eb5bc08a";
+    const profile_value = doc.source_profile;
+    if (!equal(doc.schema, "wikidict.figure-sizing-source.v1") or !equal(doc.wiki, "yiwiktionary") or
+        !equal(doc.wiki, ns.wiki) or !equal(doc.content_language, "yi") or !equal(doc.content_language, ns.content_language) or
+        !equal(ns.dump_date, "20261001") or
+        !equal(doc.namespace_registry_sha256, "01a98ddcb3652323f092899682abcdf64c66a11485961766afcd3b15de8d6123") or
+        !equal(doc.namespace_registry_sha256, &std.fmt.bytesToHex(ns.source_sha256, .lower)) or
+        !equal(source_core orelse return invalid, doc.core_revision) or
+        !equal(doc.raw_sha256, raw_sha) or !digestMatches(raw, raw_sha) or !digestMatches(site, site_sha) or
+        profile_value != .object or profile_value.object.count() != 2 or
+        !equal(try string(profile_value, "kind"), "wikimedia-svg-thumbnail-observation-v1") or
+        !equal(try string(profile_value, "site_raw_sha256"), site_sha) or doc.records.len != 1) return invalid;
+    const expected_generator = "77edebacbcdaea0ae9c5b7850da3f99b09da46d4c9710300f0c76196cf2d4e87";
+    if (!equal(doc.generator_sha256, expected_generator)) return invalid;
+    const source = try std.json.parseFromSliceLeaky(Value, a, raw, .{ .allocate = .alloc_always });
+    const old = try std.json.parseFromSliceLeaky(Value, a, site, .{ .allocate = .alloc_always });
+    const info = try yiObservedSvgImage(source);
+    const original = try yiObservedSvgImage(old);
+    const record = doc.records[0];
+    if (!equal(doc.observation_utc, try string(source, "curtimestamp"))) return invalid;
+    try validateYiObservedSvgRecord(a, ns, record, info, doc.observation_utc);
+    try validateYiObservedSvgOriginal(record, original);
+}
+
+fn yiObservedSvgImage(response: Value) !Value {
+    return yiObservedSvgImageAtCore(response, namespaces.Registry.yi_current_figure_core);
+}
+
+fn yiObservedSvgImageAtCore(response: Value, expected_core: []const u8) !Value {
+    const query = try field(response, "query");
+    const general_info = try field(query, "general");
+    const pages = try field(query, "pages");
+    if (!equal(try string(general_info, "wikiid"), "yiwiktionary") or
+        !equal(try string(general_info, "git-hash"), expected_core) or
+        !equal(try string(general_info, "server"), "//yi.wiktionary.org") or
+        pages != .array or pages.array.items.len != 1) return invalid;
+    const page = pages.array.items[0];
+    const items = try field(page, "imageinfo");
+    if (try positive(page, "ns") != 6 or !equal(try string(page, "imagerepository"), "shared") or
+        hasHidden(page) or items != .array or items.array.items.len != 1) return invalid;
+    const info = items.array.items[0];
+    if (hasHidden(info) or !equal(try string(info, "mime"), "image/svg+xml") or
+        !equal(try string(info, "mediatype"), "DRAWING") or
+        !equal(try string(info, "canonicaltitle"), try string(page, "title"))) return invalid;
+    return info;
+}
+
 pub const Registry = struct {
     arena: std.heap.ArenaAllocator,
     namespace_catalog: *const namespaces.Registry,
     records: []const Record,
     file_authority: bool = false,
+    measured_thumbnail_only: bool = false,
+    // The file rename enables an exact thumbnail sizing query only. The
+    // Registry still withholds resolveCanonicalFile, file and intrinsic roles.
+    yi_measured_thumbnail_rename: bool = false,
     reviewed_thumbnail_site: bool = false,
     // Parallel to records; derived only after complete raw file-fact replay.
     resolved_files: []const []const u8 = &.{},
@@ -1717,6 +2045,18 @@ pub const Registry = struct {
             if (try field(record_value, "height_px") != .null) return invalid;
         }
         const doc = try std.json.parseFromValueLeaky(Document, a, projection_value, .{});
+        if (equal(doc.core_revision, namespaces.Registry.yi_current_figure_core)) {
+            var rename = false;
+            var missing: std.StringHashMapUnmanaged(void) = .empty;
+            if (doc.source_profile == .object and equal(try string(doc.source_profile, "kind"), "wikimedia-exact-thumbnail-observation-set-v1"))
+                rename = try validateYiExactThumbnails(a, doc, raw, site, ns, source_core_revision, &missing)
+            else if (doc.source_profile == .object and equal(try string(doc.source_profile, "kind"), "wikimedia-svg-thumbnail-observation-set-v1"))
+                try validateYiObservedSvgSet(a, doc, raw, site, ns, source_core_revision)
+            else
+                try validateYiObservedSvg(a, doc, raw, site, ns, source_core_revision);
+            return .{ .arena = arena, .namespace_catalog = ns, .records = doc.records,
+                .measured_thumbnail_only = true, .yi_measured_thumbnail_rename = rename, .missing_files = missing };
+        }
         const source = try std.json.parseFromSliceLeaky(Value, a, raw, .{ .allocate = .alloc_always });
         const registration = try std.json.parseFromSliceLeaky(Value, a, site, .{ .allocate = .alloc_always });
         const ns_digest = std.fmt.bytesToHex(ns.source_sha256, .lower);
@@ -1930,6 +2270,13 @@ pub const Registry = struct {
             try batches.finish();
             return .{ .arena = arena.*, .namespace_catalog = ns, .records = &.{}, .file_authority = true };
         };
+        const nn_jpeg_file = if (equal(doc.core_revision, nn_jpeg_core))
+            selectedNnJpeg(site) orelse return invalid else null;
+        if (nn_jpeg_file) |file| {
+            if (!batches.streamed_v6 or !equal(doc.records[0].requested_file, file) or
+                !equal(doc.records[0].canonical_file, file) or doc.records[0].state != .eligible or
+                !equal(doc.records[0].mime, "image/jpeg") or !equal(doc.records[0].mediatype, "BITMAP")) return invalid;
+        }
         const gif = gifProfile(doc.source_profile);
         const webp = webpProfile(doc.source_profile);
         const italian_wmf5_document = batches.streamed_v6 and gif and !webp and equal(doc.core_revision, wmf5_imageinfo_core) and
@@ -2028,7 +2375,11 @@ pub const Registry = struct {
             // The rollout occurred during three full captures. Only their later ordinary
             // rows may use the new core. The first authenticated registration, defaults
             // and every supplemental observation retain their original source rules.
-            const scope: ImageInfoScope = if (equal(doc.core_revision, wmf5_rollout_core)) scope: {
+            const scope: ImageInfoScope = if (nn_jpeg_file) |file| scope: {
+                if (!equal(batch_core, nn_jpeg_core) or supplement or batch.tiff_metadata_response != null or
+                    batch.requests.len != 1 or !equal(batch.requests[0], file) or !equal(batch.response, site)) return invalid;
+                break :scope .nn_current_jpeg;
+            } else if (equal(doc.core_revision, wmf5_rollout_core)) scope: {
                 // validateFileSource already bound this exact Book defaults observation.
                 if (!batches.streamed_v6 or !equal(batch_core, wmf5_rollout_core) or supplement) return invalid;
                 if (equal(ns.wiki, "mnwwiktionary")) break :scope .mon_current;
@@ -2383,7 +2734,7 @@ pub const Registry = struct {
     // stylesheet effects, or a successful image. Those need separate evidence.
     pub fn isMissingFile(raw: ?*const anyopaque, a: A, file: []const u8) A.Error!bool {
         const self: *const Registry = @ptrCast(@alignCast(raw orelse return false));
-        if (!self.file_authority) return false;
+        if (!self.file_authority and !self.measured_thumbnail_only) return false;
         const canonical = canonicalFile(a, self.namespace_catalog, file) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             else => return false,
@@ -2721,8 +3072,11 @@ pub const Registry = struct {
             };
         }
         if (format_value != .thumbnail or width == null or width.? == 0 or (height != null and height.? == 0)) return null;
-        const canonical = canonicalFile(a, self.namespace_catalog, file) catch |err| switch (err) { error.OutOfMemory => return error.OutOfMemory, else => return null };
-        defer a.free(canonical);
+        const key = canonicalFile(a, self.namespace_catalog, file) catch |err| switch (err) { error.OutOfMemory => return error.OutOfMemory, else => return null };
+        defer a.free(key);
+        const canonical = if (self.yi_measured_thumbnail_rename and height == null and
+            width.? == YiObservedThumbnail.renamed_width and equal(key, YiObservedThumbnail.renamed_requested))
+            YiObservedThumbnail.renamed_canonical else key;
         var lo: usize = 0; var hi = self.records.len;
         while (lo < hi) {
             const mid = lo + (hi - lo) / 2;

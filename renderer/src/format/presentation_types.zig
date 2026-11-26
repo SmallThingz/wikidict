@@ -2887,7 +2887,13 @@ pub const ContainerTextWrap = enum(u8) {
         return std.meta.stringToEnum(@This(), source.string) orelse error.InvalidEnumTag;
     }
 };
-pub const GenericFontFamily = enum(u8) { sans_serif = 0, serif = 1 };
+pub const GenericFontFamily = enum(u8) {
+    sans_serif = 0,
+    serif = 1,
+    // The author supplied only named faces. After those fail, the client
+    // applies its standard font fallback without an invented CSS generic.
+    css_default = 2,
+};
 pub const FontFamilyStack = struct {
     names: []const []const u8,
     fallback: GenericFontFamily,
@@ -2958,7 +2964,7 @@ pub fn validContainerFontFamily(value: ContainerFontFamily) bool {
     switch (value) {
         .sans_serif => return true,
         .stack => |stack| {
-            if (stack.names.len > 16) return false;
+            if (stack.names.len > 16 or (stack.fallback == .css_default and stack.names.len == 0)) return false;
             for (stack.names) |name| if (!validFontFamilyName(name)) return false;
             return true;
         },
@@ -12870,4 +12876,132 @@ test "responsive caption bounded census charges exactly one owner and discovers 
     const census = DeepTableWork.containerLayouts(@as([]const Span, &.{}), &sections,
         @as([]const Span, &.{}), @as([]const Reference, &.{}));
     try std.testing.expect(census.responsive_caption_table);
+}
+
+
+// New synthetic model controls for the exact YI two-hunk candidate.
+// These are not page05 output and do not establish an installed font or pixels.
+const YiNamedFont01ModelTest = struct {
+    const names = [_][]const u8{
+        "Times New Roman", "Georgia", "Face 03", "Face 04", "Face 05", "Face 06",
+        "Face 07", "Face 08", "Face 09", "Face 10", "Face 11", "Face 12",
+        "Face 13", "Face 14", "Face 15", "Face 16", "Face 17",
+    };
+    fn family(names_value: []const []const u8) ContainerFontFamily {
+        return .{ .stack = .{ .names = names_value, .fallback = .css_default } };
+    }
+    fn rejectsJson(a: std.mem.Allocator, source: []const u8) !void {
+        if (std.json.parseFromSlice(ContainerFontFamily, a, source,
+            .{ .ignore_unknown_fields = false, .duplicate_field_behavior = .@"error" })) |parsed| {
+            parsed.deinit();
+            return error.TestUnexpectedResult;
+        } else |_| {}
+    }
+    fn rejectsStored(a: std.mem.Allocator, value: ContainerFontFamily) !void {
+        const span: Span = .{ .text = "synthetic invalid named request", .font_family = value };
+        const stored: Stored = .{ .entry = .{
+            .title = "YI names-only model control", .kind = .supplemental, .display_title = &.{span},
+        } };
+        try std.testing.expectError(error.InvalidPresentation,
+            validateStored(a, stored, stored.entry.title, .supplemental, null));
+    }
+};
+
+test "YI named-font contract01 ordered 1 through 16 names model and strict JSON" {
+    const T = YiNamedFont01ModelTest;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    try std.testing.expectEqual(@as(u8, 0), @intFromEnum(GenericFontFamily.sans_serif));
+    try std.testing.expectEqual(@as(u8, 1), @intFromEnum(GenericFontFamily.serif));
+    try std.testing.expectEqual(@as(u8, 2), @intFromEnum(GenericFontFamily.css_default));
+    for (1..17) |count| {
+        const value = T.family(T.names[0..count]);
+        try std.testing.expect(validContainerFontFamily(value));
+        const json = try std.json.Stringify.valueAlloc(a, value, .{});
+        const parsed = try std.json.parseFromSlice(ContainerFontFamily, a, json,
+            .{ .ignore_unknown_fields = false, .duplicate_field_behavior = .@"error" });
+        defer parsed.deinit();
+        try std.testing.expectEqualDeep(value, parsed.value);
+        try std.testing.expectEqual(GenericFontFamily.css_default, parsed.value.stack.fallback);
+        for (T.names[0..count], parsed.value.stack.names) |expected, actual|
+            try std.testing.expectEqualStrings(expected, actual);
+        try std.testing.expect(sameFontFamilyRequest(value, parsed.value));
+    }
+    const one = try std.json.Stringify.valueAlloc(a, T.family(T.names[0..1]), .{});
+    try std.testing.expectEqualStrings(
+        "{\"stack\":{\"names\":[\"Times New Roman\"],\"fallback\":\"css_default\"}}", one);
+    const reversed = T.family(&.{ "Georgia", "Times New Roman" });
+    try std.testing.expect(!sameFontFamilyRequest(T.family(T.names[0..2]), reversed));
+    var generic = T.family(T.names[0..1]);
+    generic.stack.fallback = .serif;
+    try std.testing.expect(!sameFontFamilyRequest(T.family(T.names[0..1]), generic));
+
+    const too_many = T.family(&T.names);
+    try std.testing.expect(!validContainerFontFamily(too_many));
+    try T.rejectsStored(a, too_many);
+    try T.rejectsJson(a, try std.json.Stringify.valueAlloc(a, too_many, .{}));
+    var maximum_name: [128]u8 = undefined;
+    @memset(&maximum_name, 'A');
+    var overlong_name: [129]u8 = undefined;
+    @memset(&overlong_name, 'A');
+    try std.testing.expect(validContainerFontFamily(T.family(&.{&maximum_name})));
+    for ([_][]const u8{
+        "", " leading", "trailing ", "serif", "Sans  Serif", "system-ui",
+        "Face[Foundry]", "Face]", "Bad\x00Name", "Bad\tName", "\xc3\xa9", "\xff", &overlong_name,
+    }) |name| {
+        const invalid = T.family(&.{name});
+        try std.testing.expect(!validContainerFontFamily(invalid));
+        try T.rejectsStored(a, invalid);
+        if (std.unicode.utf8ValidateSlice(name))
+            try T.rejectsJson(a, try std.json.Stringify.valueAlloc(a, invalid, .{}));
+    }
+    for ([_][]const u8{
+        "null", "2", "[]", "\"css_default\"",
+        "{\"stack\":{\"names\":[\"Times New Roman\"],\"fallback\":2}}",
+        "{\"stack\":{\"names\":[\"Times New Roman\"],\"fallback\":\"unknown\"}}",
+        "{\"stack\":{\"names\":[7],\"fallback\":\"css_default\"}}",
+        "{\"stack\":{\"names\":\"Times New Roman\",\"fallback\":\"css_default\"}}",
+        "{\"stack\":{\"names\":[\"Times New Roman\"]}}",
+        "{\"stack\":{\"names\":[\"Times New Roman\"],\"fallback\":\"css_default\",\"extra\":0}}",
+        "{\"stack\":{\"names\":[\"Times New Roman\"],\"fallback\":\"css_default\"},\"extra\":0}",
+        "{\"stack\":{\"names\":[\"Times New Roman\"],\"names\":[\"Georgia\"],\"fallback\":\"css_default\"}}",
+        "{\"stack\":{\"names\":[\"Times New Roman\"],\"fallback\":\"css_default\",\"fallback\":\"serif\"}}",
+    }) |bad| try T.rejectsJson(a, bad);
+}
+
+test "YI named-font contract01 empty JSON parse versus validation and legacy empty lists" {
+    const T = YiNamedFont01ModelTest;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // The exact two-hunk candidate does NOT add final validation to this parser.
+    // Acceptance here is a parsed value, not an accepted Stored/wire record.
+    const parsed = try std.json.parseFromSlice(ContainerFontFamily, a,
+        "{\"stack\":{\"names\":[],\"fallback\":\"css_default\"}}",
+        .{ .ignore_unknown_fields = false, .duplicate_field_behavior = .@"error" });
+    defer parsed.deinit();
+    try std.testing.expectEqual(@as(usize, 0), parsed.value.stack.names.len);
+    try std.testing.expectEqual(GenericFontFamily.css_default, parsed.value.stack.fallback);
+    try std.testing.expect(!validContainerFontFamily(parsed.value));
+    try T.rejectsStored(a, parsed.value);
+    const font: InlineFontSnapshot = .{
+        .font_scale = 16, .font_scale_basis = .css_px, .font_normalized = true, .font_family = parsed.value,
+    };
+    try std.testing.expect(!validInlineFontSnapshot(font));
+    const font_json = try std.json.Stringify.valueAlloc(a, font, .{});
+    const parsed_font = try std.json.parseFromSlice(InlineFontSnapshot, a, font_json,
+        .{ .ignore_unknown_fields = false, .duplicate_field_behavior = .@"error" });
+    defer parsed_font.deinit();
+    try std.testing.expectEqualDeep(font, parsed_font.value);
+    try std.testing.expect(!validInlineFontSnapshot(parsed_font.value));
+    for ([_]GenericFontFamily{ .sans_serif, .serif }) |fallback| {
+        const legacy: ContainerFontFamily = .{ .stack = .{ .names = &.{}, .fallback = fallback } };
+        try std.testing.expect(validContainerFontFamily(legacy));
+        const json = try std.json.Stringify.valueAlloc(a, legacy, .{});
+        const restored = try std.json.parseFromSlice(ContainerFontFamily, a, json, .{});
+        defer restored.deinit();
+        try std.testing.expectEqualDeep(legacy, restored.value);
+        try std.testing.expect(validContainerFontFamily(restored.value));
+    }
 }

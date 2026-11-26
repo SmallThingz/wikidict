@@ -45,6 +45,10 @@ SCRIBUNTO = 'b109cb6e5866c13871e308859ef78249b1bd3ea2'
 WMF6_SITEINFO_CORE = '901a9d48bec3e17bdde40049604019ff62aa4491'
 WMF6_SITEINFO_API_SHA256 = 'c940c5a88f83d8c18e2844ff5886095c34c8f9b5dc6db657e1963b1d9723d38f'
 WMF6_SITEINFO_SCRIBUNTO = 'ce115abd8ef15beb000c375d54a3137b4e56c52b'
+# NN default-options observation. The requested source leaves and Scribunto
+# registration are identical to the reviewed WMF6 bundle.
+NN_FIGURE_CORE = '6b357ea5fbbafe4bde3dcc705aa129afb392fdb2'
+NN_FIGURE_DEFAULTS = ('20261001', 'd018de55d0920199f0e5e613209f7961500ac0fce8b0b77169e32cd28f54c669')
 FIGURE_WMF5_CORE = '87f311882d8c84ec21e288d0bde8aa289df8dc56'
 FIGURE_WMF5_SCRIBUNTO = '25f7cdefa45a3b8417d7fa296f86b76537927f43'
 # Retained CSB response: current Figure defaults only, never main site-info.
@@ -133,7 +137,7 @@ def validate_producer_provenance(manifest):
 
 
 def source_pins(core):
-    if core == WMF6_SITEINFO_CORE:
+    if core in (WMF6_SITEINFO_CORE, NN_FIGURE_CORE):
         return {**SOURCE_PINS, 'ApiQuerySiteinfo.php': WMF6_SITEINFO_API_SHA256}
     return SOURCE_PINS
 
@@ -193,7 +197,7 @@ def response(data, wiki, language, profile=PROFILE, *, raw_sha=None, date=None):
     if binding is not None:
         reviewed_date, reviewed_sha = binding
         if (raw_sha != reviewed_sha or (date is not None and date != reviewed_date)
-                or (core == FIGURE_CSB_CORE and date is None)):
+                or (core in (FIGURE_CSB_CORE, NN_FIGURE_CORE) and date is None)):
             raise ValueError('Unreviewed Figure default-options observation')
     legacy.validate_server(general.get('server'))
     stamp(general.get('time'))
@@ -208,6 +212,8 @@ def response(data, wiki, language, profile=PROFILE, *, raw_sha=None, date=None):
 
 
 def file_defaults_observation(core, wiki):
+    if core == NN_FIGURE_CORE and wiki == 'nnwiktionary':
+        return NN_FIGURE_DEFAULTS
     if core == FIGURE_CSB_CORE and wiki == 'csbwiktionary':
         return FIGURE_CSB_DEFAULTS
     if core == FIGURE_WMF5_CORE and isinstance(wiki, str):
@@ -224,7 +230,7 @@ def reviewed_source(core, profile, wiki):
 
 
 def scribunto_reference(core):
-    if core == WMF6_SITEINFO_CORE:
+    if core in (WMF6_SITEINFO_CORE, NN_FIGURE_CORE):
         return WMF6_SITEINFO_SCRIBUNTO
     # These observed core revisions select Scribunto with the same pinned library leaves.
     return FIGURE_WMF5_SCRIBUNTO if core in (FIGURE_WMF5_CORE, FIGURE_MON_CORE, SEPTEMBER_EN_CORE, FIGURE_CSB_CORE) else SCRIBUNTO

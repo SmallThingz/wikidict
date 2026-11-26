@@ -28911,6 +28911,10 @@ const CapturedTableFocusTest = struct {
 };
 
 pub fn observedFontFamilyRequestAlloc(a: std.mem.Allocator, raw: []const u8) !?types.ContainerFontFamily {
+    return fontFamilyRequestAlloc(a, raw, false);
+}
+
+fn fontFamilyRequestAlloc(a: std.mem.Allocator, raw: []const u8, allow_implicit_default: bool) !?types.ContainerFontFamily {
     if (!observedFigureFontFamilySyntax(raw)) return null;
     var scratch = std.heap.ArenaAllocator.init(a);
     defer scratch.deinit();
@@ -28952,12 +28956,68 @@ pub fn observedFontFamilyRequestAlloc(a: std.mem.Allocator, raw: []const u8) !?t
             if (names.items.len == 0 and fallback == .sans_serif) return .sans_serif;
             return try cloneFontFamilyRequestAlloc(a, .{ .stack = .{ .names = names.items, .fallback = fallback } });
         }
-        if (!types.validFontFamilyName(name) or names.items.len == 16 or last) return null;
+        if (!types.validFontFamilyName(name) or names.items.len == 16) return null;
         try names.append(temp, name);
+        if (last) {
+            if (!allow_implicit_default) return null;
+            return try cloneFontFamilyRequestAlloc(a, .{ .stack = .{ .names = names.items, .fallback = .css_default } });
+        }
         if (value[at] != ',') return null;
         at += 1;
     }
     return null;
+}
+
+pub const FigureCaptionTypography = struct {
+    font_size: f32,
+    family: types.ContainerFontFamily,
+    line_height: types.ComputedLineHeight,
+};
+
+fn exactCaptionInlineValue(a: std.mem.Allocator, declarations: []const ObservedFigureDeclaration,
+    property: []const u8) !?[]const u8
+{
+    const surviving = try observedFigurePropertyCandidates(a, declarations, property, &.{"font"});
+    defer a.free(surviving);
+    if (surviving.len != 1) return null;
+    const selected = surviving[0];
+    if (!selected.priority.inline_style or selected.uncertain or selected.rank_unknown or selected.syntax_unknown or
+        !std.ascii.eqlIgnoreCase(selected.name, property)) return null;
+    return selected.raw;
+}
+
+/// This exact inline recipe has three longhands and an absolute declaring
+/// font size. Other declarations, including external possible winners, must
+/// retain their ordinary cascade or fail admission.
+pub fn resolveFigureCaptionTypographyAlloc(backing: std.mem.Allocator, profile: *const Profile,
+    element: *const TextElement, css: []const u8) !?FigureCaptionTypography
+{
+    if (css.len == 0 or css.len > max_css_bytes) return null;
+    var arena = std.heap.ArenaAllocator.init(backing);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var declarations: std.ArrayList(ObservedFigureDeclaration) = .empty;
+    try appendObservedFigureDeclarations(a, &declarations, css,
+        .{ .inline_style = true, .order = max_rules * 1024 }, false, false, null, 0);
+    if (declarations.items.len != 3) return null;
+    const matches = try profile.containerRuleMatchesIn(a, element);
+    if (matches.unresolved) return null;
+    for (matches.rules) |rule| {
+        try appendObservedFigureDeclarations(a, &declarations, rule.css,
+            .{ .specificity = rule.specificity, .order = rule.order },
+            rule.match == .unknown or rule.viewport != .all, rule.rank_unknown, null, 0);
+    }
+    const size = @import("font_scale.zig").parseCssPixelOrPointFontSize(
+        (try exactCaptionInlineValue(a, declarations.items, "font-size")) orelse return null) orelse return null;
+    const raw_height = (try exactCaptionInlineValue(a, declarations.items, "line-height")) orelse return null;
+    const height = containerLineHeight(raw_height) orelse return null;
+    if (height != .length or height.length.unit != .em) return null;
+    const pixels = @as(f64, size) * @as(f64, height.length.value);
+    if (!std.math.isFinite(pixels) or pixels > std.math.floatMax(f32)) return null;
+    const raw_family = (try exactCaptionInlineValue(a, declarations.items, "font-family")) orelse return null;
+    const family = (try fontFamilyRequestAlloc(backing, raw_family, true)) orelse return null;
+    return .{ .font_size = size, .family = family,
+        .line_height = .{ .value = @floatCast(pixels), .font_scale_basis = .css_px } };
 }
 
 pub fn cloneFontFamilyRequestAlloc(a: std.mem.Allocator, request: types.ContainerFontFamily) !types.ContainerFontFamily {

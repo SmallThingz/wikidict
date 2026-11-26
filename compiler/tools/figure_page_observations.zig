@@ -1223,6 +1223,11 @@ pub const RawPage = struct {
     source_element_relations: ?bool = null,
 };
 const MissingServedSet = struct { responses: []const []const u8, receipt: []const u8 };
+const YiMissingAssets = struct {
+    styles: MissingServedSet,
+    media_script: []const u8,
+    media_script_receipt: []const u8,
+};
 const MissingLinkStyles = struct {
     profile: []const u8,
     response: []const u8 = "",
@@ -1248,6 +1253,7 @@ pub const Document = struct {
     literal_screen_resources: ?MissingServedSet = null,
     missing_link_styles: ?MissingLinkStyles = null,
     static_poster_styles: ?StaticPosterStyles = null,
+    yi_missing_assets: ?YiMissingAssets = null,
 };
 const Attribute = struct { name: []const u8, value: []const u8 };
 const Inventory = struct {
@@ -1277,9 +1283,11 @@ const Occurrence = struct {
     anchor: ?Inventory,
     centered_width: ?u32 = null,
     right_anchor_width: ?u32 = null,
+    measured_left_anchor_width: ?u32 = null,
     centered_default_size: bool = false,
     right_default_size: bool = false,
     missing_content: ?ObservedMissing = null,
+    yi_missing_style: bool = false,
     static_poster: ?encoder.presentation_types.StaticPoster = null,
 };
 const SuppliedClassCapture = struct {
@@ -1338,7 +1346,7 @@ pub const SelectedPage = struct {
         var resolved_canonical: ?[]const u8 = null;
         defer if (resolved_canonical) |value| a.free(value);
         if (self.file_registry) |registry| {
-            if (!registry.file_authority or
+            if ((!registry.file_authority and !registry.measured_thumbnail_only) or
                 !std.mem.eql(u8, &registry.namespace_catalog.source_sha256, &self.namespace_catalog.source_sha256)) return null;
             if (try sizing.Registry.resolveCanonicalFile(registry, a, canonical)) |resolved| {
                 defer a.free(resolved);
@@ -1396,6 +1404,7 @@ pub const SelectedPage = struct {
         const observed = if (occurrence.missing_content) |*value| value else return null;
         const anchor_inventory = if (occurrence.anchor) |*value| value else return null;
         return .{ .label = observed.label, .href = observed.href, .data_width = observed.data_width,
+            .yi_missing_style = occurrence.yi_missing_style,
             .link_paint = if (observed.paint_root_proven) self.missing_link_paint else null,
             .anchor_attributes = .{ .ctx = anchor_inventory, .get = Inventory.presence },
             .element_attributes = .{ .ctx = &observed.element, .get = Inventory.presence } };
@@ -4930,6 +4939,57 @@ pub const SelectedPageStyles = struct {
     }
 };
 
+fn capturedYiMissing(page: RawPage, occurrence: RawOccurrence) bool {
+    const retained = [_]struct { page_id: u64, revision_id: u64, title: []const u8, file: []const u8,
+        raw: []const u8, response: []const u8 }{
+        .{ .page_id = 4970, .revision_id = 16281, .title = "dondurma",
+            .file = "טעקע:I scream You Scream (Unsplash).jpg", .raw = "0e45c9cac612eddc6312ac8a27857ebd2b9a7ee904523be8b27c62f7774c24b3",
+            .response = "6c6ef04c733c2b70f52d9f72e97809dadc20a0d3fa6a292d05cd904991cdaa7d" },
+        .{ .page_id = 5065, .revision_id = 16377, .title = "aspirin",
+            .file = "טעקע:Aspirin 20161209 143118.jpg", .raw = "206547d6c25c7d6f9a2ee2ed8e16ec3c0d332a3242a36386cd8892d5764eb179",
+            .response = "538ea8d82b073cab9edbe3ab42c0ac9d95f20de041d122c3283a08db78a6c06a" },
+    };
+    for (retained) |capture| if (page.page_id == capture.page_id and page.revision_id == capture.revision_id and
+        equal(page.title, capture.title) and equal(occurrence.canonical_file, capture.file) and
+        equal(page.raw_sha256, capture.raw) and digestMatches(page.response, capture.response)) return true;
+    return false;
+}
+
+const yi_missing_schema = "wikidict.figure-page-observations.yi-missing-v1";
+
+fn yiMissingStyledPage(page: RawPage) bool {
+    if (page.occurrences.len != 1 or !page.occurrences[0].missing_content or
+        !capturedYiMissing(page, page.occurrences[0])) return false;
+    const outer = page.outer_context orelse return false;
+    if (outer.selected_body != null or outer.current_identity != null or
+        !equal(outer.profile, "mediawiki-vector-2022-1.48.0-wmf.6")) return false;
+    const expected = switch (page.page_id) {
+        4970 => "8b60e23caffda8fa1051066888b717ee01d7ce38400e2057cf6753195404952c",
+        5065 => "7921f95b11cf5b55ea72f0bf55b8c772b11ef2d3eb43dddcc3464b9b5103bd42",
+        else => return false,
+    };
+    return digestMatches(outer.response, expected);
+}
+
+fn yiMissingStyleAssets(a: A, assets: YiMissingAssets, wiki: []const u8) !ValidatedMissingSet {
+    if (!equal(wiki, "yiwiktionary") or !digestMatches(assets.media_script, "24ed3d113dd5e3ff9dbdbbb9f306f5e8ae4e259f5546dd6692d11e38a13d570b")) return invalid;
+    const receipt = try json(a, assets.media_script_receipt);
+    try descriptor(assets.media_script, receipt);
+    const url = try string(receipt, "url");
+    if (!equal(url, "https://yi.wiktionary.org/w/load.php?lang=yi&modules=mediawiki.page.media&only=scripts&skin=vector-2022") or !equal(url, try string(receipt, "final_url")) or try number(receipt, "status") != 200) return invalid;
+    const assets_style = try validateObservedStyleSet(a, assets.styles, wiki);
+    const captures = [_]struct { url: []const u8, sha: []const u8 }{
+        .{ .url = "https://yi.wiktionary.org/w/load.php?lang=yi&modules=ext.uls.interlanguage%7Cext.visualEditor.desktopArticleTarget.noscript%7Cext.wikimediamessages.styles%7Cmediawiki.action.styles%7Cmediawiki.codex.messagebox.styles%7Cmediawiki.interface.helpers.linker.styles%7Cmediawiki.interface.helpers.styles%7Cskins.vector.icons%2Cstyles%7Cskins.vector.search.codex.styles&only=styles&skin=vector-2022", .sha = "1903338080bcc92e192ca9444feea535dd7bd2dd368391fbd11190d8151273c8" },
+        .{ .url = "https://yi.wiktionary.org/w/load.php?lang=yi&modules=ext.wikimediamessages.styles%7Cskins.vector.icons%2Cstyles%7Cskins.vector.search.codex.styles&only=styles&skin=vector-2022", .sha = "e40e8c4bbae3915d47c4b684ea1b4f37656702256544fef5f41e45f9490cdf4f" },
+        .{ .url = "https://yi.wiktionary.org/w/load.php?lang=yi&modules=site.styles&only=styles&skin=vector-2022", .sha = "67a685b3a7bf4d01066e51f94bcdba52a0c7fada3a48cd35549b5fb02cea9801" },
+    };
+    if (assets_style.urls.len != captures.len) return invalid;
+    for (captures, assets_style.urls, assets_style.responses) |expected, style_url, body| {
+        if (!equal(expected.url, style_url) or !digestMatches(body, expected.sha)) return invalid;
+    }
+    return assets_style;
+}
+
 pub const Book = struct {
     arena: std.heap.ArenaAllocator,
     namespace_sha256: [32]u8,
@@ -4942,7 +5002,13 @@ pub const Book = struct {
     literal_regions: []const PreparedLiteralRegion = &.{},
     missing_link_paint: ?encoder.presentation_types.MissingLinkPaint = null,
     pub fn init(parent: A, bytes: []const u8, ns: *const namespaces.Registry, registry: *const sizing.Registry, defaults_sha256: [32]u8, default_width: u32) !Book {
-        if (bytes.len == 0 or bytes.len > max_input or default_width == 0 or !registry.file_authority) return invalid;
+        // A measured transform can certify its one original identity for an
+        // anchor. It does not authorize file aliases or default-sized media.
+        const measured_anchor = registry.measured_thumbnail_only and !registry.file_authority and
+            ns.isCurrentYiFigureDefaults(defaults_sha256) and registry.records.len != 0 and
+            std.mem.eql(u8, &ns.source_sha256, &registry.namespace_catalog.source_sha256);
+        if (bytes.len == 0 or bytes.len > max_input or default_width == 0 or
+            (!measured_anchor and !registry.file_authority)) return invalid;
         var arena = std.heap.ArenaAllocator.init(parent);
         errdefer arena.deinit();
         const a = arena.allocator();
@@ -4953,7 +5019,8 @@ pub const Book = struct {
             if (shape.object.get("schema")) |schema_value| {
                 if (schema_value == .string and !equal(schema_value.string, "wikidict.figure-page-observations.v8") and
                     !equal(schema_value.string, "wikidict.figure-page-observations.v10") and
-                    !equal(schema_value.string, "wikidict.figure-page-observations.v11")) {
+                    !equal(schema_value.string, "wikidict.figure-page-observations.v11") and
+                    !equal(schema_value.string, yi_missing_schema)) {
                     if (shape.object.get("pages")) |page_values| {
                         if (page_values == .array) {
                             for (page_values.array.items) |page_value| {
@@ -4972,6 +5039,12 @@ pub const Book = struct {
                         (page_value.object.contains("authored_style_operations") or page_value.object.contains("authored_head_context"))) return error.UnknownField;
         };
         const doc = try std.json.parseFromValueLeaky(Document, a, shape, .{});
+        const yi_style_contract = equal(doc.schema, yi_missing_schema);
+        if (yi_style_contract != (doc.yi_missing_assets != null) or (yi_style_contract and !measured_anchor)) return invalid;
+        if (measured_anchor and (if (yi_style_contract) shape.object.count() != 7 or doc.pages.len != 3
+            else !equal(doc.schema, "wikidict.figure-page-observations.v4") or
+                shape.object.count() != 6 or (doc.pages.len != 1 and doc.pages.len != 3))) return invalid;
+        const current_yi_styles = if (doc.yi_missing_assets) |assets| try yiMissingStyleAssets(a, assets, ns.wiki) else null;
         // v7 composes independent Missing and SVG-language proofs. It does not
         // manufacture a page context or authorize general stylesheets.
         // V9 composes existing independent proofs; it grants no v8-only source
@@ -5015,8 +5088,8 @@ pub const Book = struct {
         const svg_language_contract = combined_contract or equal(doc.schema, "wikidict.figure-page-observations.v6");
         const paint_contract = equal(doc.schema, "wikidict.figure-page-observations.v3");
         const poster_contract = poster_svg_contract or equal(doc.schema, "wikidict.figure-page-observations.v5");
-        const page_style_contract = combined_contract;
-        const class_contract = combined_contract or poster_contract or equal(doc.schema, "wikidict.figure-page-observations.v4");
+        const page_style_contract = combined_contract or yi_style_contract;
+        const class_contract = combined_contract or yi_style_contract or poster_contract or equal(doc.schema, "wikidict.figure-page-observations.v4");
         const class_scope_contract = class_contract or svg_language_contract;
         const missing_contract = class_contract or paint_contract or equal(doc.schema, "wikidict.figure-page-observations.v2");
         if ((!equal(doc.schema, "wikidict.figure-page-observations.v1") and !missing_contract and !svg_language_contract) or !equal(doc.wiki, ns.wiki) or !equal(doc.date, ns.dump_date) or
@@ -5054,10 +5127,33 @@ pub const Book = struct {
                 // would otherwise run first. Every record is checked eagerly.
                 _ = try authoredHeadContext(a, page);
             }
-            const has_page_styles = page_style_contract and page.page_styles != null;
+            const yi_style_page = yi_style_contract and yiMissingStyledPage(page);
+            const has_page_styles = (page_style_contract and page.page_styles != null) or yi_style_page;
             if (page.text_class_scope and !class_scope_contract) return invalid;
             if (page_style_contract and page.page_styles != null and (!page.text_class_scope or page.outer_context == null)) return invalid;
             const page_shape = (try field(shape, "pages")).array.items[index];
+            var yi_missing = false;
+            if (measured_anchor) {
+                if (page_shape.object.count() != @as(usize, if (yi_style_page) 13 else 11) or
+                    page.namespace_id != 0 or !page.text_class_scope or page.occurrences.len != 1 or
+                    (page.outer_context != null) != yi_style_page or (page.figure_style_operations != null) != yi_style_page or
+                    page.source_element_relations != null) return invalid;
+                const raw_occurrence = (try field(page_shape, "occurrences")).array.items[0];
+                const occurrence = page.occurrences[0];
+                if (occurrence.width or occurrence.height or occurrence.static_poster or
+                    occurrence.svg_language != null or occurrence.resolved_svg_language != null) return invalid;
+                if (occurrence.missing_content) {
+                    if (doc.pages.len != 3 or raw_occurrence.object.count() != 4 or
+                        occurrence.anchor_attributes or !capturedYiMissing(page, occurrence) or
+                        (yi_style_contract and !yi_style_page)) return invalid;
+                    if (yi_style_page) {
+                        const operations = page.figure_style_operations orelse return invalid;
+                        if (operations.len != 1 or operations[0].media_kind != .missing or
+                            operations[0].start != occurrence.start or operations[0].end != occurrence.end) return invalid;
+                    }
+                    yi_missing = true;
+                } else if (index != 0 or raw_occurrence.object.count() != 9 or !occurrence.anchor_attributes) return invalid;
+            }
             if (currentGetLiteral(page)) {
                 if (!image_map_contract or doc.missing_link_styles != null) return invalid;
                 for ([_][]const u8{ "request", "form_body", "receipt", "response" }) |name|
@@ -5083,7 +5179,7 @@ pub const Book = struct {
                 (page.figure_style_operations orelse return invalid).len == 0)) return invalid;
             const source_and_html = try responseSource(a, ns, page);
             if (page_shape.object.get("figure_style_operations")) |operations| {
-                if ((!image_map_contract and !missing_operation_contract and !relation_style_contract) or !has_page_styles or !page.text_class_scope or page.outer_context == null) return invalid;
+                if ((!image_map_contract and !missing_operation_contract and !relation_style_contract and !yi_style_page) or !has_page_styles or !page.text_class_scope or page.outer_context == null) return invalid;
                 _ = try figureStyleRangeShape(operations, source_and_html.source);
                 if (page.figure_style_operations == null) return invalid;
                 if (missing_operation_contract) for (page.figure_style_operations.?) |operation| {
@@ -5120,7 +5216,16 @@ pub const Book = struct {
                 try staticPosterPageContext(a, ns, page, source_and_html.html);
             }
             var observed_nodes: std.ArrayList(ObservedSiblingNode) = .empty;
-            var text_scope: ?profile.BoundedTextClassScope = if (page.text_class_scope or relations)
+            var text_scope: ?profile.BoundedTextClassScope = if (measured_anchor) scope: {
+                const tag = syntax.tagAt(source_and_html.html, 0) orelse return invalid;
+                const root = try inventoryReturnedMode(a, tag, false, false, false);
+                if (root.attributes.len != 3 or !equal(root.get("class") orelse return invalid, "mw-content-rtl mw-parser-output") or
+                    !equal(root.get("lang") orelse return invalid, ns.content_language) or
+                    !equal(root.get("dir") orelse return invalid, "rtl")) return invalid;
+                const bounded = try observedTextClassScopeToEndWithRootOptions(a, ns, source_and_html.html,
+                    if (yi_style_page) &observed_nodes else null, null, false, root, false, false);
+                break :scope if (yi_style_page) bounded else null;
+            } else if (page.text_class_scope or relations)
                 try observedTextClassScopeToEndIn(a, ns, source_and_html.html, if (relations or page.outer_context != null or has_page_styles) &observed_nodes else null, null, currentGetLiteral(page)) else null;
             const source_siblings = if (relations)
                 try observedSourceSiblings(a, source_and_html.source, source_and_html.html, observed_nodes.items) else &.{};
@@ -5146,7 +5251,8 @@ pub const Book = struct {
                 } else return invalid;
             }
             const page_styles = try observedPageStyleProfile(a, ns, doc.schema, page,
-                (try field(shape, "pages")).array.items[index], source_and_html.html, text_scope, paint_outer);
+                (try field(shape, "pages")).array.items[index], source_and_html.html, text_scope, paint_outer,
+                if (yi_style_page) current_yi_styles else null);
             if (page_styles) |selected_styles| {
                 selected_styles.observed_nodes = observed_nodes.items;
                 selected_styles.observed_html = source_and_html.html;
@@ -5167,7 +5273,7 @@ pub const Book = struct {
                         try selectedGetCaptionCorrespondence(a, ns, source_and_html.source, source_and_html.html, observed_nodes.items, selected);
                         if (currentGetLiteral(page)) try currentLiteralFrame(page, source_and_html.html, observed_nodes.items, selected);
                         break :get selected;
-                    } else if (relation_style_contract and ranges.len != 0 and ranges[0].media_kind == .missing) relation: {
+                    } else if ((relation_style_contract or yi_style_page) and ranges.len != 0 and ranges[0].media_kind == .missing) relation: {
                         const selected = try figureStyleFlowSourceProofsIn(a, ns, source_and_html.source, ranges, false, true);
                         try figureStyleCandidates(a, ns, source_and_html.html, observed_nodes.items, selected);
                         break :relation selected;
@@ -5215,7 +5321,7 @@ pub const Book = struct {
             const observed_images: []const ObservedImage = if (page.occurrences.len == 0 and has_image_map_error) &.{} else try observedImagesWithServedPaintFailureMode(a, ns, source_and_html.html, page.occurrences,
                 if (selected_served != null) paint_outer else null,
                 if (served_profile) |*styles| styles else null, selected_served != null, null,
-                if (relation_style_contract) (if (page_styles) |styles| styles.figure_styles else &.{}) else &.{}, currentGetLiteral(page));
+                if (relation_style_contract) (if (page_styles) |styles| styles.figure_styles else &.{}) else &.{}, currentGetLiteral(page), measured_anchor and !yi_missing, yi_missing);
             const occurrences = try a.alloc(Occurrence, page.occurrences.len);
             for (page.occurrences, occurrences, 0..) |occurrence, *selected, occurrence_index| {
                 if (occurrence.start >= occurrence.end or occurrence.end > source_and_html.source.len) return invalid;
@@ -5240,6 +5346,7 @@ pub const Book = struct {
                 var poster: ?encoder.presentation_types.StaticPoster = null;
                 var eligible_svg = false;
                 var fact_found = false;
+                var observed_file_width: ?u32 = null;
                 if (occurrence.static_poster) {
                     const fact = registry.static_poster_files.get(canonical) orelse return invalid;
                     if (!equal(fact.file_sha1, occurrence.file_sha1) or !equal(fact.file_timestamp, occurrence.file_timestamp) or
@@ -5251,12 +5358,14 @@ pub const Book = struct {
                     poster = .{ .policy = proof.policy, .label = try a.dupe(u8, proof.label),
                         .file_sha1 = try a.dupe(u8, proof.file_sha1), .file_timestamp = try a.dupe(u8, proof.file_timestamp) };
                     fact_found = true;
-                } else for (registry.records, 0..) |fact, fact_index| if (equal(fact.canonical_file, canonical)) {
+                } else for (registry.records, 0..) |fact, fact_index| if (equal(fact.canonical_file, canonical) and
+                    (!measured_anchor or fact.width_px == observed_images[occurrence_index].width)) {
                     if (!equal(fact.file_sha1, occurrence.file_sha1) or !equal(fact.file_timestamp, occurrence.file_timestamp) or
                         fact.original_width != occurrence.original_width or fact.original_height != occurrence.original_height) return invalid;
                     if (occurrence.height and (fact_index >= registry.height_bound_records.len or
                         registry.height_bound_records[fact_index] != .svg_redundant_height or
                         fact.format != .thumbnail or fact.sizing != .requested_fit)) return invalid;
+                    observed_file_width = fact.width_px;
                     eligible_svg = fact_index < registry.height_bound_records.len and
                         registry.height_bound_records[fact_index] == .svg_redundant_height and
                         fact.format == .thumbnail and fact.sizing == .requested_fit;
@@ -5285,6 +5394,7 @@ pub const Book = struct {
                     break :proof .{ .width = image.width, .height = image.height };
                 } else null;
                 if (image.right_default_size and image.width > occurrence.original_width and svg_upright_fit == null) return invalid;
+                if (measured_anchor and !yi_missing and (!image.measured_left_anchor or image.width != observed_file_width)) return invalid;
                 const svg_language: ?SvgLanguageEvidence = if (occurrence.svg_language orelse occurrence.resolved_svg_language) |language| proof: {
                     // Actual raster and language-key evidence was checked in the
                     // complete HTML observer. File models alone never grant it.
@@ -5311,8 +5421,9 @@ pub const Book = struct {
                     .anchor = if (occurrence.anchor_attributes or occurrence.missing_content or occurrence.static_poster) image.anchor else null,
                     .centered_width = if (image.centered) image.width else null,
                     .right_anchor_width = if (image.right_anchor) image.width else null,
+                    .measured_left_anchor_width = if (image.measured_left_anchor) image.width else null,
                     .centered_default_size = image.centered_default_size, .right_default_size = image.right_default_size,
-                    .missing_content = image.missing_content, .static_poster = poster };
+                    .missing_content = image.missing_content, .yi_missing_style = yi_style_page, .static_poster = poster };
             }
             out.* = .{ .namespace_id = page.namespace_id, .page_id = page.page_id, .revision_id = page.revision_id, .title = page.title,
                 .supplied_class_html = if (equal(doc.schema, "wikidict.figure-page-observations.v1")) source_and_html.html else null,
@@ -5612,6 +5723,11 @@ pub const Book = struct {
                     if (!alignedThumbnailDimensionOptions(context.image_options.?, occurrence.original_options, "img_right", observed_width, false) or
                         !alignedThumbnailDimensionOptions(context.image_options.?, slot.stage_options, "img_right", observed_width, false)) return null;
                 }
+                if (occurrence.measured_left_anchor_width) |observed_width| {
+                    const options = context.image_options.?;
+                    if (!alignedThumbnailDimensionOptions(options, occurrence.original_options, "img_left", observed_width, false) or
+                        !alignedThumbnailDimensionOptions(options, slot.stage_options, "img_left", observed_width, false)) return null;
+                }
                 if (occurrence.centered_default_size) {
                     const width = occurrence.width orelse return null;
                     if (occurrence.centered_width != width or
@@ -5863,7 +5979,8 @@ fn centeredThumbnailOptions(registry: *const namespaces.image_options.Registry, 
 fn alignedThumbnailDimensionOptions(registry: *const namespaces.image_options.Registry, options: []const u8, comptime alignment: []const u8, observed_width: u32, bare_upright: bool) bool {
     var parts: [4][]const u8 = undefined;
     var count: usize = 0;
-    var at: usize = 0;
+    const measured_left = comptime equal(alignment, "img_left");
+    var at: usize = if (measured_left and std.mem.startsWith(u8, options, "|")) 1 else 0;
     while (at <= options.len) {
         if (count == parts.len) return false;
         const end = syntax.delimiter(options, "|", at) orelse options.len;
@@ -5872,12 +5989,12 @@ fn alignedThumbnailDimensionOptions(registry: *const namespaces.image_options.Re
         at = end + 1;
     }
     if (count != parts.len or observed_width == 0) return false;
-    const format = registry.match(parts[0], .image) orelse return false;
-    const horizontal = registry.match(parts[1], .image) orelse return false;
+    const format = registry.match(parts[if (measured_left) 1 else 0], .image) orelse return false;
+    const horizontal = registry.match(parts[if (measured_left) 0 else 1], .image) orelse return false;
     const dimension = registry.match(parts[2], .image) orelse return false;
     if (!equal(format.id, "img_thumbnail") or format.value != null or
         !equal(horizontal.id, alignment) or horizontal.value != null or
-        (equal(alignment, "img_right") and parts[3].len == 0) or registry.match(parts[3], .image) != null) return false;
+        ((equal(alignment, "img_right") or measured_left) and parts[3].len == 0) or registry.match(parts[3], .image) != null) return false;
     if (bare_upright) return equal(dimension.id, "img_upright") and dimension.value == null and parts[3].len != 0;
     if (!equal(dimension.id, "img_width")) return false;
     const width = dimension.value orelse return false;
@@ -6191,7 +6308,8 @@ fn missingHeadSources(a: A, ns: *const namespaces.Registry, page: RawPage, serve
     if (observed.ancestors.len != 2) return invalid;
     const root = observed.ancestors[0].attributes; const body = observed.ancestors[1].attributes;
     const classes = root.get("class") orelse return invalid;
-    if (!equal(root.get("lang") orelse "", ns.content_language) or !equal(root.get("dir") orelse "", "ltr") or
+    if (!equal(root.get("lang") orelse "", ns.content_language) or
+        !equal(root.get("dir") orelse "", if (yiMissingStyledPage(page)) "rtl" else "ltr") or
         !profile.Profile.hasClass(classes, "skin-theme-clientpref-day") or
         profile.Profile.hasClass(classes, "skin-theme-clientpref-night") or profile.Profile.hasClass(classes, "skin-theme-clientpref-os") or
         !profile.Profile.hasClass(body.get("class") orelse "", "skin-vector-2022")) return invalid;
@@ -6238,14 +6356,16 @@ fn missingHeadSources(a: A, ns: *const namespaces.Registry, page: RawPage, serve
 // It never filters declarations in those bodies. Every emitted body style keeps
 // its original byte offset and order, and unknown CSS remains the parser's refusal.
 fn observedPageStyleProfile(a: A, ns: *const namespaces.Registry, schema: []const u8, page: RawPage, shape: Value, html: []const u8,
-    text_scope: ?profile.BoundedTextClassScope, outer: ?ObservedOuterContext) !?*PageStyleData
+    text_scope: ?profile.BoundedTextClassScope, outer: ?ObservedOuterContext, yi_styles: ?ValidatedMissingSet) !?*PageStyleData
 {
     if (shape != .object) return invalid;
-    const field_value = shape.object.get("page_styles") orelse return null;
-    if ((!equal(schema, "wikidict.figure-page-observations.v7") and !equal(schema, "wikidict.figure-page-observations.v8") and !equal(schema, "wikidict.figure-page-observations.v9") and !equal(schema, "wikidict.figure-page-observations.v10") and !equal(schema, "wikidict.figure-page-observations.v11")) or field_value != .object or field_value.object.count() != 2 or
+    const field_value = shape.object.get("page_styles") orelse if (yi_styles != null) @as(Value, .null) else return null;
+    if (yi_styles != null and (!equal(schema, yi_missing_schema) or !yiMissingStyledPage(page) or
+        field_value != .null or !page.text_class_scope or text_scope == null or outer == null)) return invalid;
+    if (yi_styles == null and ((!equal(schema, "wikidict.figure-page-observations.v7") and !equal(schema, "wikidict.figure-page-observations.v8") and !equal(schema, "wikidict.figure-page-observations.v9") and !equal(schema, "wikidict.figure-page-observations.v10") and !equal(schema, "wikidict.figure-page-observations.v11")) or field_value != .object or field_value.object.count() != 2 or
         field_value.object.get("responses") == null or field_value.object.get("receipt") == null or
-        !page.text_class_scope or text_scope == null or outer == null) return invalid;
-    const served = if (currentGetLiteral(page)) try currentLiteralStyleSet(a, page, ns.wiki) else
+        !page.text_class_scope or text_scope == null or outer == null)) return invalid;
+    const served = yi_styles orelse if (currentGetLiteral(page)) try currentLiteralStyleSet(a, page, ns.wiki) else
         try validateObservedStyleSet(a, page.page_styles orelse return invalid, ns.wiki);
     if (suppliedScreen(page) and !equal(schema, "wikidict.figure-page-observations.v8")) return invalid;
     const selected = try missingHeadSources(a, ns, page, served);
@@ -7501,7 +7621,7 @@ const ObservedMissing = struct {
     centered: bool = false,
     left: bool = false,
 };
-const ObservedImage = struct { width: u32, height: u32 = 0, svg_language: ?[]const u8 = null, element: ?Inventory = null, anchor: Inventory, centered: bool = false, centered_default_size: bool = false, right_anchor: bool = false, right_default_size: bool = false, missing_content: ?ObservedMissing = null, poster_label: ?[]const u8 = null };
+const ObservedImage = struct { width: u32, height: u32 = 0, svg_language: ?[]const u8 = null, element: ?Inventory = null, anchor: Inventory, centered: bool = false, centered_default_size: bool = false, right_anchor: bool = false, measured_left_anchor: bool = false, right_default_size: bool = false, missing_content: ?ObservedMissing = null, poster_label: ?[]const u8 = null };
 // Returned markup supplies occurrence facts, not computed CSS or image pixels.
 fn missingAnchorFile(a: A, ns: *const namespaces.Registry, anchor: Inventory) !?[]const u8 {
     if (!equal(anchor.get("class") orelse return null, "new")) return null;
@@ -7789,11 +7909,11 @@ fn observedImagesWithServedPaintFailure(a: A, ns: *const namespaces.Registry, ht
 
 fn observedImagesWithServedPaintFailureIn(a: A, ns: *const namespaces.Registry, html: []const u8, occurrences: []const RawOccurrence,
     paint_outer: ?ObservedOuterContext, served_profile: ?*const profile.Profile, require_served_proof: bool, failure: ?*?MissingPaintFailure, missing_operations: []const FigureStyleProof) ![]const ObservedImage {
-    return observedImagesWithServedPaintFailureMode(a, ns, html, occurrences, paint_outer, served_profile, require_served_proof, failure, missing_operations, false);
+    return observedImagesWithServedPaintFailureMode(a, ns, html, occurrences, paint_outer, served_profile, require_served_proof, failure, missing_operations, false, false, false);
 }
 
 fn observedImagesWithServedPaintFailureMode(a: A, ns: *const namespaces.Registry, html: []const u8, occurrences: []const RawOccurrence,
-    paint_outer: ?ObservedOuterContext, served_profile: ?*const profile.Profile, require_served_proof: bool, failure: ?*?MissingPaintFailure, missing_operations: []const FigureStyleProof, current_literal: bool) ![]const ObservedImage {
+    paint_outer: ?ObservedOuterContext, served_profile: ?*const profile.Profile, require_served_proof: bool, failure: ?*?MissingPaintFailure, missing_operations: []const FigureStyleProof, current_literal: bool, measured_anchor: bool, captured_yi_missing: bool) ![]const ObservedImage {
     var stack: [128]ObservedOpenNode = undefined;
     var depth: usize = 0;
     var at: usize = 0;
@@ -7934,7 +8054,8 @@ fn observedImagesWithServedPaintFailureMode(a: A, ns: *const namespaces.Registry
                     };
                     var observed = if (current_literal)
                         try observedCurrentLiteralMissingContent(a, ns, occurrence.canonical_file, html, at, tag, inv, stack[depth - 1].tag, anchor, stack[depth - 2].attributes, left_proofs == 1)
-                    else try observedMissingContentIn(a, html, at, tag, inv, stack[depth - 1].tag, anchor, stack[depth - 2].attributes, left_proofs == 1);
+                    else try observedMissingContentIn(a, html, at, tag, inv, stack[depth - 1].tag, anchor, stack[depth - 2].attributes,
+                            left_proofs == 1 or captured_yi_missing);
                     // Only the complete observed ParserOutput root directly
                     // owns this Figure. A wrapper can reset inherited theme
                     // variables (.notheme/.skin-invert), so it cannot borrow
@@ -8018,6 +8139,8 @@ fn observedImagesWithServedPaintFailureMode(a: A, ns: *const namespaces.Registry
                 const right_anchor = occurrence.anchor_attributes and !occurrence.width and !occurrence.height and
                     occurrence.svg_language == null and occurrence.resolved_svg_language == null and
                     equal(figure_classes, "mw-halign-right");
+                const measured_left_anchor = measured_anchor and depth == 3 and
+                    stack[0].tag.is("div") and equal(figure_classes, "mw-halign-left");
                 const height_right = occurrence.height and equal(figure_classes, "mw-halign-right");
                 const right_default_size = occurrence.width and !occurrence.height and !occurrence.anchor_attributes and
                     occurrence.svg_language == null and occurrence.resolved_svg_language == null and
@@ -8025,12 +8148,12 @@ fn observedImagesWithServedPaintFailureMode(a: A, ns: *const namespaces.Registry
                 if (!equal(stack[depth - 2].attributes.get("typeof") orelse return invalid, "mw:File/Thumb") or
                     (!equal(figure_classes, "mw-default-size") and
                         !(explicit_centered and occurrence.anchor_attributes and !occurrence.width) and
-                        !(centered_default_size and occurrence.width) and !right_anchor and !height_right and !right_default_size and
+                        !(centered_default_size and occurrence.width) and !right_anchor and !measured_left_anchor and !height_right and !right_default_size and
                         !(explicit_svg_width and class_value == null)) or
                     !equal(anchor.get("class") orelse return invalid, "mw-file-description") or
                     try positiveAttribute(inv, "data-file-width") != occurrence.original_width or try positiveAttribute(inv, "data-file-height") != occurrence.original_height) return invalid;
                 if (occurrence.height and !height_right) return invalid;
-                if ((occurrence.height or right_anchor) and (!equal(inv.get("class") orelse "", "mw-file-element") or inv.get("style") != null)) return invalid;
+                if ((occurrence.height or right_anchor or measured_left_anchor) and (!equal(inv.get("class") orelse "", "mw-file-element") or inv.get("style") != null)) return invalid;
                 for (anchor.attributes) |attr| if (!equal(attr.name, "href") and !equal(attr.name, "class") and !equal(attr.name, "rel") and !equal(attr.name, "title")) return invalid;
                 for (stack[depth - 2].attributes.attributes) |attr| if (!equal(attr.name, "class") and !equal(attr.name, "typeof")) return invalid;
                 try imageSource(a, ns, inv.get("src") orelse return invalid, occurrence.canonical_file);
@@ -8062,9 +8185,9 @@ fn observedImagesWithServedPaintFailureMode(a: A, ns: *const namespaces.Registry
                 const width = try positiveAttribute(inv, "width");
                 if (centered and width > occurrence.original_width) return invalid;
                 const height = try positiveAttribute(inv, "height");
-                if (right_anchor and !observedWidthDownfit(width, height, occurrence.original_width, occurrence.original_height)) return invalid;
+                if ((right_anchor or measured_left_anchor) and !observedWidthDownfit(width, height, occurrence.original_width, occurrence.original_height)) return invalid;
                 if (occurrence.height and !observedHeightFit(width, height, occurrence.original_width, occurrence.original_height)) return invalid;
-                selected[index] = .{ .width = width, .height = height, .svg_language = occurrence.svg_language orelse occurrence.resolved_svg_language, .element = inv, .anchor = anchor, .centered = centered, .centered_default_size = centered_default_size, .right_anchor = right_anchor, .right_default_size = right_default_size };
+                selected[index] = .{ .width = width, .height = height, .svg_language = occurrence.svg_language orelse occurrence.resolved_svg_language, .element = inv, .anchor = anchor, .centered = centered, .centered_default_size = centered_default_size, .right_anchor = right_anchor, .measured_left_anchor = measured_left_anchor, .right_default_size = right_default_size };
             };
         }
         if (!is_void) {
@@ -9700,6 +9823,8 @@ fn observedOuterContext(a: A, ns: *const namespaces.Registry, page: RawPage, out
         "MediaWiki 1.48.0-wmf.3"
     else if (equal(outer.profile, "mediawiki-vector-2022-1.48.0-wmf.4"))
         "MediaWiki 1.48.0-wmf.4"
+    else if (equal(ns.wiki, "yiwiktionary") and yiMissingStyledPage(page))
+        "MediaWiki 1.48.0-wmf.6"
     else if (suppliedScreen(page)) screen: {
         _ = (try verifiedThemePreferenceSeed(a, ns, page, false)) orelse return invalid;
         _ = (try verifiedThemePreferenceSeed(a, ns, page, true)) orelse return invalid;
@@ -9765,7 +9890,8 @@ fn observedOuterContext(a: A, ns: *const namespaces.Registry, page: RawPage, out
         if (!equal(node.tag, tag) or !profile.Profile.hasClass(node.attributes.get("class") orelse "", class) or !equal(node.attributes.get("id") orelse "", id)) return invalid;
     }
     const root = observed.root orelse return invalid;
-    if (!equal(root.get("class") orelse "", scope.root_classes) or !equal(root.get("lang") orelse "", ns.content_language) or !equal(root.get("dir") orelse "", "ltr")) return invalid;
+    if (!equal(root.get("class") orelse "", scope.root_classes) or !equal(root.get("lang") orelse "", ns.content_language) or
+        !equal(root.get("dir") orelse "", if (yiMissingStyledPage(page)) "rtl" else "ltr")) return invalid;
     var result: std.ArrayList(u8) = .empty;
     errdefer result.deinit(a);
     for (observed.ancestors) |node| {
@@ -20027,7 +20153,7 @@ test "current GET literal raw scope requires a unique top level line without tem
     try currentLiteralFrameRootPath(html, nodes.items, 3);
     try std.testing.expectEqual(@as(?usize, 2), nodes.items[3].parent);
     try std.testing.expectEqualStrings("_Etimôlôjia", nodes.items[2].attributes.get("aria-labelledby").?);
-    _ = try observedImagesWithServedPaintFailureMode(a, &ns, html, &.{}, null, null, false, null, &.{}, true);
+    _ = try observedImagesWithServedPaintFailureMode(a, &ns, html, &.{}, null, null, false, null, &.{}, true, false, false);
     try std.testing.expectError(invalid, observedTextClassScope(a, &ns, html));
     try std.testing.expectError(invalid, observedImages(a, &ns, html, &.{}));
     for ([_][]const u8{
@@ -20044,7 +20170,7 @@ test "current GET literal raw scope requires a unique top level line without tem
     }) |opening| {
         const bad = try std.mem.concat(a, u8, &.{ root, opening, "<figure></figure></section></div>" });
         try std.testing.expectError(invalid, observedTextClassScopeToEndIn(a, &ns, bad, null, null, true));
-        try std.testing.expectError(invalid, observedImagesWithServedPaintFailureMode(a, &ns, bad, &.{}, null, null, false, null, &.{}, true));
+        try std.testing.expectError(invalid, observedImagesWithServedPaintFailureMode(a, &ns, bad, &.{}, null, null, false, null, &.{}, true, false, false));
     }
     const unclosed = root ++ section ++ "<figure></figure></div>";
     try std.testing.expectError(invalid, observedTextClassScopeToEndIn(a, &ns, unclosed, null, null, true));
@@ -20168,7 +20294,7 @@ test "current literal returned HTML keeps quoted greater than bytes without chan
     try std.testing.expectEqual(@as(?usize, 0), nodes.items[1].parent);
     try std.testing.expectEqualStrings("left > right", nodes.items[1].attributes.get("title").?);
     try std.testing.expectEqualStrings("two > three & <b>inert</b>", nodes.items[1].attributes.get("data-note").?);
-    try std.testing.expectEqual(@as(usize, 0), (try observedImagesWithServedPaintFailureMode(a, &ns, html, &.{}, null, null, false, null, &.{}, true)).len);
+    try std.testing.expectEqual(@as(usize, 0), (try observedImagesWithServedPaintFailureMode(a, &ns, html, &.{}, null, null, false, null, &.{}, true, false, false)).len);
     // Outside a quote, the first greater-than still terminates the tag. The
     // observed inventory continues requiring quoted, complete attribute values.
     const unquoted = "<span title=left>right>";
@@ -20186,7 +20312,7 @@ test "current literal returned HTML keeps quoted greater than bytes without chan
     }) |bad| {
         const refused = try std.mem.concat(a, u8, &.{ root, bad, "visible</span></div>" });
         try std.testing.expectError(invalid, observedTextClassScopeToEndIn(a, &ns, refused, null, null, true));
-        try std.testing.expectError(invalid, observedImagesWithServedPaintFailureMode(a, &ns, refused, &.{}, null, null, false, null, &.{}, true));
+        try std.testing.expectError(invalid, observedImagesWithServedPaintFailureMode(a, &ns, refused, &.{}, null, null, false, null, &.{}, true, false, false));
     }
     // The complete graph validator is the existing handler-refusal boundary;
     // the following image walk receives only that already-validated graph.
@@ -21208,7 +21334,7 @@ test "retained two-operation Ready input binds every listed ordinary and block F
     try std.testing.expect(proofs.len == 1 and proofs[0].range.media_kind == .image and proofs[0].candidates.len == 1);
     var parent = try profile.parseForTargetAlloc(a, "", .screen); defer parent.deinit();
     var stored = (try observedPageStyleProfile(a, &ns, document.schema, page,
-        selected_shape orelse return error.TestUnexpectedResult, supplied.html, scope, outer) orelse return error.TestUnexpectedResult).*;
+        selected_shape orelse return error.TestUnexpectedResult, supplied.html, scope, outer, null) orelse return error.TestUnexpectedResult).*;
     stored.observed_nodes = source.items;
     stored.observed_html = supplied.html;
     stored.figure_styles = proofs;
@@ -23611,7 +23737,7 @@ test "authored Rule actual source and literal parents select both complete page 
     try std.testing.expectEqualStrings("NavContent", nodes.items[node.parent.?].attributes.get("class").?);
     const shape = try json(a, @embedFile(AuthoredHeadTesting.prefix ++ "alexander.page.json"));
     rule193_checkpoint = "page styles/profile";
-    const stored = (try observedPageStyleProfile(a, &ns, "wikidict.figure-page-observations.v8", page, shape, supplied.html, scope, outer)) orelse return error.TestUnexpectedResult;
+    const stored = (try observedPageStyleProfile(a, &ns, "wikidict.figure-page-observations.v8", page, shape, supplied.html, scope, outer, null)) orelse return error.TestUnexpectedResult;
     stored.observed_nodes = nodes.items; stored.observed_html = supplied.html; stored.authored_element_styles = proofs;
     try std.testing.expect(page.figure_style_operations == null and stored.figure_styles.len == 0);
     const served = try validateObservedStyleSet(a, page.page_styles.?, ns.wiki);
@@ -23639,7 +23765,7 @@ test "authored Rule actual source and literal parents select both complete page 
         var changed = page;
         changed.outer_context.?.response = try std.mem.concat(a, u8, &.{ get[0..head_end], unbound_head, get[head_end..] });
         try std.testing.expectError(error.InvalidFigurePageObservations,
-            observedPageStyleProfile(a, &ns, "wikidict.figure-page-observations.v8", changed, shape, supplied.html, scope, outer));
+            observedPageStyleProfile(a, &ns, "wikidict.figure-page-observations.v8", changed, shape, supplied.html, scope, outer, null));
     }
     rule193_checkpoint = "selected styles/alternative refusal";
     var parent = try profile.parseForTargetAlloc(a, "", .screen); defer parent.deinit();
@@ -28570,7 +28696,7 @@ test "authored Rule complete actual graph preserves preceding STYLE in both sele
     const outer = try observedOuterContext(a, &ns, page, page.outer_context.?, scope);
     const proofs = try authoredElementStyleProofsWithHtml(a, &ns, supplied.source, supplied.html, page.authored_style_operations.?, nodes.items);
     const shape = try json(a, @embedFile(AuthoredHeadTesting.prefix ++ "alexander.page.json"));
-    const stored = (try observedPageStyleProfile(a, &ns, "wikidict.figure-page-observations.v8", page, shape, supplied.html, scope, outer)) orelse return error.TestUnexpectedResult;
+    const stored = (try observedPageStyleProfile(a, &ns, "wikidict.figure-page-observations.v8", page, shape, supplied.html, scope, outer, null)) orelse return error.TestUnexpectedResult;
     stored.observed_nodes = nodes.items; stored.observed_html = supplied.html; stored.authored_element_styles = proofs;
     var parent = try profile.parseForTargetAlloc(a, "", .screen); defer parent.deinit();
     const choices = try selectAuthoredElementStyles(a, &parent, stored);

@@ -376,7 +376,30 @@ def bound_file_core(core, selected_core, observed, *, wiki='srwiktionary'):
     return figure_source_compatible(core, selected_core)
 
 
+# This observation supplies four exact current JPEG objects for the original
+# NN dump. The response does not establish geometry for another file or core.
+NN_FIGURE_NAMESPACE = '16e38943d70c667e2f2be7b416c9a83e46270a1a617ff5666a6b02cb2ff09397'
+NN_FIGURE_SITE = '8b13ffcefe09f41a76d76e4024e061f68338c3bd5bbcf384db6bf0b6b1d426e1'
+NN_JPEG_RESPONSES = {
+    '3a9dac99e11d001a2cb7a2fcc34cb4c2a98184e00cc26c49f5922becd4b29a16': 'Fil:Russian-Matroshka.jpg',
+    'd83074f58020853afd669bfca982569b4382f5e5972666238a4891368dd9c74c': 'Fil:NGC 4414 (NASA-med).jpg',
+    'e3e86dbbefc759aaa56ef9439941727c6b49c0456b486212f89b366e73dc7719': 'Fil:Hohenfriedeberg - Attack of Prussian Infantry - 1745.jpg',
+    'e0c3b753f5a7a0237b79e7c313646900c1c1444862bfe7f5b4932d93ab99463a': 'Fil:Sunflower sky backdrop.jpg',
+}
+NN_JPEG_REGISTRATION = {
+    'PagedTiffHandler': '0dd1254beafb560f2cd76923c1997fb7d4aacda8',
+    'TimedMediaHandler': '8d9c271fb65e04e13a16acc5d5ed7da1cc51accc',
+    'PDF Handler': '0ee572467a13edd54af80ab38fed86d71cab6ebf',
+    '3D': '9d3ea849f1ebb3aafe7d4f75228d41ef018ea488',
+}
+
+
 def figure_profile(core, kind, media_extensions=None, *, wiki=None):
+    if core == site_info.NN_FIGURE_CORE:
+        if (wiki != 'nnwiktionary' or kind != FIGURE_PROFILE_V4 or
+                media_extensions != NN_JPEG_REGISTRATION):
+            raise ValueError('Unreviewed NN JPEG profile or registration')
+        return dict(FIGURE_WMF4_PROFILE, media_extensions=dict(NN_JPEG_REGISTRATION))
     if core == FIGURE_WMF5_ROLLOUT_CORE and (wiki == 'mnwwiktionary' or wiki in CURRENT_SQL_FILE_BINDINGS):
         if kind != FIGURE_PROFILE_V4 or media_extensions != FIGURE_WMF5_MEDIA:
             raise ValueError('Unreviewed current Figure handler profile or registration')
@@ -1612,6 +1635,12 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
     if (core in (FIGURE_RESPONSE_CORE, *FIGURE_REGISTRATION_EPOCHS, *FIGURE_WMF4_CORES, site_info.FIGURE_WMF5_CORE) or profile_kind == FIGURE_PROFILE_V5) and not allow_compatible_epochs:
         raise ValueError('Compatible response epochs require replay contract v3')
     profile = None
+    nn_jpeg = core == site_info.NN_FIGURE_CORE
+    nn_jpeg_file = NN_JPEG_RESPONSES.get(digest(site_raw)) if nn_jpeg else None
+    if nn_jpeg and (wiki != 'nnwiktionary' or language != 'nn' or date != '20261001' or
+                    not has_batches or not allow_compatible_epochs or not current_file_supplements or
+                    digest(namespace_raw) != NN_FIGURE_NAMESPACE or nn_jpeg_file is None):
+        raise ValueError('Unreviewed NN JPEG source binding')
     # Per-batch TIFF classification consumes one response in isolation. This
     # local validation cannot provide the registration header of a capture.
     current_sql = core == FIGURE_WMF5_ROLLOUT_CORE and wiki in CURRENT_SQL_FILE_BINDINGS
@@ -1689,6 +1718,9 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
         if len(response_raw) > MAX_RESPONSE:
             raise ValueError('Figure API response exceeds per-response bound')
         titles = batch['requests']
+        if nn_jpeg and (batch_index != 0 or set(batch) != {'requests', 'response'} or
+                        titles != [nn_jpeg_file] or response_raw != site_raw):
+            raise ValueError('NN JPEG replay requires its exact ordinary single-file response')
         if any(not isinstance(title, str) for title in titles) or len(set(titles)) != len(titles):
             raise ValueError('Duplicate or invalid Figure batch request')
         for title in titles:
@@ -1872,6 +1904,8 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
         if (target is not None and target is not record and
                 file_fact_identity(target) != file_fact_identity(record)):
             raise ValueError('Requested file conflicts with an authenticated canonical alias')
+    if nn_jpeg and (base_count != 1 or observed_count != 0 or len(records) != 1):
+        raise ValueError('NN JPEG replay omitted its ordinary source batch')
     records.sort(key=lambda row: row['requested_file'].encode('utf-8'))
     return {'wiki': wiki, 'content_language': language, 'core_revision': core,
             'namespace_registry_sha256': digest(namespace_raw), 'source_profile': profile,
@@ -5247,11 +5281,15 @@ def _capture_files(args, transport=None, sleep=time.sleep, *, target_contract=RE
     current_sql = (target_contract == REPLAY_CONTRACT and current_sql_file_scope(args.wiki, args.date, profile_kind)
         and not lean and getattr(args, 'page_selection', None) is None and
         digest(small(defaults_path, MAX_RESPONSE)) == CURRENT_SQL_FILE_BINDINGS[args.wiki][1])
-    defaults = site_info.validate_snapshot(defaults_path, args.wiki, args.date, file_defaults=True) if mon_current or current_sql else \
+    nn_jpeg_defaults = (args.wiki == 'nnwiktionary' and args.date == '20261001' and
+                        profile_kind == FIGURE_PROFILE_V4 and target_contract == REPLAY_CONTRACT and
+                        not lean and getattr(args, 'page_selection', None) is not None and
+                        digest(small(defaults_path, MAX_RESPONSE)) == NN_FIGURE_SITE)
+    defaults = site_info.validate_snapshot(defaults_path, args.wiki, args.date, file_defaults=True) if mon_current or current_sql or nn_jpeg_defaults else \
         site_info.validate_snapshot(defaults_path, args.wiki, args.date)
     if defaults['profile'] != site_info.FIGURE_PROFILE:
         raise ValueError('Missing Figure default-options capture')
-    artifacts = (site_info.capture_artifacts(defaults_path, defaults, file_defaults=True) if mon_current or current_sql else
+    artifacts = (site_info.capture_artifacts(defaults_path, defaults, file_defaults=True) if mon_current or current_sql or nn_jpeg_defaults else
                  site_info.capture_artifacts(defaults_path, defaults))
     saved = {name: small(defaults_root / name) for name in artifacts}
     if any(digest(saved[name]) != expected for name, expected in artifacts.items()):
@@ -5388,6 +5426,9 @@ def _capture_files(args, transport=None, sleep=time.sleep, *, target_contract=RE
         if not supplemental:
             used.update(names)
     remaining = sorted(desired - used, key=lambda name: name.encode('utf-8'))
+    if nn_jpeg_defaults and (len(desired) != 1 or not desired.issubset(NN_JPEG_RESPONSES.values()) or
+                             remaining or len(retained) != 1 or observed):
+        raise ValueError('NN JPEG capture requires the retained ordinary one-file batch')
     # Reserve the full query's URL budget so even an all-TIFF response has one
     # bounded followup with the same ordered subset of at most fifty titles.
     planned = list(metadata.title_batches(args.wiki, remaining, args.batch_size, figure_axes=True))

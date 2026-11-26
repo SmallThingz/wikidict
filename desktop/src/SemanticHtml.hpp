@@ -49,6 +49,15 @@ inline void applyFontFamily(QFont &font, const QJsonValue &value) {
         for (const auto &name : stack.value(QStringLiteral("names")).toArray()) names.append(name.toString());
         generic = stack.value(QStringLiteral("fallback")).toString();
     }
+    // A named-only request has no authored generic. Do not retain a parent's
+    // generic hint or append an invented serif/sans family. Qt chooses its
+    // own fallback; this is not a claim of installed faces or CSS metrics.
+    if (generic == QStringLiteral("css_default")) {
+        font.setStyleHint(QFont::AnyStyle,
+            QFont::StyleStrategy(font.styleStrategy() & ~QFont::NoFontMerging));
+        font.setFamilies(names);
+        return;
+    }
     // The request is data, not CSS and not a claim about an installed face.
     // Keep ordinary glyph fallback; the closed generic is a native style hint.
     font.setStyleHint(generic == QStringLiteral("serif") ? QFont::Serif : QFont::SansSerif,
