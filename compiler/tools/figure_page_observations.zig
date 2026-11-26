@@ -30989,3 +30989,730 @@ pub fn expectOriginalLiteralHtmlCellParents(selected: *const SelectedPageStyles)
     }
     try std.testing.expectEqual(@as(usize, 1), count);
 }
+
+const FixedAtomLocalCapture = struct {
+    html: []const u8,
+    nodes: []const ObservedSiblingNode,
+};
+
+const FixedAtomLocalNode = struct {
+    index: usize,
+    range: AuthoredElementStyleRange,
+    body: AuthoredElementStyleRange,
+    attributes: Inventory,
+};
+
+const FixedAtomLocalNbsp = struct {
+    range: AuthoredElementStyleRange,
+    text: AuthoredElementStyleRange,
+    entity: ?FixedAtomLocalNode,
+};
+
+const FixedAtomLocalSource = struct {
+    bytes: []const u8,
+    row: AuthoredElementStyleRange,
+    span: AuthoredElementStyleRange,
+    row_attributes: Inventory,
+    span_attributes: Inventory,
+    interior_entity: AuthoredElementStyleRange,
+    exterior_entity: AuthoredElementStyleRange,
+    label: AuthoredElementStyleRange,
+    decoded_label: []const u8,
+};
+
+const FixedAtomLocalArm = struct {
+    capture: FixedAtomLocalCapture,
+    row: FixedAtomLocalNode,
+    span: FixedAtomLocalNode,
+    interior: FixedAtomLocalNbsp,
+    exterior: FixedAtomLocalNbsp,
+    label: AuthoredElementStyleRange,
+};
+
+const FixedAtomLocalCorrespondence = struct {
+    source: FixedAtomLocalSource,
+    get: FixedAtomLocalArm,
+    post: FixedAtomLocalArm,
+};
+
+fn fixedAtomLocalNbspEnd(a: A, bytes: []const u8, start: usize, stop: usize, source_entity: bool) !?usize {
+    if (start >= stop or stop > bytes.len) return null;
+    if (!source_entity and std.mem.startsWith(u8, bytes[start..stop], "\xc2\xa0")) return start + 2;
+    if (bytes[start] != '&') return null;
+    const semi = std.mem.indexOfScalarPos(u8, bytes[0..stop], start + 1, ';') orelse return null;
+    if (semi - start > 32 or std.mem.indexOfAny(u8, bytes[start + 1 .. semi], "&;") != null) return null;
+    if (!equal(try decodedAttribute(a, bytes[start .. semi + 1]), "\xc2\xa0")) return null;
+    return semi + 1;
+}
+
+fn fixedAtomLocalLabel(a: A, raw: []const u8) !?[]const u8 {
+    if (raw.len == 0 or raw.len > 1024) return null;
+    const closed = (try noteInlineText(a, raw)) orelse return null;
+    const decoded = try decodedAttribute(a, raw);
+    // Use the existing closed text grammar, but never fold a label's spaces.
+    if (!equal(closed, decoded) or std.mem.indexOf(u8, decoded, "\xc2\xa0") != null) return null;
+    return decoded;
+}
+
+fn fixedAtomLocalClose(bytes: []const u8, at: usize, name: []const u8) bool {
+    const tag = syntax.tagAt(bytes, at) orelse return false;
+    return tag.closing and !tag.self_closing and tag.is(name) and
+        !std.mem.endsWith(u8, bytes[at..tag.end], "/>") and
+        std.mem.trim(u8, tag.attrs, " \t\r\n").len == 0;
+}
+
+fn fixedAtomLocalSource(a: A, source: []const u8, row: AuthoredElementStyleRange,
+    span: AuthoredElementStyleRange) !?FixedAtomLocalSource
+{
+    if (row.start >= row.end or row.end > source.len or row.end - row.start > 4096 or
+        span.start <= row.start or span.start >= span.end or span.end >= row.end) return null;
+    const limited = source[0..row.end];
+    const div = syntax.tagAt(limited, row.start) orelse return null;
+    const row_attributes = (try literalDivAttributes(a, div)) orelse return null;
+    if (std.mem.endsWith(u8, limited[row.start..div.end], "/>") or span.start != div.end) return null;
+    const div_pair = syntax.matchingTag(limited, div) orelse return null;
+    if (div_pair.end != row.end or !fixedAtomLocalClose(limited, div_pair.inner_end, "div")) return null;
+    const tag = syntax.tagAt(limited, span.start) orelse return null;
+    if (!tag.is("span") or tag.closing or tag.self_closing or tag.html_pre or
+        std.mem.endsWith(u8, limited[span.start..tag.end], "/>") or
+        std.mem.indexOfAny(u8, tag.attrs, "{}[]<>|\r\n\x00") != null or
+        std.mem.indexOf(u8, tag.attrs, "__") != null) return null;
+    const attrs = try inventory(a, tag);
+    if (attrs.attributes.len != 2 or (attrs.get("class") orelse return null).len == 0 or
+        (attrs.get("style") orelse return null).len == 0) return null;
+    for (attrs.attributes) |attr| if (std.mem.indexOfAny(u8, attr.value, "{}[]<>|\r\n\x00") != null or
+        std.mem.indexOf(u8, attr.value, "__") != null) return null;
+    const pair = syntax.matchingTag(limited, tag) orelse return null;
+    if (pair.end != span.end or span.end > div_pair.inner_end or !fixedAtomLocalClose(limited, pair.inner_end, "span")) return null;
+    const inside = (try fixedAtomLocalNbspEnd(a, limited, tag.end, pair.inner_end, true)) orelse return null;
+    if (inside != pair.inner_end) return null;
+    const outside = (try fixedAtomLocalNbspEnd(a, limited, pair.end, div_pair.inner_end, true)) orelse return null;
+    const label = (try fixedAtomLocalLabel(a, limited[outside..div_pair.inner_end])) orelse return null;
+    return .{ .bytes = source, .row = row, .span = span, .row_attributes = row_attributes, .span_attributes = attrs,
+        .interior_entity = .{ .start = tag.end, .end = inside },
+        .exterior_entity = .{ .start = pair.end, .end = outside },
+        .label = .{ .start = outside, .end = div_pair.inner_end }, .decoded_label = label };
+}
+
+fn fixedAtomLocalNode(capture: FixedAtomLocalCapture, index: usize) FixedAtomLocalNode {
+    const node = capture.nodes[index];
+    const closing = syntax.tagAt(capture.html, node.inner_end.?).?;
+    return .{ .index = index, .range = .{ .start = node.start, .end = closing.end },
+        .body = .{ .start = node.tag.end, .end = node.inner_end.? }, .attributes = node.attributes };
+}
+
+fn fixedAtomLocalObservedNbsp(a: A, capture: FixedAtomLocalCapture, branch: AuthoredElementStyleRange,
+    start: usize, stop: usize, parent: usize, source_entity: []const u8) !?FixedAtomLocalNbsp
+{
+    if (start >= stop) return null;
+    var text_start = start;
+    var text_stop = stop;
+    var entity: ?FixedAtomLocalNode = null;
+    if (capture.html[start] == '<') {
+        for (capture.nodes[branch.start..branch.end], branch.start..) |node, index| {
+            if (node.start != start) continue;
+            if (!node.tag.is("span") or node.parent != parent or node.first_child != null or
+                node.attributes.attributes.len != 1 or !equal(node.attributes.get("typeof") orelse return null, "mw:Entity")) return null;
+            if (entity != null) return null;
+            entity = fixedAtomLocalNode(capture, index);
+        }
+        const wrapped = entity orelse return null;
+        if (wrapped.range.end > stop) return null;
+        text_start = wrapped.body.start; text_stop = wrapped.body.end;
+    }
+    const text_end = (try fixedAtomLocalNbspEnd(a, capture.html, text_start, text_stop, false)) orelse return null;
+    if (entity != null and text_end != text_stop) return null;
+    if (!equal(try decodedAttribute(a, source_entity), try decodedAttribute(a, capture.html[text_start..text_end]))) return null;
+    return .{ .range = .{ .start = start, .end = if (entity) |wrapped| wrapped.range.end else text_end },
+        .text = .{ .start = text_start, .end = text_end }, .entity = entity };
+}
+
+fn fixedAtomLocalArmAt(a: A, source: FixedAtomLocalSource, capture: FixedAtomLocalCapture, row_index: usize) !?FixedAtomLocalArm {
+    const owner = capture.nodes[row_index];
+    const inner_end = owner.inner_end orelse return null;
+    if (!owner.tag.is("div") or owner.start >= inner_end or inner_end > capture.html.len or
+        inner_end - owner.start > 8192 or !sameSiblingAttributes(source.row_attributes, owner.attributes)) return null;
+    var cursor = row_index;
+    _ = (try figureSiblingInventoryBranch(a, capture.html, capture.nodes, &cursor, 0, false, false)) orelse return null;
+    if (cursor - row_index < 2 or cursor - row_index > 4) return null;
+    const row = fixedAtomLocalNode(capture, row_index);
+    const span_index = owner.first_child orelse return null;
+    if (!capture.nodes[span_index].tag.is("span")) return null;
+    const span = fixedAtomLocalNode(capture, span_index);
+    if (span.range.start != row.body.start or !sameSiblingAttributes(source.span_attributes, span.attributes)) return null;
+    const branch: AuthoredElementStyleRange = .{ .start = row_index, .end = cursor };
+    const inside = (try fixedAtomLocalObservedNbsp(a, capture, branch, span.body.start, span.body.end,
+        span_index, source.bytes[source.interior_entity.start..source.interior_entity.end])) orelse return null;
+    if (inside.range.end != span.body.end) return null;
+    const outside = (try fixedAtomLocalObservedNbsp(a, capture, branch, span.range.end, row.body.end,
+        row_index, source.bytes[source.exterior_entity.start..source.exterior_entity.end])) orelse return null;
+    const label = (try fixedAtomLocalLabel(a, capture.html[outside.range.end..row.body.end])) orelse return null;
+    if (!equal(label, source.decoded_label)) return null;
+    return .{ .capture = capture, .row = row, .span = span, .interior = inside, .exterior = outside,
+        .label = .{ .start = outside.range.end, .end = row.body.end } };
+}
+
+fn fixedAtomLocalSelectArm(a: A, source: FixedAtomLocalSource, capture: FixedAtomLocalCapture) !?FixedAtomLocalArm {
+    if (capture.nodes.len == 0 or capture.nodes.len > 16384 or capture.html.len > max_response) return null;
+    var selected: ?FixedAtomLocalArm = null;
+    for (capture.nodes, 0..) |_, index| {
+        if (try fixedAtomLocalArmAt(a, source, capture, index)) |candidate| {
+            // Identity is the entire local tuple, not a class/style or ordinal.
+            // Ambiguous repeated tuples cannot choose an observed CSS subject.
+            if (selected != null) return null;
+            selected = candidate;
+        }
+    }
+    return selected;
+}
+
+fn fixedAtomLocalCorrespondenceIn(a: A, source: []const u8, row: AuthoredElementStyleRange,
+    span: AuthoredElementStyleRange, get: FixedAtomLocalCapture, post: FixedAtomLocalCapture) !?FixedAtomLocalCorrespondence
+{
+    const authored = (try fixedAtomLocalSource(a, source, row, span)) orelse return null;
+    const get_arm = (try fixedAtomLocalSelectArm(a, authored, get)) orelse return null;
+    const post_arm = (try fixedAtomLocalSelectArm(a, authored, post)) orelse return null;
+    return .{ .source = authored, .get = get_arm, .post = post_arm };
+}
+
+fn fixedAtomLocalCorrespondence(a: A, source: []const u8, row: AuthoredElementStyleRange,
+    span: AuthoredElementStyleRange, get: FixedAtomLocalCapture, post: FixedAtomLocalCapture) !?FixedAtomLocalCorrespondence
+{
+    return fixedAtomLocalCorrespondenceIn(a, source, row, span, get, post) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory, else => return null,
+    };
+}
+
+const FixedAtomLocalTesting = if (@import("builtin").is_test) struct {
+    // Exact retained HU rows; synthetic enclosing roots below are only test
+    // scaffolding. These fragments confer no whole-capture or native authority.
+    // Expanded source [701,946), [946,1195); GET [35367,35668), [35668,35973);
+    // POST /parse/text [4066,4311), [4311,4560), all UTF-8 byte ranges.
+    const source_rows = [_][]const u8{ "<div class=\"legend\"><span class=\"legend-color\" style=\"display:inline-block; width:1.5em; height:1.5em; margin:1px 0; border:1px solid black; background-color:red; color:black; font-size:90%; text-align:center;\">&nbsp;</span>&nbsp;Oxygen, O</div>", "<div class=\"legend\"><span class=\"legend-color\" style=\"display:inline-block; width:1.5em; height:1.5em; margin:1px 0; border:1px solid black; background-color:white; color:black; font-size:90%; text-align:center;\">&nbsp;</span>&nbsp;Hydrogen, H</div>" };
+    const get_rows = [_][]const u8{ "<div class=\"legend\"><span class=\"legend-color\" style=\"display:inline-block; width:1.5em; height:1.5em; margin:1px 0; border:1px solid black; background-color:red; color:black; font-size:90%; text-align:center;\"><span typeof=\"mw:Entity\">\xc2\xa0</span></span><span typeof=\"mw:Entity\">\xc2\xa0</span>Oxygen, O</div>", "<div class=\"legend\"><span class=\"legend-color\" style=\"display:inline-block; width:1.5em; height:1.5em; margin:1px 0; border:1px solid black; background-color:white; color:black; font-size:90%; text-align:center;\"><span typeof=\"mw:Entity\">\xc2\xa0</span></span><span typeof=\"mw:Entity\">\xc2\xa0</span>Hydrogen, H</div>" };
+    const post_rows = [_][]const u8{ "<div class=\"legend\"><span class=\"legend-color\" style=\"display:inline-block; width:1.5em; height:1.5em; margin:1px 0; border:1px solid black; background-color:red; color:black; font-size:90%; text-align:center;\">&#160;</span>&#160;Oxygen, O</div>", "<div class=\"legend\"><span class=\"legend-color\" style=\"display:inline-block; width:1.5em; height:1.5em; margin:1px 0; border:1px solid black; background-color:white; color:black; font-size:90%; text-align:center;\">&#160;</span>&#160;Hydrogen, H</div>" };
+    fn capture(a: A, ns: *const namespaces.Registry, body: []const u8) !FixedAtomLocalCapture {
+        const html = try std.fmt.allocPrint(a, "<div class=\"mw-content-ltr mw-parser-output\" lang=\"{s}\" dir=\"ltr\">{s}</div>", .{ ns.content_language, body });
+        var nodes: std.ArrayList(ObservedSiblingNode) = .empty;
+        _ = try observedTextClassScopeWithElements(a, ns, html, &nodes);
+        return .{ .html = html, .nodes = try nodes.toOwnedSlice(a) };
+    }
+    fn span(source: []const u8, start: usize) AuthoredElementStyleRange {
+        const row = syntax.tagAt(source, start).?;
+        const tag = syntax.tagAt(source, row.end).?;
+        return .{ .start = row.end, .end = syntax.matchingTag(source, tag).?.end };
+    }
+} else struct {};
+
+test "fixed atom local tuple retains exact red white arm nodes and byte ranges" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile(AuthoredHeadTesting.prefix ++ "namespace-registry.tsv")); defer ns.deinit();
+    const t = FixedAtomLocalTesting;
+    // Different outer text and reversed GET row order deliberately prevent
+    // using whole-page equality or source/DOM ordinals for this LOCAL result.
+    const prefix = "unmatched outside source\n";
+    const source = try std.mem.concat(a, u8, &.{ prefix, t.source_rows[0], t.source_rows[1], "\nunmatched source tail" });
+    const get = try t.capture(a, &ns, try std.mem.concat(a, u8, &.{ "<div>unmatched GET outside</div>", t.get_rows[1], t.get_rows[0] }));
+    const post = try t.capture(a, &ns, try std.mem.concat(a, u8, &.{ t.post_rows[0], t.post_rows[1], "<div>unmatched POST outside</div>" }));
+    var start: usize = prefix.len;
+    for (t.source_rows, 0..) |raw, i| {
+        const row: AuthoredElementStyleRange = .{ .start = start, .end = start + raw.len };
+        const result = (try fixedAtomLocalCorrespondence(a, source, row, t.span(source, start), get, post)).?;
+        try std.testing.expect(result.source.bytes.ptr == source.ptr and result.source.bytes.len == source.len);
+        try std.testing.expectEqualStrings("&nbsp;", source[result.source.interior_entity.start..result.source.interior_entity.end]);
+        try std.testing.expectEqualStrings("&nbsp;", source[result.source.exterior_entity.start..result.source.exterior_entity.end]);
+        const label: []const u8 = if (i == 0) "Oxygen, O" else "Hydrogen, H";
+        try std.testing.expectEqualStrings(label, result.source.decoded_label);
+        try std.testing.expectEqualStrings(t.get_rows[i], get.html[result.get.row.range.start..result.get.row.range.end]);
+        try std.testing.expectEqualStrings(t.post_rows[i], post.html[result.post.row.range.start..result.post.row.range.end]);
+        try std.testing.expect(result.get.span.index != result.post.span.index);
+        for ([_]FixedAtomLocalArm{ result.get, result.post }, 0..) |arm, arm_index| {
+            const original = if (arm_index == 0) get else post;
+            try std.testing.expect(arm.capture.html.ptr == original.html.ptr and arm.capture.nodes.ptr == original.nodes.ptr);
+            try std.testing.expect(arm.span.attributes.attributes.ptr == original.nodes[arm.span.index].attributes.attributes.ptr);
+            try std.testing.expect(arm.interior.range.start == arm.span.body.start and arm.interior.range.end == arm.span.body.end);
+            try std.testing.expect(arm.exterior.range.start == arm.span.range.end and arm.exterior.range.end == arm.label.start);
+            try std.testing.expect(arm.label.end == arm.row.body.end);
+            try std.testing.expectEqualStrings(label, original.html[arm.label.start..arm.label.end]);
+            if (arm_index == 0) {
+                const inside = arm.interior.entity.?; const outside = arm.exterior.entity.?;
+                try std.testing.expect(inside.index != outside.index);
+                try std.testing.expectEqual(@as(?usize, arm.span.index), original.nodes[inside.index].parent);
+                try std.testing.expectEqual(@as(?usize, arm.row.index), original.nodes[outside.index].parent);
+                try std.testing.expectEqual(@as(?usize, arm.span.index), original.nodes[outside.index].previous);
+                for ([_]FixedAtomLocalNode{ inside, outside }) |entity| {
+                    try std.testing.expectEqual(@as(usize, 1), entity.attributes.attributes.len);
+                    try std.testing.expectEqualStrings("mw:Entity", entity.attributes.get("typeof").?);
+                    try std.testing.expectEqualStrings("\xc2\xa0", original.html[entity.body.start..entity.body.end]);
+                }
+            } else {
+                try std.testing.expect(arm.interior.entity == null and arm.exterior.entity == null);
+                try std.testing.expectEqualStrings("&#160;", original.html[arm.interior.text.start..arm.interior.text.end]);
+                try std.testing.expectEqualStrings("&#160;", original.html[arm.exterior.text.start..arm.exterior.text.end]);
+            }
+        }
+        start = row.end;
+    }
+}
+
+test "fixed atom local tuple rejects entity attrs children labels source mismatch and cross owners" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile(AuthoredHeadTesting.prefix ++ "namespace-registry.tsv")); defer ns.deinit();
+    const t = FixedAtomLocalTesting;
+    const source = t.source_rows[0];
+    const row: AuthoredElementStyleRange = .{ .start = 0, .end = source.len };
+    const span = t.span(source, 0);
+    const get = try t.capture(a, &ns, t.get_rows[0]);
+    const post = try t.capture(a, &ns, t.post_rows[0]);
+    const good = (try fixedAtomLocalCorrespondence(a, source, row, span, get, post)).?;
+    const changes = [_][2][]const u8{
+        .{ "typeof=\"mw:Entity\"", "typeof=\"mw:Entity\" class=\"extra\"" },
+        .{ "typeof=\"mw:Entity\"", "typeof=\"mw:Entity other\"" },
+        .{ "typeof=\"mw:Entity\"", "title=\"mw:Entity\"" },
+        .{ "\xc2\xa0</span>", "\xc2\xa0\xc2\xa0</span>" },
+        .{ "\xc2\xa0</span>", " </span>" },
+        .{ "\xc2\xa0</span>", "<span>\xc2\xa0</span></span>" },
+        .{ "Oxygen, O", "Hydrogen, H" },
+        .{ "Oxygen, O", "Oxygen, O<span>extra</span>" },
+        .{ "</span><span typeof=\"mw:Entity\">\xc2\xa0</span>Oxygen, O", "Oxygen, O</span><span typeof=\"mw:Entity\">\xc2\xa0</span>" },
+        .{ "width:1.5em", "width:2em" },
+        .{ "class=\"legend-color\"", "class=\"other\"" },
+    };
+    for (changes) |change| {
+        var at: usize = 0; var count: usize = 0;
+        while (std.mem.indexOfPos(u8, t.get_rows[0], at, change[0])) |found| {
+            // Mutate each occurrence separately, so exterior failures cannot
+            // hide behind an already-invalid interior Entity (or vice versa).
+            const changed = try std.mem.concat(a, u8, &.{ t.get_rows[0][0..found], change[1], t.get_rows[0][found + change[0].len ..] });
+            const bad = try t.capture(a, &ns, changed);
+            try std.testing.expect(try fixedAtomLocalCorrespondence(a, source, row, span, bad, post) == null);
+            count += 1; at = found + change[0].len;
+        }
+        try std.testing.expect(count != 0);
+    }
+    for ([_][]const u8{ t.get_rows[1], "<div class=\"legend\"><br>&#160;Oxygen, O</div>",
+        try std.mem.concat(a, u8, &.{ t.get_rows[0], t.get_rows[0] }) }) |body| {
+        const bad = try t.capture(a, &ns, body);
+        try std.testing.expect(try fixedAtomLocalCorrespondence(a, source, row, span, bad, post) == null);
+    }
+    for ([_][2][]const u8{ .{ "&#160;", "" }, .{ "&#160;", "&#160;&#160;" }, .{ "Oxygen, O", "Hydrogen, H" } }) |change| {
+        var at: usize = 0;
+        while (std.mem.indexOfPos(u8, t.post_rows[0], at, change[0])) |found| {
+            const changed = try std.mem.concat(a, u8, &.{ t.post_rows[0][0..found], change[1], t.post_rows[0][found + change[0].len ..] });
+            const bad = try t.capture(a, &ns, changed);
+            try std.testing.expect(try fixedAtomLocalCorrespondence(a, source, row, span, get, bad) == null);
+            at = found + change[0].len;
+        }
+    }
+    for ([_][]const u8{ "&amp;", "\xc2\xa0", "&nbsp;&nbsp;" }) |entity| {
+        var at: usize = 0;
+        while (std.mem.indexOfPos(u8, source, at, "&nbsp;")) |found| {
+            const changed = try std.mem.concat(a, u8, &.{ source[0..found], entity, source[found + 6 ..] });
+            try std.testing.expect(try fixedAtomLocalCorrespondence(a, changed, .{ .start = 0, .end = changed.len },
+                t.span(changed, 0), get, post) == null);
+            at = found + 6;
+        }
+    }
+    try std.testing.expect(try fixedAtomLocalCorrespondence(a, source, row,
+        .{ .start = span.start + 1, .end = span.end }, get, post) == null);
+    for (0..6) |mutation| {
+        const changed = try a.dupe(ObservedSiblingNode, get.nodes);
+        const inside = good.get.interior.entity.?.index;
+        const outside = good.get.exterior.entity.?.index;
+        switch (mutation) {
+            0 => changed[inside].parent = good.get.row.index,
+            1 => changed[outside].parent = good.get.span.index,
+            2 => changed[outside].previous = null,
+            3 => changed[good.get.span.index].first_child = outside,
+            4 => changed[inside].inner_end = changed[outside].inner_end,
+            else => changed[good.get.row.index].first_child = outside,
+        }
+        try std.testing.expect(try fixedAtomLocalCorrespondence(a, source, row, span, .{ .html = get.html, .nodes = changed }, post) == null);
+    }
+    // Byte-equal copies are not the original graph's backing capture.
+    const other_html = try a.dupe(u8, get.html);
+    try std.testing.expect(try fixedAtomLocalCorrespondence(a, source, row, span,
+        .{ .html = other_html, .nodes = get.nodes }, post) == null);
+}
+
+const FixedAtomCompleteStyleArm = struct {
+    alternative: bool,
+    capture: FixedAtomLocalCapture,
+    response_root_start: usize,
+    source_echo: ?[]const u8,
+    styles: *const profile.Profile,
+    nodes: []profile.FigureObservedNode,
+    root: u32,
+};
+
+const FixedAtomObservedStyleArm = struct {
+    local: FixedAtomLocalArm,
+    response_root_start: usize,
+    context: profile.AuthoredElementObservedContext,
+    row: u32,
+    interior_entity: ?u32,
+    exterior_entity: ?u32,
+};
+
+const SelectedFixedAtomObservedStyles = struct {
+    tuple: FixedAtomLocalCorrespondence,
+    source_echo: []const u8,
+    parent_profile: *const profile.Profile,
+    get: FixedAtomObservedStyleArm,
+    post: FixedAtomObservedStyleArm,
+    contexts: [2]profile.AuthoredElementObservedContext,
+
+    fn operation(self: *const SelectedFixedAtomObservedStyles) compiler.AuthoredElementStyleOperation {
+        const source = self.tuple.source;
+        return .{ .source = source.bytes, .element = source.bytes[source.span.start..source.span.end] };
+    }
+    fn entityToken(self: *const SelectedFixedAtomObservedStyles) []const u8 {
+        const source = self.tuple.source;
+        return source.bytes[source.interior_entity.start..source.interior_entity.end];
+    }
+    // Explicit consumer call only. Do not install this into the generic HR
+    // callback. PC still owes current source-parent/native-parent agreement;
+    // Pascal's own-effects/neutral-child query still owes CSS acceptance.
+    fn observe(self: *const SelectedFixedAtomObservedStyles,
+        requested: compiler.AuthoredElementStyleOperation) ?compiler.AuthoredElementStyleObservation
+    {
+        const issued = self.operation();
+        if (requested.source.ptr != issued.source.ptr or requested.source.len != issued.source.len or
+            requested.element.ptr != issued.element.ptr or requested.element.len != issued.element.len or
+            !equal(issued.source, self.source_echo)) return null;
+        return .{ .profile = self.parent_profile, .contexts = &self.contexts };
+    }
+};
+
+fn fixedAtomCompleteStyleArm(a: A, ns: *const namespaces.Registry, parent: *const profile.Profile,
+    stored: *const PageStyleData, alternative: bool) !?FixedAtomCompleteStyleArm
+{
+    if (selectedGetRoot(stored.page)) return null;
+    var observed = stored.*;
+    var body: []const u8 = undefined;
+    var root_attributes: ?Inventory = null;
+    var source_echo: ?[]const u8 = null;
+    var response_root_start: usize = 0;
+    if (alternative) {
+        const response = (stored.page.outer_context orelse return null).response;
+        const prefix = try observedOuterPrefix(a, response, true);
+        response_root_start = prefix.root_start orelse return null;
+        if (prefix.body_open_end == 0 or prefix.body_open_end > response_root_start or
+            prefix.ancestors.len != stored.outer.ancestors.len) return null;
+        for (prefix.ancestors, stored.outer.ancestors) |actual, retained|
+            if (!equal(actual.tag, retained.tag) or !sameSiblingAttributes(actual.attributes, retained.attributes)) return null;
+        body = response[response_root_start..];
+        root_attributes = prefix.root;
+    } else {
+        const parsed = try field(try json(a, stored.page.response), "parse");
+        body = try string(parsed, "text");
+        source_echo = try string(parsed, "wikitext");
+    }
+    var raw_nodes: std.ArrayList(ObservedSiblingNode) = .empty;
+    var end: usize = 0;
+    _ = try observedTextClassScopeToEndWithSections(a, ns, body, &raw_nodes, &end, root_attributes, alternative);
+    if (end == 0 or end > body.len or raw_nodes.items.len == 0) return null;
+    observed.observed_html = body[0..end];
+    observed.observed_nodes = try raw_nodes.toOwnedSlice(a);
+    var sheets: std.ArrayList(profile.Source) = .empty;
+    try appendObservedPageStyles(a, &sheets, observed.observed_html);
+    observed.authored_sources = try sheets.toOwnedSlice(a);
+    const styles = try figureContextStyles(a, parent, &observed, alternative);
+    const graph = try figureObservedGraph(a, styles, &observed, alternative);
+    const shift = observed.outer.ancestors.len;
+    if (shift != 8 or graph.len != shift + observed.observed_nodes.len) return null;
+    return .{ .alternative = alternative,
+        .capture = .{ .html = observed.observed_html, .nodes = observed.observed_nodes },
+        .response_root_start = response_root_start, .source_echo = source_echo,
+        .styles = styles, .nodes = graph, .root = @intCast(shift) };
+}
+
+fn fixedAtomStyleSameNode(left: FixedAtomLocalNode, right: FixedAtomLocalNode) bool {
+    return left.index == right.index and std.meta.eql(left.range, right.range) and std.meta.eql(left.body, right.body) and
+        left.attributes.attributes.ptr == right.attributes.attributes.ptr and left.attributes.attributes.len == right.attributes.attributes.len;
+}
+
+fn fixedAtomStyleSameNbsp(left: FixedAtomLocalNbsp, right: FixedAtomLocalNbsp) bool {
+    if (!std.meta.eql(left.range, right.range) or !std.meta.eql(left.text, right.text) or
+        (left.entity == null) != (right.entity == null)) return false;
+    return if (left.entity) |entity| fixedAtomStyleSameNode(entity, right.entity.?) else true;
+}
+
+fn fixedAtomStyleSameLocal(left: FixedAtomLocalArm, right: FixedAtomLocalArm) bool {
+    return left.capture.html.ptr == right.capture.html.ptr and left.capture.html.len == right.capture.html.len and
+        left.capture.nodes.ptr == right.capture.nodes.ptr and left.capture.nodes.len == right.capture.nodes.len and
+        fixedAtomStyleSameNode(left.row, right.row) and fixedAtomStyleSameNode(left.span, right.span) and
+        fixedAtomStyleSameNbsp(left.interior, right.interior) and fixedAtomStyleSameNbsp(left.exterior, right.exterior) and
+        std.meta.eql(left.label, right.label);
+}
+
+fn fixedAtomStyleNext(capture: FixedAtomLocalCapture, index: usize, end: usize) ?usize {
+    const parent = capture.nodes[index].parent;
+    for (capture.nodes[index + 1 .. end], index + 1..) |node, next|
+        if (node.parent == parent) return next;
+    return null;
+}
+
+fn fixedAtomJoinStyleArm(a: A, source: FixedAtomLocalSource, local: FixedAtomLocalArm,
+    complete: FixedAtomCompleteStyleArm, alternative: bool) !?FixedAtomObservedStyleArm
+{
+    const capture = complete.capture;
+    const shift: usize = complete.root;
+    if (alternative != complete.alternative or shift != 8 or complete.nodes.len != shift + capture.nodes.len or
+        local.capture.html.ptr != capture.html.ptr or local.capture.html.len != capture.html.len or
+        local.capture.nodes.ptr != capture.nodes.ptr or local.capture.nodes.len != capture.nodes.len or
+        local.row.index >= capture.nodes.len) return null;
+    const fresh = (try fixedAtomLocalArmAt(a, source, capture, local.row.index)) orelse return null;
+    if (!fixedAtomStyleSameLocal(local, fresh)) return null;
+    const start = local.row.index;
+    var end = start;
+    _ = (try figureSiblingInventoryBranch(a, capture.html, capture.nodes, &end, 0, false, false)) orelse return null;
+    // Complete raw graph already includes both entity positions. Do not add a
+    // synthetic leaf or carry a subject ordinal from the other arm.
+    for (capture.nodes[start..end], start..) |raw, index| {
+        const mapped = complete.nodes[shift + index];
+        const mapped_index: u32 = @intCast(shift + index);
+        const expected_parent: ?u32 = if (raw.parent) |owner| @intCast(shift + owner) else @intCast(shift - 1);
+        if (mapped.tag.ptr != raw.tag.name.ptr or !equal(mapped.tag, raw.tag.name) or
+            mapped.parent != expected_parent or mapped.attributes.len != raw.attributes.attributes.len or
+            mapped.empty != figureObservedEmpty(capture.html, raw) or
+            mapped.has_text != figureObservedHasText(capture.html, capture.nodes, index)) return null;
+        for (mapped.attributes, raw.attributes.attributes) |actual, expected|
+            if (!equal(actual.name, expected.name) or !equal(actual.value, expected.value)) return null;
+        // A crossed/extra mapped child cannot be certified as absent merely
+        // because it was outside the selected raw byte range.
+        for (complete.nodes, 0..) |child, child_index|
+            if (child.parent == mapped_index and (child_index < shift + start or child_index >= shift + end)) return null;
+        var entity_text: ?[]const u8 = null;
+        for ([_]FixedAtomLocalNbsp{ local.interior, local.exterior }) |part| if (part.entity) |entity| {
+            if (entity.index == index) entity_text = capture.html[part.text.start..part.text.end];
+        };
+        if (mapped.captured_entity_text) |old|
+            if (!equal(old, entity_text orelse return null)) return null;
+        if (index == start) continue; // no claim about the row's outer siblings
+        const previous: ?u32 = if (raw.previous) |value| @intCast(shift + value) else null;
+        const next: ?u32 = if (fixedAtomStyleNext(capture, index, end)) |value| @intCast(shift + value) else null;
+        if ((mapped.known_previous_element_sibling != null and mapped.known_previous_element_sibling != previous) or
+            (mapped.known_no_previous_element_sibling and previous != null) or
+            (mapped.known_next_element_sibling != null and mapped.known_next_element_sibling != next) or
+            (mapped.known_no_next_element_sibling and next != null)) return null;
+    }
+    for (capture.nodes[start..end], start..) |raw, index| {
+        const mapped = &complete.nodes[shift + index];
+        mapped.known_complete_child_elements = true;
+        if (index != start) {
+            mapped.known_previous_element_sibling = if (raw.previous) |value| @intCast(shift + value) else null;
+            mapped.known_no_previous_element_sibling = raw.previous == null;
+            mapped.known_next_element_sibling = if (fixedAtomStyleNext(capture, index, end)) |value| @intCast(shift + value) else null;
+            mapped.known_no_next_element_sibling = mapped.known_next_element_sibling == null;
+        }
+        for ([_]FixedAtomLocalNbsp{ local.interior, local.exterior }) |part| if (part.entity) |entity| {
+            // Retain exact captured bytes; decoded NBSP/source-entity equality
+            // was established by the tuple. CSS neutrality remains unproved.
+            if (entity.index == index) mapped.captured_entity_text = capture.html[part.text.start..part.text.end];
+        };
+    }
+    return .{ .local = local, .response_root_start = complete.response_root_start,
+        .context = .{ .styles = complete.styles, .nodes = complete.nodes, .root = complete.root,
+            .element = @intCast(shift + local.span.index) },
+        .row = @intCast(shift + local.row.index),
+        .interior_entity = if (local.interior.entity) |entity| @intCast(shift + entity.index) else null,
+        .exterior_entity = if (local.exterior.entity) |entity| @intCast(shift + entity.index) else null };
+}
+
+fn selectFixedAtomObservedStylesIn(a: A, ns: *const namespaces.Registry, parent: *const profile.Profile,
+    stored: *const PageStyleData, source: []const u8, row: AuthoredElementStyleRange,
+    span: AuthoredElementStyleRange) !?*const SelectedFixedAtomObservedStyles
+{
+    _ = (try fixedAtomLocalSource(a, source, row, span)) orelse return null;
+    const post = (try fixedAtomCompleteStyleArm(a, ns, parent, stored, false)) orelse return null;
+    const echo = post.source_echo orelse return null;
+    if (!equal(source, echo)) return null;
+    const get = (try fixedAtomCompleteStyleArm(a, ns, parent, stored, true)) orelse return null;
+    const tuple = (try fixedAtomLocalCorrespondence(a, source, row, span, get.capture, post.capture)) orelse return null;
+    const get_join = (try fixedAtomJoinStyleArm(a, tuple.source, tuple.get, get, true)) orelse return null;
+    const post_join = (try fixedAtomJoinStyleArm(a, tuple.source, tuple.post, post, false)) orelse return null;
+    const selected = try a.create(SelectedFixedAtomObservedStyles);
+    selected.* = .{ .tuple = tuple, .source_echo = echo, .parent_profile = parent,
+        .get = get_join, .post = post_join, .contexts = .{ get_join.context, post_join.context } };
+    return selected;
+}
+
+fn selectFixedAtomObservedStylesAlloc(a: A, ns: *const namespaces.Registry, parent: *const profile.Profile,
+    stored: *const PageStyleData, source: []const u8, row: AuthoredElementStyleRange,
+    span: AuthoredElementStyleRange) !?*const SelectedFixedAtomObservedStyles
+{
+    return selectFixedAtomObservedStylesIn(a, ns, parent, stored, source, row, span) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory, else => return null,
+    };
+}
+
+const FixedAtomStyleJoinTesting = if (@import("builtin").is_test) struct {
+    // Authentic HU local rows are reused from the immutable tuple candidate.
+    // Everything outside those rows is synthetic test scaffolding, not a
+    // retained PageStyleData authentication or an authentic geometry pass.
+    fn stored(a: A, ns: *const namespaces.Registry, source: []const u8) !PageStyleData {
+        const t = FixedAtomLocalTesting;
+        const post = try t.capture(a, ns, try std.mem.concat(a, u8, &.{
+            "<style>.legend{--local-body:post}</style>", t.post_rows[0], t.post_rows[1] }));
+        const root = try std.fmt.allocPrint(a, "<div class=\"mw-content-ltr mw-parser-output\" lang=\"{s}\" dir=\"ltr\">", .{ns.content_language});
+        const head = "<html class=\"post-shell\"><head><meta name=\"generator\" content=\"test\"></head><body class=\"post-body\">";
+        const get = try std.mem.concat(a, u8, &.{
+            "<html class=\"get-shell\"><head><meta name=\"generator\" content=\"test\"></head><body class=\"get-body\">",
+            "<div><div><div><div><div><div>", root,
+            "<style>.legend{--local-body:get}</style><section data-mw-section-id=\"0\">",
+            t.get_rows[1], t.get_rows[0], "</section></div></div></div></div></div></div></div></body></html>" });
+        const outer = try observedOuterPrefix(a, get, true);
+        const response = try std.json.Stringify.valueAlloc(a, .{ .parse = .{
+            .text = post.html, .wikitext = source, .headhtml = head } }, .{});
+        const stale = try t.capture(a, ns, "<div>stale cached body</div>");
+        return .{
+            .authored_sources = &.{.{ .css = ".legend{--local-body:stale}", .base_url = "" }},
+            .context_sources = &.{.{ .css = "html{--head:post}", .base_url = "" }},
+            .figure_alternative_sources = &.{.{ .css = "html{--head:get}", .base_url = "" }},
+            .page = .{ .namespace_id = 0, .page_id = 609, .revision_id = 3518053, .title = "synthetic HU join",
+                .raw_sha256 = "", .occurrences = &.{}, .response = response,
+                .outer_context = .{ .profile = "synthetic", .response = get } },
+            .scope = try observedTextClassScope(a, ns, post.html),
+            .outer = .{ .classes = "", .html_classes = "get-shell", .ancestors = outer.ancestors,
+                .root_attributes = outer.root, .root_start = outer.root_start, .root_open_end = outer.root_open_end },
+            .observed_html = stale.html, .observed_nodes = stale.nodes,
+        };
+    }
+} else struct {};
+
+test "fixed atom style join rebuilds independent SECTION and POST graphs with source scoped contexts" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile(AuthoredHeadTesting.prefix ++ "namespace-registry.tsv")); defer ns.deinit();
+    var parent = try profile.parseForTargetAlloc(a, "", .screen); defer parent.deinit();
+    const t = FixedAtomLocalTesting;
+    const source = try std.mem.concat(a, u8, &.{ t.source_rows[0], t.source_rows[1] });
+    const stored = try FixedAtomStyleJoinTesting.stored(a, &ns, source);
+    var start: usize = 0;
+    for (t.source_rows) |raw| {
+        const selected = (try selectFixedAtomObservedStylesAlloc(a, &ns, &parent, &stored, source,
+            .{ .start = start, .end = start + raw.len }, t.span(source, start))).?;
+        const operation = selected.operation();
+        const observed = selected.observe(operation).?;
+        try std.testing.expect(observed.profile == &parent and observed.contexts.len == 2);
+        try std.testing.expectEqualStrings("&nbsp;", selected.entityToken());
+        try std.testing.expect(selected.entityToken().ptr == source[selected.tuple.source.interior_entity.start..].ptr);
+        try std.testing.expect(operation.source.ptr == source.ptr and operation.element.ptr == source[t.span(source, start).start..].ptr);
+        try std.testing.expect(selected.get.context.nodes.ptr != selected.post.context.nodes.ptr);
+        try std.testing.expect(selected.get.context.styles != selected.post.context.styles);
+        try std.testing.expect(selected.get.context.element != selected.post.context.element);
+        try std.testing.expect(selected.get.response_root_start == stored.outer.root_start.? and selected.post.response_root_start == 0);
+        try std.testing.expectEqualStrings("section", selected.get.context.nodes[selected.get.context.nodes[selected.get.row].parent.?].tag);
+        try std.testing.expectEqual(@as(?u32, selected.post.context.root), selected.post.context.nodes[selected.post.row].parent);
+        for ([_]FixedAtomObservedStyleArm{ selected.get, selected.post }, 0..) |arm, i| {
+            const context = arm.context;
+            const name: []const u8 = if (i == 0) "get" else "post";
+            try std.testing.expect(observed.contexts[i].nodes.ptr == context.nodes.ptr and observed.contexts[i].element == context.element);
+            try std.testing.expect(context.nodes.len == context.root + arm.local.capture.nodes.len);
+            try std.testing.expectEqual(context.root + @as(u32, @intCast(arm.local.span.index)), context.element);
+            try std.testing.expectEqualStrings(name, context.nodes[context.element].custom_environment.?.get("--head").known);
+            try std.testing.expectEqualStrings(name, context.nodes[context.element].custom_environment.?.get("--local-body").known);
+            try std.testing.expect(context.nodes[arm.row].known_complete_child_elements and context.nodes[context.element].known_complete_child_elements);
+            try std.testing.expectEqual(@as(?bool, i != 0), context.nodes[context.element].has_text);
+            try std.testing.expectEqual(@as(?bool, false), context.nodes[context.element].empty);
+            if (i == 0) {
+                const inside = arm.interior_entity.?; const outside = arm.exterior_entity.?;
+                try std.testing.expectEqual(@as(?u32, context.element), context.nodes[inside].parent);
+                try std.testing.expectEqual(@as(?u32, arm.row), context.nodes[outside].parent);
+                try std.testing.expectEqual(@as(?u32, context.element), context.nodes[outside].known_previous_element_sibling);
+                try std.testing.expectEqual(@as(?u32, outside), context.nodes[context.element].known_next_element_sibling);
+                try std.testing.expect(context.nodes[inside].known_complete_child_elements and context.nodes[outside].known_complete_child_elements);
+                for ([_]u32{ inside, outside }) |entity| {
+                    try std.testing.expectEqualStrings("mw:Entity", FigureOwnStyleTesting.attribute(context.nodes[entity], "typeof").?);
+                    try std.testing.expectEqualStrings("\xc2\xa0", context.nodes[entity].captured_entity_text.?);
+                    try std.testing.expectEqual(@as(?bool, true), context.nodes[entity].has_text);
+                    try std.testing.expectEqual(@as(?bool, false), context.nodes[entity].empty);
+                    try std.testing.expect(context.nodes[entity].known_no_next_element_sibling);
+                }
+                try std.testing.expect(context.nodes[inside].known_no_previous_element_sibling);
+                // Private Pascal c24dfea1 API: this tests the exact mapped child
+                // contract, not fixed geometry or native-parent agreement.
+                const proof = (try profile.proveObservedFixedInlineEntityNeutral(a, context,
+                    operation.source, operation.element, selected.entityToken())).?;
+                try std.testing.expectEqual(inside, proof.child);
+                const exterior = selected.tuple.source.exterior_entity;
+                try std.testing.expect((try profile.proveObservedFixedInlineEntityNeutral(a, context,
+                    operation.source, operation.element, source[exterior.start..exterior.end])) == null);
+                // The unsupported outer SECTION never becomes a claimed source
+                // parent or a complete sibling/child grant from this local join.
+                try std.testing.expect(!context.nodes[context.nodes[arm.row].parent.?].known_complete_child_elements);
+                for (context.nodes, 0..) |node, index| {
+                    if (index != inside and index != outside) try std.testing.expect(node.captured_entity_text == null);
+                    if (index != arm.row and index != context.element and index != inside and index != outside)
+                        try std.testing.expect(!node.known_complete_child_elements);
+                }
+            } else {
+                try std.testing.expect(arm.interior_entity == null and arm.exterior_entity == null);
+                try std.testing.expect((try profile.proveObservedFixedInlineEntityNeutral(a, context,
+                    operation.source, operation.element, selected.entityToken())) == null);
+                try std.testing.expect(context.nodes[context.element].known_no_previous_element_sibling and context.nodes[context.element].known_no_next_element_sibling);
+            }
+            try std.testing.expectEqualStrings(source[selected.tuple.source.label.start..selected.tuple.source.label.end],
+                arm.local.capture.html[arm.local.label.start..arm.local.label.end]);
+        }
+        var wrong = operation; wrong.source = try a.dupe(u8, source);
+        try std.testing.expect(selected.observe(wrong) == null);
+        wrong = operation; wrong.element = try a.dupe(u8, operation.element);
+        try std.testing.expect(selected.observe(wrong) == null);
+        wrong = operation; wrong.element = source[selected.tuple.source.span.start..selected.tuple.source.label.end];
+        try std.testing.expect(selected.observe(wrong) == null);
+        start += raw.len;
+    }
+}
+
+test "fixed atom style join refuses crossed captures ranges offsets inventories and child facts" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile(AuthoredHeadTesting.prefix ++ "namespace-registry.tsv")); defer ns.deinit();
+    var parent = try profile.parseForTargetAlloc(a, "", .screen); defer parent.deinit();
+    const t = FixedAtomLocalTesting;
+    const source = try std.mem.concat(a, u8, &.{ t.source_rows[0], t.source_rows[1] });
+    const stored = try FixedAtomStyleJoinTesting.stored(a, &ns, source);
+    const row: AuthoredElementStyleRange = .{ .start = 0, .end = t.source_rows[0].len };
+    const span = t.span(source, 0);
+    const get = (try fixedAtomCompleteStyleArm(a, &ns, &parent, &stored, true)).?;
+    const post = (try fixedAtomCompleteStyleArm(a, &ns, &parent, &stored, false)).?;
+    const tuple = (try fixedAtomLocalCorrespondence(a, source, row, span, get.capture, post.capture)).?;
+    try std.testing.expect(try fixedAtomJoinStyleArm(a, tuple.source, tuple.get, post, false) == null);
+    try std.testing.expect(try fixedAtomJoinStyleArm(a, tuple.source, tuple.get, get, false) == null);
+    var shifted = get; shifted.root += 1;
+    try std.testing.expect(try fixedAtomJoinStyleArm(a, tuple.source, tuple.get, shifted, true) == null);
+    var local = tuple.get; local.interior.text.end += 1;
+    try std.testing.expect(try fixedAtomJoinStyleArm(a, tuple.source, local, get, true) == null);
+    local = tuple.get; local.exterior.entity = local.interior.entity;
+    try std.testing.expect(try fixedAtomJoinStyleArm(a, tuple.source, local, get, true) == null);
+    for (0..8) |mutation| {
+        var bad = get; bad.nodes = try a.dupe(profile.FigureObservedNode, get.nodes);
+        const owner = get.root + tuple.get.span.index;
+        const inside = get.root + tuple.get.interior.entity.?.index;
+        const outside = get.root + tuple.get.exterior.entity.?.index;
+        switch (mutation) {
+            0 => bad.nodes[inside].parent = @intCast(get.root + tuple.get.row.index),
+            1 => bad.nodes[outside].parent = @intCast(owner),
+            2 => bad.nodes[inside].attributes = &.{.{ .name = "typeof", .value = "mw:Entity extra" }},
+            3 => bad.nodes[owner].tag = try a.dupe(u8, bad.nodes[owner].tag),
+            4 => bad.nodes[owner].has_text = true,
+            5 => bad.nodes[inside].captured_entity_text = "wrong",
+            6 => bad.nodes[owner].known_no_next_element_sibling = true,
+            else => bad.nodes[get.root + 1].parent = @intCast(owner), // foreign STYLE child
+        }
+        try std.testing.expect(try fixedAtomJoinStyleArm(a, tuple.source, tuple.get, bad, true) == null);
+        // Publication is atomic on every failing mapped graph.
+        try std.testing.expect(!bad.nodes[inside].known_complete_child_elements);
+    }
+    var changed = stored; changed.figure_alternative_sources = null;
+    try std.testing.expect(try selectFixedAtomObservedStylesAlloc(a, &ns, &parent, &changed, source, row, span) == null);
+    changed = stored; changed.page.outer_context.?.selected_body = .full_get_root;
+    try std.testing.expect(try selectFixedAtomObservedStylesAlloc(a, &ns, &parent, &changed, source, row, span) == null);
+    const changed_source = try std.mem.concat(a, u8, &.{ source, "extra source" });
+    try std.testing.expect(try selectFixedAtomObservedStylesAlloc(a, &ns, &parent, &stored, changed_source, row, span) == null);
+    changed = stored;
+    changed.outer.ancestors = try a.dupe(OuterObservedNode, stored.outer.ancestors);
+    const changed_ancestors = @constCast(changed.outer.ancestors);
+    changed_ancestors[2].attributes = .{ .attributes = &.{.{ .name = "id", .value = "crossed-shell" }} };
+    try std.testing.expect(try selectFixedAtomObservedStylesAlloc(a, &ns, &parent, &changed, source, row, span) == null);
+}

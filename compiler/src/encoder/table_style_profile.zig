@@ -42200,3 +42200,586 @@ test "table physical padding longhands preserve independent cascade and cell ref
     try std.testing.expectEqualDeep(types.StyleEdges.all(.{ .unit = .px, .value = 0 }), original.style.?.padding.?);
     try std.testing.expectEqualStrings("#f4f4f4", original.style.?.background.?);
 }
+
+pub const FixedInlineBoxComputed = struct {
+    layout: types.InlineBoxAtomicLayout,
+    font: types.InlineFontSnapshot,
+    padding: types.StyleEdges,
+    border: types.InlineBoxBorderEdges,
+    background: []const u8,
+    foreground: []const u8,
+};
+
+fn fixedInlineBoxFromPath(a: std.mem.Allocator, path: []const PositionedContainerPathNode,
+    parent_font: types.InlineFontSnapshot) !?FixedInlineBoxComputed
+{
+    if (path.len == 0 or !std.ascii.eqlIgnoreCase(path[path.len - 1].tag, "span") or
+        !parent_font.font_normalized or parent_font.font_scale == null or parent_font.font_scale_basis == .context) return null;
+    const node = path[path.len - 1];
+    const inherited = (try positionedContainerInheritance(a, path, parent_font, null)) orelse return null;
+    const font = inherited.font orelse return null;
+    if (!std.ascii.eqlIgnoreCase(inherited.wrap orelse return null, "normal") or
+        !std.ascii.eqlIgnoreCase(inherited.direction orelse return null, "ltr")) return null;
+    const alignment: types.InlineBoxOverlayTextAlign = switch (inherited.alignment orelse return null) {
+        .left => .left, .right => .right, .center => .center,
+    };
+    const line_height: ?types.InlineLineHeight = switch (inherited.line_height orelse return null) {
+        .normal => null,
+        .multiplier => |factor| .{ .font_relative = .{ .factor = factor, .font = font } },
+        .length => |metric_length| .{ .computed = .{ .value = metric_length.value,
+            .font_scale_basis = if (metric_length.unit == .px) .css_px else .normal_body } },
+    };
+    var used = try ObservedFigurePropertyUse.init(a, node.declarations);
+    defer used.deinit(a);
+    used.customEnvironment();
+    if (!try used.staticMotion(a, node.environment)) return null;
+    inline for (.{
+        .{ "display", "inline-block", "inline" }, .{ "position", "static", "static" },
+        .{ "vertical-align", "baseline", "baseline" }, .{ "box-decoration-break", "slice", "slice" },
+        .{ "min-width", "auto", "auto" }, .{ "min-height", "auto", "auto" },
+        .{ "max-width", "none", "none" }, .{ "max-height", "none", "none" },
+        .{ "z-index", "auto", "auto" }, .{ "unicode-bidi", "normal", "normal" },
+        .{ "float", "none", "none" }, .{ "clear", "none", "none" },
+        .{ "transform", "none", "none" }, .{ "translate", "none", "none" },
+        .{ "rotate", "none", "none" }, .{ "scale", "none", "none" },
+        .{ "perspective", "none", "none" }, .{ "filter", "none", "none" },
+        .{ "backdrop-filter", "none", "none" }, .{ "clip", "auto", "auto" },
+        .{ "clip-path", "none", "none" }, .{ "box-shadow", "none", "none" },
+        .{ "opacity", "1", "1" }, .{ "isolation", "auto", "auto" },
+        .{ "mix-blend-mode", "normal", "normal" }, .{ "contain", "none", "none" },
+        .{ "will-change", "auto", "auto" }, .{ "zoom", "1", "1" },
+        .{ "cursor", "auto", "auto" }, .{ "content", "normal", "normal" },
+        .{ "overflow-x", "visible", "visible" }, .{ "overflow-y", "visible", "visible" },
+    }) |check| {
+        const aliases: []const []const u8 = if (comptime std.mem.startsWith(u8, check[0], "overflow-")) &.{"overflow"} else &.{};
+        const value = (try positionedContainerKeyword(a, node, check[0], aliases, &.{check[1]}, check[2], check[2], false)) orelse return null;
+        if (!std.ascii.eqlIgnoreCase(value, check[1])) return null;
+        used.property(check[0], aliases);
+    }
+    // Reject authored offsets in this static subset. Even a future relative
+    // carrier must keep its containing block and stacking semantics separately.
+    const insets = (try inlineBoxInsets(a, node.declarations, node.environment)) orelse return null;
+    inline for (.{ "left", "right", "top", "bottom" }) |side| {
+        if (@field(insets, side) != null) return null;
+        used.property(side, &.{"inset"});
+    }
+    const box_sizing = (try positionedContainerKeyword(a, node, "box-sizing", &.{},
+        &.{ "content-box", "border-box" }, "content-box", "", false)) orelse return null;
+    const width = try observedFigureComputedLength(a, node.declarations, "width", &.{}, node.environment,
+        1, "auto", .automatic, .unknown, false, false);
+    const height = try observedFigureComputedLength(a, node.declarations, "height", &.{}, node.environment,
+        1, "auto", .automatic, .unknown, false, false);
+    if (width != .known or height != .known or width.known.value <= 0 or height.known.value <= 0) return null;
+    used.property("width", &.{}); used.property("height", &.{}); used.property("box-sizing", &.{});
+    const padding = try observedFigureEdges(a, node.declarations, node.environment, true, false, 1, null);
+    const margins = try observedFigureEdges(a, node.declarations, node.environment, false, false, 1, null);
+    if (padding.unresolved or margins.unresolved) return null;
+    const padding_edges = observedFigureFixedEdges(padding.value orelse return null) orelse return null;
+    const margin_edges = observedFigureFixedEdges(margins.value orelse return null) orelse return null;
+    if (!types.validStyleEdges(padding_edges) or !types.validStyleEdges(margin_edges)) return null;
+    const border = (try inlineBoxBorders(a, node.declarations, node.environment, false, false)) orelse return null;
+    inline for (.{ "left", "right", "top", "bottom" }) |side| switch (@field(border, side)) {
+        .none => {},
+        .solid => |line| if (line.color != .rgb) return null,
+        else => return null,
+    };
+    used.boxEdges(true); used.boxEdges(false); used.borderEdges();
+    if (!try inlineBoxStaticBackgroundImageAbsent(a, node.declarations, node.environment)) return null;
+    const ink = try observedFigureColor(a, node.declarations, "color", node.environment, null, null);
+    const fill = try observedFigureColor(a, node.declarations, "background-color", node.environment, null, null);
+    if (ink.unresolved or fill.unresolved or ink.value == null or fill.value == null or
+        ink.value.?.kind != .rgb or fill.value.?.kind != .rgb) return null;
+    used.property("color", &.{}); used.property("background-color", &.{"background"});
+    used.property("background-image", &.{"background"});
+    for (authored_inherited_neutral) |item| used.property(item.property, if (item.shorthand) |value| &.{value} else &.{});
+    inline for (.{ "font-size", "font-weight", "font-style", "font-family", "font-feature-settings", "line-height" }) |property|
+        used.property(property, &.{});
+    used.property("direction", &.{}); used.property("text-align", &.{});
+    if (!used.complete()) return null;
+    return .{ .layout = .{ .width = width.known, .height = height.known, .margins = margin_edges,
+        .box_sizing = if (std.ascii.eqlIgnoreCase(box_sizing, "border-box")) .border_box else .content_box,
+        .text_align = alignment, .wrap = .normal, .line_height = line_height },
+        .font = font, .padding = padding_edges, .border = border, .background = fill.value.?.value orelse return null, .foreground = ink.value.?.value orelse return null };
+}
+
+pub fn resolveObservedFixedInlineBox(a: std.mem.Allocator, context: AuthoredElementObservedContext,
+    parent_font: types.InlineFontSnapshot) !?FixedInlineBoxComputed
+{
+    return resolveObservedFixedInlineBoxChildIn(a, context, parent_font, null);
+}
+
+fn resolveObservedFixedInlineBoxChildIn(a: std.mem.Allocator, context: AuthoredElementObservedContext,
+    parent_font: types.InlineFontSnapshot, neutral_child: ?u32) !?FixedInlineBoxComputed
+{
+    // authoredElementObservedContextValid includes observedStyleGraphValid.
+    if (!authoredElementObservedContextValid(context) or context.styles.globally_unresolved) return null;
+    const subject = context.nodes[context.element];
+    if (!std.ascii.eqlIgnoreCase(subject.tag, "span") or subject.empty != false or
+        subject.has_text != (neutral_child == null) or !subject.known_complete_child_elements) return null;
+    // A proved entity owns all text in the child arm. No source/observed node
+    // is removed, and the direct-text arm still refuses every element child.
+    var child_seen = false;
+    for (context.nodes, 0..) |node, index| if (node.parent == context.element) {
+        if (neutral_child == null or index != neutral_child.?) return null;
+        child_seen = true;
+    };
+    if (child_seen != (neutral_child != null)) return null;
+
+    var reverse: [64]u32 = undefined;
+    var count: usize = 0;
+    var next: ?u32 = context.element;
+    while (next) |index| {
+        if (count == reverse.len) return null;
+        reverse[count] = index; count += 1;
+        next = context.nodes[index].parent;
+    }
+    if (count == 0 or reverse[count - 1] != 0) return null;
+    var lists: [64]std.ArrayList(ObservedFigureDeclaration) = @splat(.empty);
+    defer for (lists[0..count]) |*list| list.deinit(a);
+    var path: [64]PositionedContainerPathNode = undefined;
+    var computed: [64]ObservedFigureComputedNode = undefined;
+    var environment: CustomEnvironment = .{ .complete = true };
+    for (0..count) |ordinal| {
+        const index = reverse[count - ordinal - 1];
+        const node = context.nodes[index];
+        if (observedFigureAttribute(node, "hidden") != null or observedFigureAttribute(node, "inert") != null or
+            observedFigureAttribute(node, "contenteditable") != null) return null;
+        // This geometry path does not project HTML directional/alignment hints.
+        // Refuse them rather than silently treating them as CSS inheritance.
+        if (observedFigureAttribute(node, "dir") != null or observedFigureAttribute(node, "align") != null) return null;
+        // All observed rules, exact inline declarations and unresolved states
+        // reach the shared cascade; there is no invented viewport/link state.
+        lists[ordinal] = (try observedStyleNodeDeclarationsWithLanguage(a, context.styles, context.nodes,
+            index, null, null, .{}, true)) orelse return null;
+        environment = try observedFigureCustomEnvironment(a, lists[ordinal].items, environment, true);
+        if (!environment.complete) return null;
+        if (node.custom_environment) |issued| for (issued.values) |binding| {
+            if (binding.value != .unknown and !sameObservedCustomValue(binding.value, environment.get(binding.name))) return null;
+        };
+        path[ordinal] = .{ .tag = node.tag, .declarations = lists[ordinal].items, .environment = environment,
+            .language = observedFigureAttribute(node, "lang") };
+        computed[ordinal] = .{ .index = index, .declarations = lists[ordinal].items, .environment = environment };
+    }
+    if (!try observedInlineAncestorsVisible(a, context.styles, context.nodes, context.root,
+        context.element, computed[0..count], .{}, false)) return null;
+    if (!try authoredElementPseudoEmpty(a, context, context.element, .before, environment) or
+        !try authoredElementPseudoEmpty(a, context, context.element, .after, environment) or
+        !observedTableOtherPseudoEmpty(context, context.element)) return null;
+    // Own motion/property accounting, radius refusal, baseline and declaring-em
+    // dimensions stay in the same strict helper as the source-path query.
+    return fixedInlineBoxFromPath(a, path[0..count], parent_font);
+}
+
+pub const ObservedFixedInlineBoxComputedContext = struct {
+    text: AuthoredElementComputedContext,
+    box: FixedInlineBoxComputed,
+};
+
+pub fn resolveObservedFixedInlineBoxWithText(a: std.mem.Allocator, context: AuthoredElementObservedContext,
+    parent_font: types.InlineFontSnapshot) !?ObservedFixedInlineBoxComputedContext
+{
+    // Retain the complete-child inventory and unconditional element-child
+    // refusal. A generated mw:Entity NBSP leaf is not erased or certified here.
+    const box = (try resolveObservedFixedInlineBox(a, context, parent_font)) orelse return null;
+    // Reuse the same typed text construction as resolveObservedAuthoredRule.
+    // table_cell=true selects text-only ownership: the separately checked fixed
+    // box owns geometry. It grants no table/source/pseudo/focus authorization.
+    // No HR focus exclusion or shell-visibility exception is imported.
+    const text = (try resolveObservedElementTextPathIn(a, context, .{}, true, null, true,
+        false, false, false)) orelse return null;
+    if (text.nodes.len < 2 or text.root != context.root or text.element != context.element) return null;
+    const own = text.nodes[text.nodes.len - 1];
+    const parent = context.nodes[context.element].parent orelse return null;
+    if (own.index != context.element or own.hidden or text.nodes[text.nodes.len - 2].index != parent) return null;
+    return .{ .text = text, .box = box };
+}
+
+pub const ObservedFixedInlineEntityProof = struct {
+    context: AuthoredElementObservedContext,
+    source: []const u8,
+    owner_span: []const u8,
+    token: []const u8,
+    child: u32,
+
+    fn binds(self: @This(), context: AuthoredElementObservedContext, source: []const u8,
+        owner_span: []const u8, token: []const u8) bool
+    {
+        return self.context.styles == context.styles and self.context.nodes.ptr == context.nodes.ptr and
+            self.context.nodes.len == context.nodes.len and self.context.root == context.root and
+            self.context.element == context.element and self.source.ptr == source.ptr and self.source.len == source.len and
+            self.owner_span.ptr == owner_span.ptr and self.owner_span.len == owner_span.len and
+            self.token.ptr == token.ptr and self.token.len == token.len;
+    }
+};
+
+fn fixedInlineEntityNbspToken(token: []const u8) bool {
+    if (std.mem.eql(u8, token, "&nbsp;")) return true;
+    if (token.len < 4 or token.len > 32 or !std.mem.startsWith(u8, token, "&#") or token[token.len - 1] != ';') return false;
+    var digits = token[2 .. token.len - 1];
+    var radix: u16 = 10;
+    if (digits.len > 0 and (digits[0] == 'x' or digits[0] == 'X')) { radix = 16; digits = digits[1..]; }
+    if (digits.len == 0) return false;
+    var value: u16 = 0;
+    for (digits) |byte| {
+        const digit: u16 = if (byte >= '0' and byte <= '9') byte - '0'
+            else if (radix == 16 and byte >= 'a' and byte <= 'f') byte - 'a' + 10
+            else if (radix == 16 and byte >= 'A' and byte <= 'F') byte - 'A' + 10 else return false;
+        value = value * radix + digit;
+        if (value > 160) return false;
+    }
+    return value == 160;
+}
+
+pub fn proveObservedFixedInlineEntityNeutral(a: std.mem.Allocator, context: AuthoredElementObservedContext,
+    source: []const u8, owner_span: []const u8, token: []const u8) !?ObservedFixedInlineEntityProof
+{
+    if (!authoredElementObservedContextValid(context) or context.styles.globally_unresolved or
+        pageSourceFocusTokenOffset(source, owner_span) == null or !fixedInlineEntityNbspToken(token)) return null;
+    const token_offset = pageSourceFocusTokenOffset(owner_span, token) orelse return null;
+    if (token_offset == 0 or token_offset + token.len == owner_span.len) return null;
+    const owner = context.nodes[context.element];
+    if (!std.ascii.eqlIgnoreCase(owner.tag, "span") or owner.empty != false or owner.has_text != false or
+        !owner.known_complete_child_elements) return null;
+    var child_index: ?u32 = null;
+    for (context.nodes, 0..) |node, index| if (node.parent == context.element) {
+        if (child_index != null) return null;
+        child_index = @intCast(index);
+    };
+    const child = child_index orelse return null;
+    const leaf = context.nodes[child];
+    if (!std.ascii.eqlIgnoreCase(leaf.tag, "span") or leaf.attributes.len != 1 or
+        !std.mem.eql(u8, observedFigureAttribute(leaf, "typeof") orelse return null, "mw:Entity") or
+        leaf.empty != false or leaf.has_text != true or !leaf.known_complete_child_elements or
+        !std.mem.eql(u8, leaf.captured_entity_text orelse return null, "\xc2\xa0")) return null;
+    for (context.nodes) |node| if (node.parent == child) return null;
+
+    var reverse: [65]u32 = undefined; var count: usize = 0; var next: ?u32 = child;
+    while (next) |index| {
+        if (count == reverse.len) return null;
+        reverse[count] = index; count += 1; next = context.nodes[index].parent;
+    }
+    if (count == 0 or reverse[count - 1] != 0) return null;
+    var environment: CustomEnvironment = .{ .complete = true };
+    for (0..count) |ordinal| {
+        const index = reverse[count - ordinal - 1];
+        var declarations = (try observedStyleNodeDeclarationsWithLanguage(a, context.styles, context.nodes,
+            index, null, null, .{}, true)) orelse return null;
+        defer declarations.deinit(a);
+        // Even an invariant-looking custom/motion rule cannot hide an unknown
+        // selector, rank or state in this narrow child-neutrality proof.
+        for (declarations.items) |declaration|
+            if (declaration.syntax_unknown or declaration.rank_unknown or declaration.uncertain) return null;
+        environment = try observedFigureCustomEnvironment(a, declarations.items, environment, true);
+        if (!environment.complete) return null;
+        for (environment.values) |binding| if (binding.value == .unknown) return null;
+        if (context.nodes[index].custom_environment) |issued| for (issued.values) |binding| {
+            if (binding.value == .unknown or !sameObservedCustomValue(binding.value, environment.get(binding.name))) return null;
+        };
+        if (index == child) {
+            var used = try ObservedFigurePropertyUse.init(a, declarations.items); defer used.deinit(a);
+            used.customEnvironment();
+            // Exact prefix-entity pattern, without any prefix/table capability:
+            // no font, ink, bidi, box, radius or other own property is consumed.
+            if (!try used.staticMotion(a, environment) or !used.complete()) return null;
+        }
+    }
+    for ([_]GeneratedFigurePseudo{ .before, .after }) |pseudo| {
+        var declarations = (try observedStyleNodeDeclarationsWithLanguage(a, context.styles, context.nodes,
+            child, null, pseudo, .{}, true)) orelse return null;
+        defer declarations.deinit(a);
+        for (declarations.items) |declaration|
+            if (declaration.syntax_unknown or declaration.rank_unknown or declaration.uncertain) return null;
+        const pseudo_environment = try observedFigureCustomEnvironment(a, declarations.items, environment, true);
+        if (!pseudo_environment.complete) return null;
+        for (pseudo_environment.values) |binding| if (binding.value == .unknown) return null;
+        var used = try ObservedFigurePropertyUse.init(a, declarations.items); defer used.deinit(a);
+        used.customEnvironment(); used.property("content", &.{});
+        if (!try used.staticMotion(a, pseudo_environment) or !used.complete() or
+            !try authoredElementPseudoEmpty(a, context, child, pseudo, pseudo_environment)) return null;
+    }
+    if (!observedTableOtherPseudoEmpty(context, child)) return null;
+    return .{ .context = context, .source = source, .owner_span = owner_span, .token = token, .child = child };
+}
+
+pub fn resolveObservedFixedInlineBoxWithEntity(a: std.mem.Allocator, context: AuthoredElementObservedContext,
+    source: []const u8, owner_span: []const u8, token: []const u8, parent_font: types.InlineFontSnapshot,
+    proof: ObservedFixedInlineEntityProof) !?ObservedFixedInlineBoxComputedContext
+{
+    if (!proof.binds(context, source, owner_span, token)) return null;
+    // Recheck current declarations and shape; a copied/stale/constructed proof
+    // cannot skip the neutrality checks, even if it retains matching pointers.
+    const current = (try proveObservedFixedInlineEntityNeutral(a, context, source, owner_span, token)) orelse return null;
+    if (current.child != proof.child) return null;
+    const box = (try resolveObservedFixedInlineBoxChildIn(a, context, parent_font, current.child)) orelse return null;
+    const text = (try resolveObservedElementTextPathIn(a, context, .{}, true, null, true,
+        false, false, false)) orelse return null;
+    if (text.nodes.len < 2 or text.root != context.root or text.element != context.element) return null;
+    const own = text.nodes[text.nodes.len - 1];
+    const parent = context.nodes[context.element].parent orelse return null;
+    if (own.index != context.element or own.hidden or text.nodes[text.nodes.len - 2].index != parent) return null;
+    return .{ .text = text, .box = box };
+}
+
+const ObservedFixedInlineBoxTest = struct {
+    const root_css = "html{font-family:sans-serif;font-size:16px;font-weight:normal;font-style:normal;" ++
+        "white-space:normal;direction:ltr;text-align:left}" ++
+        ".legend-parent{font-size:125%;--fill:red}";
+    const owner_css = ".legend-color{display:inline-block;width:1.5em;height:1.5em;margin:1px 0;" ++
+        "border:1px solid black;background-color:var(--fill);color:black;font-size:90%;text-align:center}";
+    // Synthetic immediate-parent metric: 16px * 125% = 20px. These tests do not
+    // issue authentic source authority or native agreement for retained heads.
+    const parent_font: types.InlineFontSnapshot = .{ .font_scale = 20, .font_scale_basis = .css_px,
+        .font_normalized = true, .font_family = .sans_serif };
+    fn nodes(a: std.mem.Allocator) ![]ObservedStyleNode {
+        return a.dupe(ObservedStyleNode, &.{
+            .{ .tag = "html", .parent = null, .attributes = &.{} },
+            .{ .tag = "body", .parent = 0, .attributes = &.{} },
+            .{ .tag = "div", .parent = 1, .attributes = &.{.{ .name = "class", .value = "mw-parser-output" }} },
+            .{ .tag = "div", .parent = 2, .attributes = &.{.{ .name = "class", .value = "legend-parent" }} },
+            .{ .tag = "span", .parent = 3, .attributes = &.{.{ .name = "class", .value = "legend-color" }},
+                .empty = false, .has_text = true, .known_complete_child_elements = true },
+        });
+    }
+    fn context(styles: *const Profile, graph: []const ObservedStyleNode) AuthoredElementObservedContext {
+        return .{ .styles = styles, .nodes = graph, .root = 2, .element = 4 };
+    }
+};
+
+test "observed fixed atom preserves cascade declaring em and distinct normal line height" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = ObservedFixedInlineBoxTest;
+    // Independent observations keep multiplier and explicit normal distinct.
+    for ([_][]const u8{ "html{line-height:1.6}", "html{line-height:normal}" }, 0..) |line_css, index| {
+        const css = try std.mem.concat(a, u8, &.{ T.root_css, T.owner_css, line_css });
+        var styles = try parseForTargetAlloc(a, css, .screen); defer styles.deinit();
+        const graph = try T.nodes(a);
+        const result = (try resolveObservedFixedInlineBox(a, T.context(&styles, graph), T.parent_font)) orelse
+            return error.TestUnexpectedResult;
+        try std.testing.expectEqual(@as(f32, 18), result.font.font_scale.?);
+        try std.testing.expectEqual(types.FontScaleBasis.css_px, result.font.font_scale_basis);
+        try std.testing.expectEqualDeep(types.StyleLength{ .unit = .em, .value = 1.5 }, result.layout.width);
+        try std.testing.expectEqualDeep(result.layout.width, result.layout.height);
+        try std.testing.expect(result.layout.box_sizing == .content_box and result.layout.text_align == .center);
+        try std.testing.expectEqualDeep(types.StyleLength{ .unit = .px, .value = 1 }, result.layout.margins.top);
+        try std.testing.expect(result.border.top == .solid);
+        try std.testing.expectEqualStrings("#ff0000", result.background);
+        if (index == 0) {
+            try std.testing.expectEqual(@as(f32, 1.6), result.layout.line_height.?.font_relative.factor);
+            try std.testing.expectEqualDeep(result.font, result.layout.line_height.?.font_relative.font);
+        } else try std.testing.expect(result.layout.line_height == null);
+        // Inline cascade beats the class rule without modifying the graph path.
+        graph[4].attributes = &.{ .{ .name = "class", .value = "legend-color" },
+            .{ .name = "style", .value = "background-color:white" } };
+        const white = (try resolveObservedFixedInlineBox(a, T.context(&styles, graph), T.parent_font)) orelse
+            return error.TestUnexpectedResult;
+        try std.testing.expectEqualStrings("#ffffff", white.background);
+        try std.testing.expectEqualDeep(result.layout, white.layout);
+    }
+    // Absent/unknown inherited line-height is not CSS normal.
+    var unknown = try parseForTargetAlloc(a, T.root_css ++ T.owner_css, .screen); defer unknown.deinit();
+    try std.testing.expect((try resolveObservedFixedInlineBox(a, T.context(&unknown, try T.nodes(a)), T.parent_font)) == null);
+}
+
+test "observed fixed atom refuses unclosed children hidden paths pseudo motion and unsupported properties" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = ObservedFixedInlineBoxTest;
+    const css = T.root_css ++ T.owner_css ++ "html{line-height:1.6}";
+    var styles = try parseForTargetAlloc(a, css, .screen); defer styles.deinit();
+    const graph = try T.nodes(a);
+    const context = T.context(&styles, graph);
+    try std.testing.expect((try resolveObservedFixedInlineBox(a, context, T.parent_font)) != null);
+    for (0..7) |mutation| {
+        const changed = try a.dupe(ObservedStyleNode, graph);
+        switch (mutation) {
+            0 => changed[4].known_complete_child_elements = false,
+            1 => changed[4].has_text = null,
+            2 => changed[4].empty = null,
+            3 => changed[4].parent = 4,
+            4 => changed[3].attributes = &.{.{ .name = "hidden", .value = "" }},
+            5 => changed[4].attributes = &.{.{ .name = "hidden", .value = "" }},
+            6 => changed[3].attributes = &.{.{ .name = "dir", .value = "rtl" }},
+            else => unreachable,
+        }
+        const refused = (try resolveObservedFixedInlineBox(a, T.context(&styles, changed), T.parent_font)) == null;
+        if (!refused) std.debug.print("fixed atom graph mutation accepted: {d}\n", .{mutation});
+        try std.testing.expect(refused);
+    }
+    const with_child = try a.alloc(ObservedStyleNode, graph.len + 1);
+    @memcpy(with_child[0..graph.len], graph);
+    with_child[graph.len] = .{ .tag = "span", .parent = 4, .attributes = &.{.{ .name = "hidden", .value = "" }},
+        .empty = true, .has_text = false };
+    try std.testing.expect((try resolveObservedFixedInlineBox(a, T.context(&styles, with_child), T.parent_font)) == null);
+    for ([_][]const u8{
+        ".legend-parent{display:none}", ".legend-color{visibility:hidden}",
+        ".legend-color::before{content:'x'}", ".legend-color::unqualified{content:'x'}",
+        ".legend-color{display:list-item}.legend-color::marker{content:'x'}",
+        ".legend-color{animation-name:spin}", ".legend-parent{transition-duration:1s}",
+        ".legend-color{border-radius:1px}", ".legend-color{unhandled-geometry:1}",
+        ".legend-color:hover{width:2em}", ".legend-color{line-height:calc(1em + 1px)}",
+        ".legend-color:hover{--line:2}.legend-color{line-height:var(--line)}",
+    }) |mutation| {
+        var changed = try parseForTargetAlloc(a, try std.mem.concat(a, u8, &.{ css, mutation }), .screen);
+        defer changed.deinit();
+        const refused = (try resolveObservedFixedInlineBox(a, T.context(&changed, graph), T.parent_font)) == null;
+        if (!refused) std.debug.print("fixed atom CSS mutation accepted: {s}\n", .{mutation});
+        try std.testing.expect(refused);
+    }
+    // Only list-item generates a marker (CSS Lists 3). This path proves
+    // inline-block, so marker-only styling cannot affect its geometry.
+    var marker = try parseForTargetAlloc(a, css ++ ".legend-color::marker{content:'x'}", .screen);
+    defer marker.deinit();
+    const unchanged = (try resolveObservedFixedInlineBox(a, T.context(&marker, graph), T.parent_font)) orelse
+        return error.TestUnexpectedResult;
+    try std.testing.expectEqualDeep((try resolveObservedFixedInlineBox(a, context, T.parent_font)).?, unchanged);
+    // Complete custom-property state proves this variable is absent. Invalid
+    // substitution becomes unset, which inherits the known 1.6 line height;
+    // it is different from the uncertain variable mutation above.
+    var missing = try parseForTargetAlloc(a, css ++ ".legend-color{line-height:var(--missing)}", .screen);
+    defer missing.deinit();
+    const inherited = (try resolveObservedFixedInlineBox(a, T.context(&missing, graph), T.parent_font)) orelse
+        return error.TestUnexpectedResult;
+    try std.testing.expectEqualDeep(unchanged, inherited);
+    var unissued = T.parent_font; unissued.font_scale = null;
+    try std.testing.expect((try resolveObservedFixedInlineBox(a, context, unissued)) == null);
+}
+
+test "observed fixed atom typed paths retain independent source and native parent metrics" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = ObservedFixedInlineBoxTest;
+    // Synthetic independently issued native-parent snapshots. Neither 16px nor
+    // 20px below is converted to normal-body units by this API or this test.
+    // Real native-parent agreement and source binding belong to the producer.
+    const native_parent: types.InlineFontSnapshot = .{ .font_scale = 1.25, .font_scale_basis = .normal_body,
+        .font_normalized = true, .font_family = .sans_serif };
+    for ([_][]const u8{ "html{font-size:16px;line-height:1.6}", "html{font-size:20px;line-height:normal}" },
+        [_]f32{ 16, 20 }, 0..) |arm_css, root_px, arm|
+    {
+        var styles = try parseForTargetAlloc(a, try std.mem.concat(a, u8, &.{ T.root_css, T.owner_css, arm_css }), .screen);
+        defer styles.deinit();
+        const graph = try T.nodes(a);
+        const result = (try resolveObservedFixedInlineBoxWithText(a, T.context(&styles, graph), native_parent)) orelse
+            return error.TestUnexpectedResult;
+        const text = result.text;
+        try std.testing.expectEqual(@as(u32, 2), text.root);
+        try std.testing.expectEqual(@as(u32, 4), text.element);
+        try std.testing.expectEqual(@as(usize, 5), text.nodes.len);
+        for (text.nodes, 0..) |node, index| try std.testing.expectEqual(@as(u32, @intCast(index)), node.index);
+        try std.testing.expectEqualDeep(ObservedFontSizeValue{ .css_px = root_px }, text.nodes[0].font_size.?);
+        try std.testing.expectEqualDeep(ObservedFontSizeValue{ .relative = 1.25 }, text.nodes[3].font_size.?);
+        try std.testing.expectEqualDeep(ObservedFontSizeValue{ .relative = 0.9 }, text.nodes[4].font_size.?);
+        try std.testing.expectEqualStrings("sans-serif", text.root_font_family);
+        try std.testing.expectEqual(types.FontScaleBasis.normal_body, result.box.font.font_scale_basis);
+        try std.testing.expectEqual(@as(f32, 1.125), result.box.font.font_scale.?);
+        try std.testing.expectEqualDeep(types.StyleLength{ .unit = .em, .value = 1.5 }, result.box.layout.width);
+        try std.testing.expect(text.nodes[4].line_height == .inherit);
+        if (arm == 0) {
+            try std.testing.expectEqualDeep(AuthoredElementLineHeight{ .multiplier = 1.6 }, text.nodes[0].line_height);
+            try std.testing.expectEqual(@as(f32, 1.6), result.box.layout.line_height.?.font_relative.factor);
+            try std.testing.expectEqualDeep(result.box.font, result.box.layout.line_height.?.font_relative.font);
+        } else {
+            try std.testing.expect(text.nodes[0].line_height == .normal);
+            try std.testing.expect(result.box.layout.line_height == null);
+        }
+    }
+}
+
+test "ordinary fixed atom entity proof binds only the mapped NBSP child and refuses own effects" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = ObservedFixedInlineBoxTest;
+    const css = T.root_css ++ T.owner_css ++ "html{line-height:1.6}" ++
+        "[typeof='mw:Entity']{--neutral:1;animation-name:none;transition-duration:0s;scroll-behavior:auto}";
+    var styles = try parseForTargetAlloc(a, css, .screen); defer styles.deinit();
+    const graph = try a.alloc(ObservedStyleNode, 7);
+    @memcpy(graph[0..5], try T.nodes(a)); graph[4].has_text = false;
+    graph[5] = .{ .tag = "span", .parent = 4, .attributes = &.{.{ .name = "typeof", .value = "mw:Entity" }},
+        .empty = false, .has_text = true, .known_complete_child_elements = true, .captured_entity_text = "\xc2\xa0" };
+    graph[6] = graph[5]; graph[6].parent = 3; // Exterior entity stays outside this owner.
+    const context = T.context(&styles, graph);
+    const prefix = "before&nbsp;";
+    const opening = "<span class='legend-color'>";
+    const closing = "</span>";
+    // Synthetic mapping only: production FPO must supply these exact ranges.
+    for ([_][]const u8{ "&nbsp;", "&#160;", "&#xA0;", "&#X00a0;" }) |spelling| {
+        const source = try std.mem.concat(a, u8, &.{ prefix, opening, spelling, closing, "&nbsp;after" });
+        const start = prefix.len + opening.len;
+        const token = source[start .. start + spelling.len];
+        const span = source[prefix.len .. start + spelling.len + closing.len];
+        const proof = (try proveObservedFixedInlineEntityNeutral(a, context, source, span, token)) orelse
+            return error.TestUnexpectedResult;
+        try std.testing.expectEqual(@as(u32, 5), proof.child);
+        const result = (try resolveObservedFixedInlineBoxWithEntity(a, context, source, span, token, T.parent_font, proof)) orelse
+            return error.TestUnexpectedResult;
+        try std.testing.expectEqual(@as(f32, 18), result.box.font.font_scale.?);
+        try std.testing.expectEqualDeep(types.StyleLength{ .unit = .em, .value = 1.5 }, result.box.layout.width);
+        try std.testing.expectEqual(@as(u32, 4), result.text.element);
+        try std.testing.expectEqual(@as(usize, 5), result.text.nodes.len);
+        try std.testing.expectEqual(@as(?u32, 4), graph[5].parent);
+        try std.testing.expectEqual(@as(?u32, 3), graph[6].parent);
+        try std.testing.expect((try resolveObservedFixedInlineBoxWithText(a, context, T.parent_font)) == null);
+    }
+    const source = try std.mem.concat(a, u8, &.{ prefix, opening, "&nbsp;", closing, "&nbsp;after" });
+    const start = prefix.len + opening.len;
+    const token = source[start .. start + 6];
+    const span = source[prefix.len .. start + 6 + closing.len];
+    const proof = (try proveObservedFixedInlineEntityNeutral(a, context, source, span, token)) orelse return error.TestUnexpectedResult;
+    try std.testing.expect((try proveObservedFixedInlineEntityNeutral(a, context, source, span, source[6..12])) == null);
+    const copy_token = try a.dupe(u8, token);
+    try std.testing.expect((try proveObservedFixedInlineEntityNeutral(a, context, source, span, copy_token)) == null);
+    const copy_source = try a.dupe(u8, source);
+    try std.testing.expect((try resolveObservedFixedInlineBoxWithEntity(a, context, copy_source,
+        copy_source[prefix.len .. span.len + prefix.len], copy_source[start .. start + 6], T.parent_font, proof)) == null);
+    const copied_graph = try a.dupe(ObservedStyleNode, graph);
+    try std.testing.expect((try resolveObservedFixedInlineBoxWithEntity(a, T.context(&styles, copied_graph),
+        source, span, token, T.parent_font, proof)) == null);
+    for ([_][]const u8{ "&#32;", "&#161;", "&#x20;", "&#x;", "&nbsp", "\xc2\xa0" }) |wrong| {
+        const bad = try std.mem.concat(a, u8, &.{ opening, wrong, closing });
+        try std.testing.expect((try proveObservedFixedInlineEntityNeutral(a, context, bad, bad,
+            bad[opening.len .. opening.len + wrong.len])) == null);
+    }
+    for (0..8) |mutation| {
+        const changed = try a.dupe(ObservedStyleNode, graph);
+        switch (mutation) {
+            0 => changed[4].known_complete_child_elements = false,
+            1 => changed[5].known_complete_child_elements = false,
+            2 => changed[5].captured_entity_text = " ",
+            3 => changed[5].has_text = null,
+            4 => changed[4].has_text = true,
+            5 => changed[6].parent = 4,
+            6 => changed[6].parent = 5,
+            7 => changed[5].attributes = &.{ .{ .name = "typeof", .value = "mw:Entity" }, .{ .name = "dir", .value = "ltr" } },
+            else => unreachable,
+        }
+        const refused = (try proveObservedFixedInlineEntityNeutral(a, T.context(&styles, changed), source, span, token)) == null;
+        if (!refused) std.debug.print("entity graph mutation accepted: {d}\n", .{mutation});
+        try std.testing.expect(refused);
+    }
+    // Same-pointer mutation must be rechecked when the proof is consumed.
+    graph[5].captured_entity_text = " ";
+    try std.testing.expect((try resolveObservedFixedInlineBoxWithEntity(a, context, source, span, token, T.parent_font, proof)) == null);
+    graph[5].captured_entity_text = "\xc2\xa0";
+    for ([_][]const u8{
+        "[typeof='mw:Entity']{font-size:inherit}", "[typeof='mw:Entity']{color:inherit}",
+        "[typeof='mw:Entity']{unicode-bidi:normal}", "[typeof='mw:Entity']{display:inline}",
+        "[typeof='mw:Entity']{margin:0}", "[typeof='mw:Entity']{border-radius:0}",
+        "[typeof='mw:Entity']{unhandled-property:1}", "[typeof='mw:Entity']{animation-name:spin}",
+        "[typeof='mw:Entity']:hover{--neutral:1}", "[typeof='mw:Entity']::before{content:'x'}",
+        "[typeof='mw:Entity']::after{content:none;font-size:inherit}",
+        "[typeof='mw:Entity']::before{--content:'x';content:var(--content)}",
+        "[typeof='mw:Entity']:hover::before{content:none}", "[typeof='mw:Entity']::unqualified{content:none}",
+        "[typeof='mw:Entity']{display:list-item}[typeof='mw:Entity']::marker{content:'x'}",
+    }) |mutation| {
+        var changed = try parseForTargetAlloc(a, try std.mem.concat(a, u8, &.{ css, mutation }), .screen);
+        defer changed.deinit();
+        const refused = (try proveObservedFixedInlineEntityNeutral(a, T.context(&changed, graph), source, span, token)) == null;
+        if (!refused) std.debug.print("entity CSS mutation accepted: {s}\n", .{mutation});
+        try std.testing.expect(refused);
+    }
+    // This generated SPAN has no own display declaration and cannot be a
+    // list-item. A marker rule alone is therefore inert; display changes above
+    // still refuse through complete own-property accounting.
+    var marker = try parseForTargetAlloc(a, css ++ "[typeof='mw:Entity']::marker{content:'x'}", .screen);
+    defer marker.deinit();
+    try std.testing.expect((try proveObservedFixedInlineEntityNeutral(a, T.context(&marker, graph),
+        source, span, token)) != null);
+
+}
