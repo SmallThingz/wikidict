@@ -762,6 +762,7 @@ pub const SourceReader = struct {
     // Provider metadata may use an arena; member eviction needs real per-allocation frees.
     cache_allocator: std.mem.Allocator,
     file: std.Io.File,
+    opened_file_identity: std.Io.File.Stat,
     kind: PageIndexKind,
     original_bzip2: ?bzip2_blocks.Reader = null,
     streams: []StreamSpan = &.{},
@@ -782,7 +783,8 @@ pub const SourceReader = struct {
     ) !SourceReader {
         var file = try std.Io.Dir.cwd().openFile(io, dump_path, .{});
         errdefer file.close(io);
-        const size = (try file.stat(io)).size;
+        const opened_file_identity = try file.stat(io);
+        const size = opened_file_identity.size;
         var streams: []StreamSpan = &.{};
         if (isMultistream(kind)) {
             const path = stream_table_path orelse return error.MissingStreamIndex;
@@ -793,6 +795,7 @@ pub const SourceReader = struct {
             .allocator = allocator,
             .cache_allocator = cache_allocator,
             .file = file,
+            .opened_file_identity = opened_file_identity,
             .kind = kind,
             .streams = streams,
         };
@@ -811,6 +814,10 @@ pub const SourceReader = struct {
         stream_table_path: ?[]const u8,
     ) !SourceReader {
         if (kind == .multistream_bz2) return error.UnsupportedBzip2AddressBridge;
+        // Retain the opened descriptor identity before parsing its part table.
+        var file = try std.Io.Dir.cwd().openFile(io, directory_path, .{});
+        errdefer file.close(io);
+        const opened_file_identity = try file.stat(io);
         var original = try bzip2_blocks.Reader.open(io, allocator, cache_allocator, directory_path, source_directory);
         errdefer original.deinit();
         var streams: []StreamSpan = &.{};
@@ -830,9 +837,7 @@ pub const SourceReader = struct {
             }
             if (next != bridge.dump_bytes) return error.InvalidBzip2Bridge;
         }
-        var file = try std.Io.Dir.cwd().openFile(io, directory_path, .{});
-        errdefer file.close(io);
-        return .{ .io = io, .allocator = allocator, .cache_allocator = cache_allocator, .file = file, .kind = kind, .streams = streams, .original_bzip2 = original };
+        return .{ .io = io, .allocator = allocator, .cache_allocator = cache_allocator, .file = file, .opened_file_identity = opened_file_identity, .kind = kind, .streams = streams, .original_bzip2 = original };
     }
 
     pub const Selection = union(enum) { legacy, root_receipt, original_bzip2: []const u8 };
@@ -854,6 +859,22 @@ pub const SourceReader = struct {
         }
         if (selection == .original_bzip2) return error.MissingBzip2SourceTransport;
         return open(io, allocator, cache_allocator, dump_path, kind, stream_table_path);
+    }
+
+    // Verify the retained open descriptor identities, without rereading the
+    // corpus or granting path/manifest provenance. Export callers separately
+    // verify their captured input paths and mapped index identity.
+    // For original transport, check ALL opened parts, including unread parts;
+    // a current selected range alone cannot establish this postcondition.
+    pub fn verifyAllUnchanged(self: *SourceReader) !void {
+        self.read_mutex.lockUncancelable(self.io);
+        defer self.read_mutex.unlock(self.io);
+        const before = self.opened_file_identity;
+        const after = try self.file.stat(self.io);
+        if (after.inode != before.inode or after.size != before.size or after.kind != before.kind or
+            !std.meta.eql(after.mtime, before.mtime) or !std.meta.eql(after.ctime, before.ctime))
+            return error.SourceReaderChanged;
+        if (self.original_bzip2) |*original| try original.checkCurrent();
     }
 
     pub fn deinit(self: *SourceReader) void {
@@ -2063,4 +2084,63 @@ test "portable original bzip2 lookup spans blocks and parts with owned bounded c
     try std.testing.expectEqual(@as(u8, 'a'), text[0]);
     try std.testing.expectEqual(@as(u8, '9'), text[text.len - 1]);
     try reader.original_bzip2.?.checkCurrent();
+}
+
+
+test "source reader full post preserves stable raw input and refuses changed opened dump" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(io, .{ .sub_path = "pages.xml", .data = "<mediawiki/>" });
+    var root_buffer: [4096]u8 = undefined;
+    const root = root_buffer[0..try tmp.dir.realPath(io, &root_buffer)];
+    const path = try std.fs.path.join(a, &.{ root, "pages.xml" });
+    defer a.free(path);
+    var reader = try SourceReader.open(io, a, a, path, .raw_xml, null);
+    defer reader.deinit();
+    try reader.verifyAllUnchanged();
+    try tmp.dir.writeFile(io, .{ .sub_path = "pages.xml", .data = "<mediawiki>changed</mediawiki>" });
+    try std.testing.expectError(error.SourceReaderChanged, reader.verifyAllUnchanged());
+}
+
+test "source reader full post rejects changed original part outside selected range" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(io, .{ .sub_path = "part-a.bz2", .data = @embedFile("testdata/original-bzip2/part-a.bz2") });
+    try tmp.dir.writeFile(io, .{ .sub_path = "part-b.bz2", .data = @embedFile("testdata/original-bzip2/part-b.bz2") });
+    try tmp.dir.writeFile(io, .{ .sub_path = "blocks.json", .data = @embedFile("testdata/original-bzip2/blocks.json") });
+    var root_buffer: [4096]u8 = undefined;
+    const root = root_buffer[0..try tmp.dir.realPath(io, &root_buffer)];
+    const path = try std.fs.path.join(a, &.{ root, "blocks.json" });
+    defer a.free(path);
+    var reader = try SourceReader.openOriginalBzip2(io, a, a, path, root, .raw_xml, "", null);
+    defer reader.deinit();
+    try reader.verifyAllUnchanged();
+    // The first range remains current; the independent second part does not.
+    try tmp.dir.writeFile(io, .{ .sub_path = "part-b.bz2", .data = "BZh9changed-part" });
+    try reader.original_bzip2.?.checkRangeCurrent(0, 1);
+    try std.testing.expectError(error.Bzip2PartChanged, reader.verifyAllUnchanged());
+}
+
+test "source reader full post rejects changed original descriptor with unchanged parts" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(io, .{ .sub_path = "part-a.bz2", .data = @embedFile("testdata/original-bzip2/part-a.bz2") });
+    try tmp.dir.writeFile(io, .{ .sub_path = "part-b.bz2", .data = @embedFile("testdata/original-bzip2/part-b.bz2") });
+    try tmp.dir.writeFile(io, .{ .sub_path = "blocks.json", .data = @embedFile("testdata/original-bzip2/blocks.json") });
+    var root_buffer: [4096]u8 = undefined;
+    const root = root_buffer[0..try tmp.dir.realPath(io, &root_buffer)];
+    const path = try std.fs.path.join(a, &.{ root, "blocks.json" });
+    defer a.free(path);
+    var reader = try SourceReader.openOriginalBzip2(io, a, a, path, root, .raw_xml, "", null);
+    defer reader.deinit();
+    try reader.verifyAllUnchanged();
+    try tmp.dir.writeFile(io, .{ .sub_path = "blocks.json", .data = "{}" });
+    try reader.original_bzip2.?.checkCurrent();
+    try std.testing.expectError(error.SourceReaderChanged, reader.verifyAllUnchanged());
 }
