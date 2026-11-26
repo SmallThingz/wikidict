@@ -262,12 +262,22 @@ pub const Registry = struct {
             std.mem.eql(u8, &std.fmt.bytesToHex(digest, .lower), "8b13ffcefe09f41a76d76e4024e061f68338c3bd5bbcf384db6bf0b6b1d426e1");
     }
 
+    const sd_current_figure_core = "6b357ea5fbbafe4bde3dcc705aa129afb392fdb2";
+
+    pub fn isCurrentSdFigureDefaults(self: *const Registry, digest: [32]u8) bool {
+        return std.mem.eql(u8, self.wiki, "sdwiktionary") and std.mem.eql(u8, self.content_language, "sd") and
+            std.mem.eql(u8, self.dump_date, "20261001") and
+            std.mem.eql(u8, &std.fmt.bytesToHex(self.source_sha256, .lower), "1a335a658db305317b17e342af9a38fdfd12cf306244ba5e35fe102b703f1ff2") and
+            std.mem.eql(u8, &std.fmt.bytesToHex(digest, .lower), "60a4bb91283a1dc9763b32308c440c28f4b97e5cdd045e9c66bd3ca459c4c153");
+    }
+
     /// Preserve the exact observed core without granting File handler authority.
     pub fn currentFigureDefaultsCore(self: *const Registry, digest: [32]u8, include_sql: bool) ?[]const u8 {
         if (self.isCurrentMonFigureDefaults(digest)) return mon_current_figure_core;
         if (!include_sql) return null;
         if (self.isCurrentSqlFigureDefaults(digest)) return mon_current_figure_core;
         if (self.isCurrentCsbFigureDefaults(digest)) return csb_current_figure_core;
+        if (self.isCurrentSdFigureDefaults(digest)) return sd_current_figure_core;
         if (self.isCurrentYiFigureDefaults(digest)) return yi_current_figure_core;
         if (self.isCurrentNnFigureDefaults(digest)) return nn_current_figure_core;
         return null;

@@ -3843,6 +3843,7 @@ fn loadSiteMainPage(io: std.Io, a: std.mem.Allocator, root: []const u8, namespac
     if (schema != .string or !std.mem.eql(u8, schema.string, "wikidict.site-info.v2")) return null;
     const site = try parseSiteMainPage(a, bytes, namespaces);
     errdefer a.free(site.title);
+    if (namespaces.isCurrentSdFigureDefaults(site.digest)) return error.InvalidSiteMainPage;
     try namespaces.attachLanguageConversion(bytes);
     return site;
 }

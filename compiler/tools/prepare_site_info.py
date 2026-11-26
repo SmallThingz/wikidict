@@ -45,6 +45,10 @@ SCRIBUNTO = 'b109cb6e5866c13871e308859ef78249b1bd3ea2'
 WMF6_SITEINFO_CORE = '901a9d48bec3e17bdde40049604019ff62aa4491'
 WMF6_SITEINFO_API_SHA256 = 'c940c5a88f83d8c18e2844ff5886095c34c8f9b5dc6db657e1963b1d9723d38f'
 WMF6_SITEINFO_SCRIBUNTO = 'ce115abd8ef15beb000c375d54a3137b4e56c52b'
+# Exact current SD Figure defaults. This core uses the reviewed WMF6 site-info leaves.
+SD_FIGURE_CORE = '6b357ea5fbbafe4bde3dcc705aa129afb392fdb2'
+SD_FIGURE_DEFAULTS = ('20261001', '2a943323f1f52c63f4665d42ce62faca3e33fdfe0da53c3e9dc5ca8bef5b0b46')
+SD_FIGURE_NAMESPACE = '1a335a658db305317b17e342af9a38fdfd12cf306244ba5e35fe102b703f1ff2'
 # NN default-options observation. The requested source leaves and Scribunto
 # registration are identical to the reviewed WMF6 bundle.
 NN_FIGURE_CORE = '6b357ea5fbbafe4bde3dcc705aa129afb392fdb2'
@@ -137,7 +141,7 @@ def validate_producer_provenance(manifest):
 
 
 def source_pins(core):
-    if core in (WMF6_SITEINFO_CORE, NN_FIGURE_CORE):
+    if core in (WMF6_SITEINFO_CORE, NN_FIGURE_CORE, SD_FIGURE_CORE):
         return {**SOURCE_PINS, 'ApiQuerySiteinfo.php': WMF6_SITEINFO_API_SHA256}
     return SOURCE_PINS
 
@@ -197,7 +201,7 @@ def response(data, wiki, language, profile=PROFILE, *, raw_sha=None, date=None):
     if binding is not None:
         reviewed_date, reviewed_sha = binding
         if (raw_sha != reviewed_sha or (date is not None and date != reviewed_date)
-                or (core in (FIGURE_CSB_CORE, NN_FIGURE_CORE) and date is None)):
+                or (core in (FIGURE_CSB_CORE, NN_FIGURE_CORE, SD_FIGURE_CORE) and date is None)):
             raise ValueError('Unreviewed Figure default-options observation')
     legacy.validate_server(general.get('server'))
     stamp(general.get('time'))
@@ -208,12 +212,16 @@ def response(data, wiki, language, profile=PROFILE, *, raw_sha=None, date=None):
     query(profile)
     if profile == FIGURE_PROFILE:
         figure_thumbnail_width(result)
+        if core == SD_FIGURE_CORE and wiki == 'sdwiktionary' and general.get('rtl') is not True:
+            raise ValueError('Missing reviewed Sindhi Figure direction')
     return result
 
 
 def file_defaults_observation(core, wiki):
     if core == NN_FIGURE_CORE and wiki == 'nnwiktionary':
         return NN_FIGURE_DEFAULTS
+    if core == SD_FIGURE_CORE and wiki == 'sdwiktionary':
+        return SD_FIGURE_DEFAULTS
     if core == FIGURE_CSB_CORE and wiki == 'csbwiktionary':
         return FIGURE_CSB_DEFAULTS
     if core == FIGURE_WMF5_CORE and isinstance(wiki, str):
@@ -230,7 +238,7 @@ def reviewed_source(core, profile, wiki):
 
 
 def scribunto_reference(core):
-    if core in (WMF6_SITEINFO_CORE, NN_FIGURE_CORE):
+    if core in (WMF6_SITEINFO_CORE, NN_FIGURE_CORE, SD_FIGURE_CORE):
         return WMF6_SITEINFO_SCRIBUNTO
     # These observed core revisions select Scribunto with the same pinned library leaves.
     return FIGURE_WMF5_SCRIBUNTO if core in (FIGURE_WMF5_CORE, FIGURE_MON_CORE, SEPTEMBER_EN_CORE, FIGURE_CSB_CORE) else SCRIBUNTO
@@ -238,6 +246,10 @@ def scribunto_reference(core):
 
 def render(data, config, retrieved, raw_sha):
     result = response(data, config['wiki'], config['content_language'], config['profile'], raw_sha=raw_sha, date=config['date'])
+    if (config['wiki'] == 'sdwiktionary' and config['profile'] == FIGURE_PROFILE
+            and result['general']['git-hash'] == SD_FIGURE_CORE
+            and config['namespace_registry_sha256'] != SD_FIGURE_NAMESPACE):
+        raise ValueError('Unreviewed Sindhi Figure namespace registry')
     return evidence.encoded({'schema': HEADER, **config, 'temporal_scope': 'current-api-observation',
         'retrieved_utc': retrieved, 'raw_response_sha256': raw_sha, 'query': result})
 
@@ -420,6 +432,8 @@ def verify(root, require_complete=True, *, embedded=False):
             or manifest.get('scribunto') != scribunto_reference(manifest.get('core'))
             or manifest.get('temporal_scope') != 'current-api-observation' or manifest.get('dump_date') is not None):
         raise ValueError('Unreviewed site-info capture profile or producer')
+    if embedded and manifest['core'] == SD_FIGURE_CORE and manifest['wiki'] == 'sdwiktionary':
+        raise ValueError('Sindhi Figure defaults are scoped to the separate Writer defaults input')
     validate_producer_provenance(manifest)
     if require_complete and evidence.decode(evidence.small(root / COMPLETE, MAX_MANIFEST)) != {
             'schema': SCHEMA, 'manifest_sha256': evidence.digest(raw_manifest)}:
@@ -501,6 +515,8 @@ def validate_snapshot(path, wiki=None, date=None, *, file_defaults=False):
     if path.name != SNAPSHOT:
         raise ValueError('Unexpected site-info snapshot filename')
     manifest = verify(path.parent)
+    if manifest['core'] == SD_FIGURE_CORE and manifest['wiki'] == 'sdwiktionary':
+        raise ValueError('Sindhi Figure defaults are scoped to the separate Writer defaults input')
     defaults_only = (file_defaults_observation(manifest['core'], manifest['wiki']) is not None
                      or (manifest['core'] == SEPTEMBER_EN_CORE and manifest['profile'] == FIGURE_PROFILE))
     if defaults_only and not file_defaults:
