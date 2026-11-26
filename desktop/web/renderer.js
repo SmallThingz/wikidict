@@ -1370,6 +1370,10 @@ function blockView(block, onLink, explanations, legacy = '', context = {}) {
     const inline=block.table.style?.display==='inline_block'||block.table.style?.display==='inline_table';
     if(context.tableDepth&&!block.table.style?.float_side){table.style.marginInlineStart=margin;return table;}
     const wrap = node('div', null, 'table-scroll'); wrap.style.marginInlineStart = margin; wrap.tabIndex = 0; wrap.setAttribute('aria-label','Scrollable table');
+    // Preserve intrinsic fit beside floats while keeping indentation inside the article.
+    if(!inline&&!block.table.style?.float_side&&block.table.style?.display==null&&block.table.style?.width==null&&block.table.geometry?.width==null){
+      wrap.style.width='fit-content';wrap.style.maxWidth=`calc(100% - ${margin})`;
+    }
     if(block.table.style?.display!=null||block.table.style?.vertical_align!=null||block.table.style?.line_height!=null){
       wrap.style.font='var(--wikidict-normal-body-size)/normal Reader,Georgia,serif';
       if(inline){
