@@ -84,9 +84,23 @@ fn jsonEnd(text: []const u8, start: usize) !usize {
 fn configuration(a: A, text: []const u8, page_id: u64, revision_id: u64) !bool {
     return configurationForPage(a, text, page_id, revision_id, null);
 }
+// This binds a selected GET's observed generator only. It does not issue
+// stylesheet, skin, ancestry, transport, or evaluated-program authority.
+pub const SelectedGetGenerator = enum {
+    wmf5,
+    wmf6,
+
+    fn text(self: SelectedGetGenerator) []const u8 {
+        return switch (self) {
+            .wmf5 => "MediaWiki 1.48.0-wmf.5",
+            .wmf6 => "MediaWiki 1.48.0-wmf.6",
+        };
+    }
+};
 const SelectedPage = struct { namespace_id: i32, title: []const u8, sr_wmf5_prelude: bool = false,
     is_screen_prelude: bool = false,
     selected_get_wiki: ?[]const u8 = null,
+    selected_get_generator: SelectedGetGenerator = .wmf5,
     // Only the separately typed normal-text identity path supplies this wiki.
     normal_text_wiki: ?[]const u8 = null,
     exterior: ?struct { wiki: []const u8, tags: *std.ArrayList([]const u8) } = null };
@@ -260,6 +274,18 @@ pub fn parseSelectedGetOldidAlloc(a: A, bytes: []const u8, page_id: u64, revisio
         .{ .namespace_id = namespace_id, .title = title, .selected_get_wiki = wiki });
 }
 
+// Explicit generator selection for a separately observed selected-GET
+// profile. The existing API above remains WMF5-only; all program, wiki,
+// anonymous-view, selected-identity and root checks remain shared.
+pub fn parseSelectedGetOldidWithGeneratorAlloc(a: A, bytes: []const u8, page_id: u64, revision_id: u64,
+    namespace_id: i32, title: []const u8, wiki: []const u8, generator: SelectedGetGenerator) !Observation
+{
+    if (namespace_id != 0) return invalid;
+    return parseForSelectedPage(a, bytes, page_id, revision_id, null,
+        .{ .namespace_id = namespace_id, .title = title, .selected_get_wiki = wiki,
+            .selected_get_generator = generator });
+}
+
 // A new normal-text identity role may bind the exact maintained static
 // prelude after substituting only its selected wiki cookie literal. Existing
 // selected-oldid/style/exterior entry points retain their earlier contracts.
@@ -329,8 +355,12 @@ fn parseForSelectedPage(a: A, bytes: []const u8, page_id: u64, revision_id: u64,
         if (selected != null and (selected.?.exterior != null or selected.?.is_screen_prelude or selected.?.selected_get_wiki != null) and !tag.closing and tag.is("meta") and
             depth == 2 and stack[1].tag.is("head") and same(tag.attr("name") orelse "", "generator")) {
             const generator = tag.attr("content") orelse "";
-            if (exterior_generator or !same(generator, "MediaWiki 1.48.0-wmf.5")) return invalid;
-            if ((selected.?.is_screen_prelude or selected.?.selected_get_wiki != null) and !std.mem.eql(u8, generator, "MediaWiki 1.48.0-wmf.5")) return invalid;
+            if (selected.?.selected_get_wiki != null) {
+                if (exterior_generator or !std.mem.eql(u8, generator, selected.?.selected_get_generator.text())) return invalid;
+            } else {
+                if (exterior_generator or !same(generator, "MediaWiki 1.48.0-wmf.5")) return invalid;
+                if (selected.?.is_screen_prelude and !std.mem.eql(u8, generator, "MediaWiki 1.48.0-wmf.5")) return invalid;
+            }
             exterior_generator = true;
         }
         if (tag.is("noscript") or tag.is("template")) return invalid;
@@ -814,6 +844,49 @@ test "selected GET hu authentic fixed prelude binds identity and rejects crossed
     // Selected oldid does not require the wiki's latest revision to be identical.
     const newer = try std.mem.replaceOwned(u8, a, bytes, "\"wgCurRevisionId\":3518053", "\"wgCurRevisionId\":3518054");
     _ = try parseSelectedGetOldidAlloc(a, newer, 609, 3518053, 0, "víz", "huwiktionary");
+}
+
+test "selected GET observed HU WMF6 binds explicit generator without widening WMF5 identity" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const bytes = @embedFile("testdata/selected-get-wmf6-01/hu.prefix.html");
+    var digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
+    try std.testing.expectEqualStrings("9cc7a399e80647ce0be5641ee645935cabef00ec5646065cb70b9e78f0e7f371", &std.fmt.bytesToHex(digest, .lower));
+    const observed = try parseSelectedGetOldidWithGeneratorAlloc(a, bytes, 609, 3518053, 0, "víz", "huwiktionary", .wmf6);
+    try std.testing.expectEqualStrings("hu", observed.root_language);
+    try std.testing.expectError(invalid, parseSelectedGetOldidAlloc(a, bytes, 609, 3518053, 0, "víz", "huwiktionary"));
+    try std.testing.expectError(invalid, parseSelectedGetOldidWithGeneratorAlloc(a, bytes, 609, 3518053, 0, "víz", "huwiktionary", .wmf5));
+    try std.testing.expectError(invalid, parseSelectedGetOldidWithGeneratorAlloc(a, bytes, 610, 3518053, 0, "víz", "huwiktionary", .wmf6));
+    try std.testing.expectError(invalid, parseSelectedGetOldidWithGeneratorAlloc(a, bytes, 609, 3518054, 0, "víz", "huwiktionary", .wmf6));
+    try std.testing.expectError(invalid, parseSelectedGetOldidWithGeneratorAlloc(a, bytes, 609, 3518053, 1, "víz", "huwiktionary", .wmf6));
+    try std.testing.expectError(invalid, parseSelectedGetOldidWithGeneratorAlloc(a, bytes, 609, 3518053, 0, "crossed", "huwiktionary", .wmf6));
+    try std.testing.expectError(invalid, parseSelectedGetOldidWithGeneratorAlloc(a, bytes, 609, 3518053, 0, "víz", "crossedwiktionary", .wmf6));
+    for ([_][2][]const u8{
+        .{ "MediaWiki 1.48.0-wmf.6", "MediaWiki 1.48.0-wmf.5" },
+        .{ "MediaWiki 1.48.0-wmf.6", "MediaWiki 1.48.0-wmf.7" },
+        .{ "MediaWiki 1.48.0-wmf.6", "MediaWiki 1.48.0-WMF.6" },
+        .{ "huwiktionarymwclientpreferences", "crossedwiktionarymwclientpreferences" },
+        .{ "client-nojs ", "client-nojs crossed " },
+        .{ "var cookie=", "var cookix=" },
+        .{ "document.documentElement.className=className", "document.documentElement.className=other" },
+        .{ "RLCONF=", "void 0;RLCONF=" },
+        .{ "\"wgRevisionId\":3518053", "\"wgRevisionId\":\"3518053\"" },
+        .{ "\"wgNamespaceNumber\":0", "\"wgNamespaceNumber\":1" },
+        .{ "\"wgAction\":\"view\"", "\"wgAction\":\"edit\"" },
+        .{ "\"wgTitle\":\"víz\"", "\"wgTitle\":\"crossed\"" },
+        .{ "\"wgUserName\":null", "\"wgUserName\":\"crossed\"" },
+        .{ "<script>", "<script type=\"text/plain\">" },
+        .{ "</head>", "<script>RLCONF={};</script></head>" },
+        .{ "</head>", "<meta name=\"generator\" content=\"MediaWiki 1.48.0-wmf.6\"></head>" },
+    }) |pair| {
+        const altered = try std.mem.replaceOwned(u8, a, bytes, pair[0], pair[1]);
+        try std.testing.expect(!std.mem.eql(u8, bytes, altered));
+        try std.testing.expectError(invalid, parseSelectedGetOldidWithGeneratorAlloc(a, altered, 609, 3518053, 0, "víz", "huwiktionary", .wmf6));
+    }
+    const cropped = try std.mem.concat(a, u8, &.{bytes[0..207], bytes[642..]});
+    try std.testing.expectError(invalid, parseSelectedGetOldidWithGeneratorAlloc(a, cropped, 609, 3518053, 0, "víz", "huwiktionary", .wmf6));
+    try std.testing.expectError(invalid, parseSelectedGetOldidWithGeneratorAlloc(a, bytes[0..bytes.len - 1], 609, 3518053, 0, "víz", "huwiktionary", .wmf6));
 }
 
 test "normal text actual selected oldid prelude binds wiki and preserves prior refusal" {
