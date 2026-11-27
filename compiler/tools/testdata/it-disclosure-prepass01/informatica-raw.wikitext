@@ -1,0 +1,83 @@
+== {{-it-}} ==
+{{-agg form-|it}}
+{{Pn}} ''f sing''
+{{Tabs|informatico|informatici|informatica|informatiche}}
+#femminile di [[informatico]]
+
+{{-sost-|it}}
+{{Pn|w}}
+''f sing''
+{{Linkp|informatiche}}
+#{{Glossa|scienza}} [[disciplina]] [[scientifica]] e [[tecnica]] [[che]] studia, con l'[[aiuto]] di [[concetti]] [[logici]], [[statistici]] e [[matematici]], le [[operazioni]] per [[predisporre]] lo [[sviluppo]] di [[informazioni]] e [[dati]] con [[sistemi]] [[elettronici]] di [[calcolo]] e le [[loro]] [[applicazioni]] [[pratiche]]
+#* ''Visto il costo contenuto di un personal computer, oggi l'{{Pn}} è entrata in quasi tutte le case''
+# '''ingegneria informatica''': ramo dell'[[ingegneria]] che [[progetta]] e [[realizza]] [[sistemi]] e [[soluzioni]] per [[elaborare]], [[mandare]] e [[ricevere]] [[informazioni]] e [[dati]]
+# '''sicurezza informatica''': ramo dell'informatica che si occupa delle operazioni per difendere reti e sistemi di computer da rischi e violazioni di dati
+# '''informatica umanistica''': è un campo di studi, ricerca, insegnamento che nasce dall'unione di discipline umanistiche e informatiche
+
+{{-sost form-|it}}
+{{Pn|w}} ''f''
+#femminile di [[informatico]], [[studiosa]] di informatica 
+
+{{-sill-}}
+; in | for | mà | ti | ca
+
+{{-pron-}}
+{{IPA|/inforˈmatika/}}
+
+{{-etim-}}
+voce composta dalla contrazione della frase 'INFORMazione automATICA'
+
+{{-quote-}}
+{{Quote
+|Se il settore dell'automobile si fosse sviluppato come l'industria informatica, oggi avremmo veicoli che costano 25 dollari e fanno 500 Km con un litro
+|[[q:Bill Gates|Bill Gates]]}}
+
+{{-der-}}
+* [[bioinformatica]], [[informatichese]], [[socioinformatica]], [[telematica]]
+
+{{-trad-}}
+{{Trad1|scienza)}}
+:*{{af}}: [[rekenaarwetenskap]]
+:*{{ca}}: [[informàtica]]
+:*{{da}}: [[datalogi]]
+:*{{eo}}: [[komputiko]]
+:*{{et}}: [[informaatika]] ''f''
+:*{{fi}}: [[tietotekniikka]]
+:*{{fr}}: [[informatique]]
+:*{{fy}}: [[ynformatika]]
+:*{{en}}: [[computer science]], [[computing]], [[informatics]]
+{{mid}}
+:*{{lmo}}: [[scenza de urdenaduur]]
+:*{{nl}}: informatica, [[computerwetenschap]]
+:*{{fa}}: [[علوم کامپیوتر]] ,[[انفورماتیک]]
+:*{{pl}}: [[informatyka]] ''f''
+:*{{pt}}: [[ciênca da computação]]
+:*{{es}}: [[informática]] ''f''
+:*{{sv}}: [[datavetenskap]]
+:*{{de}}: [[Informatik]] ''f'', [[Computerwissenschaft]]
+{{Trad2}}
+
+== {{-nl-}} ==
+{{-sost-|nl}}
+{{Pn}} ''f''
+# {{Glossa|scienza}} informatica
+
+{{-sill-}}
+; in | for | mà | ti | ca
+
+{{-pron-}}
+{{Audio|Nl-informatica.ogg|/ˌɪɱfɔrˈmaːtiˑkɑ/}}
+
+{{-ref-}}
+Italiano
+* {{Fonte|trec}}
+* {{Fonte|hoep}}
+* {{Fonte|dizit}}
+Olandese
+* {{Fonte|vanDale|informatica}}
+
+== Altri progetti ==
+{{Interprogetto|s|w|q|b=Ripiano:Informatica}}
+
+[[Categoria:Scienza-IT|informatica]]
+[[Categoria:Scienza-NL|informatica]]

@@ -744,7 +744,17 @@ fn selectedSdJpeg(site: []const u8) ?[]const u8 {
     return if (digestMatches(site, exact)) "فائل:Devil's Staircase Wales.jpg" else null;
 }
 
-const ImageInfoScope = enum { ordinary, rollout_base, mon_current, sql_current, it_current, selected_jpeg, sd_current_jpeg, svg_width, french_jpeg, hungarian_missing_ogg, greek_audio_ogg, vietnamese_svg };
+// GOM's complete dated SQL inventory and its three exact ImageInfo observations.
+// This source scope does not admit 2cc57 as a general response epoch.
+const gom_current_core = namespaces.Registry.gom_current_figure_core;
+const gom_raw_sha = "396f29f2ce051d33c54eca968a7faadf1eafbb8f01efaf6e9d518847af54d4a5";
+const gom_responses = [_]struct { titles: usize, sha: []const u8 }{
+    .{ .titles = 50, .sha = "261d69151db07d650e38a16ab9364f8720316454d3154b45c014d19750cbee2f" },
+    .{ .titles = 50, .sha = "3ab66290c7c7f3873459c88d5fe9c8db03f515385f30927d4914d473516ae5db" },
+    .{ .titles = 30, .sha = "ae50a2e87fed2683cab497ed9025ba4d82757b09e89ca7af431c83e223637bea" },
+};
+
+const ImageInfoScope = enum { ordinary, gom_current, rollout_base, mon_current, sql_current, it_current, selected_jpeg, sd_current_jpeg, svg_width, french_jpeg, hungarian_missing_ogg, greek_audio_ogg, vietnamese_svg };
 
 // These roles use only the file state or explicit thumbnail returned by
 // ImageInfo. The deployment does not supply general file or parser authority.
@@ -781,12 +791,14 @@ fn generalWithEpoch(value: Value, wiki: []const u8, language: []const u8, server
         !equal(try string(item, "generator"), "MediaWiki 1.48.0-wmf.5"))) return invalid;
     if (scope == .it_current and (!equal(core, it_current_core) or !equal(wiki, "itwiktionary") or
         !equal(language, "it") or !equal(try string(item, "generator"), "MediaWiki 1.48.0-wmf.6"))) return invalid;
+    if (scope == .gom_current and (!equal(core, gom_current_core) or !equal(wiki, "gomwiktionary") or
+        !equal(language, "gom") or !equal(try string(item, "generator"), "MediaWiki 1.48.0-wmf.6"))) return invalid;
     if (scope == .selected_jpeg and (!equal(core, selected_jpeg_core) or
         (!equal(wiki, "nnwiktionary") and !equal(wiki, "nahwiktionary")) or
         !equal(try string(item, "generator"), "MediaWiki 1.48.0-wmf.6"))) return invalid;
     if (scope == .sd_current_jpeg and ((!equal(core, selected_jpeg_core) and !equal(core, sd_local_antenna_core)) or !equal(wiki, "sdwiktionary") or
         !equal(try string(item, "generator"), "MediaWiki 1.48.0-wmf.6"))) return invalid;
-    if (scope == .rollout_base or scope == .mon_current or scope == .sql_current or scope == .it_current or scope == .selected_jpeg or scope == .sd_current_jpeg or equal(core, wmf5_imageinfo_core)) {
+    if (scope == .rollout_base or scope == .mon_current or scope == .sql_current or scope == .it_current or scope == .gom_current or scope == .selected_jpeg or scope == .sd_current_jpeg or equal(core, wmf5_imageinfo_core)) {
         if (scope == .rollout_base and (!equal(core, wmf5_rollout_core) or
             (!equal(wiki, "dewiktionary") and !equal(wiki, "ruwiktionary") and !equal(wiki, "thwiktionary")) or
             !equal(try string(item, "generator"), "MediaWiki 1.48.0-wmf.5"))) return invalid;
@@ -899,7 +911,7 @@ fn mediaRevision(core: []const u8, name: []const u8, prior: []const u8) []const 
 }
 // Keep complete reviewed sets, not independently interchangeable revisions.
 fn mediaVariant(core: []const u8) ?[media_extensions.len][]const u8 {
-    if (equal(core, selected_jpeg_core)) return .{
+    if (equal(core, selected_jpeg_core) or equal(core, gom_current_core)) return .{
         "0dd1254beafb560f2cd76923c1997fb7d4aacda8",
         "8d9c271fb65e04e13a16acc5d5ed7da1cc51accc",
         "0ee572467a13edd54af80ab38fed86d71cab6ebf",
@@ -922,7 +934,7 @@ fn mediaSetAccepted(core: []const u8, actual: [media_extensions.len][]const u8) 
         return true;
     }
     // This newly observed epoch proves one complete set, not the older WMF set.
-    if (equal(core, selected_jpeg_core) or equal(core, d191_core) or equal(core, wmf5_imageinfo_core) or equal(core, wmf5_rollout_core)) {
+    if (equal(core, selected_jpeg_core) or equal(core, gom_current_core) or equal(core, d191_core) or equal(core, wmf5_imageinfo_core) or equal(core, wmf5_rollout_core)) {
         for (mediaVariant(core).?, actual) |expected, revision| if (!equal(expected, revision)) return false;
         return true;
     }
@@ -955,6 +967,8 @@ fn vietnameseDefaults(value: Value, core: []const u8) bool {
 }
 fn profile(value: Value, site_bytes: []const u8, core: []const u8, binding: ?OrdinaryImageInfoDefaults) !void {
     if (!d191Profile(core, value)) return invalid;
+    const gom = equal(core, gom_current_core);
+    if (gom and !equal(try string(value, "observed_gom_dispatch_sha256"), "ce5410427992c40ddd6a05d9cfd72ac0045561d05070eceeb23f51e2c349104c")) return invalid;
     const gif = gifProfile(value);
     const webp = webpProfile(value);
     if (equal(core, it_current_core) and !webp) return invalid;
@@ -963,7 +977,7 @@ fn profile(value: Value, site_bytes: []const u8, core: []const u8, binding: ?Ord
         if (!equal(try string(value, "selected_defaults_sha256"), bound.selected) or
             !equal(try string(value, "observed_defaults_response_sha256"), bound.observed)) return invalid;
     }
-    if (value != .object or value.object.count() != profile_strings.len + 3 + @as(usize, if (binding != null or vietnameseDefaults(value, core)) 2 else 0) + @as(usize, if (gif) 2 else 0) + @as(usize, if (webp) 2 else 0)) return invalid;
+    if (value != .object or value.object.count() != profile_strings.len + 3 + @as(usize, if (binding != null or vietnameseDefaults(value, core)) 2 else 0) + @as(usize, if (gif) 2 else 0) + @as(usize, if (webp) 2 else 0) + @as(usize, if (gom) 1 else 0)) return invalid;
     for (profile_strings) |pair| {
         const expected = if (webp and equal(pair[0], "kind")) "wikimedia-imagehandler-v5" else if (gif and equal(pair[0], "kind")) "wikimedia-imagehandler-v4" else profileString(core, pair[0], pair[1]);
         if (!equal(try string(value, pair[0]), expected)) return invalid;
@@ -973,14 +987,16 @@ fn profile(value: Value, site_bytes: []const u8, core: []const u8, binding: ?Ord
     if (webp and (!equal(try string(value, "webp_handler_core_revision"), if (equal(core, it_current_core)) it_current_core else current_core) or
         !equal(try string(value, "webp_handler_sha256"), "4a3fa93de539a2a13ce9cc9475af5e3e45037a5a576cac2df21139120593fe5a"))) return invalid;
     const families = try field(value, "handler_families");
-    if (families != .object or families.object.count() != handler_families.len + @as(usize, if (gif) 1 else 0) + @as(usize, if (webp) 1 else 0)) return invalid;
+    const family_count = if (gom) 4 else handler_families.len + @as(usize, if (gif) 1 else 0) + @as(usize, if (webp) 1 else 0);
+    if (families != .object or families.object.count() != family_count) return invalid;
     for (handler_families) |family| {
+        if (gom and equal(family.mime, "image/tiff")) continue;
         const item = try field(families, family.mime);
         if (item != .object or item.object.count() != 2 or
             !equal(try string(item, "handler_class"), family.handler_class) or
             !equal(try string(item, "mediatype"), family.mediatype)) return invalid;
     }
-    if (gif) {
+    if (gif and !gom) {
         const item = try field(families, gif_handler.mime);
         if (item != .object or item.object.count() != 2 or
             !equal(try string(item, "handler_class"), gif_handler.handler_class) or
@@ -1311,6 +1327,15 @@ fn validateFileSource(a: A, doc: anytype, records_count: u64, batch_count: u64, 
         equal(doc.core_revision, namespaces.Registry.yi_current_figure_core);
     const it_current = equal(doc.core_revision, it_current_core) and !yi_empty;
     var current_scope: ImageInfoScope = .ordinary;
+    const gom_current = equal(doc.core_revision, gom_current_core);
+    if (gom_current) {
+        const digest = defaults.sha256 orelse return invalid;
+        if (!contract or !epochs or records_count != 130 or batch_count != gom_responses.len or
+            !equal(doc.raw_sha256, gom_raw_sha) or !digestMatches(site, gom_responses[0].sha) or
+            !equal(source_core, gom_current_core) or !ns.isCurrentGomFigureDefaults(digest) or
+            !gifProfile(doc.source_profile) or webpProfile(doc.source_profile)) return invalid;
+        current_scope = .gom_current;
+    }
     if (it_current) {
         const digest = defaults.sha256 orelse return invalid;
         if (!contract or !epochs or records_count == 0 or batch_count == 0 or
@@ -1365,14 +1390,14 @@ fn validateFileSource(a: A, doc: anytype, records_count: u64, batch_count: u64, 
             !equal(try string(empty_general, "git-hash"), doc.core_revision)) return invalid;
         return null;
     }
-    if ((binding == null and !current and !current_jpeg and !it_current and !acceptedResponseCore(doc.core_revision, epochs)) or !d191Profile(source_core, doc.source_profile)) return invalid;
+    if ((binding == null and !current and !current_jpeg and !it_current and !gom_current and !acceptedResponseCore(doc.core_revision, epochs)) or !d191Profile(source_core, doc.source_profile)) return invalid;
     if (current_scope == .sd_current_jpeg) {
         try sdJpegProfile(doc.source_profile, site, sdCatalogue(doc.raw_sha256, records_count, batch_count));
     } else try profile(doc.source_profile, site, doc.core_revision, binding);
     if (webpProfile(doc.source_profile) and (!contract or !epochs)) return invalid;
     const gif = gifProfile(doc.source_profile);
     if ((equal(doc.core_revision, response_core) or registrationEpoch(doc.core_revision) or wmf4Epoch(doc.core_revision)) and !gif) return invalid;
-    if (gif and (!(binding != null or current or current_jpeg or it_current or equal(doc.core_revision, current_core) or (epochs and responseEpoch(doc.core_revision))) or (!contract and !svgOccurrenceGenerator(doc.generator_sha256) and
+    if (gif and (!(binding != null or current or current_jpeg or it_current or gom_current or equal(doc.core_revision, current_core) or (epochs and responseEpoch(doc.core_revision))) or (!contract and !svgOccurrenceGenerator(doc.generator_sha256) and
         !equal(doc.generator_sha256, "7bce7ec0bd0acdf6a9d726ed50c1e85a64bc089731d0347d048f1787003d4c0b")))) return invalid;
     const server = try officialServer(a, ns.wiki);
     const site_query = try generalWithEpoch(registration, ns.wiki, ns.content_language, server, doc.core_revision, epochs, current_scope);
@@ -1408,6 +1433,9 @@ fn readStreamHeaders(a: A, temp: A, projection: *StreamInput, raw: *StreamInput)
     if (equal(header.core_revision, it_current_core) and (!contract or
         !equal(try string(header_value, "replay_contract"), replay_contract_v6) or
         header.records_count == 0 or header.base_batches == 0 or header.observed_batches != 0)) return invalid;
+    if (equal(header.core_revision, gom_current_core) and (!contract or
+        !equal(try string(header_value, "replay_contract"), replay_contract_v6) or
+        header.base_batches != gom_responses.len or header.observed_batches != 0)) return invalid;
     const count_u64 = std.math.add(u64, header.base_batches, header.observed_batches) catch return invalid;
     const max_requests = std.math.mul(u64, header.base_batches, 50) catch return invalid;
     // Counts are bounded by the authenticated physical inputs, not an
@@ -2498,7 +2526,9 @@ pub const Registry = struct {
                 !equal(doc.records[0].canonical_file, file) or doc.records[0].state != .eligible or
                 !equal(doc.records[0].mime, "image/jpeg") or !equal(doc.records[0].mediatype, "BITMAP"))) return invalid;
         }
-        const gif = gifProfile(doc.source_profile);
+        const gom_current = equal(doc.core_revision, gom_current_core);
+        if (gom_current and !batches.streamed_v6) return invalid;
+        const gif = !gom_current and gifProfile(doc.source_profile);
         const webp = webpProfile(doc.source_profile);
         const it_current = equal(doc.core_revision, it_current_core);
         if (it_current and !batches.streamed_v6) return invalid;
@@ -2601,7 +2631,13 @@ pub const Registry = struct {
             // and every supplemental observation retain their original source rules.
             const sd_local = sd_jpeg and batch_index == 1;
             const sd_catalogue_batch = sd_catalogue and batch_index >= 2;
-            const scope: ImageInfoScope = if (it_current) scope: {
+            const scope: ImageInfoScope = if (gom_current) scope: {
+                if (!equal(batch_core, gom_current_core) or supplement or batch.tiff_metadata_response != null or
+                    batch_index >= gom_responses.len) return invalid;
+                const expected = gom_responses[batch_index];
+                if (batch.requests.len != expected.titles or !digestMatches(batch.response, expected.sha)) return invalid;
+                break :scope .gom_current;
+            } else if (it_current) scope: {
                 if (!equal(batch_core, it_current_core) or supplement or batch.tiff_metadata_response != null or
                     (batch_index == 0 and !equal(batch.response, site))) return invalid;
                 break :scope .it_current;
@@ -2781,7 +2817,7 @@ pub const Registry = struct {
                 var default_page = false;
                 if (if (webp and (equal(batch_core, current_core) or scope == .it_current) and equal(fact.mime, webp_handler.mime)) @as(?HandlerFamily, webp_handler)
                     else if (gif and equal(fact.mime, gif_handler.mime)) @as(?HandlerFamily, gif_handler)
-                    else if (sd_catalogue and equal(fact.mime, "image/tiff")) null else handlerFamily(fact.mime)) |family| {
+                    else if ((sd_catalogue or gom_current) and equal(fact.mime, "image/tiff")) null else handlerFamily(fact.mime)) |family| {
                     if (!equal(family.mediatype, fact.mediatype)) return invalid;
                     if (equal(fact.mime, "image/webp")) {
                         staticWebPAxes(temp, image, width, height) catch |err| switch (err) {

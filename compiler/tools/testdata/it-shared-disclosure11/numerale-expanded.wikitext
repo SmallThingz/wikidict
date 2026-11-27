@@ -1,0 +1,60 @@
+<templatestyles src="Mbox/common.css" />
+ <table class="plainlinks ombox ombox-notice" role="presentation" style="background-color: #D8E8FF; border:1px solid #A0CCA0; color:#000;"><tr><td class="mbox-image">[[File:Blue_Glass_Arrow.svg|30px]]</td><td class="mbox-text">Vedi anche: [[Numerale]]</td></tr></table>
+== [[File:Flag of Italy.svg|40px|border|bandiera italiana]] [[Appendice:Italiano|Italiano]] ==
+===[[Image:Open_book_01.svg|30px|]]''[[aggettivo|Aggettivo]]''===
+[[Categoria:Aggettivi in italiano]] 
+
+'''numerale'''<small></small> ''m'' e '' f sing'' (''pl.'': [[numerali]][[Categoria:Lemmi con forme flesse da scrivere]])
+#di o dei [[numeri]]
+
+===[[Image:Open_book_01.svg|30px|]]''[[sostantivo|Sostantivo]]''===
+[[Categoria:Sostantivi in italiano]] 
+
+'''numerale'''<small>&nbsp;([[File:Wikipedia-logo.svg|20px|Wikipedia]] '''[[w:numerale|approfondimento]]''')</small>
+# <small>(<i>[[linguistica]]</i>)</small>[[Categoria:Linguistica-IT]] relativo ai [[numeri]]
+
+=== [[File:Hyph abc.svg|45px]] [[sillabazione|Sillabazione]] ===
+
+; nu | me | rà | le
+
+===[[Image:Nuvola apps edu languages.svg|30px]] [[pronuncia|Pronuncia]]===
+
+[[Aiuto:IPA|AFI]]: <span class="IPA" style="font-family:'Segoe UI', 'Calibri', 'DejaVu Sans', 'Charis SIL', 'Doulos SIL', 'Gentium Plus', Gentium, GentiumAlt, 'Lucida Grande', 'Arial Unicode MS', sans-serif; font-size: 110%;">/numeˈrale/</span>
+
+===[[Image:Nuvola kdict glass.svg|30px|]][[etimologia|Etimologia]] / [[derivazione|Derivazione]]===
+
+dal [[latino]] tardo ''[[numeralis]]'' che deriva da ''[[numerus|numĕrus]]'' cioè "[[numero]]"
+
+=== [[Image:Gnome-globe.svg|30px]] [[traduzione|Traduzione]] ===
+<div class="mw-collapsible mw-collapsed" data-expandtext="Mostra" data-collapsetext="Nascondi" style="padding:0.2em 0.6em 0.2em 0.6em; border-right:1px solid #BEBEBE; border-bottom:1px dotted black; background:#EDEDED; color:#000;">parte del discorso
+<div class="z-index:-1; toccolours mw-collapsible-content" style="border:0;">
+{| border="0" width="100%" class="translations"
+|-
+| bgcolor="beige" valign="top" width="48%" |
+:*[[ceco]]: [[číslovka]]'' ''f''
+:*[[esperanto]]: [[numeralo]]
+:*[[finlandese]]: [[numeraali]], [[lukusana]]
+:*[[francese]]: [[numéral]] ''m''
+:*[[islandese]]: [[töluorð]] ''n'' 
+:*[[inglese]]: [[numeral]]
+:*[[interlingua]]: [[numeral]]
+:*[[olandese]]: [[telwoord]] ''n''
+:*[[polacco]]: [[liczebnik]] ''m''
+:*[[portoghese]]: [[numeral]]
+:*[[spagnolo]]: [[numeral]]
+:*[[svedese]]: [[räkneord]] ''n''
+:*[[tedesco]]: [[Numerale]] ''n'', [[Zahlwort]] ''n''
+|}</div></div>
+
+<div class="NonModificabile">
+== [[Image:Nuvola apps bookcase.svg|30px|]] [[note|Note]] / [[riferimenti|Riferimenti]] ==
+</div>
+* Enrico Olivetti, [https://www.dizionario-italiano.it/dizionario-italiano.php?lemma=NUMERALE100 ''Dizionario Italiano Olivetti''] edizione on line su ''[https://www.dizionario-italiano.it www.dizionario-italiano.it]'', Olivetti Media Communication
+* AA.VV., [https://www.treccani.it/vocabolario/ricerca/numerale/ ''Vocabolario Treccani''] edizione online su ''[https://www.treccani.it treccani.it]'', Istituto dell'Enciclopedia Italiana
+* 
+
+== Altri progetti ==
+<div id="interProject" style="display: none; clear: both; border-top: 2px dotted #AAAAAA; margin-top: 2em"><div title="Collegamenti verso gli altri progetti Wikimedia">
+* [[w:numerale|Wikipedia]]
+</div></div>
+* [[File:Wikipedia-logo-v2.svg|link=w:|18px|Collabora a Wikipedia]] '''[[w:|Wikipedia]]''' contiene una voce  riguardante '''[[w:numerale|numerale]]'''

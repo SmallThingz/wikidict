@@ -1,0 +1,87 @@
+<templatestyles src="Mbox/common.css" />
+<templatestyles src="Ambox/styles.css" />
+<table class="plainlinks metadata ambox ambox-content" role="presentation"><tr><td class="mbox-image"><div style="width:52px">[[immagine:Twemoji12 1f1f8.svg|38px|immagine degli stub]]</div></td><td class="mbox-text"><div class="mbox-text-span">Questo lemma è solo uno "[[Aiuto:Stub|stub]]", ovvero deve essere ampliato secondo gli [[Wikizionario:Manuale di stile|standard]] di Wikizionario (vedi l'[[:Categoria:Stub|elenco dei lemmi da ampliare]]). <br/>
+<small>[//it.wiktionary.org/w/index.php?title=:mancese&action=edit Contribuisci] a migliorarlo seguendo le [[Wikizionario:Manuale di stile|linee guida]] e quindi rimuovi questo avviso.</small></br></div></td></tr></table>
+[[Categoria:Stub]]
+== [[File:Flag of Italy.svg|40px|border|bandiera italiana]] [[Appendice:Italiano|Italiano]] ==
+===[[Image:Open_book_01.svg|30px|]]''[[aggettivo|Aggettivo]]''===
+[[Categoria:Aggettivi in italiano]] 
+
+'''mancese'''<small></small>
+(''pl.'': [[mancesi]][[Categoria:Lemmi con forme flesse da scrivere]])
+# <small>(<i>[[geografia]]</i>)</small>[[Categoria:Geografia-IT]] relativo alla [[Manciuria]]
+# relativo alla [[lingua]] mancese
+
+===[[Image:Open_book_01.svg|30px|]]''[[sostantivo|Sostantivo]]''===
+[[Categoria:Sostantivi in italiano]] 
+
+'''mancese'''<small>&nbsp;([[File:Wikipedia-logo.svg|20px|Wikipedia]] '''[[w:Lingua mancese|approfondimento]]''')</small>
+# <small>(<i>[[linguistica]]</i>)</small>[[Categoria:Linguistica-IT]] lingua mancese
+
+=== [[File:Hyph abc.svg|45px]] [[sillabazione|Sillabazione]] ===
+
+; man | cé | se
+
+===[[Image:Nuvola apps edu languages.svg|30px]] [[pronuncia|Pronuncia]]===
+
+[[Aiuto:IPA|AFI]]: <span class="IPA" style="font-family:'Segoe UI', 'Calibri', 'DejaVu Sans', 'Charis SIL', 'Doulos SIL', 'Gentium Plus', Gentium, GentiumAlt, 'Lucida Grande', 'Arial Unicode MS', sans-serif; font-size: 110%;">/manˈt͡ʃese/</span>
+
+===[[Image:Nuvola kdict glass.svg|30px|]][[etimologia|Etimologia]] / [[derivazione|Derivazione]]===
+
+da [[Manciuria]]
+
+===[[File:Icona_sinonimi.png|35px]] [[sinonimi|Sinonimi]]===
+
+* [[manciuriano]]
+
+===[[File:Nuvola apps iper.svg|30px]] [[iperonimo|Iperonimi]]===
+
+*[[asiatico]]
+
+=== [[Image:Gnome-globe.svg|30px]] [[traduzione|Traduzione]] ===
+<div class="mw-collapsible mw-collapsed" data-expandtext="Mostra" data-collapsetext="Nascondi" style="padding:0.2em 0.6em 0.2em 0.6em; border-right:1px solid #BEBEBE; border-bottom:1px dotted black; background:#EDEDED; color:#000;">(aggettivo)
+<div class="z-index:-1; toccolours mw-collapsible-content" style="border:0;">
+{| border="0" width="100%" class="translations"
+|-
+| bgcolor="beige" valign="top" width="48%" |
+:* [[inglese]]: [[Manchu]], [[Manchurian]]
+|}</div></div>
+
+<div class="mw-collapsible mw-collapsed" data-expandtext="Mostra" data-collapsetext="Nascondi" style="padding:0.2em 0.6em 0.2em 0.6em; border-right:1px solid #BEBEBE; border-bottom:1px dotted black; background:#EDEDED; color:#000;">[[lingua]]
+<div class="z-index:-1; toccolours mw-collapsible-content" style="border:0;">
+{| border="0" width="100%" class="translations"
+|-
+| bgcolor="beige" valign="top" width="48%" |
+:* [[inglese]]: [[Manchu]], [[Manchurian]]
+|}</div></div>
+
+<div class="mw-collapsible mw-collapsed" data-expandtext="Mostra" data-collapsetext="Nascondi" style="padding:0.2em 0.6em 0.2em 0.6em; border-right:1px solid #BEBEBE; border-bottom:1px dotted black; background:#EDEDED; color:#000;">[[abitante]]
+<div class="z-index:-1; toccolours mw-collapsible-content" style="border:0;">
+{| border="0" width="100%" class="translations"
+|-
+| bgcolor="beige" valign="top" width="48%" |
+:* [[inglese]]: [[Manchu]], [[Manchurian]]
+|}</div></div>
+
+<div class="mw-collapsible mw-collapsed" data-expandtext="Mostra" data-collapsetext="Nascondi" style="padding:0.2em 0.6em 0.2em 0.6em; border-right:1px solid #BEBEBE; border-bottom:1px dotted black; background:#EDEDED; color:#000;">Vedi le traduzioni
+<div class="z-index:-1; toccolours mw-collapsible-content" style="border:0;">
+{| border="0" width="100%" class="translations"
+|-
+| bgcolor="beige" valign="top" width="48%" |
+:*[[cinese]]: [[满语]]
+:*[[finlandese]]: [[mantšu]]
+:*[[giapponese]]: [[満州語]] 
+:*[[olandese]]: [[Mantsjoe]]
+|}</div></div>
+
+<div class="NonModificabile">
+== [[Image:Nuvola apps bookcase.svg|30px|]] [[note|Note]] / [[riferimenti|Riferimenti]] ==
+</div>
+*Enrico Olivetti, [https://www.dizionario-italiano.it/dizionario-italiano.php?lemma=MANCESE100 ''Dizionario Italiano Olivetti''] edizione on line su ''[https://www.dizionario-italiano.it www.dizionario-italiano.it]'', Olivetti Media Communication
+*AA.VV., [https://www.treccani.it/vocabolario/ricerca/mancese/ ''Vocabolario Treccani''] edizione online su ''[https://www.treccani.it treccani.it]'', Istituto dell'Enciclopedia Italiana
+
+== Altri progetti ==
+<div id="interProject" style="display: none; clear: both; border-top: 2px dotted #AAAAAA; margin-top: 2em"><div title="Collegamenti verso gli altri progetti Wikimedia">
+* [[w:Lingua mancese|Wikipedia]]
+</div></div>
+* [[File:Wikipedia-logo-v2.svg|link=w:|18px|Collabora a Wikipedia]] '''[[w:|Wikipedia]]''' contiene una voce  riguardante '''[[w:Lingua mancese|mancese]]'''

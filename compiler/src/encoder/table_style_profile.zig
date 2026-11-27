@@ -2700,6 +2700,7 @@ fn observedFigureLinkPaintSamples(samples: []const ObservedFigureLinkPaintSample
 }
 const GeneratedFigureCompoundGroup = struct { alternatives: []const GeneratedFigureCompound };
 const ObservedFigureRule = struct {
+    source_optional: bool = false,
     disclosure_alias: ?GeneratedFigureSelector = null,
     disclosure_list_known: bool = false,
     focus_inner_control_host: bool = false,
@@ -3404,7 +3405,9 @@ fn observedStyleMatchAt(selector: GeneratedFigureSelector, nodes: []const Observ
 {
     if (budget.* == 0) return .unknown;
     budget.* -= 1;
-    const own = observedFigureCompoundMatchIn(selector.chain[compound_index], nodes[node_index], node_index == 0, budget,
+    const own = if (evaluation.disclosure_font_path) |path|
+        path[node_index].compound(selector.chain[compound_index], nodes[node_index], node_index == 0, budget)
+    else observedFigureCompoundMatchIn(selector.chain[compound_index], nodes[node_index], node_index == 0, budget,
         evaluation.missing_width != null and missing_media == node_index, observedFigureStateAt(nodes, node_index, evaluation));
     if (own == .no or compound_index == 0) return own;
     var ancestor = nodes[node_index].parent;
@@ -3702,6 +3705,7 @@ fn observedFigureOtherPseudoEffectsWithWitness(context: FigureObservedContext, o
     return false;
 }
 const ObservedFigureEvaluation = struct {
+    disclosure_font_path: ?[]const DisclosureFontShellStep = null,
     disclosure: ?DisclosureEvaluation = null,
     selected_heading_language: bool = false,
     selected_list_language: bool = false,
@@ -3898,7 +3902,8 @@ fn observedFigureCondition(prelude: []const u8, evaluation: ObservedFigureEvalua
 }
 fn observedFigureConditions(rule: ObservedFigureRule, evaluation: ObservedFigureEvaluation) ContainerSelectorMatch {
     var result: ContainerSelectorMatch = .known;
-    if (rule.conditional and rule.conditions.len == 0) result = .unknown;
+    // A known nested @media or @supports condition cannot select its source sheet.
+    if (rule.source_optional or (rule.conditional and rule.conditions.len == 0)) result = .unknown;
     for (rule.conditions) |condition| switch (observedFigureCondition(condition, evaluation)) {
         .no => return .no, .unknown => result = .unknown, .known => {},
     };
@@ -4005,6 +4010,15 @@ fn appendObservedFigureDeclarations(a: std.mem.Allocator, result: *std.ArrayList
 fn observedStyleRuleMatch(rule: ObservedFigureRule, nodes: []const ObservedStyleNode, missing_media: ?u32,
     subject: u32, pseudo: ?GeneratedFigurePseudo, evaluation: ObservedFigureEvaluation) ContainerSelectorMatch
 {
+    if (evaluation.disclosure_font_path) |path| {
+        if (pseudo != null) return .unknown;
+        if (rule.selector) |sel| {
+            const m = disclosureFontShellSelector(sel, path, nodes, subject);
+            return if (m == .known and rule.list_uncertain) .unknown else m;
+        }
+        if (rule.weak_selector) |sel| if (disclosureFontShellSelector(sel, path, nodes, subject) == .no) return .no;
+        return .unknown;
+    }
     if (evaluation.disclosure) |scope| if (scope.boundary) |boundary| {
         if (scope.nodes.ptr != nodes.ptr or scope.nodes.len != nodes.len) return .unknown;
         if (rule.selector) |selector| {
@@ -11587,6 +11601,23 @@ pub const Profile = struct {
         return false;
     }
 
+    // A complete selected article inventory can refute positioning rules for
+    // an owned opener without establishing a parent edge or resolving a style.
+    pub fn inlineBoxPositionAbsentIn(self: *const Profile, a: std.mem.Allocator,
+        element: *const TextElement, css: []const u8, classes: []const u8, ids: ?[]const u8) !bool
+    {
+        if (self.page_style_parent == null or self.globally_unresolved) return false;
+        const own = try inlineBoxSelectionAlloc(a, css);
+        if (own.position or own.reset) return false;
+        const absence: InlineImageSourceAbsence = .{ .classes = classes, .ids = ids };
+        for (self.container_rules) |rule| {
+            if (rule.selector.matchIn(element, true) == .no or inlineImageContainerRuleAbsent(rule.selector, absence)) continue;
+            const possible = try inlineBoxSelectionAlloc(a, rule.css);
+            if (possible.position or possible.reset) return false;
+        }
+        return true;
+    }
+
     pub fn resolveInlineBoxOverlayTextIn(self: *const Profile, a: std.mem.Allocator,
         element: *const TextElement, css: []const u8, environment: CustomEnvironment,
         source_declarations: ?[]const []const u8, font: types.InlineFontSnapshot) !?InlineBoxOverlayTextStyle
@@ -12123,10 +12154,12 @@ fn observedFigureStateAt(nodes: []const ObservedStyleNode, index: u32,
             if (index == scope.button) return scope.state;
             // Pointer over the button need not be over the SPAN. Keep both
             // child pointer predicates unknown unless excluded by the button.
-            if (index == scope.label) return .{
+            if (index == scope.label) return scope.span_state orelse .{
                 .hover = if (scope.state.hover == false) false else null,
                 .active = if (scope.state.active == false) false else null,
-                .focus = false, .focus_visible = false, .focus_within = false,
+                .focus = if (scope.label_nonfocusable) false else null,
+                .focus_visible = if (scope.label_nonfocusable) false else null,
+                .focus_within = if (scope.label_nonfocusable) false else null,
             };
         }
     }
@@ -12420,6 +12453,7 @@ const Builder = struct {
     container_rules: std.ArrayList(ContainerRule) = .empty,
     container_source: []const u8 = "",
     container_source_index: usize = 0,
+    container_source_optional: bool = false,
     container_source_byte_start: usize = 0,
     container_conditions: []const []const u8 = &.{},
     container_viewport: ContainerViewportCondition = .all,
@@ -12894,6 +12928,7 @@ const Builder = struct {
                 .list_uncertain = false, .css = css, .conditions = self.container_conditions, .conditional = conditional,
                 .rank_unknown = self.container_rank_unknown or observedFigureUnknownRank(self.container_conditions), .order = order,
                 .source_index = self.container_source_index, .source_byte_start = source_byte_start,
+                .source_optional = self.container_source_optional,
                 .focus_inner_control_host = try self.figureFocusInnerControlHost(owned),
             });
         }
@@ -14638,6 +14673,7 @@ fn parseSourceGroups(a: std.mem.Allocator, sources: []const Source, target: Read
         };
         builder.container_source = source.css;
         builder.container_source_index = source_index;
+        builder.container_source_optional = source.unknown_applicability;
         builder.container_source_byte_start = source.byte_start;
         const first = builder.number + 1;
         try builder.parse(source.css, source.unknown_applicability, 0, false);
@@ -27774,7 +27810,7 @@ pub const SelectedTerm = struct { source: []const u8, recipe: SourceTerm };
 // media grammar as potentially responsive until the selector refutes it.
 const TermViewportCondition = union(enum) { independent, unsupported, maximum: u32 };
 fn termViewportCondition(rule: ObservedFigureRule) TermViewportCondition {
-    if (rule.conditional and rule.conditions.len == 0) return .unsupported;
+    if (rule.source_optional or (rule.conditional and rule.conditions.len == 0)) return .unsupported;
     var threshold: ?u32 = null;
     for (rule.conditions) |prelude| {
         if (!atRuleNamed(prelude, "media")) continue;
@@ -43898,10 +43934,16 @@ pub const DisclosureGraph = struct {
     button: u32,
     label: u32,
     label_text: []const u8,
+    html_underline: ?DisclosureHtmlUnderline = null,
     // Source projection can omit Parsoid-added ID/RDFa/attributes.
     source_only_owner: bool = false,
+    // Internal, source/profile-bound projection, installed only by the shared
+    // resolver after validating its owner capability. It describes no ancestor.
+    owner_attributes: ?*const DisclosureOwnerAttributeProjection = null,
+    exterior_domain: ?*const DisclosureExteriorDomain = null,
     // Internal derivation operand; populated from the bound local proof.
     reset_parent_font: ?DisclosureInheritedFont = null,
+    inline_hit: ?*const DisclosureInlineHit = null,
 };
 pub const DisclosureStates = struct {
     collapsed: DisclosureGraph,
@@ -43915,6 +43957,9 @@ pub const DisclosureStates = struct {
 // platform, control appearance, fonts, palette, scale and screen environment.
 // Values must cover all reachable states. No policy from a page is a UA basis.
 pub const DisclosureUaBasis = struct {
+    // The observed UA button retains its actual four edge styles in every
+    // state. An unresolved native bevel supplies no reader border authority.
+    border_authority: enum { represented, requires_authored_reset } = .represented,
     button: types.ContainerDisclosureButton,
     foreground: types.FigureColor,
     margin: types.StyleEdges,
@@ -43925,6 +43970,8 @@ pub const DisclosureUaBasis = struct {
     focus_visible_supported: bool,
 };
 pub const DisclosurePaint = struct {
+    expand_label: []const u8,
+    collapse_label: []const u8,
     button: types.ContainerDisclosureButton,
     expand_run: types.ContainerDisclosureLabelRun,
     collapse_run: types.ContainerDisclosureLabelRun,
@@ -43937,8 +43984,13 @@ const DisclosureEvaluation = struct {
     button: u32,
     label: u32,
     state: ObservedFigureLinkState,
+    span_state: ?ObservedFigureLinkState = null,
+    label_nonfocusable: bool = false,
+    html_underline: ?DisclosureHtmlUnderline = null,
     boundary: ?*const DisclosureBoundary,
     partial_owner: ?u32,
+    owner_attributes: ?*const DisclosureOwnerAttributeProjection = null,
+    exterior_domain: ?*const DisclosureExteriorDomain = null,
     candidates: []const ObservedFigureRuleCandidates = &.{},
     float_ancestors: ?[]const u3 = null,
     moz_focus_inner_absent: bool,
@@ -43950,14 +44002,119 @@ pub const DisclosureSharedProfile = struct {
     exteriors: []const DisclosureExterior = &.{},
     boundary: ?DisclosureBoundary = null,
     placement_shell: ?[]const DisclosureShellStep = null,
+    // Issued by the authenticated ordinary constructor manifest, then bound
+    // to the exact local source owner before selector evaluation.
+    owner_attribute_projection: ?*const DisclosureOwnerAttributeProjection = null,
 };
+// Only the two Vector underline class tokens on the unique HTML ancestor.
+// Scope selection binds this predicate for the current original page. Unknown
+// source state keeps both outcomes. All other selector terms retain their own
+// evidence, including siblings, attributes, specificity and media conditions.
+pub const DisclosureHtmlUnderline = enum { neither, always, never };
+
+fn disclosureHtmlUnderlineTerm(part: GeneratedFigureCompound, preference: DisclosureHtmlUnderline) ?bool {
+    if (!std.ascii.eqlIgnoreCase(part.positive.tag orelse return null, "html") or
+        part.positive.classes.len != 1 or part.positive.ids.len != 0 or part.positive.typeof_token != null or
+        part.requires_empty or part.excluded_tags.len != 0 or part.excluded_classes.len != 0 or
+        part.attributes.len != 0 or part.any_groups.len != 0 or part.none_groups.len != 0 or
+        part.dynamic_pseudos.len != 0) return null;
+    const token = part.positive.classes[0];
+    if (std.mem.eql(u8, token, "skin-underline-clientpref-always")) return preference == .always;
+    if (std.mem.eql(u8, token, "skin-underline-clientpref-never")) return preference == .never;
+    return null;
+}
+
+// A constructor may preserve selected source absences while adding metadata
+// such as a generated ID. These facts are intentionally per attribute: neither
+// a complete own-attribute domain nor a complete DOM graph follows from them.
+pub const DisclosureGeneratedIdDomain = struct {
+    prefix: []const u8,
+    suffix_alphabet: []const u8,
+    min_suffix_bytes: usize,
+    max_suffix_bytes: usize,
+};
+pub const DisclosureOwnerAttributeProjection = struct {
+    absent: []const []const u8 = &.{},
+    generated_id: ?DisclosureGeneratedIdDomain = null,
+};
+pub const DisclosureOwnerAttributeProof = struct {
+    owner: *const TextElement,
+    source_key: usize,
+    shared: *const DisclosureSharedProfile,
+    projection: DisclosureOwnerAttributeProjection,
+};
+
+fn disclosureAttributeAbsent(projection: ?*const DisclosureOwnerAttributeProjection, name: []const u8) bool {
+    const known = projection orelse return false;
+    for (known.absent) |absent| if (std.ascii.eqlIgnoreCase(absent, name)) return true;
+    return false;
+}
+fn disclosureGeneratedIdPossible(domain: DisclosureGeneratedIdDomain, id: []const u8) bool {
+    if (!std.mem.startsWith(u8, id, domain.prefix)) return false;
+    const suffix = id[domain.prefix.len..];
+    if (suffix.len < domain.min_suffix_bytes or suffix.len > domain.max_suffix_bytes) return false;
+    for (suffix) |byte| if (std.mem.indexOfScalar(u8, domain.suffix_alphabet, byte) == null) return false;
+    return true;
+}
+fn disclosureOwnerAttributeProofValid(proof: *const DisclosureOwnerAttributeProof,
+    owner: *const TextElement, shared: *const DisclosureSharedProfile) bool
+{
+    if (proof.owner != owner or proof.shared != shared or proof.source_key == 0 or
+        proof.source_key != owner.source_key or proof.projection.absent.len > 32) return false;
+    const source = owner.attribute_presence orelse return false;
+    for (proof.projection.absent, 0..) |name, i| {
+        if (name.len == 0 or name.len > 64 or std.ascii.eqlIgnoreCase(name, "class") or
+            source.get(source.ctx, name) != .absent) return false;
+        for (name) |byte| if (!std.ascii.isAlphanumeric(byte) and byte != '-' and byte != '_') return false;
+        for (proof.projection.absent[0..i]) |prior| if (std.ascii.eqlIgnoreCase(prior, name)) return false;
+    }
+    if (proof.projection.generated_id) |domain| {
+        if (owner.id.len != 0 or source.get(source.ctx, "id") != .absent or
+            disclosureAttributeAbsent(&proof.projection, "id") or domain.prefix.len == 0 or
+            domain.prefix.len > 32 or domain.suffix_alphabet.len == 0 or domain.suffix_alphabet.len > 128 or
+            domain.min_suffix_bytes == 0 or domain.min_suffix_bytes > domain.max_suffix_bytes or
+            domain.max_suffix_bytes > 64) return false;
+        for (domain.prefix) |byte| if (byte <= 0x20 or byte >= 0x7f) return false;
+        for (domain.suffix_alphabet, 0..) |byte, i| {
+            if (byte <= 0x20 or byte >= 0x7f or
+                std.mem.indexOfScalar(u8, domain.suffix_alphabet[0..i], byte) != null) return false;
+        }
+    }
+    return true;
+}
+fn disclosureOwnerRequiredAttributeRefutes(part: GeneratedFigureCompound, node: ObservedStyleNode,
+    projection: ?*const DisclosureOwnerAttributeProjection) bool
+{
+    const known = projection orelse return false;
+    if (observedFigureAttribute(node, "id") == null) {
+        for (part.positive.ids) |id| {
+            if (disclosureAttributeAbsent(known, "id")) return true;
+            if (known.generated_id) |domain| if (!disclosureGeneratedIdPossible(domain, id)) return true;
+        }
+    }
+    // Every supported positive attribute selector requires its own attribute.
+    // Do not turn a negative/alternative group into a positive requirement.
+    for (part.attributes) |attr| if (observedFigureAttribute(node, attr.name) == null and
+        disclosureAttributeAbsent(known, attr.name)) return true;
+    return false;
+}
+fn disclosureOwnerAttributeGraphAgrees(graph: DisclosureGraph, projection: *const DisclosureOwnerAttributeProjection) bool {
+    if (graph.owner >= graph.nodes.len) return false;
+    const node = graph.nodes[graph.owner];
+    for (projection.absent) |name| if (observedFigureAttribute(node, name) != null) return false;
+    if (projection.generated_id != null and observedFigureAttribute(node, "id") != null) return false;
+    return true;
+}
+
 pub const DisclosureLocalProof = struct {
+    html_underline: ?DisclosureHtmlUnderline = null,
     owner: *const TextElement,
     source_key: usize,
     shared: *const DisclosureSharedProfile,
     states: DisclosureStates,
     root_placement: ?DisclosureRootPlacement = null,
     reset_font_at_parent: ?DisclosureOwnerFont = null,
+    owner_attributes: ?DisclosureOwnerAttributeProof = null,
     absent_tags: []const []const u8 = &.{},
     absent_classes: []const []const u8 = &.{},
 };
@@ -44040,6 +44197,104 @@ fn disclosureDirection(a: std.mem.Allocator, node: ObservedStyleNode, computed: 
     if (value.unresolved) return null;
     return if (std.ascii.eqlIgnoreCase(value.value.?, "rtl")) .rtl else .ltr;
 }
+const DisclosureAffixes = struct {
+    before: bool = false,
+    after: bool = false,
+
+    fn visible(self: @This(), a: std.mem.Allocator, source: []const u8) ![]const u8 {
+        if (!self.before and !self.after) return source;
+        return std.mem.concat(a, u8, &.{ if (self.before) "[" else "", source, if (self.after) "]" else "" });
+    }
+};
+
+// Only an inline punctuation glyph with the button's unchanged paint may be
+// folded into the text outside a run. Other content/boxes retain their refusal.
+fn disclosureBracket(a: std.mem.Allocator, declarations: []const ObservedFigureDeclaration,
+    env: CustomEnvironment, expected: u8) !?bool
+{
+    const candidates = try observedFigurePropertyCandidates(a, declarations, "content", &.{});
+    defer a.free(candidates);
+    var definite = false;
+    for (candidates) |d| definite = definite or !d.uncertain;
+    var selected: ?bool = if (definite) null else false;
+    for (candidates) |d| {
+        if (d.syntax_unknown or !std.ascii.eqlIgnoreCase(d.name, "content")) return null;
+        const v = try customColorValue(a, env, d.raw);
+        if (v != .known) return null;
+        const raw = trim(v.known);
+        const present = if (std.ascii.eqlIgnoreCase(raw, "none") or std.ascii.eqlIgnoreCase(raw, "normal") or
+            std.ascii.eqlIgnoreCase(raw, "initial") or std.ascii.eqlIgnoreCase(raw, "unset")) false
+        else if (raw.len == 3 and (raw[0] == '"' or raw[0] == 39) and raw[2] == raw[0] and raw[1] == expected) true
+        else return null;
+        if (selected) |prior| if (prior != present) return null;
+        selected = present;
+    }
+    if (selected == true) {
+        var use = try ObservedFigurePropertyUse.init(a, declarations);
+        defer use.deinit(a);
+        use.customEnvironment();
+        use.property("content", &.{});
+        if (!try use.staticMotion(a, env) or !use.complete()) return null;
+    }
+    return selected;
+}
+fn disclosureButtonAffixes(a: std.mem.Allocator, styles: *const Profile, graph: DisclosureGraph,
+    node: ObservedFigureComputedNode, evaluation: ObservedFigureEvaluation) !?DisclosureAffixes
+{
+    var result: DisclosureAffixes = .{};
+    for ([_]GeneratedFigurePseudo{ .before, .after, .marker, .other }) |pseudo| {
+        const p = (try disclosureDeclarations(a, styles, graph, node.index, pseudo, evaluation, node.environment)) orelse return null;
+        if (p.declarations.len == 0) continue;
+        if (pseudo == .other or pseudo == .marker or !try observedFigureStaticMotion(a, p.declarations, p.environment)) return null;
+        const before = pseudo == .before;
+        const bracket = (try disclosureBracket(a, p.declarations, p.environment, if (before) '[' else ']')) orelse return null;
+        if (before) result.before = bracket else result.after = bracket;
+    }
+    return result;
+}
+fn disclosurePointerEvaluation(base: ObservedFigureEvaluation, host: usize, span: usize, focus: usize) ObservedFigureEvaluation {
+    var result = base;
+    result.disclosure.?.state = .{ .hover = host & 1 != 0, .active = host & 2 != 0,
+        .focus = focus != 0, .focus_visible = focus == 2, .focus_within = focus != 0 };
+    const absent: ?bool = if (result.disclosure.?.label_nonfocusable) false else null;
+    result.disclosure.?.span_state = .{ .hover = span & 1 != 0, .active = span & 2 != 0,
+        .focus = absent, .focus_visible = absent, .focus_within = absent };
+    return result;
+}
+fn disclosureNonTextEqual(left: DisclosureSample, right: DisclosureSample) bool {
+    return left.label_radius == right.label_radius and left.direction == right.direction and left.placement == right.placement and
+        observedFigureDataEqual(DisclosureAffixes, left.affixes, right.affixes, 0) and
+        observedFigureDataEqual(?DisclosureResetBox, left.reset, right.reset, 0);
+}
+
+// Recheck the initializer's unadorned source string against a returned run.
+// Caller has already bound the owner/child and the derived paint authority.
+pub fn disclosureSourceLabelAgrees(visible: []const u8, run: types.ContainerDisclosureLabelRun, source: []const u8) bool {
+    if (run.start >= run.end or run.end > visible.len or
+        !std.mem.eql(u8, visible[run.start..run.end], source)) return false;
+    return (run.start == 0 or std.mem.eql(u8, visible[0..run.start], "[")) and
+        (run.end == visible.len or std.mem.eql(u8, visible[run.end..], "]"));
+}
+
+// On ::before and ::after, normal computes to none. These distinct
+// specified values therefore have one observable result: no pseudo-element.
+// Test every possible cascade winner, including the implicit initial value,
+// without turning uncertain selector membership or rank into a known match.
+// https://www.w3.org/TR/css-content-3/#content-property
+fn disclosureBeforeAfterNoContent(a: std.mem.Allocator, declarations: []const ObservedFigureDeclaration,
+    environment: CustomEnvironment) !bool
+{
+    const candidates = try observedFigurePropertyCandidates(a, declarations, "content", &.{});
+    defer a.free(candidates);
+    for (candidates) |candidate| {
+        const content = try observedFigureKeywordValue(a, candidate, "content", environment,
+            &.{ "none", "normal" }, "normal", null, false);
+        if (content.unresolved or content.value == null) return false;
+        if (!std.ascii.eqlIgnoreCase(content.value.?, "none") and
+            !std.ascii.eqlIgnoreCase(content.value.?, "normal")) return false;
+    }
+    return true;
+}
 fn disclosureNoGenerated(a: std.mem.Allocator, styles: *const Profile, graph: DisclosureGraph,
     node: ObservedFigureComputedNode, evaluation: ObservedFigureEvaluation) !bool
 {
@@ -44048,9 +44303,7 @@ fn disclosureNoGenerated(a: std.mem.Allocator, styles: *const Profile, graph: Di
         if (p.declarations.len == 0) continue;
         if (pseudo == .other or pseudo == .marker) return false;
         if (!try observedFigureStaticMotion(a, p.declarations, p.environment)) return false;
-        const content = try observedFigureKeyword(a, p.declarations, "content", &.{}, p.environment,
-            &.{ "none", "normal" }, "normal", null, false, "normal");
-        if (content.unresolved) return false;
+        if (!try disclosureBeforeAfterNoContent(a, p.declarations, p.environment)) return false;
     }
     return true;
 }
@@ -44065,7 +44318,504 @@ pub const DisclosureInheritedFont = struct {
     italic: bool,
     line_height: types.ContainerLineHeight,
 };
+// The producer qualifies the ParserOutput cascade and the emitted BODY_FRAGMENT
+// constructor for the selected target, language, preferences and module set.
+// covered_labels guarantees a single face for each exact string with or without
+// either generated bracket, including shaping at these joins in both phases.
+pub const DisclosureRootFontInput = struct {
+    parser_font: DisclosureInheritedFont,
+    covered_labels: []const []const u8,
+    // Every intervening element is a font-inheriting HTML SECTION. Its
+    // attributes are a subset of this exhaustive union. Variation in depth,
+    // siblings and attribute values remains unknown. No shell DOM is copied.
+    section_attributes: []const []const u8,
+    // When present, every emitted SECTION id starts with these exact bytes.
+    section_id_prefix: ?[]const u8 = null,
+    section_id_max_bytes: ?usize = null,
+    // Complete effective wrapper class tokens, for the immediate-parent
+    // test only. Neither these nor the generated ID bounds come from a sample.
+    parser_classes: []const u8,
+};
+
+// A source constructor, shared by an explicitly qualified query domain.
+// fixed_attributes are emitted on every invocation. Additional attribute
+// names and class-token prefixes are exhaustive upper bounds, with no claim
+// that a possible attribute or class is present on a particular page.
+pub const DisclosureFontShellStep = struct {
+    tag: []const u8,
+    fixed_attributes: []const FigureObservedAttribute,
+    variable_attributes: []const []const u8,
+    extra_class_prefixes: []const []const u8,
+
+    fn variable(self: @This(), name: []const u8) bool {
+        if (std.ascii.eqlIgnoreCase(name, "class")) return self.extra_class_prefixes.len != 0;
+        for (self.variable_attributes) |attr| if (std.ascii.eqlIgnoreCase(attr, name)) return true;
+        return false;
+    }
+    fn classMayVary(self: @This(), token: []const u8) bool {
+        for (self.extra_class_prefixes) |prefix| if (std.mem.startsWith(u8, token, prefix)) return true;
+        return false;
+    }
+
+    fn compound(self: @This(), part: GeneratedFigureCompound, node: ObservedStyleNode, root: bool,
+        budget: *usize) ContainerSelectorMatch
+    {
+        const fixed = observedFigureAttribute(node, "class") orelse "";
+        if (part.positive.tag) |tag| if (!std.ascii.eqlIgnoreCase(tag, self.tag)) return .no;
+        if (part.root_only and !root) return .no;
+        var uncertain = part.positive.ids.len != 0 and self.variable("id") or
+            part.positive.typeof_token != null and self.variable("typeof");
+        for (part.excluded_tags) |tag| if (std.ascii.eqlIgnoreCase(tag, self.tag)) return .no;
+        for (part.positive.classes) |c| {
+            if (Profile.hasClass(fixed, c)) continue;
+            if (!self.classMayVary(c)) return .no;
+            uncertain = true;
+        }
+        for (part.excluded_classes) |c| {
+            if (Profile.hasClass(fixed, c)) return .no;
+            uncertain = uncertain or self.classMayVary(c);
+        }
+        for (part.attributes) |attr| {
+            if (!self.variable(attr.name) and attr.matches(node) == .no) return .no;
+            uncertain = uncertain or self.variable(attr.name);
+        }
+        // A variable fact inside a negation/disjunction cannot be evaluated
+        // by treating omitted DOM attributes as absent. Other predicates
+        // retain the source engine's ordinary specificity and unknown state.
+        if ((part.any_groups.len != 0 or part.none_groups.len != 0) and
+            (self.variable_attributes.len != 0 or self.extra_class_prefixes.len != 0)) uncertain = true;
+        if (uncertain) return .unknown;
+        return observedFigureCompoundMatchIn(part, node, root, budget, false, null);
+    }
+};
+
+pub const DisclosureFontShell = struct {
+    path: []const DisclosureFontShellStep,
+    // Independently qualified initial UA medium in CSS px, CSS initial family,
+    // applicable platform-face mapping for the covered strings, and inherited
+    // initial custom-property environment. The constructor qualification covers
+    // neutral unrepresented shaping, geometry, zoom and UA shell inheritance.
+    medium_px: f32,
+    initial_family: ?[]const u8 = null,
+    face_css_family: []const u8,
+    initial_custom: CustomEnvironment,
+};
+
+fn disclosureFontShellSelector(selector: GeneratedFigureSelector, path: []const DisclosureFontShellStep,
+    nodes: []const ObservedStyleNode, subject: u32) ContainerSelectorMatch
+{
+    if (selector.chain.len == 0 or selector.chain.len > 16 or selector.chain.len != selector.direct_parent.len or
+        path.len != nodes.len or subject >= path.len) return .unknown;
+    if (selector.pseudo != null and selector.pseudo.? != .other) return .no;
+    var budget: usize = 4096;
+    const match = observedStyleMatchAt(selector, nodes, null, subject, selector.chain.len - 1, &budget,
+        .{ .disclosure_font_path = path });
+    if (match == .known and (selector.pseudo != null or !selector.syntax_known or selector.necessary_previous_sibling or
+        selector.necessary_sibling_ancestors.len != 0 or selector.necessary_previous_adjacent != null or
+        selector.necessary_html_root != null or selector.necessary_has_next != null)) return .unknown;
+    return match;
+}
+
+pub fn disclosureParserFontMatches(a: std.mem.Allocator, styles: *const Profile, input: DisclosureRootFontInput,
+    shell: DisclosureFontShell, placement: []const DisclosureShellStep) !bool
+{
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    return (try disclosureParserFontEnvironment(arena.allocator(), styles, input, shell, placement)) != null;
+}
+
+fn disclosureParserFontEnvironment(temp: std.mem.Allocator, styles: *const Profile, input: DisclosureRootFontInput,
+    shell: DisclosureFontShell, placement: []const DisclosureShellStep) !?CustomEnvironment
+{
+    if (styles.globally_unresolved or styles.reading_target != .screen or !std.math.isFinite(shell.medium_px) or
+        shell.medium_px <= 0 or
+        !observedFigureFontFamilySyntax(shell.face_css_family) or shell.path.len < 3 or shell.path.len > 33 or
+        shell.path.len != placement.len + 1) return null;
+    if (shell.initial_family) |initial| if (!observedFigureFontFamilySyntax(initial)) return null;
+    const optional_source = for (styles.retained_sources) |source| {
+        if (source.unknown_applicability) break true;
+    } else false;
+    const root = shell.path.len - 1;
+    const nodes = try temp.alloc(ObservedStyleNode, shell.path.len);
+    for (shell.path, nodes, 0..) |step, *node, i| {
+        if (i < placement.len and !std.ascii.eqlIgnoreCase(step.tag, placement[i].tag)) return null;
+        var neutral = false;
+        for ([_][]const u8{ "html", "body", "div", "main", "article", "section" }) |tag| {
+            if (std.ascii.eqlIgnoreCase(tag, step.tag)) { neutral = true; break; }
+        }
+        if (!neutral or step.variable_attributes.len > 32 or step.extra_class_prefixes.len > 32 or
+            (i == 0) != std.ascii.eqlIgnoreCase(step.tag, "html") or
+            (i == 1) != std.ascii.eqlIgnoreCase(step.tag, "body")) return null;
+        node.* = .{ .tag = step.tag, .parent = if (i == 0) null else @intCast(i - 1),
+            .attributes = step.fixed_attributes };
+        for (step.variable_attributes) |name| {
+            if (name.len == 0 or name.len > 64 or observedFigureAttribute(node.*, name) != null) return null;
+            for (name) |c| if (!observedFigureNameByte(c)) return null;
+            for ([_][]const u8{ "class", "lang", "xml:lang", "dir", "style", "hidden", "inert", "contenteditable" }) |s|
+                if (std.ascii.eqlIgnoreCase(s, name)) return null;
+        }
+        for (step.extra_class_prefixes) |prefix| {
+            if (prefix.len > 128) return null;
+            for (prefix) |c| if (!observedFigureNameByte(c)) return null;
+        }
+        if (i < placement.len) {
+            const fixed = observedFigureAttribute(node.*, "class") orelse "";
+            for ([_][]const u8{ "mw-content-ltr", "mw-content-rtl" }, [_]?bool{ placement[i].content_ltr, placement[i].content_rtl }) |c, claim| {
+                if (claim) |present| if (Profile.hasClass(fixed, c) != present or
+                    (!present and step.classMayVary(c))) return null;
+            }
+        }
+    }
+    if (!observedStyleGraphValid(styles, nodes, @intCast(root)) or shell.path[root].extra_class_prefixes.len != 0 or
+        !std.mem.eql(u8, observedFigureAttribute(nodes[root], "class") orelse return null, input.parser_classes)) return null;
+
+    var font: types.FigureMediaStrut = .{ .font_scale = 1, .direction = .ltr };
+    var family = shell.initial_family;
+    var env = shell.initial_custom;
+    var html_scale: f32 = 1;
+    var height: ObservedFigureLineHeight = .normal;
+    for (nodes, 0..) |node, i| {
+        const ds = (try observedStyleNodeDeclarations(temp, styles, nodes, @intCast(i), null, null,
+            .{ .disclosure_font_path = shell.path })) orelse return null;
+        for (ds.items) |d| {
+            if (d.syntax_unknown or std.ascii.eqlIgnoreCase(d.name, "all")) return null;
+            // The strut can represent only regular or bold, italic, size and
+            // neutral features here. Do not drop an unmodelled font axis.
+            if (std.ascii.startsWithIgnoreCase(d.name, "font-")) {
+                for ([_][]const u8{ "font-family", "font-feature-settings", "font-style", "font-weight",
+                    "font-size", "font-stretch", "font-variant", "font-size-adjust", "font-variation-settings" }) |k|
+                    { if (std.ascii.eqlIgnoreCase(d.name, k)) break; } else return null;
+            }
+        }
+        env = try observedFigureCustomEnvironment(temp, ds.items, env, true);
+        // Optional keyframes are global definitions. Require an inactive name
+        // on every outer shell step before transferring its inherited values.
+        if (optional_source) {
+            const animation = try observedFigureKeyword(temp, ds.items, "animation-name", &.{"animation"}, env,
+                &.{"none"}, "none", null, false, "none");
+            if (animation.unresolved or !std.mem.eql(u8, animation.value.?, "none")) return null;
+        }
+        const current: ObservedFigureComputedNode = .{ .index = @intCast(i), .declarations = ds.items, .environment = env };
+        family = (try observedFigureFontFamilyWithWitness(temp, current, family, null)) orelse return null;
+        font = (try observedFigureOwnFontInWithWitness(temp, node, current, font, 1, html_scale, true, null)) orelse return null;
+        if (i == 0) html_scale = font.font_scale;
+        height = try observedFigureLineHeight(temp, current, height, font.font_scale * shell.medium_px);
+        if (height == .unknown) return null;
+    }
+    const actual_px = font.font_scale * shell.medium_px;
+    if (!std.math.isFinite(actual_px) or actual_px <= 0 or input.parser_font.size.unit != .px or
+        actual_px != input.parser_font.size.value or font.bold or font.italic or font.font_features != null or
+        !std.ascii.eqlIgnoreCase(family orelse return null, shell.face_css_family)) return null;
+    const expected = input.parser_font.line_height;
+    const px: f64 = switch (height) {
+        .normal => return if (expected == .normal) env else null,
+        .factor => |factor| factor * actual_px,
+        .length => |v| v.value, // physical px, or em resolved at its declaring element above
+        .unknown => return null,
+    };
+    return if (expected == .length and expected.length.unit == .px and px == expected.length.value) env else null;
+}
+
+// Upper bounds for strict ancestors outside the local disclosure graph.
+// They prove only that a required positive tag/class cannot occur. They do
+// not construct a parent path, establish order, or confer any paint value.
+pub const DisclosureExteriorDomain = struct {
+    tags: []const []const u8,
+    classes: []const []const u8,
+    class_prefixes: []const []const u8,
+    // A missing ID domain preserves arbitrary external IDs. Membership is
+    // only a possibility; it cannot establish an ancestor or its attributes.
+    ids: ?struct { values: []const []const u8, prefixes: []const []const u8 } = null,
+
+    fn possible(self: @This(), part: GeneratedFigureCompound) bool {
+        if (part.positive.tag) |tag| if (tag.len != 0 and !std.mem.eql(u8, tag, "*")) {
+            var found = false;
+            for (self.tags) |allowed| if (std.ascii.eqlIgnoreCase(tag, allowed)) { found = true; break; };
+            if (!found) return false;
+        };
+        if (self.ids) |domain| for (part.positive.ids) |required| {
+            var found = false;
+            for (domain.values) |allowed| if (std.mem.eql(u8, required, allowed)) { found = true; break; };
+            if (!found) for (domain.prefixes) |prefix| if (std.mem.startsWith(u8, required, prefix)) {
+                found = true; break;
+            };
+            if (!found) return false;
+        };
+        for (part.positive.classes) |required| {
+            var found = false;
+            for (self.classes) |allowed| if (std.mem.eql(u8, required, allowed)) { found = true; break; };
+            if (!found) for (self.class_prefixes) |prefix| if (std.mem.startsWith(u8, required, prefix)) {
+                found = true; break;
+            };
+            if (!found) return false;
+        }
+        return true;
+    }
+};
+
+fn disclosureExteriorDomainAlloc(a: std.mem.Allocator, input: DisclosureRootFontInput,
+    shell: DisclosureFontShell) !?*const DisclosureExteriorDomain
+{
+    if (shell.path.len == 0 or shell.path.len > 33 or input.section_attributes.len > 16) return null;
+    var tags: std.ArrayList([]const u8) = .empty;
+    var classes: std.ArrayList([]const u8) = .empty;
+    var prefixes: std.ArrayList([]const u8) = .empty;
+    var ids: std.ArrayList([]const u8) = .empty;
+    var id_prefixes: std.ArrayList([]const u8) = .empty;
+    // The closed normal content wrapper starts with its class only; its
+    // later NODE_DATA_ID writer uses mw*. This is independent of SECTION
+    // attribute authority and requires the same no-unaccounted-writer closure.
+    try id_prefixes.append(a, "mw");
+    // SECTION IDs have the independently qualified constructor prefix. If
+    // that constraint is absent, retain every ID rather than infer absence.
+    for (input.section_attributes) |name| if (std.ascii.eqlIgnoreCase(name, "id")) {
+        try id_prefixes.append(a, if (input.section_id_prefix) |prefix| try a.dupe(u8, prefix) else "");
+    };
+    // Cover both generated SECTIONs and the optional normal collapsible-
+    // section content wrapper. Its inclusion adds no claim of presence.
+    try tags.appendSlice(a, &.{ "section", "div" });
+    try classes.append(a, "mw-collapsible-content");
+    for (input.section_attributes) |name| if (std.ascii.eqlIgnoreCase(name, "class"))
+        try prefixes.append(a, "");
+    for (shell.path) |step| {
+        try tags.append(a, try a.dupe(u8, step.tag));
+        for (step.fixed_attributes) |attribute| {
+            if (std.ascii.eqlIgnoreCase(attribute.name, "id")) {
+                if (attribute.value.len > 4096 or ids.items.len == 4096) return null;
+                try ids.append(a, try a.dupe(u8, attribute.value));
+            }
+            if (!std.ascii.eqlIgnoreCase(attribute.name, "class")) continue;
+            var words = std.mem.tokenizeAny(u8, attribute.value, " \t\r\n\x0c");
+            while (words.next()) |word| {
+                if (word.len > 4096 or classes.items.len == 4096) return null;
+                try classes.append(a, try a.dupe(u8, word));
+            }
+        }
+        // An unbounded shell ID disables ID refutation for the entire domain.
+        for (step.variable_attributes) |name| if (std.ascii.eqlIgnoreCase(name, "id")) {
+            try id_prefixes.append(a, "");
+        };
+        // Unknown generated class attributes conservatively admit any token.
+        for (step.variable_attributes) |name| if (std.ascii.eqlIgnoreCase(name, "class")) {
+            if (prefixes.items.len == 4096) return null;
+            try prefixes.append(a, "");
+        };
+        for (step.extra_class_prefixes) |prefix| {
+            if (prefix.len > 4096 or prefixes.items.len == 4096) return null;
+            try prefixes.append(a, try a.dupe(u8, prefix));
+        }
+    }
+    const result = try a.create(DisclosureExteriorDomain);
+    result.* = .{ .tags = tags.items, .classes = classes.items, .class_prefixes = prefixes.items,
+        .ids = .{ .values = ids.items, .prefixes = id_prefixes.items } };
+    return result;
+}
+
+pub const DisclosureFontTransfer = struct {
+    exterior_domain: ?*const DisclosureExteriorDomain = null,
+    inline_hit: ?*const DisclosureInlineHit = null,
+    styles: *const Profile,
+    input: DisclosureRootFontInput,
+
+    fn covers(self: @This(), label: []const u8) bool {
+        for (self.input.covered_labels) |known| if (std.mem.eql(u8, label, known)) return true;
+        return false;
+    }
+
+    pub fn bind(self: *const @This(), root: DisclosureRootPlacement, shared: *const DisclosureSharedProfile,
+        owner: *const TextElement, page: []const u8, current: []const u8, expand: []const u8, collapse: []const u8) ?DisclosureOwnerFont
+    {
+        if (root.shared != shared or self.styles != shared.styles or root.subject != owner or
+            root.key != owner.source_key or root.page.ptr != page.ptr or root.page.len != page.len or
+            root.current.ptr != current.ptr or root.current.len != current.len or
+            root.start > root.end or root.end > page.len or !std.mem.eql(u8, page[root.start..root.end], current) or
+            !self.covers(expand) or !self.covers(collapse)) return null;
+        if (root.root_direction) |dir| {
+            const other = if (dir == .ltr) "mw-content-rtl" else "mw-content-ltr";
+            if (Profile.hasClass(self.input.parser_classes, other)) return null;
+        }
+        return .{ .shared = shared, .owner = owner, .source_key = owner.source_key,
+            .expand = expand, .collapse = collapse, .font = self.input.parser_font,
+            .exterior_domain = self.exterior_domain,
+            .inline_hit = if (self.inline_hit) |hit| if (std.mem.eql(u8, expand, hit.expand.label) and
+                std.mem.eql(u8, collapse, hit.collapse.label)) hit else null else null };
+    }
+};
+
+fn disclosureSectionAttribute(input: DisclosureRootFontInput, name: []const u8) bool {
+    for (input.section_attributes) |possible| if (std.ascii.eqlIgnoreCase(name, possible)) return true;
+    return false;
+}
+
+fn disclosureSectionPossible(input: DisclosureRootFontInput, rule: ObservedFigureRule) bool {
+    const sel = rule.selector orelse rule.disclosure_alias orelse rule.weak_selector orelse return true;
+    if (sel.chain.len == 0) return true;
+    const part = sel.chain[sel.chain.len - 1];
+    if (part.positive.tag) |tag| if (!std.ascii.eqlIgnoreCase(tag, "section")) return false;
+    if (part.root_only or part.requires_empty or part.positive.classes.len != 0) return false;
+    for (part.excluded_tags) |tag| if (std.ascii.eqlIgnoreCase(tag, "section")) return false;
+    for (part.positive.ids) |id| {
+        if (!disclosureSectionAttribute(input, "id")) return false;
+        if (input.section_id_max_bytes) |limit| if (id.len > limit) return false;
+        if (input.section_id_prefix) |prefix| if (!std.mem.startsWith(u8, id, prefix)) return false;
+    }
+    for (part.attributes) |attr| if (!disclosureSectionAttribute(input, attr.name)) return false;
+    const last = sel.chain.len - 1;
+    if (last != 0 and sel.direct_parent.len == sel.chain.len and sel.direct_parent[last]) {
+        const parent = sel.chain[last - 1].positive;
+        var section = parent.classes.len == 0;
+        var root = true;
+        if (parent.tag) |tag| {
+            section = section and std.ascii.eqlIgnoreCase(tag, "section");
+            root = std.ascii.eqlIgnoreCase(tag, "div");
+        }
+        for (parent.classes) |name| if (!Profile.hasClass(input.parser_classes, name)) { root = false; break; };
+        if (!section and !root) return false;
+    }
+    // Only these pseudo-elements have independent font boxes. Unknown pseudo
+    // syntax and first-line/first-letter may affect inherited text metrics.
+    return sel.pseudo != .before and sel.pseudo != .after and sel.pseudo != .marker;
+}
+
+// Join over zero or more generated SECTIONs. Each possible declaration
+// must preserve the parser value on every step, or that name becomes unknown.
+// A computed ancestor value has already substituted its own dependencies.
+const DisclosureSectionBindings = struct {
+    a: std.mem.Allocator,
+    values: std.ArrayList(CustomBinding),
+    complete: bool,
+
+    fn possibleWrite(self: *@This(), d: ObservedFigureDeclaration) !bool {
+        if (!customName(d.name)) return false;
+        const raw = trim(d.raw);
+        if (std.ascii.eqlIgnoreCase(raw, "inherit") or std.ascii.eqlIgnoreCase(raw, "unset")) return true;
+        var index: ?usize = null;
+        for (self.values.items, 0..) |entry, i| if (std.mem.eql(u8, entry.name, d.name)) { index = i; break; };
+        const prior: CustomValue = if (index) |i| self.values.items[i].value else if (self.complete) .invalid else .unknown;
+        if (prior == .unknown) return true;
+        if (std.ascii.eqlIgnoreCase(raw, "initial") and prior == .invalid) return true;
+        if (prior == .known and !customContainsFunction(raw) and !std.ascii.eqlIgnoreCase(raw, "revert") and
+            !std.ascii.eqlIgnoreCase(raw, "revert-layer") and !std.ascii.eqlIgnoreCase(raw, "initial") and
+            std.mem.eql(u8, raw, prior.known)) return true;
+        if (index) |i| {
+            self.values.items[i].value = .unknown;
+        } else {
+            if (self.values.items.len >= 4096) return false;
+            // Declaration storage belongs to a per-rule scratch arena.
+            try self.values.append(self.a, .{ .name = try self.a.dupe(u8, d.name), .value = .unknown });
+        }
+        return true;
+    }
+};
+
+pub const DisclosureConstructorTransfer = struct {
+    font: DisclosureFontTransfer,
+    environment: CustomEnvironment,
+};
+
+// The result is owned by the ordinary Book arena. The inherited environment
+// comes from the same shell, target and ordered CSS as the checked root font.
+pub fn prepareDisclosureConstructorTransfer(a: std.mem.Allocator, styles: *const Profile, input: DisclosureRootFontInput,
+    shell: DisclosureFontShell, placement: []const DisclosureShellStep) !?DisclosureConstructorTransfer
+{
+    var scratch = std.heap.ArenaAllocator.init(a);
+    defer scratch.deinit();
+    const temp = scratch.allocator();
+    const root = (try disclosureParserFontEnvironment(temp, styles, input, shell, placement)) orelse return null;
+    var bindings: DisclosureSectionBindings = .{ .a = temp, .values = .empty, .complete = root.complete };
+    try bindings.values.appendSlice(temp, root.values);
+    var font = (try disclosurePrepareSectionTransfer(temp, styles, input, &bindings)) orelse return null;
+    // Allocate persistent strings/arrays in the caller's arena, never in the
+    // scratch cascade arena. A font-only transfer never issues this domain.
+    font.exterior_domain = try disclosureExteriorDomainAlloc(a, input, shell);
+    const boundary: CustomEnvironment = .{ .complete = root.complete, .values = bindings.values.items };
+    return .{ .font = font, .environment = try observedFigureDataClone(CustomEnvironment, a, boundary, 0) };
+}
+
+fn disclosureSectionRuleTransfers(a: std.mem.Allocator, rule: ObservedFigureRule, font: DisclosureInheritedFont,
+    bindings: ?*DisclosureSectionBindings) !bool
+{
+    var ds: std.ArrayList(ObservedFigureDeclaration) = .empty;
+    try appendObservedFigureDeclarations(a, &ds, rule.css, .{}, true, true, rule.source_index, rule.source_byte_start);
+    // Positive inventory of orthogonal declarations. An unknown spelling,
+    // shaping effect, UA reversal, motion or container query unit stays open.
+    // Custom properties are evaluated only at a consuming declaration. Here
+    // the environment is unknown, so a possible font value using var refuses.
+    for (ds.items) |d| {
+        if (d.syntax_unknown) return false;
+        if (std.mem.startsWith(u8, d.name, "--")) {
+            if (bindings) |scope| if (!try scope.possibleWrite(d)) return false;
+            continue;
+        }
+        if (std.ascii.eqlIgnoreCase(d.name, "font") or
+            std.ascii.startsWithIgnoreCase(d.name, "font-") or std.ascii.eqlIgnoreCase(d.name, "line-height")) continue;
+        var orthogonal = false;
+        for ([_][]const u8{ "color", "background", "background-color", "background-image", "outline",
+            "outline-color", "outline-width", "outline-style", "outline-offset", "border", "border-color",
+            "border-style", "border-width", "border-radius", "box-sizing", "margin", "padding",
+            "cursor", "scroll-margin-top", "scroll-padding-top", "margin-left", "margin-right",
+            "margin-top", "margin-bottom", "padding-top", "padding-bottom", "padding-left", "padding-right",
+            "scroll-behavior", "animation-delay", "animation-duration", "animation-iteration-count" }) |name| {
+            if (std.ascii.eqlIgnoreCase(d.name, name)) { orthogonal = true; break; }
+        }
+        // Timing alone cannot attach keyframes. Animation-name/shorthand
+        // refuses elsewhere in this inventory. Only literal zero transition
+        // duration is harmless under every possible selector outcome.
+        if (std.ascii.eqlIgnoreCase(d.name, "transition-duration") and
+            (std.mem.eql(u8, d.raw, "0ms") or std.mem.eql(u8, d.raw, "0s"))) continue;
+        if (!orthogonal) return false;
+    }
+    return disclosureOwnerFontMatches(a, .{ .index = 0, .declarations = ds.items, .environment = .{} }, font);
+}
+
+// Prepare once per immutable ordered screen cascade. Any number of generated
+// SECTIONs then preserves the qualified font by induction. This proves only
+// the font transfer; page CSS, exterior paint, placement and UA keep their
+// independent authority joins. Scope selection is per actual original page.
+pub fn prepareDisclosureFontTransfer(a: std.mem.Allocator, styles: *const Profile,
+    input: DisclosureRootFontInput) !?DisclosureFontTransfer
+{
+    return disclosurePrepareSectionTransfer(a, styles, input, null);
+}
+
+fn disclosurePrepareSectionTransfer(a: std.mem.Allocator, styles: *const Profile,
+    input: DisclosureRootFontInput, bindings: ?*DisclosureSectionBindings) !?DisclosureFontTransfer
+{
+    const font = input.parser_font;
+    if (styles.globally_unresolved or styles.reading_target != .screen or styles.sources.len == 0 or
+        styles.retained_sources.len != styles.sources.len or input.covered_labels.len == 0 or
+        input.covered_labels.len > 128 or input.section_attributes.len > 16 or
+        !types.validFontFamilyName(font.family.name) or font.size.unit != .px or
+        !types.validStyleLength(font.size) or font.size.value <= 0 or font.weight != 400 or font.italic) return null;
+    switch (font.line_height) {
+        .length => |v| if (v.unit != .px or !types.validStyleLength(v) or v.value <= 0) return null,
+        .normal => {},
+        else => return null,
+    }
+    for (input.covered_labels) |label| if (!disclosureLabelValid(label)) return null;
+    for (input.section_attributes) |name| {
+        if (name.len == 0 or name.len > 64 or !(std.mem.eql(u8, name, "id") or
+            std.mem.eql(u8, name, "about") or std.mem.eql(u8, name, "typeof") or
+            std.mem.startsWith(u8, name, "aria-") or std.mem.startsWith(u8, name, "data-"))) return null;
+        for (name) |c| if (!std.ascii.isAlphanumeric(c) and c != '-') return null;
+    }
+    if (input.parser_classes.len > 1024 or !Profile.hasClass(input.parser_classes, "mw-parser-output")) return null;
+    if (input.section_id_max_bytes) |limit| if (!disclosureSectionAttribute(input, "id") or limit == 0 or limit > 4096) return null;
+    if (input.section_id_prefix) |prefix| if (!disclosureSectionAttribute(input, "id") or
+        prefix.len == 0 or prefix.len > 64) return null;
+    var scratch = std.heap.ArenaAllocator.init(a);
+    defer scratch.deinit();
+    for (styles.observed_figure_rules) |rule| {
+        if (!disclosureSectionPossible(input, rule)) continue;
+        defer _ = scratch.reset(.retain_capacity);
+        if (!try disclosureSectionRuleTransfers(scratch.allocator(), rule, font, bindings)) return null;
+    }
+    return .{ .styles = styles, .input = input };
+}
+
 pub const DisclosureOwnerFont = struct {
+    exterior_domain: ?*const DisclosureExteriorDomain = null,
+    inline_hit: ?*const DisclosureInlineHit = null,
     owner: *const TextElement,
     shared: *const DisclosureSharedProfile,
     source_key: usize,
@@ -44079,6 +44829,44 @@ const DisclosureResetBox = struct {
     padding: types.StyleEdges,
     state: types.ContainerDisclosureButtonState,
 };
+
+// All possible winners of each represented dimension must equal the qualified
+// parent. A missing declaration also inherits. Other font axes retain their
+// strict inheritance-only check, including shaping and family selection.
+fn disclosureOwnerFontMatches(a: std.mem.Allocator, node: ObservedFigureComputedNode, font: DisclosureInheritedFont) !bool {
+    for (node.declarations) |d| {
+        if (d.syntax_unknown or std.ascii.eqlIgnoreCase(d.name, "all")) return false;
+        if (!std.ascii.eqlIgnoreCase(d.name, "font") and !std.ascii.startsWithIgnoreCase(d.name, "font-") and
+            !std.ascii.eqlIgnoreCase(d.name, "line-height")) continue;
+        if (std.ascii.eqlIgnoreCase(d.name, "font-size") or std.ascii.eqlIgnoreCase(d.name, "line-height") or
+            std.ascii.eqlIgnoreCase(d.name, "font-weight") or std.ascii.eqlIgnoreCase(d.name, "font-style")) continue;
+        const v = try customColorValue(a, node.environment, d.raw);
+        if (v != .known or !std.ascii.eqlIgnoreCase(trim(v.known), "inherit")) return false;
+    }
+    for ([_][]const u8{ "font-size", "line-height", "font-weight", "font-style" }, 0..) |name, axis| {
+        const candidates = try observedFigurePropertyCandidates(a, node.declarations, name, &.{"font"});
+        defer a.free(candidates);
+        for (candidates) |d| {
+            const value = try customColorValue(a, node.environment, d.raw);
+            if (value != .known) return false;
+            const raw = trim(value.known);
+            if (std.ascii.eqlIgnoreCase(raw, "inherit") or std.ascii.eqlIgnoreCase(raw, "unset")) continue;
+            if (!std.ascii.eqlIgnoreCase(d.name, name)) return false;
+            switch (axis) {
+                0, 1 => {
+                    if (axis == 1 and font.line_height == .normal and std.ascii.eqlIgnoreCase(raw, "normal")) continue;
+                    if (raw.len <= 2 or !widthNumberSyntax(raw[0 .. raw.len - 2])) return false;
+                    const px = length(raw) orelse return false;
+                    if (px.unit != .px or (if (axis == 0) px.value != font.size.value else
+                        font.line_height != .length or px.value != font.line_height.length.value)) return false;
+                },
+                2 => if (font.weight != 400 or !(std.mem.eql(u8, raw, "400") or std.ascii.eqlIgnoreCase(raw, "normal"))) return false,
+                else => if (font.italic or !std.ascii.eqlIgnoreCase(raw, "normal")) return false,
+            }
+        }
+    }
+    return true;
+}
 
 fn disclosureFontInherits(a: std.mem.Allocator, node: ObservedFigureComputedNode) !bool {
     // Accept only transparent inheritance across this one source-owned DIV.
@@ -44147,6 +44935,57 @@ fn disclosureApplyReset(button: *types.ContainerDisclosureButton, reset: Disclos
     button.padding = reset.padding;
     inline for (.{ "normal", "hover", "active", "hover_active" }) |key| @field(button, key) = reset.state;
     return true;
+}
+
+test "disclosure exact runtime selector uses source owner font and literal bracket runs" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const fixture =
+        ".mw-collapsible-toggle-default{-webkit-appearance:none;-moz-appearance:none;appearance:none;background:none;margin:0;padding:0;border:0;font:inherit}" ++
+        ".mw-collapsible-toggle-default::before{content:'['}.mw-collapsible-toggle-default::after{content:']'}" ++
+        ".mw-collapsible-toggle-default .mw-collapsible-text:hover{color:#3056a9}";
+    var styles = try parseForTargetAlloc(a, fixture, .screen);
+    defer styles.deinit();
+    var owner_attrs = [_]FigureObservedAttribute{.{ .name = "style", .value = "font-size:40px;font-size:16px;line-height:26px;color:#654321" }};
+    const nodes = [_]ObservedStyleNode{
+        .{ .tag = "div", .parent = null, .attributes = &owner_attrs },
+        .{ .tag = "button", .parent = 0, .attributes = &.{.{ .name = "class", .value = "mw-collapsible-toggle-default" }} },
+        .{ .tag = "span", .parent = 1, .attributes = &.{.{ .name = "class", .value = "mw-collapsible-text" }} },
+    };
+    const env: CustomEnvironment = .{ .complete = true };
+    const graph: DisclosureGraph = .{ .nodes = &nodes, .root = 0, .owner = 0, .button = 1, .label = 2, .label_text = "Più" };
+    const boundary: DisclosureBoundary = .{ .direction = .ltr, .color_scheme = "normal", .custom_environment = env };
+    const evaluation: ObservedFigureEvaluation = .{ .disclosure = .{ .nodes = &nodes, .button = 1, .label = 2,
+        .state = .{}, .boundary = &boundary, .partial_owner = null, .moz_focus_inner_absent = true } };
+    const font: DisclosureInheritedFont = .{ .family = .{ .name = "Fixture" }, .size = .{ .unit = .px, .value = 16 },
+        .line_height = .{ .length = .{ .unit = .px, .value = 26 } }, .weight = 400, .italic = false };
+    const parent = (try disclosureDeclarations(a, &styles, graph, 0, null, evaluation, env)).?;
+    try std.testing.expect(try disclosureOwnerFontMatches(a, parent, font));
+    const button = (try disclosureDeclarations(a, &styles, graph, 1, null, evaluation, env)).?;
+    var use = try ObservedFigurePropertyUse.init(a, button.declarations);
+    use.boxEdges(false);
+    const box = (try disclosureResetBox(a, button, &use, font)).?;
+    try std.testing.expect(use.complete());
+    try std.testing.expectEqualDeep(font, box.font);
+    const affixes = (try disclosureButtonAffixes(a, &styles, graph, button, evaluation)).?;
+    try std.testing.expectEqualStrings("[Più]", try affixes.visible(a, graph.label_text));
+    for ([_]usize{ 0, 1 }) |span| {
+        const state = disclosurePointerEvaluation(evaluation, 1, span, 0);
+        const label = (try disclosureDeclarations(a, &styles, graph, 2, null, state, env)).?;
+        const black: types.FigureColor = .{ .kind = .rgb, .value = "#000000" };
+        const ink = try observedFigureColor(a, label.declarations, "color", env, black, black);
+        try std.testing.expect(!ink.unresolved);
+        try std.testing.expectEqualStrings(if (span == 0) "#000000" else "#3056a9", ink.value.?.value.?);
+    }
+    owner_attrs[0].value = "font-size:17px";
+    const changed = (try disclosureDeclarations(a, &styles, graph, 0, null, evaluation, env)).?;
+    try std.testing.expect(!try disclosureOwnerFontMatches(a, changed, font));
+    for ([_][]const u8{ "content:attr(title)", "content:'[';color:red", "content:counter(n)" }) |raw| {
+        var decls: std.ArrayList(ObservedFigureDeclaration) = .empty;
+        try appendObservedFigureDeclarations(a, &decls, raw, .{}, false, false, 0, 0);
+        try std.testing.expect((try disclosureBracket(a, decls.items, env, '[')) == null);
+    }
 }
 
 test "disclosure runtime reset consumes definite author box and inherits the qualified owner font" {
@@ -44242,7 +45081,7 @@ fn disclosureAncestors(a: std.mem.Allocator, styles: *const Profile, graph: Disc
         } else if ((try observedRuleShellHidden(a, d.declarations, d.environment)) != false) return null;
         const inherited_font = if (graph.reset_parent_font) |font| blk: {
             if (!graph.source_only_owner or graph.owner != 0 or index != 0 or
-                evaluation.disclosure.?.boundary == null or !try disclosureFontInherits(a, d)) break :blk null;
+                evaluation.disclosure.?.boundary == null or !try disclosureOwnerFontMatches(a, d, font)) break :blk null;
             break :blk @as(?DisclosureInheritedFont, font);
         } else null;
         parent = .{ .env = d.environment, .direction = direction, .scheme = scheme.value.?, .inherited_font = inherited_font };
@@ -44254,14 +45093,126 @@ fn disclosureAncestors(a: std.mem.Allocator, styles: *const Profile, graph: Disc
 // nodes[0]. Includes qualification of the inherited control text and palette
 // context and exterior visibility. Empty absence lists prove nothing.
 // Unknown custom bindings must remain unknown (incomplete environment).
+// Qualified for the selected target readers, ordinary nonediting constructor,
+// and enabled control. A browser-computed page row cannot supply this contract.
+// The authenticated ordinary manifest binds this paired derivative to the
+// selected constructor, UA and reader validation. The comparison concerns
+// only the radius on an otherwise admitted zero-radius inline text run.
+pub const DisclosureInlineHit = struct {
+    pub const Map = struct {
+        display: []const u8,
+        radius_px: f32,
+        rect: [4]f64,
+        bits: []const u8,
+    };
+    pub const Phase = struct {
+        label: []const u8,
+        original: Map,
+        zero: Map,
+        restored: Map,
+        block: Map,
+        block_zero: Map,
+
+        fn validMap(m: Map, display: []const u8, radius: f32) bool {
+            if (!std.mem.eql(u8, m.display, display) or !std.math.isFinite(radius) or m.radius_px != radius or
+                m.bits.len != 2916 or m.rect[2] <= 0 or m.rect[3] <= 0) return false;
+            for (m.rect) |v| if (!std.math.isFinite(v)) return false;
+            for (m.bits) |c| if (c != 'S' and c != 'B' and c != 'X') return false;
+            return std.mem.indexOfScalar(u8, m.bits, 'S') != null and std.mem.indexOfScalar(u8, m.bits, 'B') != null;
+        }
+
+        fn valid(self: @This(), radius: f32) bool {
+            if (radius <= 0 or self.block.radius_px <= 0 or !disclosureLabelValid(self.label)) return false;
+            return validMap(self.original, "inline", radius) and validMap(self.zero, "inline", 0) and
+                validMap(self.restored, "inline", radius) and validMap(self.block, "inline-block", self.block.radius_px) and
+                validMap(self.block_zero, "inline-block", 0) and
+                std.mem.eql(f64, &self.original.rect, &self.zero.rect) and
+                std.mem.eql(f64, &self.original.rect, &self.restored.rect) and
+                std.mem.eql(f64, &self.block.rect, &self.block_zero.rect) and
+                std.mem.eql(u8, self.original.bits, self.zero.bits) and
+                std.mem.eql(u8, self.original.bits, self.restored.bits) and
+                !std.mem.eql(u8, self.block.bits, self.block_zero.bits);
+        }
+    };
+
+    observation_sha256: []const u8,
+    expand: Phase,
+    collapse: Phase,
+    font: DisclosureInheritedFont,
+    direction: types.BidiResolvedDirection,
+
+    fn agrees(self: *const @This(), interaction: DisclosureInteractionBasis, phase: DisclosurePhase,
+        label: []const u8, font: DisclosureInheritedFont, direction: types.BidiResolvedDirection, radius: f32) bool
+    {
+        const reader = interaction.reader_run_hit_radius_px orelse return false;
+        const row = if (phase == .collapsed) &self.expand else &self.collapse;
+        return reader == 0 and interaction.reader_pointer_unselectable and interaction.plain_inline_brackets and
+            interaction.nonfocusable_label and interaction.unpainted_unclipped_label and
+            direction == self.direction and row.original.radius_px == radius and
+            std.mem.eql(u8, label, row.label) and observedFigureDataEqual(DisclosureInheritedFont, font, self.font, 0);
+    }
+
+    pub fn valid(self: *const @This()) bool {
+        return self.expand.valid(self.expand.original.radius_px) and self.collapse.valid(self.expand.original.radius_px);
+    }
+};
+
+pub const DisclosureInteractionBasis = struct {
+    reader_pointer_unselectable: bool = false,
+    plain_inline_brackets: bool = false,
+    nonfocusable_label: bool = false,
+    unpainted_unclipped_label: bool = false,
+    // Source and reader hit geometry must agree when the run's pointer state
+    // selects paint. A transparent background alone proves no such equality.
+    reader_run_hit_radius_px: ?f32 = null,
+};
+
+fn disclosureButtonInteraction(a: std.mem.Allocator, node: ObservedFigureComputedNode,
+    use: *ObservedFigurePropertyUse, basis: DisclosureInteractionBasis) !bool
+{
+    var present = false;
+    for (node.declarations) |d| {
+        for ([_][]const u8{ "cursor", "user-select", "-moz-user-select", "-webkit-user-select" }) |name|
+            if (std.ascii.eqlIgnoreCase(d.name, name)) { present = true; break; };
+    }
+    if (!present and !basis.reader_pointer_unselectable) return true;
+    if (!basis.reader_pointer_unselectable or
+        !try disclosureResetProperty(a, use, node, "cursor", "pointer", false) or
+        !try disclosureResetProperty(a, use, node, "user-select", "none", false)) return false;
+    for ([_][]const u8{ "-moz-user-select", "-webkit-user-select" }) |name|
+        if (!try disclosureResetProperty(a, use, node, name, "none", true)) return false;
+    return true;
+}
+
+fn disclosureLabelRadius(a: std.mem.Allocator, node: ObservedFigureComputedNode,
+    use: *ObservedFigurePropertyUse, basis: DisclosureInteractionBasis) !?f32
+{
+    const corners = [_][]const u8{ "border-top-left-radius", "border-top-right-radius",
+        "border-bottom-right-radius", "border-bottom-left-radius" };
+    const r = try observedFigureUniformRadius(a, node.declarations, node.environment, 1);
+    if (r != .known or r.known.unit != .px or !types.validStyleLength(r.known) or r.known.value < 0 or
+        (r.known.value != 0 and !basis.unpainted_unclipped_label)) return null;
+    for (corners) |corner| use.property(corner, &.{"border-radius"});
+    return r.known.value;
+}
+
+fn disclosureRunHitAgrees(source: f32, reader: ?f32) bool {
+    const radius = reader orelse return false;
+    return std.math.isFinite(radius) and radius >= 0 and source == radius;
+}
+
 pub const DisclosureBoundary = struct {
+    interaction: DisclosureInteractionBasis = .{},
     direction: ?types.BidiResolvedDirection,
     color_scheme: []const u8,
-    custom_environment: CustomEnvironment,
+    custom_environment: CustomEnvironment = .{},
     absent_tags: []const []const u8 = &.{},
     absent_classes: []const []const u8 = &.{},
 };
-fn disclosureExteriorPossible(compound: GeneratedFigureCompound, boundary: *const DisclosureBoundary) bool {
+fn disclosureExteriorPossible(compound: GeneratedFigureCompound, boundary: *const DisclosureBoundary,
+    domain: ?*const DisclosureExteriorDomain) bool
+{
+    if (domain) |known| if (!known.possible(compound)) return false;
     if (compound.positive.tag) |tag| for (boundary.absent_tags) |absent| {
         if (std.ascii.eqlIgnoreCase(tag, absent)) return false;
     };
@@ -44276,7 +45227,10 @@ fn disclosurePartialAt(selector: GeneratedFigureSelector, nodes: []const Observe
     const part = selector.chain[term];
     const node = nodes[subject];
     var own = observedFigureCompoundMatchIn(part, node, false, budget, false, observedFigureStateAt(nodes, subject, evaluation));
-    if (evaluation.disclosure.?.partial_owner == subject and disclosureMayReadOmittedAttributes(part, node)) {
+    const owner_attributes = evaluation.disclosure.?.owner_attributes;
+    if (evaluation.disclosure.?.partial_owner == subject and
+        disclosureOwnerRequiredAttributeRefutes(part, node, owner_attributes)) return .no;
+    if (evaluation.disclosure.?.partial_owner == subject and disclosureMayReadOmittedAttributes(part, node, owner_attributes)) {
         // Retain only necessary tag and class tokens. In particular, unknown
         // ID or RDFa presence inside a negation cannot establish a match.
         var required = GeneratedFigureCompound{ .positive = .{ .tag = part.positive.tag, .classes = part.positive.classes } };
@@ -44297,13 +45251,20 @@ fn disclosurePartialAt(selector: GeneratedFigureSelector, nodes: []const Observe
     }
     // Only at the unobserved boundary. Every remaining compound would have
     // to occur outside; no positive exterior match or order is inferred.
+    if (evaluation.disclosure.?.html_underline) |preference| {
+        for (selector.chain[0..term]) |prefix| if (disclosureHtmlUnderlineTerm(prefix, preference)) |present| {
+            if (!present) return if (possible) .unknown else .no;
+        };
+        if (term == 1 and !selector.direct_parent[1] and selector.syntax_known and
+            disclosureHtmlUnderlineTerm(selector.chain[0], preference) == true) return own;
+    }
     if (evaluation.disclosure.?.float_ancestors) |projected| {
         if (disclosureProjectedPrefix(selector, term, projected)) |found| {
             if (found) return own;
             return if (possible) .unknown else .no;
         }
     }
-    for (selector.chain[0..term]) |outer_part| if (!disclosureExteriorPossible(outer_part, boundary))
+    for (selector.chain[0..term]) |outer_part| if (!disclosureExteriorPossible(outer_part, boundary, evaluation.disclosure.?.exterior_domain))
         return if (possible) .unknown else .no;
     return .unknown;
 }
@@ -44313,11 +45274,25 @@ fn disclosurePartialSelector(selector: GeneratedFigureSelector, nodes: []const O
     if (selector.chain.len == 0 or selector.chain.len > 16 or selector.direct_parent.len != selector.chain.len or subject >= nodes.len) return .unknown;
     if (selector.pseudo != pseudo) return .no;
     if (evaluation.disclosure.?.partial_owner == null and observedCompletePreviousRefutes(selector, nodes, subject)) return .no;
-    if (selector.necessary_html_root) |root| if (!disclosureExteriorPossible(root, boundary)) return .no;
+    if (selector.necessary_html_root) |root| if (!disclosureExteriorPossible(root, boundary, evaluation.disclosure.?.exterior_domain)) return .no;
+    // A terminal sibling edge retains necessary shared ancestors even when
+    // the edge itself is unsupported. Query those ancestors through the same
+    // partial graph: local possibilities and unbounded exterior facts remain
+    // possible. Only absence refutes; no sibling edge or rank is established.
+    if (selector.necessary_sibling_ancestors.len > 16) return .unknown;
+    for (selector.necessary_sibling_ancestors) |required| {
+        const chain = [_]GeneratedFigureCompound{ required, .{ .positive = .{} } };
+        const projected: GeneratedFigureSelector = .{ .chain = &chain,
+            .direct_parent = &.{ false, false }, .specificity = 0 };
+        var remaining: usize = 4096;
+        if (disclosurePartialAt(projected, nodes, subject, 1, evaluation, boundary, &remaining) == .no) return .no;
+    }
     var budget: usize = 4096;
     return disclosurePartialAt(selector, nodes, subject, selector.chain.len - 1, evaluation, boundary, &budget);
 }
 const DisclosureSample = struct {
+    label_radius: f32,
+    affixes: DisclosureAffixes,
     reset: ?DisclosureResetBox,
     placement: types.ContainerDisclosurePlacement,
     direction: types.BidiResolvedDirection,
@@ -44332,7 +45307,10 @@ fn disclosureSample(a: std.mem.Allocator, styles: *const Profile, graph: Disclos
 {
     const b = (try disclosureDeclarations(a, styles, graph, graph.button, null, evaluation, parent.env)) orelse return null;
     const l = (try disclosureDeclarations(a, styles, graph, graph.label, null, evaluation, b.environment)) orelse return null;
-    if (!try disclosureNoGenerated(a, styles, graph, b, evaluation) or !try disclosureNoGenerated(a, styles, graph, l, evaluation)) return null;
+    const interaction: DisclosureInteractionBasis = if (evaluation.disclosure.?.boundary) |bound| bound.interaction else .{};
+    const affixes = (try disclosureButtonAffixes(a, styles, graph, b, evaluation)) orelse return null;
+    if ((affixes.before or affixes.after) and !interaction.plain_inline_brackets) return null;
+    if (!try disclosureNoGenerated(a, styles, graph, l, evaluation)) return null;
     var button_use = try ObservedFigurePropertyUse.init(a, b.declarations);
     defer button_use.deinit(a);
     button_use.customEnvironment();
@@ -44340,7 +45318,13 @@ fn disclosureSample(a: std.mem.Allocator, styles: *const Profile, graph: Disclos
     button_use.property("outline-color", &.{});
     button_use.property("direction", &.{});
     button_use.boxEdges(false);
-    if (!try button_use.staticMotion(a, b.environment)) return null;
+    if (!try disclosureButtonInteraction(a, b, &button_use, interaction) or
+        !try button_use.staticMotion(a, b.environment)) return null;
+    // Each reachable host/run pointer and focus sample has its own cascade.
+    // Consume only a definite winning border:0. Side, logical or border-image
+    // overrides remain in the property inventory and must also be accounted for.
+    if (ua.border_authority == .requires_authored_reset and
+        !try disclosureResetProperty(a, &button_use, b, "border", "0", false)) return null;
     var reset: ?DisclosureResetBox = null;
     if (!button_use.complete()) {
         reset = (try disclosureResetBox(a, b, &button_use, parent.inherited_font orelse return null)) orelse return null;
@@ -44383,6 +45367,7 @@ fn disclosureSample(a: std.mem.Allocator, styles: *const Profile, graph: Disclos
     label_use.property("color", &.{});
     label_use.property("direction", &.{});
     label_use.property("text-decoration-line", &.{"text-decoration"});
+    const radius = (try disclosureLabelRadius(a, l, &label_use, interaction)) orelse return null;
     if (!try label_use.staticMotion(a, l.environment) or !label_use.complete()) return null;
     const label_direction = (try disclosureDirection(a, graph.nodes[graph.label], l, direction)) orelse return null;
     if (label_direction != direction) return null;
@@ -44392,13 +45377,14 @@ fn disclosureSample(a: std.mem.Allocator, styles: *const Profile, graph: Disclos
         l.environment, &.{ "none", "underline" }, "none", "none", false, "none");
     if (decoration.unresolved) return null;
     return .{
-        .reset = reset, .outline = outline orelse return null, .text = .{ .foreground = ink.value.?.value.?,
+        .label_radius = radius, .affixes = affixes, .reset = reset, .outline = outline orelse return null, .text = .{ .foreground = ink.value.?.value.?,
             .underline = std.mem.eql(u8, decoration.value.?, "underline") },
         .direction = direction, .placement = if (std.mem.eql(u8, placement.value.?, "left")) .float_left
             else if (std.mem.eql(u8, placement.value.?, "right")) .float_right else .inline_flow,
     };
 }
 const DisclosurePhasePaint = struct {
+    visible_label: []const u8,
     button: types.ContainerDisclosureButton,
     placement: types.ContainerDisclosurePlacement,
     direction: types.BidiResolvedDirection,
@@ -44410,7 +45396,14 @@ fn disclosurePhasePaint(a: std.mem.Allocator, styles: *const Profile, graph: Dis
     if (!disclosureGraphValid(styles, graph, phase, boundary != null)) return null;
     var evaluation: ObservedFigureEvaluation = .{ .focus_visible_supported = ua.focus_visible_supported,
         .disclosure = .{ .nodes = graph.nodes, .button = graph.button, .label = graph.label, .state = .{},
-            .boundary = boundary, .partial_owner = if (graph.source_only_owner) graph.owner else null, .moz_focus_inner_absent = ua.moz_focus_inner_absent } };
+            .boundary = boundary, .partial_owner = if (graph.source_only_owner) graph.owner else null,
+            .owner_attributes = graph.owner_attributes, .exterior_domain = graph.exterior_domain, .moz_focus_inner_absent = ua.moz_focus_inner_absent } };
+    const interaction: DisclosureInteractionBasis = if (boundary) |bound| bound.interaction else .{};
+    // The attribute/parent checks above identify the plain generated SPAN.
+    // Nonediting context and a complete child domain also have to be proved.
+    evaluation.disclosure.?.html_underline = graph.html_underline;
+    evaluation.disclosure.?.label_nonfocusable = interaction.nonfocusable_label and
+        graph.nodes[graph.label].known_complete_child_elements;
     const parent = (try disclosureAncestors(a, styles, graph, ua, evaluation)) orelse return null;
     // Match each immutable selector domain once with all button states open.
     // Only definite impossibility is cached. The normal collector evaluates
@@ -44434,14 +45427,30 @@ fn disclosurePhasePaint(a: std.mem.Allocator, styles: *const Profile, graph: Dis
     defer scratch.deinit();
     var samples: [4][3]DisclosureSample = undefined;
     for (&samples, 0..) |*row, pointer| for (row, 0..) |*out, focus| {
-        evaluation.disclosure.?.state = .{ .hover = pointer & 1 != 0, .active = pointer & 2 != 0,
-            .focus = focus != 0, .focus_visible = focus == 2, .focus_within = focus != 0 };
+        const held = disclosurePointerEvaluation(evaluation, pointer, pointer, focus);
         defer _ = scratch.reset(.retain_capacity);
-        const sample = (try disclosureSample(scratch.allocator(), styles, graph, ua, evaluation, parent, placement_path)) orelse return null;
+        const sample = (try disclosureSample(scratch.allocator(), styles, graph, ua, held, parent, placement_path)) orelse return null;
         out.* = try observedFigureDataClone(DisclosureSample, a, sample, 0);
-        if (!observedFigureDataEqual(?DisclosureResetBox, sample.reset, samples[0][0].reset, 0) or
-            sample.direction != samples[0][0].direction or sample.placement != samples[0][0].placement or
+        if (!disclosureNonTextEqual(sample, samples[0][0]) or
             !observedFigureColorEqual(sample.outline, samples[0][focus].outline)) return null;
+    };
+    // A child can be hovered/active only when its button ancestor is.
+    // Check all nine compatible pairs at each focus state, including a
+    // press that remains active while its pointer is outside the SPAN.
+    var host_paint = true;
+    var span_paint = true;
+    for (0..4) |host| for (0..4) |span| {
+        if (host == span or span & host != span) continue;
+        for (0..3) |focus| {
+            const held = disclosurePointerEvaluation(evaluation, host, span, focus);
+            defer _ = scratch.reset(.retain_capacity);
+            const sample = (try disclosureSample(scratch.allocator(), styles, graph, ua, held, parent, placement_path)) orelse return null;
+            if (!disclosureNonTextEqual(sample, samples[0][0]) or
+                !observedFigureColorEqual(sample.outline, samples[0][focus].outline)) return null;
+            host_paint = host_paint and observedFigureDataEqual(types.LinkState, sample.text, samples[host][focus].text, 0);
+            span_paint = span_paint and observedFigureDataEqual(types.LinkState, sample.text, samples[span][focus].text, 0);
+            if (!host_paint and !span_paint) return null;
+        }
     };
     var paint: types.ContainerDisclosureTextPaint = undefined;
     var stable = true;
@@ -44458,12 +45467,35 @@ fn disclosurePhasePaint(a: std.mem.Allocator, styles: *const Profile, graph: Dis
     if (!stable and !focus_underlines) return null;
     paint.underline_on_focus = !stable;
     var button = ua.button;
-    if (samples[0][0].reset) |box| if (!disclosureApplyReset(&button, box)) return null;
+    if (samples[0][0].reset) |box| {
+        if (!disclosureApplyReset(&button, box)) return null;
+    } else if (ua.border_authority == .requires_authored_reset) {
+        // Every sample proved the authored shorthand before reaching this join.
+        inline for (.{ "normal", "hover", "active", "hover_active" }) |state|
+            @field(button, state).border = .all(.none);
+    }
     button.outline_colors = .{ .unfocused = samples[0][0].outline, .focused = samples[0][1].outline };
     if (button.focus_visible) |*visible| visible.outline.color = samples[0][2].outline
     else if (!observedFigureColorEqual(samples[0][2].outline, samples[0][1].outline)) return null;
+    const affixes = samples[0][0].affixes;
+    const start: u32 = @intFromBool(affixes.before);
+    var run: types.ContainerDisclosureLabelRun = .{ .start = start, .end = start + @as(u32, @intCast(graph.label_text.len)), .paint = paint };
+    if (!host_paint) {
+        const sample = samples[0][0];
+        if (!disclosureRunHitAgrees(sample.label_radius, interaction.reader_run_hit_radius_px)) {
+            const hit = graph.inline_hit orelse return null;
+            const reset = sample.reset orelse return null;
+            if (placement_path == null or !graph.source_only_owner or graph.reset_parent_font == null or
+                !affixes.before or !affixes.after or !graph.nodes[graph.button].known_complete_child_elements or
+                !graph.nodes[graph.label].known_complete_child_elements or
+                !hit.agrees(interaction, phase, graph.label_text, reset.font, sample.direction, sample.label_radius)) return null;
+        }
+        if (comptime @hasField(types.ContainerDisclosureLabelRun, "pointer_on_run"))
+            run.pointer_on_run = true
+        else return null;
+    }
     return .{ .button = button, .placement = samples[0][0].placement, .direction = samples[0][0].direction,
-        .run = .{ .start = 0, .end = @intCast(graph.label_text.len), .paint = paint } };
+        .visible_label = try affixes.visible(a, graph.label_text), .run = run };
 }
 fn disclosureResolve(a: std.mem.Allocator, styles: *const Profile, states: DisclosureStates, ua: DisclosureUaBasis,
     boundary: ?*const DisclosureBoundary, placement_path: ?DisclosurePlacementPath) !?DisclosurePaint
@@ -44485,7 +45517,8 @@ fn disclosureResolve(a: std.mem.Allocator, styles: *const Profile, states: Discl
         const first = (try disclosurePhasePaint(a, styles, initial, .initially_expanded, ua, boundary, placement_path)) orelse return null;
         if (!observedFigureDataEqual(DisclosurePhasePaint, first, opened, 0)) return null;
     }
-    const result: DisclosurePaint = .{ .placement = closed.placement, .direction = closed.direction,
+    const result: DisclosurePaint = .{ .expand_label = closed.visible_label, .collapse_label = opened.visible_label,
+        .placement = closed.placement, .direction = closed.direction,
         .foreground = ua.foreground, .button = closed.button, .expand_run = closed.run, .collapse_run = opened.run };
     return result;
 }
@@ -44584,12 +45617,36 @@ pub fn resolveSharedDisclosureAlloc(a: std.mem.Allocator, shared: *const Disclos
     if (proof.states.initially_expanded) |g| if (!disclosureOwnerAgrees(g, owner, expand, collapse)) return null;
     if (!try disclosureAddAbsences(arena.allocator(), &effective, proof.absent_tags, proof.absent_classes)) return null;
     var states = proof.states;
+    const owner_attributes: ?*const DisclosureOwnerAttributeProjection = if (proof.owner_attributes) |*known| blk: {
+        if (effective.boundary == null or !disclosureOwnerAttributeProofValid(known, owner, shared) or
+            !disclosureOwnerAttributeGraphAgrees(states.collapsed, &known.projection) or
+            !disclosureOwnerAttributeGraphAgrees(states.expanded, &known.projection) or
+            (if (states.initially_expanded) |g| !disclosureOwnerAttributeGraphAgrees(g, &known.projection) else false)) return null;
+        break :blk &known.projection;
+    } else null;
+    states.collapsed.owner_attributes = owner_attributes;
+    states.expanded.owner_attributes = owner_attributes;
+    if (states.initially_expanded) |*g| g.owner_attributes = owner_attributes;
+    if (proof.html_underline != null and (proof.root_placement == null or effective.boundary == null)) return null;
+    states.collapsed.html_underline = proof.html_underline;
+    states.expanded.html_underline = proof.html_underline;
+    if (states.initially_expanded) |*g| g.html_underline = proof.html_underline;
     const font: ?DisclosureInheritedFont = if (proof.reset_font_at_parent) |issued| blk: {
         if (issued.owner != owner or issued.source_key != owner.source_key or issued.shared != shared or
             effective.boundary == null or !std.mem.eql(u8, issued.expand, expand) or
             !std.mem.eql(u8, issued.collapse, collapse)) return null;
         break :blk issued.font;
     } else null;
+    const exterior = if (proof.root_placement != null and font != null)
+        proof.reset_font_at_parent.?.exterior_domain else null;
+    states.collapsed.exterior_domain = exterior;
+    states.expanded.exterior_domain = exterior;
+    if (states.initially_expanded) |*g| g.exterior_domain = exterior;
+    const hit = if (proof.root_placement != null and proof.reset_font_at_parent != null)
+        proof.reset_font_at_parent.?.inline_hit else null;
+    states.collapsed.inline_hit = hit;
+    states.expanded.inline_hit = hit;
+    if (states.initially_expanded) |*g| g.inline_hit = hit;
     states.collapsed.reset_parent_font = font;
     states.expanded.reset_parent_font = font;
     if (states.initially_expanded) |*g| g.reset_parent_font = font;
@@ -44625,21 +45682,26 @@ pub fn resolveSharedDisclosureAlloc(a: std.mem.Allocator, shared: *const Disclos
         else => return null,
     }) orelse return null;
     const value: types.ContainerDisclosure = .{ .initially_collapsed = initially_collapsed, .content_index = 0,
-        .expand_label = expand, .collapse_label = collapse, .expand_run = paint.expand_run, .collapse_run = paint.collapse_run,
+        .expand_label = paint.expand_label, .collapse_label = paint.collapse_label, .expand_run = paint.expand_run, .collapse_run = paint.collapse_run,
         .button = paint.button, .direction = paint.direction, .foreground = paint.foreground, .placement = paint.placement };
     return if (types.validContainerDisclosure(value)) value else null;
 }
-fn disclosureMayReadOmittedAttributes(part: GeneratedFigureCompound, node: ObservedStyleNode) bool {
-    if ((part.positive.ids.len != 0 and observedFigureAttribute(node, "id") == null) or part.positive.typeof_token != null) return true;
+fn disclosureMayReadOmittedAttributes(part: GeneratedFigureCompound, node: ObservedStyleNode,
+    projection: ?*const DisclosureOwnerAttributeProjection) bool
+{
+    if ((part.positive.ids.len != 0 and observedFigureAttribute(node, "id") == null and
+        !disclosureAttributeAbsent(projection, "id")) or
+        (part.positive.typeof_token != null and !disclosureAttributeAbsent(projection, "typeof"))) return true;
     for (part.attributes) |attr| {
         // Toggling can reorder the owner's class attribute after a full cycle.
-        if (std.ascii.eqlIgnoreCase(attr.name, "class") or observedFigureAttribute(node, attr.name) == null) return true;
+        if (std.ascii.eqlIgnoreCase(attr.name, "class") or
+            (observedFigureAttribute(node, attr.name) == null and !disclosureAttributeAbsent(projection, attr.name))) return true;
     }
     for (part.any_groups) |group| for (group.alternatives) |alt| {
-        if (disclosureMayReadOmittedAttributes(alt, node)) return true;
+        if (disclosureMayReadOmittedAttributes(alt, node, projection)) return true;
     };
     for (part.none_groups) |group| for (group.alternatives) |alt| {
-        if (disclosureMayReadOmittedAttributes(alt, node)) return true;
+        if (disclosureMayReadOmittedAttributes(alt, node, projection)) return true;
     };
     return false;
 }
@@ -45060,6 +46122,316 @@ test "disclosure parser-root placement refuses open source frames and conflictin
     try std.testing.expect(!try disclosureSheetDirection(std.testing.allocator, "@keyframes changed{to{direction:rtl}}", .ltr, 0));
 }
 
+test "disclosure constructor transfers only invariant fonts across unknown section depth" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const input: DisclosureRootFontInput = .{
+        .parser_font = .{ .family = .{ .name = "Fixture" }, .size = .{ .unit = .px, .value = 16 },
+            .weight = 400, .italic = false, .line_height = .{ .length = .{ .unit = .px, .value = 26 } } },
+        .covered_labels = &.{ "Più", "Meno" }, .parser_classes = "mw-parser-output mw-content-ltr",
+        .section_attributes = &.{ "id", "data-mw-section-id", "aria-labelledby" },
+        .section_id_prefix = "mw", .section_id_max_bytes = 6,
+    };
+    const css = ".cdx-message__content>*{font-size:var(--font-size-medium,1rem);line-height:var(--line-height-medium,1.625rem)}" ++
+        "#mw-teleport-target{font-size:var(--font-size-small,0.875rem)}[lang]{font-style:italic}" ++
+        "@media screen{section:hover{line-height:26px}}";
+    var styles = try parseForTargetAlloc(a, css, .screen);
+    defer styles.deinit();
+    const transfer = (try prepareDisclosureFontTransfer(a, &styles, input)) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(transfer.covers("Più") and !transfer.covers("Piú"));
+    var unknown_id = input;
+    unknown_id.section_id_max_bytes = null;
+    try std.testing.expect((try prepareDisclosureFontTransfer(a, &styles, unknown_id)) == null);
+    var unknown_parent = input;
+    unknown_parent.parser_classes = "mw-parser-output cdx-message__content";
+    try std.testing.expect((try prepareDisclosureFontTransfer(a, &styles, unknown_parent)) == null);
+    for ([_][]const u8{ ".outside section{font-size:18px}", "[data-mw-section-id]{font-style:italic}",
+        "@media (width:999px){#mwAB{line-height:1.8}}", ".outer *{animation:change 1s}",
+        "section{font-weight:var(--weight,400)}", "@import 'unaccounted.css';", "section{all:revert}" }) |counter| {
+        var conflict = try parseForTargetAlloc(a, counter, .screen);
+        defer conflict.deinit();
+        try std.testing.expect((try prepareDisclosureFontTransfer(a, &conflict, input)) == null);
+    }
+}
+
+test "disclosure span hit target requires source-equivalent radius and button interaction" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const basis: DisclosureInteractionBasis = .{ .reader_pointer_unselectable = true,
+        .unpainted_unclipped_label = true, .reader_run_hit_radius_px = 2 };
+    for ([_][]const u8{
+        "cursor:pointer;-webkit-user-select:none;-moz-user-select:none;user-select:none",
+        "cursor:default;user-select:none", "cursor:pointer;user-select:text",
+        "cursor:pointer;-webkit-user-select:all;user-select:none", "cursor:var(--absent);user-select:none",
+    }, 0..) |css, i| {
+        var ds: std.ArrayList(ObservedFigureDeclaration) = .empty;
+        try appendObservedFigureDeclarations(a, &ds, css, .{}, false, false, null, 0);
+        const n: ObservedFigureComputedNode = .{ .index = 0, .declarations = ds.items, .environment = .{} };
+        var use = try ObservedFigurePropertyUse.init(a, ds.items);
+        try std.testing.expectEqual(i == 0, try disclosureButtonInteraction(a, n, &use, basis));
+        try std.testing.expect(!try disclosureButtonInteraction(a, n, &use, .{}));
+    }
+    for ([_][]const u8{ "border-radius:2px", "border-radius:2px;background:red",
+        "border-radius:2px;border-top-left-radius:8px", "border-radius:var(--unknown)" }, 0..) |css, i| {
+        var ds: std.ArrayList(ObservedFigureDeclaration) = .empty;
+        try appendObservedFigureDeclarations(a, &ds, css, .{}, false, false, null, 0);
+        const n: ObservedFigureComputedNode = .{ .index = 0, .declarations = ds.items, .environment = .{} };
+        var use = try ObservedFigurePropertyUse.init(a, ds.items);
+        const radius = try disclosureLabelRadius(a, n, &use, basis);
+        try std.testing.expectEqual(i == 0, radius != null and disclosureRunHitAgrees(radius.?, 2) and use.complete());
+    }
+    try std.testing.expect(!disclosureRunHitAgrees(2, 0) and !disclosureRunHitAgrees(2, null));
+}
+
+test "disclosure shared constructor resolves root font with variable body classes and RDFa section attributes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const path = [_]DisclosureFontShellStep{
+        .{ .tag = "html", .fixed_attributes = &.{}, .variable_attributes = &.{}, .extra_class_prefixes = &.{} },
+        .{ .tag = "body", .fixed_attributes = &.{}, .variable_attributes = &.{"id"}, .extra_class_prefixes = &.{"page-"} },
+        .{ .tag = "main", .fixed_attributes = &.{.{ .name = "class", .value = "vector-body" }},
+            .variable_attributes = &.{}, .extra_class_prefixes = &.{} },
+        .{ .tag = "div", .fixed_attributes = &.{.{ .name = "class", .value = "mw-parser-output" }},
+            .variable_attributes = &.{}, .extra_class_prefixes = &.{} },
+    };
+    const placement = [_]DisclosureShellStep{
+        .{ .tag = "html", .content_ltr = false, .content_rtl = false },
+        .{ .tag = "body", .content_ltr = false, .content_rtl = false },
+        .{ .tag = "main", .content_ltr = false, .content_rtl = false },
+    };
+    const shell: DisclosureFontShell = .{ .path = &path, .medium_px = 16, .initial_family = "serif",
+        .face_css_family = "sans-serif", .initial_custom = .{ .complete = true } };
+    const input: DisclosureRootFontInput = .{
+        .parser_font = .{ .family = .{ .name = "Fixture" }, .size = .{ .unit = .px, .value = 16 },
+            .weight = 400, .italic = false, .line_height = .{ .length = .{ .unit = .px, .value = 26 } } },
+        .covered_labels = &.{ "Mostra", "Nascondi" }, .parser_classes = "mw-parser-output",
+        .section_attributes = &.{ "id", "about", "typeof", "data-mw-section-id", "aria-labelledby" },
+    };
+    const css = "html{font-family:sans-serif;--font-size-medium:1rem;--line-height-content:1.625}" ++
+        ".vector-body{font-size:var(--font-size-medium);line-height:var(--line-height-content)}";
+    var styles = try parseForTargetAlloc(a, css, .screen);
+    defer styles.deinit();
+    try std.testing.expect(try disclosureParserFontMatches(a, &styles, input, shell, &placement));
+    try std.testing.expect((try prepareDisclosureFontTransfer(a, &styles, input)) != null);
+    var changed = shell;
+    changed.medium_px = 18;
+    try std.testing.expect(!try disclosureParserFontMatches(a, &styles, input, changed, &placement));
+    for ([_][]const u8{ ".page-other main{font-size:125%}", "[id] main{font-family:monospace}",
+        ".page-other main{--line-height-content:2}", "@media (min-width:900px){main.vector-body{line-height:2}}" }) |counter| {
+        var varied = try parseForTargetAlloc(a, try std.mem.concat(a, u8, &.{ css, counter }), .screen);
+        defer varied.deinit();
+        try std.testing.expect(!try disclosureParserFontMatches(a, &varied, input, shell, &placement));
+    }
+    for ([_][]const u8{ "section[about]{font-weight:bold}", "section[typeof]{line-height:12px}" }) |counter| {
+        var varied = try parseForTargetAlloc(a, counter, .screen);
+        defer varied.deinit();
+        try std.testing.expect((try prepareDisclosureFontTransfer(a, &varied, input)) == null);
+    }
+}
+
+test "disclosure constructor inherits parent size through Vector custom property cycle and refuses unknown binding" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const path = [_]DisclosureFontShellStep{
+        .{ .tag = "html", .fixed_attributes = &.{.{ .name = "class", .value = "vector-feature-custom-font-size-clientpref-1" }}, .variable_attributes = &.{}, .extra_class_prefixes = &.{} },
+        .{ .tag = "body", .fixed_attributes = &.{}, .variable_attributes = &.{"id"}, .extra_class_prefixes = &.{"page-"} },
+        .{ .tag = "main", .fixed_attributes = &.{.{ .name = "class", .value = "vector-body" }},
+            .variable_attributes = &.{}, .extra_class_prefixes = &.{} },
+        .{ .tag = "div", .fixed_attributes = &.{.{ .name = "class", .value = "mw-parser-output" }},
+            .variable_attributes = &.{}, .extra_class_prefixes = &.{} },
+    };
+    const placement = [_]DisclosureShellStep{
+        .{ .tag = "html", .content_ltr = false, .content_rtl = false },
+        .{ .tag = "body", .content_ltr = false, .content_rtl = false },
+        .{ .tag = "main", .content_ltr = false, .content_rtl = false },
+    };
+    const shell: DisclosureFontShell = .{ .path = &path, .medium_px = 16, .initial_family = "sans-serif",
+        .face_css_family = "sans-serif", .initial_custom = .{ .complete = true } };
+    const input: DisclosureRootFontInput = .{
+        .parser_font = .{ .family = .{ .name = "Fixture" }, .size = .{ .unit = .px, .value = 20 },
+            .weight = 400, .italic = false, .line_height = .{ .length = .{ .unit = .px, .value = 32.5 } } },
+        .covered_labels = &.{"Fixture"}, .parser_classes = "mw-parser-output",
+        .section_attributes = &.{ "id", "about", "typeof", "data-mw-section-id", "aria-labelledby" },
+    };
+    // The synthetic parent size distinguishes inheritance from the inner 1rem fallback.
+    const css = "html.vector-feature-custom-font-size-clientpref-1,.vector-icon{--font-size-medium:var(--font-size-medium,1rem);--line-height-medium:1.6;--line-height-content:1.625}" ++
+        ".vector-body{font-size:var(--font-size-medium);line-height:var(--line-height-content)}" ++
+        "body{font-size:125%}";
+
+    var one_rem = input;
+    one_rem.parser_font.size.value = 16;
+    one_rem.parser_font.line_height = .{ .length = .{ .unit = .px, .value = 26 } };
+    var cyclic = try parseForTargetAlloc(a, css, .screen);
+    defer cyclic.deinit();
+    try std.testing.expect(try disclosureParserFontMatches(a, &cyclic, input, shell, &placement));
+    try std.testing.expect(!try disclosureParserFontMatches(a, &cyclic, one_rem, shell, &placement));
+
+    var rebound = try parseForTargetAlloc(a, css ++ "body{--font-size-medium:1rem}", .screen);
+    defer rebound.deinit();
+    try std.testing.expect(try disclosureParserFontMatches(a, &rebound, one_rem, shell, &placement));
+
+    var uncertain = try parseForTargetAlloc(a, css ++ "body.page-wide{--font-size-medium:1rem}", .screen);
+    defer uncertain.deinit();
+    try std.testing.expect(!try disclosureParserFontMatches(a, &uncertain, input, shell, &placement));
+    try std.testing.expect(!try disclosureParserFontMatches(a, &uncertain, one_rem, shell, &placement));
+}
+
+test "disclosure unresolved native bevel requires an authored border reset in every state and phase" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Fixture = struct {
+        fn graph(comptime phase: DisclosurePhase) DisclosureGraph {
+            const closed = phase == .collapsed;
+            return .{ .root = 0, .owner = 0, .button = 1, .label = 2, .source_only_owner = true,
+                .label_text = if (closed) "Open" else "Close",
+                .reset_parent_font = .{ .family = .{ .name = "Fixture" }, .size = .{ .unit = .px, .value = 19 },
+                    .weight = 400, .italic = false, .line_height = .normal },
+                .nodes = &.{
+                    .{ .tag = "div", .parent = null, .empty = false, .attributes = &.{
+                        .{ .name = "class", .value = if (closed) "mw-collapsible mw-collapsed mw-made-collapsible" else "mw-collapsible mw-made-collapsible" },
+                        .{ .name = "data-expandtext", .value = "Open" }, .{ .name = "data-collapsetext", .value = "Close" },
+                    } },
+                    .{ .tag = "button", .parent = 0, .empty = false, .has_text = false, .attributes = &.{
+                        .{ .name = "class", .value = "mw-collapsible-toggle mw-collapsible-toggle-default" ++ switch (phase) {
+                            .collapsed => " mw-collapsible-toggle-collapsed", .expanded => " mw-collapsible-toggle-expanded", .initially_expanded => "",
+                        } },
+                        .{ .name = "type", .value = "button" }, .{ .name = "tabindex", .value = "0" },
+                        .{ .name = "aria-expanded", .value = if (closed) "false" else "true" },
+                    } },
+                    .{ .tag = "span", .parent = 1, .empty = false, .has_text = true,
+                        .attributes = &.{.{ .name = "class", .value = "mw-collapsible-text" }} },
+                } };
+        }
+    };
+    const states: DisclosureStates = .{ .collapsed = Fixture.graph(.collapsed), .expanded = Fixture.graph(.expanded),
+        .initially_expanded = Fixture.graph(.initially_expanded) };
+    const boundary: DisclosureBoundary = .{ .direction = .ltr, .color_scheme = "normal", .custom_environment = .{ .complete = true } };
+    const ink: types.FigureColor = .{ .kind = .rgb, .value = "#000000" };
+    const bevel: types.ResolvedStyleBorderLine = .{ .width = .{ .unit = .px, .value = 2 }, .paint = .{ .rgb = "#000000" } };
+    const idle: types.ContainerDisclosureButtonState = .{ .background = .{ .kind = .rgb, .value = "#efefef" }, .border = .all(.{ .outset = bevel }) };
+    const pressed: types.ContainerDisclosureButtonState = .{ .background = idle.background, .border = .all(.{ .inset = bevel }) };
+    const ua: DisclosureUaBasis = .{
+        .border_authority = .requires_authored_reset, .foreground = ink, .color_scheme = "normal",
+        .initial_float = .inline_flow, .label_underline = false, .margin = .all(.{ .unit = .px, .value = 0 }),
+        .focus_visible_supported = true, .moz_focus_inner_absent = true,
+        .button = .{ .appearance = .native_button, .font_family = .{ .name = "Fixture" }, .font_size = .{ .unit = .px, .value = 14 },
+            .font_weight = 400, .font_italic = false, .line_height = .normal, .padding = .all(.{ .unit = .px, .value = 2 }),
+            .normal = idle, .hover = idle, .active = pressed, .hover_active = pressed, .outline_colors = .{ .unfocused = ink, .focused = ink } },
+    };
+    const reset = ".mw-collapsible-toggle-default{-webkit-appearance:none;-moz-appearance:none;appearance:none;background:none;margin:0;padding:0;border:0;font:inherit}";
+    for ([_][]const u8{ reset, "button{border:0}" }, 0..) |css, i| {
+        var styles = try parseForTargetAlloc(a, css, .screen);
+        defer styles.deinit();
+        const paint = (try disclosureResolve(a, &styles, states, ua, &boundary, null)) orelse return error.TestUnexpectedResult;
+        inline for (.{ "normal", "hover", "active", "hover_active" }) |key|
+            try std.testing.expectEqualDeep(types.ResolvedStyleBorderEdges.all(.none), @field(paint.button, key).border);
+        if (i == 0) try std.testing.expectEqual(types.ContainerDisclosureButtonAppearance.none, paint.button.appearance);
+    }
+    for ([_][]const u8{
+        "button{float:right}", "button:hover{border:0}", "@media (min-width:900px){button{border:0}}",
+        "button{border:initial}", "button{border:revert}", "button{border:0}button:focus-visible{border:initial}",
+        "button{border:0}button:active{border:var(--undecided)}", "button{border:0}button:hover{border-left:2px solid black}",
+        ".mw-collapsible-toggle-expanded,.mw-collapsible-toggle-collapsed{border:0}",
+    }) |css| {
+        var styles = try parseForTargetAlloc(a, css, .screen);
+        defer styles.deinit();
+        try std.testing.expect((try disclosureResolve(a, &styles, states, ua, &boundary, null)) == null);
+    }
+}
+
+test "disclosure constructor carries root variables across possible section writes and resolves omitted UA family" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const steps = [_]DisclosureFontShellStep{
+        .{ .tag = "html", .fixed_attributes = &.{}, .variable_attributes = &.{}, .extra_class_prefixes = &.{"opt-"} },
+        .{ .tag = "body", .fixed_attributes = &.{}, .variable_attributes = &.{}, .extra_class_prefixes = &.{} },
+        .{ .tag = "div", .fixed_attributes = &.{.{ .name = "class", .value = "mw-parser-output" }},
+            .variable_attributes = &.{}, .extra_class_prefixes = &.{} },
+    };
+    const placement = [_]DisclosureShellStep{
+        .{ .tag = "html", .content_ltr = false, .content_rtl = false },
+        .{ .tag = "body", .content_ltr = false, .content_rtl = false },
+    };
+    const shell: DisclosureFontShell = .{ .path = &steps, .medium_px = 16,
+        .face_css_family = "sans-serif", .initial_custom = .{ .complete = true } };
+    const input: DisclosureRootFontInput = .{
+        .parser_font = .{ .family = .{ .name = "Fixture" }, .size = .{ .unit = .px, .value = 16 },
+            .weight = 400, .italic = false, .line_height = .normal },
+        .covered_labels = &.{"Fixture"}, .parser_classes = "mw-parser-output", .section_attributes = &.{"about"},
+    };
+    const css = "html{font-family:sans-serif;--base:#36c;--ink:var(--base);--hover:#3056a9;--cyclic:var(--cyclic)}" ++
+        ".mw-parser-output{--focus:var(--ink)}section[about]{--base:#000;--hover:inherit;--added:#abc}" ++
+        "section{--ink:#36c}.foreign section{--maybe:var(--base)}";
+    var styles = try parseForTargetAlloc(a, css, .screen);
+    defer styles.deinit();
+    const transfer = (try prepareDisclosureConstructorTransfer(a, &styles, input, shell, &placement)) orelse return error.TestUnexpectedResult;
+    const env = transfer.environment;
+    try std.testing.expect(env.complete);
+    try std.testing.expectEqualStrings("#36c", env.get("--ink").known);
+    try std.testing.expectEqualStrings("#36c", env.get("--focus").known);
+    try std.testing.expectEqualStrings("#3056a9", env.get("--hover").known);
+    for ([_][]const u8{ "--base", "--added", "--maybe" }) |name| try std.testing.expect(env.get(name) == .unknown);
+    try std.testing.expect(env.get("--cyclic") == .invalid and env.get("--absent") == .invalid);
+    // A fallback does not make an unresolved SECTION binding known.
+    try std.testing.expect((try customColorValue(a, env, "var(--base,#fff)")) == .unknown);
+    var open = shell;
+    open.initial_custom = .{};
+    const incomplete = (try prepareDisclosureConstructorTransfer(a, &styles, input, open, &placement)) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(!incomplete.environment.complete and incomplete.environment.get("--absent") == .unknown);
+    for ([_][]const u8{ "body{font-family:sans-serif}", "html{font-family:inherit}", "html{font-family:initial}",
+        "html.opt-alt{font-family:sans-serif}", "html{font-family:sans-serif}html.opt-alt{font-family:monospace}" }) |uncertain| {
+        var other = try parseForTargetAlloc(a, uncertain, .screen);
+        defer other.deinit();
+        try std.testing.expect((try prepareDisclosureConstructorTransfer(a, &other, input, shell, &placement)) == null);
+    }
+}
+
+test "disclosure inline hit derivative binds reader scope radius direction font and exact phase labels" {
+    const font: DisclosureInheritedFont = .{ .family = .{ .name = "Fixture" }, .size = .{ .unit = .px, .value = 16 },
+        .weight = 400, .italic = false, .line_height = .{ .length = .{ .unit = .px, .value = 26 } } };
+    var cells: [2916]u8 = @splat('S');
+    cells[0] = 'B';
+    var different = cells;
+    different[1] = 'B';
+    const orig: DisclosureInlineHit.Map = .{ .display = "inline", .radius_px = 3, .rect = .{ 0, 0, 12, 10 }, .bits = &cells };
+    var zero = orig; zero.radius_px = 0;
+    var block = orig; block.display = "inline-block";
+    var block_zero = block; block_zero.radius_px = 0; block_zero.bits = &different;
+    const row: DisclosureInlineHit.Phase = .{ .label = "More", .original = orig, .zero = zero, .restored = orig,
+        .block = block, .block_zero = block_zero };
+    var proof: DisclosureInlineHit = .{ .observation_sha256 = "synthetic", .expand = row, .collapse = row,
+        .font = font, .direction = .ltr };
+    proof.collapse.label = "Less";
+    try std.testing.expect(proof.valid());
+    proof.expand.zero.bits = &different;
+    try std.testing.expect(!proof.valid());
+    proof.expand.zero = zero;
+    proof.collapse.block_zero.bits = &cells;
+    try std.testing.expect(!proof.valid());
+    proof.collapse.block_zero = block_zero;
+    var interaction: DisclosureInteractionBasis = .{ .reader_pointer_unselectable = true, .plain_inline_brackets = true,
+        .nonfocusable_label = true, .unpainted_unclipped_label = true, .reader_run_hit_radius_px = 0 };
+    try std.testing.expect(proof.agrees(interaction, .collapsed, "More", font, .ltr, 3));
+    try std.testing.expect(proof.agrees(interaction, .expanded, "Less", font, .ltr, 3));
+    try std.testing.expect(!proof.agrees(interaction, .expanded, "More", font, .ltr, 3));
+    try std.testing.expect(!proof.agrees(interaction, .collapsed, "More", font, .rtl, 3));
+    try std.testing.expect(!proof.agrees(interaction, .collapsed, "More", font, .ltr, 4));
+    var other = font;
+    other.line_height = .normal;
+    try std.testing.expect(!proof.agrees(interaction, .collapsed, "More", other, .ltr, 3));
+    interaction.reader_run_hit_radius_px = null;
+    try std.testing.expect(!proof.agrees(interaction, .collapsed, "More", font, .ltr, 3));
+    interaction.reader_run_hit_radius_px = 0;
+    interaction.unpainted_unclipped_label = false;
+    try std.testing.expect(!proof.agrees(interaction, .collapsed, "More", font, .ltr, 3));
+}
+
 test "Italian Latin conjugation CSS keeps invalid padding out of the cascade" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -45165,4 +46537,447 @@ test "SD caption regression admits only the matched single Missing FONT leaf" {
         changed.styles = &altered;
         try std.testing.expect((try observedFigureMissingViewport(a, changed, 100, null)) == null);
     }
+}
+
+test "optional disclosure sheet remains conditional inside a selected viewport group" {
+    const a = std.testing.allocator;
+    const css = "@media (min-width:900px){.mw-editfont-serif{font-family:serif}}";
+    for ([_]bool{ false, true }) |optional| {
+        var profile = try parseSourcesForTargetAlloc(a, &.{.{ .css = css, .base_url = "/sheet",
+            .byte_start = 17, .unknown_applicability = optional }}, .screen);
+        defer profile.deinit();
+        try std.testing.expectEqual(@as(usize, 1), profile.observed_figure_rules.len);
+        const rule = profile.observed_figure_rules[0];
+        try std.testing.expectEqual(optional, rule.source_optional);
+        try std.testing.expectEqual(if (optional) ContainerSelectorMatch.unknown else ContainerSelectorMatch.known,
+            observedFigureConditions(rule, .{ .viewport_width = 1000 }));
+        try std.testing.expectEqual(ContainerSelectorMatch.no, observedFigureConditions(rule, .{ .viewport_width = 800 }));
+    }
+}
+
+test "disclosure owner attribute projection preserves generated ID and unrelated attribute uncertainty" {
+    const node: ObservedStyleNode = .{ .tag = "div", .parent = null, .attributes = &.{
+        .{ .name = "class", .value = "mw-collapsible mw-collapsed mw-made-collapsible" },
+    } };
+    const nodes = [_]ObservedStyleNode{node};
+    const boundary: DisclosureBoundary = .{ .direction = .ltr, .color_scheme = "normal" };
+    var evaluation: ObservedFigureEvaluation = .{ .disclosure = .{ .nodes = &nodes,
+        .button = 0, .label = 0, .state = .{}, .boundary = &boundary,
+        .partial_owner = 0, .moz_focus_inner_absent = true } };
+    const projection: DisclosureOwnerAttributeProjection = .{
+        .absent = &.{"hidden"},
+        // Synthetic domain; this test issues no target constructor authority.
+        .generated_id = .{ .prefix = "mw", .suffix_alphabet = "ABC012",
+            .min_suffix_bytes = 1, .max_suffix_bytes = 4 },
+    };
+    const F = struct {
+        fn match(part: GeneratedFigureCompound, ns: []const ObservedStyleNode,
+            ev: ObservedFigureEvaluation, b: *const DisclosureBoundary) ContainerSelectorMatch
+        {
+            const chain = [_]GeneratedFigureCompound{part};
+            const selector: GeneratedFigureSelector = .{ .chain = &chain, .direct_parent = &.{false}, .specificity = 0 };
+            return disclosurePartialSelector(selector, ns, 0, null, ev, b);
+        }
+    };
+    const unrelated_id: GeneratedFigureCompound = .{ .positive = .{ .ids = &.{"mw-clearyourcache"} } };
+    try std.testing.expectEqual(ContainerSelectorMatch.unknown, F.match(unrelated_id, &nodes, evaluation, &boundary));
+    evaluation.disclosure.?.owner_attributes = &projection;
+    try std.testing.expectEqual(ContainerSelectorMatch.no, F.match(unrelated_id, &nodes, evaluation, &boundary));
+    try std.testing.expectEqual(ContainerSelectorMatch.unknown, F.match(.{
+        .positive = .{ .ids = &.{"mwA0"} },
+    }, &nodes, evaluation, &boundary));
+    const hidden: GeneratedFigureCompound = .{ .positive = .{}, .attributes = &.{.{ .name = "hidden", .operator = .present }} };
+    try std.testing.expectEqual(ContainerSelectorMatch.no, F.match(hidden, &nodes, evaluation, &boundary));
+    try std.testing.expectEqual(ContainerSelectorMatch.known, F.match(.{
+        .positive = .{}, .none_groups = &.{.{ .alternatives = &.{hidden} }},
+    }, &nodes, evaluation, &boundary));
+    try std.testing.expectEqual(ContainerSelectorMatch.unknown, F.match(.{
+        .positive = .{}, .attributes = &.{.{ .name = "about", .operator = .present }},
+    }, &nodes, evaluation, &boundary));
+    try std.testing.expectEqual(ContainerSelectorMatch.unknown, F.match(.{
+        .positive = .{}, .attributes = &.{.{ .name = "class", .operator = .present }},
+    }, &nodes, evaluation, &boundary));
+    // An independent unknown cannot undo a proved necessary nonmatch.
+    try std.testing.expectEqual(ContainerSelectorMatch.no, F.match(.{
+        .positive = unrelated_id.positive,
+        .attributes = &.{.{ .name = "about", .operator = .present }},
+    }, &nodes, evaluation, &boundary));
+    const exterior = [_]GeneratedFigureCompound{
+        .{ .positive = .{ .classes = &.{"unknown-parent"} } },
+        .{ .positive = .{ .classes = &.{"mw-collapsible"} } },
+    };
+    try std.testing.expectEqual(ContainerSelectorMatch.unknown, disclosurePartialSelector(.{
+        .chain = &exterior, .direct_parent = &.{ false, true }, .specificity = 0,
+    }, &nodes, 0, null, evaluation, &boundary));
+}
+
+test "disclosure owner attribute capability refuses foreign bindings and contradictory source facts" {
+    const F = struct {
+        fn absent(_: ?*const anyopaque, _: []const u8) AttributePresence { return .absent; }
+        fn present(_: ?*const anyopaque, _: []const u8) AttributePresence { return .present; }
+        fn unknown(_: ?*const anyopaque, _: []const u8) AttributePresence { return .unknown; }
+    };
+    var shared: DisclosureSharedProfile = undefined;
+    var foreign_shared: DisclosureSharedProfile = undefined;
+    var owner: TextElement = .{ .tag = "div", .source_key = 73,
+        .attribute_presence = .{ .ctx = null, .get = F.absent } };
+    var other_owner = owner;
+    var proof: DisclosureOwnerAttributeProof = .{ .owner = &owner, .source_key = 73, .shared = &shared,
+        .projection = .{ .absent = &.{"hidden"} } };
+    try std.testing.expect(disclosureOwnerAttributeProofValid(&proof, &owner, &shared));
+    try std.testing.expect(!disclosureOwnerAttributeProofValid(&proof, &other_owner, &shared));
+    try std.testing.expect(!disclosureOwnerAttributeProofValid(&proof, &owner, &foreign_shared));
+    proof.source_key += 1;
+    try std.testing.expect(!disclosureOwnerAttributeProofValid(&proof, &owner, &shared));
+    proof.source_key = owner.source_key;
+    owner.attribute_presence.?.get = F.present;
+    try std.testing.expect(!disclosureOwnerAttributeProofValid(&proof, &owner, &shared));
+    owner.attribute_presence.?.get = F.unknown;
+    try std.testing.expect(!disclosureOwnerAttributeProofValid(&proof, &owner, &shared));
+    owner.attribute_presence.?.get = F.absent;
+    proof.projection.absent = &.{"class"};
+    try std.testing.expect(!disclosureOwnerAttributeProofValid(&proof, &owner, &shared));
+    proof.projection.absent = &.{ "hidden", "HIDDEN" };
+    try std.testing.expect(!disclosureOwnerAttributeProofValid(&proof, &owner, &shared));
+    proof.projection.absent = &.{"id"};
+    proof.projection.generated_id = .{ .prefix = "mw", .suffix_alphabet = "ABC012",
+        .min_suffix_bytes = 1, .max_suffix_bytes = 4 };
+    try std.testing.expect(!disclosureOwnerAttributeProofValid(&proof, &owner, &shared));
+    proof.projection.absent = &.{"hidden"};
+    try std.testing.expect(disclosureOwnerAttributeProofValid(&proof, &owner, &shared));
+    owner.id = "mw-clearyourcache";
+    try std.testing.expect(!disclosureOwnerAttributeProofValid(&proof, &owner, &shared));
+    owner.id = "";
+    proof.projection.generated_id.?.max_suffix_bytes = 0;
+    try std.testing.expect(!disclosureOwnerAttributeProofValid(&proof, &owner, &shared));
+    proof.projection.generated_id = null;
+    const graph: DisclosureGraph = .{ .nodes = &.{.{ .tag = "div", .parent = null, .attributes = &.{
+        .{ .name = "hidden", .value = "until-found" },
+    } }}, .root = 0, .owner = 0, .button = 0, .label = 0, .label_text = "x" };
+    try std.testing.expect(!disclosureOwnerAttributeGraphAgrees(graph, &proof.projection));
+}
+
+test "disclosure external constructor domain refutes only impossible positive ancestors" {
+    var nodes = [_]ObservedStyleNode{
+        .{ .tag = "div", .parent = null, .attributes = &.{.{ .name = "class", .value = "mw-collapsible" }} },
+        .{ .tag = "span", .parent = 0, .attributes = &.{.{ .name = "class", .value = "target" }} },
+    };
+    const boundary: DisclosureBoundary = .{ .direction = .ltr, .color_scheme = "normal" };
+    var domain: DisclosureExteriorDomain = .{
+        .tags = &.{ "html", "body", "div", "main", "section" },
+        .classes = &.{ "mw-parser-output", "mw-collapsible-content" },
+        .class_prefixes = &.{"ve-init-mw-desktopArticleTarget-targetContainer"},
+    };
+    var evaluation: ObservedFigureEvaluation = .{ .disclosure = .{ .nodes = &nodes,
+        .button = 0, .label = 1, .state = .{}, .boundary = &boundary,
+        .partial_owner = 0, .moz_focus_inner_absent = true } };
+    const F = struct {
+        fn match(chain: []const GeneratedFigureCompound, parent_edges: []const bool,
+            ns: []const ObservedStyleNode, subject: u32, ev: ObservedFigureEvaluation,
+            b: *const DisclosureBoundary) ContainerSelectorMatch
+        {
+            return disclosurePartialSelector(.{ .chain = chain, .direct_parent = parent_edges,
+                .specificity = 0 }, ns, subject, null, ev, b);
+        }
+    };
+    const editor = [_]GeneratedFigureCompound{
+        .{ .positive = .{ .classes = &.{"ve-loading"} } },
+        .{ .positive = .{ .classes = &.{"ve-init-mw-desktopArticleTarget-targetContainer"} } },
+        .{ .positive = .{} },
+    };
+    try std.testing.expectEqual(ContainerSelectorMatch.unknown,
+        F.match(&editor, &.{ false, false, true }, &nodes, 0, evaluation, &boundary));
+    evaluation.disclosure.?.exterior_domain = &domain;
+    try std.testing.expectEqual(ContainerSelectorMatch.no,
+        F.match(&editor, &.{ false, false, true }, &nodes, 0, evaluation, &boundary));
+    const message = [_]GeneratedFigureCompound{
+        .{ .positive = .{ .classes = &.{"cdx-message__content"} } }, .{ .positive = .{} },
+    };
+    try std.testing.expectEqual(ContainerSelectorMatch.no,
+        F.match(&message, &.{ false, true }, &nodes, 0, evaluation, &boundary));
+    const caption = [_]GeneratedFigureCompound{
+        .{ .positive = .{ .tag = "caption" } }, .{ .positive = .{} },
+    };
+    try std.testing.expectEqual(ContainerSelectorMatch.no,
+        F.match(&caption, &.{ false, false }, &nodes, 0, evaluation, &boundary));
+    const possible = [_]GeneratedFigureCompound{
+        .{ .positive = .{ .classes = &.{"mw-parser-output"} } }, .{ .positive = .{} },
+    };
+    try std.testing.expectEqual(ContainerSelectorMatch.unknown,
+        F.match(&possible, &.{ false, true }, &nodes, 0, evaluation, &boundary));
+    domain.class_prefixes = &.{"ve-"};
+    try std.testing.expectEqual(ContainerSelectorMatch.unknown,
+        F.match(&editor, &.{ false, false, true }, &nodes, 0, evaluation, &boundary));
+    domain.class_prefixes = &.{""};
+    try std.testing.expectEqual(ContainerSelectorMatch.unknown,
+        F.match(&message, &.{ false, true }, &nodes, 0, evaluation, &boundary));
+    domain.tags = &.{ "html", "div", "section", "caption" };
+    try std.testing.expectEqual(ContainerSelectorMatch.unknown,
+        F.match(&caption, &.{ false, false }, &nodes, 0, evaluation, &boundary));
+    domain.class_prefixes = &.{};
+    // The domain applies outside the known graph, never to its observed parent.
+    nodes[0].attributes = &.{.{ .name = "class", .value = "cdx-message__content" }};
+    try std.testing.expectEqual(ContainerSelectorMatch.known,
+        F.match(&message, &.{ false, true }, &nodes, 1, evaluation, &boundary));
+    const local_unknown = [_]GeneratedFigureCompound{
+        .{ .positive = .{ .classes = &.{"cdx-message__content"} },
+            .attributes = &.{.{ .name = "about", .operator = .present }} },
+        .{ .positive = .{} },
+    };
+    try std.testing.expectEqual(ContainerSelectorMatch.unknown,
+        F.match(&local_unknown, &.{ false, false }, &nodes, 1, evaluation, &boundary));
+    const negated = [_]GeneratedFigureCompound{
+        .{ .positive = .{}, .none_groups = &.{.{ .alternatives = &.{message[0]} }} },
+        .{ .positive = .{} },
+    };
+    try std.testing.expectEqual(ContainerSelectorMatch.unknown,
+        F.match(&negated, &.{ false, false }, &nodes, 0, evaluation, &boundary));
+}
+
+test "disclosure constructor ancestor domain owns strings and preserves unknown generated classes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var classes = "mw-parser-output".*;
+    var prefix = "page-".*;
+    const attributes = [_]FigureObservedAttribute{.{ .name = "class", .value = &classes }};
+    var steps = [_]DisclosureFontShellStep{.{ .tag = "div", .fixed_attributes = &attributes,
+        .variable_attributes = &.{}, .extra_class_prefixes = &.{&prefix} }};
+    var input: DisclosureRootFontInput = .{
+        .parser_font = .{ .family = .{ .name = "Fixture" }, .size = .{ .unit = .px, .value = 16 },
+            .weight = 400, .italic = false, .line_height = .normal },
+        .covered_labels = &.{"x"}, .section_attributes = &.{"id"}, .parser_classes = "mw-parser-output",
+    };
+    const shell: DisclosureFontShell = .{ .path = &steps, .medium_px = 16,
+        .face_css_family = "Fixture", .initial_custom = .{} };
+    const domain = (try disclosureExteriorDomainAlloc(a, input, shell)) orelse return error.TestUnexpectedResult;
+    classes[0] = 'X'; prefix[0] = 'X';
+    try std.testing.expect(domain.possible(.{ .positive = .{ .classes = &.{"mw-parser-output"} } }));
+    try std.testing.expect(domain.possible(.{ .positive = .{ .classes = &.{"page-informatica"} } }));
+    try std.testing.expect(domain.possible(.{ .positive = .{ .classes = &.{"mw-collapsible-content"} } }));
+    try std.testing.expect(!domain.possible(.{ .positive = .{ .classes = &.{"ve-loading"} } }));
+    try std.testing.expect(!domain.possible(.{ .positive = .{ .tag = "caption" } }));
+    input.section_attributes = &.{"class"};
+    const unknown_section = (try disclosureExteriorDomainAlloc(a, input, shell)) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(unknown_section.possible(.{ .positive = .{ .classes = &.{"ve-loading"} } }));
+    input.section_attributes = &.{};
+    steps[0].variable_attributes = &.{"class"};
+    const unknown_shell = (try disclosureExteriorDomainAlloc(a, input, shell)) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(unknown_shell.possible(.{ .positive = .{ .classes = &.{"cdx-message__content"} } }));
+}
+
+
+test "disclosure before after content joins equivalent absence under uncertain selectors" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const base: ObservedFigureDeclaration = .{
+        .name = "content", .raw = "none", .priority = .{ .specificity = 0 },
+        .uncertain = true, .rank_unknown = true, .syntax_unknown = false,
+        .source_index = null, .source_byte_start = 0,
+    };
+    const env: CustomEnvironment = .{ .complete = true };
+    try std.testing.expect(try disclosureBeforeAfterNoContent(a, &.{}, env));
+    for ([_][]const u8{ "none", "normal", "initial", "unset", "var(--missing)" }) |raw| {
+        var declaration = base;
+        declaration.raw = raw;
+        try std.testing.expect(try disclosureBeforeAfterNoContent(a, &.{declaration}, env));
+    }
+    var normal = base;
+    normal.raw = "normal";
+    normal.priority.order = 2;
+    try std.testing.expect(try disclosureBeforeAfterNoContent(a, &.{ base, normal }, env));
+    // The scalar keyword join is intentionally still unresolved. Only the
+    // before/after absence consumer projects these values to the same effect.
+    const scalar = try observedFigureKeyword(a, &.{base}, "content", &.{}, env,
+        &.{ "none", "normal" }, "normal", null, false, "normal");
+    try std.testing.expect(scalar.unresolved);
+    const bindings = [_]CustomBinding{.{ .name = "--content", .value = .{ .known = "none" } }};
+    normal.raw = "var(--content)";
+    try std.testing.expect(try disclosureBeforeAfterNoContent(a, &.{normal},
+        .{ .values = &bindings, .complete = true }));
+}
+
+test "disclosure before after content preserves possible generated and unresolved content" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const base: ObservedFigureDeclaration = .{
+        .name = "content", .raw = "none", .priority = .{ .specificity = 0 },
+        .uncertain = true, .rank_unknown = true, .syntax_unknown = false,
+        .source_index = null, .source_byte_start = 0,
+    };
+    const env: CustomEnvironment = .{ .complete = true };
+    for ([_][]const u8{ "\"\"", "\"visible\"", "attr(data-label)", "counter(item)",
+        "inherit", "revert", "revert-layer", "url(icon.svg)" }) |raw| {
+        var declaration = base;
+        declaration.raw = raw;
+        try std.testing.expect(!try disclosureBeforeAfterNoContent(a, &.{ base, declaration }, env));
+    }
+    var unknown = base;
+    unknown.raw = "var(--content)";
+    try std.testing.expect(!try disclosureBeforeAfterNoContent(a, &.{unknown}, .{}));
+    unknown = base;
+    unknown.syntax_unknown = true;
+    try std.testing.expect(!try disclosureBeforeAfterNoContent(a, &.{unknown}, env));
+    // Ordinary known cascade precedence still suppresses a lower candidate;
+    // an uncertain important reset cannot erase the possible generated value.
+    var generated = base;
+    generated.raw = "\"visible\"";
+    generated.rank_unknown = false;
+    generated.uncertain = false;
+    var reset = base;
+    reset.priority.important = true;
+    reset.rank_unknown = false;
+    reset.uncertain = false;
+    try std.testing.expect(try disclosureBeforeAfterNoContent(a, &.{ generated, reset }, env));
+    reset.uncertain = true;
+    try std.testing.expect(!try disclosureBeforeAfterNoContent(a, &.{ generated, reset }, env));
+}
+
+
+test "disclosure external ancestor IDs refute unrelated shell branches without creating matches" {
+    var nodes = [_]ObservedStyleNode{
+        .{ .tag = "div", .parent = null, .attributes = &.{} },
+        .{ .tag = "div", .parent = 0, .attributes = &.{} },
+    };
+    const boundary: DisclosureBoundary = .{ .direction = .ltr, .color_scheme = "normal" };
+    var domain: DisclosureExteriorDomain = .{
+        .tags = &.{ "html", "body", "main", "div", "section" },
+        .classes = &.{}, .class_prefixes = &.{},
+        .ids = .{ .values = &.{ "content", "bodyContent", "mw-content-text" }, .prefixes = &.{"mw"} },
+    };
+    var evaluation: ObservedFigureEvaluation = .{ .disclosure = .{ .nodes = &nodes,
+        .button = 0, .label = 1, .state = .{}, .boundary = &boundary,
+        .partial_owner = 0, .exterior_domain = &domain, .moz_focus_inner_absent = true } };
+    const F = struct {
+        fn match(id: []const u8, ns: []const ObservedStyleNode, subject: u32,
+            ev: ObservedFigureEvaluation, b: *const DisclosureBoundary) ContainerSelectorMatch
+        {
+            const ids = [_][]const u8{id};
+            const chain = [_]GeneratedFigureCompound{
+                .{ .positive = .{ .ids = &ids } }, .{ .positive = .{ .tag = "div" } },
+            };
+            return disclosurePartialSelector(.{ .chain = &chain, .direct_parent = &.{ false, true },
+                .specificity = 0 }, ns, subject, null, ev, b);
+        }
+    };
+    try std.testing.expectEqual(ContainerSelectorMatch.no,
+        F.match("contentSub", &nodes, 0, evaluation, &boundary));
+    for ([_][]const u8{ "content", "bodyContent", "mw-content-text", "mwAQ" }) |id|
+        try std.testing.expectEqual(ContainerSelectorMatch.unknown,
+            F.match(id, &nodes, 0, evaluation, &boundary));
+    // Existing local ancestry wins normally, including an ID excluded outside.
+    nodes[0].attributes = &.{.{ .name = "id", .value = "contentSub" }};
+    evaluation.disclosure.?.partial_owner = null;
+    try std.testing.expectEqual(ContainerSelectorMatch.known,
+        F.match("contentSub", &nodes, 1, evaluation, &boundary));
+    domain.ids = null;
+    try std.testing.expectEqual(ContainerSelectorMatch.unknown,
+        F.match("contentSub", &nodes, 0, evaluation, &boundary));
+    domain.ids = .{ .values = &.{}, .prefixes = &.{""} };
+    try std.testing.expectEqual(ContainerSelectorMatch.unknown,
+        F.match("contentSub", &nodes, 0, evaluation, &boundary));
+}
+
+test "disclosure exterior ID constructor bounds retain unknown IDs and own source bytes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var fixed = "bodyContent".*;
+    var prefix = "mw".*;
+    const attrs = [_]FigureObservedAttribute{.{ .name = "id", .value = &fixed }};
+    var steps = [_]DisclosureFontShellStep{.{ .tag = "div", .fixed_attributes = &attrs,
+        .variable_attributes = &.{}, .extra_class_prefixes = &.{} }};
+    var input: DisclosureRootFontInput = .{
+        .parser_font = .{ .family = .{ .name = "Fixture" }, .size = .{ .unit = .px, .value = 16 },
+            .weight = 400, .italic = false, .line_height = .normal },
+        .covered_labels = &.{"x"}, .section_attributes = &.{"id"},
+        .section_id_prefix = &prefix, .parser_classes = "mw-parser-output",
+    };
+    const shell: DisclosureFontShell = .{ .path = &steps, .medium_px = 16,
+        .face_css_family = "Fixture", .initial_custom = .{} };
+    const domain = (try disclosureExteriorDomainAlloc(a, input, shell)).?;
+    fixed[0] = 'X'; prefix[0] = 'X';
+    try std.testing.expect(domain.possible(.{ .positive = .{ .ids = &.{"bodyContent"} } }));
+    try std.testing.expect(domain.possible(.{ .positive = .{ .ids = &.{"mwAQ"} } }));
+    try std.testing.expect(!domain.possible(.{ .positive = .{ .ids = &.{"contentSub"} } }));
+    input.section_id_prefix = null;
+    const unknown_section = (try disclosureExteriorDomainAlloc(a, input, shell)).?;
+    try std.testing.expect(unknown_section.possible(.{ .positive = .{ .ids = &.{"contentSub"} } }));
+    input.section_attributes = &.{};
+    const no_section_id = (try disclosureExteriorDomainAlloc(a, input, shell)).?;
+    try std.testing.expect(no_section_id.possible(.{ .positive = .{ .ids = &.{"mwAQ"} } }));
+    try std.testing.expect(!no_section_id.possible(.{ .positive = .{ .ids = &.{"contentSub"} } }));
+    steps[0].variable_attributes = &.{"id"};
+    const unknown_shell = (try disclosureExteriorDomainAlloc(a, input, shell)).?;
+    try std.testing.expect(unknown_shell.possible(.{ .positive = .{ .ids = &.{"contentSub"} } }));
+}
+
+
+test "disclosure partial sibling selector refutes impossible shared ancestors only" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const styles = try parseForTargetAlloc(a,
+        ".cdx-button.cdx-button--icon-only span + span { display:block;position:absolute;width:1px }", .screen);
+    try std.testing.expectEqual(@as(usize, 1), styles.observed_figure_rules.len);
+    const rule = styles.observed_figure_rules[0];
+    const selector = rule.selector orelse rule.weak_selector orelse return error.TestUnexpectedResult;
+    try std.testing.expect(selector.necessary_sibling_ancestors.len != 0);
+    var nodes = [_]ObservedStyleNode{
+        .{ .tag = "div", .parent = null, .attributes = &.{.{ .name = "class", .value = "mw-collapsible mw-made-collapsible" }} },
+        .{ .tag = "button", .parent = 0, .attributes = &.{.{ .name = "class", .value = "mw-collapsible-toggle mw-collapsible-toggle-default" }} },
+        .{ .tag = "span", .parent = 1, .attributes = &.{.{ .name = "class", .value = "mw-collapsible-text" }} },
+    };
+    const boundary: DisclosureBoundary = .{ .direction = .ltr, .color_scheme = "normal" };
+    var domain: DisclosureExteriorDomain = .{
+        .tags = &.{ "html", "body", "main", "div", "section" },
+        .classes = &.{"mw-parser-output"}, .class_prefixes = &.{},
+    };
+    var ev: ObservedFigureEvaluation = .{ .disclosure = .{ .nodes = &nodes,
+        .button = 1, .label = 2, .state = .{}, .boundary = &boundary, .partial_owner = 0,
+        .moz_focus_inner_absent = true } };
+    try std.testing.expectEqual(ContainerSelectorMatch.unknown,
+        observedStyleRuleMatch(rule, &nodes, null, 2, null, ev));
+    ev.disclosure.?.exterior_domain = &domain;
+    try std.testing.expectEqual(ContainerSelectorMatch.no,
+        observedStyleRuleMatch(rule, &nodes, null, 2, null, ev));
+    domain.classes = &.{ "mw-parser-output", "cdx-button", "cdx-button--icon-only" };
+    try std.testing.expectEqual(ContainerSelectorMatch.unknown,
+        observedStyleRuleMatch(rule, &nodes, null, 2, null, ev));
+    domain.classes = &.{"mw-parser-output"};
+    nodes[1].attributes = &.{.{ .name = "class", .value = "cdx-button cdx-button--icon-only" }};
+    try std.testing.expectEqual(ContainerSelectorMatch.unknown,
+        observedStyleRuleMatch(rule, &nodes, null, 2, null, ev));
+}
+
+test "disclosure partial sibling ancestor projection retains omitted owner IDs" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const styles = try parseForTargetAlloc(a, "#contentSub span + span { width:1px }", .screen);
+    try std.testing.expectEqual(@as(usize, 1), styles.observed_figure_rules.len);
+    const rule = styles.observed_figure_rules[0];
+    var nodes = [_]ObservedStyleNode{
+        .{ .tag = "div", .parent = null, .attributes = &.{} },
+        .{ .tag = "span", .parent = 0, .attributes = &.{} },
+    };
+    const boundary: DisclosureBoundary = .{ .direction = .ltr, .color_scheme = "normal" };
+    const domain: DisclosureExteriorDomain = .{
+        .tags = &.{ "html", "div", "section" }, .classes = &.{}, .class_prefixes = &.{},
+        .ids = .{ .values = &.{"content"}, .prefixes = &.{"mw"} },
+    };
+    var ev: ObservedFigureEvaluation = .{ .disclosure = .{ .nodes = &nodes,
+        .button = 0, .label = 1, .state = .{}, .boundary = &boundary,
+        .partial_owner = 0, .exterior_domain = &domain, .moz_focus_inner_absent = true } };
+    // An omitted ID on the partial source owner could satisfy the ancestor.
+    try std.testing.expectEqual(ContainerSelectorMatch.unknown,
+        observedStyleRuleMatch(rule, &nodes, null, 1, null, ev));
+    ev.disclosure.?.partial_owner = null;
+    try std.testing.expectEqual(ContainerSelectorMatch.no,
+        observedStyleRuleMatch(rule, &nodes, null, 1, null, ev));
+    nodes[0].attributes = &.{.{ .name = "id", .value = "contentSub" }};
+    try std.testing.expectEqual(ContainerSelectorMatch.unknown,
+        observedStyleRuleMatch(rule, &nodes, null, 1, null, ev));
 }

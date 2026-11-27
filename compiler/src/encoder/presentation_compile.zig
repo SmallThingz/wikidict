@@ -1887,7 +1887,52 @@ pub const ContainerDisclosureCapture = struct {
     content_end: usize,
     policy: presentation_types.ContainerDisclosure,
 };
+// In-process, immutable page selection. The caller supplies the independent
+// complete screen cascade from this page's authenticated constructor, including
+// conditional applicability, runtime modules, base URLs and local styles in
+// physical cascade order. A list reconstructed from the shared profile itself
+// is not a page selection. The returned proof borrows this exact source record.
+pub const ContainerDisclosureStyleScope = struct {
+    source: []const u8,
+    shared: *const table_style_profile.DisclosureSharedProfile,
+    selected_font: ?*const table_style_profile.DisclosureFontTransfer = null,
+    // Selected independently with the original page and constructor scope.
+    html_underline: ?table_style_profile.DisclosureHtmlUnderline = null,
+
+    // Select only when the current source belongs to the independently
+    // authenticated constructor/target/font domain. Source/style comparison
+    // remains mandatory. No implicit transfer from some other page.
+    pub fn fromPageSourcesAndFont(source: []const u8, shared: *const table_style_profile.DisclosureSharedProfile,
+        ordered: []const table_style_profile.Source, font: *const table_style_profile.DisclosureFontTransfer) ?@This()
+    {
+        if (shared.styles != font.styles or shared.placement_shell == null or shared.boundary == null) return null;
+        var scope = fromPageSources(source, shared, ordered) orelse return null;
+        scope.selected_font = font;
+        return scope;
+    }
+
+
+    pub fn fromPageSources(source: []const u8, shared: *const table_style_profile.DisclosureSharedProfile,
+        ordered: []const table_style_profile.Source) ?@This()
+    {
+        const retained = shared.styles.retained_sources;
+        if (source.len == 0 or ordered.len == 0 or ordered.len != retained.len or
+            retained.len != shared.styles.sources.len or shared.styles.reading_target != .screen or
+            shared.styles.globally_unresolved) return null;
+        for (ordered, retained) |page, expected| {
+            if (page.unknown_applicability != expected.unknown_applicability or page.byte_start != expected.byte_start or
+                !std.mem.eql(u8, page.base_url, expected.base_url) or !std.mem.eql(u8, page.css, expected.css)) return null;
+        }
+        return .{ .source = source, .shared = shared };
+    }
+
+    fn current(self: *const @This(), held: *const ContainerDisclosureSource) bool {
+        return held.shared_profile == self.shared and held.source.len == self.source.len and held.source.ptr == self.source.ptr;
+    }
+};
+
 pub const ContainerDisclosureSource = struct {
+    page_style_scope: ?*const ContainerDisclosureStyleScope = null,
     source: []const u8,
     captures: []const ContainerDisclosureCapture,
     // Edition-local authenticated policy inputs; actual owner and child
@@ -14558,6 +14603,34 @@ pub const Renderer = struct {
         return true;
     }
 
+    fn observedInlineBoxPositionAbsent(self: *Renderer, tracked: MissingText, tag: syntax.Tag,
+        inherited: Style, css: []const u8) Error!bool
+    {
+        const domain = self.pageStyleDomain() orelse return false;
+        const styles = self.textPaintProfile() orelse return false;
+        if (domain.scope.page_styles != styles) return false;
+        const opening = localTrackedTagOpening(tracked, tag) orelse return false;
+        if (!noLiParentSourceRange(tracked, opening)) return false;
+        const source_opening = if (self.pageStyleQuotedTag(tag)) |mapped| anchor: {
+            if (mapped.generated) return false;
+            break :anchor mapped.anchor;
+        } else self.pageStyleCopiedAnchor(tracked, opening) orelse copied: {
+            // WikiTable replay copies resolve to the tracked fragment owner.
+            // The page projection must still authenticate the whole opener.
+            const anchor = self.registeredOriginalInterval(opening, domain.owner) orelse return false;
+            if (!self.pageStyleSourceRange(anchor)) return false;
+            break :copied anchor;
+        };
+        if (!std.mem.eql(u8, source_opening, opening)) return false;
+        const element = try self.textElement(tag, inherited.text_element, inherited.language);
+        if (element.page_style_root != null) return false;
+        const classes = (try self.negativePaintQueryClasses(domain.scope.complete_ancestor_class_superset, element)) orelse return false;
+        defer self.a.free(classes);
+        const ids = try self.negativePaintQueryTokens(domain.scope.complete_ancestor_id_superset, element, true);
+        defer if (ids) |complete| self.a.free(complete);
+        return styles.inlineBoxPositionAbsentIn(self.a, element, css, classes, ids);
+    }
+
     fn typedInlineBox(self: *Renderer, tracked: MissingText, at: usize, tag: syntax.Tag, pair: syntax.Pair,
         effective: Style, inherited: Style, depth: usize) Error!bool
     {
@@ -14627,6 +14700,10 @@ pub const Renderer = struct {
             return failure;
         };
         if (box.unresolved) {
+            // The selected page can disprove a positioning obligation even
+            // when this cell/list parser has no physical source-parent proof.
+            if (!static_candidate and self.inline_box_owner == null and profile_reason == .matched_rules_unresolved and
+                try self.observedInlineBoxPositionAbsent(tracked, tag, inherited, own_css)) return false;
             if (!static_candidate and try self.positionedInlineImage(tracked, at, tag, pair, effective, inherited, depth, own_css)) return true;
             if (try self.observedFixedInlineBox(tracked, at, tag, pair, effective, inherited)) return true;
             const previous_native_reason = self.inline_box_native_motion_diagnostic;
@@ -46981,8 +47058,17 @@ pub const Renderer = struct {
                     self.display_parent_region = self.makeDisplayParentRegion(wrapper_source[0..pair.end]);
                     const owner_positioned_diagnostic = self.positionedContainerDiagnosticFor(tag.attrs);
                     const disclosure_source = try self.genericDisclosureSourceQuery(tag, wrapper_source[0..pair.end]);
-                    const disclosure_authority = if (disclosure_source) |query| try self.genericDisclosureAuthority(query, scoped_style.text_element) else null;
-                    var disclosure_binding: ?GenericDisclosureChildBinding = if (disclosure_source) |query|
+                    // Structural observation keeps validating the authored shape
+                    // and traversing its children. Shared paint authority belongs
+                    // to the final pass, after the page context has been bound.
+                    // Finite captures retain their existing observation path.
+                    const observe_shared_disclosure = self.context.observe_structure_only and
+                        if (self.context.container_disclosures) |held|
+                            held.captures.len == 0 and held.shared_profile != null
+                        else false;
+                    const disclosure_paint_source = if (observe_shared_disclosure) null else disclosure_source;
+                    const disclosure_authority = if (disclosure_paint_source) |query| try self.genericDisclosureAuthority(query, scoped_style.text_element) else null;
+                    var disclosure_binding: ?GenericDisclosureChildBinding = if (disclosure_paint_source) |query|
                         .{ .parent_inner = query.parent_inner, .content_source = query.content_source } else null;
                     const wrapper_blocks = children: {
                         const previous_child = self.terminal_grid_child;
@@ -46996,7 +47082,7 @@ pub const Renderer = struct {
                         self.literal_container_parent = literal_dispatch;
                         break :children try self.renderBodySlice(wrapper_source[tag.end..pair.inner_end], true, false, if (origin) |base| base + (@intFromPtr(wrapper_source.ptr) - @intFromPtr(input.ptr)) + tag.end else null, scoped_quote);
                     };
-                    const disclosure: ?presentation_types.ContainerDisclosure = if (disclosure_source) |query| resolved: {
+                    const disclosure: ?presentation_types.ContainerDisclosure = if (disclosure_paint_source) |query| resolved: {
                         const index = try self.genericDisclosureBoundChild(query, &disclosure_binding.?, wrapper_blocks);
                         break :resolved try self.genericDisclosureAuthorityPolicy(query, disclosure_authority.?, index);
                     } else null;
@@ -49404,6 +49490,37 @@ pub const Renderer = struct {
             proof.root_placement = table_style_profile.disclosureRootPlacement(shared, local, whole,
                 start, query.owner_source, held.parser_output_direction) orelse
                 return self.containerUnavailableAt("generic_disclosure_shared_root_source", query.owner_source);
+            const scope = held.page_style_scope orelse
+                return self.containerUnavailableAt("generic_disclosure_shared_page_styles", query.owner_source);
+            if (!scope.current(held)) return self.containerUnavailableAt("generic_disclosure_shared_page_styles", query.owner_source);
+            if (scope.selected_font != null and (whole.unknown or whole.lost_missing_range or
+                whole.generated_source != null or whole.ranges.len != 0 or whole.literal_curly_ranges.len != 0 or
+                whole.generated_links.len != 0)) return self.containerUnavailableAt("generic_disclosure_shared_page_styles", query.owner_source);
+            proof.html_underline = scope.html_underline;
+            if (scope.selected_font) |font| {
+                proof.reset_font_at_parent = font.bind(proof.root_placement.?, shared, local,
+                    whole.bytes, query.owner_source, query.expand_label, query.collapse_label) orelse
+                    return self.containerUnavailableAt("generic_disclosure_shared_root_font", query.owner_source);
+            }
+        }
+        if (shared.owner_attribute_projection) |projection| {
+            // Only this validated source shape uses the normal initializer's
+            // direct-content-child branch. The current page style scope and
+            // original source range above are required for its constructor.
+            if (proof.root_placement == null)
+                return self.containerUnavailableAt("generic_disclosure_shared_owner_attributes", query.owner_source);
+            const presence = local.attribute_presence orelse
+                return self.containerUnavailableAt("generic_disclosure_shared_owner_attributes", query.owner_source);
+            var projected = projection.*;
+            var absent: std.ArrayList([]const u8) = .empty;
+            for (projection.absent) |name| if (presence.get(presence.ctx, name) == .absent)
+                try absent.append(self.a, name);
+            projected.absent = absent.items;
+            // A generated-ID domain applies only to a source-absent ID. An
+            // authored ID cannot inherit another owner's negative predicate.
+            if (presence.get(presence.ctx, "id") != .absent) projected.generated_id = null;
+            proof.owner_attributes = .{ .owner = local, .source_key = local.source_key,
+                .shared = shared, .projection = projected };
         }
         local.disclosure_local_proof = proof;
     }
@@ -49414,6 +49531,7 @@ pub const Renderer = struct {
         captured: *const ContainerDisclosureCapture,
         derived: struct {
             held: *const ContainerDisclosureSource,
+            style_scope: *const ContainerDisclosureStyleScope,
             shared: *const table_style_profile.DisclosureSharedProfile,
             owner: *const table_style_profile.TextElement,
             owner_source: []const u8,
@@ -49436,6 +49554,10 @@ pub const Renderer = struct {
             return .{ .captured = try self.genericDisclosureCapture(query) };
         const shared = held.shared_profile orelse
             return self.containerUnavailableAt("generic_disclosure_paint_authority_unbound", query.owner_source);
+        const style_scope = held.page_style_scope orelse
+            return self.containerUnavailableAt("generic_disclosure_shared_page_styles", query.owner_source);
+        if (!style_scope.current(held))
+            return self.containerUnavailableAt("generic_disclosure_shared_page_styles", query.owner_source);
         const owner_start = self.genericDisclosureInputOffset(held.source, query.owner_source) orelse
             return self.containerUnavailableAt("generic_disclosure_shared_source", query.owner_source);
         const content_start = self.genericDisclosureInputOffset(held.source, query.content_source) orelse
@@ -49471,12 +49593,12 @@ pub const Renderer = struct {
             return self.containerUnavailableAt("generic_disclosure_shared_cascade", query.owner_source);
         if (policy.content_index != 0 or policy.button == null or policy.direction == null or
             policy.foreground == null or policy.expand_run == null or policy.collapse_run == null or
-            !std.mem.eql(u8, policy.expand_label, query.expand_label) or
-            !std.mem.eql(u8, policy.collapse_label, query.collapse_label) or
+            !table_style_profile.disclosureSourceLabelAgrees(policy.expand_label, policy.expand_run.?, query.expand_label) or
+            !table_style_profile.disclosureSourceLabelAgrees(policy.collapse_label, policy.collapse_run.?, query.collapse_label) or
             policy.initially_collapsed != query.initially_collapsed or
             !presentation_types.validContainerDisclosure(policy))
             return self.containerUnavailableAt("generic_disclosure_shared_policy", query.owner_source);
-        return .{ .derived = .{ .held = held, .shared = shared, .owner = local,
+        return .{ .derived = .{ .held = held, .style_scope = style_scope, .shared = shared, .owner = local,
             .owner_source = query.owner_source, .content_source = query.content_source,
             .owner_start = owner_start, .content_start = content_start, .policy = policy } };
     }
@@ -49490,6 +49612,7 @@ pub const Renderer = struct {
                 const held = self.context.container_disclosures orelse
                     return self.containerUnavailableAt("generic_disclosure_shared_rebind", query.owner_source);
                 if (held != proof.held or held.shared_profile != proof.shared or held.captures.len != 0 or
+                    held.page_style_scope != proof.style_scope or !proof.style_scope.current(held) or
                     query.owner_source.ptr != proof.owner_source.ptr or query.owner_source.len != proof.owner_source.len or
                     query.content_source.ptr != proof.content_source.ptr or query.content_source.len != proof.content_source.len or
                     self.genericDisclosureInputOffset(held.source, query.owner_source) != proof.owner_start or
@@ -141773,10 +141896,16 @@ test "A3 shared disclosure issuer binds actual child index and rejects source or
     shared.ua.button.outline_colors = .{ .unfocused = shared.ua.foreground,
         .focused = shared.ua.foreground };
     var held: ContainerDisclosureSource = .{ .source = F.source, .captures = &.{}, .shared_profile = &shared };
+    // Synthetic constructor inputs for this fixture only.
+    const scope = ContainerDisclosureStyleScope.fromPageSources(F.source, &shared, styles.retained_sources).?;
+    held.page_style_scope = &scope;
     var r: Renderer = .{ .a = a, .content_root = .parser_output, .body_missing = .{ .bytes = F.source },
         .context = .{ .container_disclosures = &held } };
     var owner = F.owner(F.source);
     const query = (try r.genericDisclosureSourceQuery(syntax.tagAt(F.source, 0).?, F.source)).?;
+    held.page_style_scope = null;
+    try std.testing.expectError(error.UncompiledPresentation, r.genericDisclosureAuthority(query, &owner));
+    held.page_style_scope = &scope;
     const authority = try r.genericDisclosureAuthority(query, &owner);
     try std.testing.expect(authority == .derived);
     try std.testing.expectEqual(@as(u32, 0), authority.derived.policy.content_index);
@@ -141787,6 +141916,9 @@ test "A3 shared disclosure issuer binds actual child index and rejects source or
     r.generic_disclosure_child_binding = &child_binding;
     r.noteGenericDisclosureChild(query.parent_inner, query.content_source, 2, child);
     const index = try r.genericDisclosureBoundChild(query, &child_binding, &blocks);
+    held.page_style_scope = null;
+    try std.testing.expectError(error.UncompiledPresentation, r.genericDisclosureAuthorityPolicy(query, authority, index));
+    held.page_style_scope = &scope;
     const policy = try r.genericDisclosureAuthorityPolicy(query, authority, index);
     try std.testing.expectEqual(@as(u32, 2), policy.content_index);
     try std.testing.expectEqualStrings("Mostra", policy.expand_label);
@@ -141826,6 +141958,9 @@ test "A3 shared disclosure refuses unknown exterior CSS and preserves finite cap
         ".mw-collapsible-toggle{float:right}.foreign .mw-collapsible-toggle{float:left}", .screen); defer styles.deinit();
     var shared = try F.profile(a, &styles);
     var held: ContainerDisclosureSource = .{ .source = F.source, .captures = &.{}, .shared_profile = &shared };
+    // Synthetic constructor inputs for this fixture only.
+    const scope = ContainerDisclosureStyleScope.fromPageSources(F.source, &shared, styles.retained_sources).?;
+    held.page_style_scope = &scope;
     var r: Renderer = .{ .a = a, .content_root = .parser_output, .body_missing = .{ .bytes = F.source },
         .context = .{ .container_disclosures = &held } };
     var owner = F.owner(F.source);
@@ -141843,6 +141978,31 @@ test "A3 shared disclosure refuses unknown exterior CSS and preserves finite cap
     try std.testing.expectError(error.UncompiledPresentation, r.genericDisclosureAuthorityPolicy(query, authority, old.content_index + 1));
     rows[0].owner_start = 1;
     try std.testing.expectError(error.UncompiledPresentation, r.genericDisclosureAuthority(query, &owner));
+}
+
+test "A3 disclosure shared CSS requires the complete ordered current page source list" {
+    const F = SharedDisclosureIssuerTest;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const S = table_style_profile.Source;
+    const global = S{ .css = ".mw-collapsible-toggle{float:right}", .base_url = "/module.css" };
+    const local = S{ .css = ".mw-collapsible-toggle{float:left}", .base_url = "/article", .byte_start = 17 };
+    var styles = try table_style_profile.parseSourcesForTargetAlloc(a, &.{ global, local }, .screen);
+    defer styles.deinit();
+    const shared = try F.profile(a, &styles);
+    const select = ContainerDisclosureStyleScope.fromPageSources;
+    const scope = select(F.source, &shared, &.{ global, local }).?;
+    try std.testing.expect(select(F.source, &shared, &.{global}) == null);
+    try std.testing.expect(select(F.source, &shared, &.{ local, global }) == null);
+    var changed = local; changed.base_url = "/other";
+    try std.testing.expect(select(F.source, &shared, &.{ global, changed }) == null);
+    changed = local; changed.unknown_applicability = true;
+    try std.testing.expect(select(F.source, &shared, &.{ global, changed }) == null);
+    changed = local; changed.css = ".mw-collapsible-toggle{float:none}";
+    try std.testing.expect(select(F.source, &shared, &.{ global, changed }) == null);
+    const copied = try a.dupe(u8, F.source);
+    try std.testing.expect(!scope.current(&.{ .source = copied, .captures = &.{}, .shared_profile = &shared }));
 }
 
 test "finite normal disclosure matches authored bracket interiors and binds actual content child" {
@@ -142029,4 +142189,148 @@ test "SD caption regression keeps the observed plain text style through Figure c
     var copied = choice;
     copied.caption = copy[Caption.prefix.len..][0..Caption.text.len];
     try std.testing.expectError(error.UncompiledPresentation, actual.makeFigure(copied, parent, MissingText.untracked(copy)));
+}
+
+
+test "ordinary selected inline position can be absent without an inferred physical parent" {
+    // Exact p1831 ordinary failure fragment and an exact possible retained CSS
+    // selector. This bounded control does not stand in for ordinary generation.
+    const source = "عربِي: <span class=\"AR\" style=\"font-family:Arial Unicode MS, Code2000; font-family :inherit; font-size:125%; font-size :inherit\">[[قطة]]</span>";
+    const css = ".cdx-button.cdx-button--icon-only span + span{position:absolute !important}";
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var parent = try table_style_profile.parseForTargetAlloc(a, "", .screen);
+    defer parent.deinit();
+    var styles = try table_style_profile.joinPageSourcesAlloc(a, &parent, &.{.{ .css = css, .base_url = "" }}, &.{});
+    defer styles.deinit();
+    const parser_root: table_style_profile.TextElement = .{ .tag = "div", .classes = "mw-parser-output" };
+    const cell: table_style_profile.TextElement = .{ .tag = "td" };
+    const item: table_style_profile.TextElement = .{ .tag = "li", .parent = &cell };
+    const inherited: Style = .{ .text_element = &item, .font_scale = 1.25, .font_scale_set = true, .font_family = .sans_serif };
+    const F = struct {
+        fn sizing(_: ?*const anyopaque, _: A, _: []const u8, _: presentation_types.FigureFormat, _: ?u32, _: ?u32) A.Error!?presentation_types.FigureSizingPolicy {
+            return null;
+        }
+    };
+    const tracked = MissingText.untracked(source);
+    var scope: table_style_profile.BoundedTextClassScope = .{
+        .root_tag = "div", .root_classes = "mw-parser-output", .subtree_classes = "AR",
+        .complete_ancestor_class_superset = "mw-parser-output AR", .page_styles = &styles, .page_style_root = &parser_root,
+    };
+    var renderer: Renderer = .{
+        .a = a, .content_root = .parser_output, .body_missing = tracked, .inline_missing = tracked,
+        .bounded_text_class_source = source, .bounded_text_class_scope = &scope,
+        .context = .{ .title = "ٻِلو", .language = "Sindhi", .table_styles = &styles, .figure_sizing = .{
+            .resolve_fn = F.sizing, .text_class_scope = .{ .source = source, .scope = &scope },
+        } },
+    };
+    const at = std.mem.indexOfScalar(u8, source, '<').?;
+    const tag = syntax.tagAt(source, at).?;
+    const pair = syntax.matchingTag(source, tag).?;
+    const element = try renderer.textElement(tag, inherited.text_element, inherited.language);
+    try std.testing.expect(element.page_style_root == null and !element.physical_ancestry_complete);
+    try std.testing.expect(try styles.hasInlineBoxCandidateIn(a, element, tag.attr("style").?));
+    try std.testing.expect(!try renderer.typedInlineBox(tracked, at, tag, pair, inherited, inherited, 0));
+    try std.testing.expect(element.parent == &item and !element.ancestry_complete and !element.physical_ancestry_complete);
+    const detached = MissingText.untracked(try a.dupe(u8, source));
+    const detached_tag = syntax.tagAt(detached.bytes, at).?;
+    try std.testing.expectError(error.UncompiledPresentation, renderer.typedInlineBox(detached, at,
+        detached_tag, syntax.matchingTag(detached.bytes, detached_tag).?, inherited, inherited, 0));
+    scope.complete_ancestor_class_superset = "mw-parser-output AR cdx-button cdx-button--icon-only";
+    try std.testing.expectError(error.UncompiledPresentation, renderer.typedInlineBox(tracked, at, tag, pair, inherited, inherited, 0));
+    scope.complete_ancestor_class_superset = null;
+    try std.testing.expectError(error.UncompiledPresentation, renderer.typedInlineBox(tracked, at, tag, pair, inherited, inherited, 0));
+}
+
+test "wiki table bullet position absence authenticates the copied fragment opener" {
+    // The first two authored list lines in the p1831/r26031 table and its
+    // authored closing delimiter. The remainder of the table is outside this test.
+    const source =
+        "{| width=100% cellpadding=10\n" ++
+        "|-\n" ++
+        "| bgcolor=#f9f9f9 valign=top style=\"border:1px solid #aaaaaa\" |\n" ++
+        "*عربِي: <span class=\"AR\" style=\"font-family:Arial Unicode MS, Code2000; font-family :inherit; font-size:125%; font-size :inherit\">[[قطة]]</span> \n" ++
+        "*Bambara: [[jakuma]]\n" ++
+        "|}";
+    try MilyonLinkedBr210Test.hash(source, "21a5909393dcfe2a0689a7b094b90610dc2b20cab62da871c75f8503e4bd8f8d");
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var parent = try table_style_profile.parseForTargetAlloc(a, "", .screen);
+    defer parent.deinit();
+    // Exact retained Vector rule. An unknown sibling position alone cannot
+    // exclude it. The positive case supplies the required class-absence facts.
+    const css = ".cdx-button.cdx-button--icon-only span + span{position:absolute !important}";
+    var styles = try table_style_profile.joinPageSourcesAlloc(a, &parent, &.{.{ .css = css, .base_url = "" }}, &.{});
+    defer styles.deinit();
+    const parser_root: table_style_profile.TextElement = .{ .tag = "div", .classes = "mw-parser-output" };
+    const F = struct {
+        fn sizing(_: ?*const anyopaque, _: A, _: []const u8, _: presentation_types.FigureFormat, _: ?u32, _: ?u32) A.Error!?presentation_types.FigureSizingPolicy {
+            return null;
+        }
+    };
+    const original = MissingText.untracked(source);
+    const owner = try missing_dependency.slice(a, original, 0, source.len);
+    try std.testing.expect(owner.bytes.ptr != source.ptr);
+    try std.testing.expectEqualStrings(source, owner.bytes);
+    const unrelated = try missing_dependency.slice(a, original, 0, source.len);
+    const opener = std.mem.indexOfScalar(u8, source, '<').?;
+    const failure_fragment = source[97..248];
+    const Case = enum { selected, unrelated_owner, unprojected_opening, possible_position };
+    for ([_]Case{ .selected, .unrelated_owner, .unprojected_opening, .possible_position }) |case| {
+        const scope: table_style_profile.BoundedTextClassScope = .{
+            .root_tag = "div", .root_classes = "mw-parser-output", .subtree_classes = "AR",
+            .complete_ancestor_class_superset = if (case == .possible_position)
+                "mw-parser-output AR cdx-button cdx-button--icon-only" else "mw-parser-output AR",
+            .page_styles = &styles, .page_style_root = &parser_root,
+        };
+        const copies = [_]SourceElementProjection.Copy{.{
+            .original_start = 0, .prepared_start = 0,
+            .len = if (case == .unprojected_opening) opener else source.len,
+        }};
+        const projection: SourceElementProjection = .{ .original = original, .prepared = source, .copies = &copies,
+            .observed_source = .{ .source = source, .scope = &scope } };
+        var renderer: Renderer = .{
+            .a = a, .content_root = .parser_output, .heading_source = owner.bytes,
+            .bounded_text_class_source = owner.bytes, .bounded_text_class_scope = &scope,
+            .source_element_binding = .{ .scope = &scope, .projection = &projection,
+                .owner = if (case == .unrelated_owner) unrelated else owner, .page_start = 0 },
+            .context = .{ .title = "ٻِلو", .language = "Sindhi", .table_styles = &styles, .figure_sizing = .{
+                .resolve_fn = F.sizing, .text_class_scope = .{ .source = source, .scope = &scope },
+            } },
+        };
+        renderer.figure_class_source_binding = renderer.source_element_binding;
+        var rejection: RejectedCompilerCapture = .{};
+        const capture_scope = rejection.begin();
+        defer capture_scope.deinit();
+        const result = renderer.renderBodyWithFragmentPreAndMissing(owner, .{});
+        if (case != .selected) {
+            try std.testing.expectError(error.UncompiledPresentation, result);
+            const first = rejection.snapshot(error.UncompiledPresentation) orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqualStrings("inline_box", first.operation);
+            try std.testing.expectEqualStrings("unresolved_geometry", first.reason);
+            try std.testing.expectEqual(failure_fragment.len, first.fragment_bytes);
+            try std.testing.expectEqual(@as(usize, 12), first.local_offset);
+            var expected_hex: [302]u8 = undefined;
+            try std.testing.expectEqualStrings(boundedTraceHex(&expected_hex, failure_fragment), first.window_hex);
+            continue;
+        }
+        const blocks = try result;
+        try std.testing.expect(rejection.failure == null);
+        const table = blocks[0].table orelse return error.TestUnexpectedResult;
+        const items = table.rows[0].cells[0].blocks orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(@as(usize, 2), items.len);
+        try std.testing.expectEqualStrings("*", items[0].list_path);
+        try std.testing.expectEqualStrings("عربِي: قطة", try flattened(a, items[0].spans));
+        var found = false;
+        for (items[0].spans) |span| {
+            try std.testing.expect(span.inline_box_group == null);
+            if (span.kind == .link) {
+                try std.testing.expectEqualStrings("قطة", span.target);
+                found = true;
+            }
+        }
+        try std.testing.expect(found);
+    }
 }

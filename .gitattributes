@@ -637,3 +637,9 @@ compiler/src/encoder/testdata/zh-piasu381-pitch/expanded.wikitext whitespace=-bl
 renderer/fonts/NotoSansThaana-OFL.txt whitespace=-blank-at-eol
 compiler/tools/testdata/it-cediglia-normal-disclosure/IndiceOrizzontale.css whitespace=-blank-at-eol
 compiler/tools/testdata/selected-get-wmf6-01/hu.prefix.html whitespace=-blank-at-eol
+
+# Authenticated Italian source captures are bound byte for byte by regressions.
+compiler/tools/testdata/it-disclosure-prepass01/informatica-raw.wikitext whitespace=-blank-at-eol
+compiler/tools/testdata/it-disclosure-prepass01/informatica-expanded.wikitext whitespace=-blank-at-eol
+compiler/tools/testdata/it-shared-disclosure11/mancese-expanded.wikitext whitespace=-blank-at-eol
+compiler/tools/testdata/it-shared-disclosure11/numerale-expanded.wikitext whitespace=-blank-at-eol

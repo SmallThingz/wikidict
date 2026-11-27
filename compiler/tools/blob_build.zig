@@ -3654,6 +3654,9 @@ const ExpansionSlot = struct {
             if (self.stop.load(.acquire)) return;
             self.failure = null;
             const profile_start = if (self.profile_enabled) ParentProfileStamp.now(self.io) else null;
+            self.worker.effect_profile = if (self.disclosure_inputs) |inputs|
+                inputs.workerEffectProfile(self.job.ns.id, self.job.ns.kind == .language, self.job.alias_record != null,
+                    self.job.title, self.job.page_id) else null;
             self.expansion = self.worker.expand(
                 self.arena.allocator(),
                 self.job.ordinal,
@@ -3740,9 +3743,17 @@ const ExpansionSlot = struct {
         // immutable build-input book, whose lifetime encloses every slot.
         codes.container_disclosures = null;
         if (self.disclosure_inputs) |inputs| {
-            codes.container_disclosures = inputs.bind(self.arena.allocator(), observation_namespace,
+            const receipt = inputs.styleReceiptFromExpansion(self.arena.allocator(), self.job.ordinal,
+                .{ .index_offset = self.job.index_offset, .namespace = self.job.ns.id,
+                    .page_id = self.job.page_id, .revision_id = self.job.revision_id },
+                self.job.title, self.job.source, expanded.source, expanded.display_title orelse "",
+                expanded.unsupported_parser_function, expanded.page_effect_metadata, codes.namespace_catalog) catch |err| {
+                self.compile_failure = err;
+                return;
+            };
+            codes.container_disclosures = inputs.bindWithStyleReceipt(self.arena.allocator(), observation_namespace,
                 self.job.ns.kind == .language, self.job.alias_record != null, self.job.title,
-                self.job.page_id, self.job.revision_id, self.job.source, expanded.source) catch |err| {
+                self.job.page_id, self.job.revision_id, self.job.source, expanded.source, receipt) catch |err| {
                 self.compile_failure = err;
                 return;
             };
@@ -75594,5 +75605,870 @@ test "normal Missing imports the full five-page Book with the genuine SD file re
     for (book.pages, [_]u64{ 1819, 1831, 2384, 2429, 4353 }) |page, id| {
         try std.testing.expectEqual(id, page.page_id);
         try std.testing.expectEqual(@as(usize, 1), page.occurrences.len);
+    }
+}
+
+test "IT shared disclosure ordinary constructor checks original calls and whole expanded stylesheet scope" {
+    const B = container_disclosure_inputs;
+    const calls = [_]B.OrdinaryCall{ .{ .name = "Audio", .required = true }, .{ .name = "Trad1", .required = false } };
+    const raw = "{{Trad1|voce}}{{Audio|Sample.ogg}}";
+    const expanded = "<div class=\"mw-collapsible\"><span>voce</span></div>\n[[File:Sample.ogg]]";
+    try std.testing.expect(B.ordinarySourceSelected(&calls, raw, expanded));
+    for ([_][]const u8{ "{{Trad1|voce}}", "{{Audio|x}}{{Other}}", "{{Audio|{{Unknown}}}}",
+        "{{Audio|x}}<templatestyles src=\"sheet\"/>", "{{Audio|x}}__TOC__" }) |wrong|
+        try std.testing.expect(!B.ordinarySourceSelected(&calls, wrong, expanded));
+    for ([_][]const u8{ "<templatestyles src=\"Sheet.css\"/>", "<style>div{}</style>", "<link rel=\"stylesheet\">",
+        "<span onclick=\"x()\">", "<!-- incomplete", "{{unknown}}" }) |after| {
+        const with_local = try std.mem.concat(std.testing.allocator, u8, &.{ expanded, after });
+        defer std.testing.allocator.free(with_local);
+        try std.testing.expect(!B.ordinarySourceSelected(&calls, raw, with_local));
+    }
+}
+
+test "IT shared disclosure family selector checks literal table formatting and nested module scope" {
+    const B = container_disclosure_inputs;
+    const calls = [_]B.OrdinaryCall{ .{ .name = "Outer", .required = true }, .{ .name = "Term", .required = false } };
+    const raw = "<small>{{Outer|{{Term|[[example]]}}}}</small>";
+    const layout = "<table role=\"presentation\" border=\"1\" cellspacing=\"0\"><tr><td width=\"80\" colspan=\"2\" bgcolor=\"#FFC0CB\">" ++
+        "<b>Text</b><i>example<sup>2</sup></i><br clear=\"all\" /></td></tr></table>";
+    const owner = "<div class=\"mw-collapsible\"><span>text</span></div>";
+    var trace = struct {
+        count: usize = 0,
+        pub fn visit(self: *@This(), call: B.OrdinarySourceCall) bool {
+            const expected = [_][]const u8{ "{{Outer|{{Term|[[example]]}}}}", "{{Term|[[example]]}}" };
+            if (self.count >= expected.len or call.depth != self.count or !std.mem.eql(u8, call.source, expected[self.count])) return false;
+            self.count += 1;
+            return true;
+        }
+    }{};
+    try std.testing.expect(B.ordinaryFamilySourceInventory(raw, owner, &trace));
+    try std.testing.expectEqual(@as(usize, 2), trace.count);
+    try std.testing.expect(B.ordinaryFamilySourceSelected(&calls, raw, layout ++ owner));
+    try std.testing.expect(B.ordinaryFamilySourceSelected(&calls, raw, owner ++ layout));
+    try std.testing.expect(!B.ordinarySourceSelected(&calls, raw, layout ++ owner));
+    try std.testing.expect(!B.ordinarySourceSelected(&calls, "{{Outer}}", layout ++ owner));
+    try std.testing.expect(!B.ordinaryFamilySourceSelected(&calls, "{{Term|{{Outer}}}}", owner));
+    for ([_][]const u8{ "{{Outer|{{Other}}}}", "{{Outer|{{#invoke:M|f}}}}", "{{Outer|{{{1}}}}}",
+        "{{Outer{{Term}}}}", "{{Outer|{{Term}}", "{{Outer|<ref>A</ref>}}", "<nowiki>{{Outer}}</nowiki>",
+        "{{Outer|<i title=\"{{Term}}\">x</i>}}", "{{Outer}}__TOC__" }) |bad|
+        try std.testing.expect(!B.ordinaryFamilySourceSelected(&calls, bad, owner));
+    for ([_][]const u8{ "<templatestyles src=\"Sheet.css\"/>", "<script>x</script>", "<link rel=\"stylesheet\">", "<style>i{}</style>",
+        "<references/>", "<gallery>x</gallery>", "<table role=\"application\"></table>", "<i onclick=\"f()\"></i>",
+        "<td background=\"//example.org/x\"></td>", "<i style=\"background:url(x)\"></i>", "<i><b></i></b>",
+        "<b/>", "<sup title=unquoted>x</sup>", "<br clear=\"bogus\"/>" }) |bad| {
+        const mixed = try std.mem.concat(std.testing.allocator, u8, &.{ owner, bad });
+        defer std.testing.allocator.free(mixed);
+        try std.testing.expect(!B.ordinaryFamilySourceSelected(&calls, raw, mixed));
+        const mixed_raw = try std.mem.concat(std.testing.allocator, u8, &.{ raw, bad });
+        defer std.testing.allocator.free(mixed_raw);
+        try std.testing.expect(!B.ordinaryFamilySourceSelected(&calls, mixed_raw, owner));
+    }
+}
+
+test "IT ordinary family excludes Vector pinnable header operands before inventory" {
+    const B = container_disclosure_inputs;
+    const calls = [_]B.OrdinaryCall{.{ .name = "Outer", .required = true }};
+    const raw = "{{Outer}}";
+    for ([_][]const u8{
+        "{| class=\"translations\"\n!&nbsp;\n| [[term]]\n|}",
+        "<span class=\"local\">A &fjlig; &#x76; &#45;</span>",
+        "vector-pinnable-\nheader",
+        "vector&hyphen;pinnable-header",
+        "[[https://example.org/ ] source]",
+    }, 0..) |operand, i| {
+        const actual = B.ordinaryFamilySourceSelected(&calls, raw, operand);
+        if (actual != true) std.debug.print("\ncase3 operand {d}/19 expected {} got {} source {s}\n", .{ i + 1, true, actual, operand });
+        try std.testing.expectEqual(true, actual);
+    }
+    for ([_][]const u8{
+        "ordinary text vector-pinnable-header",
+        "{| class=\"vector-pinnable-header\"\n| term\n|}",
+        "{| class=\"vector&#x2d;pinnable&#45;header\"\n| term\n|}",
+        "&#118;ector-pinnable-header", "vector&amp;#45;pinnable-header",
+        "vector&#38;#x2d;pinnable-header", "vector&amp;amp;#45;pinnable-header",
+        "vector&unknown;pinnable-header", "vector&#45pinnable-header",
+        "[[File:A.svg|class=vector-pin\nnable-header]]",
+        "[[https://example.org/ ] source]vector-pin\nnable-header",
+        "vector-pin<i>nable</i>-header", "vector-{x}-pinnable-header",
+        "<span class=\"vector-pin\nnable-header\"></span>",
+    }, 0..) |operand, i| {
+        const actual = B.ordinaryFamilySourceSelected(&calls, raw, operand);
+        if (actual != false) std.debug.print("\ncase3 operand {d}/19 expected {} got {} source {s}\n", .{ i + 6, false, actual, operand });
+        try std.testing.expectEqual(false, actual);
+    }
+}
+
+test "IT shared disclosure registered local styles bind exact occurrences deduplication and placement" {
+    const B = container_disclosure_inputs;
+    const S = encoder.table_style_profile;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const hash = struct {
+        fn of(data: []const u8) [64]u8 {
+            var bytes: [32]u8 = undefined;
+            std.crypto.hash.sha2.Sha256.hash(data, &bytes, .{});
+            return std.fmt.bytesToHex(bytes, .lower);
+        }
+    }.of;
+    const base_url = "https://fixture.example/wiki/Entry";
+    const global_url = "https://fixture.example/w/global.css";
+    const global_css = "html{font-family:sans-serif}";
+    const a_css = ".mw-parser-output .a{color:#123}";
+    const b_css = ".mw-parser-output .b{color:#456}";
+    const h_g = hash(global_css);
+    const h_a = hash(a_css);
+    const h_b = hash(b_css);
+    const h_place = hash("fixture placement");
+    const h_module = hash("fixture modules");
+    const entries = [_]B.OrdinaryRegistryEntry{
+        .{ .src = "A/common.css", .revision_id = 7, .dedup_key = "TemplateStyles:r7", .url = base_url, .sha256 = &h_a, .body = a_css },
+        .{ .src = "B/common.css", .revision_id = 9, .dedup_key = "TemplateStyles:r9", .url = base_url, .sha256 = &h_b, .body = b_css },
+    };
+    const slots = [_]B.OrdinarySheet{
+        .{ .url = base_url, .sha256 = &h_a, .local_key = entries[0].dedup_key },
+        .{ .url = global_url, .sha256 = &h_g },
+        .{ .url = base_url, .sha256 = &h_b, .local_key = entries[1].dedup_key },
+    };
+    const registry: B.OrdinaryLocalRegistry = .{ .entries = &entries, .sanitizer_closure_sha256 = &h_module, .placement_sha256 = &h_place };
+    const plan = try B.OrdinaryLocalPlan.prepare(registry, &slots);
+    const first = "<templatestyles src=\"A/common.css\" />";
+    const second = "<templatestyles src=\"B/common.css\" />";
+    const expanded = first ++ "\n" ++ first ++ "\n" ++ second ++ "\n<div>owner</div>";
+    const raw = "{{Outer}}";
+    const start_b = 2 * (first.len + 1);
+    const ops = [_]B.OrdinaryStyleImport{
+        .{ .src = entries[0].src, .start = 0, .end = first.len },
+        .{ .src = entries[0].src, .start = first.len + 1, .end = 2 * first.len + 1 },
+        .{ .src = entries[1].src, .start = start_b, .end = start_b + second.len },
+    };
+    const sources = [_]S.Source{
+        .{ .css = a_css, .base_url = base_url }, .{ .css = global_css, .base_url = global_url }, .{ .css = b_css, .base_url = base_url },
+    };
+    const keys = [_]?[]const u8{ entries[0].dedup_key, null, entries[1].dedup_key };
+    var placement_digest: [32]u8 = undefined;
+    var module_digest: [32]u8 = undefined;
+    _ = try std.fmt.hexToBytes(&placement_digest, &h_place);
+    _ = try std.fmt.hexToBytes(&module_digest, &h_module);
+    const receipt: B.OrdinaryStyleReceipt = .{
+        .raw = raw, .expanded = expanded, .imports = &ops, .ordered = &sources, .placed_keys = &keys,
+        .placement_sha256 = placement_digest,
+        .module_selection_sha256 = module_digest,
+    };
+    const Names = struct { pub fn visit(_: @This(), _: B.OrdinarySourceCall) bool { return true; } };
+    try std.testing.expect(plan.matchesPlacement(raw, expanded, receipt));
+    try std.testing.expect(B.ordinaryFamilyStyleInventory(raw, expanded, &ops, Names{}));
+    try std.testing.expect(!B.ordinaryFamilySourceInventory(raw, expanded, Names{}));
+    try std.testing.expect(!B.ordinaryFamilyStyleInventory(raw, expanded, &.{ ops[0], ops[2] }, Names{}));
+    var crossed = ops;
+    crossed[0].end -= 1;
+    try std.testing.expect(!B.ordinaryFamilyStyleInventory(raw, expanded, &crossed, Names{}));
+    try std.testing.expect(!B.ordinaryFamilyStyleInventory(raw, "<templatestyles src=\"A/common.css\" wrapper=\"x\" />", &ops, Names{}));
+    try std.testing.expect(!B.ordinaryFamilyStyleInventory(raw, expanded ++ "\n<span class=\"vector-pinnable-header\"></span>", &ops, Names{}));
+    var stale = receipt;
+    stale.imports = &.{ ops[2], ops[1], ops[0] };
+    try std.testing.expect(!plan.matchesPlacement(raw, expanded, stale));
+    stale = receipt; stale.expanded = try a.dupe(u8, expanded);
+    try std.testing.expect(!plan.matchesPlacement(raw, expanded, stale));
+    stale = receipt; stale.placed_keys = &.{ null, keys[0], keys[2] };
+    try std.testing.expect(!plan.matchesPlacement(raw, expanded, stale));
+    stale = receipt; stale.placement_sha256[0] ^= 1;
+    try std.testing.expect(!plan.matchesPlacement(raw, expanded, stale));
+    crossed = ops; crossed[2].src = "Unknown.css";
+    stale = receipt; stale.imports = &crossed;
+    try std.testing.expect(!plan.matchesPlacement(raw, expanded, stale));
+    for (0..4) |i| {
+        var wrong = entries;
+        switch (i) {
+            0 => wrong[0].revision_id += 1,
+            1 => wrong[0].body = b_css,
+            2 => wrong[1].src = entries[0].src,
+            else => wrong[0].url = global_url,
+        }
+        var bad = registry; bad.entries = &wrong;
+        try std.testing.expectError(error.InvalidContainerDisclosureInput, B.OrdinaryLocalPlan.prepare(bad, &slots));
+    }
+    var unmarked = slots; unmarked[0].local_key = null;
+    try std.testing.expectError(error.InvalidContainerDisclosureInput, B.OrdinaryLocalPlan.prepare(registry, &unmarked));
+    try std.testing.expectError(error.InvalidContainerDisclosureInput, B.OrdinaryLocalPlan.prepare(registry, &.{ slots[0], slots[0] }));
+    // Book's normal finite entry remains available. This ordinary profile
+    // requires both producer receipts and the live source/body equality join.
+    var ns = try namespace_registry.Registry.init(a, @embedFile("testdata/it-per/namespace-registry.tsv"));
+    defer ns.deinit();
+    var input = try std.json.parseFromSliceLeaky(B.Input, a, @embedFile("testdata/it-cediglia-normal-disclosure/capture-input.json"), .{});
+    const button = input.pages[0].captures[0].policy.button.?;
+    const shell_steps = [_]S.DisclosureFontShellStep{
+        .{ .tag = "html", .fixed_attributes = &.{}, .extra_class_prefixes = &.{}, .variable_attributes = &.{} },
+        .{ .tag = "body", .fixed_attributes = &.{}, .extra_class_prefixes = &.{}, .variable_attributes = &.{} },
+        .{ .tag = "div", .fixed_attributes = &.{.{ .name = "class", .value = "mw-parser-output" }},
+            .extra_class_prefixes = &.{}, .variable_attributes = &.{} },
+    };
+    const manifest = try std.json.Stringify.valueAlloc(a, .{
+        .schema = "normal-parser-output-selected-templatestyles.v3", .wiki = input.wiki, .dump_date = input.dump_date,
+        .namespace_sha256 = input.namespace_sha256, .parser_constructor_sha256 = &h_place, .module_selection_sha256 = &h_module,
+        .initializer_sha256 = &h_module, .ua_basis_sha256 = &h_module, .root_font_and_faces_sha256 = &h_module,
+        .local_registry = registry, .sheets = @as([]const B.OrdinarySheet, &slots), .calls = @as([]const B.OrdinaryCall, &.{}),
+        .font = S.DisclosureRootFontInput{
+            .parser_font = .{ .family = .{ .name = "Fixture" }, .size = .{ .value = 16, .unit = .px },
+                .weight = 400, .italic = false, .line_height = .normal },
+            .covered_labels = &.{"Fixture"}, .parser_classes = "mw-parser-output",
+            .section_attributes = &.{ "data-mw-section-id", "id", "aria-labelledby", "about", "typeof", "data-mw", "data-parsoid", "data-x-id" },
+        },
+        .shell = S.DisclosureFontShell{ .path = &shell_steps, .medium_px = 16, .face_css_family = "sans-serif",
+            .initial_custom = .{ .complete = true } },
+    }, .{});
+    const manifest_hash = hash(manifest);
+    input.schema = "wikidict.container-disclosure-inputs.v2";
+    input.pages = &.{};
+    input.shared = .{
+        .protocol = "mediawiki-native-div-disclosure.v1", .ordinary_manifest = manifest,
+        .reference = .{ .scope = "current_normal_shared_initializer_css", .historical_deployment_qualified = false,
+            .initializer_sha256 = &h_module, .source_closure_sha256 = &h_module, .validation_sha256 = &h_module,
+            .ua_basis_sha256 = &h_module, .parser_constructor_sha256 = &h_place, .ordinary_manifest_sha256 = &manifest_hash },
+        .styles = &.{
+            .{ .url = base_url, .sha256 = &h_a, .body = a_css }, .{ .url = global_url, .sha256 = &h_g, .body = global_css },
+            .{ .url = base_url, .sha256 = &h_b, .body = b_css },
+        },
+        .ua = .{ .button = button, .foreground = .{ .kind = .rgb, .value = "#000000" }, .margin = .all(.{ .unit = .px, .value = 0 }),
+            .label_underline = false, .initial_float = .inline_flow, .color_scheme = "normal", .moz_focus_inner_absent = true, .focus_visible_supported = true },
+        .boundary = .{ .direction = .ltr, .color_scheme = "normal" },
+        .placement_shell = &.{ .{ .tag = "html", .content_ltr = false, .content_rtl = false },
+            .{ .tag = "body", .content_ltr = false, .content_rtl = false } },
+    };
+    const encoded = try std.json.Stringify.valueAlloc(a, input, .{});
+    var selected_book = try B.Book.init(a, encoded, &ns);
+    defer selected_book.deinit();
+    const good = (try selected_book.bindWithStyleReceipt(a, 0, true, false, "Fixture", 1, 1, raw, expanded, receipt)).?;
+    try std.testing.expect(good.page_style_scope != null);
+    const missing = (try selected_book.bind(a, 0, true, false, "Fixture", 1, 1, raw, expanded)).?;
+    try std.testing.expect(missing.page_style_scope == null);
+    for (0..5) |i| {
+        stale = receipt;
+        var changed = sources;
+        switch (i) {
+            0 => changed[1].base_url = base_url,
+            1 => changed[2].css = a_css,
+            2 => changed[1].unknown_applicability = true,
+            3 => stale.module_selection_sha256[0] ^= 1,
+            else => changed[0].byte_start = 1,
+        }
+        stale.ordered = &changed;
+        const refused = (try selected_book.bindWithStyleReceipt(a, 0, true, false, "Fixture", 1, 1, raw, expanded, stale)).?;
+        try std.testing.expect(refused.page_style_scope == null);
+    }
+    // One v4 Book resolves independently ordered page vectors, including the
+    // empty local selection. Neither the shared inventory nor siblings change.
+    var variable = try std.json.parseFromSliceLeaky(std.json.Value, a, manifest, .{});
+    try variable.object.put(a, "schema", .{ .string = "normal-parser-output-registered-style-vector.v4" });
+    const globals_json = try std.json.Stringify.valueAlloc(a, @as([]const B.OrdinarySheet, slots[1..2]), .{});
+    try variable.object.put(a, "sheets", try std.json.parseFromSliceLeaky(std.json.Value, a, globals_json, .{}));
+    const variable_bytes = try std.json.Stringify.valueAlloc(a, variable, .{});
+    const h_variable = hash(variable_bytes);
+    input.shared.?.ordinary_manifest = variable_bytes;
+    input.shared.?.reference.ordinary_manifest_sha256 = &h_variable;
+    input.shared.?.styles = input.shared.?.styles[1..2];
+    var variants = try B.Book.init(a, try std.json.Stringify.valueAlloc(a, input, .{}), &ns);
+    defer variants.deinit();
+    var one = receipt;
+    one.expanded = first;
+    one.imports = ops[0..1];
+    one.ordered = sources[0..2];
+    one.placed_keys = keys[0..2];
+    const local_page = (try variants.bindWithStyleReceipt(a, 0, true, false, "A", 1, 1, raw, first, one)).?;
+    try std.testing.expectEqual(@as(usize, 2), local_page.page_style_scope.?.shared.styles.retained_sources.len);
+    var none = one;
+    none.expanded = "ordinary";
+    none.imports = &.{};
+    none.ordered = sources[1..2];
+    none.placed_keys = keys[1..2];
+    const plain = (try variants.bindWithStyleReceipt(a, 0, true, false, "B", 2, 2, raw, none.expanded, none)).?;
+    try std.testing.expectEqual(@as(usize, 1), plain.page_style_scope.?.shared.styles.retained_sources.len);
+    try std.testing.expect(local_page.shared_profile == local_page.page_style_scope.?.shared and
+        local_page.shared_profile != plain.shared_profile);
+    const both = (try variants.bindWithStyleReceipt(a, 0, true, false, "C", 3, 3, raw, expanded, receipt)).?;
+    try std.testing.expectEqual(@as(usize, 3), both.page_style_scope.?.shared.styles.retained_sources.len);
+    one.ordered = sources[1..3];
+    const crossed_vector = (try variants.bindWithStyleReceipt(a, 0, true, false, "D", 4, 4, raw, first, one)).?;
+    try std.testing.expect(crossed_vector.page_style_scope == null);
+
+}
+
+test "IT worker effect reply binds page scope selects TOC and independently places registered sheets" {
+    const B = container_disclosure_inputs;
+    const S = encoder.table_style_profile;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const hash = struct {
+        fn of(data: []const u8) [64]u8 {
+            var bytes: [32]u8 = undefined;
+            std.crypto.hash.sha2.Sha256.hash(data, &bytes, .{});
+            return std.fmt.bytesToHex(bytes, .lower);
+        }
+    }.of;
+    const base_url = "https://fixture.example/wiki/Entry";
+    const global_url = "https://fixture.example/w/global.css";
+    const global_css = "html{font-family:sans-serif}";
+    const a_css = ".mw-parser-output .a{color:#123}";
+    const b_css = ".mw-parser-output .b{color:#456}";
+    const h_g = hash(global_css);
+    const h_a = hash(a_css);
+    const h_b = hash(b_css);
+    const h_place = hash("fixture placement");
+    const h_module = hash("fixture modules");
+    const entries = [_]B.OrdinaryRegistryEntry{
+        .{ .src = "A/common.css", .revision_id = 7, .dedup_key = "TemplateStyles:r7", .url = base_url, .sha256 = &h_a, .body = a_css },
+        .{ .src = "B/common.css", .revision_id = 9, .dedup_key = "TemplateStyles:r9", .url = base_url, .sha256 = &h_b, .body = b_css },
+    };
+    var ns = try namespace_registry.Registry.init(a, @embedFile("testdata/it-per/namespace-registry.tsv"));
+    defer ns.deinit();
+    var input = try std.json.parseFromSliceLeaky(B.Input, a, @embedFile("testdata/it-cediglia-normal-disclosure/capture-input.json"), .{});
+    const button = input.pages[0].captures[0].policy.button.?;
+    const shell_steps = [_]S.DisclosureFontShellStep{
+        .{ .tag = "html", .fixed_attributes = &.{}, .extra_class_prefixes = &.{}, .variable_attributes = &.{} },
+        .{ .tag = "body", .fixed_attributes = &.{}, .extra_class_prefixes = &.{}, .variable_attributes = &.{} },
+        .{ .tag = "div", .fixed_attributes = &.{.{ .name = "class", .value = "mw-parser-output" }},
+            .extra_class_prefixes = &.{}, .variable_attributes = &.{} },
+    };
+    const slots = [_]B.OrdinarySheet{ .{ .url = global_url, .sha256 = &h_a },
+        .{ .url = global_url, .sha256 = &h_g }, .{ .url = global_url, .sha256 = &h_b } };
+    const registry: B.OrdinaryLocalRegistry = .{ .entries = &entries, .sanitizer_closure_sha256 = &h_module, .placement_sha256 = &h_place };
+    const manifest = try std.json.Stringify.valueAlloc(a, .{
+        .schema = "normal-parser-output-registered-style-vector.v4", .wiki = input.wiki, .dump_date = input.dump_date,
+        .namespace_sha256 = input.namespace_sha256, .parser_constructor_sha256 = &h_place, .module_selection_sha256 = &h_module,
+        .initializer_sha256 = &h_module, .ua_basis_sha256 = &h_module, .root_font_and_faces_sha256 = &h_module,
+        .worker_projection = .{ .schema = "native-it-normal-module-projection.v1", .catalog_sha256 = &h_module,
+            .feature_source_sha256 = &h_module, .placement_source_sha256 = &h_place,
+            .local_placement = "document-prefix-first-key.v1",
+            .toc_on = @as([]const B.OrdinarySheet, &slots), .toc_off = @as([]const B.OrdinarySheet, slots[0..2]),
+            .without_tmh = .{ .toc_on = @as([]const B.OrdinarySheet, slots[1..3]), .toc_off = @as([]const B.OrdinarySheet, slots[1..2]) },
+            .media_operations = .{.{ .operand = "[[File:Tone.ogg]]", .evidence_sha256 = &h_module,
+                .media = "successful_audio_video", .thumbnail = false }} },
+        .local_registry = registry, .sheets = @as([]const B.OrdinarySheet, &slots), .calls = @as([]const B.OrdinaryCall, &.{}),
+        .font = S.DisclosureRootFontInput{
+            .parser_font = .{ .family = .{ .name = "Fixture" }, .size = .{ .value = 16, .unit = .px },
+                .weight = 400, .italic = false, .line_height = .normal },
+            .covered_labels = &.{"Fixture"}, .parser_classes = "mw-parser-output",
+            .section_attributes = &.{ "data-mw-section-id", "id", "aria-labelledby", "about", "typeof", "data-mw", "data-parsoid", "data-x-id" },
+        },
+        .shell = S.DisclosureFontShell{ .path = &shell_steps, .medium_px = 16, .face_css_family = "sans-serif",
+            .initial_custom = .{ .complete = true } },
+    }, .{});
+    const manifest_hash = hash(manifest);
+    input.schema = "wikidict.container-disclosure-inputs.v2";
+    input.pages = &.{};
+    input.shared = .{
+        .protocol = "mediawiki-native-div-disclosure.v1", .ordinary_manifest = manifest,
+        .reference = .{ .scope = "current_normal_shared_initializer_css", .historical_deployment_qualified = false,
+            .initializer_sha256 = &h_module, .source_closure_sha256 = &h_module, .validation_sha256 = &h_module,
+            .ua_basis_sha256 = &h_module, .parser_constructor_sha256 = &h_place, .ordinary_manifest_sha256 = &manifest_hash },
+        .styles = &.{
+            .{ .url = global_url, .sha256 = &h_a, .body = a_css },
+            .{ .url = global_url, .sha256 = &h_g, .body = global_css },
+            .{ .url = global_url, .sha256 = &h_b, .body = b_css },
+        },
+        .ua = .{ .button = button, .foreground = .{ .kind = .rgb, .value = "#000000" }, .margin = .all(.{ .unit = .px, .value = 0 }),
+            .label_underline = false, .initial_float = .inline_flow, .color_scheme = "normal", .moz_focus_inner_absent = true, .focus_visible_supported = true },
+        .boundary = .{ .direction = .ltr, .color_scheme = "normal" },
+        .placement_shell = &.{ .{ .tag = "html", .content_ltr = false, .content_rtl = false },
+            .{ .tag = "body", .content_ltr = false, .content_rtl = false } },
+    };
+    var selected = try B.Book.init(a, try std.json.Stringify.valueAlloc(a, input, .{}), &ns);
+    defer selected.deinit();
+    const protocol = @import("bundle_protocol");
+    const id: protocol.PageIdentity = .{ .index_offset = 23, .namespace = 0, .page_id = 1, .revision_id = 7 };
+    const raw = "{{Outer}}";
+    const prefix = "<templatestyles src=\"A/common.css\" />\n";
+    const media = "[[File:Tone.ogg]]";
+    const title = "Entry";
+    const profile = selected.workerEffectProfile(0, true, false, title, 1).?;
+    try std.testing.expect(selected.workerEffectProfile(0, true, true, title, 1) == null);
+    const Origin = struct { src: []const u8, origin: []const u8 };
+    const origins = [_]Origin{ .{ .src = "A/common.css", .origin = "expanded_output" },
+        .{ .src = "B/common.css", .origin = "extension_call" } };
+    const origins_both = origins ++ [_]Origin{.{ .src = "B/common.css", .origin = "expanded_output" }};
+    const second_prefix = "<templatestyles src=\"B/common.css\" />\n";
+    const Case = struct { expanded: []const u8, accepted: bool = true, toc: bool = false, tmh: bool = false,
+        second: bool = false, imports: usize = 1, local_keys: []const usize = &.{0} };
+    const wrapped_table = "<div><div>\n{|\n|cell\n|}</div></div>\n";
+    const headings = "==a==\n==b==\n==c==\n==d==\n";
+    const external = "* source, [[http://example.test/dictionary/ ] online edition]";
+    for ([_]Case{
+        .{ .expanded = prefix ++ media, .tmh = true },
+        .{ .expanded = prefix ++ headings ++ media, .toc = true, .tmh = true },
+        .{ .expanded = prefix ++ "plain" },
+        .{ .expanded = prefix ++ "</br>\n" ++ headings, .toc = true },
+        .{ .expanded = prefix ++ "<div>a</br>b</BR>c</div>\n" ++ headings, .toc = true },
+        .{ .expanded = prefix ++ "<div>\n{|\n|a</br>b\n|}</div>\n" ++ headings, .toc = true },
+        .{ .expanded = prefix ++ "<div><br/><small>x</small></BR></div>\n" ++ headings, .toc = true },
+        .{ .expanded = prefix ++ "<div><small>x</BR></div>", .accepted = false },
+        .{ .expanded = prefix ++ "<div>\n{|\n|cell\n|}</br>\n</div>", .accepted = false },
+        .{ .expanded = prefix ++ "</br >", .accepted = false },
+        .{ .expanded = prefix ++ "</br\t>", .accepted = false },
+        .{ .expanded = prefix ++ "</br/>", .accepted = false },
+        .{ .expanded = prefix ++ "</br class=\"sortable\">", .accepted = false },
+        .{ .expanded = prefix ++ "</br clear=\"both\">", .accepted = false },
+        .{ .expanded = prefix ++ "<div>text</br>", .accepted = false },
+        .{ .expanded = prefix ++ "<div>text</b></div>", .accepted = false },
+        .{ .expanded = prefix ++ "<nowiki>a</br>b</nowiki>", .accepted = false },
+        .{ .expanded = prefix ++ "a&lt;/br&gt;b", .accepted = false },
+        .{ .expanded = prefix ++ second_prefix ++ prefix ++ "plain", .second = true, .imports = 3, .local_keys = &.{0, 1} },
+        .{ .expanded = second_prefix ++ prefix ++ "plain", .second = true, .imports = 2, .local_keys = &.{1, 0} },
+        .{ .expanded = "plain\n" ++ prefix, .accepted = false },
+        .{ .expanded = " " ++ prefix, .accepted = false },
+        .{ .expanded = "<table>\n<tr><td>\n" ++ prefix ++ "</td></tr>\n<div>\n" ++ second_prefix ++ "</div>\n</table>", .second = true, .accepted = false },
+        .{ .expanded = prefix ++ wrapped_table ++ headings ++ external ++ "\n" ++ media, .toc = true, .tmh = true },
+        .{ .expanded = prefix ++ "<div>\n{|\n|cell\n|} \t</div>\n" ++ external },
+        .{ .expanded = prefix ++ "[[https://example.test/path label]\n" ++ media, .tmh = true },
+        .{ .expanded = prefix ++ headings ++ "<div>\n== [[Topic]] ==\n</div>", .toc = true },
+        .{ .expanded = prefix ++ "==a==\n==b==\n==c==\n<div>\n==d==\n</div>", .accepted = false },
+        .{ .expanded = prefix ++ headings ++ "<div>\n== [[File:Unknown.svg]] ==\n</div>", .accepted = false },
+        .{ .expanded = prefix ++ "|}</div>", .accepted = false },
+        .{ .expanded = prefix ++ "<div>\n{|\n|cell\n|}text</div>", .accepted = false },
+        .{ .expanded = prefix ++ "<div>\n{|\n|cell\n|}<b></b></div>", .accepted = false },
+        .{ .expanded = prefix ++ "<div>\n{|\n|cell\n|}[[File:Unknown.svg]]</div>", .accepted = false },
+        .{ .expanded = prefix ++ "{|\n|<div>cell\n|}</div>", .accepted = false },
+        .{ .expanded = prefix ++ "<div>\n{|\n|</div><div>cell\n|}</div>", .accepted = false },
+        .{ .expanded = prefix ++ "[[http:// label] words]", .accepted = false },
+        .{ .expanded = prefix ++ "[[https://example.test/no-close\n later]", .accepted = false },
+        .{ .expanded = prefix ++ "[[https://example.test/ [[File:Unknown.svg]]] words]", .accepted = false },
+        .{ .expanded = prefix ++ "[[https://example.test/ ] words [[File:Unknown.svg]]", .accepted = false },
+        .{ .expanded = prefix ++ external ++ "]", .accepted = false },
+    }) |case| {
+        const expanded = case.expanded;
+        const observed: []const Origin = if (case.second) &origins_both else &origins;
+        const phase = try std.json.Stringify.valueAlloc(a, .{ .schema = "wikidict.page-effects.v1", .status = "complete",
+            .collector = "native-executed-extensions.v1", .generation = 8,
+            .identity = .{ .title = title, .namespace = 0, .page_id = 1, .revision_id = 7 },
+            .source_sha256 = &hash(raw), .expanded_sha256 = &hash(expanded), .display_title_sha256 = &hash(""),
+            .observed_extensions = .{"templatestyles"}, .operation_count = observed.len, .template_styles = observed,
+            .placement = @as(?bool, null) }, .{});
+        const payload: protocol.BoundPageEffects = .{ .binding = protocol.pageEffectBinding(profile, 8, id, title, raw, expanded, phase),
+            .collector = phase };
+        const result = try selected.styleReceiptFromExpansion(a, 8, id, title, raw, expanded, "", false, payload, &ns);
+        if (!case.accepted) {
+            try std.testing.expect(result == null);
+            continue;
+        }
+        const receipt = result orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(case.toc, receipt.worker_features.?.toc);
+        try std.testing.expectEqual(case.tmh, receipt.worker_features.?.tmh);
+        const sheet_count = @as(usize, 1) + @intFromBool(case.toc) + @intFromBool(case.tmh) + case.local_keys.len;
+        try std.testing.expectEqual(sheet_count, receipt.ordered.len);
+        try std.testing.expectEqual(case.imports, receipt.imports.len);
+        for (case.local_keys, 0..) |key, index| {
+            try std.testing.expectEqualStrings(entries[key].dedup_key,
+                receipt.placed_keys[receipt.placed_keys.len - case.local_keys.len + index].?);
+        }
+        try std.testing.expectEqualStrings("https://it.wiktionary.org/w/index.php?title=Entry&oldid=7&useskin=vector-2022",
+            receipt.ordered[receipt.ordered.len - 1].base_url);
+        const held = (try selected.bindWithStyleReceipt(a, 0, true, false, title, 1, 7, raw, expanded, receipt)).?;
+        try std.testing.expectEqual(receipt.ordered.len, held.page_style_scope.?.shared.styles.retained_sources.len);
+        // Offset-zero global sheets must still precede all locals. The old
+        // consumer checked local order while skipping intervening globals.
+        var interleaved = receipt;
+        const interleaved_sources = try a.dupe(S.Source, receipt.ordered);
+        const interleaved_keys = try a.dupe(?[]const u8, receipt.placed_keys);
+        const first_local = receipt.ordered.len - case.local_keys.len;
+        std.mem.swap(S.Source, &interleaved_sources[0], &interleaved_sources[first_local]);
+        std.mem.swap(?[]const u8, &interleaved_keys[0], &interleaved_keys[first_local]);
+        interleaved.ordered = interleaved_sources; interleaved.placed_keys = interleaved_keys;
+        const misplaced = (try selected.bindWithStyleReceipt(a, 0, true, false, title, 1, 7, raw, expanded, interleaved)).?;
+        try std.testing.expect(misplaced.page_style_scope == null);
+        if (case.toc and case.tmh) {
+            // Full global vector plus registry bases made this downgrade
+            // indistinguishable from the old non-worker receipt path.
+            var downgraded = receipt;
+            downgraded.worker_features = null; downgraded.document_base = null;
+            const legacy_bases = try a.dupe(S.Source, receipt.ordered);
+            for (legacy_bases[first_local..], case.local_keys) |*source, key| source.base_url = entries[key].url;
+            downgraded.ordered = legacy_bases;
+            const unbound = (try selected.bindWithStyleReceipt(a, 0, true, false, title, 1, 7, raw, expanded, downgraded)).?;
+            try std.testing.expect(unbound.page_style_scope == null);
+        }
+        try std.testing.expect((try selected.styleReceiptFromExpansion(a, 9, id, title, raw, expanded, "", false, payload, &ns)) == null);
+        try std.testing.expect((try selected.styleReceiptFromExpansion(a, 8, id, title, raw, expanded, "different", false, payload, &ns)) == null);
+        try std.testing.expect((try selected.styleReceiptFromExpansion(a, 8, id, title, "crossed", expanded, "", false, payload, &ns)) == null);
+        try std.testing.expect((try selected.styleReceiptFromExpansion(a, 8, id, title, raw, expanded, "", true, payload, &ns)) == null);
+        try std.testing.expect((try selected.styleReceiptFromExpansion(a, 8, id, title, raw, expanded, "", false, null, &ns)) == null);
+        // Even a correctly bound opaque frame cannot conceal invalid inner phase data.
+        const bad: protocol.BoundPageEffects = .{ .binding = protocol.pageEffectBinding(profile, 8, id, title, raw, expanded, "{}"),
+            .collector = "{}" };
+        try std.testing.expect((try selected.styleReceiptFromExpansion(a, 8, id, title, raw, expanded, "", false, bad, &ns)) == null);
+    }
+}
+
+test "IT shared disclosure runtime input admits retained normal family and denies foreign scope" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var ns = try namespace_registry.Registry.init(a, @embedFile("testdata/it-per/namespace-registry.tsv"));
+    defer ns.deinit();
+    var selected = try container_disclosure_inputs.Book.init(a,
+        @embedFile("testdata/it-shared-disclosure09/input.json"), &ns);
+    defer selected.deinit();
+    try std.testing.expect(selected.workerEffectProfile(0, true, false, "informatica", 776) != null);
+    try std.testing.expect(selected.workerEffectProfile(1, true, false, "informatica", 776) == null);
+    try std.testing.expect(selected.workerEffectProfile(0, false, false, "informatica", 776) == null);
+    try std.testing.expect(selected.workerEffectProfile(0, true, true, "informatica", 776) == null);
+    // Already qualified finite rows do not acquire a second shared authority.
+    try std.testing.expect(selected.workerEffectProfile(0, true, false, "casa", 742) == null);
+}
+
+test "IT local stylesheet prefix retains first keys and refuses movable body imports" {
+    const B = container_disclosure_inputs;
+    const a_tag = "<templatestyles src=\"A/common.css\" />";
+    const b_tag = "<templatestyles src=\"B/common.css\" />";
+    const Case = struct { source: []const u8, accepted: bool };
+    for ([_]Case{
+        .{ .source = a_tag ++ "\nplain", .accepted = true },
+        .{ .source = "\n\r\n" ++ a_tag ++ "\nplain", .accepted = true },
+        .{ .source = a_tag ++ " \t\r\n\r\n" ++ b_tag ++ "\nplain", .accepted = true },
+        .{ .source = a_tag ++ "\n" ++ b_tag ++ "\n" ++ a_tag ++ "\nplain", .accepted = true },
+        .{ .source = a_tag ++ "\n<table><tr><td>body</td></tr></table>", .accepted = true },
+        .{ .source = a_tag ++ "\n{|\n|body\n|}", .accepted = true },
+        .{ .source = "text\n" ++ a_tag, .accepted = false },
+        .{ .source = "<div>\n" ++ a_tag ++ "\n</div>", .accepted = false },
+        .{ .source = "<table>\n<tr><td>\n" ++ a_tag ++ "\n</td></tr>\n<div>\n" ++ b_tag ++ "\n</div>\n</table>", .accepted = false },
+        .{ .source = a_tag ++ "\n<table><tr><td>\n" ++ b_tag ++ "\n</td></tr></table>", .accepted = false },
+        .{ .source = a_tag ++ "\nplain\n" ++ a_tag, .accepted = false },
+        .{ .source = " " ++ a_tag, .accepted = false },
+        .{ .source = "\t" ++ a_tag, .accepted = false },
+        .{ .source = " \n" ++ a_tag, .accepted = false },
+        .{ .source = a_tag ++ "\n \n" ++ b_tag, .accepted = false },
+        .{ .source = "\r" ++ a_tag, .accepted = false },
+        .{ .source = "\xef\xbb\xbf" ++ a_tag, .accepted = false },
+        .{ .source = "<!-- prefix -->\n" ++ a_tag, .accepted = false },
+        .{ .source = "{|\n|\n" ++ a_tag ++ "\n|}", .accepted = false },
+        .{ .source = "&nbsp;\n" ++ a_tag, .accepted = false },
+        .{ .source = "<nowiki>\n" ++ a_tag ++ "\n</nowiki>", .accepted = false },
+        .{ .source = "<div class=\"mw-collapsible\"><div class=\"mw-collapsible-toggle-placeholder\">\n" ++ a_tag ++ "\n</div></div>", .accepted = false },
+    }) |case| {
+        var ops: [4]B.OrdinaryStyleImport = undefined;
+        var count: usize = 0;
+        var cursor: usize = 0;
+        while (std.mem.indexOfPos(u8, case.source, cursor, "<templatestyles")) |start| {
+            const end = (std.mem.indexOfScalarPos(u8, case.source, start, '>') orelse unreachable) + 1;
+            ops[count] = .{ .start = start, .end = end,
+                .src = if (std.mem.eql(u8, case.source[start..end], a_tag)) "A/common.css" else "B/common.css" };
+            count += 1;
+            cursor = end;
+        }
+        try std.testing.expectEqual(case.accepted, B.ordinaryStylePrefix(case.source, ops[0..count]));
+        if (case.accepted) {
+            var crossed = ops;
+            crossed[0].end -= 1;
+            try std.testing.expect(!B.ordinaryStylePrefix(case.source, crossed[0..count]));
+            crossed = ops; crossed[0].src = "foreign.css";
+            try std.testing.expect(!B.ordinaryStylePrefix(case.source, crossed[0..count]));
+            if (count > 1) {
+                try std.testing.expect(!B.ordinaryStylePrefix(case.source, ops[0..count - 1]));
+                crossed = ops; std.mem.swap(B.OrdinaryStyleImport, &crossed[0], &crossed[1]);
+                try std.testing.expect(!B.ordinaryStylePrefix(case.source, crossed[0..count]));
+            }
+        }
+    }
+
+    // Authentic retained numerale p2027/r3890149, without replacing its body
+    // by a synthetic owner. The separate worker/caller controls bind effects.
+    const genuine = @embedFile("testdata/it-shared-disclosure11/numerale-expanded.wikitext");
+    try std.testing.expectEqual(@as(usize, 3498), genuine.len);
+    var actual_hash: [32]u8 = undefined;
+    var expected_hash: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(genuine, &actual_hash, .{});
+    _ = try std.fmt.hexToBytes(&expected_hash, "d288eaa89509a8e0a3347c9aede4e113182b1ea4951e94997a2c589dc8439fdf");
+    try std.testing.expectEqualSlices(u8, &expected_hash, &actual_hash);
+    const first_end = std.mem.indexOfScalar(u8, genuine, '\n') orelse unreachable;
+    const first = B.OrdinaryStyleImport{ .start = 0, .end = first_end, .src = "Mbox/common.css" };
+    try std.testing.expect(B.ordinaryStylePrefix(genuine, &.{first}));
+
+    const before = "visible body\n";
+    const displaced = try std.mem.concat(std.testing.allocator, u8, &.{ before, genuine });
+    defer std.testing.allocator.free(displaced);
+    try std.testing.expect(!B.ordinaryStylePrefix(displaced, &.{.{
+        .start = before.len, .end = before.len + first_end, .src = first.src,
+    }}));
+
+    const late = try std.mem.concat(std.testing.allocator, u8, &.{ genuine, "\n", genuine[0..first_end] });
+    defer std.testing.allocator.free(late);
+    try std.testing.expect(!B.ordinaryStylePrefix(late, &.{ first, .{
+        .start = genuine.len + 1, .end = late.len, .src = first.src,
+    } }));
+
+    // Genuine two-key Ambox source retains its literal closing BR. It is a
+    // void line break in the existing renderer and must not pop the DIV.
+    const mancese = @embedFile("testdata/it-shared-disclosure11/mancese-expanded.wikitext");
+    try std.testing.expectEqual(@as(usize, 5224), mancese.len);
+    var mancese_actual: [32]u8 = undefined;
+    var mancese_expected: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(mancese, &mancese_actual, .{});
+    _ = try std.fmt.hexToBytes(&mancese_expected, "5f93943c9a336c0277e29cc0b32a7c8e315952d014a66e8114eb1cc867ec5c7e");
+    try std.testing.expectEqualSlices(u8, &mancese_expected, &mancese_actual);
+    const amb_end = std.mem.indexOfScalarPos(u8, mancese, 41, '\n') orelse unreachable;
+    try std.testing.expect(B.ordinaryStylePrefix(mancese, &.{
+        .{ .start = 0, .end = 40, .src = "Mbox/common.css" },
+        .{ .start = 41, .end = amb_end, .src = "Ambox/styles.css" },
+    }));
+}
+
+test "IT disclosure Book retains a stable CSS allocator and cleans failed construction" {
+    const B = container_disclosure_inputs;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const temp = arena.allocator();
+    var ns = try namespace_registry.Registry.init(temp, @embedFile("testdata/it-per/namespace-registry.tsv"));
+    defer ns.deinit();
+    const bytes = @embedFile("testdata/it-shared-disclosure09/input.json");
+    var backing: std.heap.DebugAllocator(.{}) = .init;
+    var backing_live = true;
+    defer if (backing_live) { _ = backing.deinit(); };
+    const a = backing.allocator();
+    const Load = struct {
+        fn book(allocator: std.mem.Allocator, input: []const u8, namespaces: *const namespace_registry.Registry) !B.Book {
+            return B.Book.init(allocator, input, namespaces);
+        }
+    };
+    {
+        // The Book crosses both init and this helper's return boundary.
+        var selected = try Load.book(a, bytes, &ns);
+        defer selected.deinit();
+        const shared = selected.shared orelse return error.TestUnexpectedResult;
+        try std.testing.expect(shared.styles.arena.child_allocator.ptr == a.ptr);
+        try std.testing.expect(shared.styles.arena.child_allocator.vtable == a.vtable);
+        try std.testing.expect(selected.workerEffectProfile(0, true, false, "informatica", 776) != null);
+    }
+    // Shared CSS has been created before the ordinary manifest digest fails.
+    // Its separate arena must be retired as well as the Book's string arena.
+    var invalid = try std.json.parseFromSliceLeaky(B.Input, temp, bytes, .{});
+    invalid.shared.?.reference.ordinary_manifest_sha256 = "0000000000000000000000000000000000000000000000000000000000000000";
+    const invalid_bytes = try std.json.Stringify.valueAlloc(temp, invalid, .{});
+    try std.testing.expectError(error.InvalidContainerDisclosureInput, B.Book.init(a, invalid_bytes, &ns));
+    const check = backing.deinit();
+    backing_live = false;
+    try std.testing.expectEqual(std.heap.Check.ok, check);
+}
+
+test "IT genuine informatica compiles and retains the typed disclosure through the whole page" {
+    const B = container_disclosure_inputs;
+    const protocol = @import("bundle_protocol");
+    const F = struct {
+        const T = encoder.presentation_types;
+        fn authoredLabels(policy: T.ContainerDisclosure) bool {
+            const expand = policy.expand_run orelse return false;
+            const collapse = policy.collapse_run orelse return false;
+            return encoder.table_style_profile.disclosureSourceLabelAgrees(policy.expand_label, expand, "Mostra") and
+                encoder.table_style_profile.disclosureSourceLabelAgrees(policy.collapse_label, collapse, "Nascondi");
+        }
+        fn findFlowDisclosure(parts: []const T.FlowPart) ?T.Container {
+            for (parts) |part| {
+                if (part.figure) |figure| if (figure.caption_blocks) |caption|
+                    if (findDisclosure(caption)) |found| return found;
+                if (part.scope) |scope| if (findFlowDisclosure(scope.parts)) |found| return found;
+            }
+            return null;
+        }
+        fn findDisclosure(values: []const T.Block) ?T.Container {
+            for (values) |block| {
+                if (T.contentBox(block)) |box| {
+                    if (box.disclosure) |policy| {
+                        std.debug.print("IT_GENUINE_INPUT12 stored labels expand={s} collapse={s} child={d}\n",
+                            .{ policy.expand_label, policy.collapse_label, policy.content_index });
+                        if (policy.expand_run) |run|
+                            std.debug.print("IT_GENUINE_INPUT12 stored expand_run={d}:{d}\n", .{ run.start, run.end });
+                        if (policy.collapse_run) |run|
+                            std.debug.print("IT_GENUINE_INPUT12 stored collapse_run={d}:{d}\n", .{ run.start, run.end });
+                        if (authoredLabels(policy)) return box;
+                    }
+                    if (findDisclosure(box.blocks)) |found| return found;
+                }
+                if (block.table) |table| {
+                    if (table.caption_blocks) |caption| if (findDisclosure(caption)) |found| return found;
+                    for (table.rows) |row| for (row.cells) |cell| if (cell.blocks) |children| {
+                        if (findDisclosure(children)) |found| return found;
+                    };
+                }
+                if (block.figure) |figure| if (figure.caption_blocks) |caption|
+                    if (findDisclosure(caption)) |found| return found;
+                if (block.flow) |flow| if (findFlowDisclosure(flow)) |found| return found;
+            }
+            return null;
+        }
+        fn hash(bytes: []const u8, expected: []const u8) !void {
+            var digest: [32]u8 = undefined;
+            std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
+            try std.testing.expectEqualStrings(expected, &std.fmt.bytesToHex(digest, .lower));
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var checkpoint: []const u8 = "exact genuine source, input12 and retained Worker v6 receipt";
+    errdefer std.debug.print("IT_GENUINE_INPUT12 checkpoint={s}\n", .{checkpoint});
+    const raw = @embedFile("testdata/it-disclosure-prepass01/informatica-raw.wikitext");
+    const source = @embedFile("testdata/it-disclosure-prepass01/informatica-expanded.wikitext");
+    const collector = @embedFile("testdata/it-disclosure-prepass01/informatica-effects.json");
+    const binding_bytes = @embedFile("testdata/it-disclosure-prepass01/informatica-effects-binding.bin");
+    const input = @embedFile("testdata/it-shared-disclosure12/input.json");
+    try F.hash(raw, "62d16c6da9dd78d337ecec5bdd2cf5f88bd8ddf29cbb5915344ef9c1d69d7c02");
+    try F.hash(source, "69e2f3d26c3b943eb1db4b7033885dd4500cadd63969db6a02ed46e8397f0b23");
+    try F.hash(input, "422879ff6648cffd601e123314f2a04400a8ad765c8d0223b2d213527e072043");
+    try F.hash(collector, "516de8ab3e581cfa5c584cd754b73011400c17cc276ec230e50ddcb00853fd31");
+    var ns = try namespace_registry.Registry.init(a, @embedFile("testdata/it-per/namespace-registry.tsv"));
+    defer ns.deinit();
+    try ns.attachInterwikiMap(@embedFile("testdata/it-consistente/interwiki-map.tsv"));
+    try ns.attachLanguageConversion(@embedFile("testdata/it-consistente/namespace-siteinfo.raw.json"));
+    var book = try B.Book.init(a, input, &ns); defer book.deinit();
+    const profile = book.workerEffectProfile(0, true, false, "informatica", 776) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("1b145d14aa526dfb75199e86bbbd70944fd4e0c57c01cb319869740b26825ef2", &std.fmt.bytesToHex(profile, .lower));
+    const id: protocol.PageIdentity = .{ .index_offset = 9319, .namespace = 0, .page_id = 776, .revision_id = 4263579 };
+    var binding: [32]u8 = undefined;
+    @memcpy(&binding, binding_bytes);
+    try std.testing.expectEqualSlices(u8, &binding, &protocol.pageEffectBinding(profile, 72, id, "informatica", raw, source, collector));
+    const payload: protocol.BoundPageEffects = .{ .binding = binding, .collector = collector };
+    const receipt = (try book.styleReceiptFromExpansion(a, 72, id, "informatica", raw, source, "", false, payload, &ns)) orelse return error.TestUnexpectedResult;
+    const held = (try book.bindWithStyleReceipt(a, 0, true, false, "informatica", 776, 4263579, raw, source, receipt)) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(held.captures.len == 0 and held.shared_profile != null);
+    const style_scope = held.page_style_scope orelse return error.TestUnexpectedResult;
+    try std.testing.expect(held.shared_profile == style_scope.shared and
+        held.source.ptr == style_scope.source.ptr and held.source.len == style_scope.source.len);
+
+    const behavior_bytes = @embedFile("testdata/it-per/behavior-switches.tsv");
+    var behavior = try namespace_registry.behavior_switches.Registry.init(a, behavior_bytes, ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256);
+    defer behavior.deinit();
+    var digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(behavior_bytes, &digest, .{});
+    var images = try namespace_registry.image_options.Registry.init(a, @embedFile("testdata/it-per/image-options.tsv"), ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256, digest);
+    defer images.deinit();
+    var registry = language_registry.Registry.empty(a);
+    defer registry.deinit();
+    try registry.addTsv(@embedFile("testdata/it-per/language-registry.tsv"));
+    var codes = languageCodes(&registry, &ns);
+    codes.behavior_switches = &behavior;
+    codes.image_options = &images;
+    const gadget = @embedFile("testdata/it-cediglia-normal-disclosure/IndiceOrizzontale.css");
+    const common = @embedFile("testdata/it-consistente/it-common.css");
+    try F.hash(gadget, "e709e719949c725531cad0cfba932c7efa2bff992098a74a27c81910c94d81ac");
+    try F.hash(common, "98694865a8a0da877f6cad072dbf74ff605b410afaa3587b39c7864ddacc294a");
+    var table_styles = try encoder.table_style_profile.parseSourcesAlloc(a, &.{
+        .{ .css = gadget, .base_url = "" },
+        .{ .css = common, .base_url = "" },
+    });
+    defer table_styles.deinit();
+    codes.table_styles = &table_styles;
+    codes.container_disclosures = held;
+    const attributes = held.shared_profile.?.owner_attribute_projection orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 1), attributes.absent.len);
+    try std.testing.expectEqualStrings("hidden", attributes.absent[0]);
+    const id_domain = attributes.generated_id orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("mw", id_domain.prefix);
+    try std.testing.expectEqualStrings("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_", id_domain.suffix_alphabet);
+    try std.testing.expectEqual(@as(usize, 2), id_domain.min_suffix_bytes);
+    try std.testing.expectEqual(@as(usize, 11), id_domain.max_suffix_bytes);
+    var page: encoder.blob_builder.PreparedPage = .{ .ns = .{ .id = 0, .kind = .language }, .title = "informatica" };
+    checkpoint = "genuine ordinary PreparedPage compilation";
+    try page.compileWithPhasesAndRoot(a, codes, source, raw, null, null, null, null, .parser_output);
+    try std.testing.expectEqual(@as(usize, 2), page.records.items.len);
+
+    var witnessed = false;
+    for (page.records.items, [_][]const u8{ "it", "nl" }) |record, code| {
+        checkpoint = "all decoded whole-page records";
+        try std.testing.expectEqualStrings("informatica", record.title);
+        try std.testing.expect(record.kind == .language);
+        try std.testing.expectEqualStrings(code, record.language_code);
+        const expected_sha = if (std.mem.eql(u8, code, "it"))
+            "34c7b336a33ecb5cad3bfa3341eb5df58cda07a89cd63299c7c1620ac3d9cd20"
+        else
+            "31e4a4a1bc1e55ce1688e331d98fd374c893887377ceaf32a0ca9645e00de542";
+        const decoded = try encoder.presentation_codec.decodeAlloc(a, record.payload, record.title, record.kind,
+            .{ .heading = record.key, .code = record.language_code });
+        try F.hash(record.payload, expected_sha);
+        std.debug.print("IT_WHOLE_PAGE_RECORD language={s} heading={s} bytes={d} sha256={s}\n",
+            .{ code, record.key, record.payload.len, expected_sha });
+
+        if (!std.mem.eql(u8, code, "it")) continue;
+        checkpoint = "Italian decoded typed disclosure";
+        for (decoded.entry.sections) |section| if (F.findDisclosure(section.blocks)) |box| {
+            try std.testing.expect(!witnessed);
+            try std.testing.expect(F.T.validContainerDisclosureOwner(box));
+            const policy = box.disclosure orelse return error.TestUnexpectedResult;
+            try std.testing.expect(policy.initially_collapsed);
+            try std.testing.expect(policy.button != null);
+            try std.testing.expectEqualStrings("[Mostra]", policy.expand_label);
+            try std.testing.expectEqualStrings("[Nascondi]", policy.collapse_label);
+            const expand_run = policy.expand_run orelse return error.TestUnexpectedResult;
+            const collapse_run = policy.collapse_run orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqual(@as(u32, 1), expand_run.start);
+            try std.testing.expectEqual(@as(u32, 7), expand_run.end);
+            try std.testing.expectEqual(@as(u32, 1), collapse_run.start);
+            try std.testing.expectEqual(@as(u32, 9), collapse_run.end);
+            const child = box.blocks[policy.content_index].container orelse return error.TestUnexpectedResult;
+            try std.testing.expect(child.blocks.len != 0);
+            const body = try std.json.Stringify.valueAlloc(a, child, .{});
+            try std.testing.expect(std.mem.indexOf(u8, body, "\"target\":\"rekenaarwetenskap\"") != null);
+            try std.testing.expect(std.mem.indexOf(u8, body, "\"target\":\"Computerwissenschaft\"") != null);
+            witnessed = true;
+        };
+    }
+    checkpoint = "genuine Italian source labels and semantic disclosure body present";
+    try std.testing.expect(witnessed);
+    std.debug.print("IT_GENUINE_INPUT12 wholepage PASS records={d} typed_disclosure=[Mostra]/[Nascondi]\n", .{page.records.items.len});
+}
+
+test "IT owner attribute manifest binds constructor and preserves conservative input boundaries" {
+    const B = container_disclosure_inputs;
+    const input = @embedFile("testdata/it-shared-disclosure12/input.json");
+    var digest_bytes: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(input, &digest_bytes, .{});
+    try std.testing.expectEqualStrings("422879ff6648cffd601e123314f2a04400a8ad765c8d0223b2d213527e072043",
+        &std.fmt.bytesToHex(digest_bytes, .lower));
+    for (0..16) |which| {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const a = arena.allocator();
+        var ns = try namespace_registry.Registry.init(a, @embedFile("testdata/it-per/namespace-registry.tsv"));
+        defer ns.deinit();
+        if (which == 0) {
+            var good = try B.Book.init(a, input, &ns);
+            defer good.deinit();
+            try std.testing.expect(good.workerEffectProfile(0, true, false, "informatica", 776) != null);
+            continue;
+        }
+        var root = try std.json.parseFromSliceLeaky(std.json.Value, a, input, .{});
+        const shared = root.object.getPtr("shared").?;
+        var manifest = try std.json.parseFromSliceLeaky(std.json.Value, a,
+            shared.object.get("ordinary_manifest").?.string, .{});
+        const known = manifest.object.getPtr("owner_attributes").?;
+        const projection = known.object.getPtr("projection").?;
+        const generated = projection.object.getPtr("generated_id").?;
+        switch (which) {
+            1 => try known.object.put(a, "schema", .{ .string = "unqualified-owner-attributes" }),
+            2 => try known.object.put(a, "source_sha256", .{ .string = "0000000000000000000000000000000000000000000000000000000000000000" }),
+            3 => try known.object.put(a, "parser_constructor_sha256", .{ .string = "1111111111111111111111111111111111111111111111111111111111111111" }),
+            4 => try known.object.put(a, "initializer_sha256", .{ .string = "1111111111111111111111111111111111111111111111111111111111111111" }),
+            5 => try projection.object.put(a, "absent", try std.json.parseFromSliceLeaky(std.json.Value, a, "[\"hidden\",\"hidden\"]", .{})),
+            6 => try projection.object.put(a, "absent", try std.json.parseFromSliceLeaky(std.json.Value, a, "[\"class\"]", .{})),
+            7 => try generated.object.put(a, "prefix", .{ .string = "other" }),
+            8 => try generated.object.put(a, "max_suffix_bytes", .{ .integer = 10 }),
+            9 => try generated.object.put(a, "min_suffix_bytes", .{ .integer = 0 }),
+            10 => try generated.object.put(a, "suffix_alphabet", .{ .string = "AABC" }),
+            11 => try projection.object.put(a, "absent", try std.json.parseFromSliceLeaky(std.json.Value, a, "[\"id\"]", .{})),
+            12 => try manifest.object.put(a, "schema", .{ .string = "normal-parser-output-selected-templatestyles.v3" }),
+            13 => {
+                try projection.object.put(a, "absent", try std.json.parseFromSliceLeaky(std.json.Value, a, "[\"id\"]", .{}));
+                try projection.object.put(a, "generated_id", .null);
+            },
+            14 => try generated.object.put(a, "suffix_alphabet", .{ .string = "ABCDEFGHIJKLMNOPRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_" }),
+            15 => try generated.object.put(a, "min_suffix_bytes", .{ .integer = 3 }),
+            else => unreachable,
+        }
+        const bytes = try std.json.Stringify.valueAlloc(a, manifest, .{});
+        try shared.object.put(a, "ordinary_manifest", .{ .string = bytes });
+        std.crypto.hash.sha2.Sha256.hash(bytes, &digest_bytes, .{});
+        // Recompute the changed byte inventory hash so each negative tests the
+        // semantic guard, rather than merely failing a stale manifest hash.
+        const hash = std.fmt.bytesToHex(digest_bytes, .lower);
+        try shared.object.getPtr("reference").?.object.put(a, "ordinary_manifest_sha256",
+            .{ .string = try a.dupe(u8, &hash) });
+        const changed = try std.json.Stringify.valueAlloc(a, root, .{});
+        try std.testing.expectError(error.InvalidContainerDisclosureInput, B.Book.init(a, changed, &ns));
     }
 }

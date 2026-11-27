@@ -1,0 +1,132 @@
+== [[File:Flag of Italy.svg|40px|border|bandiera italiana]] [[Appendice:Italiano|Italiano]] ==
+===[[Image:Open book 01.svg|30px]] ''[[aggettivo|Aggettivo]], [[forma]] [[flessa]]''===
+[[Categoria:Forme flesse aggettivali in italiano]]
+'''informatica'''<small></small> ''f sing''
+
+{| style="float:right; margin-left:0.5em; margin-bottom:0.5em;border: 1px solid #AAAAAA; border-collapse:collapse;" cellpadding="3" rules="all"
+|- align="center"
+!&nbsp;
+! bgcolor="#FFFFE0" |&nbsp;''[[singolare]]''&nbsp;
+! bgcolor="#FFFFE0" |&nbsp;''[[plurale]]''&nbsp;
+|- align="center"
+! bgcolor="#FFFFE0" |&nbsp;''[[maschile]]''&nbsp;
+| &nbsp; [[informatico]]&nbsp;
+| &nbsp; [[informatici]]&nbsp;
+|- align="center"
+! bgcolor="#FFFFE0" |&nbsp;''[[femminile]]''&nbsp;
+| &nbsp; [[informatica]]&nbsp;
+| &nbsp; [[informatiche]]&nbsp;
+|}
+
+#femminile di [[informatico]]
+
+===[[Image:Open_book_01.svg|30px|]]''[[sostantivo|Sostantivo]]''===
+[[Categoria:Sostantivi in italiano]] 
+
+'''informatica'''<small>&nbsp;([[File:Wikipedia-logo.svg|20px|Wikipedia]] '''[[w:informatica|approfondimento]]''')</small>
+''f sing''
+(''pl.'': [[informatiche]])
+#<small>''(scienza)''</small> [[disciplina]] [[scientifica]] e [[tecnica]] [[che]] studia, con l'[[aiuto]] di [[concetti]] [[logici]], [[statistici]] e [[matematici]], le [[operazioni]] per [[predisporre]] lo [[sviluppo]] di [[informazioni]] e [[dati]] con [[sistemi]] [[elettronici]] di [[calcolo]] e le [[loro]] [[applicazioni]] [[pratiche]]
+#* ''Visto il costo contenuto di un personal computer, oggi l''''informatica'''<small></small> è entrata in quasi tutte le case''
+# '''ingegneria informatica''': ramo dell'[[ingegneria]] che [[progetta]] e [[realizza]] [[sistemi]] e [[soluzioni]] per [[elaborare]], [[mandare]] e [[ricevere]] [[informazioni]] e [[dati]]
+# '''sicurezza informatica''': ramo dell'informatica che si occupa delle operazioni per difendere reti e sistemi di computer da rischi e violazioni di dati
+# '''informatica umanistica''': è un campo di studi, ricerca, insegnamento che nasce dall'unione di discipline umanistiche e informatiche
+
+===[[Image:Open book 01.svg|30px]] ''[[sostantivo|Sostantivo]], [[forma]] [[flesso|flessa]]''===
+[[Categoria:Forme flesse sostantivali in italiano]]
+'''informatica'''<small>&nbsp;([[File:Wikipedia-logo.svg|20px|Wikipedia]] '''[[w:informatica|approfondimento]]''')</small> ''f''
+#femminile di [[informatico]], [[studiosa]] di informatica 
+
+=== [[File:Hyph abc.svg|45px]] [[sillabazione|Sillabazione]] ===
+
+; in | for | mà | ti | ca
+
+===[[Image:Nuvola apps edu languages.svg|30px]] [[pronuncia|Pronuncia]]===
+
+[[Aiuto:IPA|AFI]]: <span class="IPA" style="font-family:'Segoe UI', 'Calibri', 'DejaVu Sans', 'Charis SIL', 'Doulos SIL', 'Gentium Plus', Gentium, GentiumAlt, 'Lucida Grande', 'Arial Unicode MS', sans-serif; font-size: 110%;">/inforˈmatika/</span>
+
+===[[Image:Nuvola kdict glass.svg|30px|]][[etimologia|Etimologia]] / [[derivazione|Derivazione]]===
+
+voce composta dalla contrazione della frase 'INFORMazione automATICA'
+
+
+{| cellpadding="0" style="width:auto; background:none; margin-bottom:.5em; font-size:95%; color:#606060; text-align:left"
+| style="padding:0 1.2em; vertical-align:top"|[[Immagine:Wikiquote-logo.svg|15px|Collabora a Wikiquote]]
+| style="padding:0 1.2em 0 0"|<div style="font-style:normal">«Se il settore dell'automobile si fosse sviluppato come l'industria informatica, oggi avremmo veicoli che costano 25 dollari e fanno 500 Km con un litro
+»</div>
+|- 
+| style="padding:0 1.2em"|
+| style="padding:0 1.2em 0 0"|<div style="font-style:normal">(<small>[[q:Bill Gates|Bill Gates]]</small>)</div>
+|}
+
+===[[File:Nuvola apps tree.svg|30px]]  [[parole|Parole]] [[derivate]]===
+
+* [[bioinformatica]], [[informatichese]], [[socioinformatica]], [[telematica]]
+
+=== [[Image:Gnome-globe.svg|30px]] [[traduzione|Traduzione]] ===
+<div class="mw-collapsible mw-collapsed" data-expandtext="Mostra" data-collapsetext="Nascondi" style="padding:0.2em 0.6em 0.2em 0.6em; border-right:1px solid #BEBEBE; border-bottom:1px dotted black; background:#EDEDED; color:#000;">scienza)
+<div class="z-index:-1; toccolours mw-collapsible-content" style="border:0;">
+{| border="0" width="100%" class="translations"
+|-
+| bgcolor="beige" valign="top" width="48%" |
+:*[[afrikaans]]: [[rekenaarwetenskap]]
+:*[[catalano]]: [[informàtica]]
+:*[[danese]]: [[datalogi]]
+:*[[esperanto]]: [[komputiko]]
+:*[[estone]]: [[informaatika]] ''f''
+:*[[finlandese]]: [[tietotekniikka]]
+:*[[francese]]: [[informatique]]
+:*[[frisone]]: [[ynformatika]]
+:*[[inglese]]: [[computer science]], [[computing]], [[informatics]]
+| width=1% |
+|bgcolor="beige" valign=top width=48%|
+
+:*[[lombardo]]: [[scenza de urdenaduur]]
+:*[[olandese]]: informatica, [[computerwetenschap]]
+:*[[persiano]]: [[علوم کامپیوتر]] ,[[انفورماتیک]]
+:*[[polacco]]: [[informatyka]] ''f''
+:*[[portoghese]]: [[ciênca da computação]]
+:*[[spagnolo]]: [[informática]] ''f''
+:*[[svedese]]: [[datavetenskap]]
+:*[[tedesco]]: [[Informatik]] ''f'', [[Computerwissenschaft]]
+|}</div></div>
+
+== [[File:Flag of the Netherlands.svg|40px|border]] [[olandese|Olandese]] ==
+===[[Image:Open_book_01.svg|30px|]]''[[sostantivo|Sostantivo]]''===
+[[Categoria:Sostantivi in olandese]] 
+
+'''informatica'''<small></small> ''f''
+# <small>''(scienza)''</small> informatica
+
+=== [[File:Hyph abc.svg|45px]] [[sillabazione|Sillabazione]] ===
+
+; in | for | mà | ti | ca
+
+===[[Image:Nuvola apps edu languages.svg|30px]] [[pronuncia|Pronuncia]]===
+
+Ascolta la pronuncia ''(/ˌɪɱfɔrˈmaːtiˑkɑ/)''&nbsp;: [[File:Nl-informatica.ogg]]
+
+<div class="NonModificabile">
+== [[Image:Nuvola apps bookcase.svg|30px|]] [[note|Note]] / [[riferimenti|Riferimenti]] ==
+</div>
+Italiano
+* AA.VV., [https://www.treccani.it/vocabolario/ricerca/informatica/ ''Vocabolario Treccani''] edizione online su ''[https://www.treccani.it treccani.it]'', Istituto dell'Enciclopedia Italiana
+* Aldo Gabrielli, [https://grandidizionari.hoepli.it/Dizionario_Italiano/parola/I/informatica.aspx?query=informatica ''Grande Grande Libreria Online''] edizione online su ''[https://www.hoepli.it/ hoepli.it]'', Hoepli
+* Enrico Olivetti, [https://www.dizionario-italiano.it/dizionario-italiano.php?lemma=INFORMATICA100 ''Dizionario Italiano Olivetti''] edizione on line su ''[https://www.dizionario-italiano.it www.dizionario-italiano.it]'', Olivetti Media Communication
+Olandese
+* uitmutend, [[http://www.uitmuntend.de/woordenboek/informatica/ ] edizione online]
+
+== Altri progetti ==
+<div id="interProject" style="display: none; clear: both; border-top: 2px dotted #AAAAAA; margin-top: 2em"><div title="Collegamenti verso gli altri progetti Wikimedia">
+* [[s:informatica|Wikisource]]
+* [[q:informatica|Wikiquote]]
+* [[w:informatica|Wikipedia]]
+* [[b:Ripiano:Informatica|Wikibooks]]
+</div></div>
+* [[File:Wikisource-logo.svg|link=s:|18px|Collabora a Wikisource]] '''[[s:|Wikisource]]''' contiene opere originali  di o su '''[[s:informatica|informatica]]'''
+* [[File:Wikiquote-logo.svg|link=q:|18px|Collabora a Wikiquote]] '''[[q:|Wikiquote]]''' contiene citazioni  di o su '''[[q:informatica|informatica]]'''
+* [[File:Wikipedia-logo-v2.svg|link=w:|18px|Collabora a Wikipedia]] '''[[w:|Wikipedia]]''' contiene una voce  riguardante '''[[w:informatica|informatica]]'''
+* [[File:Wikibooks-logo.svg|link=b:|22px|Collabora a Wikibooks]] '''[[b:|Wikibooks]]''' contiene testi o manuali  su '''[[b:Ripiano:Informatica|informatica]]'''
+
+[[Categoria:Scienza-IT|informatica]]
+[[Categoria:Scienza-NL|informatica]]
