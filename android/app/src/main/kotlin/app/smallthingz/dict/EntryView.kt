@@ -77,6 +77,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.BaselineShift
+import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextDirection
 import androidx.compose.ui.text.style.TextAlign
@@ -2579,10 +2580,24 @@ internal fun StyledText(source: List<Span>, modifier: Modifier = Modifier, weigh
         { target -> (cache?.link?.value ?: currentLink.value)(target) },
         authoredSpanForegroundArgb(null, inheritedBackground)?.let { Color(it) } ?: MaterialTheme.colorScheme.onSurfaceVariant)
         else emptyMap()
+    // Theme line height is a minimum for enlarged ordinary text, not an authored
+    // fixed-height box. Keep explicit table/container and caller policies intact.
+    val enlargedOrdinaryText = annotated.spanStyles.any { range ->
+        val size = range.item.fontSize
+        range.start < range.end && (size.isEm && size.value > 1f ||
+            size.isSp && renderedStyle.fontSize.isSp && size.value > renderedStyle.fontSize.value)
+    }
+    val composeStyle = renderedStyle.copy(textDirection = compiledDirection,
+        textAlign = cellTextAlign ?: style.textAlign).let { resolved ->
+        if (enlargedOrdinaryText && egyptianRuns.isEmpty() && inlineContent.isEmpty() &&
+            lineHeightPixels == null && containerFormat == null && resolved.lineHeightStyle == null)
+            resolved.copy(lineHeightStyle = LineHeightStyle.Default.copy(mode = LineHeightStyle.Mode.Minimum))
+        else resolved
+    }
     SelectionContainer(modifier = modifier.then(if (cellTextAlign == null) Modifier else Modifier.fillMaxWidth())
         .then(bandLinkFocusModifier(annotated))) {
         EgyptianInlineText(annotated, egyptianRuns, Modifier.then(if (cellTextAlign == null) Modifier else Modifier.fillMaxWidth()),
-            renderedStyle.copy(textDirection = compiledDirection, textAlign = cellTextAlign ?: style.textAlign), linkColor, inlineContent)
+            composeStyle, linkColor, inlineContent)
     }
 }
 
