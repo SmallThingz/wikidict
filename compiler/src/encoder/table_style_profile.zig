@@ -22,6 +22,9 @@ pub const ElementContext = struct {
     font_size_consumed: bool = false,
     // Same-profile own TD weight was applied to the emitted cell formatting.
     font_weight_consumed: bool = false,
+    // Wiki cells defer physical height accounting until their producer has
+    // normalized the exact winning declaration into an emitted row constraint.
+    defer_cell_height: bool = false,
     custom_environment: ?CustomEnvironment = null,
     // Producer has applied this same element/profile text-color cascade.
     text_color_consumed: bool = false,
@@ -43,14 +46,23 @@ pub const ElementContext = struct {
     cell_ancestor_id_superset: ?[]const u8 = null,
     // Wiki TABLE only; negative page-wide ID evidence, not a native ancestor domain.
     table_ancestor_id_superset: ?[]const u8 = null,
+    table_height_id_superset: ?[]const u8 = null,
     // Union across every selected head: negative evidence only.
     complete_table_ancestor_classes: ?[]const u8 = null,
     // Complete original ancestor tag inventory; null retains uncertainty.
     complete_font_ancestor_tags: ?[]const []const u8 = null,
 };
-pub const TableResolution = struct { resolved_legacy_border: bool = false, float_viewport: ?types.TableFloatViewport = null, block_viewport: ?*const types.TableBlockViewport = null, style: ?types.TableStyle, scope: Scope, unresolved: bool, margin_basis_unresolved: bool = false, background_specified: bool = false, descendant_style_unresolved: bool = false, width_specified: bool = false, line_height_em: ?f32 = null };
+pub const TableResolution = struct { captured_height_font_ids: ?[]const u8 = null, principal_viewport: ?*const types.TablePrincipalViewport = null, resolved_legacy_border: bool = false, float_viewport: ?types.TableFloatViewport = null, block_viewport: ?*const types.TableBlockViewport = null, style: ?types.TableStyle, scope: Scope, unresolved: bool, margin_basis_unresolved: bool = false, background_specified: bool = false, descendant_style_unresolved: bool = false, width_specified: bool = false, line_height_em: ?f32 = null };
 pub const CellSourceScopeHazards = struct { height: bool = false, font_context: bool = false };
-pub const CellResolution = struct { style: ?types.CellStyle, background: ?[]const u8, background_specified: bool, unresolved: bool, padding_basis_unresolved: bool = false, own_font_basis_unresolved: bool = false, alignment_specified: bool = false, line_height: ?cell_font_metrics.CellLineHeightSpecified = null, line_height_refused: bool = false };
+pub const CellResolution = struct { style: ?types.CellStyle, background: ?[]const u8, background_specified: bool, unresolved: bool, padding_basis_unresolved: bool = false, own_font_basis_unresolved: bool = false, alignment_specified: bool = false, line_height: ?cell_font_metrics.CellLineHeightSpecified = null, line_height_refused: bool = false,
+    // Specified by a physical CSS height declaration on this cell. This is
+    // source evidence only until the row solver can apply its font and box basis.
+    authored_height: ?types.StyleLength = null,
+    // Every deferred height must either become a validated CellBoxHeight or
+    // retain the producer's unresolved-table-style fallback.
+    authored_height_deferred: bool = false,
+    authored_height_box_sizing: ?types.ContainerBoxSizing = null,
+};
 const max_css_bytes = 1024 * 1024;
 const max_rules = 4096;
 const Target = enum { element, table, cell, th, td, other };
@@ -82,7 +94,7 @@ const Value = union(enum) {
     font_size_consumed,
     unsupported,
 };
-const Declaration = struct { consumable_font_weight: bool = false, cell_source_hazards: CellSourceScopeHazards = .{}, cell_context_property: bool = false, cell_line_height_raw: ?[]const u8 = null, border_update: ?BorderUpdate = null, border_raw: ?struct { name: []const u8, value: []const u8 } = null, property: Property, value: Value, important: bool, order: u32, affects_font_basis: bool = false, may_name_min_width: bool = false, custom_paint: ?[]const u8 = null };
+const Declaration = struct { consumable_font_weight: bool = false, cell_source_hazards: CellSourceScopeHazards = .{}, cell_context_property: bool = false, cell_line_height_raw: ?[]const u8 = null, cell_height: ?Value = null, border_update: ?BorderUpdate = null, border_raw: ?struct { name: []const u8, value: []const u8 } = null, property: Property, value: Value, important: bool, order: u32, affects_font_basis: bool = false, may_name_min_width: bool = false, custom_paint: ?[]const u8 = null };
 const Selector = struct {
     complete_own_attribute: ?[]const u8 = null,
     target: Target,
@@ -114,6 +126,9 @@ const Winner = struct { value: Value, priority: Priority };
 const Winners = struct {
     borders: BorderCascade = .{},
     slots: [@typeInfo(Property).@"enum".field_names.len]?Winner = @splat(null),
+    cell_height: ?Winner = null,
+    defer_cell_height: bool = false,
+    cell_height_deferred: bool = false,
     selector_unresolved: bool = false,
     font_basis_unresolved: bool = false,
     fn add(self: *Winners, declaration: Declaration, specificity: u64, conditional: bool, inline_style: bool) void {
@@ -129,6 +144,17 @@ const Winners = struct {
         if (declaration.affects_font_basis) self.font_basis_unresolved = true;
         const index = @backingInt(declaration.property);
         const next: Priority = .{ .important = declaration.important, .specificity = specificity, .order = declaration.order, .inline_style = inline_style };
+        if (declaration.cell_height) |height| {
+            if (self.cell_height == null or next.wins(self.cell_height.?.priority))
+                self.cell_height = .{ .value = if (conditional) .unsupported else height, .priority = next };
+            // Do not clear the shared .other slot: it may belong to an
+            // unrelated unsupported declaration, before or after this height.
+            // Escaped names, unknown values and uncertain matches stay there.
+            if (self.defer_cell_height and !conditional and height == .length_value) {
+                self.cell_height_deferred = true;
+                return;
+            }
+        }
         if (declaration.border_update) |update| {
             self.borders.add(update, next, conditional);
             return;
@@ -2874,6 +2900,7 @@ pub const TableContainingDirectionResult = struct {
     // This checks the responsive display/overflow/width policy only. It is not
     // a replacement for the constructor's other style/font/geometry guards.
     responsive_geometry_accounted: bool,
+    root_responsive_placement: ?ObservedRootTableResponsivePlacement = null,
 };
 const table_direction_displays = [_][]const u8{ "none", "contents", "block", "flow-root", "inline", "inline-block", "flex", "inline-flex", "grid", "inline-grid", "table", "inline-table", "list-item" };
 const table_direction_positions = [_][]const u8{ "static", "relative", "absolute", "fixed", "sticky" };
@@ -10927,7 +10954,8 @@ pub const Profile = struct {
     fn cascade(self: *const Profile, a: std.mem.Allocator, target: Target, scope: Scope, ancestor_scope: Scope, own_names: []const u8, context: ElementContext, legacy_bg: ?[]const u8, legacy_align: ?[]const u8, inline_css: []const u8) !Winners {
         const ancestor_names = context.ancestor_classes;
         const absent_from = context.complete_table_ancestor_classes orelse ancestor_names;
-        var winners: Winners = .{};
+        var winners: Winners = .{ .defer_cell_height = context.defer_cell_height and
+            (target == .td or target == .th or target == .cell) };
         if (target == .td or target == .th or target == .cell) {
             addCellVerticalHint(&winners, context.legacy_vertical_align);
             addCellWidthHint(&winners, context.legacy_cell_width);
@@ -11065,7 +11093,12 @@ pub const Profile = struct {
         };
         const corner_conflict = projectTableCorners(&style, winners);
         const flow_conflict = tableFlowFloatConflict(&style);
-        return .{ .style = if (types.validUnboundTableStyle(style)) style else null, .scope = inherited_scope | own_scope, .unresolved = winners.unresolvedWithFont(context.font_size_consumed) or flow_conflict or corner_conflict, .margin_basis_unresolved = winners.font_basis_unresolved or self.inheritedFontBasisUnresolved(inherited_scope, context.complete_table_ancestor_classes orelse ancestor_names, context.complete_font_ancestor_ids, context.complete_font_ancestor_tags, context.complete_table_ancestor_ids != null, null), .background_specified = winners.value(.background) != null, .width_specified = winners.value(.width) != null or unresolvedTableWidthBox(winners), .line_height_em = selectedLineHeight(winners) };
+        // This complete source-bound ID census is used only to normalize a
+        // declared cell minimum. It does not change legacy edge/font guards.
+        const captured_height_font_ids = if (context.table_height_id_superset) |ids|
+            (if (!winners.font_basis_unresolved and self.capturedCellHeightInheritedFontKnown(inherited_scope, ancestor_names, ids)) ids else null)
+        else null;
+        return .{ .captured_height_font_ids = captured_height_font_ids, .style = if (types.validUnboundTableStyle(style)) style else null, .scope = inherited_scope | own_scope, .unresolved = winners.unresolvedWithFont(context.font_size_consumed) or flow_conflict or corner_conflict, .margin_basis_unresolved = winners.font_basis_unresolved or self.inheritedFontBasisUnresolved(inherited_scope, context.complete_table_ancestor_classes orelse ancestor_names, context.complete_font_ancestor_ids, context.complete_font_ancestor_tags, context.complete_table_ancestor_ids != null, null), .background_specified = winners.value(.background) != null, .width_specified = winners.value(.width) != null or unresolvedTableWidthBox(winners), .line_height_em = selectedLineHeight(winners) };
     }
 
     fn inheritedFontBasisUnresolved(self: *const Profile, scope: Scope, ancestor_names: ?[]const u8, complete_ids: ?[]const []const u8, complete_tags: ?[]const []const u8, source_bound: bool, cell_ids: ?[]const u8) bool {
@@ -11103,6 +11136,15 @@ pub const Profile = struct {
             for (rule.declarations) |declaration| if (declaration.affects_font_basis) return true;
         }
         return false;
+    }
+
+    pub fn capturedCellHeightInheritedFontKnown(self: *const Profile, scope: Scope,
+        ancestor_classes: ?[]const u8, complete_ids: []const u8) bool
+    {
+        if (self.globally_unresolved or self.page_style_parent != null) return false;
+        // Use necessary-ID nonmatches only. Selectors with unproved relevance
+        // and a possible font-affecting declaration continue to refuse.
+        return !self.inheritedFontBasisUnresolved(scope, ancestor_classes, null, null, false, complete_ids);
     }
 
     pub fn resolveCell(self: *const Profile, a: std.mem.Allocator, scope: Scope, header: bool, legacy_bg: ?[]const u8, inline_css: []const u8) std.mem.Allocator.Error!CellResolution {
@@ -11185,7 +11227,13 @@ pub const Profile = struct {
         style.width = selectedCellWidth(winners);
         if (winners.value(.vertical_align)) |value| if (value == .cell_vertical_align_value) { style.vertical_align = value.cell_vertical_align_value; };
         const background = winners.value(.background);
-        return .{ .style = if (types.validCellStyle(style)) style else null, .background = if (background) |value| (if (value == .color) value.color else null) else null, .background_specified = background != null, .unresolved = winners.unresolvedWithFont(context.font_size_consumed), .padding_basis_unresolved = winners.font_basis_unresolved or self.inheritedFontBasisUnresolved(scope, ancestor_names, null, null, false, null), .own_font_basis_unresolved = winners.font_basis_unresolved, .alignment_specified = winners.value(.text_align) != null, .line_height = selectedCellLineHeight(winners) };
+        // For a normal table cell, a complete own cascade with no display,
+        // box-sizing or all override retains the content-box initial basis.
+        // Unresolved and explicit states need their own representation proof.
+        const authored_height = selectedCellAuthoredHeight(winners);
+        const height_box: ?types.ContainerBoxSizing = if (authored_height != null and !winners.selector_unresolved and
+            winners.value(.box_sizing) == null and winners.value(.display) == null and winners.value(.layout_reset) == null) .content_box else null;
+        return .{ .authored_height = authored_height, .authored_height_deferred = winners.cell_height_deferred, .authored_height_box_sizing = height_box, .style = if (types.validCellStyle(style)) style else null, .background = if (background) |value| (if (value == .color) value.color else null) else null, .background_specified = background != null, .unresolved = winners.unresolvedWithFont(context.font_size_consumed), .padding_basis_unresolved = winners.font_basis_unresolved or self.inheritedFontBasisUnresolved(scope, ancestor_names, null, null, false, null), .own_font_basis_unresolved = winners.font_basis_unresolved, .alignment_specified = winners.value(.text_align) != null, .line_height = selectedCellLineHeight(winners) };
     }
 
     // Complete captured cell ancestry can refute inherited font subjects.
@@ -11330,6 +11378,41 @@ pub const Profile = struct {
         source_declarations: ?[]const []const u8, diagnostic: ?*InlineBoxSourceDiagnostic,
         comptime static_decoration: bool, comptime rounded_decoration: bool, comptime image_relative: bool, image_absence: ?InlineImageSourceAbsence) !InlineBoxResolution
     {
+        return self.resolveInlineBoxSourcePhonosModeIn(a, element, css, environment, rtl, within_box,
+            source_declarations, diagnostic, static_decoration, rounded_decoration, image_relative, image_absence, false, null);
+    }
+
+    // Source-backed entry. Authenticated owner binding is supplied by
+    // the ordinary Renderer; all current source/cascade guards remain required.
+    pub fn resolvePhonosInlineDecorationIn(self: *const Profile, a: std.mem.Allocator, element: *const TextElement,
+        css: []const u8, environment: CustomEnvironment, rtl: bool,
+        source_declarations: ?[]const []const u8, diagnostic: ?*InlineBoxSourceDiagnostic,
+        direction_detail: ?*StaticInlineDirectionDiagnostic, shadow: *?PhonosShadowSource) !InlineBoxResolution
+    {
+        shadow.* = null;
+        if (diagnostic) |sink| sink.* = .none;
+        if (direction_detail) |sink| sink.* = .{};
+        if (rtl or !std.ascii.eqlIgnoreCase(element.tag, "span")) {
+            inlineBoxSourceRejected(diagnostic, .static_subject_domain); return .{ .unresolved = true };
+        }
+        const chain = source_declarations orelse {
+            inlineBoxSourceRejected(diagnostic, .source_chain_absent); return .{ .unresolved = true };
+        };
+        if (!rubySourceDeclarationChainValid(element, css, chain)) {
+            inlineBoxSourceRejected(diagnostic, .source_chain_invalid); return .{ .unresolved = true };
+        }
+        if (!try staticInlineDirectionDefaultsDiagnosedAlloc(a, self, chain, inlineBoxSourceAbsence(element), direction_detail)) {
+            inlineBoxSourceRejected(diagnostic, .static_direction_defaults_rejected); return .{ .unresolved = true };
+        }
+        return self.resolveInlineBoxSourcePhonosModeIn(a, element, css, environment, rtl, false,
+            chain, diagnostic, true, true, false, null, true, shadow);
+    }
+
+    fn resolveInlineBoxSourcePhonosModeIn(self: *const Profile, a: std.mem.Allocator, element: *const TextElement,
+        css: []const u8, environment: CustomEnvironment, rtl: bool, within_box: bool,
+        source_declarations: ?[]const []const u8, diagnostic: ?*InlineBoxSourceDiagnostic,
+        comptime static_decoration: bool, comptime rounded_decoration: bool, comptime image_relative: bool, image_absence: ?InlineImageSourceAbsence, comptime phonos: bool, shadow: ?*?PhonosShadowSource) !InlineBoxResolution
+    {
         if (diagnostic) |sink| sink.* = .none;
         if (css.len > max_css_bytes) {
             inlineBoxSourceRejected(diagnostic, .css_limit); return .{ .unresolved = true };
@@ -11353,7 +11436,7 @@ pub const Profile = struct {
         if (image_relative and !try observedInlineBoxPropertiesComplete(a, declarations.items, environment)) {
             inlineBoxSourceRejected(diagnostic, .own_geometry_unresolved); return .{ .unresolved = true };
         }
-        const result = try inlineBoxDeclarationsIn(a, declarations.items, environment, rtl, within_box, image_relative, static_decoration, rounded_decoration, false);
+        const result = try inlineBoxDeclarationsPhonosModeIn(a, declarations.items, environment, rtl, within_box, image_relative, static_decoration, rounded_decoration, false, phonos, shadow);
         if (result.unresolved) {
             inlineBoxSourceRejected(diagnostic, .own_geometry_unresolved); return result;
         }
@@ -14744,6 +14827,26 @@ fn cellSourceRawMetadata(raw: []const u8) ?CellSourceDeclarationMetadata {
     return cellSourceDeclarationMetadata(name, value);
 }
 
+// Select a physical declaration. This build-only evidence supplies neither
+// the logical size cascade nor the used row constraint.
+fn selectedCellAuthoredHeight(winners: Winners) ?types.StyleLength {
+    if (winners.selector_unresolved) return null;
+    const winner = winners.cell_height orelse return null;
+    if (winners.slots[@backingInt(Property.layout_reset)]) |reset| {
+        if (reset.priority.wins(winner.priority)) return null;
+    }
+    return if (winner.value == .length_value) winner.value.length_value else null;
+}
+
+fn cellAuthoredHeight(name: []const u8, value: []const u8) ?Value {
+    if (std.mem.indexOfScalar(u8, name, '\\') != null) return .unsupported;
+    if (!std.ascii.eqlIgnoreCase(name, "height")) return null;
+    if (std.mem.eql(u8, value, "0")) return .{ .length_value = .{ .unit = .px, .value = 0 } };
+    if (value.len <= 2 or !widthNumberSyntax(value[0 .. value.len - 2])) return .unsupported;
+    const parsed = length(value) orelse return .unsupported;
+    return .{ .length_value = parsed };
+}
+
 fn selectedCellLineHeight(winners: Winners) ?cell_font_metrics.CellLineHeightSpecified {
     const selected = winners.value(.line_height) orelse return null;
     return if (selected == .cell_line_height) selected.cell_line_height else null;
@@ -15221,6 +15324,7 @@ fn declarationAlloc(a: std.mem.Allocator, raw: []const u8, order: u32) !?Declara
         // Builder raw is Profile-arena owned; transient callers consume this
         // slice before freeing raw. Winners retain only the parsed numeric value.
         .cell_line_height_raw = if (property == .line_height) value else null,
+        .cell_height = cellAuthoredHeight(name, value),
         .border_update = if (property == .border) try borderUpdateAlloc(a, name, value, null) else null,
         .border_raw = if (property == .border and std.mem.indexOf(u8, value, "var(") != null) .{ .name = try a.dupe(u8, name), .value = try a.dupe(u8, value) } else null,
         .property = property, .value = projection, .custom_paint = if (variable_paint) try a.dupe(u8, value) else null, .important = important, .order = order, .affects_font_basis = std.ascii.eqlIgnoreCase(name, "font") or std.ascii.eqlIgnoreCase(name, "font-size") or std.ascii.eqlIgnoreCase(name, "all"), .may_name_min_width = std.mem.indexOfScalar(u8, name, '\\') != null };
@@ -24750,7 +24854,11 @@ pub fn resolveObservedRootTableContainingDirection(a: std.mem.Allocator,
     expected: ?types.TableStyle, plain_parent: bool) !?TableContainingDirectionResult
 {
     if (expected) |style| if (!types.validUnboundTableStyle(style)) return null;
-    return resolveObservedTableContainingDirectionWithStyle(a, contexts, native_parent, expected, plain_parent);
+    var result = (try resolveObservedTableContainingDirectionWithStyle(a, contexts, native_parent, expected, plain_parent)) orelse return null;
+    if (plain_parent and !result.responsive_geometry_accounted) if (expected) |style| {
+        result.root_responsive_placement = try observedRootTableResponsivePlacement(a, contexts, style, result.direction);
+    };
+    return result;
 }
 
 
@@ -24768,6 +24876,124 @@ fn tableRootMarginsAgree(a: std.mem.Allocator, declarations: []const ObservedFig
     return true;
 }
 
+
+/// Build-time observation of the principal Table box only. Grid, text and
+/// interaction still require their separate proof and stored representation.
+pub const ObservedRootTableResponsivePlacement = struct {
+    language: []const u8,
+    max_viewport_width_px: u32,
+    physical_margins: types.ContainerMargins,
+    containing_direction: types.TableContainingDirection,
+    narrow_box_sizing: types.ContainerBoxSizing,
+    wide_box_sizing: types.ContainerBoxSizing,
+};
+
+// For this box query a definite inline physical shorthand supplies all four
+// margins. Uncertain selector rank cannot elevate a normal stylesheet margin
+// above it. Keep other inline declarations, important rules and syntax whose
+// importance could not be parsed. The variable environment was built before
+// this margin-only projection, from the complete cascade.
+fn observedRootResponsiveMarginsAgree(a: std.mem.Allocator, declarations: []const ObservedFigureDeclaration,
+    environment: CustomEnvironment, margins: types.ContainerMargins) !bool
+{
+    var inline_shorthand = false;
+    for (declarations) |declaration| {
+        if (declaration.priority.inline_style and !declaration.uncertain and !declaration.rank_unknown and
+            !declaration.syntax_unknown and std.ascii.eqlIgnoreCase(declaration.name, "margin"))
+        {
+            inline_shorthand = true;
+            break;
+        }
+    }
+    if (!inline_shorthand) return tableRootMarginsAgree(a, declarations, environment, margins);
+    var kept: std.ArrayList(ObservedFigureDeclaration) = .empty;
+    defer kept.deinit(a);
+    for (declarations) |declaration| {
+        if (declaration.priority.inline_style or declaration.priority.important or declaration.syntax_unknown)
+            try kept.append(a, declaration);
+    }
+    return tableRootMarginsAgree(a, kept.items, environment, margins);
+}
+
+fn observedRootTableResponsivePlacement(a: std.mem.Allocator, contexts: []const TableContainingDirectionContext,
+    expected: types.TableStyle, direction: types.TableContainingDirection) !?ObservedRootTableResponsivePlacement
+{
+    const margins = expected.margin_values orelse return null;
+    if (margins.left != .auto or margins.right != .auto or expected.width != null or
+        expected.float_side != null or (expected.display != null and expected.display.? != .table)) return null;
+    var samples_arena = std.heap.ArenaAllocator.init(a);
+    defer samples_arena.deinit();
+    const samples = (try observedTableViewportSamples(samples_arena.allocator(), contexts)) orelse return null;
+    var scratch = std.heap.ArenaAllocator.init(a);
+    defer scratch.deinit();
+    var joined: ?ObservedRootTableResponsivePlacement = null;
+    for (contexts) |context| {
+        // This language belongs to the authenticated parser-output root.
+        const language = observedFigureAttribute(context.nodes[context.root], "lang") orelse return null;
+        if (language.len == 0 or language.len > 1024 or !std.unicode.utf8ValidateSlice(language)) return null;
+        var last_narrow: ?ObservedTableViewportSample = null;
+        var narrow_sizing: ?types.ContainerBoxSizing = null;
+        var wide_sizing: ?types.ContainerBoxSizing = null;
+        for (samples) |sample| {
+            _ = scratch.reset(.retain_capacity);
+            const temp = scratch.allocator();
+            const path = (try observedTableDeclarationPath(temp, context, context.table, sample.width, null)) orelse return null;
+            const declarations = path.declarations;
+            const environment = path.environment;
+            if (!try observedRootResponsiveMarginsAgree(temp, declarations, environment, margins)) return null;
+            const display = try observedFigureKeyword(temp, declarations, "display", &.{}, environment,
+                &.{ "table", "block" }, "inline", null, false, "table");
+            const position = try observedFigureKeyword(temp, declarations, "position", &.{}, environment,
+                &.{"static"}, "static", null, false, "static");
+            const floating = try observedFigureKeyword(temp, declarations, "float", &.{}, environment,
+                &.{"none"}, "none", null, false, "none");
+            if (display.unresolved or position.unresolved or floating.unresolved) return null;
+            const mode = display.value orelse return null;
+            const narrow = std.mem.eql(u8, mode, "block");
+            if ((!narrow and !std.mem.eql(u8, mode, "table")) or
+                !std.mem.eql(u8, position.value orelse return null, "static") or
+                !std.mem.eql(u8, floating.value orelse return null, "none")) return null;
+            const overflow = if (narrow) "auto" else "visible";
+            inline for (.{ "overflow-x", "overflow-y" }) |property| {
+                const observed = try observedFigureKeyword(temp, declarations, property, &.{"overflow"}, environment,
+                    &.{ "auto", "visible" }, "visible", null, false, "visible");
+                if (observed.unresolved or !std.mem.eql(u8, observed.value orelse return null, overflow)) return null;
+            }
+            const width = try observedTableWidthWithHintIn(temp, declarations, environment, "width", 1,
+                .normal_body, .automatic, .automatic, true);
+            const cap = try observedTableWidth(temp, declarations, environment, "max-width", 1, .normal_body, .automatic);
+            if (narrow) {
+                if (wide_sizing != null or width != .fit_content or cap != .known or
+                    cap.known.unit != .percent or cap.known.value != 100) return null;
+                if (narrow_sizing) |prior| if (prior != path.box_sizing) return null;
+                narrow_sizing = path.box_sizing;
+                last_narrow = sample;
+            } else {
+                if (last_narrow == null or width != .automatic or cap != .automatic) return null;
+                if (wide_sizing) |prior| if (prior != path.box_sizing) return null;
+                wide_sizing = path.box_sizing;
+            }
+        }
+        const last = last_narrow orelse return null;
+        if (!last.boundary or last.width <= 0 or @floor(last.width) != last.width or
+            last.width > @as(f64, @floatFromInt(std.math.maxInt(u32)))) return null;
+        const result: ObservedRootTableResponsivePlacement = .{
+            .language = language,
+            .max_viewport_width_px = @intFromFloat(last.width), .physical_margins = margins,
+            .containing_direction = direction, .narrow_box_sizing = narrow_sizing orelse return null,
+            .wide_box_sizing = wide_sizing orelse return null,
+        };
+        if (joined) |prior| {
+            if (!std.mem.eql(u8, prior.language, result.language) or
+                prior.max_viewport_width_px != result.max_viewport_width_px or
+                prior.containing_direction != result.containing_direction or
+                !std.meta.eql(prior.physical_margins, result.physical_margins) or
+                prior.narrow_box_sizing != result.narrow_box_sizing or prior.wide_box_sizing != result.wide_box_sizing) return null;
+        }
+        joined = result;
+    }
+    return joined;
+}
 
 fn tableRootSourceFocusDomain(a: std.mem.Allocator, context: TableContainingDirectionContext) !TableSourceFocusDomain {
     var rules = try std.DynamicBitSetUnmanaged.initEmpty(a, context.styles.observed_figure_rules.len);
@@ -24797,11 +25023,14 @@ fn tableRootStaticFocusAttributesIn(context: TableContainingDirectionContext, su
             if (section.len == 0 or (section.len > 1 and section[0] == '0')) return false;
             for (section) |byte| if (!std.ascii.isDigit(byte)) return false;
             _ = std.fmt.parseInt(u64, section, 10) catch return false;
-            for ([_][]const u8{ "id", "aria-labelledby" }) |name| {
-                const value = observedFigureAttribute(owner, name) orelse return false;
-                if (value.len == 0 or value.len > 256) return false;
-                for (value) |byte| if (!std.ascii.isAlphanumeric(byte) and std.mem.indexOfScalar(u8, "_.:-", byte) == null) return false;
-            }
+            const id = observedFigureAttribute(owner, "id") orelse return false;
+            if (id.len == 0 or id.len > 256) return false;
+            for (id) |byte| if (!std.ascii.isAlphanumeric(byte) and std.mem.indexOfScalar(u8, "_.:-", byte) == null) return false;
+            // The generated SECTION refers to one observed heading ID.
+            // Its UTF-8 label cannot add focus, editing or a second IDREF.
+            const label = observedFigureAttribute(owner, "aria-labelledby") orelse return false;
+            if (label.len == 0 or label.len > 256 or !std.unicode.utf8ValidateSlice(label)) return false;
+            for (label) |byte| if (byte < 0x80 and !std.ascii.isAlphanumeric(byte) and std.mem.indexOfScalar(u8, "_.:-", byte) == null) return false;
         }
     } else if (std.ascii.eqlIgnoreCase(owner.tag, "div")) {
         if (!std.mem.eql(u8, observedFigureAttribute(owner, "align") orelse return false, "center")) return false;
@@ -27718,6 +27947,9 @@ pub const PhonosButton = struct {
     file: []const u8,
     language: []const u8,
     caption_html: []const u8,
+    // Source serialization fallback is not the visible caption. Only a
+    // verified empty-label observation may bind this ordinary expander token.
+    source_fallback_caption_html: ?[]const u8 = null,
     caption: []const u8,
     accessible_name: []const u8,
     attribution_title: []const u8,
@@ -27900,6 +28132,27 @@ pub const SelectedDescriptionExample = struct {
 pub const SelectedPhonos = struct {
     source: []const u8,
     button: PhonosButton,
+    // Build-only source association. This is the exact enclosing original
+    // SPAN, not a geometry, style, font, native-child or publication proof.
+    // Its only child is source; any following SUP stays outside this interval.
+    decoration_source: ?[]const u8 = null,
+
+    pub fn lookupDecoration(items: []const SelectedPhonos, owner: []const u8) ?SelectedPhonos {
+        var left: usize = 0;
+        var right = items.len;
+        const start = @intFromPtr(owner.ptr);
+        while (left < right) {
+            const at = left + (right - left) / 2;
+            if (@intFromPtr(items[at].source.ptr) < start) left = at + 1 else right = at;
+        }
+        if (left >= items.len) return null;
+        const item = items[left];
+        const outer = item.decoration_source orelse return null;
+        if (outer.ptr != owner.ptr or outer.len != owner.len) return null;
+        const child = @intFromPtr(item.source.ptr);
+        if (child < start or child - start > owner.len or item.source.len > owner.len - (child - start)) return null;
+        return item;
+    }
 
     // Sorted by physical source address in the same live expanded page.
     pub fn lookup(items: []const SelectedPhonos, token: []const u8) ?PhonosButton {
@@ -38696,6 +38949,16 @@ fn dottedHelpBorderColor(border_edges: types.InlineBoxBorderEdges) ?[]const u8 {
 fn inlineBoxDeclarationsIn(a: std.mem.Allocator, declarations: []const ObservedFigureDeclaration, environment: CustomEnvironment,
     rtl: bool, within_box: bool, comptime image_relative: bool, comptime static_decoration: bool, comptime rounded_decoration: bool, comptime observed_help: bool) !InlineBoxResolution
 {
+    return inlineBoxDeclarationsPhonosModeIn(a, declarations, environment, rtl, within_box,
+        image_relative, static_decoration, rounded_decoration, observed_help, false, null);
+}
+
+fn inlineBoxDeclarationsPhonosModeIn(a: std.mem.Allocator, declarations: []const ObservedFigureDeclaration, environment: CustomEnvironment,
+    rtl: bool, within_box: bool, comptime image_relative: bool, comptime static_decoration: bool, comptime rounded_decoration: bool, comptime observed_help: bool, comptime phonos: bool, shadow_out: ?*?PhonosShadowSource) !InlineBoxResolution
+{
+    if (phonos and (!static_decoration or !rounded_decoration or image_relative or observed_help or
+        within_box or rtl or shadow_out == null)) return .{ .unresolved = true };
+
     const position = try observedFigureKeyword(a, declarations, "position", &.{}, environment, &.{ "static", "relative", "absolute" }, "static", null, false, "static");
     if (position.unresolved) return .{ .unresolved = true };
     var result: InlineBoxResolution = .{ .position = if (std.ascii.eqlIgnoreCase(position.value.?, "relative")) .relative else if (std.ascii.eqlIgnoreCase(position.value.?, "absolute")) .absolute else .static };
@@ -38728,12 +38991,14 @@ fn inlineBoxDeclarationsIn(a: std.mem.Allocator, declarations: []const ObservedF
     inline for (.{ "top", "right", "bottom", "left" }) |side| {
         const edge = @field(padding.value.?, side);
         if (edge != .length) return .{ .unresolved = true };
+        if (phonos and (edge.length.unit != .px or !std.math.isFinite(edge.length.value) or edge.length.value < 0))
+            return .{ .unresolved = true };
         @field(result.padding, side) = edge.length;
     }
     result.border = (try inlineBoxBorders(a, declarations, environment, static_decoration and !rounded_decoration, observed_help)) orelse return .{ .unresolved = true };
     if (static_decoration) {
         inline for (.{ "top", "right", "bottom", "left" }) |side|
-            if ((!rounded_decoration or std.mem.eql(u8, side, "top") or std.mem.eql(u8, side, "bottom")) and
+            if (!phonos and (!rounded_decoration or std.mem.eql(u8, side, "top") or std.mem.eql(u8, side, "bottom")) and
                 @field(result.padding, side).value != 0) return .{ .unresolved = true };
         result.static_decoration = true;
     }
@@ -38780,6 +39045,15 @@ fn inlineBoxDeclarationsIn(a: std.mem.Allocator, declarations: []const ObservedF
     }
     }
     result.insets = (try inlineBoxInsets(a, declarations, environment)) orelse return .{ .unresolved = true };
+    if (phonos) {
+        if (result.cursor != null or result.insets.top != null or result.insets.right != null or
+            result.insets.bottom != null or result.insets.left != null) return .{ .unresolved = true };
+        const paint = try phonosShadowDeclarations(a, declarations, environment);
+        if (paint.unresolved) return .{ .unresolved = true };
+        if (!try phonosBackgroundImageAbsent(a, declarations, environment)) return .{ .unresolved = true };
+        shadow_out.?.* = paint.shadow;
+    }
+
     // Empty overlays share their declaring owner's dynamic currentColor only
     // when the complete selected cascade actually preserves inheritance.
     const color = try observedFigureKeyword(a, declarations, "color", &.{}, environment,
@@ -38798,6 +39072,7 @@ fn inlineBoxDeclarationsIn(a: std.mem.Allocator, declarations: []const ObservedF
         .{ "float", "none" }, .{ "clear", "none" }, .{ "overflow-x", "visible" }, .{ "overflow-y", "visible" },
         .{ "contain", "none" }, .{ "will-change", "auto" }, .{ "writing-mode", "horizontal-tb" },
     }) |check| {
+        if (comptime phonos and std.mem.eql(u8, check[0], "box-shadow")) continue;
         // A proved non-replaced inline has no used width/height constraints.
         // Its normal Span already carries the independently computed background.
         if (comptime (static_decoration and (std.mem.eql(u8, check[0], "width") or std.mem.eql(u8, check[0], "height") or
@@ -42935,4 +43210,252 @@ test "ordinary fixed atom entity proof binds only the mapped NBSP child and refu
     try std.testing.expect((try proveObservedFixedInlineEntityNeutral(a, T.context(&marker, graph),
         source, span, token)) != null);
 
+}
+
+pub const PhonosShadowSource = struct {
+    offset_x: f32,
+    offset_y: f32,
+    blur: f32,
+    spread: f32,
+    color: []const u8,
+    alpha: f32,
+
+    fn pixel(raw: []const u8) ?f32 {
+        const value = inlineBoxInset(raw) orelse return null;
+        return if (value.unit == .px and std.math.isFinite(value.value)) value.value else null;
+    }
+
+    fn parse(a: std.mem.Allocator, raw: []const u8) !?@This() {
+        const value = trim(raw);
+        if (value.len == 0 or value.len > 512) return null;
+        var storage: [5][]const u8 = undefined;
+        const count = styleValueTokens(value, &storage) orelse return null;
+        // Two required offsets; optional blur and spread; explicit color last.
+        if (count < 3 or count > 5) return null;
+        const x = pixel(storage[0]) orelse return null;
+        const y = pixel(storage[1]) orelse return null;
+        const blur = if (count >= 4) pixel(storage[2]) orelse return null else 0;
+        const spread = if (count == 5) pixel(storage[3]) orelse return null else 0;
+        if (blur < 0) return null;
+        const paint = storage[count - 1];
+        var alpha: f32 = 1;
+        const rgb = if (std.ascii.startsWithIgnoreCase(paint, "rgba(")) blk: {
+            if (paint.len < 7 or paint[paint.len - 1] != ')') return null;
+            const args = paint[5 .. paint.len - 1];
+            const comma = std.mem.lastIndexOfScalar(u8, args, ',') orelse return null;
+            const alpha_text = trim(args[comma + 1 ..]);
+            if (!widthNumberSyntax(alpha_text)) return null;
+            const number = std.fmt.parseFloat(f64, alpha_text) catch return null;
+            // Keep the explicit finite 0..1 shadow-alpha domain.
+            // Do not borrow the clamping background helper as shadow authority.
+            if (!std.math.isFinite(number) or number < 0 or number > 1) return null;
+            alpha = @floatCast(number);
+            var buffer: [512]u8 = undefined;
+            const color = std.fmt.bufPrint(&buffer, "rgb({s})", .{args[0..comma]}) catch return null;
+            const channels = legacyRgb(color) orelse return null;
+            const hex = std.fmt.bytesToHex(channels, .lower);
+            const result = try a.alloc(u8, 7);
+            result[0] = '#';
+            @memcpy(result[1..], &hex);
+            break :blk result;
+        } else (try canonicalColorAlloc(a, paint)) orelse return null;
+        return .{ .offset_x = x, .offset_y = y, .blur = blur, .spread = spread, .color = rgb, .alpha = alpha };
+    }
+};
+
+const PhonosShadowResolution = struct { shadow: ?PhonosShadowSource = null, unresolved: bool = false };
+
+fn phonosShadowEqual(left: ?PhonosShadowSource, right: ?PhonosShadowSource) bool {
+    if (left == null or right == null) return left == null and right == null;
+    const x = left.?; const y = right.?;
+    return x.offset_x == y.offset_x and x.offset_y == y.offset_y and x.blur == y.blur and
+        x.spread == y.spread and x.alpha == y.alpha and std.mem.eql(u8, x.color, y.color);
+}
+
+fn phonosShadowCandidate(a: std.mem.Allocator, candidate: ObservedFigureDeclaration,
+    environment: CustomEnvironment) !PhonosShadowResolution
+{
+    if (candidate.syntax_unknown) return .{ .unresolved = true };
+    const computed = try customColorValue(a, environment, candidate.raw);
+    const raw = switch (computed) {
+        .unknown => return .{ .unresolved = true },
+        // box-shadow is not inherited: guaranteed-invalid substitution has
+        // unset/initial none semantics, never a lower-declaration fallback.
+        .invalid => return .{},
+        .known => |value| trim(value),
+    };
+    if (std.ascii.eqlIgnoreCase(raw, "none") or std.ascii.eqlIgnoreCase(raw, "initial") or
+        std.ascii.eqlIgnoreCase(raw, "unset")) return .{};
+    if (!std.ascii.eqlIgnoreCase(candidate.name, "box-shadow")) return .{ .unresolved = true };
+    // Inherit/revert, multiple/inset/currentColor and unresolved dependencies
+    // remain unsupported. The already-qualified parser never invents paint.
+    return .{ .shadow = (try PhonosShadowSource.parse(a, raw)) orelse return .{ .unresolved = true } };
+}
+
+fn phonosShadowDeclarations(a: std.mem.Allocator, declarations: []const ObservedFigureDeclaration,
+    environment: CustomEnvironment) !PhonosShadowResolution
+{
+    const candidates = try observedFigurePropertyCandidates(a, declarations, "box-shadow", &.{});
+    defer a.free(candidates);
+    var definite = false;
+    for (candidates) |candidate| definite = definite or (!candidate.uncertain and !candidate.rank_unknown);
+    // Without a definite winning declaration, absence (none) remains possible.
+    var selected: ?PhonosShadowSource = null;
+    var selected_known = !definite;
+    for (candidates) |candidate| {
+        const value = try phonosShadowCandidate(a, candidate, environment);
+        if (value.unresolved) return .{ .unresolved = true };
+        if (selected_known and !phonosShadowEqual(selected, value.shadow)) return .{ .unresolved = true };
+        selected = value.shadow;
+        selected_known = true;
+    }
+    return .{ .shadow = selected };
+}
+
+fn phonosBackgroundImageAbsent(a: std.mem.Allocator, declarations: []const ObservedFigureDeclaration,
+    environment: CustomEnvironment) !bool
+{
+    const candidates = try observedFigurePropertyCandidates(a, declarations, "background-image", &.{"background"});
+    defer a.free(candidates);
+    for (candidates) |candidate| {
+        if (candidate.syntax_unknown) return false;
+        const computed = try customColorValue(a, environment, candidate.raw);
+        const value = switch (computed) {
+            .unknown => return false,
+            .invalid => continue, // guaranteed-invalid substitution is unset: none
+            .known => |raw| trim(raw),
+        };
+        if (std.ascii.eqlIgnoreCase(value, "initial") or std.ascii.eqlIgnoreCase(value, "unset")) continue;
+        if (std.ascii.eqlIgnoreCase(value, "inherit") or std.ascii.eqlIgnoreCase(candidate.name, "all")) return false;
+        if (std.ascii.eqlIgnoreCase(value, "none")) continue;
+        if (std.ascii.eqlIgnoreCase(candidate.name, "background") and (try figureColor(a, value)) != null) continue;
+        return false;
+    }
+    return true;
+}
+
+test "Phonos shadow parses finite authored paint and rejects unsupported forms" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // Exact shadow value inside the authenticated291B p867 owner0ff9bd.
+    const shadow = (try PhonosShadowSource.parse(a, "0 4px 6px rgba(0, 0, 0, 0.12)")) orelse return error.TestMissingPhonosShadow;
+    try std.testing.expectEqual(@as(f32, 0), shadow.offset_x);
+    try std.testing.expectEqual(@as(f32, 4), shadow.offset_y);
+    try std.testing.expectEqual(@as(f32, 6), shadow.blur);
+    try std.testing.expectEqual(@as(f32, 0), shadow.spread);
+    try std.testing.expectEqualStrings("#000000", shadow.color);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.12), shadow.alpha, 0.000001);
+    const signed = (try PhonosShadowSource.parse(a, "-2px +3px 0 -1px #AbC")) orelse return error.TestMissingSignedShadow;
+    try std.testing.expectEqual(@as(f32, -2), signed.offset_x);
+    try std.testing.expectEqual(@as(f32, -1), signed.spread);
+    try std.testing.expectEqualStrings("#aabbcc", signed.color);
+    try std.testing.expectEqual(@as(f32, 1), signed.alpha);
+    for ([_][]const u8{
+        "inset 0 4px 6px black", "0 4px 6px black, 0 0 red", "0 4px 6px currentColor",
+        "0 4px 6px var(--unknown)", "0 4px -6px black", "0 4px 6px rgba(0,0,0,-0.1)",
+        "0 4px 6px rgba(0,0,0,1.1)", "0 4px 6px rgba(0,0,0,NaN)",
+        "0 4px 6px rgba(0,0,0,Inf)", "0 4px 6px rgba(0,0,0,1e999)",
+        "1em 4px 6px black", "1% 4px 6px black", "1 4px 6px black",
+        "0 4px calc(6px) black", "0 4px 6px", "0 4px 6px black extra",
+    }) |unsupported| try std.testing.expect(try PhonosShadowSource.parse(a, unsupported) == null);
+    var failing = std.testing.FailingAllocator.init(a, .{ .fail_index = 0 });
+    try std.testing.expectError(error.OutOfMemory,
+        PhonosShadowSource.parse(failing.allocator(), "0 4px 6px rgba(0,0,0,0.12)"));
+}
+
+test "Phonos shadow preserves uncertain cascade and invalid variable semantics" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const paint = "box-shadow:0 4px 6px rgba(0,0,0,0.12)";
+    var declarations: std.ArrayList(ObservedFigureDeclaration) = .empty;
+    defer declarations.deinit(a);
+    try appendObservedFigureDeclarations(a, &declarations, paint, .{ .order = 1 }, true, false, null, 0);
+    try std.testing.expect((try phonosShadowDeclarations(a, declarations.items, .{ .complete = true })).unresolved);
+    declarations.clearRetainingCapacity();
+    try appendObservedFigureDeclarations(a, &declarations, paint, .{ .order = 1 }, false, false, null, 0);
+    try appendObservedFigureDeclarations(a, &declarations, paint, .{ .order = 2 }, true, false, null, 0);
+    const equal = try phonosShadowDeclarations(a, declarations.items, .{ .complete = true });
+    try std.testing.expect(!equal.unresolved and equal.shadow != null);
+    try appendObservedFigureDeclarations(a, &declarations, "box-shadow:none !important", .{ .order = 3 }, true, false, null, 0);
+    try std.testing.expect((try phonosShadowDeclarations(a, declarations.items, .{ .complete = true })).unresolved);
+    declarations.clearRetainingCapacity();
+    try appendObservedFigureDeclarations(a, &declarations, paint, .{ .order = 1 }, false, false, null, 0);
+    try appendObservedFigureDeclarations(a, &declarations, "box-shadow:var(--missing)", .{ .order = 2 }, false, false, null, 0);
+    const invalid = try phonosShadowDeclarations(a, declarations.items, .{ .complete = true });
+    try std.testing.expect(!invalid.unresolved and invalid.shadow == null);
+    try std.testing.expect((try phonosShadowDeclarations(a, declarations.items, .{})).unresolved);
+    for ([_][]const u8{ "box-shadow:inherit", "box-shadow:revert", "box-shadow:inset 0 4px 6px black" }) |unsupported| {
+        declarations.clearRetainingCapacity();
+        try appendObservedFigureDeclarations(a, &declarations, unsupported, .{ .order = 1 }, false, false, null, 0);
+        try std.testing.expect((try phonosShadowDeclarations(a, declarations.items, .{ .complete = true })).unresolved);
+    }
+    var failing = std.testing.FailingAllocator.init(a, .{ .fail_index = 0 });
+    try std.testing.expectError(error.OutOfMemory,
+        phonosShadowDeclarations(failing.allocator(), declarations.items, .{ .complete = true }));
+}
+
+test "Phonos background image absence follows every possible cascade candidate" {
+    const Case = struct { css: []const u8, absent: bool };
+    const cases = [_]Case{
+        .{ .css = "background:#e8f4f8", .absent = true },
+        .{ .css = "background-image:url(x);background:#e8f4f8", .absent = true },
+        .{ .css = "background:#e8f4f8;background-image:url(x)", .absent = false },
+        .{ .css = "background-image:url(x)!important;background:#e8f4f8", .absent = false },
+        .{ .css = "background:linear-gradient(red,blue)", .absent = false },
+        .{ .css = "background-image:inherit", .absent = false },
+        .{ .css = "background-image:var(--missing)", .absent = true },
+        .{ .css = "background-image:url(x);background-image:none", .absent = true },
+    };
+    for (cases) |case| {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const a = arena.allocator();
+        var declarations: std.ArrayList(ObservedFigureDeclaration) = .empty;
+        defer declarations.deinit(a);
+        try appendObservedFigureDeclarations(a, &declarations, case.css,
+            .{ .inline_style = true, .order = max_rules * 1024 }, false, false, null, 0);
+        try std.testing.expectEqual(case.absent, try phonosBackgroundImageAbsent(a, declarations.items, .{ .complete = true }));
+    }
+    var declarations: std.ArrayList(ObservedFigureDeclaration) = .empty;
+    defer declarations.deinit(std.testing.allocator);
+    defer for (declarations.items) |declaration| {
+        std.testing.allocator.free(declaration.name);
+        std.testing.allocator.free(declaration.raw);
+    };
+    try appendObservedFigureDeclarations(std.testing.allocator, &declarations, "background:#e8f4f8",
+        .{ .inline_style = true, .order = max_rules * 1024 }, false, false, null, 0);
+    var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 0 });
+    try std.testing.expectError(error.OutOfMemory,
+        phonosBackgroundImageAbsent(failing.allocator(), declarations.items, .{ .complete = true }));
+}
+
+
+test "deferred cell physical height keeps independent unsupported declarations and consumer boundaries" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var profile = try parseAlloc(a, ""); defer profile.deinit();
+    const known = try profile.resolveCellWithContext(a, 0, 0, "", .{ .defer_cell_height = true }, false, null, "height:.25em");
+    try std.testing.expect(known.authored_height_deferred);
+    try std.testing.expect(!known.unresolved);
+    try std.testing.expectEqualDeep(types.StyleLength{ .unit = .em, .value = 0.25 }, known.authored_height.?);
+    try std.testing.expectEqual(types.ContainerBoxSizing.content_box, known.authored_height_box_sizing.?);
+    const ordinary = try profile.resolveCellWithContext(a, 0, 0, "", .{}, false, null, "height:.25em");
+    try std.testing.expect(ordinary.unresolved and !ordinary.authored_height_deferred);
+    try std.testing.expect((try profile.resolveTableWithContext(a, 0, "", .{ .defer_cell_height = true }, null, "height:.25em")).unresolved);
+    for ([_][]const u8{
+        "position:relative;height:.25em", "height:.25em;position:relative",
+        "height:.25em;height:auto", "height:auto!important;height:.25em",
+        "height:.25em;box-sizing:border-box", "height:.25em;all:initial",
+        "height:var(--unknown)", "he\\69ght:1em",
+    }) |css| {
+        const refused = try profile.resolveCellWithContext(a, 0, 0, "", .{ .defer_cell_height = true }, false, null, css);
+        try std.testing.expect(refused.unresolved);
+    }
+    const priority = try profile.resolveCellWithContext(a, 0, 0, "", .{ .defer_cell_height = true }, false, null, "height:2px!important;height:3px");
+    try std.testing.expect(priority.authored_height_deferred and !priority.unresolved);
+    try std.testing.expectEqualDeep(types.StyleLength{ .unit = .px, .value = 2 }, priority.authored_height.?);
+    var uncertain = try parseAlloc(a, "td:hover{height:2px}"); defer uncertain.deinit();
+    const conditional = try uncertain.resolveCellWithContext(a, 0, 0, "", .{ .defer_cell_height = true }, false, null, "height:.25em");
+    try std.testing.expect(conditional.unresolved);
 }

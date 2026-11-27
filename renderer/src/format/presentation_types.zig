@@ -586,6 +586,7 @@ const RubyFallbackBudget = struct {
     remaining: usize = max_presentation_items,
     action_group_depth: usize = 0,
     inline_box_depth: usize = 0,
+    allow_box_phonos_child: bool = false,
     actual_text_leaves: usize = 0,
     fn items(self: *RubyFallbackBudget, count: usize) error{InvalidPresentation}!void {
         if (count > self.remaining) return error.InvalidPresentation;
@@ -637,6 +638,13 @@ fn visitRubyFallbackInner(spans: anytype, context: anytype, comptime emit: anyty
         if (comptime @hasField(@TypeOf(span), "inline_box_group")) if (span.inline_box_group) |group| {
             if (gap or content_depth >= max_content_depth or !validInlineBoxGroupOwner(span)) return error.InvalidPresentation;
             try budget.items(group.overlays.len);
+            const phonos = inlineBoxIsPhonos(group.*);
+            if (phonos and (inherited_action != null or inside_group or ruby_depth != 0 or
+                budget.inline_box_depth != 0 or budget.action_group_depth != 0)) return error.InvalidPresentation;
+            if (inlineBoxShadow(group.*) != null) try budget.items(1);
+            const previous_phonos = budget.allow_box_phonos_child;
+            budget.allow_box_phonos_child = phonos;
+            defer budget.allow_box_phonos_child = previous_phonos;
             if (inlineBoxAtomicLayout(group.*) != null) {
                 if (inherited_action != null or inside_group or ruby_depth != 0 or
                     budget.inline_box_depth != 0 or budget.action_group_depth != 0) return error.InvalidPresentation;
@@ -676,7 +684,8 @@ fn visitRubyFallbackInner(spans: anytype, context: anytype, comptime emit: anyty
             } else {
                 try visitRubyFallbackInner(group.spans, context, emit, content_depth + 1, ruby_depth, false,
                     decoration.including(span), own_action orelse inherited_action, inside_group, budget, visual);
-                if (budget.actual_text_leaves == before_text) return error.InvalidPresentation;
+                // An authenticated icon-only child is an action, never a fabricated text leaf.
+                if (budget.actual_text_leaves == before_text and !phonos) return error.InvalidPresentation;
             }
             continue;
         };
@@ -734,7 +743,9 @@ fn visitRubyFallbackInner(spans: anytype, context: anytype, comptime emit: anyty
             continue;
         };
         if ((ruby_depth != 0 or inside_group) and !(if (gap) validRubyChild(span) else validRubyBodyChild(span))) return error.InvalidPresentation;
-        if (budget.inline_box_depth != 0 and !validRubyChild(span)) return error.InvalidPresentation;
+        if (budget.inline_box_depth != 0 and !validInlineBoxChild(span, budget.allow_box_phonos_child)) return error.InvalidPresentation;
+        if (budget.allow_box_phonos_child) if (spanAudioControl(span)) |audio|
+            try budget.items(1 + @as(usize, @intFromBool(audio.focus != null)));
         const effective = if (inherited_action) |action| try action.project(span) else span;
         const trail: []const u8 = if (comptime @hasField(@TypeOf(span), "trail")) span.trail else "";
         if (span.text.len != 0 or trail.len != 0) budget.actual_text_leaves += 1;
@@ -751,7 +762,7 @@ fn rubyFallbackHasText(spans: anytype, content_depth: usize, ruby_depth: usize, 
             continue;
         };
         if (comptime @hasField(@TypeOf(span), "inline_box_group")) if (span.inline_box_group) |group| {
-            if (content_depth >= max_content_depth or !validInlineBoxGroupOwner(span)) return error.InvalidPresentation;
+            if (content_depth >= max_content_depth or !validInlineBoxGroupOwner(span) or inlineBoxIsPhonos(group.*)) return error.InvalidPresentation;
             try budget.items(group.overlays.len);
             if (try rubyFallbackHasText(group.spans, content_depth + 1, ruby_depth, budget)) return true;
             continue;
@@ -995,6 +1006,75 @@ fn validAtomicInlineOwner(span: anytype, group: anytype, layout: InlineBoxAtomic
     return true;
 }
 
+/// Authored ordinary Phonos box paint.
+pub const InlineBoxShadow = struct {
+    offset_x: f32,
+    offset_y: f32,
+    blur: f32,
+    spread: f32,
+    color: []const u8,
+    alpha: f32,
+    const JsonFields = struct {
+        offset_x: std.json.Value, offset_y: std.json.Value, blur: std.json.Value,
+        spread: std.json.Value, color: std.json.Value, alpha: std.json.Value,
+    };
+    pub fn jsonParse(a: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) std.json.ParseError(@TypeOf(source.*))!@This() {
+        var strict = options; strict.ignore_unknown_fields = false; strict.duplicate_field_behavior = .@"error";
+        return fromJson(try std.json.innerParse(JsonFields, a, source, strict));
+    }
+    pub fn jsonParseFromValue(a: std.mem.Allocator, source: std.json.Value, options: std.json.ParseOptions) std.json.ParseFromValueError!@This() {
+        var strict = options; strict.ignore_unknown_fields = false; strict.duplicate_field_behavior = .@"error";
+        return fromJson(try std.json.innerParseFromValue(JsonFields, a, source, strict));
+    }
+    fn number(value: std.json.Value) error{UnexpectedToken}!f32 {
+        const result: f32 = switch (value) {
+            .integer => |n| @floatFromInt(n),
+            .float => |n| @floatCast(n),
+            else => return error.UnexpectedToken,
+        };
+        if (!std.math.isFinite(result)) return error.UnexpectedToken;
+        return result;
+    }
+    fn fromJson(value: JsonFields) error{UnexpectedToken}!@This() {
+        if (value.color != .string) return error.UnexpectedToken;
+        const result: @This() = .{ .offset_x = try number(value.offset_x), .offset_y = try number(value.offset_y),
+            .blur = try number(value.blur), .spread = try number(value.spread),
+            .color = value.color.string, .alpha = try number(value.alpha) };
+        if (!validInlineBoxShadow(result)) return error.UnexpectedToken;
+        return result;
+    }
+};
+pub fn inlineBoxShadow(value: anytype) ?InlineBoxShadow {
+    return if (comptime @hasField(@TypeOf(value), "shadow")) value.shadow else null;
+}
+pub fn validInlineBoxShadow(value: InlineBoxShadow) bool {
+    return std.math.isFinite(value.offset_x) and std.math.isFinite(value.offset_y) and
+        std.math.isFinite(value.blur) and value.blur >= 0 and std.math.isFinite(value.spread) and
+        isCanonicalRgb(value.color) and std.math.isFinite(value.alpha) and value.alpha >= 0 and value.alpha <= 1;
+}
+pub fn validInlineBoxPhonosChild(span: anytype) bool {
+    const audio = spanAudioControl(span) orelse return false;
+    if (comptime !@hasField(@TypeOf(span), "text")) return false;
+    if (audio.presentation != .phonos_button or span.text.len != 0 or !validSpanAudioControlInBox(span, true)) return false;
+    if (comptime @hasField(@TypeOf(span), "audio_control") and @hasField(@TypeOf(span), "classes")) {
+        if (!std.unicode.utf8ValidateSlice(span.classes)) return false;
+        // The original media class and action are checked above. This local
+        // validation projection reuses all ordinary font/ink/UTF-8 checks;
+        // neither the original child nor validRubyChild is altered.
+        var ordinary = span;
+        ordinary.audio_control = null;
+        ordinary.classes = "";
+        return validRubyChild(ordinary);
+    }
+    return false;
+}
+pub fn validInlineBoxChild(span: anytype, allow_phonos: bool) bool {
+    return validRubyChild(span) or (allow_phonos and validInlineBoxPhonosChild(span));
+}
+pub fn inlineBoxIsPhonos(value: anytype) bool {
+    return value.spans.len == 1 and validInlineBoxPhonosChild(value.spans[0]);
+}
+
 /// The ordinary form uses CSS slice decoration and native
 /// parent progression. The owner font governs geometry; child font scales keep
 /// their established original-root Context/normal-body/CSS-pixel semantics and
@@ -1018,6 +1098,7 @@ pub fn InlineBoxGroup(comptime Child: type) type {
         // must be equal solid or equal dotted RGB, with no overlays.
         radius: ?StyleWidth = null,
         atomic_layout: ?InlineBoxAtomicLayout = null,
+        shadow: ?InlineBoxShadow = null,
         pub fn jsonStringify(self: @This(), jw: anytype) !void {
             try jw.beginObject();
             try jw.objectField("padding"); try jw.write(self.padding);
@@ -1026,6 +1107,7 @@ pub fn InlineBoxGroup(comptime Child: type) type {
             try jw.objectField("spans"); try jw.write(self.spans);
             if (self.radius) |radius| { try jw.objectField("radius"); try jw.write(radius); }
             if (self.atomic_layout) |layout| { try jw.objectField("atomic_layout"); try jw.write(layout); }
+            if (self.shadow) |shadow| { try jw.objectField("shadow"); try jw.write(shadow); }
             try jw.endObject();
         }
     };
@@ -1083,11 +1165,33 @@ fn emptyInlineTopEdge(value: anytype) bool {
         value.border.right == .none and value.border.bottom == .none and value.border.left == .none;
 }
 pub fn validInlineBoxGroup(value: anytype) bool {
+    if (value.spans.len > max_presentation_items) return false;
+    const phonos = inlineBoxIsPhonos(value);
+    if (inlineBoxShadow(value)) |shadow| if (!phonos or !validInlineBoxShadow(shadow)) return false;
+    for (value.spans) |child| if (spanAudioControl(child) != null and !phonos) return false;
+    if (phonos) {
+        if (value.overlays.len != 0 or inlineBoxAtomicLayout(value) != null) return false;
+        if (inlineBoxRadius(value)) |radius| if (radius.unit != .px) return false;
+        const top = value.border.top;
+        inline for (.{ "right", "bottom", "left" }) |side| {
+            const edge = @field(value.border, side);
+            switch (top) {
+                .none => if (edge != .none) return false,
+                .solid => |line| {
+                    if (line.color != .rgb or edge != .solid or edge.solid.color != .rgb or
+                        edge.solid.width.unit != line.width.unit or edge.solid.width.value != line.width.value or
+                        !std.mem.eql(u8, edge.solid.color.rgb, line.color.rgb)) return false;
+                },
+                else => return false,
+            }
+        }
+    }
     if (inlineBoxAtomicLayout(value)) |layout| {
         if (!validAtomicInlineChildren(value, layout)) return false;
     }
-    if (inlineBoxRadius(value)) |radius| {
-        if (!validInlineBoxRadius(radius) or value.overlays.len != 0) return false;
+    const radius_value = inlineBoxRadius(value);
+    if (radius_value) |radius| if (!validInlineBoxRadius(radius) or value.overlays.len != 0) return false;
+    if (!(phonos and value.border.top == .none)) if (radius_value) |radius| {
         const line = switch (value.border.top) { .solid, .dotted => |border_line| border_line, else => return false };
         if (!validStyleLength(line.width) or !validInlineBoxColor(line.color)) return false;
         switch (line.color) {
@@ -1114,7 +1218,7 @@ pub fn validInlineBoxGroup(value: anytype) bool {
                 else => unreachable,
             }
         }
-    }
+    };
     if (!validStyleEdges(value.padding) or !validInlineBoxBorderEdges(value.border) or
         (value.spans.len == 0 and !emptyInlineTopEdge(value)) or value.spans.len > max_presentation_items or
         value.overlays.len > max_presentation_items) return false;
@@ -1145,6 +1249,12 @@ pub fn validInlineBoxGroupOwner(span: anytype) bool {
     if (comptime @hasField(@TypeOf(span), "image")) if (span.image != null) return false;
     if (comptime @hasField(@TypeOf(span), "inline_box_group")) {
         const group = span.inline_box_group.?.*;
+        if (inlineBoxIsPhonos(group)) {
+            if (!std.mem.eql(u8, @tagName(span.kind), "text") or span.target.len != 0) return false;
+            if (comptime @hasField(@TypeOf(span), "tooltip")) if (span.tooltip != null) return false;
+            if (comptime @hasField(@TypeOf(span), "explanation")) if (span.explanation.len != 0) return false;
+            if (comptime @hasField(@TypeOf(span), "target_fragment")) if (span.target_fragment != null) return false;
+        }
         if (group.spans.len == 0) {
             if (!std.mem.eql(u8, @tagName(span.kind), "text") or span.target.len != 0) return false;
             if (comptime @hasField(@TypeOf(span), "tooltip")) if (span.tooltip != null) return false;
@@ -1699,7 +1809,139 @@ fn writeOptionalStyleFields(value: anytype, jw: anytype) !void {
     }
     try jw.endObject();
 }
+/// Computed physical CSS cell minimum. The producer resolves the declaring
+/// cell font before emission. This never establishes a line strut or used row
+/// height. normal_body means an already-normalized body-em quantity; css_px
+/// means fixed CSS pixels. Context/child-font interpretation is forbidden.
+pub const CellBoxHeight = struct {
+    value: f32,
+    font_scale_basis: FontScaleBasis,
+    box_sizing: ContainerBoxSizing,
+
+    pub fn jsonStringify(self: @This(), jw: anytype) !void {
+        try jw.beginObject();
+        try jw.objectField("value"); try jw.write(@as(f64, self.value));
+        try jw.objectField("font_scale_basis"); try jw.write(self.font_scale_basis);
+        try jw.objectField("box_sizing"); try jw.write(self.box_sizing);
+        try jw.endObject();
+    }
+    const JsonFields = struct { value: f32, font_scale_basis: FontScaleBasis, box_sizing: ContainerBoxSizing };
+    pub fn jsonParse(a: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) std.json.ParseError(@TypeOf(source.*))!@This() {
+        var strict = options; strict.ignore_unknown_fields = false; strict.duplicate_field_behavior = .@"error";
+        return fromJson(try std.json.innerParse(JsonFields, a, source, strict));
+    }
+    pub fn jsonParseFromValue(a: std.mem.Allocator, source: std.json.Value, options: std.json.ParseOptions) std.json.ParseFromValueError!@This() {
+        var strict = options; strict.ignore_unknown_fields = false; strict.duplicate_field_behavior = .@"error";
+        return fromJson(try std.json.innerParseFromValue(JsonFields, a, source, strict));
+    }
+    fn fromJson(v: JsonFields) error{UnexpectedToken}!@This() {
+        const result: @This() = .{ .value = v.value, .font_scale_basis = v.font_scale_basis, .box_sizing = v.box_sizing };
+        if (!validCellBoxHeight(result)) return error.UnexpectedToken;
+        return result;
+    }
+};
+pub fn validCellBoxHeight(value: CellBoxHeight) bool {
+    return std.math.isFinite(value.value) and value.value >= 0 and
+        !std.math.signbit(value.value) and value.font_scale_basis != .context;
+}
+
+pub const TablePrincipalDisplay = enum(u8) { table = 0, block = 1 };
+pub const TablePrincipalWidth = enum(u8) { auto = 0, fit_content = 1 };
+pub const TablePrincipalMaxWidth = enum(u8) { none = 0, containing_100_percent = 1 };
+pub const TablePrincipalOverflow = enum(u8) { visible = 0, auto = 1 };
+/// One source principal box, not a second anonymous scroll wrapper. Semantic
+/// caption/rows/cells remain on the owning Table. No grid direction, font,
+/// focus, keyboard stop, or stationary geometry is supplied by this policy.
+pub const TablePrincipalBox = struct {
+    display: TablePrincipalDisplay,
+    width: TablePrincipalWidth,
+    max_width: TablePrincipalMaxWidth,
+    overflow_x: TablePrincipalOverflow,
+    overflow_y: TablePrincipalOverflow,
+    box_sizing: ContainerBoxSizing,
+    margins: ContainerMargins,
+    const JsonFields = struct {
+        display: TablePrincipalDisplay, width: TablePrincipalWidth, max_width: TablePrincipalMaxWidth,
+        overflow_x: TablePrincipalOverflow, overflow_y: TablePrincipalOverflow,
+        box_sizing: ContainerBoxSizing, margins: ContainerMargins,
+    };
+    pub fn jsonParse(a: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) std.json.ParseError(@TypeOf(source.*))!@This() {
+        var strict = options; strict.ignore_unknown_fields = false; strict.duplicate_field_behavior = .@"error";
+        return fromJson(try std.json.innerParse(JsonFields, a, source, strict));
+    }
+    pub fn jsonParseFromValue(a: std.mem.Allocator, source: std.json.Value, options: std.json.ParseOptions) std.json.ParseFromValueError!@This() {
+        var strict = options; strict.ignore_unknown_fields = false; strict.duplicate_field_behavior = .@"error";
+        return fromJson(try std.json.innerParseFromValue(JsonFields, a, source, strict));
+    }
+    fn fromJson(v: JsonFields) @This() {
+        return .{ .display = v.display, .width = v.width, .max_width = v.max_width,
+            .overflow_x = v.overflow_x, .overflow_y = v.overflow_y, .box_sizing = v.box_sizing, .margins = v.margins };
+    }
+};
+pub const TablePrincipalViewport = struct {
+    max_viewport_width_px: u32,
+    containing_direction: TableContainingDirection,
+    language: []const u8,
+    narrow: TablePrincipalBox,
+    wide: TablePrincipalBox,
+    const JsonFields = struct {
+        max_viewport_width_px: u32, containing_direction: TableContainingDirection,
+        language: []const u8, narrow: TablePrincipalBox, wide: TablePrincipalBox,
+    };
+    pub fn jsonParse(a: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) std.json.ParseError(@TypeOf(source.*))!@This() {
+        var strict = options; strict.ignore_unknown_fields = false; strict.duplicate_field_behavior = .@"error";
+        return fromJson(try std.json.innerParse(JsonFields, a, source, strict));
+    }
+    pub fn jsonParseFromValue(a: std.mem.Allocator, source: std.json.Value, options: std.json.ParseOptions) std.json.ParseFromValueError!@This() {
+        var strict = options; strict.ignore_unknown_fields = false; strict.duplicate_field_behavior = .@"error";
+        return fromJson(try std.json.innerParseFromValue(JsonFields, a, source, strict));
+    }
+    fn fromJson(v: JsonFields) error{UnexpectedToken}!@This() {
+        const result: @This() = .{ .max_viewport_width_px = v.max_viewport_width_px,
+            .containing_direction = v.containing_direction, .language = v.language, .narrow = v.narrow, .wide = v.wide };
+        if (!validTablePrincipalViewport(result)) return error.UnexpectedToken;
+        return result;
+    }
+};
+fn principalZeroAutoMargins(value: ContainerMargins) bool {
+    if (value.top != .length or value.bottom != .length or value.right != .auto or value.left != .auto) return false;
+    return value.top.length.unit == .px and value.bottom.length.unit == .px and
+        value.top.length.value == 0 and value.bottom.length.value == 0 and
+        !std.math.signbit(value.top.length.value) and !std.math.signbit(value.bottom.length.value);
+}
+pub fn validTablePrincipalViewport(value: TablePrincipalViewport) bool {
+    if (value.max_viewport_width_px == 0 or value.max_viewport_width_px > 16777216 or
+        value.language.len == 0 or value.language.len > 1024 or !std.unicode.utf8ValidateSlice(value.language)) return false;
+    const n = value.narrow; const w = value.wide;
+    return n.display == .block and n.width == .fit_content and n.max_width == .containing_100_percent and
+        n.overflow_x == .auto and n.overflow_y == .auto and n.box_sizing == .border_box and principalZeroAutoMargins(n.margins) and
+        w.display == .table and w.width == .auto and w.max_width == .none and
+        w.overflow_x == .visible and w.overflow_y == .visible and w.box_sizing == .border_box and principalZeroAutoMargins(w.margins);
+}
+pub fn validTablePrincipalOwner(table: anytype) bool {
+    if (comptime !@hasField(@TypeOf(table), "principal_viewport")) return true;
+    const policy = table.principal_viewport orelse return true;
+    if (!validTablePrincipalViewport(policy.*)) return false;
+    inline for (.{ "block_viewport", "float_viewport", "caption_viewport", "rows_hidden_max_width_px", "disclosure" }) |name| {
+        if (comptime @hasField(@TypeOf(table), name)) if (@field(table, name) != null) return false;
+    }
+    if (table.geometry) |geometry| if (geometry.width != null) return false;
+    if (table.style) |style| {
+        if (style.width != null or style.min_width != null or style.margins != null or style.margin_values != null or
+            style.containing_direction != null or style.display != null or style.float_side != null or style.clear != null) return false;
+    }
+    var has_cells = false;
+    for (table.rows) |row| if (row.cells.len != 0) { has_cells = true; break; };
+    return has_cells;
+}
+pub fn resolveTablePrincipalBox(table: Table, viewport_css_px: f32) error{InvalidPresentation}!?TablePrincipalBox {
+    if (!std.math.isFinite(viewport_css_px) or viewport_css_px < 0 or !validTablePrincipalOwner(table)) return error.InvalidPresentation;
+    const policy = table.principal_viewport orelse return null;
+    return if (viewport_css_px <= @as(f32, @floatFromInt(policy.max_viewport_width_px))) policy.narrow else policy.wide;
+}
+
 pub const Cell = struct {
+    box_height: ?CellBoxHeight = null,
     spans: []const Span = &.{},
     header: bool = false,
     colspan: u16 = 1,
@@ -1713,7 +1955,9 @@ pub const Cell = struct {
     pub fn jsonStringify(self: Cell, jw: anytype) !void {
         try jw.beginObject();
         inline for (@typeInfo(Cell).@"struct".field_names) |field_name| {
-            if (comptime std.mem.eql(u8, field_name, "style")) {
+            if (comptime std.mem.eql(u8, field_name, "box_height")) {
+                if (self.box_height) |height| { try jw.objectField(field_name); try jw.write(height); }
+            } else if (comptime std.mem.eql(u8, field_name, "style")) {
                 if (self.style) |style| {
                     try jw.objectField(field_name);
                     try jw.write(style);
@@ -1823,10 +2067,15 @@ pub fn spanAudioControl(span: anytype) ?AudioControl {
     return if (comptime @hasField(@TypeOf(span), "audio_control")) span.audio_control else null;
 }
 pub fn validSpanAudioControl(span: anytype) bool {
+    return validSpanAudioControlInBox(span, false);
+}
+/// Valid only when the caller has proved the sole ordinary-box context.
+pub fn validSpanAudioControlInBox(span: anytype, allow_empty_phonos: bool) bool {
     const control = spanAudioControl(span) orelse return true;
     if (control.presentation == .phonos_button) {
         if (comptime !@hasField(@TypeOf(span), "tooltip") or !@hasField(@TypeOf(span), "text")) return false;
-        if (span.text.len == 0 or (span.tooltip orelse return false).len == 0) return false;
+        if ((span.text.len == 0 and !allow_empty_phonos) or (span.tooltip orelse return false).len == 0) return false;
+        if (span.text.len == 0 and !std.unicode.utf8ValidateSlice(span.tooltip.?)) return false;
     }
     const trail: []const u8 = if (comptime @hasField(@TypeOf(span), "trail")) span.trail else "";
     if (!validAudioControl(control) or !std.mem.eql(u8, @tagName(span.kind), "link") or
@@ -2161,6 +2410,7 @@ fn cloneResponsiveCaptionValue(comptime T: type, a: std.mem.Allocator, value: T)
 }
 
 pub const Table = struct {
+    principal_viewport: ?*const TablePrincipalViewport = null,
     caption_viewport: ?*const ResponsiveCaptionTable = null,
     caption: []const Span = &.{},
     /// Non-null is authoritative; flat caption must be empty.
@@ -2178,6 +2428,7 @@ pub const Table = struct {
 
     pub fn jsonStringify(self: Table, jw: anytype) !void {
         try jw.beginObject();
+        if (self.principal_viewport) |policy| { try jw.objectField("principal_viewport"); try jw.write(policy.*); }
         try jw.objectField("caption");
         try jw.write(self.caption);
         if (self.float_viewport) |policy| { try jw.objectField("float_viewport"); try jw.write(policy); }
@@ -4208,8 +4459,11 @@ pub const ImageCatalogIndex = struct {
         self.* = .{};
     }
     pub fn supportsAudioControl(self: *const ImageCatalogIndex, span: anytype) bool {
+        return self.supportsAudioControlInBox(span, false);
+    }
+    pub fn supportsAudioControlInBox(self: *const ImageCatalogIndex, span: anytype, allow_empty_phonos: bool) bool {
         if (spanAudioControl(span) == null) return true;
-        if (!validSpanAudioControl(span)) return false;
+        if (!validSpanAudioControlInBox(span, allow_empty_phonos)) return false;
         const value = inlineTableMediaValue(self.values, span) orelse return false;
         return !value.image and !value.duplicate;
     }
@@ -4285,6 +4539,9 @@ pub const SourceAnchorDestinations = struct {
 };
 
 pub const DeepTableWork = struct {
+    inline_structure_depth: usize = 0,
+    allow_box_phonos_child: bool = false,
+    inline_box_phonos_found: bool = false,
     destinations: ?*SourceAnchorDestinations = null,
     remaining: usize = max_presentation_items,
     inline_group_found: bool = false,
@@ -4308,6 +4565,8 @@ pub const DeepTableWork = struct {
     discover_positioned_container: bool = false,
     table_min_width_found: bool = false,
     discover_table_min_width: bool = false,
+    cell_box_height_found: bool = false,
+    principal_viewport_found: bool = false,
     responsive_caption_table_found: bool = false,
     discover_responsive_caption_table: bool = false,
     table_rows_visibility_found: bool = false,
@@ -4328,6 +4587,14 @@ pub const DeepTableWork = struct {
     discover_inline_group: bool = false,
     discover_inline_action_group: bool = false,
     discover_inline_box_group: bool = false,
+    fn inlineChildren(self: *DeepTableWork, values: anytype, content_depth: usize, ruby_depth: usize, allow_phonos: bool) Error!void {
+        const previous = self.allow_box_phonos_child;
+        self.allow_box_phonos_child = allow_phonos;
+        self.inline_structure_depth += 1;
+        defer self.inline_structure_depth -= 1;
+        defer self.allow_box_phonos_child = previous;
+        try self.spans(values, content_depth, ruby_depth);
+    }
     const Error = error{ InvalidPresentation, PresentationTooLarge };
     fn take(self: *DeepTableWork, count: usize) Error!void {
         if (count > self.remaining) return error.PresentationTooLarge;
@@ -4357,7 +4624,8 @@ pub const DeepTableWork = struct {
             if (spanAudioControl(value)) |control| {
                 self.audio_control_found = true;
                 if (self.discover_audio_control) return error.InvalidPresentation;
-                if (!validSpanAudioControl(value)) return error.InvalidPresentation;
+                if (!validSpanAudioControlInBox(value, self.allow_box_phonos_child) or
+                    (self.allow_box_phonos_child and !validInlineBoxPhonosChild(value))) return error.InvalidPresentation;
                 try self.take(1 + @as(usize, @intFromBool(control.focus != null)));
             }
             if (comptime @hasField(@TypeOf(value), "image")) if (value.image) |image| if (image.occurrence_layout) |layout| {
@@ -4371,12 +4639,16 @@ pub const DeepTableWork = struct {
                 if (self.discover_clipped_absolute) return error.InvalidPresentation;
                 if (self.clipped_nonstatic_ancestor) return error.InvalidPresentation;
                 try validateClippedAbsoluteInlineTree(value, content_depth, ruby_depth);
-                try self.spans(group.children, content_depth + 1, ruby_depth);
+                try self.inlineChildren(group.children, content_depth + 1, ruby_depth, false);
             };
             if (comptime @hasField(@TypeOf(value), "inline_box_group")) if (value.inline_box_group) |group| {
                 self.inline_box_group_found = true;
                 if (self.discover_inline_box_group) return error.InvalidPresentation;
                 if (content_depth >= max_content_depth or !validInlineBoxGroupOwner(value)) return error.InvalidPresentation;
+                const phonos = inlineBoxIsPhonos(group.*);
+                if (phonos and (self.inline_structure_depth != 0 or ruby_depth != 0)) return error.InvalidPresentation;
+                self.inline_box_phonos_found = self.inline_box_phonos_found or phonos;
+                if (inlineBoxShadow(group.*) != null) try self.take(1);
                 try self.take(group.overlays.len);
                 if (inlineBoxAtomicLayout(group.*)) |layout| {
                     try self.take(1);
@@ -4385,15 +4657,15 @@ pub const DeepTableWork = struct {
                 for (group.overlays) |overlay| if (overlay.content) |content| {
                     self.inlineFeatures(content.owner_font);
                     if (content.line_height) |height| if (height == .font_relative) self.inlineFeatures(height.font_relative.font);
-                    try self.spans(content.spans, content_depth + 2, ruby_depth);
+                    try self.inlineChildren(content.spans, content_depth + 2, ruby_depth, false);
                 };
-                try self.spans(group.spans, content_depth + 1, ruby_depth);
+                try self.inlineChildren(group.spans, content_depth + 1, ruby_depth, phonos);
             };
             if (comptime @hasField(@TypeOf(value), "inline_action_group")) if (value.inline_action_group) |group| {
                 self.inline_action_group_found = true;
                 if (self.discover_inline_action_group) return error.InvalidPresentation;
                 if (content_depth >= max_content_depth) return error.InvalidPresentation;
-                try self.spans(group.spans, content_depth + 1, ruby_depth);
+                try self.inlineChildren(group.spans, content_depth + 1, ruby_depth, false);
             };
             if (comptime @hasField(@TypeOf(value), "inline_padding_group")) if (value.inline_padding_group) |group| {
                 self.inline_group_found = true;
@@ -4401,7 +4673,7 @@ pub const DeepTableWork = struct {
                 // never this sentinel; ordinary preflight still checks all work.
                 if (self.discover_inline_group) return error.InvalidPresentation;
                 if (content_depth >= max_content_depth) return error.InvalidPresentation;
-                try self.spans(group.spans, content_depth + 1, ruby_depth);
+                try self.inlineChildren(group.spans, content_depth + 1, ruby_depth, false);
             };
             if (comptime @hasField(@TypeOf(value), "ruby")) if (value.ruby) |ruby| {
                 if (content_depth >= max_content_depth or ruby_depth >= max_ruby_depth) return error.InvalidPresentation;
@@ -4456,7 +4728,7 @@ pub const DeepTableWork = struct {
     pub fn hasTablePolicyWork(display: anytype, sections: anytype, preamble: anytype, references: anytype) bool {
         var work: DeepTableWork = .{ .discover_table_min_width = true, .discover_table_rows_visibility = true, .discover_responsive_caption_table = true };
         work.entry(display, sections, preamble, references) catch {};
-        return work.table_min_width_found or work.table_rows_visibility_found or work.responsive_caption_table_found;
+        return work.table_min_width_found or work.table_rows_visibility_found or work.responsive_caption_table_found or work.cell_box_height_found or work.principal_viewport_found;
     }
     pub fn hasTableMinWidths(display: anytype, sections: anytype, preamble: anytype, references: anytype) bool {
         var work: DeepTableWork = .{ .discover_table_min_width = true };
@@ -4470,12 +4742,13 @@ pub const DeepTableWork = struct {
             if (!validStyleWidth(minimum)) return error.InvalidPresentation;
         }
     }
-    pub fn containerLayouts(display: anytype, sections: anytype, preamble: anytype, references: anytype) struct { positioned: bool, column_layout: bool, responsive_flow: bool, source_anchor: bool, inline_destination: bool, responsive_caption_table: bool } {
+    pub fn containerLayouts(display: anytype, sections: anytype, preamble: anytype, references: anytype) struct { positioned: bool, column_layout: bool, responsive_flow: bool, source_anchor: bool, inline_destination: bool, responsive_caption_table: bool, cell_box_height: bool, principal_viewport: bool } {
         var work: DeepTableWork = .{};
         work.entry(display, sections, preamble, references) catch {};
         return .{ .positioned = work.positioned_container_found, .column_layout = work.column_layout_found,
             .responsive_flow = work.responsive_container_flow_found ,
-            .source_anchor = work.source_anchor_found, .inline_destination = work.inline_destination_found, .responsive_caption_table = work.responsive_caption_table_found };
+            .source_anchor = work.source_anchor_found, .inline_destination = work.inline_destination_found, .responsive_caption_table = work.responsive_caption_table_found,
+            .cell_box_height = work.cell_box_height_found, .principal_viewport = work.principal_viewport_found };
     }
     pub fn hasPositionedContainers(display: anytype, sections: anytype, preamble: anytype, references: anytype) bool {
         var work: DeepTableWork = .{ .discover_positioned_container = true };
@@ -4716,6 +4989,11 @@ pub const DeepTableWork = struct {
             try self.resolvedStyleBorder(policy.narrow_grid_style.border);
             self.inlineFeatures(policy.caption_box.line.strut.?.owner_font.?);
         };
+        if (comptime @hasField(@TypeOf(value), "principal_viewport")) if (value.principal_viewport != null) {
+            self.principal_viewport_found = true;
+            try self.take(1);
+            if (!validTablePrincipalOwner(value)) return error.InvalidPresentation;
+        };
         if (!validTableRowsVisibility(value)) return error.InvalidPresentation;
         if (comptime @hasField(@TypeOf(value), "caption")) try self.spans(value.caption, content_depth, 0);
         if (comptime @hasField(@TypeOf(value), "caption_blocks")) if (value.caption_blocks) |children|
@@ -4724,6 +5002,11 @@ pub const DeepTableWork = struct {
         for (value.rows) |row| {
             try self.take(row.cells.len);
             for (row.cells) |cell| {
+                if (comptime @hasField(@TypeOf(cell), "box_height")) if (cell.box_height) |height| {
+                    self.cell_box_height_found = true;
+                    try self.take(1);
+                    if (!validCellBoxHeight(height)) return error.InvalidPresentation;
+                };
                 if (comptime @hasField(@TypeOf(cell), "style")) if (cell.style) |style|
                     try self.resolvedStyleBorder(style.border);
                 try self.spans(cell.spans, content_depth, 0);
@@ -4808,6 +5091,7 @@ const ImageValidation = struct {
     in_inline_padding_group: bool = false,
     in_inline_action_group: bool = false,
     in_inline_box_group: bool = false,
+    allow_box_phonos_child: bool = false,
     in_clipped_absolute: bool = false,
     link_paint: ?FigureLinkPaint = null,
 
@@ -4816,9 +5100,10 @@ const ImageValidation = struct {
     }
     fn validateAudioControl(self: *ImageValidation, span: Span) ValidationError!void {
         const control = span.audio_control orelse return;
-        if (!validSpanAudioControl(span) or !self.maps.items(1 + @as(usize, @intFromBool(control.focus != null)))) return error.InvalidPresentation;
+        if (!validSpanAudioControlInBox(span, self.in_inline_box_group and self.allow_box_phonos_child) or
+            !self.maps.items(1 + @as(usize, @intFromBool(control.focus != null)))) return error.InvalidPresentation;
         if (self.index == null) self.index = try ImageCatalogIndex.init(self.a, self.media);
-        if (!self.index.?.supportsAudioControl(span)) return error.InvalidPresentation;
+        if (!self.index.?.supportsAudioControlInBox(span, self.in_inline_box_group and self.allow_box_phonos_child)) return error.InvalidPresentation;
     }
     fn validateInlineTableMedia(self: *ImageValidation, table: Table) ValidationError!void {
         for (table.rows) |row| for (row.cells) |cell| for (cell.spans) |span| {
@@ -4870,7 +5155,7 @@ fn validateSpanColors(spans: []const Span, media: *ImageValidation) ValidationEr
         try media.validateAudioControl(span);
         if (media.in_clipped_absolute and !validClippedAbsoluteInlineChild(span)) return error.InvalidPresentation;
         if ((media.in_inline_padding_group or media.in_inline_action_group) and !validRubyBodyChild(span)) return error.InvalidPresentation;
-        if (media.in_inline_box_group and !validRubyChild(span)) return error.InvalidPresentation;
+        if (media.in_inline_box_group and !validInlineBoxChild(span, media.allow_box_phonos_child)) return error.InvalidPresentation;
         if (media.in_inline_action_group or media.in_inline_box_group or media.in_clipped_absolute) if (media.inline_padding_action) |action| try action.check(span);
         if (media.inline_padding_action != null and (span.kind != .text or span.target.len != 0)) return error.InvalidPresentation;
         if (span.clipped_absolute) |group| {
@@ -4888,6 +5173,10 @@ fn validateSpanColors(spans: []const Span, media: *ImageValidation) ValidationEr
             defer media.inline_padding_action = previous_action;
             try validateSpanColors(group.children, media);
         } else if (span.inline_box_group) |group| {
+            const phonos = inlineBoxIsPhonos(group.*);
+            if (phonos and (media.in_inline_box_group or media.in_inline_padding_group or media.in_inline_action_group or
+                media.in_clipped_absolute or media.inline_padding_action != null or media.ruby_depth != 0)) return error.InvalidPresentation;
+            if (inlineBoxShadow(group.*) != null and !media.maps.items(1)) return error.InvalidPresentation;
             if (!validInlineBoxGroupOwner(span) or media.content_depth >= max_content_depth or
                 (!media.in_inline_box_group and !media.in_inline_padding_group and !media.in_inline_action_group and media.ruby_depth == 0 and !media.maps.items(1)) or
                 !media.maps.items(group.overlays.len) or !media.maps.items(group.spans.len)) return error.InvalidPresentation;
@@ -4898,6 +5187,9 @@ fn validateSpanColors(spans: []const Span, media: *ImageValidation) ValidationEr
             try validateInlineBoxGroupTree(span, media.content_depth, media.ruby_depth);
             const previous_action = media.inline_padding_action;
             const previous_group = media.in_inline_box_group;
+            const previous_phonos = media.allow_box_phonos_child;
+            media.allow_box_phonos_child = phonos;
+            defer media.allow_box_phonos_child = previous_phonos;
             media.inline_padding_action = InlinePaddingGroupAction.from(span) orelse previous_action;
             media.in_inline_box_group = true;
             media.content_depth += 1;
@@ -5621,6 +5913,7 @@ pub fn resolveTableFloatStyle(table: Table, viewport_css_px: f32) error{InvalidP
 }
 
 fn validateTable(table: Table, depth: usize, media: *ImageValidation) ValidationError!void {
+    if (!validTablePrincipalOwner(table) or (table.principal_viewport != null and !media.container_owner_work_checked)) return error.InvalidPresentation;
     if (!validResponsiveCaptionTable(table) or
         (table.caption_viewport != null and !media.responsive_caption_table_work_checked)) return error.InvalidPresentation;
     if (tableStyleHasResolvedEdges(table.style) and !media.resolved_style_border_work_checked) return error.InvalidPresentation;
@@ -5653,6 +5946,7 @@ fn validateTable(table: Table, depth: usize, media: *ImageValidation) Validation
         try validateCaptionBlocks(blocks, depth, media);
     } else try validateSpanColors(table.caption, media);
     for (table.rows) |row| for (row.cells) |cell| {
+        if (cell.box_height) |height| if (!validCellBoxHeight(height) or !media.container_owner_work_checked) return error.InvalidPresentation;
         try validateSpanColors(cell.spans, media);
         if (cell.background) |background| if (!isCanonicalRgb(background)) return error.InvalidPresentation;
         if (cell.style) |style| if (styleBorderHasResolvedEdges(style.border) and
@@ -13004,4 +13298,40 @@ test "YI named-font contract01 empty JSON parse versus validation and legacy emp
         try std.testing.expectEqualDeep(legacy, restored.value);
         try std.testing.expect(validContainerFontFamily(restored.value));
     }
+}
+
+test "YI authored carrier01 computed minimum and strict JSON refuse unknown font basis" {
+    const a = std.testing.allocator;
+    var h: CellBoxHeight = .{ .value = 0.5, .font_scale_basis = .normal_body, .box_sizing = .content_box };
+    try std.testing.expect(validCellBoxHeight(h)); // Synthetic .25em at a proved 2x cell font.
+    h.value = 0; try std.testing.expect(validCellBoxHeight(h));
+    for ([_]f32{ -1, -0.0, std.math.inf(f32), std.math.nan(f32) }) |bad| {
+        h.value = bad; try std.testing.expect(!validCellBoxHeight(h));
+    }
+    h.value = 0.25; h.font_scale_basis = .context; try std.testing.expect(!validCellBoxHeight(h));
+    try std.testing.expectError(error.UnexpectedToken, std.json.parseFromSlice(CellBoxHeight, a,
+        "{\"value\":0.25,\"font_scale_basis\":\"context\",\"box_sizing\":\"border_box\"}", .{}));
+    try std.testing.expectError(error.UnknownField, std.json.parseFromSlice(CellBoxHeight, a,
+        "{\"value\":0.25,\"font_scale_basis\":\"normal_body\",\"box_sizing\":\"border_box\",\"owner_font\":1}", .{ .ignore_unknown_fields = true }));
+    try std.testing.expectError(error.MissingField, std.json.parseFromSlice(CellBoxHeight, a,
+        "{\"value\":0.25,\"box_sizing\":\"border_box\"}", .{}));
+}
+
+test "YI authored carrier01 principal owner physical margins inclusive threshold and conflicts" {
+    const margins: ContainerMargins = .{ .top = .{ .length = .{ .unit = .px, .value = 0 } },
+        .right = .auto, .bottom = .{ .length = .{ .unit = .px, .value = 0 } }, .left = .auto };
+    var p: TablePrincipalViewport = .{ .max_viewport_width_px = 639, .containing_direction = .rtl, .language = "yi",
+        .narrow = .{ .display = .block, .width = .fit_content, .max_width = .containing_100_percent,
+            .overflow_x = .auto, .overflow_y = .auto, .box_sizing = .border_box, .margins = margins },
+        .wide = .{ .display = .table, .width = .auto, .max_width = .none,
+            .overflow_x = .visible, .overflow_y = .visible, .box_sizing = .border_box, .margins = margins } };
+    var table: Table = .{ .principal_viewport = &p, .rows = &.{.{ .cells = &.{.{}} }} };
+    try std.testing.expect(validTablePrincipalOwner(table));
+    for ([_]f32{ 638, 639 }) |w| try std.testing.expectEqual(TablePrincipalDisplay.block, (try resolveTablePrincipalBox(table, w)).?.display);
+    for ([_]f32{ 639.5, 640, 1000 }) |w| try std.testing.expectEqual(TablePrincipalDisplay.table, (try resolveTablePrincipalBox(table, w)).?.display);
+    try std.testing.expectError(error.InvalidPresentation, resolveTablePrincipalBox(table, std.math.nan(f32)));
+    table.rows_hidden_max_width_px = 639; try std.testing.expect(!validTablePrincipalOwner(table)); table.rows_hidden_max_width_px = null;
+    table.style = .{ .width = .{ .unit = .percent, .value = 100 } }; try std.testing.expect(!validTablePrincipalOwner(table)); table.style = null;
+    p.narrow.margins.right = .{ .length = .{ .unit = .px, .value = 0 } }; try std.testing.expect(!validTablePrincipalOwner(table));
+    p.narrow.margins.right = .auto; p.wide.overflow_x = .auto; try std.testing.expect(!validTablePrincipalOwner(table));
 }

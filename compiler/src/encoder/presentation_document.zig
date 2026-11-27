@@ -207,7 +207,46 @@ fn bindContainerDisclosureProjection(renderer: *compiler.Renderer,
     renderer.container_disclosure_binding = .{ .projection = selected, .owner = tracked, .page_start = page_start };
 }
 
+// Exact Phonos occurrence custody is independent of optional Figure sizing.
+// This carries an existing insertion projection only. It does not set a
+// content root, original-page capability, ancestor inventory, font or geometry.
+fn preObservationPhonosPartCurrent(projection: *const compiler.SourceElementProjection,
+    part: []const u8) bool
+{
+    if (part.len == 0) return false;
+    const start = std.math.sub(usize, @intFromPtr(part.ptr),
+        @intFromPtr(projection.original.bytes.ptr)) catch return false;
+    if (start > projection.original.bytes.len or part.len > projection.original.bytes.len - start)
+        return false;
+    return projection.preparedRange(start, part.len) != null;
+}
+
+fn bindSelectedPhonosProjection(renderer: *compiler.Renderer, source: MissingText,
+    styles: ?*const TableStyleProfile, source_projection: ?*const compiler.SourceElementProjection) void
+{
+    renderer.selected_phonos_source = null;
+    const projection = source_projection orelse return;
+    const profile = styles orelse return;
+    if (profile.selected_phonos.len == 0 or source.unknown or source.lost_missing_range or
+        source.generated_source != null or projection.original.unknown or
+        projection.original.lost_missing_range or projection.original.generated_source != null or
+        projection.prepared.ptr != source.bytes.ptr or projection.prepared.len != source.bytes.len)
+        return;
+    for (profile.selected_phonos) |selected| {
+        if (!preObservationPhonosPartCurrent(projection, selected.source)) return;
+        if (selected.decoration_source) |owner| {
+            if (!preObservationPhonosPartCurrent(projection, owner)) return;
+            const child_start = std.math.sub(usize, @intFromPtr(selected.source.ptr),
+                @intFromPtr(owner.ptr)) catch return;
+            if (child_start > owner.len or selected.source.len > owner.len - child_start) return;
+        }
+    }
+    renderer.selected_phonos_source = .{ .projection = projection, .owner = source,
+        .page_start = 0, .selected = profile.selected_phonos };
+}
+
 fn bindPreObservationSelectedPage(renderer: *compiler.Renderer, source: MissingText, styles: ?*const TableStyleProfile, figure_sizing: ?FigureSizingSource, source_projection: ?*const compiler.SourceElementProjection) void {
+    bindSelectedPhonosProjection(renderer, source, styles, source_projection);
     bindContainerDisclosureProjection(renderer, source_projection, source, 0);
     const projection = source_projection orelse {
         tracePreObservationBinding(renderer, "projection_absent", source, styles, figure_sizing, source_projection);
@@ -1451,10 +1490,20 @@ fn bindFragmentTextClassScope(renderer: *compiler.Renderer, fragment: SourceFrag
     }
     renderer.wrapped_heading_source = null;
     renderer.selected_inline_fragment = null;
+    renderer.selected_phonos_source = null;
     if (renderer.context.table_styles) |styles| {
         if (styles.selected_wrapped_heading) |selected| renderer.wrapped_heading_source = selectedFragmentOccurrence(fragment, tracked, selected.source);
         if ((styles.selected_phonos.len != 0 or styles.selected_descriptions.len != 0 or styles.selected_terms.len != 0) and fragmentContentRoot(fragment, tracked) == .parser_output and !tracked.lost_missing_range and tracked.generated_source == null) {
             const range = fragment.parser_output_range.?;
+            // Only an issued insertion projection is required here. The
+            // original_page capability stays withheld for transformed pages.
+            // The consumer still matches the exact selected original token.
+            if (styles.selected_phonos.len != 0) if (range.source_element_projection) |projection| {
+                if (projection.prepared.ptr == range.page.ptr and projection.prepared.len == range.page.len and
+                    std.mem.eql(u8, tracked.bytes, fragment.source))
+                    renderer.selected_phonos_source = .{ .projection = projection, .owner = tracked,
+                        .page_start = range.start, .selected = styles.selected_phonos };
+            };
             if (range.original_page) |original| {
                 if (std.mem.eql(u8, original, range.page) and range.start <= original.len and tracked.bytes.len <= original.len - range.start) {
                     const input = original[range.start..][0..tracked.bytes.len];
@@ -1697,6 +1746,7 @@ fn workAllocWithMissingFragmentsIn(a: A, title: []const u8, language: []const u8
     // One final Entry owner, not one receipt per selected source fragment.
     renderer.budgetForSource(tracked.bytes.len);
     bindContainerDisclosureProjection(&renderer, reference_context.container_disclosure_projection, tracked, 0);
+    bindSelectedPhonosProjection(&renderer, tracked, renderer.context.table_styles, reference_context.container_disclosure_projection);
     var native_host = nativeArticleHostForFinalBody(&renderer, tracked, title, native_body_language,
         native_article_owner and final_document_body);
     renderer.native_article_host = if (native_host) |*host| host else null;
@@ -1802,6 +1852,7 @@ fn workWithHeadingOffsetsAllocIn(a: A, title: []const u8, language: []const u8, 
     renderer.context.content_conversion = try compiler.pageContentConversion(a, source.bytes, .{ .namespace_catalog = namespace_catalog, .behavior_switches = behavior_switches, .content_conversion = reference_context.content_conversion });
     renderer.context.external_links_prepared = reference_context.citations != null;
     bindContainerDisclosureProjection(&renderer, reference_context.container_disclosure_projection, source, 0);
+    bindSelectedPhonosProjection(&renderer, source, renderer.context.table_styles, reference_context.container_disclosure_projection);
     renderer.page_reference_definitions = reference_context.items;
     renderer.fallbacks.merge(reference_context.fallbacks);
     var builder: Builder = .{ .a = a, .renderer = &renderer, .title = if (language.len == 0) title else language };
@@ -17254,5 +17305,50 @@ test "definition example whole Serbian page heading observer retains source oper
         try std.testing.expect(std.mem.startsWith(u8, source[at..], "#: <span style=\"background:#FFF2E0\" class=\"defdate\">"));
         try std.testing.expect(end <= unchanged and end < ranges[0].start);
         try std.testing.expect(std.mem.indexOfScalar(usize, observer.page_static_example_openings, at) != null);
+    }
+}
+
+test "Phonos fragment projection grants no whole page or ancestry authority" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const original = "<span style=\"padding:4px\"><span data-phonos-audio=\"One.ogg\">play</span></span>";
+    const prepared = try std.mem.concat(a, u8, &.{ "inserted\n", original });
+    const token = original[(std.mem.indexOfScalar(u8, original, '>').? + 1) .. original.len - 7];
+    const selected = [_]@import("table_style_profile.zig").SelectedPhonos{.{ .source = token, .decoration_source = original,
+        .button = .{ .file = "One.ogg", .language = "el", .caption = "play", .caption_html = "play", .accessible_name = "play",
+            .attribution_title = "File:One.ogg", .attribution_target = "https://example.invalid/One.ogg", .attribution_text = "ⓘ" } }};
+    var styles = try @import("table_style_profile.zig").parseAlloc(a, "");
+    defer styles.deinit();
+    styles.selected_phonos = &selected;
+    const copies = [_]compiler.SourceElementProjection.Copy{.{ .original_start = 0, .prepared_start = 9, .len = original.len }};
+    var projection: compiler.SourceElementProjection = .{ .original = MissingText.untracked(original), .prepared = prepared, .copies = &copies };
+    const fragment: SourceFragment = .{ .source = prepared, .original_start = 0,
+        .parser_output_range = .{ .page = prepared, .start = 0, .prepared = prepared, .original_page = null, .source_element_projection = &projection } };
+    var renderer: compiler.Renderer = .{ .a = a, .context = .{ .table_styles = &styles }, .content_root = .parser_output };
+    bindFragmentTextClassScope(&renderer, fragment, MissingText.untracked(prepared));
+    const bound = renderer.selected_phonos_source orelse return error.TestMissingPhonosProjection;
+    try std.testing.expect(bound.projection == &projection and bound.selected.ptr == selected[0..].ptr and bound.owner.bytes.ptr == prepared.ptr);
+    try std.testing.expect(renderer.selected_inline_fragment == null and renderer.source_element_binding == null and
+        renderer.bounded_text_class_scope == null and fragment.parser_output_range.?.original_page == null);
+    for (0..8) |case| {
+        var changed = fragment;
+        var tracked = MissingText.untracked(prepared);
+        const saved_projection = projection;
+        switch (case) {
+            0 => changed.parser_output_range.?.source_element_projection = null,
+            1 => projection.prepared = try a.dupe(u8, prepared),
+            2 => changed.original_start = 1,
+            3 => tracked.bytes = try a.dupe(u8, prepared),
+            4 => changed.parser_output_range.?.page = try a.dupe(u8, prepared),
+            5 => tracked.lost_missing_range = true,
+            6 => tracked.generated_source = "generated",
+            else => styles.selected_phonos = &.{},
+        }
+        renderer.selected_phonos_source = bound;
+        bindFragmentTextClassScope(&renderer, changed, tracked);
+        try std.testing.expect(renderer.selected_phonos_source == null);
+        projection = saved_projection;
+        styles.selected_phonos = &selected;
     }
 }

@@ -1179,6 +1179,9 @@ pub const TableContainingDirectionSource = struct {
     // Independent class/optional-ID absence for one owned wiki table opening.
     wiki_table_class_context: ?*const anyopaque = null,
     observe_wiki_table_classes: ?*const fn (?*const anyopaque, A, NormalTextClassOperation) A.Error!?NormalTextClassObservation = null,
+    // This callback conveys only ID absence for authored cell minimums.
+    wiki_table_height_id_context: ?*const anyopaque = null,
+    observe_wiki_table_height_ids: ?*const fn (?*const anyopaque, A, NormalTextClassOperation) A.Error!?NormalTextClassObservation = null,
     normal_text_context: ?*const anyopaque = null,
     observe_normal_text_classes: ?*const fn (?*const anyopaque, A, NormalTextClassOperation) A.Error!?NormalTextClassObservation = null,
     observe_normal_link_classes: ?*const fn (?*const anyopaque, A, NormalTextLinkClassOperation) A.Error!?NormalTextLinkClassObservation = null,
@@ -2387,9 +2390,9 @@ pub const PendingContainer = struct {
 };
 pub const Kind = enum { paragraph, blank, definition, example, quotation, list_item, list_detail, indent, term, heading, preformatted, rule, table, container };
 pub const TableGeometry = @import("blob_encoder").presentation_types.TableGeometry;
-pub const Cell = struct { table_viewport_source: ?Renderer.TableViewportCellScope = null, line_context_state: ?Renderer.CellLineContextState = null, figure_font_source: ?*const Renderer.FigureWikiCellFontSource = null, css_ancestor_classes: []const u8 = "", style_font_unresolved: bool = false, style_unresolved: bool = false, style: ?presentation_types.CellStyle = null, spans: []const Span, header: bool = false, colspan: u16 = 1, rowspan: u16 = 1, background: ?[]const u8 = null, nested_table: ?Table = null, blocks: ?[]const Block = null };
+pub const Cell = struct { box_height: ?presentation_types.CellBoxHeight = null, table_viewport_source: ?Renderer.TableViewportCellScope = null, line_context_state: ?Renderer.CellLineContextState = null, figure_font_source: ?*const Renderer.FigureWikiCellFontSource = null, css_ancestor_classes: []const u8 = "", style_font_unresolved: bool = false, style_unresolved: bool = false, style: ?presentation_types.CellStyle = null, spans: []const Span, header: bool = false, colspan: u16 = 1, rowspan: u16 = 1, background: ?[]const u8 = null, nested_table: ?Table = null, blocks: ?[]const Block = null };
 pub const Row = struct { cells: []const Cell };
-pub const Table = struct { block_viewport: ?*const presentation_types.TableBlockViewport = null, float_viewport: ?presentation_types.TableFloatViewport = null, style: ?presentation_types.TableStyle = null, caption: []const Span = &.{}, caption_blocks: ?[]const Block = null, rows: []const Row, geometry: ?TableGeometry = null };
+pub const Table = struct { principal_viewport: ?*const presentation_types.TablePrincipalViewport = null, block_viewport: ?*const presentation_types.TableBlockViewport = null, float_viewport: ?presentation_types.TableFloatViewport = null, style: ?presentation_types.TableStyle = null, caption: []const Span = &.{}, caption_blocks: ?[]const Block = null, rows: []const Row, geometry: ?TableGeometry = null };
 pub const FigureContent = presentation_types.FigureContentFor(Span);
 pub const Figure = struct {
     intrinsic_size: ?presentation_types.FigureIntrinsicSize = null,
@@ -5023,6 +5026,31 @@ pub fn nativeSourceClassRangeCurrent(range: NativeSourceClassRange, current: Mis
     return std.mem.eql(u8, current.bytes, proof.source.bytes[range.start..][0..current.bytes.len]);
 }
 
+// Carries only an existing selected Phonos occurrence through the ordinary
+// insertion-only page projection. It grants no ancestor/style/root authority.
+pub const SelectedPhonosSourceBinding = struct {
+    projection: *const SourceElementProjection,
+    owner: MissingText,
+    page_start: usize,
+    selected: []const table_style_profile.SelectedPhonos,
+
+    fn original(self: @This(), part: []const u8, current: []const table_style_profile.SelectedPhonos) ?[]const u8 {
+        if (current.len == 0 or current.ptr != self.selected.ptr or current.len != self.selected.len or
+            self.owner.lost_missing_range or self.owner.generated_source != null) return null;
+        const offset = std.math.sub(usize, @intFromPtr(part.ptr), @intFromPtr(self.owner.bytes.ptr)) catch return null;
+        if (offset > self.owner.bytes.len or part.len > self.owner.bytes.len - offset or
+            self.page_start > self.projection.prepared.len or self.owner.bytes.len > self.projection.prepared.len - self.page_start or
+            !self.projection.ordinaryRange(self.owner, offset, offset + part.len) or
+            !std.mem.eql(u8, self.owner.bytes, self.projection.prepared[self.page_start..][0..self.owner.bytes.len])) return null;
+        const start = self.projection.originalRange(self.page_start + offset, part.len) orelse return null;
+        const source = self.projection.original.bytes[start..][0..part.len];
+        if (table_style_profile.SelectedPhonos.lookup(current, source) == null and
+            table_style_profile.SelectedPhonos.lookupDecoration(current, source) == null) return null;
+        return source;
+    }
+
+};
+
 pub const SourceElementProjection = struct {
     pub const Copy = struct { original_start: usize, prepared_start: usize, len: usize };
     original: MissingText,
@@ -6782,6 +6810,14 @@ fn validateInlineBoxRunStructure(values: []const Span) Error!void {
                     !std.mem.eql(u8, child.text, "\u{a0}")) return error.UncompiledPresentation;
                 remaining -= 1;
                 try paragraph.text(child.text);
+                continue;
+            }
+            if (presentation_types.inlineBoxIsPhonos(group.*)) {
+                if (remaining == 0 or staticPhonosParagraphChild(span) == null)
+                    return error.UncompiledPresentation;
+                remaining -= 1;
+                // Already-issued empty audio is neutral replacement content.
+                // Add no fabricated text; retain the full later sibling scan.
                 continue;
             }
             if (staticInlineFrame(span, group.*)) {
@@ -9786,6 +9822,8 @@ pub const Renderer = struct {
     literal_url_root: ?[]const u8 = null,
     selected_inline_fragment: ?struct { original: []const u8, projected: []const u8 } = null,
     selected_inline_quote_source: ?*const QuoteSourceMap = null,
+    selected_phonos_source: ?SelectedPhonosSourceBinding = null,
+    phonos_box_source_owner: ?[]const u8 = null,
     selected_thumbnail_quote_source: ?*const QuoteSourceMap = null,
     selected_timed_audio: ?SelectedTimedAudio = null,
     wrapped_heading_source: ?[]const u8=null,
@@ -12896,6 +12934,15 @@ pub const Renderer = struct {
         source_diagnostic: ?*NativeSourceClassQueryDiagnostic, profile_diagnostic: ?*table_style_profile.InlineBoxSourceDiagnostic,
         comptime static_decoration: bool, comptime rounded_decoration: bool, live_owner: ?[]const u8) Error!table_style_profile.InlineBoxResolution
     {
+        return self.inlineBoxResolutionPhonosMode(tag, style, inherited, diagnostic, native_diagnostic,
+            source_diagnostic, profile_diagnostic, static_decoration, rounded_decoration, live_owner, false, null);
+    }
+
+    fn inlineBoxResolutionPhonosMode(self: *Renderer, tag: syntax.Tag, style: Style, inherited: Style,
+        diagnostic: ?*InlineBoxResolutionDiagnostic, native_diagnostic: ?*NativeInlineMotionDeclarationDiagnostic,
+        source_diagnostic: ?*NativeSourceClassQueryDiagnostic, profile_diagnostic: ?*table_style_profile.InlineBoxSourceDiagnostic,
+        comptime static_decoration: bool, comptime rounded_decoration: bool, live_owner: ?[]const u8, comptime phonos: bool, shadow: ?*?table_style_profile.PhonosShadowSource) Error!table_style_profile.InlineBoxResolution
+    {
         self.inline_box_direction_detail = .{};
         if (profile_diagnostic) |detail| detail.* = .none;
         if (source_diagnostic) |detail| detail.* = .{};
@@ -13002,16 +13049,19 @@ pub const Renderer = struct {
                             tags[0..complete.len], paint, profile_diagnostic, &self.inline_box_direction_detail);
                     }
                 };
+                if (phonos) break :selected profile.?.resolvePhonosInlineDecorationIn(self.a, query_element, css, self.customParent(style), rtl, complete, profile_diagnostic, &self.inline_box_direction_detail, shadow.?);
                 if (rounded_decoration) break :selected profile.?.resolveRoundedInlineDecorationIn(self.a, query_element, css, self.customParent(style), rtl, complete);
                 if (static_decoration) break :selected profile.?.resolveStaticInlineDecorationWithDirectionDiagnosticIn(self.a, query_element, css, self.customParent(style), rtl, complete, profile_diagnostic, &self.inline_box_direction_detail);
                 break :selected profile.?.resolveInlineBoxSourceDiagnosedIn(self.a, query_element, css,
                     self.customParent(style), rtl, self.inline_box_owner != null, complete, profile_diagnostic);
             }
-            if (rounded_decoration) break :selected profile.?.resolveRoundedInlineDecorationIn(self.a, query_element, css, self.customParent(style), rtl, null);
+            if (phonos) break :selected profile.?.resolvePhonosInlineDecorationIn(self.a, query_element, css, self.customParent(style), rtl, null, profile_diagnostic, &self.inline_box_direction_detail, shadow.?);
+                if (rounded_decoration) break :selected profile.?.resolveRoundedInlineDecorationIn(self.a, query_element, css, self.customParent(style), rtl, null);
             if (static_decoration) break :selected profile.?.resolveStaticInlineDecorationWithDirectionDiagnosticIn(self.a, query_element, css, self.customParent(style), rtl, null, profile_diagnostic, &self.inline_box_direction_detail);
             break :selected profile.?.resolveInlineBoxSourceDiagnosedIn(self.a, query_element, css,
                 self.customParent(style), rtl, self.inline_box_owner != null, null, profile_diagnostic);
         } else isolated: {
+            if (phonos) return .{ .unresolved = true };
             const declarations = (try self.nativeInlineMotionDeclarationsDiagnosed(style.native_inline_motion, native_diagnostic)) orelse {
                 if (diagnostic) |reason| reason.* = .isolated_source_ancestry_absent;
                 return .{ .unresolved = true };
@@ -14086,16 +14136,22 @@ pub const Renderer = struct {
                 return false;
             };
         }
+        const phonos = if (static_kind == .known and !linked_decoration)
+            self.phonosBoxSourceCurrent(tracked, at, tag, pair, effective) else null;
+        var phonos_shadow: ?table_style_profile.PhonosShadowSource = null;
         const nested_label = static_candidate and std.mem.indexOfScalar(u8, tracked.bytes[tag.end..pair.inner_end], '<') != null;
         const circle_source = if (nested_label and !linked_decoration) self.topEdgeCircleSource(tracked, at, tag, pair, effective) else null;
-        if (static_candidate and ((nested_label and (rounded_action_candidate or
+        if (static_candidate and ((nested_label and phonos == null and (rounded_action_candidate or
             (circle_source == null and !try self.staticInlineItalicLabel(tracked, tag, pair, effective)))) or
             effective.direction.len != 0 or effective.captured_direction != null or effective.superscript or effective.subscript or
             (!linked_decoration and (effective.kind != .text or effective.target.len != 0)))) {
             self.tracePresentationRejection("static_inline_box", "unsupported_source_scope", tracked.bytes, at, 0, error.UncompiledPresentation);
             return error.UncompiledPresentation;
         }
-        const pending = if (rounded_action_candidate)
+        const pending = if (phonos) |selected|
+            self.inlineBoxResolutionPhonosMode(tag, effective, inherited, &geometry_reason, &native_reason,
+                &source_reason, &profile_reason, true, true, selected.decoration_source.?, true, &phonos_shadow)
+        else if (rounded_action_candidate)
             self.inlineBoxResolutionMode(tag, effective, inherited, &geometry_reason, &native_reason, &source_reason, &profile_reason, true, true, null)
         else if (static_candidate)
             self.inlineBoxResolutionMode(tag, effective, inherited, &geometry_reason, &native_reason, &source_reason, &profile_reason, true, false,
@@ -14139,6 +14195,13 @@ pub const Renderer = struct {
             const other = try self.inlineBoxResolutionWithProfileDiagnostic(tag, opposite, inherited, null, null, null, null);
             if (!sameFigurePreparationValue(box, other)) return error.UncompiledPresentation;
         };
+        if (phonos != null and (!box.static_decoration or box.position != .static or box.cursor != null or
+            box.font_family != null or box.radius == null or box.radius.?.unit != .px or
+            box.rounded_background == null or effective.background == null or
+            !std.mem.eql(u8, box.rounded_background.?, effective.background.?))) {
+            self.tracePresentationRejection("phonos_inline_box", "owner_representation", tracked.bytes, at, 0, error.UncompiledPresentation);
+            return error.UncompiledPresentation;
+        }
         if (rounded_action_candidate and (box.radius == null or box.rounded_background == null or effective.background == null or
             !std.mem.eql(u8, box.rounded_background.?, effective.background.?) or
             !self.decoratedLinkSourceCurrent(tracked, at, pair, effective, false))) return error.UncompiledPresentation;
@@ -14221,6 +14284,9 @@ pub const Renderer = struct {
         var owner: InlineBoxOwner = .{ .body = body, .child_depth = depth + 1, .child_style = child_style,
             .text_content_allowed = !inherited_action and effective.kind == .text and effective.target.len == 0 };
         defer owner.overlays.deinit(self.a);
+        const previous_phonos = self.phonos_box_source_owner;
+        self.phonos_box_source_owner = if (phonos) |selected| selected.decoration_source else null;
+        defer self.phonos_box_source_owner = previous_phonos;
         const previous_owner = self.inline_box_owner;
         // A static slice never establishes the relative overlay containing block.
         self.inline_box_owner = if (box.static_decoration) null else &owner;
@@ -14238,9 +14304,10 @@ pub const Renderer = struct {
             const authored_swatch = !inherited_action and try self.joinStaticSwatchEntities(tracked, body, box, effective);
             for (self.spans.items, 0..) |span, i| {
                 const nested_circle = circle_source != null and i == 1 and fixedCircleLeaf(span) != null;
-                if (box.static_decoration and (span.kind != .text or span.target.len != 0 or span.image != null))
+                const phonos_child = phonos != null and self.spans.items.len == 1 and presentation_types.validInlineBoxPhonosChild(span);
+                if (box.static_decoration and !phonos_child and (span.kind != .text or span.target.len != 0 or span.image != null))
                     return error.UncompiledPresentation;
-                if (!presentation_types.validRubyBodyChild(span) or span.ruby != null or span.inline_padding_group != null or
+                if ((!phonos_child and !presentation_types.validRubyBodyChild(span)) or span.ruby != null or span.inline_padding_group != null or
                     span.inline_action_group != null or (span.inline_box_group != null and !nested_circle) or presentation_types.spanHasClippedAbsolute(span) or span.pending_figure != null or span.pending_container != null or
                     span.pending_bidi_scope != null or span.captured_bidi_scope != null or span.font_size_unknown or span.generated_link != null or
                     span.external_literal_parameter != null or span.generated_diagnostic or (span.provenance != .parsed and !authored_swatch) or
@@ -14258,8 +14325,14 @@ pub const Renderer = struct {
             self.tracePresentationRejection("inline_box", "empty_group_source", tracked.bytes, at, 0, error.UncompiledPresentation);
             return error.UncompiledPresentation;
         }
+        if (phonos != null and (children.len != 1 or !presentation_types.validInlineBoxPhonosChild(children[0]))) {
+            self.tracePresentationRejection("phonos_inline_box", "sole_child_absent", tracked.bytes, at, 0, error.UncompiledPresentation);
+            return error.UncompiledPresentation;
+        }
         const group = try self.a.create(presentation_types.InlineBoxGroup(Span));
-        group.* = .{ .padding = box.padding, .border = box.border, .overlays = try owner.overlays.toOwnedSlice(self.a), .spans = children, .radius = box.radius };
+        group.* = .{ .padding = box.padding, .border = box.border, .overlays = try owner.overlays.toOwnedSlice(self.a), .spans = children, .radius = box.radius,
+            .shadow = if (phonos_shadow) |value| .{ .offset_x = value.offset_x, .offset_y = value.offset_y,
+                .blur = value.blur, .spread = value.spread, .color = value.color, .alpha = value.alpha } else null };
         const before = self.spans.items.len;
         errdefer self.spans.items.len = before;
         self.textRawGeneratedWithPayload("", declaring_style, null, null, null, group) catch |failure| {
@@ -14279,11 +14352,16 @@ pub const Renderer = struct {
             if (!topEdgeWithCircle(emitted, group.*) or !std.mem.eql(u8, children[0].text, texts[0]) or
                 !std.mem.eql(u8, fixedCircleLeaf(children[1]).?.text, texts[1]) or !std.mem.eql(u8, children[2].text, texts[2]))
                 return error.UncompiledPresentation;
-        } else if (nested_label and !staticDottedTextLabel(emitted, group.*) and !staticDashedLinkLabel(emitted, group.*)) return error.UncompiledPresentation;
+        } else if (nested_label and phonos == null and !staticDottedTextLabel(emitted, group.*) and !staticDashedLinkLabel(emitted, group.*)) return error.UncompiledPresentation;
         if (emitted.inline_box_group != group or emitted.kind != effective.kind or emitted.font_size_unknown) { self.tracePresentationRejection("inline_box", "emitted_group", tracked.bytes, at, 0, error.UncompiledPresentation); return error.UncompiledPresentation; }
         if (emitted.target.ptr != effective.target.ptr or emitted.target.len != effective.target.len) { self.tracePresentationRejection("inline_box", "emitted_target", tracked.bytes, at, 0, error.UncompiledPresentation); return error.UncompiledPresentation; }
         if (box.static_decoration) for (children) |child| {
-            if (!inlineBoxWireMetricEqual(emitted, child)) {
+            // Only the authenticated sole icon may retain its distinct child
+            // language. Every visual metric and the actual child stay unchanged.
+            const metric_equal = if (phonos) |selected|
+                phonosInlineBoxWireMetricEqual(emitted, child, selected.button.language)
+            else inlineBoxWireMetricEqual(emitted, child);
+            if (!metric_equal) {
                 self.tracePresentationRejection("static_inline_box", "child_metric_or_background", tracked.bytes, at, 0, error.UncompiledPresentation);
                 return error.UncompiledPresentation;
             }
@@ -17215,8 +17293,30 @@ pub const Renderer = struct {
         }
         return pair.end;
     }
+    // Source custody may use the exact current paint profile only when its
+    // selected-Phonos carrier is already present. An explicit ordinary profile
+    // remains authoritative; no context field or geometry capability is set.
+    fn selectedPhonosSourceProfile(self: *const Renderer) ?*const table_style_profile.Profile {
+        if (self.context.table_styles) |profile| return profile;
+        if (self.selected_phonos_source == null) return null;
+        return self.context.text_paint_styles;
+    }
+
     fn selectedInlineOriginal(self: *Renderer, token: []const u8) ?[]const u8 {
-        const fragment = self.selected_inline_fragment orelse return null;
+        const fragment = self.selected_inline_fragment orelse {
+            const binding = self.selected_phonos_source orelse {
+                return null;
+            };
+            const profile = self.selectedPhonosSourceProfile() orelse {
+                return null;
+            };
+            const source = if (self.selected_inline_quote_source) |map| map.copiedOriginal(token) orelse token else token;
+            const current = self.registeredOriginalInterval(source, binding.owner.bytes) orelse {
+                return null;
+            };
+            const original = binding.original(current, profile.selected_phonos) orelse return null;
+            return if (std.mem.eql(u8, original, token)) original else null;
+        };
         // The quote normalizer can copy an unchanged widget when the enclosing
         // list line carries a quote seed. Only its actual contiguous copy can
         // recover this physical occurrence, including repeated identical files.
@@ -17230,6 +17330,12 @@ pub const Renderer = struct {
     // A caption in the catalog remains plain. Only a source-identified inline
     // occurrence acquires play and attribution actions in the body.
     fn phonosOccurrence(self: *Renderer, token: []const u8, caption: []const Span, raw_file: []const u8, style: Style) Error!?[]const Span {
+        if (self.phonos_box_source_owner) |source| {
+            const child = (try self.phonosBoxChild(source, token, caption, raw_file, style)) orelse return error.UncompiledPresentation;
+            const one = try self.a.alloc(Span, 1);
+            one[0] = child;
+            return one;
+        }
         const profile = self.context.table_styles orelse return null;
         const original = self.selectedInlineOriginal(token) orelse return null;
         const owner = table_style_profile.SelectedPhonos.lookup(profile.selected_phonos, original) orelse return null;
@@ -17317,6 +17423,85 @@ pub const Renderer = struct {
         if (!presentation_types.validSpanAudioControl(span.*)) return error.UncompiledPresentation;
         return true;
     }
+    // Producer adapter for a sole direct child of an independently
+    // resolved ordinary box. The caller must still qualify the complete box
+    // style/font/cascade and validate the final group. This never emits it.
+    // The existing two-span Phonos/attribution path remains unchanged.
+    // The only new nested-child domain is an exact selected decoration whose
+    // complete body is that same current Phonos occurrence. This carries source
+    // identity only; typedInlineBox still proves cascade, geometry and metrics.
+    fn phonosBoxSourceCurrent(self: *Renderer, tracked: MissingText, at: usize,
+        tag: syntax.Tag, pair: syntax.Pair, style: Style) ?table_style_profile.SelectedPhonos
+    {
+        if (self.content_root != .parser_output or self.in_reference or self.parsed_pre or
+            self.pre_block or self.ruby_depth != 0 or self.inline_box_owner != null or
+            self.phonos_box_source_owner != null or self.body_link_target.len != 0 or
+            tracked.unknown or tracked.lost_missing_range or tracked.generated_source != null or
+            style.provenance != .parsed or style.kind != .text or style.target.len != 0 or
+            style.self_link_target != null or style.direction.len != 0 or style.captured_direction != null or
+            style.superscript or style.subscript or !tag.is("span") or tag.closing or tag.self_closing)
+            return null;
+        const profile = self.selectedPhonosSourceProfile() orelse return null;
+        const original = self.selectedInlineOriginal(tracked.bytes[at..pair.end]) orelse return null;
+        const selected = table_style_profile.SelectedPhonos.lookupDecoration(profile.selected_phonos, original) orelse return null;
+        const body = tracked.bytes[tag.end..pair.inner_end];
+        const child = self.selectedInlineOriginal(body) orelse return null;
+        if (child.ptr != selected.source.ptr or child.len != selected.source.len or
+            !std.mem.eql(u8, body, selected.source)) return null;
+        return selected;
+    }
+
+    fn phonosBoxChild(self: *Renderer, original_owner: []const u8,
+        token: []const u8, caption: []const Span, raw_file: []const u8,
+        style: Style) Error!?Span
+    {
+        const profile = self.selectedPhonosSourceProfile() orelse return null;
+        const original = self.selectedInlineOriginal(token) orelse return null;
+        const bound = table_style_profile.SelectedPhonos.lookupDecoration(
+            profile.selected_phonos, original_owner) orelse return null;
+        if (bound.source.ptr != original.ptr or bound.source.len != original.len or
+            !std.mem.eql(u8, token, original) or self.content_root != .parser_output or
+            self.in_reference or self.parsed_pre or self.pre_block or self.ruby_depth != 0 or
+            style.provenance != .parsed or style.kind != .text or style.target.len != 0 or
+            style.self_link_target != null or self.body_link_target.len != 0 or caption.len != 1)
+            return null;
+        const button = bound.button;
+        const label = caption[0];
+        const file = (try self.resolvedMediaFile(raw_file)) orelse return null;
+        const index = self.media_indices.get(file) orelse return null;
+        const media = self.media.items[index];
+        if (media.kind != .audio or !std.mem.eql(u8, media.file, button.file) or
+            !std.mem.eql(u8, button.language, label.language) or label.kind != .text or
+            label.target.len != 0 or label.flags.code or label.image != null or label.ruby != null or
+            label.self_link or label.tooltip != null or label.link_paint != null or
+            label.inline_box_group != null or label.inline_padding_group != null or
+            label.inline_action_group != null or label.audio_control != null) return null;
+        if (button.source_fallback_caption_html) |fallback| {
+            // The GET's visible label is empty. Only the same authenticated
+            // extension's source fallback may account for the parsed text.
+            if (button.caption.len != 0 or button.caption_html.len != 0 or
+                button.accessible_name.len == 0 or
+                !std.mem.eql(u8, label.text, button.accessible_name)) return null;
+            const opening = syntax.tagAt(original, 0) orelse return null;
+            const pair = syntax.matchingTag(original, opening) orelse return null;
+            if (!opening.is("span") or opening.closing or opening.self_closing or
+                pair.end != original.len or
+                !std.mem.eql(u8, original[opening.end..pair.inner_end], fallback)) return null;
+        } else if (!std.mem.eql(u8, button.caption, label.text)) return null;
+        var child = label;
+        child.kind = .link;
+        child.text = button.caption;
+        child.target = try std.mem.concat(self.a, u8, &.{ "File:", file });
+        child.classes = try self.mediaCaptionClasses(try self.mediaClasses(file), label.classes);
+        child.tooltip = button.accessible_name;
+        child.tooltip_set = true;
+        child.audio_control = .{ .presentation = .phonos_button };
+        // Box-specific model validation; the default audio validator is
+        // unchanged. The final enclosing-group check remains mandatory.
+        if (!presentation_types.validInlineBoxPhonosChild(child)) return error.UncompiledPresentation;
+        return child;
+    }
+
     fn mediaCaptionClasses(self: *Renderer, owner: []const u8, parsed: []const u8) Error![]const u8 {
         var out: std.ArrayList(u8) = .empty;
         // Caption parsing can occur before or after the generated owner is
@@ -19838,7 +20023,7 @@ pub const Renderer = struct {
     // This optional ID superset is local to one current wiki TABLE query.
     // It cannot establish positive ancestry, font basis, tags or geometry.
     fn wikiTableIdAbsence(self: *Renderer, opening: []const u8, tag: syntax.Tag,
-        style: Style) Error!?[]const u8
+        style: Style, comptime height_only: bool) Error!?[]const u8
     {
         if (!self.wikiClassOrdinaryDomain() or self.typed_table_depth != 1 or !tag.is("table") or
             tag.closing or tag.self_closing or self.content_root != .parser_output or
@@ -19847,14 +20032,14 @@ pub const Renderer = struct {
         if (profile.page_style_parent != null) return null;
         const tracked = self.inline_missing orelse self.body_missing orelse return null;
         const selected = (self.mediaRootLanguageCarrier(tracked) catch return null) orelse return null;
-        const observe = selected.observe_wiki_table_classes orelse return null;
+        const observe = (if (height_only) selected.observe_wiki_table_height_ids else selected.observe_wiki_table_classes) orelse return null;
         const ns = self.context.namespace_catalog orelse return null;
         const root = selected.source_root_language orelse return null;
         if (!root.current(selected.source, ns.source_sha256, self.context.title, profile)) return null;
         if (!std.mem.eql(u8, tag.attrs, std.mem.trimEnd(u8, opening[2..], "\r"))) return null;
         const original = self.boundSourceOriginal(opening, selected) orelse return null;
         if (!std.mem.eql(u8, original, opening)) return null;
-        const observation = (try observe(selected.wiki_table_class_context, self.a, .{ .source = selected.source,
+        const observation = (try observe(if (height_only) selected.wiki_table_height_id_context else selected.wiki_table_class_context, self.a, .{ .source = selected.source,
             .opening = original, .title = self.context.title, .namespace_sha256 = ns.source_sha256, .profile = profile })) orelse return null;
         const ids = observation.complete_ancestor_id_superset orelse return null;
         if (observation.opening.ptr != original.ptr or observation.opening.len != original.len or
@@ -23278,6 +23463,28 @@ pub const Renderer = struct {
                 resolved.unresolved = true;
                 self.fallbacks.unresolved_table_style = self.traceUnresolvedTableStyle(true, "table.containing_direction", opening);
                 return;
+            };
+            if (root_only) if (observed.root_responsive_placement) |placement| {
+                if (style.width == null and style.min_width == null and style.margins == null and
+                    style.containing_direction == null and style.display == null and style.float_side == null and style.clear == null)
+                {
+                    const policy: presentation_types.TablePrincipalViewport = .{
+                        .max_viewport_width_px = placement.max_viewport_width_px,
+                        .containing_direction = placement.containing_direction, .language = placement.language,
+                        .narrow = .{ .display = .block, .width = .fit_content, .max_width = .containing_100_percent,
+                            .overflow_x = .auto, .overflow_y = .auto, .box_sizing = placement.narrow_box_sizing, .margins = placement.physical_margins },
+                        .wide = .{ .display = .table, .width = .auto, .max_width = .none,
+                            .overflow_x = .visible, .overflow_y = .visible, .box_sizing = placement.wide_box_sizing, .margins = placement.physical_margins },
+                    };
+                    if (presentation_types.validTablePrincipalViewport(policy)) {
+                        const held = try self.a.create(presentation_types.TablePrincipalViewport);
+                        held.* = policy;
+                        resolved.principal_viewport = held;
+                        style.margin_values = null;
+                        if (!presentation_types.validTableStyle(style.*)) resolved.style = null;
+                        return;
+                    }
+                }
             };
             if (!observed.responsive_geometry_accounted) {
                 // Knowing the containing direction cannot authorize a different
@@ -27545,6 +27752,31 @@ pub const Renderer = struct {
         return try relative_font.FontMetric(FontScaleBasis).from(known.value, known.basis);
     }
 
+    fn normalizedAuthoredCellHeight(self: *Renderer, resolved: table_style_profile.CellResolution,
+        style: Style, formatting: SpanFlags, captured_ids: ?[]const u8,
+        ancestor_classes: []const u8) Error!?presentation_types.CellBoxHeight
+    {
+        const declared = resolved.authored_height orelse return null;
+        const sizing = resolved.authored_height_box_sizing orelse return null;
+        if (self.table_style_unresolved) return null;
+        const result: presentation_types.CellBoxHeight = if (declared.unit == .px)
+            .{ .value = declared.value, .font_scale_basis = .css_px, .box_sizing = sizing }
+        else em: {
+            if (formatting.small or formatting.superscript or formatting.subscript or formatting.code or
+                resolved.own_font_basis_unresolved) return null;
+            if (resolved.padding_basis_unresolved or self.table_style_font_unresolved) {
+                const ids = captured_ids orelse return null;
+                const profile = self.context.table_styles orelse return null;
+                if (!profile.capturedCellHeightInheritedFontKnown(self.table_style_scope, ancestor_classes, ids)) return null;
+            }
+            const metric = (try self.cellFontMetric(style)) orelse return null;
+            const value = @as(f64, declared.value) * @as(f64, metric.value orelse return null);
+            if (!std.math.isFinite(value) or value < 0 or value > std.math.floatMax(f32)) return null;
+            break :em .{ .value = @floatCast(value), .font_scale_basis = metric.basis, .box_sizing = sizing };
+        };
+        return if (presentation_types.validCellBoxHeight(result)) result else null;
+    }
+
     fn cellOwnerContextMatches(source: Style, formatting: SpanFlags, native: CellNativeContext, header: bool) bool {
         if (!native.source_context_known or source.heading or source.small or source.superscript or source.subscript or source.code or source.bold or source.italic or
             native.style.heading or native.style.small or native.style.superscript or native.style.subscript or native.style.code or
@@ -28337,9 +28569,10 @@ pub const Renderer = struct {
                 catch |err| return self.authoredElementQueryError(err);
         };
         const complete_ids = if (ancestor_domain) |domain| domain.ids else try self.completeTableFontAncestorIds(style.text_element, witnessed_root);
+        const height_ids = if (source_opening) |opening| try self.wikiTableIdAbsence(opening, tag, style, true) else null;
         var resolved = try profile.resolveTableWithContext(self.a, self.table_style_scope,
             (try self.semanticAttribute(tag, "class")) orelse "",
-            .{ .font_size_consumed = style.font_scale_set and !style.font_size_unknown, .page_style_root = if (style.text_element) |node| node.page_style_root else null, .custom_environment = style.custom_properties, .text_color_consumed = style.table_text_color_consumed, .absent_own_attribute = self.tableRowColorOwnAbsence(tag, style), .computed_border_collapse = if (style.table_inheritance_scoped) style.table_collapse else null, .ancestor_classes = self.table_css_ancestor_classes, .table_ancestor_id_superset = table_id_superset, .own_id = (try self.semanticAttribute(tag, "id")) orelse "", .complete_table_ancestor_classes = if (ancestor_domain) |domain| domain.classes else null, .complete_table_ancestor_ids = if (ancestor_domain) |domain| domain.ids else null, .complete_font_ancestor_ids = complete_ids, .complete_font_ancestor_tags = if (ancestor_domain) |domain| domain.tags else try self.completeTableFontAncestorTags(style.text_element, complete_ids) },
+            .{ .font_size_consumed = style.font_scale_set and !style.font_size_unknown, .page_style_root = if (style.text_element) |node| node.page_style_root else null, .custom_environment = style.custom_properties, .text_color_consumed = style.table_text_color_consumed, .absent_own_attribute = self.tableRowColorOwnAbsence(tag, style), .computed_border_collapse = if (style.table_inheritance_scoped) style.table_collapse else null, .ancestor_classes = self.table_css_ancestor_classes, .table_ancestor_id_superset = table_id_superset, .table_height_id_superset = height_ids, .own_id = (try self.semanticAttribute(tag, "id")) orelse "", .complete_table_ancestor_classes = if (ancestor_domain) |domain| domain.classes else null, .complete_table_ancestor_ids = if (ancestor_domain) |domain| domain.ids else null, .complete_font_ancestor_ids = complete_ids, .complete_font_ancestor_tags = if (ancestor_domain) |domain| domain.tags else try self.completeTableFontAncestorTags(style.text_element, complete_ids) },
             try self.semanticAttribute(tag, "bgcolor"),
             (try self.semanticAttribute(tag, "style")) orelse "");
         if (self.table_style_unresolved or resolved.descendant_style_unresolved) {
@@ -28419,7 +28652,7 @@ pub const Renderer = struct {
         return self.negativePaintQueryTokens(complete, node, true);
     }
 
-    fn resolvedCellStyle(self: *Renderer, tag: syntax.Tag, fallback: ?[]const u8, inherited_alignment: ?presentation_types.CellTextAlign, computed_font: Style, native: CellNativeContext, weight_consumed: bool, cell_ancestor_id_superset: ?[]const u8) Error!table_style_profile.CellResolution {
+    fn resolvedCellStyle(self: *Renderer, tag: syntax.Tag, fallback: ?[]const u8, inherited_alignment: ?presentation_types.CellTextAlign, computed_font: Style, native: CellNativeContext, weight_consumed: bool, cell_ancestor_id_superset: ?[]const u8, defer_cell_height: bool) Error!table_style_profile.CellResolution {
         const profile = self.context.table_styles orelse {
             const basis = if (self.resolved_legacy_table_border) self.resolvedLegacyBorderBasis(computed_font, 1, .cell) else null;
             var resolved = try table_style_profile.resolveInlineCellWithLegacyBorderBasisAlloc(self.a, try self.semanticAttribute(tag, "align"), try self.semanticAttribute(tag, "valign"), try self.semanticAttribute(tag, "width"), (try self.semanticAttribute(tag, "style")) orelse "", basis);
@@ -28441,7 +28674,7 @@ pub const Renderer = struct {
         const ancestor_scope = profile.ancestorScope(self.table_css_ancestor_classes);
         var resolved = try profile.resolveCellWithContextAndHints(self.a, self.table_style_scope, ancestor_scope,
             (try self.semanticAttribute(tag, "class")) orelse "",
-            .{ .font_weight_consumed = weight_consumed, .cell_ancestor_id_superset = cell_ancestor_id_superset, .font_size_consumed = computed_font.font_scale_set and !computed_font.font_size_unknown, .page_style_root = if (computed_font.text_element) |node| node.page_style_root else null, .custom_environment = computed_font.custom_properties, .text_color_consumed = computed_font.table_text_color_consumed, .absent_own_attribute = self.tableRowColorOwnAbsence(tag, computed_font), .computed_border_collapse = if (computed_font.table_inheritance_scoped) computed_font.table_collapse else null, .legacy_vertical_align = try self.semanticAttribute(tag, "valign"), .legacy_cell_width = try self.semanticAttribute(tag, "width"), .ancestor_classes = self.table_css_ancestor_classes, .own_id = (try self.semanticAttribute(tag, "id")) orelse "" }, tag.is("th"),
+            .{ .defer_cell_height = defer_cell_height, .font_weight_consumed = weight_consumed, .cell_ancestor_id_superset = cell_ancestor_id_superset, .font_size_consumed = computed_font.font_scale_set and !computed_font.font_size_unknown, .page_style_root = if (computed_font.text_element) |node| node.page_style_root else null, .custom_environment = computed_font.custom_properties, .text_color_consumed = computed_font.table_text_color_consumed, .absent_own_attribute = self.tableRowColorOwnAbsence(tag, computed_font), .computed_border_collapse = if (computed_font.table_inheritance_scoped) computed_font.table_collapse else null, .legacy_vertical_align = try self.semanticAttribute(tag, "valign"), .legacy_cell_width = try self.semanticAttribute(tag, "width"), .ancestor_classes = self.table_css_ancestor_classes, .own_id = (try self.semanticAttribute(tag, "id")) orelse "" }, tag.is("th"),
             try self.semanticAttribute(tag, "bgcolor"), try self.semanticAttribute(tag, "align"),
             (try self.semanticAttribute(tag, "style")) orelse "");
         if (resolved.padding_basis_unresolved and !resolved.own_font_basis_unresolved and !self.table_style_unresolved) {
@@ -35727,7 +35960,7 @@ pub const Renderer = struct {
         if (tag.is("span")) if ((try self.semanticAttribute(tag, "data-phonos-audio"))) |raw_file| {
             const capture: MediaCaptionCapture = .{ .mode = .inline_body, .style = s, .depth = depth + 1 };
             phonos_spans = try self.mediaFileKindWithSpans(raw_file, content, .audio, capture);
-            if (self.selected_inline_fragment != null and matched != null) {
+            if ((self.selected_inline_fragment != null or self.phonos_box_source_owner != null) and matched != null) {
                 const caption = phonos_spans orelse try self.captureMediaCaption(content, capture);
                 phonos_spans = (try self.phonosOccurrence(tracked.bytes[at..pair.end], caption, raw_file, s)) orelse caption;
             }
@@ -50202,7 +50435,7 @@ pub const Renderer = struct {
                 cell_style.text_element = live.physical;
             }
         };
-        var resolved_cell = try self.resolvedCellStyle(cell_tag, background_fallback, row.alignment, cell_style, cell_native_context, false, null);
+        var resolved_cell = try self.resolvedCellStyle(cell_tag, background_fallback, row.alignment, cell_style, cell_native_context, false, null, false);
         try preserveCellGroupBackdrop(&resolved_cell, row.background, row.table, cell_rowspan);
         var nested_table: ?Table = null;
         var cell_blocks: ?[]const Block = null;
@@ -51140,10 +51373,13 @@ pub const Renderer = struct {
         defer self.typed_table_depth -= 1;
         // Alignment belongs to cells; fostered text keeps its outer body scope.
         const table_alignment = if (viewport != null) self.body_formatting_attributes.text_align else try self.wikiTableTextAlignment(source, opening_start, opening, class_source_visible, self.body_formatting_attributes.text_align);
+        const height_opening_end = std.mem.indexOfScalarPos(u8, source, opening_start, '\n') orelse source.len;
+        const table_ids = if (viewport == null and class_source_visible)
+            try self.wikiTableIdAbsence(source[opening_start..height_opening_end], opening, table_style, false) else null;
         var resolved: table_style_profile.TableResolution = if (viewport) |known| .{ .style = known.wide_style,
             .block_viewport = known.policy, .float_viewport = known.float_policy, .scope = known.profile.classScope((try self.semanticAttribute(opening, "class")) orelse ""),
             .unresolved = false, .background_specified = true, .width_specified = true }
-            else try self.resolvedTableStyle(opening, table_style, self.witnessedRootWikiTableOpening(source, opening_start) or self.witnessedTopLevelWikiTableOpening(source, opening_start) or self.witnessedObservedRootWikiTable(source, opening_start, table_style.text_element), source[opening_start..(std.mem.indexOfScalarPos(u8, source, opening_start, '\n') orelse source.len)], if (class_source_visible) try self.wikiTableIdAbsence(source[opening_start..(std.mem.indexOfScalarPos(u8, source, opening_start, '\n') orelse source.len)], opening, table_style) else null);
+            else try self.resolvedTableStyle(opening, table_style, self.witnessedRootWikiTableOpening(source, opening_start) or self.witnessedTopLevelWikiTableOpening(source, opening_start) or self.witnessedObservedRootWikiTable(source, opening_start, table_style.text_element), source[opening_start..height_opening_end], table_ids);
         const previous_css_ancestors = self.table_css_ancestor_classes;
         self.table_css_ancestor_classes = if (viewport != null) (try self.childAncestorClasses(table_style.text_element)) orelse { _ = self.traceTableViewportRefusal("parseTable.parent_ancestor", source, opening_start, opening.end, parent_cell_context, null, null, false); return error.UncompiledPresentation; }
             else try self.cssClassesWith(previous_css_ancestors, opening);
@@ -51440,12 +51676,20 @@ pub const Renderer = struct {
                             const parent_css = self.table_css_ancestor_classes;
                             self.table_css_ancestor_classes = row_css_ancestors;
                             defer self.table_css_ancestor_classes = parent_css;
-                            break :scoped try self.resolvedCellStyle(cell_tag, background_fallback, row_alignment, cell_style, cell_native_context, cell_weight_consumed, cell_ids);
+                            break :scoped try self.resolvedCellStyle(cell_tag, background_fallback, row_alignment, cell_style, cell_native_context, cell_weight_consumed, cell_ids, true);
                         };
                         try preserveCellGroupBackdrop(&resolved_cell, row_background, resolved.style, content.rowspan);
                         self.guardCellEmStyleAt(&resolved_cell, cell_style, cell_formatting, cell_tag.attrs);
                         try self.computeCellLineHeight(&resolved_cell, cell_tag, cell_style, &cell_formatting, cell_native_context);
-                        current = .{ .line_context_state = if (self.cell_line_source_observation) cellContextState(cell_native_context) else null, .style_font_unresolved = resolved_cell.padding_basis_unresolved, .style_unresolved = self.table_style_unresolved or resolved_cell.line_height_refused, .style = resolved_cell.style, .spans = &.{}, .header = header, .colspan = content.colspan, .rowspan = content.rowspan, .background = resolved_cell.background };
+                        const height_ids = if (!previous_font_unresolved and !row_hidden and
+                            noLiParentSourceRange(tracked, raw_cell)) resolved.captured_height_font_ids else null;
+                        const box_height = try self.normalizedAuthoredCellHeight(resolved_cell, cell_style, cell_formatting,
+                            height_ids, row_css_ancestors);
+                        if (resolved_cell.authored_height_deferred and box_height == null)
+                            self.fallbacks.unresolved_table_style = self.fallbacks.unresolved_table_style or
+                                self.traceUnresolvedTableStyle(true, "unrepresentedCellHeight", cell_tag.attrs);
+                        if (resolved_cell.authored_height != null) swatch_allowed = false;
+                        current = .{ .box_height = box_height, .line_context_state = if (self.cell_line_source_observation) cellContextState(cell_native_context) else null, .style_font_unresolved = resolved_cell.padding_basis_unresolved, .style_unresolved = self.table_style_unresolved or resolved_cell.line_height_refused, .style = resolved_cell.style, .spans = &.{}, .header = header, .colspan = content.colspan, .rowspan = content.rowspan, .background = resolved_cell.background };
                         current.?.css_ancestor_classes = try self.cssClassesWith(row_css_ancestors, cell_tag);
                         current.?.figure_font_source = try self.issueWikiFigureCellFontSource(figure_font_table, raw_cell, cell_tag.attrs, figure_row_attrs, row_style, cell_style, offset == 1, row_hidden);
                         self.wiki_cell_class_source = if (!row_hidden and input.ptr == source.ptr and input.len == source.len)
@@ -51571,9 +51815,17 @@ pub const Renderer = struct {
                 self.fallbacks.unresolved_table_style = self.traceUnresolvedTableStyle(true, "table.viewport.completed_shape", opening.attrs);
             }
         }
-        const table_value: Table = .{ .style = resolved.style, .block_viewport = resolved.block_viewport, .float_viewport = resolved.float_viewport,
+        var table_value: Table = .{ .principal_viewport = resolved.principal_viewport,
+            .style = resolved.style, .block_viewport = resolved.block_viewport, .float_viewport = resolved.float_viewport,
             .geometry = if (viewport) |known| known.geometry else if (resolved.block_viewport != null or resolved.float_viewport != null) null else if (presentation_types.validTableGeometry(geometry)) geometry else null, .caption = try caption.toOwnedSlice(self.a), .caption_blocks = if (caption_blocks.items.len == 0) null else try caption_blocks.toOwnedSlice(self.a), .rows = try rows.toOwnedSlice(self.a) };
-        const feature = if (viewport == null and swatch_allowed and fostered.items.len == 0 and body_end != input.len) try self.swatchFeature(table_value, swatch_background, swatch_foreground) else null;
+        if (table_value.principal_viewport != null and
+            (completed_close == null or fostered.items.len != 0 or hidden_rows or !presentation_types.validTablePrincipalOwner(table_value)))
+        {
+            table_value.principal_viewport = null;
+            table_value.style = null;
+            self.fallbacks.unresolved_table_style = self.traceUnresolvedTableStyle(true, "table.principal.completed_shape", opening.attrs);
+        }
+        const feature = if (table_value.principal_viewport == null and viewport == null and swatch_allowed and fostered.items.len == 0 and body_end != input.len) try self.swatchFeature(table_value, swatch_background, swatch_foreground) else null;
         if (completed_close) |close| {
             self.observeCompletedWikiTableClose(close);
             if (self.observedRootWikiTableOpening(source, opening_start)) if (self.page_root_wiki_table_openings) |openings|
@@ -139477,4 +139729,422 @@ test "KU table local absence binds current TH SPAN declarations and preserves an
     changed_motion.proved.last = &changed;
     try std.testing.expect(try renderer.inlineBoxPriorSpanClasses(node, changed_motion) == null);
     try std.testing.expect(try renderer.inlineBoxPriorSpanClasses(node, .unknown) == null);
+}
+
+fn phonosInlineBoxWireMetricEqual(owner: Span, child: Span, observed_language: []const u8) bool {
+    if (owner.kind != .text or owner.target.len != 0 or owner.audio_control != null or
+        !presentation_types.validInlineBoxPhonosChild(child) or observed_language.len == 0 or
+        !std.mem.eql(u8, child.language, observed_language)) return false;
+    if (child.text.len != 0 and !std.mem.eql(u8, child.language, owner.language)) return false;
+    if (!phonosInlineBoxSemanticClassesEqual(owner, child)) return false;
+    var comparison = child;
+    comparison.classes = owner.classes;
+    comparison.language = owner.language;
+    return inlineBoxWireMetricEqual(owner, comparison);
+}
+
+fn phonosInlineBoxClassesEqual(owner: Span, child: Span) bool {
+    if (!presentation_types.validInlineBoxPhonosChild(child)) return false;
+    const whitespace = " \t\r\n\x0b\x0c";
+    const prefix = "wikidict-media-file-";
+    var owner_tokens = std.mem.tokenizeAny(u8, owner.classes, whitespace);
+    var child_tokens = std.mem.tokenizeAny(u8, child.classes, whitespace);
+    var media_seen = false;
+    var key_seen = false;
+    while (child_tokens.next()) |token| {
+        if (std.mem.eql(u8, token, "wikidict-media")) {
+            if (media_seen) return false;
+            media_seen = true;
+        } else if (std.mem.startsWith(u8, token, prefix)) {
+            // validInlineBoxPhonosChild already proved this exact key against
+            // the child's File target, and refused malformed or duplicate keys.
+            if (key_seen) return false;
+            key_seen = true;
+        } else {
+            const owned = owner_tokens.next() orelse return false;
+            if (!std.mem.eql(u8, token, owned)) return false;
+        }
+    }
+    return media_seen and key_seen and owner_tokens.next() == null;
+}
+
+fn staticPhonosParagraphChild(owner: Span) ?Span {
+    const group = owner.inline_box_group orelse return null;
+    if (!presentation_types.inlineBoxIsPhonos(group.*) or
+        !presentation_types.validInlineBoxGroupOwner(owner) or
+        !staticInlineOrdinarySpan(owner) or owner.provenance != .parsed or
+        owner.generated_diagnostic or owner.font_size_unknown or
+        owner.flags.superscript or owner.flags.subscript) return null;
+    const child = group.spans[0];
+    if (child.text.len != 0 or child.language.len == 0 or !staticInlineOrdinarySpan(child) or
+        child.provenance != .parsed or child.generated_diagnostic or child.generated_link != null or
+        child.font_size_unknown or child.flags.superscript or child.flags.subscript or
+        !phonosInlineBoxSemanticClassesEqual(owner, child)) return null;
+    var comparison = child;
+    comparison.classes = owner.classes;
+    comparison.language = owner.language;
+    if (!inlineBoxWireMetricEqual(owner, comparison)) return null;
+    return child;
+}
+
+fn phonosInlineBoxSemanticClassesEqual(owner: Span, child: Span) bool {
+    if (phonosInlineBoxClassesEqual(owner, child)) return true;
+    if (child.text.len != 0 or !presentation_types.validInlineBoxPhonosChild(child) or
+        child.audio_control.?.presentation != .phonos_button) return false;
+    const whitespace = " \t\r\n\x0b\x0c";
+    var owner_tokens = std.mem.tokenizeAny(u8, owner.classes, whitespace);
+    var child_tokens = std.mem.tokenizeAny(u8, child.classes, whitespace);
+    var media_seen = false;
+    var key_seen = false;
+    var protocol_seen = false;
+    while (child_tokens.next()) |token| {
+        if (std.mem.eql(u8, token, "wikidict-media")) {
+            if (media_seen) return false;
+            media_seen = true;
+        } else if (std.mem.startsWith(u8, token, "wikidict-media-file-")) {
+            if (key_seen) return false;
+            key_seen = true;
+        } else if (std.mem.eql(u8, token, "ext-phonos")) {
+            if (protocol_seen or !std.mem.eql(u8, child_tokens.next() orelse return false, "ext-phonos-PhonosButton")) return false;
+            protocol_seen = true;
+        } else {
+            if (std.mem.eql(u8, token, "ext-phonos-PhonosButton")) return false;
+            const owned = owner_tokens.next() orelse return false;
+            if (!std.mem.eql(u8, token, owned)) return false;
+        }
+    }
+    return media_seen and key_seen and protocol_seen and owner_tokens.next() == null;
+}
+
+test "selected Phonos projection retains exact occurrence across inserted bytes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const retained: []const u8 = "<span style=\"\ntext-align:left; font-size:170%; background:#e8f4f8; border: 1px solid #c5e2f7; border-radius:6px; padding:4px 8px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.12);\"><span class=\"ext-phonos ext-phonos-PhonosButton\" lang=\"el\" data-phonos-audio=\"Ell-Genos.ogg\">Play audio</span></span>";
+    var digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(retained, &digest, .{});
+    try std.testing.expectEqualStrings("0ff9bd67651fca8a5c8657716e1a078d6a5289799b76dbde7fd1d0eeb7473177", &std.fmt.bytesToHex(digest, .lower));
+    const original = try std.mem.concat(a, u8, &.{ "prefix\n", retained, "\nsuffix" });
+    const inserted = "inserted\n";
+    const prepared = try std.mem.concat(a, u8, &.{ inserted, original });
+    const owner = original[7..][0..retained.len];
+    const opening = syntax.tagAt(owner, 0).?;
+    const pair = syntax.matchingTag(owner, opening).?;
+    const token = owner[opening.end..pair.inner_end];
+    const button: table_style_profile.PhonosButton = .{
+        .file = "Ell-Genos.ogg", .language = "el", .caption_html = "", .caption = "",
+        .accessible_name = "Play audio", .source_fallback_caption_html = "Play audio",
+        .attribution_title = "File:Ell-Genos.ogg", .attribution_target = "https://commons.wikimedia.org/wiki/File:Ell-Genos.ogg", .attribution_text = "ⓘ",
+    };
+    const selected = [_]table_style_profile.SelectedPhonos{.{ .source = token, .button = button, .decoration_source = owner }};
+    const copies = [_]SourceElementProjection.Copy{.{ .original_start = 0, .prepared_start = inserted.len, .len = original.len }};
+    var projection: SourceElementProjection = .{ .original = MissingText.untracked(original), .prepared = prepared, .copies = &copies };
+    var binding: SelectedPhonosSourceBinding = .{ .projection = &projection, .owner = MissingText.untracked(prepared), .page_start = 0, .selected = &selected };
+    const projected_owner = prepared[inserted.len + 7..][0..owner.len];
+    const projected_token = projected_owner[opening.end..pair.inner_end];
+    try std.testing.expect(binding.original(projected_owner, &selected).?.ptr == owner.ptr);
+    try std.testing.expect(binding.original(projected_token, &selected).?.ptr == token.ptr);
+    try std.testing.expect(binding.original(try a.dupe(u8, projected_owner), &selected) == null);
+    try std.testing.expect(binding.original(projected_owner, try a.dupe(table_style_profile.SelectedPhonos, &selected)) == null);
+    try std.testing.expect(binding.original(projected_owner, &.{}) == null);
+    try std.testing.expect(binding.original(prepared[0..inserted.len], &selected) == null);
+    try std.testing.expect(binding.original(projected_owner[1..], &selected) == null);
+    const good_binding = binding;
+    const good_projection = projection;
+    binding.page_start = 1;
+    try std.testing.expect(binding.original(projected_owner, &selected) == null);
+    binding = good_binding;
+    binding.owner.lost_missing_range = true;
+    try std.testing.expect(binding.original(projected_owner, &selected) == null);
+    binding = good_binding;
+    binding.owner.unknown = true;
+    try std.testing.expect(binding.original(projected_owner, &selected) == null);
+    binding = good_binding;
+    projection.original.lost_missing_range = true;
+    try std.testing.expect(binding.original(projected_owner, &selected) == null);
+    projection = good_projection;
+    projection.original.unknown = true;
+    try std.testing.expect(binding.original(projected_owner, &selected) == null);
+    projection = good_projection;
+    projection.original = MissingText.untracked(try a.dupe(u8, original));
+    try std.testing.expect(binding.original(projected_owner, &selected) == null);
+    projection = good_projection;
+    projection.copies = &.{};
+    try std.testing.expect(binding.original(projected_owner, &selected) == null);
+    projection = good_projection;
+    var profile = try table_style_profile.parseAlloc(a, "");
+    defer profile.deinit();
+    profile.selected_phonos = &selected;
+    var renderer: Renderer = .{ .a = a, .content_root = .parser_output, .context = .{ .table_styles = &profile }, .selected_phonos_source = binding };
+    try std.testing.expect(renderer.selected_inline_fragment == null);
+    try std.testing.expect(renderer.selectedInlineOriginal(projected_owner).?.ptr == owner.ptr);
+    try std.testing.expect(renderer.selectedInlineOriginal(projected_token).?.ptr == token.ptr);
+    renderer.context.table_styles = null;
+    try std.testing.expect(renderer.selectedInlineOriginal(projected_owner) == null);
+}
+
+test "Phonos box child preserves empty caption and selected source custody" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source: []const u8 = "<span style=\"\ntext-align:left; font-size:170%; background:#e8f4f8; border: 1px solid #c5e2f7; border-radius:6px; padding:4px 8px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.12);\"><span class=\"ext-phonos ext-phonos-PhonosButton\" lang=\"el\" data-phonos-audio=\"Ell-Genos.ogg\">Play audio</span></span>";
+    var digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(source, &digest, .{});
+    try std.testing.expectEqual(@as(usize, 291), source.len);
+    try std.testing.expectEqualStrings("0ff9bd67651fca8a5c8657716e1a078d6a5289799b76dbde7fd1d0eeb7473177", &std.fmt.bytesToHex(digest, .lower));
+    const outer = syntax.tagAt(source, 0).?;
+    const outer_pair = syntax.matchingTag(source, outer).?;
+    const token = source[outer.end..outer_pair.inner_end];
+    try std.testing.expectEqual(@as(usize, 110), token.len);
+    // This is a unit recipe for the already captured fields. The separate
+    // authentic GET/bind control owns their observation and source authority.
+    const button: table_style_profile.PhonosButton = .{
+        .file = "Ell-Genos.ogg", .language = "el", .caption_html = "", .caption = "",
+        .source_fallback_caption_html = "Play audio", .accessible_name = "Play audio",
+        .attribution_title = "File:Ell-Genos.ogg",
+        .attribution_target = "https://commons.wikimedia.org/wiki/File:Ell-Genos.ogg",
+        .attribution_text = "ⓘ",
+    };
+    var selected = [_]table_style_profile.SelectedPhonos{
+        .{ .source = token, .button = button, .decoration_source = source },
+    };
+    var sheets = try table_style_profile.parseAlloc(a, "");
+    defer sheets.deinit();
+    sheets.selected_phonos = &selected;
+    var renderer: Renderer = .{ .a = a,
+        .context = .{ .table_styles = &sheets, .external_links_prepared = true },
+        .content_root = .parser_output };
+    // Ordinary parsing supplies the existing file catalog and captured style.
+    // No selected fragment is installed until that source caption is parsed.
+    const caption = try renderer.parseSpans(token, .{});
+    try std.testing.expectEqual(@as(usize, 1), caption.len);
+    try std.testing.expectEqualStrings("Play audio", caption[0].text);
+    renderer.selected_inline_fragment = .{ .projected = source, .original = source };
+    const before_spans = renderer.spans.items.len;
+    const child = (try renderer.phonosBoxChild(source, token, caption, button.file, .{})) orelse return error.TestMissingBoxAudioChild;
+    try std.testing.expectEqualStrings("", child.text);
+    try std.testing.expectEqualStrings("Play audio", child.tooltip.?);
+    try std.testing.expectEqualStrings("File:Ell-Genos.ogg", child.target);
+    try std.testing.expect(child.audio_control.?.presentation == .phonos_button);
+    try std.testing.expect(!presentation_types.validSpanAudioControl(child));
+    try std.testing.expect(presentation_types.validInlineBoxPhonosChild(child));
+    try std.testing.expectEqual(before_spans, renderer.spans.items.len);
+    try std.testing.expect((try renderer.phonosBoxChild(try a.dupe(u8, source), token, caption, button.file, .{})) == null);
+    try std.testing.expect((try renderer.phonosBoxChild(source, try a.dupe(u8, token), caption, button.file, .{})) == null);
+    try std.testing.expect((try renderer.phonosBoxChild(source, token, &.{ caption[0], caption[0] }, button.file, .{})) == null);
+    try std.testing.expect((try renderer.phonosBoxChild(source, token, caption, "Other.ogg", .{})) == null);
+    try std.testing.expect((try renderer.phonosBoxChild(source, token, caption, button.file, .{ .kind = .link, .target = "Outer" })) == null);
+    for (0..4) |case| {
+        var changed = caption[0];
+        switch (case) {
+            0 => changed.text = "invented",
+            1 => changed.language = "fr",
+            2 => changed.target = "Other",
+            else => changed.tooltip = "invented",
+        }
+        try std.testing.expect((try renderer.phonosBoxChild(source, token, &.{changed}, button.file, .{})) == null);
+    }
+    selected[0].button.source_fallback_caption_html = "different";
+    try std.testing.expect((try renderer.phonosBoxChild(source, token, caption, button.file, .{})) == null);
+    selected[0].button = button;
+    selected[0].button.accessible_name = "different";
+    try std.testing.expect((try renderer.phonosBoxChild(source, token, caption, button.file, .{})) == null);
+    selected[0].button = button;
+    renderer.ruby_depth = 1;
+    try std.testing.expect((try renderer.phonosBoxChild(source, token, caption, button.file, .{})) == null);
+}
+
+test "Phonos semantic paragraph precedes static frame and retains sibling bidi guards" {
+    const child: Span = .{ .kind = .link, .text = "", .target = "File:Voice.ogg", .language = "el",
+        .classes = "wikidict-media wikidict-media-file-566f6963652e6f6767", .tooltip = "Play audio", .tooltip_set = true,
+        .audio_control = .{ .presentation = .phonos_button }, .font_scale = 1.7,
+        .font_scale_basis = .normal_body, .background = "#e8f4f8" };
+    const edge: presentation_types.InlineBoxBorderEdge = .{ .solid = .{
+        .width = .{ .unit = .px, .value = 1 }, .color = .{ .rgb = "#c5e2f7" } } };
+    const group: presentation_types.InlineBoxGroup(Span) = .{
+        .padding = .{ .top = .{ .unit = .px, .value = 4 }, .right = .{ .unit = .px, .value = 8 },
+            .bottom = .{ .unit = .px, .value = 4 }, .left = .{ .unit = .px, .value = 8 } },
+        .border = .{ .top = edge, .right = edge, .bottom = edge, .left = edge },
+        .radius = .{ .unit = .px, .value = 6 }, .spans = &.{child},
+        .shadow = .{ .offset_x = 0, .offset_y = 4, .blur = 6, .spread = 0, .color = "#000000", .alpha = 0.12 },
+    };
+    const owner: Span = .{ .text = "", .font_scale = 1.7, .font_scale_basis = .normal_body,
+        .background = "#e8f4f8", .inline_box_group = &group };
+    try std.testing.expect(presentation_types.validInlineBoxGroupOwner(owner));
+    try std.testing.expect(staticPhonosParagraphChild(owner) != null);
+    try validateInlineBoxParagraph(&.{ .{ .text = "left " }, owner, .{ .text = " right" } });
+    // The narrow branch must precede the generic neutral-frame dispatcher.
+    var frame_group = group;
+    frame_group.radius = null; frame_group.shadow = null;
+    frame_group.padding.top.value = 0; frame_group.padding.bottom.value = 0;
+    frame_group.border = .{ .top = .none, .right = .none, .bottom = .none, .left = .none };
+    var frame_owner = owner; frame_owner.inline_box_group = &frame_group;
+    try std.testing.expect(staticInlineFrame(frame_owner, frame_group));
+    try validateInlineBoxParagraph(&.{ .{ .text = "before" }, frame_owner, .{ .text = "after" } });
+    try std.testing.expectError(error.UncompiledPresentation, validateInlineBoxParagraph(&.{owner, .{ .text = "\u{05d0}" }}));
+    try std.testing.expectError(error.UncompiledPresentation, validateInlineBoxParagraph(&.{owner, .{ .text = "\u{202e}" }}));
+    for (0..6) |index| {
+        var changed = child;
+        switch (index) {
+            0 => changed.text = "visible",
+            1 => changed.direction = "rtl",
+            2 => changed.flags.superscript = true,
+            3 => changed.font_scale = 2,
+            4 => changed.classes = child.classes ++ " unrelated-style",
+            else => changed.generated_diagnostic = true,
+        }
+        var changed_group = group; changed_group.spans = &.{changed};
+        var changed_owner = owner; changed_owner.inline_box_group = &changed_group;
+        try std.testing.expectError(error.UncompiledPresentation, validateInlineBoxParagraph(&.{changed_owner}));
+    }
+    var action_owner = owner; action_owner.kind = .link; action_owner.target = "Outer";
+    try std.testing.expectError(error.UncompiledPresentation, validateInlineBoxParagraph(&.{action_owner}));
+    var two = group; two.spans = &.{child,child};
+    var two_owner = owner; two_owner.inline_box_group = &two;
+    try std.testing.expectError(error.UncompiledPresentation, validateInlineBoxParagraph(&.{two_owner}));
+    var plain_child = child;
+    plain_child.kind = .text; plain_child.target = ""; plain_child.classes = "";
+    plain_child.language = ""; plain_child.audio_control = null; plain_child.tooltip = null;
+    plain_child.tooltip_set = false;
+    var plain = group; plain.shadow = null; plain.spans = &.{plain_child};
+    var plain_owner = owner; plain_owner.inline_box_group = &plain;
+    try std.testing.expectError(error.UncompiledPresentation, validateInlineBoxParagraph(&.{plain_owner}));
+}
+
+test "Phonos protocol classes preserve authored tokens and paragraph restrictions" {
+    const media = "wikidict-media wikidict-media-file-456c6c2d47656e6f732e6f6767";
+    const protocol = "ext-phonos ext-phonos-PhonosButton";
+    const owner: Span = .{ .text = "", .font_scale = 1.7, .font_scale_basis = .normal_body, .background = "#e8f4f8" };
+    const child: Span = .{ .kind = .link, .text = "", .target = "File:Ell-Genos.ogg", .language = "el",
+        .classes = media ++ " " ++ protocol, .tooltip = "Play audio", .tooltip_set = true,
+        .audio_control = .{ .presentation = .phonos_button }, .font_scale = 1.7,
+        .font_scale_basis = .normal_body, .background = "#e8f4f8" };
+    try std.testing.expect(!phonosInlineBoxClassesEqual(owner, child));
+    try std.testing.expect(phonosInlineBoxSemanticClassesEqual(owner, child));
+    try std.testing.expect(phonosInlineBoxWireMetricEqual(owner, child, "el"));
+    try std.testing.expectEqualStrings(media ++ " " ++ protocol, child.classes);
+    var same_owner = owner;
+    same_owner.classes = "local-a local-b";
+    var same_child = child;
+    same_child.classes = media ++ " local-a " ++ protocol ++ " local-b";
+    try std.testing.expect(phonosInlineBoxSemanticClassesEqual(same_owner, same_child));
+    const refusals = [_][]const u8{
+        media ++ " ext-phonos",
+        media ++ " ext-phonos-PhonosButton",
+        media ++ " ext-phonos-PhonosButton ext-phonos",
+        media ++ " " ++ protocol ++ " " ++ protocol,
+        media ++ " ext-phonos local-a ext-phonos-PhonosButton",
+        media ++ " " ++ protocol ++ " unrelated-style",
+        media ++ " " ++ protocol ++ " ext-phonos-PhonosButton-extra",
+        media ++ " " ++ protocol ++ " wikidict-media",
+        "wikidict-media wikidict-media-file-00 " ++ protocol,
+        "wikidict-media " ++ protocol,
+    };
+    for (refusals) |classes| {
+        var changed = child;
+        changed.classes = classes;
+        try std.testing.expect(!phonosInlineBoxSemanticClassesEqual(owner, changed));
+        try std.testing.expect(!phonosInlineBoxWireMetricEqual(owner, changed, "el"));
+    }
+    var visible = child;
+    visible.text = "visible";
+    try std.testing.expect(!phonosInlineBoxSemanticClassesEqual(owner, visible));
+    var reordered = same_child;
+    reordered.classes = media ++ " local-b " ++ protocol ++ " local-a";
+    try std.testing.expect(!phonosInlineBoxSemanticClassesEqual(same_owner, reordered));
+    const edge: presentation_types.InlineBoxBorderEdge = .{ .solid = .{ .width = .{ .unit = .px, .value = 1 }, .color = .{ .rgb = "#c5e2f7" } } };
+    const group: presentation_types.InlineBoxGroup(Span) = .{
+        .padding = .{ .top = .{ .unit = .px, .value = 4 }, .right = .{ .unit = .px, .value = 8 },
+            .bottom = .{ .unit = .px, .value = 4 }, .left = .{ .unit = .px, .value = 8 } },
+        .border = .{ .top = edge, .right = edge, .bottom = edge, .left = edge },
+        .radius = .{ .unit = .px, .value = 6 }, .spans = &.{child},
+        .shadow = .{ .offset_x = 0, .offset_y = 4, .blur = 6, .spread = 0, .color = "#000000", .alpha = 0.12 },
+    };
+    var boxed = owner;
+    boxed.inline_box_group = &group;
+    try validateInlineBoxParagraph(&.{ .{ .text = "before" }, boxed, .{ .text = "after" } });
+    try std.testing.expectError(error.UncompiledPresentation, validateInlineBoxParagraph(&.{boxed, .{ .text = "\u{05d0}" }}));
+    for (0..2) |index| {
+        var changed = child;
+        switch (index) {
+            0 => changed.font_scale = 2,
+            else => changed.background = "#ffffff",
+        }
+        try std.testing.expect(!phonosInlineBoxWireMetricEqual(owner, changed, "el"));
+        var changed_group = group;
+        changed_group.spans = &.{changed};
+        var changed_owner = owner;
+        changed_owner.inline_box_group = &changed_group;
+        try std.testing.expectError(error.UncompiledPresentation, validateInlineBoxParagraph(&.{changed_owner}));
+    }
+    // Direction is a semantic paragraph guard, not a visual-metric field.
+    var rtl_child = child;
+    rtl_child.direction = "rtl";
+    var rtl_group = group;
+    rtl_group.spans = &.{rtl_child};
+    var rtl_owner = owner;
+    rtl_owner.inline_box_group = &rtl_group;
+    try std.testing.expectError(error.UncompiledPresentation, validateInlineBoxParagraph(&.{rtl_owner}));
+}
+
+
+test "deferred cell physical height resolves only with an emitted validated row constraint" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var profile = try table_style_profile.parseAlloc(a, ""); defer profile.deinit();
+    for ([_]struct { css: []const u8, expected: presentation_types.CellBoxHeight }{
+        .{ .css = "background:#d5d5d5;height:.25em", .expected = .{ .value = 0.25, .font_scale_basis = .normal_body, .box_sizing = .content_box } },
+        .{ .css = "height:2px!important;height:3px", .expected = .{ .value = 2, .font_scale_basis = .css_px, .box_sizing = .content_box } },
+        .{ .css = "height:0", .expected = .{ .value = 0, .font_scale_basis = .css_px, .box_sizing = .content_box } },
+    }) |case| {
+        var r: Renderer = .{ .a = a, .context = .{ .table_styles = &profile } };
+        const source = try std.fmt.allocPrint(a, "{{|\n| style='{s}' | [[Kept|body]]\n|}}", .{case.css});
+        const blocks = try r.renderBody(source);
+        try std.testing.expect(!r.fallbacks.unresolved_table_style);
+        try std.testing.expectEqualDeep(case.expected, blocks[0].table.?.rows[0].cells[0].box_height.?);
+        try std.testing.expectEqualStrings("body", try flattened(a, blocks[0].table.?.rows[0].cells[0].spans));
+        _ = try FormattingScopeTest.encode(a, &r, blocks);
+    }
+    for ([_][]const u8{
+        "height:.25em;box-sizing:border-box", "height:.25em;display:block",
+        "height:.25em;font-size:var(--unknown)", "height:.25em;height:auto",
+        "position:relative;height:.25em", "height:.25em;position:relative",
+    }) |css| {
+        var r: Renderer = .{ .a = a, .context = .{ .table_styles = &profile } };
+        _ = try r.renderBody(try std.fmt.allocPrint(a, "{{|\n| style='{s}' | body\n|}}", .{css}));
+        try std.testing.expect(r.fallbacks.unresolved_table_style);
+    }
+    // Literal HTML cells have no physical-height row-constraint consumer.
+    var html: Renderer = .{ .a = a, .context = .{ .table_styles = &profile } };
+    _ = try html.renderBody("<table><tr><td style='height:.25em'>body</td></tr></table>");
+    try std.testing.expect(html.fallbacks.unresolved_table_style);
+}
+
+
+test "deferred cell physical height late refusal cannot lose the pending warning" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var profile = try table_style_profile.parseAlloc(a, ""); defer profile.deinit();
+    // This declaration initially has no other unresolved property. A relative
+    // height cannot use the unrepresented SMALL font basis below.
+    var probe: Renderer = .{ .a = a, .context = .{ .table_styles = &profile } };
+    const cell = syntax.tagAt("<td style='height:.25em'>", 0).?;
+    const pending = try probe.resolvedCellStyle(cell, null, null, .{},
+        .{ .style = .{}, .formatting = .{} }, false, null, true);
+    try std.testing.expect(pending.authored_height_deferred and !pending.unresolved);
+    try std.testing.expect(!probe.fallbacks.unresolved_table_style);
+    try std.testing.expect((try probe.normalizedAuthoredCellHeight(pending, .{}, .{ .small = true }, null, "")) == null);
+    // The actual table path must turn that late refusal into a warning. The
+    // pixel control uses identical formatting and must have no earlier warning.
+    for ([_]struct { css: []const u8, refused: bool }{
+        .{ .css = "height:2px", .refused = false },
+        .{ .css = "height:.25em", .refused = true },
+    }) |case| {
+        var r: Renderer = .{ .a = a, .context = .{ .table_styles = &profile } };
+        const source = try std.fmt.allocPrint(a, "{{|\n| style='{s}' | body\n|}}", .{case.css});
+        const opening: syntax.Tag = .{ .name = "table", .attrs = source[2..2], .end = 0, .closing = false, .self_closing = false };
+        const parsed = try r.parseTable(source, 3, 0, null, null, .{}, .{ .small = true }, opening, true, null);
+        const output = parsed.table.rows[0].cells[0];
+        try std.testing.expectEqual(case.refused, r.fallbacks.unresolved_table_style);
+        try std.testing.expectEqual(case.refused, output.box_height == null);
+        try std.testing.expectEqualStrings("body", try flattened(a, output.spans));
+    }
 }

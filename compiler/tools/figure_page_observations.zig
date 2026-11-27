@@ -1102,7 +1102,7 @@ fn observedHuRetainedAuxiliaryBodyScope(a: A, ns: *const namespaces.Registry, pa
     // The selected-HU policy retains checked auxiliary nodes and their
     // original attributes; it grants no source/action or geometry authority.
     const scope = try observedClassRootTokensIn(a, ns, input.body, nodes, &end,
-        false, input.root, true, true, true, true);
+        false, input.root, true, true, true, true, false);
     if (end != input.body.len) return invalid;
     if (root_end) |out| out.* = end;
     return scope;
@@ -1945,6 +1945,10 @@ fn inventorySourceMode(a: A, tag: syntax.Tag, allow_repeated_class: bool, source
 // This does not establish skin ancestry, element positions or computed styles.
 
 fn observedBigOpening(stack: []const ObservedOpenNode, tag: syntax.Tag, inv: Inventory) !void {
+    return observedBigOpeningIn(stack, tag, inv, false);
+}
+
+fn observedBigOpeningIn(stack: []const ObservedOpenNode, tag: syntax.Tag, inv: Inventory, returned_metadata: bool) !void {
     var inside_big = false;
     for (stack) |open| if (open.tag.is("big")) { inside_big = true; break; };
     if (inside_big) {
@@ -1960,7 +1964,18 @@ fn observedBigOpening(stack: []const ObservedOpenNode, tag: syntax.Tag, inv: Inv
         if (tag.is("a")) for (stack) |open| if (open.tag.is("a")) return invalid;
     }
     if (!tag.is("big")) return;
-    if (inv.attributes.len != 0) return invalid;
+    if (inv.attributes.len != 0) {
+        // Only the authenticated Phonos complete-returned-tree path opts in.
+        // Keep every original attribute in the observed graph. This admits
+        // passive Parsoid transclusion metadata, not font/style/source proof.
+        if (!returned_metadata or inv.attributes.len != 4 or
+            !equal(inv.get("typeof") orelse "", "mw:Transclusion") or
+            (inv.get("about") orelse return invalid).len == 0 or
+            (inv.get("id") orelse return invalid).len == 0 or
+            (inv.get("data-mw") orelse return invalid).len == 0) return invalid;
+        for (inv.attributes) |attr| if (!equal(attr.name, "about") and !equal(attr.name, "typeof") and
+            !equal(attr.name, "id") and !equal(attr.name, "data-mw")) return invalid;
+    }
     // Formatting elements in a table insertion scope can be foster-parented.
     // Explicit cells/captions restore the ordinary in-body scope.
     var index = stack.len;
@@ -8418,12 +8433,14 @@ fn observedClassRootTokens(a: A, ns: *const namespaces.Registry, html: []const u
     nodes: ?*std.ArrayList(ObservedSiblingNode), root_end: ?*usize, current_literal: bool, expected_root: ?Inventory, retain_sections: bool, returned_html_comments: bool, quoted_html_attributes: bool) !profile.BoundedTextClassScope
 {
     return observedClassRootTokensIn(a, ns, html, nodes, root_end, current_literal, expected_root,
-        retain_sections, returned_html_comments, quoted_html_attributes, false);
+        retain_sections, returned_html_comments, quoted_html_attributes, false, false);
 }
 
 fn observedClassRootTokensIn(a: A, ns: *const namespaces.Registry, html: []const u8,
-    nodes: ?*std.ArrayList(ObservedSiblingNode), root_end: ?*usize, current_literal: bool, expected_root: ?Inventory, retain_sections: bool, returned_html_comments: bool, quoted_html_attributes: bool, retained_hu_auxiliary: bool) !profile.BoundedTextClassScope
+    nodes: ?*std.ArrayList(ObservedSiblingNode), root_end: ?*usize, current_literal: bool, expected_root: ?Inventory, retain_sections: bool, returned_html_comments: bool, quoted_html_attributes: bool, retained_hu_auxiliary: bool, retained_phonos_metadata: bool) !profile.BoundedTextClassScope
 {
+    if (retained_phonos_metadata and (current_literal or expected_root == null or !retain_sections or
+        !returned_html_comments or !quoted_html_attributes or retained_hu_auxiliary)) return invalid;
     if (retained_hu_auxiliary and (current_literal or expected_root == null or !retain_sections or
         !returned_html_comments or !quoted_html_attributes)) return invalid;
     if (html.len == 0 or html.len > max_response or !std.unicode.utf8ValidateSlice(html) or std.mem.indexOfScalar(u8, html, 0) != null) return invalid;
@@ -8505,7 +8522,7 @@ fn observedClassRootTokensIn(a: A, ns: *const namespaces.Registry, html: []const
         if ((audio_child and !tag.is("source")) or (tag.is("source") and !audio_child)) return invalid;
         try observedRubyOpening(stack[0..depth], tag, inv);
         try observedCenterOpening(stack[0..depth], tag);
-        try observedBigOpening(stack[0..depth], tag, inv);
+        try observedBigOpeningIn(stack[0..depth], tag, inv, retained_phonos_metadata);
         try observedBdiOpening(stack[0..depth], tag);
         if (depth == 0) {
             if (root_seen or !tag.is("div")) return invalid;
@@ -19415,7 +19432,7 @@ pub fn selectedPhonosAlloc(a: A, keep: A, ns: *const namespaces.Registry, html: 
     var items: std.ArrayList(ObservedSiblingNode) = .empty;
     defer items.deinit(a);
     var end: usize = 0;
-    _ = try observedClassRootTokens(a, ns, body, &items, &end, false, envelope.root, true, true, true);
+    _ = try observedClassRootTokensIn(a, ns, body, &items, &end, false, envelope.root, true, true, true, false, true);
     if (end != body.len) return null;
     const nodes = items.items;
     var buttons: std.ArrayList(profile.PhonosButton) = .empty;
@@ -19432,6 +19449,8 @@ pub fn selectedPhonosAlloc(a: A, keep: A, ns: *const namespaces.Registry, html: 
         entry.* = button;
         inline for (.{"file", "language", "caption_html", "caption", "accessible_name", "attribution_title", "attribution_target", "attribution_text"}) |name|
             @field(entry, name) = try keep.dupe(u8, @field(button, name));
+        if (button.source_fallback_caption_html) |fallback|
+            entry.source_fallback_caption_html = try keep.dupe(u8, fallback);
     }
     return retained;
 }
@@ -19442,7 +19461,12 @@ fn observedPhonosButton(a: A, ns: *const namespaces.Registry, body: []const u8,
     if (!equal(try string(extension, "name"), "phonos")) return null;
     const attrs = try field(extension, "attrs");
     const file = try string(attrs, "file");
-    const lang = try string(attrs, "lang");
+    if (attrs != .object) return invalid;
+    // Missing source lang follows the same authoritative namespace language
+    // as renderPhonos; an explicit non-string/mismatch still refuses.
+    const lang = if (attrs.object.get("lang")) |value|
+        (if (value == .string) value.string else return invalid)
+    else ns.content_language;
     const caption_html = try string(try field(extension, "body"), "extsrc");
     const children = headingElementChildren(body, nodes, owner, 2, false) orelse return null;
     const widget = nodes[children[0]];
@@ -19454,7 +19478,14 @@ fn observedPhonosButton(a: A, ns: *const namespaces.Registry, body: []const u8,
     const framed = try field(config, "framed");
     if (!equal(try string(config, "_"), "mw.Phonos.PhonosButton") or framed != .bool or framed.bool or
         !equal(try string(config, "icon"), "volumeUp") or !equal(try string(data, "lang"), lang) or
-        !equal(try string(data, "file"), file) or !equal(try string(try field(config, "label"), "html"), caption_html)) return null;
+        !equal(try string(data, "file"), file)) return null;
+    const empty_label = caption_html.len == 0;
+    if (empty_label) {
+        if (!phonosClass(widget, "span", "ext-phonos-PhonosButton-emptylabel") or
+            (try string(data, "ipa")).len != 0 or (try string(data, "text")).len != 0) return null;
+        if (config.object.get("label")) |label_config|
+            if ((try string(label_config, "html")).len != 0) return null;
+    } else if (!equal(try string(try field(config, "label"), "html"), caption_html)) return null;
     const button_id = (headingElementChildren(body, nodes, children[0], 1, false) orelse return null)[0];
     const button = nodes[button_id];
     const href = button.attributes.get("href") orelse return null;
@@ -19488,7 +19519,7 @@ fn observedPhonosButton(a: A, ns: *const namespaces.Registry, body: []const u8,
         if (!phonosClass(caption, "span", "e-audio") or caption.attributes.attributes.len != 1 or caption.first_child != null) return null;
         break :child body[caption.tag.end..caption.inner_end orelse return null];
     };
-    if (label.len == 0 or std.mem.indexOfAny(u8, label, "&<>\r\n") != null) return null;
+    if ((!empty_label and label.len == 0) or std.mem.indexOfAny(u8, label, "&<>\r\n") != null) return null;
     const attribution = nodes[(headingElementChildren(body, nodes, children[1], 1, false) orelse return null)[0]];
     const title = attribution.attributes.get("title") orelse return null;
     const attribution_href = attribution.attributes.get("href") orelse return null;
@@ -19498,9 +19529,45 @@ fn observedPhonosButton(a: A, ns: *const namespaces.Registry, body: []const u8,
         !headingLeafText(body, attribution, "ⓘ")) return null;
     const attribution_target = try std.mem.concat(a, u8, &.{ origin, attribution_href });
     if (!encoder.presentation_types.validPhonosCreditDestination(attribution_target, title)) return null;
+    var fallback: ?[]const u8 = null;
+    if (empty_label) {
+        // Exact ordinary renderPhonos appendAttrEscaped serialization of the
+        // observed accessible name. Do not turn it into rendered label text.
+        var encoded: std.ArrayList(u8) = .empty;
+        errdefer encoded.deinit(a);
+        for (name) |byte| switch (byte) {
+            '&' => try encoded.appendSlice(a, "&amp;"),
+            '<' => try encoded.appendSlice(a, "&lt;"),
+            '>' => try encoded.appendSlice(a, "&gt;"),
+            '"' => try encoded.appendSlice(a, "&quot;"),
+            else => try encoded.append(a, byte),
+        };
+        fallback = try encoded.toOwnedSlice(a);
+    }
     return .{ .file = ns.ofTitle(expected).text, .language = lang, .caption_html = caption_html,
+        .source_fallback_caption_html = fallback,
         .caption = label, .accessible_name = name, .attribution_title = title,
         .attribution_target = attribution_target, .attribution_text = "ⓘ" };
+}
+
+// Retain an immediate, style-only wrapper without interpreting its CSS.
+// Exact adjacency and matching bounds exclude prefixes, suffixes, additional
+// children and the Phonos attribution SUP following the owner's close tag.
+// The caller has already joined this child to the selected article button.
+fn phonosDecorationSource(a: A, source: []const u8, child_start: usize, child_end: usize) !?[]const u8 {
+    if (child_start == 0 or child_start >= child_end or child_end > source.len) return null;
+    const start = std.mem.lastIndexOfScalar(u8, source[0..child_start], '<') orelse return null;
+    const tag = syntax.tagAt(source, start) orelse return null;
+    if (!tag.is("span") or tag.closing or tag.self_closing or tag.end != child_start) return null;
+    // An optional wrapper must not invalidate an already selected child.
+    const attrs = inventory(a, tag) catch |failure| switch (failure) {
+        error.InvalidFigurePageObservations => return null,
+        else => return failure,
+    };
+    if (attrs.attributes.len != 1 or (attrs.get("style") orelse return null).len == 0) return null;
+    const pair = syntax.matchingTag(source, tag) orelse return null;
+    if (pair.inner_end != child_end) return null;
+    return source[start..pair.end];
 }
 
 pub fn bindPhonos(a: A, source: []const u8, buttons: []const profile.PhonosButton) ![]const profile.SelectedPhonos {
@@ -19518,8 +19585,9 @@ pub fn bindPhonos(a: A, source: []const u8, buttons: []const profile.PhonosButto
         const button = buttons[result.items.len];
         const pair = syntax.matchingTag(source, tag) orelse return &.{};
         if (attrs.attributes.len != 3 or !equal(attrs.get("data-phonos-audio") orelse "", button.file) or
-            !equal(attrs.get("lang") orelse "", button.language) or !equal(source[tag.end..pair.inner_end], button.caption_html)) return &.{};
-        try result.append(a, .{ .source = source[start..pair.end], .button = button });
+            !equal(attrs.get("lang") orelse "", button.language) or !equal(source[tag.end..pair.inner_end], button.source_fallback_caption_html orelse button.caption_html)) return &.{};
+        try result.append(a, .{ .source = source[start..pair.end], .button = button,
+            .decoration_source = try phonosDecorationSource(a, source, start, pair.end) });
         pos = pair.end;
     }
     return if (result.items.len == buttons.len) try result.toOwnedSlice(a) else &.{};
@@ -20066,6 +20134,11 @@ pub fn tableDirectionRootAlloc(a: A, ns: *const namespaces.Registry, bytes: []co
     // checked by the maintained prefix parser before retaining style attributes.
     const outer = try observedOuterPrefix(a, bytes, true);
     _ = try @import("page_language_prefix.zig").parseAlloc(a, bytes[0..outer.root_open_end orelse return invalid], page_id, revision_id);
+    return admittedTableDirectionRootAlloc(a, ns, bytes, outer, resources);
+}
+fn admittedTableDirectionRootAlloc(a: A, ns: *const namespaces.Registry, bytes: []const u8,
+    outer: OuterObservedPrefix, resources: TableDirectionResources) !TableDirectionRoot
+{
     const root = outer.root orelse return invalid;
     const receipt = try json(a, resources.receipt);
     if (receipt != .object or receipt.object.count() != 4 or
@@ -20118,9 +20191,13 @@ fn tableDirectionNoteEnd(source: []const u8, at: usize) ?usize {
 fn tableDirectionPlainHeading(line: []const u8) bool {
     const heading = syntax.controlHeading(line, null) orelse return false;
     const level: usize = heading.level;
-    if (line.len != 2 * level + heading.title.len or std.mem.trim(u8, heading.title, " ").len == 0 or
-        std.mem.indexOfAny(u8, heading.title, "=<>[]{}|'\x00\r\n\t") != null) return false;
-    return true;
+    if (line.len <= 2 * level) return false;
+    // controlHeading already trims the title. Check the complete authored
+    // interior so surrounding ASCII space does not invalidate the fence,
+    // while asymmetric or embedded delimiters cannot gain a boundary.
+    const authored_title = line[level .. line.len - level];
+    if (std.mem.indexOfAny(u8, authored_title, "=<>[]{}|'\x00\r\n\t") != null) return false;
+    return heading.title.len != 0 and equal(std.mem.trim(u8, authored_title, " "), heading.title);
 }
 
 fn tableDirectionNoSourceStyles(a: A, ns: *const namespaces.Registry, source: []const u8) !bool {
@@ -20483,12 +20560,20 @@ fn preparedTableRootAlloc(a: A, ns: *const namespaces.Registry, input: RawTableR
     const outer = try observedOuterPrefix(a, input.response, true);
     const root_start = outer.root_start orelse return invalid;
     const root_open_end = outer.root_open_end orelse return invalid;
-    _ = @import("page_language_prefix.zig").parseCurrentAlloc(a, input.response[0..root_open_end],
-        input.page_id, input.revision_id, input.title) catch |err| switch (err) { error.OutOfMemory => return err, else => return invalid };
-    // Validate action/article/canonical page-name independently of current IDs.
-    _ = @import("page_language_prefix.zig").parseSelectedOldidAlloc(a, input.response[0..root_open_end],
-        input.page_id, input.revision_id, input.namespace_id, input.title) catch |err| switch (err) { error.OutOfMemory => return err, else => return invalid };
-    const root = try tableDirectionRootAlloc(a, ns, input.response, input.page_id, input.revision_id, input.styles);
+    const prefix = @import("page_language_prefix.zig");
+    const root = if (equal(ns.wiki, "yiwiktionary")) selected: {
+        // This role joins canonical URL, anonymous Vector program and current
+        // revision before lending any table-specific root observation.
+        _ = prefix.parseYiCurrentTableAlloc(a, input.response[0..root_open_end],
+            input.page_id, input.revision_id, input.title) catch |err| switch (err) { error.OutOfMemory => return err, else => return invalid };
+        break :selected try admittedTableDirectionRootAlloc(a, ns, input.response, outer, input.styles);
+    } else previous: {
+        _ = prefix.parseCurrentAlloc(a, input.response[0..root_open_end],
+            input.page_id, input.revision_id, input.title) catch |err| switch (err) { error.OutOfMemory => return err, else => return invalid };
+        _ = prefix.parseSelectedOldidAlloc(a, input.response[0..root_open_end],
+            input.page_id, input.revision_id, input.namespace_id, input.title) catch |err| switch (err) { error.OutOfMemory => return err, else => return invalid };
+        break :previous try tableDirectionRootAlloc(a, ns, input.response, input.page_id, input.revision_id, input.styles);
+    };
     var nodes: std.ArrayList(ObservedSiblingNode) = .empty;
     var body_end: usize = 0;
     _ = try observedTextClassScopeToEndWithSections(a, ns, input.response[root_start..], &nodes, &body_end, outer.root orelse return invalid, true);
@@ -23426,12 +23511,45 @@ pub fn bindWikiTableClassAbsenceAlloc(a: A, media: *const SelectedPage,
     selected: compiler.TableContainingDirectionSource) !compiler.TableContainingDirectionSource
 {
     const captured = media.supplied_class_capture orelse return selected;
-    if (selected.observe_wiki_table_classes != null or styles.page_style_parent != null or
+    if (media.namespace_catalog != ns or !equal(media.page_title, capsule.page.title)) return invalid;
+    return bindWikiTableAbsenceAlloc(a, captured, capsule, source, ns, styles, selected, false);
+}
+
+pub fn bindWikiTableHeightIdAbsenceAlloc(a: A, capsule: *const @import("page_language.zig").SourceParentCapsule,
+    source: []const u8, ns: *const namespaces.Registry, styles: *const profile.Profile,
+    selected: compiler.TableContainingDirectionSource) !compiler.TableContainingDirectionSource
+{
+    const capture = capsule.table_height_ids orelse return selected;
+    if (capsule.observation_kind != .selected_oldid_normal_text or capsule.page.namespace != 0) return invalid;
+    const receipt = try json(a, capture.receipt);
+    const request = try json(a, capture.request);
+    const retries = try field(receipt, "retries");
+    const redirects = try field(receipt, "redirects_followed");
+    if (!equal(try string(receipt, "schema"), "wikidict.supplied-expanded-page-http-observation.v1") or
+        !equal(try string(receipt, "final_url"), try string(request, "url")) or
+        retries != .integer or retries.integer != 0 or redirects != .integer or redirects.integer != 0) return invalid;
+    const supplied = try suppliedResponseSource(a, ns, .{ .namespace_id = capsule.page.namespace,
+        .page_id = capsule.page.id, .revision_id = capsule.page.revision, .title = capsule.page.title,
+        .raw_sha256 = capsule.page.raw_sha256, .request = capture.request, .form_body = capture.form_body,
+        .receipt = capture.receipt, .response = capture.response, .occurrences = &.{}, .text_class_scope = true });
+    if (!equal(supplied.source, source)) return invalid;
+    return bindWikiTableAbsenceAlloc(a, .{ .source = source, .html = supplied.html, .page_id = capsule.page.id,
+        .revision_id = capsule.page.revision, .namespace_id = capsule.page.namespace,
+        .raw_sha256 = capsule.page.raw_sha256 }, capsule, source, ns, styles, selected, true);
+}
+
+fn bindWikiTableAbsenceAlloc(a: A, captured: SuppliedClassCapture,
+    capsule: *const @import("page_language.zig").SourceParentCapsule,
+    source: []const u8, ns: *const namespaces.Registry, styles: *const profile.Profile,
+    selected: compiler.TableContainingDirectionSource, comptime height_only: bool) !compiler.TableContainingDirectionSource
+{
+    if ((if (height_only) selected.observe_wiki_table_height_ids != null else selected.observe_wiki_table_classes != null) or
+        styles.page_style_parent != null or
         selected.source.ptr != source.ptr or selected.source.len != source.len or
-        media.namespace_catalog != ns or captured.source.ptr != source.ptr or captured.source.len != source.len or
+        captured.source.ptr != source.ptr or captured.source.len != source.len or
         capsule.styles.responses.len != 0 or capsule.styles.receipt.len != 0 or
         captured.page_id != capsule.page.id or captured.revision_id != capsule.page.revision or
-        captured.namespace_id != capsule.page.namespace or !equal(media.page_title, capsule.page.title) or
+        captured.namespace_id != capsule.page.namespace or
         !equal(captured.raw_sha256, capsule.page.raw_sha256) or
         !std.mem.eql(u8, &capsule.namespace_sha256, &ns.source_sha256) or
         !digestMatches(source, capsule.page.expanded_sha256 orelse return invalid) or
@@ -23451,8 +23569,23 @@ pub fn bindWikiTableClassAbsenceAlloc(a: A, media: *const SelectedPage,
     const get_scope = try observedClassRootTokens(a, ns, capsule.response[root_start..], &get_nodes, &get_end,
         false, outer.root, true, true, true);
     if (get_end == 0 or root_start + get_end != try sourceParentOwnedRootEnd(capsule.response, capsule.prefix)) return invalid;
+    // The supplied legacy body and the selected oldid response may both
+    // have an explicit RTL root. Use their observed agreement for the ID
+    // census only; the older class-route's root contract stays unchanged.
+    const post_root: ?Inventory = if (height_only) root: {
+        const tag = syntax.tagAt(captured.html, 0) orelse return invalid;
+        if (!tag.is("div") or tag.closing or tag.self_closing) return invalid;
+        const attrs = try inventoryReturnedMode(a, tag, false, false, true);
+        const direction = root_attributes.get("dir") orelse return invalid;
+        const classes = if (equal(direction, "rtl")) "mw-content-rtl mw-parser-output"
+            else if (equal(direction, "ltr")) "mw-content-ltr mw-parser-output" else return invalid;
+        if (attrs.attributes.len != 3 or !equal(attrs.get("class") orelse return invalid, classes) or
+            !equal(attrs.get("lang") orelse return invalid, capsule.root_language) or
+            !equal(attrs.get("dir") orelse return invalid, direction)) return invalid;
+        break :root attrs;
+    } else null;
     const post_scope = try observedClassRootTokens(a, ns, captured.html, &post_nodes, null,
-        false, null, false, true, true);
+        false, post_root, false, true, true);
     var outer_classes: std.ArrayList(u8) = .empty;
     defer outer_classes.deinit(a);
     for (outer.ancestors) |node| {
@@ -23469,13 +23602,14 @@ pub fn bindWikiTableClassAbsenceAlloc(a: A, media: *const SelectedPage,
         outer.ancestors[0].attributes.get("class") orelse return invalid)) orelse return selected;
     try appendOuterClasses(a, &outer_classes, schemes.day);
     try appendOuterClasses(a, &outer_classes, schemes.night);
-    const classes = try completeObservedTextClassSuperset(a, post_scope, outer_classes.items, source);
+    const classes = if (height_only) "" else try completeObservedTextClassSuperset(a, post_scope, outer_classes.items, source);
     // The same strict parsed GET/POST inventories cover IDs independently.
     // Malformed authored ID syntax withholds only this new optional proof.
     const outer_ids: ?[]const u8 = outerIdSuperset(a, outer.ancestors, &.{}, root_attributes) catch |err|
         if (err == error.InvalidFigurePageObservations) null else return err;
     const get_ids = try completeObservedTextIdSuperset(a, get_nodes.items, outer_ids, source);
     const ids = try completeObservedTextIdSuperset(a, post_nodes.items, get_ids, source);
+    if (height_only and ids == null) return selected;
     const Bound = struct {
         source: []const u8, source_digest: [32]u8, post: []const u8, post_digest: [32]u8,
         get: []const u8, get_digest: [64]u8, title: []const u8,
@@ -23509,8 +23643,13 @@ pub fn bindWikiTableClassAbsenceAlloc(a: A, media: *const SelectedPage,
     std.crypto.hash.sha2.Sha256.hash(source, &bound.source_digest, .{});
     std.crypto.hash.sha2.Sha256.hash(captured.html, &bound.post_digest, .{});
     var result = selected;
-    result.wiki_table_class_context = bound;
-    result.observe_wiki_table_classes = Bound.observe;
+    if (height_only) {
+        result.wiki_table_height_id_context = bound;
+        result.observe_wiki_table_height_ids = Bound.observe;
+    } else {
+        result.wiki_table_class_context = bound;
+        result.observe_wiki_table_classes = Bound.observe;
+    }
     return result;
 }
 
@@ -34518,7 +34657,7 @@ test "HU retained auxiliary body keeps four map areas and TOC controls in its or
         &strict_end, false, input.root, true, true, true));
     try std.testing.expectEqual(@as(usize, 0), strict_end);
     try std.testing.expectError(invalid, observedClassRootTokensIn(a, &ns, input.body, null,
-        &strict_end, true, input.root, true, true, true, true));
+        &strict_end, true, input.root, true, true, true, true, false));
 }
 
 test "HU selected GET outer and captured style shape preserve original legacy inputs" {
@@ -34611,4 +34750,88 @@ test "HU selected GET outer and captured style shape preserve original legacy in
         "<style onclick=\"x\">.x{color:red}</style>", true, true));
     // This positive shape test is not a complete-body parser, transport,
     // computed-style, selected source-parent, or Writer qualification.
+}
+
+test "decorated Phonos binds exact original owner without absorbing attribution or copied occurrences" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // Exact retained p867/r7336376 expanded owner; button observation below is
+    // a test recipe, not an independently captured style/native qualification.
+    const owner = "<span style=\"\ntext-align:left; font-size:170%; background:#e8f4f8; border: 1px solid #c5e2f7; border-radius:6px; padding:4px 8px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.12);\"><span class=\"ext-phonos ext-phonos-PhonosButton\" lang=\"el\" data-phonos-audio=\"Ell-Genos.ogg\">Play audio</span></span>";
+    const token = "<span class=\"ext-phonos ext-phonos-PhonosButton\" lang=\"el\" data-phonos-audio=\"Ell-Genos.ogg\">Play audio</span>";
+    const suffix = "<sup><span>ⓘ</span></sup>";
+    const source = try std.mem.concat(a, u8, &.{ owner, suffix, " ", owner, suffix });
+    const recipe: profile.PhonosButton = .{ .file = "Ell-Genos.ogg", .language = "el",
+        .caption_html = "Play audio", .caption = "Play audio", .accessible_name = "Play audio",
+        .attribution_title = "File:Ell-Genos.ogg", .attribution_target = "https://el.wiktionary.org/wiki/File:Ell-Genos.ogg",
+        .attribution_text = "ⓘ" };
+    const selected = try bindPhonos(a, source, &.{ recipe, recipe });
+    try std.testing.expectEqual(@as(usize, 2), selected.len);
+    const second_at = owner.len + suffix.len + 1;
+    for ([_]usize{ 0, second_at }, 0..) |at, i| {
+        const outer = source[at..][0..owner.len];
+        const bound = profile.SelectedPhonos.lookupDecoration(selected, outer) orelse return error.TestMissingPhonosOwner;
+        try std.testing.expect(bound.source.ptr == selected[i].source.ptr);
+        try std.testing.expectEqualStrings(token, bound.source);
+        try std.testing.expect(bound.decoration_source.?.ptr == outer.ptr);
+        try std.testing.expectEqualStrings(owner, bound.decoration_source.?);
+        try std.testing.expect(profile.SelectedPhonos.lookup(selected, bound.source) != null);
+        const detached = try a.dupe(u8, outer);
+        try std.testing.expect(profile.SelectedPhonos.lookupDecoration(selected, detached) == null);
+        try std.testing.expect(profile.SelectedPhonos.lookupDecoration(selected, source[at..][0..owner.len + suffix.len]) == null);
+        try std.testing.expect(profile.SelectedPhonos.lookupDecoration(selected, outer[1..]) == null);
+        try std.testing.expect(profile.SelectedPhonos.lookupDecoration(selected, bound.source) == null);
+    }
+    const crossed = try a.dupe(profile.SelectedPhonos, selected);
+    crossed[0].decoration_source = selected[1].decoration_source;
+    try std.testing.expect(profile.SelectedPhonos.lookupDecoration(crossed, source[0..owner.len]) == null);
+    try std.testing.expect(profile.SelectedPhonos.lookupDecoration(&.{}, source[0..owner.len]) == null);
+}
+
+test "decorated Phonos source binding preserves action checks and refuses non-single-child wrappers" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const token = "<span class=\"ext-phonos ext-phonos-PhonosButton\" lang=\"el\" data-phonos-audio=\"Ell-Genos.ogg\">Play audio</span>";
+    const recipe: profile.PhonosButton = .{ .file = "Ell-Genos.ogg", .language = "el",
+        .caption_html = "Play audio", .caption = "Play audio", .accessible_name = "Play audio",
+        .attribution_title = "File:Ell-Genos.ogg", .attribution_target = "https://el.wiktionary.org/wiki/File:Ell-Genos.ogg",
+        .attribution_text = "ⓘ" };
+    for ([_][2][]const u8{
+        .{ "<span style=\"padding:4px\" style=\"padding:8px\">", "</span>" },
+        .{ "<span style=padding:4px>", "</span>" },
+        .{ "<span style=\"padding:4px\" class=\"other\">", "</span>" },
+        .{ "<span style=\"padding:4px\">prefix", "</span>" },
+        .{ "<span style=\"padding:4px\">", "suffix</span>" },
+        .{ "<span style=\"padding:4px\">", "<b>other</b></span>" },
+        .{ "<span style=\"padding:4px\">", "" },
+        .{ "<div style=\"padding:4px\">", "</div>" },
+        .{ "<span style=\"\">", "</span>" },
+        .{ "<span>", "</span>" },
+        .{ "", "" },
+    }) |wrapper| {
+        const source = try std.mem.concat(a, u8, &.{ wrapper[0], token, wrapper[1] });
+        const selected = try bindPhonos(a, source, &.{recipe});
+        try std.testing.expectEqual(@as(usize, 1), selected.len);
+        try std.testing.expect(selected[0].decoration_source == null);
+        try std.testing.expectEqualStrings(token, selected[0].source);
+        try std.testing.expect(profile.SelectedPhonos.lookup(selected, selected[0].source) != null);
+    }
+    const source = try std.mem.concat(a, u8, &.{ "<span style=\"padding:4px\">", token, "</span>" });
+    for ([_][2][]const u8{ .{ "Ell-Genos.ogg", "Other.ogg" }, .{ "lang=\"el\"", "lang=\"en\"" },
+        .{ "Play audio", "Changed caption" } }) |edit| {
+        const changed = try std.mem.replaceOwned(u8, a, source, edit[0], edit[1]);
+        try std.testing.expectEqual(@as(usize, 0), (try bindPhonos(a, changed, &.{recipe})).len);
+    }
+    // Child inventory stays strict; only the optional wrapper catches invalid.
+    const malformed_child = try std.mem.replaceOwned(u8, a, source, "lang=\"el\"", "lang=\"el\" lang=\"el\"");
+    try std.testing.expectError(error.InvalidFigurePageObservations, bindPhonos(a, malformed_child, &.{recipe}));
+    // A real allocation failure in optional-wrapper inventory still propagates.
+    var failing = std.testing.FailingAllocator.init(a, .{ .fail_index = 0 });
+    const child_start = std.mem.indexOf(u8, source, token).?;
+    try std.testing.expectError(error.OutOfMemory,
+        phonosDecorationSource(failing.allocator(), source, child_start, child_start + token.len));
+    const duplicate = try std.mem.concat(a, u8, &.{source, source});
+    try std.testing.expectEqual(@as(usize, 0), (try bindPhonos(a, duplicate, &.{recipe})).len);
 }

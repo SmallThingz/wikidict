@@ -333,6 +333,12 @@ pub fn validateCompleteCssSource(source: V) !void {
 // Independently typed, complete identity-encoded GET evidence for an ordinary
 // text-context issuer. This is not the legacy/gzip direct-parent receipt and
 // grants neither source/DOM equivalence nor complete ancestor classes.
+pub const SuppliedTableHeightIdTransport = struct {
+    request: []const u8,
+    form_body: []const u8,
+    receipt: []const u8,
+    response: []const u8,
+};
 pub const NormalTextIdentityGet = struct {
     profile: []const u8,
     page: Page,
@@ -342,6 +348,7 @@ pub const NormalTextIdentityGet = struct {
     receipt: []const u8,
     response: []const u8,
     prefix: []const u8,
+    table_height_ids: ?SuppliedTableHeightIdTransport = null,
 };
 pub const NormalTextIdentityTransport = struct {
     document_url: []const u8,

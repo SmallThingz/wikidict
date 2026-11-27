@@ -147,6 +147,7 @@ pub const SourceParentCapsule = struct {
     namespace_sha256: [32]u8,
     root_language: []const u8,
     body_skin_responsive: ?bool,
+    table_height_ids: ?direct_source_get.SuppliedTableHeightIdTransport = null,
 };
 const Prefix = struct {
     offset: u64,
@@ -576,7 +577,15 @@ pub const Registry = struct {
                 .styles = .{ .responses = &.{}, .receipt = "" },
                 .response_sha256 = digest(html), .namespace_sha256 = ns.source_sha256,
                 .root_language = try a.dupe(u8, transport.identity.root_language),
-                .body_skin_responsive = transport.identity.body_skin_responsive };
+                .body_skin_responsive = transport.identity.body_skin_responsive,
+                .table_height_ids = if (record.table_height_ids) |held| ids: {
+                    if (held.request.len == 0 or held.request.len > 64 * 1024 or
+                        held.form_body.len == 0 or held.form_body.len > 256 * 1024 or
+                        held.receipt.len == 0 or held.receipt.len > 128 * 1024 or
+                        held.response.len == 0 or held.response.len > 2 * 1024 * 1024) return invalid;
+                    break :ids .{ .request = try a.dupe(u8, held.request), .form_body = try a.dupe(u8, held.form_body),
+                        .receipt = try a.dupe(u8, held.receipt), .response = try a.dupe(u8, held.response) };
+                } else null };
             entry.* = .{ .page = owned, .capsule = capsule };
         }
         // The two individually ordered domains share the existing binary lookup.

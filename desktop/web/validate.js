@@ -648,7 +648,7 @@ export function validateActionGroupSpan(span){
 const inlineBoxSides = ['top','right','bottom','left'];
 const inlineBoxRgb = value => typeof value === 'string' && /^#[0-9a-f]{6}$/.test(value);
 
-export function validateInlineBoxSpan(owner) {
+export function validateInlineBoxSpan(owner,allowPhonos=false) {
   let budget=1048576;
   const invalid=()=>{throw Error('Invalid compiled inline box group');};
   const check=(accept)=>{if(!accept)invalid();};
@@ -658,7 +658,7 @@ export function validateInlineBoxSpan(owner) {
   };
   const borders=value=>{
     for(const side of inlineBoxSides){
-      const edge=value?.[side];check(edge&&['none','hidden','solid','dotted'].includes(edge.kind));
+      const edge=value?.[side];check(edge&&['none','hidden','solid','dotted','dashed'].includes(edge.kind));
       if(edge.kind==='none'||edge.kind==='hidden')continue;
       length(edge.width,['px','em']);
       const color=edge.color;check(color&&['current_color','transparent','rgb','light_dark'].includes(color.kind));
@@ -713,6 +713,29 @@ export function validateInlineBoxSpan(owner) {
     for(const side of inlineBoxSides)length(group.padding?.[side],['px','em']);
     borders(group.border);
     const atomic=group.atomic_layout;
+    const audioChild=group.spans.length===1&&group.spans[0]?.audio_control!=null?group.spans[0]:null;
+    if(audioChild||group.shadow!=null){
+      check(allowPhonos&&depth===0&&!action&&!inAction&&value.tooltip==null&&!value.explanation&&
+        value.target_fragment==null&&atomic==null&&group.overlays.length===0&&audioChild&&
+        audioChild.audio_control.presentation==='phonos_button'&&audioChild.kind==='link'&&
+        audioChild.text===''&&!audioChild.trail&&typeof audioChild.tooltip==='string'&&!!audioChild.tooltip&&
+        !audioChild.image&&!audioChild.ruby&&!audioChild.inline_box_group&&!audioChild.inline_action_group&&
+        !audioChild.inline_padding_group&&!audioChild.clipped_absolute&&!audioChild.citation_marker);
+      const edge=group.border.top;
+      check((group.radius==null||group.radius.unit==='px')&&
+        (edge.kind==='none'||edge.kind==='solid'&&edge.color?.kind==='rgb')&&
+        inlineBoxSides.every(side=>{
+          const other=group.border[side];
+          return other.kind===edge.kind&&(edge.kind==='none'||other.width.unit===edge.width.unit&&
+            other.width.value===edge.width.value&&other.color.kind==='rgb'&&other.color.value===edge.color.value);
+        }));
+      if(group.shadow!=null){
+        const keys=['offset_x','offset_y','blur','spread','color','alpha'];
+        const shadow=group.shadow;containerObject(shadow,keys,keys);
+        check(--budget>=0&&[shadow.offset_x,shadow.offset_y,shadow.blur,shadow.spread,shadow.alpha].every(Number.isFinite)&&
+          shadow.blur>=0&&shadow.alpha>=0&&shadow.alpha<=1&&inlineBoxRgb(shadow.color));
+      }
+    }
     if(atomic!=null){
       check(depth===0&&!action&&!inAction&&group.radius==null&&group.overlays.length===0&&--budget>=0);
       check(group.atomic_auto_layout==null&&group.intrinsic_lines_layout==null&&group.vertical_align==null);
@@ -762,14 +785,17 @@ export function validateInlineBoxSpan(owner) {
     if(group.radius!=null){
       length(group.radius,['px','percent']);
       const edge=group.border.top;
-      check(group.overlays.length===0&&(edge.kind==='solid'||edge.kind==='dotted')&&edge.color.kind==='rgb');
-      for(const side of inlineBoxSides){const x=group.border[side];check(x.kind===edge.kind&&x.color.kind==='rgb'&&x.color.value===edge.color.value&&x.width.unit===edge.width.unit&&x.width.value===edge.width.value);}
+      if(!audioChild||edge.kind!=='none'){
+        check(group.overlays.length===0&&(edge.kind==='solid'||edge.kind==='dotted')&&edge.color.kind==='rgb');
+        for(const side of inlineBoxSides){const x=group.border[side];check(x.kind===edge.kind&&x.color.kind==='rgb'&&x.color.value===edge.color.value&&x.width.unit===edge.width.unit&&x.width.value===edge.width.value);}
+      }
     }
     for(const overlay of group.overlays){
       check(overlay?.insets && !overlay.content && (overlay.insets.top!=null||overlay.insets.bottom!=null) && (overlay.insets.left!=null||overlay.insets.right!=null));
       for(const side of inlineBoxSides)if(overlay.insets[side]!=null)length(overlay.insets[side],['px','em','percent'],true);
       borders(overlay.border);
     }
+    if(audioChild)return true;
     let text=false;
     for(const child of group.spans){if(span(child,depth+1,inAction||action))text=true;}
     check(text);
@@ -779,13 +805,14 @@ export function validateInlineBoxSpan(owner) {
   span(owner,0,false);
 }
 
-export function validateAudioControl(span,media) {
+export function validateAudioControl(span,media,authoredPhonosChild=false) {
   const invalid=()=>{throw Error('Invalid compiled audio control');};
   const control=span.audio_control;
   containerObject(control,['presentation','width','height','focus']);
   const compact=control.presentation==='phonos_button';
   if(control.presentation!==undefined&&!compact&&control.presentation!=='transport')invalid();
-  if(compact&&(!span.text?.length||!span.tooltip?.length||control.width!=null||control.height!=null))invalid();
+  if(authoredPhonosChild&&(!compact||span.text!==''))invalid();
+  if(compact&&((!authoredPhonosChild&&!span.text?.length)||!span.tooltip?.length||control.width!=null||control.height!=null))invalid();
   for(const [axis,units] of [['width',['px','em','percent']],['height',['px','em']]]){
     if(control[axis]!=null){
       containerLength(control[axis],units);
@@ -915,4 +942,51 @@ export function validateClippedSpan(span) {
     if(child.text||child.trail)body=true;
   }
   if(!body)fail();
+}
+
+// Authored table values. These fields do not extend legacy CellStyle.
+const authoredCarrierError=()=>{throw Error('Invalid authored layout carrier');};
+function authoredCarrierObject(value,fields){
+  if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).length!==fields.length||
+     fields.some(key=>!Object.hasOwn(value,key)))authoredCarrierError();
+}
+export function validateCellBoxHeight(value){
+  authoredCarrierObject(value,['value','font_scale_basis','box_sizing']);
+  if(typeof value.value!=='number'||!Number.isFinite(value.value)||value.value<0||
+     value.value>3.4028234663852886e38||Object.is(value.value,-0)||
+     !['normal_body','css_px'].includes(value.font_scale_basis)||
+     !['content_box','border_box'].includes(value.box_sizing))authoredCarrierError();
+}
+function validatePrincipalBox(value,narrow){
+  authoredCarrierObject(value,['display','width','max_width','overflow_x','overflow_y','box_sizing','margins']);
+  if(value.display!==(narrow?'block':'table')||value.width!==(narrow?'fit_content':'auto')||
+     value.max_width!==(narrow?'containing_100_percent':'none')||
+     value.overflow_x!==(narrow?'auto':'visible')||value.overflow_y!==(narrow?'auto':'visible')||
+     value.box_sizing!=='border_box')authoredCarrierError();
+  authoredCarrierObject(value.margins,['top','right','bottom','left']);
+  for(const side of ['top','bottom']){
+    const margin=value.margins[side];authoredCarrierObject(margin,['length']);
+    authoredCarrierObject(margin.length,['unit','value']);
+    if(margin.length.unit!=='px'||margin.length.value!==0||Object.is(margin.length.value,-0))authoredCarrierError();
+  }
+  for(const side of ['right','left']){
+    authoredCarrierObject(value.margins[side],['auto']);
+    authoredCarrierObject(value.margins[side].auto,[]);
+  }
+}
+export function validateTablePrincipalViewport(table){
+  const value=table.principal_viewport;
+  if(value==null)return;
+  authoredCarrierObject(value,['max_viewport_width_px','containing_direction','language','narrow','wide']);
+  if(!Number.isInteger(value.max_viewport_width_px)||value.max_viewport_width_px<1||value.max_viewport_width_px>16777216||
+     !['ltr','rtl'].includes(value.containing_direction)||typeof value.language!=='string'||!value.language||
+     new TextEncoder().encode(value.language).length>1024||
+     [...value.language].some(c=>{const n=c.codePointAt(0);return n>=0xd800&&n<=0xdfff;}))authoredCarrierError();
+  validatePrincipalBox(value.narrow,true);validatePrincipalBox(value.wide,false);
+  for(const field of ['block_viewport','float_viewport','caption_viewport','rows_hidden_max_width_px','disclosure'])
+    if(table[field]!=null)authoredCarrierError();
+  if(table.geometry?.width!=null)authoredCarrierError();
+  for(const field of ['width','min_width','margins','margin_values','containing_direction','display','float_side','clear'])
+    if(table.style?.[field]!=null)authoredCarrierError();
+  if(!Array.isArray(table.rows)||!table.rows.some(row=>Array.isArray(row.cells)&&row.cells.length))authoredCarrierError();
 }

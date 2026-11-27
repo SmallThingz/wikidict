@@ -21,7 +21,7 @@ function darkReadingInk(foreground,background){
 import {safeURL,linkTargetParts,bookSourcesURL,validateDescriptionBody,validateDarkForeground,validateContainerBlock,validateCellMetrics,validateRuby,validateRubyOwner,validateRubySpan,validateActionGroupSpan,validateInlineBoxSpan,validateFigureIntrinsicSize,validateClippedSpan,validateAudioControl,validateWrappedHeading,validateTableDisclosure} from './validate.js';
 import {validateColumnBreakInside,validateSourceAnchor,validateSourceAnchorDestinations} from './validate.js';
 import {validateInlineDestinationList,validateInlineDestinationEntry} from './validate.js';
-import {validateResponsiveCaptionTable} from './validate.js';
+import {validateResponsiveCaptionTable,validateCellBoxHeight,validateTablePrincipalViewport} from './validate.js';
 import {containerDisclosureItems,installContainerDisclosure} from './container-disclosure.js';
 import {previewBlocks,inlineText} from './preview.js';
 import {figureImageSize,audioControlView} from './media.js';
@@ -212,6 +212,11 @@ function applyInlineBox(element,group){
   styleEdges(element,'padding',group.padding,length);
   inlineBoxBorders(element,group.border,length);
   if(group.radius)element.style.borderRadius=group.radius.value+(group.radius.unit==='percent'?'%':'px');
+  if(group.shadow){
+    const {offset_x,offset_y,blur,spread,color,alpha}=group.shadow;
+    element.style.boxShadow=[offset_x,offset_y,blur,spread].map(n=>n+'px').join(' ')+
+      ' rgb('+[1,3,5].map(i=>parseInt(color.slice(i,i+2),16)).join(' ')+' / '+alpha+')';
+  }
   if(group.overlays.length)element.style.position='relative';
   for(const overlay of group.overlays){
     const layer=node('span',null,'compiled-inline-box-overlay');
@@ -355,7 +360,7 @@ export function spans(values = [], onLink = () => {}, preserve = false, explanat
   const fragment = document.createDocumentFragment();
   const compact=[];
   const scaled=span=>semanticFontSize(span,rubyFontContext)!==null;
-  values.forEach(value=>{if(value.clipped_absolute!=null)validateClippedSpan(value);if(value.inline_action_group!=null)validateActionGroupSpan(value);if(value.inline_box_group!=null)validateInlineBoxSpan(value);semanticFontSize(value,rubyFontContext);if(value.ruby!=null){validateRubySpan(value);validateRuby(value.ruby);}if(value.image&&(value.text!==''||(value.trail??'')!==''||!['text','link','external_link'].includes(value.kind)||(value.kind==='text'?!!value.target:!value.target)))throw Error('Invalid inline image action');});
+  values.forEach(value=>{if(value.clipped_absolute!=null)validateClippedSpan(value);if(value.inline_action_group!=null)validateActionGroupSpan(value);if(value.inline_box_group!=null)validateInlineBoxSpan(value,explanations?.authoredPhonos===true);semanticFontSize(value,rubyFontContext);if(value.ruby!=null){validateRubySpan(value);validateRuby(value.ruby);}if(value.image&&(value.text!==''||(value.trail??'')!==''||!['text','link','external_link'].includes(value.kind)||(value.kind==='text'?!!value.target:!value.target)))throw Error('Invalid inline image action');});
   const blank=value=>!(value||'').includes('\u00a0')&&!(value||'').trim();
   for(const span of values){
     if(span.kind==='line_break' && !span.trail && (!compact.length||compact.at(-1).kind==='line_break'))continue;
@@ -584,7 +589,7 @@ function destination(el, value, legacy = '') {
 }
 function legacyDestinations(entry) {
   const candidates = [], counts = new Map();
-  if (['DPR5','DPR6','DPR7','DPR8','DPR9','DPRA','DPRB','DPRC','DPRD','DPRE','DPRF','DPRG','DPRH','DPRI','DPRJ','DPRK','DPRL','DPRM','DPRS','DPRV','DPRY','DPRZ','DPRa'].includes(entry.presentation_version)) return new Map();
+  if (['DPR5','DPR6','DPR7','DPR8','DPR9','DPRA','DPRB','DPRC','DPRD','DPRE','DPRF','DPRG','DPRH','DPRI','DPRJ','DPRK','DPRL','DPRM','DPRS','DPRV','DPRY','DPRZ','DPRa','DPRc'].includes(entry.presentation_version)) return new Map();
   const add = (value, label) => {
     if (value.anchor || value.anchor_fallback) return;
     const id = label.replaceAll(' ','_');
@@ -618,7 +623,7 @@ function figureColor(value,fallback){return value.kind==='native_theme'?fallback
 function figureBorder(value){return value.kind==='none'?'none':styleLength(value.width)+' solid '+figureColor(value.color,'var(--muted)');}
 function validateRichEntry(entry){
   let remaining=1<<20,mapStrings=32*1024*1024;
-  let sourceAnchors=false;
+  let sourceAnchors=false,authoredCarrierCount=0;
   const inlineOwners=[];
   const charge=(n=1)=>{if(!Number.isInteger(n)||n<0||(remaining-=n)<0)richError();};
   const string=value=>{if(typeof value!=='string'||/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(value)||new TextEncoder().encode(value).length>32*1024*1024)richError();};
@@ -641,7 +646,12 @@ function validateRichEntry(entry){
     if(value.audio_control!=null)validateAudioControl(value,media);
     if(value.ruby!=null){validateRubySpan(value);validateRuby(value.ruby);}
     if(value.inline_action_group!=null){validateActionGroupSpan(value);charge(value.inline_action_group.spans.length);}
-    if(value.inline_box_group!=null){validateInlineBoxSpan(value);charge(value.inline_box_group.spans.length+value.inline_box_group.overlays.length);}
+    if(value.inline_box_group!=null){
+      const group=value.inline_box_group,child=group.spans?.length===1?group.spans[0]:null;
+      validateInlineBoxSpan(value,entry.presentation_version==='DPRc');
+      charge(group.spans.length+group.overlays.length);
+      if(child?.audio_control!=null){validateAudioControl(child,media,true);authoredCarrierCount++;}
+    }
     if(value.target_fragment!=null&&value.kind!=='link')richError();
     if(!value.image)return;
     const image=richObject(value.image,['file','width_px','height_px','alt','tooltip','border','map','dark_mode_filter','occurrence_layout'],['file']);
@@ -702,6 +712,10 @@ function validateRichEntry(entry){
   };
   const table=(value,tableDepth,depth,inReference,owner)=>{
     if(tableDepth>16)richError();
+    if(value.principal_viewport!=null){
+      if(entry.presentation_version!=='DPRc')richError();
+      validateTablePrincipalViewport(value);charge();authoredCarrierCount++;
+    }
     if(value.disclosure!=null){validateTableDisclosure(value);charge(1+value.rows.length);}
     if(Object.hasOwn(value,'caption_viewport')){
       if(value.caption_viewport==null||entry.presentation_version!=='DPRa')richError();
@@ -715,6 +729,10 @@ function validateRichEntry(entry){
     caption(value,tableDepth,depth,inReference);let cells=0;
     for(const row of array(value.rows))for(const cell of array(row.cells)){
       cells++;spanList(cell.spans);applyCellStyle(node('td'),cell.style);
+      if(cell.box_height!=null){
+        if(entry.presentation_version!=='DPRc')richError();
+        validateCellBoxHeight(cell.box_height);charge();authoredCarrierCount++;
+      }
       if(inline){
         if(cell.blocks!=null||cell.nested_table!=null)richError();
         for(const s of cell.spans||[]){if(s.image||!inlineAudio(s))richError();if(!s.code&&(s.font_scale??1)!==0&&s.kind!=='line_break'&&poemTokens(s).includes('Egyp')&&[...(s.text||'')].some(c=>c.codePointAt(0)>=0x13000&&c.codePointAt(0)<=0x13455))richError();}
@@ -731,13 +749,14 @@ function validateRichEntry(entry){
       const destinations=validateInlineDestinationList(block);charge(destinations.length);
       if(destinations.length)inlineOwners.push(block);
       spanList(block.spans);const owner=richListKinds.has(block.kind)||(block.kind==='paragraph'&&!(block.depth||0)&&!block.list_path);
-      if(entry.presentation_version==='DPRa'&&block.kind!=='heading'&&(block.anchor||block.anchor_fallback)){
+      if(['DPRa','DPRc'].includes(entry.presentation_version)&&block.kind!=='heading'&&(block.anchor||block.anchor_fallback)){
+        if(entry.presentation_version==='DPRc')richError();
         validateSourceAnchor(block,sectionRoot);sourceAnchors=true;
       }
       if(block.description_body!=null){validateDescriptionBody(block);blocks(block.description_body.box.blocks,tableDepth,depth+1,inReference);}
       if(block.kind==='container'||block.container!=null){
         const version=entry.presentation_version;
-        const positioned=version==='DPRZ'||version==='DPRa';
+        const positioned=version==='DPRZ'||version==='DPRa'||version==='DPRc';
         validateContainerBlock(block,{containerFonts:positioned||['DPRM','DPRS','DPRV','DPRY'].includes(version),positioned,parentStyle,containerDisclosureButtons:version==='DPRa'});
         if(block.container.disclosure!=null)charge(containerDisclosureItems(block.container));
         blocks(block.container.blocks,tableDepth,depth+1,inReference,block.container.style);
@@ -753,6 +772,7 @@ function validateRichEntry(entry){
   for(const ref of entry.references||[]){spanList(ref.spans);if(ref.blocks!=null)blocks(ref.blocks,0,0,true);}
   if(sourceAnchors)validateSourceAnchorDestinations(entry);
   validateInlineDestinationEntry(entry,inlineOwners);
+  if(entry.presentation_version==='DPRc'&&authoredCarrierCount===0)richError();
   return sourceAnchors;
 }
 function richAction(action,onLink,explanations,label=action.label){
@@ -929,6 +949,28 @@ function applyCellStyle(el,value){
     el.style.lineHeight=height.length?metric(height.length.value,height.length.font_scale_basis):height.multiplier!=null?String(height.multiplier):'normal';
   }
 }
+function applyCellBoxHeight(element,value){
+  if(value==null)return;
+  validateCellBoxHeight(value);
+  // CSS table-cell height is a minimum constraint. Do not set row height,
+  // min-height, child font size, or a line strut from this independent carrier.
+  element.style.height=value.font_scale_basis==='css_px'?value.value+'px':`calc(var(--wikidict-normal-body-size) * ${value.value})`;
+  element.style.boxSizing=value.box_sizing==='border_box'?'border-box':'content-box';
+}
+let principalTableSequence=0;
+function principalTableView(table,value){
+  validateTablePrincipalViewport(value);
+  const owner=value.principal_viewport,host=node('span'),style=node('style');
+  const id='compiled-principal-'+(++principalTableSequence);
+  // A display:contents context supplies no additional scroll box or tab stop.
+  // The carrier supplies containing direction/language, not grid overrides.
+  host.style.display='contents';host.dir=owner.containing_direction;host.lang=owner.language;
+  table.classList.add(id);
+  const declarations=box=>`display:${box.display};width:${box.width==='fit_content'?'fit-content':'auto'};max-width:${box.max_width==='containing_100_percent'?'100%':'none'};overflow-x:${box.overflow_x};overflow-y:${box.overflow_y};box-sizing:border-box;margin-top:0px;margin-right:auto;margin-bottom:0px;margin-left:auto;`;
+  // CSS media queries use the document viewport, with an inclusive threshold.
+  style.textContent=`.${id}{${declarations(owner.wide)}}@media(max-width:${owner.max_viewport_width_px}px){.${id}{${declarations(owner.narrow)}}`;
+  host.append(style,table);return host;
+}
 const revealTableRow=new WeakMap();
 let captionTableSequence=0;
 function responsiveCaptionView(table,value){
@@ -1095,7 +1137,7 @@ function tableView(value,onLink,explanations,depth=1,inheritedBackground=null){
   for(const row of value.rows){const tr=node('tr');for(const cell of row.cells){
     const td=node(cell.header?'th':'td');td.colSpan=cell.colspan||1;td.rowSpan=cell.rowspan||1;
     if(border!==null)td.style.border=border+'px solid currentColor';if(padding!==null)td.style.padding=padding+'px';
-    applyCellStyle(td,cell.style);
+    applyCellStyle(td,cell.style);applyCellBoxHeight(td,cell.box_height);
     const effectiveBackground=canonicalRGB(cell.background)?cell.background:tableBackground;
     // The new owner paints its own wide/narrow background once; retain only
     // genuinely authored cell backgrounds, not copies of the wide owner paint.
@@ -1112,7 +1154,7 @@ function tableView(value,onLink,explanations,depth=1,inheritedBackground=null){
     if(value.caption_viewport&&(block.closest('caption')===table.caption||block.classList.contains('heading')||block.style.lineHeight))continue;
     block.style.lineHeight='inherit';
   }
-  return value.caption_viewport?responsiveCaptionView(table,value):table;
+  return value.principal_viewport?principalTableView(table,value):value.caption_viewport?responsiveCaptionView(table,value):table;
 }
 function visibleBlock(block,sourceAnchors){
   return block.kind!=='blank'&&(((sourceAnchors||block.kind==='heading')&&(block.anchor||block.anchor_fallback))||block.description_body||block.container||block.figure||block.flow!=null||block.style||block.table||block.kind==='rule'||block.spans?.some(s=>s.image||s.inline_action_group||s.inline_box_group||s.clipped_absolute||s.text?.trim()||s.trail?.trim())||block.spans?.some(isPoem));
@@ -1374,7 +1416,7 @@ function blockView(block, onLink, explanations, legacy = '', context = {}) {
       return sample;
     }
     const table = tableView(block.table,onLink,explanations,(context.tableDepth||0)+1,context.background);
-    if(block.table.caption_viewport)return table;
+    if(block.table.caption_viewport||block.table.principal_viewport)return table;
     const inline=block.table.style?.display==='inline_block'||block.table.style?.display==='inline_table';
     if(context.tableDepth&&!block.table.style?.float_side){table.style.marginInlineStart=margin;return table;}
     const wrap = node('div', null, 'table-scroll'); wrap.style.marginInlineStart = margin; wrap.tabIndex = 0; wrap.setAttribute('aria-label','Scrollable table');
@@ -1515,7 +1557,7 @@ export function renderEntry(entry, onLink, settings = {}, mediaView = () => null
     mediaOwners.set(mediaOwnerPrefix+hex,media.file);
   }
   const darkSurface=globalThis.getComputedStyle?.(document.documentElement).getPropertyValue('--wikidict-dark-reading-surface').trim();
-  const explanations={sourceAnchors,tableCategories:new Map(),exteriorBoxes:[],inlineImage,imageActionURL,audioControl:(span,label)=>audioControlView(span,label,settings,entry.source_edition),sourceEdition:entry.source_edition,darkReadingSurface:canonicalRGB(darkSurface)?darkSurface:null,isMediaExplanation(span){
+  const explanations={sourceAnchors,authoredPhonos:entry.presentation_version==='DPRc',tableCategories:new Map(),exteriorBoxes:[],inlineImage,imageActionURL,audioControl:(span,label)=>audioControlView(span,label,settings,entry.source_edition),sourceEdition:entry.source_edition,darkReadingSurface:canonicalRGB(darkSurface)?darkSurface:null,isMediaExplanation(span){
     if(span.kind!=='link'||span.image)return false;
     const tokens=poemTokens(span),owners=tokens.filter(token=>token.startsWith(mediaOwnerPrefix));
     // Match the compiled media catalog, not an ordinary File link or a legacy abbreviation.

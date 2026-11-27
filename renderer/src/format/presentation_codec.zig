@@ -55,6 +55,19 @@ const audio_control_feature: u16 = 8192;
 const z_high_features: u16 = positioned_containers_feature | table_min_width_feature | column_layout_feature | audio_control_feature;
 const positioned_containers_features: u16 = owner_geometry_features | z_high_features;
 pub const resolved_style_borders_magic = "DPRa";
+/// Authored cell height, table principal viewport and ordinary Phonos box envelope.
+pub const authored_presentation_magic = "DPRc";
+// Older headers retain their own independent feature masks.
+const authored_phonos_inherited_features: u32 = @as(u32, inline_box_feature) | audio_control_feature;
+const cell_box_height_feature: u8 = 1;
+const principal_viewport_feature: u8 = 2;
+const authored_phonos_feature: u8 = 4;
+const authored_presentation_features: u8 = cell_box_height_feature | principal_viewport_feature | authored_phonos_feature;
+
+fn validAuthoredInheritedFeatures(features: u32, census: u8) bool {
+    const phonos_features = if (census & authored_phonos_feature != 0) authored_phonos_inherited_features else 0;
+    return features & ~@as(u32, column_layout_feature) == phonos_features;
+}
 const resolved_style_borders_feature: u32 = 0x100000;
 const ruby_annotation_margins_feature: u32 = 0x40000;
 const responsive_container_flow_feature: u32 = types.responsive_container_flow_wire_feature;
@@ -128,6 +141,9 @@ const max_string_bytes: usize = 32 * 1024 * 1024;
 const no_index: u32 = std.math.maxInt(u32);
 
 const Encoder = struct {
+    // Exact authored-envelope capability for an ordinary Phonos box.
+    inline_box_audio_capability: bool = false,
+    allow_box_phonos_child: bool = false,
     a: A,
     version: Version = .plain,
     rule_styles: bool = false,
@@ -149,6 +165,8 @@ const Encoder = struct {
     responsive_container_flow_enabled: bool = false,
     source_anchors_enabled: bool = false,
     inline_destinations_enabled: bool = false,
+    cell_box_heights_enabled: bool = false,
+    principal_viewports_enabled: bool = false,
     responsive_caption_tables_enabled: bool = false,
     body_typography_enabled: bool = false,
     inline_box_groups: bool = false,
@@ -324,7 +342,7 @@ const Encoder = struct {
         if (self.ruby_depth != 0 and !(if (self.ruby_gap) types.validRubyChild(value) else types.validRubyBodyChild(value))) return error.InvalidPresentation;
         if (types.spanHasRuby(value) and (!self.capability_s or !types.validRubyOwner(value))) return error.InvalidPresentation;
         if (self.in_inline_padding_group and !types.validRubyBodyChild(value)) return error.InvalidPresentation;
-        if (self.in_inline_box_group and !types.validRubyChild(value)) return error.InvalidPresentation;
+        if (self.in_inline_box_group and !types.validInlineBoxChild(value, self.allow_box_phonos_child)) return error.InvalidPresentation;
         if (self.in_clipped_absolute and !types.validClippedAbsoluteInlineChild(value)) return error.InvalidPresentation;
         if (types.spanHasClippedAbsolute(value)) {
             if (!self.clipped_absolute_enabled or self.ruby_depth != 0 or self.in_inline_padding_group or
@@ -413,7 +431,10 @@ const Encoder = struct {
             (if (value.inline_box_group) |group| types.inlineBoxRadius(group.*) else null) else null;
         const box_atomic = if (comptime @hasField(@TypeOf(value), "inline_box_group"))
             (if (value.inline_box_group) |group| types.inlineBoxAtomicLayout(group.*) != null else false) else false;
-        if ((box_radius != null or box_atomic) and
+        const box_shadow = if (comptime @hasField(@TypeOf(value), "inline_box_group"))
+            (if (value.inline_box_group) |group| types.inlineBoxShadow(group.*) != null else false) else false;
+        if (box_shadow and (box_atomic or !self.inline_box_audio_capability or !self.audio_controls)) return error.InvalidPresentation;
+        if ((box_radius != null or box_atomic or box_shadow) and
             (!self.capability_p or !self.inline_box_groups or self.version != .container_fonts)) return error.InvalidPresentation;
         if (family != null and (!self.capability_p or self.version != .container_fonts)) return error.InvalidPresentation;
         if (inline_style != null and (!self.inline_styles or self.version != .container_fonts)) return error.InvalidPresentation;
@@ -424,7 +445,8 @@ const Encoder = struct {
             const font_fields: u8 = @as(u8, @intFromBool(scale != null)) |
                 (if (features != null) @as(u8, 2) else 0) | (if (link_paint != null) @as(u8, 4) else 0) |
                 (if (inline_style != null) @as(u8, 8) else 0) | (if (family != null) @as(u8, 16) else 0) |
-                (if (box_radius != null) @as(u8, 0x20) else 0) | (if (box_atomic) @as(u8, 0x40) else 0);
+                (if (box_radius != null) @as(u8, 0x20) else 0) | (if (box_atomic) @as(u8, 0x40) else 0) |
+                (if (box_shadow) @as(u8, 0x80) else 0);
             try self.byte(font_fields);
             if (scale) |n| {
                 try self.writeU32(@bitCast(n));
@@ -472,10 +494,11 @@ const Encoder = struct {
                 try self.inlineBoxGroup(group.*, types.InlinePaddingGroupAction.from(value));
         }
         const audio = types.spanAudioControl(value);
-        if (audio != null and (!self.audio_controls or !types.validSpanAudioControl(value))) return error.InvalidPresentation;
+        const empty_phonos = self.inline_box_audio_capability and self.in_inline_box_group and self.allow_box_phonos_child;
+        if (audio != null and (!self.audio_controls or !types.validSpanAudioControlInBox(value, empty_phonos))) return error.InvalidPresentation;
         if (audio != null) {
             const catalog = self.inline_media_catalog orelse return error.InvalidPresentation;
-            if (!catalog.supportsAudioControl(value)) return error.InvalidPresentation;
+            if (!catalog.supportsAudioControlInBox(value, empty_phonos)) return error.InvalidPresentation;
         }
         if (self.audio_controls) {
             try self.byte(@intFromBool(audio != null));
@@ -549,8 +572,24 @@ const Encoder = struct {
         try self.spans(value.spans);
     }
 
+    fn inlineBoxShadow(self: *Encoder, value: types.InlineBoxShadow) !void {
+        if (!self.inline_box_audio_capability or !types.validInlineBoxShadow(value)) return error.InvalidPresentation;
+        if (self.remaining_items == 0) return error.PresentationTooLarge;
+        self.remaining_items -= 1;
+        inline for (.{ "offset_x", "offset_y", "blur", "spread" }) |field| try self.writeU32(@bitCast(@field(value, field)));
+        try self.string(value.color);
+        try self.writeU32(@bitCast(value.alpha));
+    }
     fn inlineBoxGroup(self: *Encoder, value: anytype, action: ?types.InlinePaddingGroupAction) error{ OutOfMemory, InvalidPresentation, PresentationTooLarge, UncompiledTemplate }!void {
         if (!self.inline_box_groups or !types.validInlineBoxGroup(value) or self.content_depth >= types.max_content_depth) return error.InvalidPresentation;
+        const phonos = types.inlineBoxIsPhonos(value);
+        if (phonos and (!self.inline_box_audio_capability or !self.capability_p or self.version != .container_fonts or
+            !self.audio_controls or self.in_inline_box_group or self.in_inline_padding_group or self.in_inline_action_group or
+            self.in_clipped_absolute or self.ruby_depth != 0 or action != null or self.inline_padding_action != null))
+            return error.InvalidPresentation;
+        const previous_phonos = self.allow_box_phonos_child;
+        self.allow_box_phonos_child = phonos;
+        defer self.allow_box_phonos_child = previous_phonos;
         const previous_group = self.in_inline_box_group;
         const previous_action = self.inline_padding_action;
         self.in_inline_box_group = true;
@@ -577,6 +616,7 @@ const Encoder = struct {
         // Same-owner font_fields bit 0x20 announces this exact five-byte suffix.
         // A null radius writes no byte and retains the historical square shape.
         if (types.inlineBoxRadius(value)) |radius| try self.styleWidth(radius);
+        if (types.inlineBoxShadow(value)) |shadow| try self.inlineBoxShadow(shadow);
         if (types.inlineBoxAtomicLayout(value)) |atom| {
             if (!self.capability_p or self.version != .container_fonts or self.remaining_items == 0)
                 return error.InvalidPresentation;
@@ -1096,6 +1136,34 @@ const Encoder = struct {
             },
         }
     }
+    fn cellBoxHeight(self: *Encoder, value: types.CellBoxHeight) !void {
+        if (!self.cell_box_heights_enabled or !types.validCellBoxHeight(value)) return error.InvalidPresentation;
+        if (self.remaining_items == 0) return error.PresentationTooLarge;
+        self.remaining_items -= 1;
+        try self.writeU32(@bitCast(value.value));
+        try self.enumByte(types.FontScaleBasis, value.font_scale_basis);
+        try self.enumByte(types.ContainerBoxSizing, value.box_sizing);
+    }
+    fn principalBox(self: *Encoder, value: types.TablePrincipalBox) !void {
+        try self.enumByte(types.TablePrincipalDisplay, value.display);
+        try self.enumByte(types.TablePrincipalWidth, value.width);
+        try self.enumByte(types.TablePrincipalMaxWidth, value.max_width);
+        try self.enumByte(types.TablePrincipalOverflow, value.overflow_x);
+        try self.enumByte(types.TablePrincipalOverflow, value.overflow_y);
+        try self.enumByte(types.ContainerBoxSizing, value.box_sizing);
+        try self.containerMargins(value.margins);
+    }
+    fn principalViewport(self: *Encoder, value: types.TablePrincipalViewport) !void {
+        if (!self.principal_viewports_enabled or !types.validTablePrincipalViewport(value)) return error.InvalidPresentation;
+        if (self.remaining_items == 0) return error.PresentationTooLarge;
+        self.remaining_items -= 1;
+        try self.writeU32(value.max_viewport_width_px);
+        try self.enumByte(types.TableContainingDirection, value.containing_direction);
+        try self.string(value.language);
+        try self.principalBox(value.narrow);
+        try self.principalBox(value.wide);
+    }
+
     fn cellStyle(self: *Encoder, optional: ?types.CellStyle) !void {
         const value = optional orelse {
             try self.byte(0);
@@ -1209,6 +1277,12 @@ const Encoder = struct {
         if (hasReferenceBlockFields(self.version)) {
             const style: ?types.CellStyle = if (comptime @hasField(@TypeOf(value), "style")) value.style else null;
             try self.cellStyle(style);
+        }
+        const box_height: ?types.CellBoxHeight = if (comptime @hasField(@TypeOf(value), "box_height")) value.box_height else null;
+        if (box_height != null and !self.cell_box_heights_enabled) return error.InvalidPresentation;
+        if (self.cell_box_heights_enabled) {
+            try self.byte(@intFromBool(box_height != null));
+            if (box_height) |height| try self.cellBoxHeight(height);
         }
     }
     fn row(self: *Encoder, value: anytype) !void {
@@ -1357,6 +1431,12 @@ const Encoder = struct {
             // Same Table owner, after every preexisting viewport tail.
             if (rows_hidden) |bound| try self.writeU32(bound);
             if (caption_viewport) |policy| try self.responsiveCaptionTable(policy.*);
+            const principal: ?*const types.TablePrincipalViewport = if (comptime @hasField(@TypeOf(table_value), "principal_viewport")) table_value.principal_viewport else null;
+            if (!types.validTablePrincipalOwner(table_value) or (principal != null and !self.principal_viewports_enabled)) return error.InvalidPresentation;
+            if (self.principal_viewports_enabled) {
+                try self.byte(@intFromBool(principal != null));
+                if (principal) |policy| try self.principalViewport(policy.*);
+            }
             if (!types.validResolvedStyleBorderTableDomain(table_value)) return error.InvalidPresentation;
         } else try self.byte(0);
     }
@@ -2085,6 +2165,9 @@ pub const TestContainerWidthObservation = if (@import("builtin").is_test) struct
 } else struct {};
 
 const Reader = struct {
+    // Exact authored-envelope capability for an ordinary Phonos box.
+    inline_box_audio_capability: bool = false,
+    allow_box_phonos_child: bool = false,
     a: A,
     version: Version = .plain,
     rule_styles: bool = false,
@@ -2106,6 +2189,8 @@ const Reader = struct {
     responsive_container_flow_enabled: bool = false,
     source_anchors_enabled: bool = false,
     inline_destinations_enabled: bool = false,
+    cell_box_heights_enabled: bool = false,
+    principal_viewports_enabled: bool = false,
     responsive_caption_tables_enabled: bool = false,
     body_typography_enabled: bool = false,
     inline_box_groups: bool = false,
@@ -2303,13 +2388,17 @@ const Reader = struct {
         };
         var inline_box_radius = false;
         var inline_box_atomic = false;
+        var inline_box_shadow = false;
         if (hasFontScaleFields(self.version)) {
             const font_fields = try self.byte();
-            const unknown_mask: u8 = if (self.capability_p) (if (self.inline_box_groups) @as(u8, 0x80) else 0xe0) else if (self.version == .container_fonts) (if (self.inline_styles) @as(u8, 0xf0) else 0xf8) else 0xfe;
+            const unknown_mask: u8 = if (self.capability_p) (if (self.inline_box_groups) (if (self.inline_box_audio_capability) @as(u8, 0) else 0x80) else 0xe0) else if (self.version == .container_fonts) (if (self.inline_styles) @as(u8, 0xf0) else 0xf8) else 0xfe;
             if (font_fields & unknown_mask != 0) return error.InvalidPresentation;
             inline_box_radius = font_fields & 0x20 != 0;
             inline_box_atomic = font_fields & 0x40 != 0;
-            if ((inline_box_radius or inline_box_atomic) and
+            inline_box_shadow = font_fields & 0x80 != 0;
+            if (inline_box_shadow and (!self.inline_box_audio_capability or !self.audio_controls or inline_box_atomic))
+                return error.InvalidPresentation;
+            if ((inline_box_radius or inline_box_atomic or inline_box_shadow) and
                 (!self.inline_box_groups or self.version != .container_fonts)) return error.InvalidPresentation;
             if (inline_box_radius and inline_box_atomic) return error.InvalidPresentation;
             if (font_fields & 1 != 0) {
@@ -2334,11 +2423,12 @@ const Reader = struct {
         if (self.capability_s and try self.presence()) result.ruby = try self.ruby();
         if (self.capability_u and try self.presence()) result.inline_padding_group = try self.inlinePaddingGroup(types.InlinePaddingGroupAction.from(result));
         if (self.capability_v and try self.presence()) result.inline_action_group = try self.inlineActionGroup(types.InlinePaddingGroupAction.from(result) orelse return error.InvalidPresentation);
-        if (self.inline_box_groups and try self.presence()) result.inline_box_group = try self.inlineBoxGroupWithGeometry(
-            types.InlinePaddingGroupAction.from(result), inline_box_radius, inline_box_atomic);
-        if ((inline_box_radius or inline_box_atomic) and result.inline_box_group == null) return error.InvalidPresentation;
+        if (self.inline_box_groups and try self.presence()) result.inline_box_group = try self.inlineBoxGroupWithShadow(
+            types.InlinePaddingGroupAction.from(result), inline_box_radius, inline_box_atomic, inline_box_shadow);
+        if ((inline_box_radius or inline_box_atomic or inline_box_shadow) and result.inline_box_group == null) return error.InvalidPresentation;
         if (self.audio_controls and try self.presence()) result.audio_control = try self.audioControl();
-        if (!types.validSpanAudioControl(result)) return error.InvalidPresentation;
+        if (!types.validSpanAudioControlInBox(result, self.inline_box_audio_capability and
+            self.in_inline_box_group and self.allow_box_phonos_child)) return error.InvalidPresentation;
         if (self.clipped_absolute_enabled and try self.presence()) result.clipped_absolute = try self.clippedAbsolute(types.InlinePaddingGroupAction.from(result));
         if (self.in_clipped_absolute and !types.validClippedAbsoluteInlineChild(result)) return error.InvalidPresentation;
         if (result.clipped_absolute != null) {
@@ -2346,7 +2436,7 @@ const Reader = struct {
                 self.in_inline_box_group or self.in_clipped_absolute) return error.InvalidPresentation;
             try types.validateClippedAbsoluteInlineTree(result, self.content_depth, self.ruby_depth);
         }
-        if (self.in_inline_box_group and !types.validRubyChild(result)) return error.InvalidPresentation;
+        if (self.in_inline_box_group and !types.validInlineBoxChild(result, self.allow_box_phonos_child)) return error.InvalidPresentation;
         if (result.inline_box_group != null) try types.validateInlineBoxGroupTree(result, self.content_depth, self.ruby_depth);
         if (self.in_inline_padding_group and !types.validRubyBodyChild(result)) return error.InvalidPresentation;
         if (result.inline_padding_group != null and !types.validInlinePaddingGroupOwner(result)) return error.InvalidPresentation;
@@ -2439,7 +2529,26 @@ const Reader = struct {
         return self.inlineBoxGroupWithGeometry(action, radius_present, false);
     }
     fn inlineBoxGroupWithGeometry(self: *Reader, action: ?types.InlinePaddingGroupAction, radius_present: bool, atomic_present: bool) error{ OutOfMemory, InvalidPresentation }!*const types.InlineBoxGroup(types.Span) {
-        const minimum: usize = 32 + (if (radius_present) @as(usize, 5) else 0) + (if (atomic_present) @as(usize, 34) else 0);
+        return self.inlineBoxGroupWithShadow(action, radius_present, atomic_present, false);
+    }
+    fn inlineBoxShadow(self: *Reader) !types.InlineBoxShadow {
+        if (!self.inline_box_audio_capability or self.remaining_items == 0 or self.remaining() < 31) return error.InvalidPresentation;
+        self.remaining_items -= 1;
+        if (self.metrics) |metrics| metrics.total_items = std.math.add(u64, metrics.total_items, 1) catch return error.InvalidPresentation;
+        const value: types.InlineBoxShadow = .{ .offset_x = @bitCast(try self.readU32()), .offset_y = @bitCast(try self.readU32()),
+            .blur = @bitCast(try self.readU32()), .spread = @bitCast(try self.readU32()),
+            .color = try self.string(), .alpha = @bitCast(try self.readU32()) };
+        if (!types.validInlineBoxShadow(value)) return error.InvalidPresentation;
+        return value;
+    }
+    fn inlineBoxGroupWithShadow(self: *Reader, action: ?types.InlinePaddingGroupAction, radius_present: bool, atomic_present: bool, shadow_present: bool) error{ OutOfMemory, InvalidPresentation }!*const types.InlineBoxGroup(types.Span) {
+        const minimum: usize = 32 + (if (radius_present) @as(usize, 5) else 0) + (if (atomic_present) @as(usize, 34) else 0) + (if (shadow_present) @as(usize, 31) else 0);
+        if (shadow_present and (!self.inline_box_audio_capability or !self.capability_p or self.version != .container_fonts or
+            !self.audio_controls or atomic_present)) return error.InvalidPresentation;
+        const allow_phonos = self.inline_box_audio_capability and self.capability_p and self.version == .container_fonts and
+            self.audio_controls and !atomic_present and !self.in_inline_box_group and !self.in_inline_padding_group and
+            !self.in_inline_action_group and !self.in_clipped_absolute and self.ruby_depth == 0 and
+            action == null and self.inline_padding_action == null;
         if (atomic_present and (!self.capability_p or self.version != .container_fonts or radius_present or
             self.in_inline_box_group or self.inline_padding_action != null or action != null or self.in_inline_action_group or self.ruby_depth != 0))
             return error.InvalidPresentation;
@@ -2472,6 +2581,9 @@ const Reader = struct {
                 .content = if (flags & inline_box_overlay_content_flag != 0) try self.inlineBoxOverlayContent() else null };
             if (!types.validInlineBoxOverlay(overlay.*)) return error.InvalidPresentation;
         }
+        const previous_phonos = self.allow_box_phonos_child;
+        self.allow_box_phonos_child = allow_phonos and overlays.len == 0;
+        defer self.allow_box_phonos_child = previous_phonos;
         const children = try self.spans();
         const radius: ?types.StyleWidth = if (radius_present) try self.styleWidth() else null;
         if (radius) |present| if (!types.validInlineBoxRadius(present)) return error.InvalidPresentation;
@@ -2495,7 +2607,8 @@ const Reader = struct {
                 .text_align = alignment, .wrap = wrap, .line_height = line };
         } else null;
         const value: types.InlineBoxGroup(types.Span) = .{ .padding = padding, .border = border, .overlays = overlays,
-            .spans = children, .radius = radius, .atomic_layout = atomic_layout };
+            .spans = children, .radius = radius, .atomic_layout = atomic_layout,
+            .shadow = if (shadow_present) try self.inlineBoxShadow() else null };
         if (!types.validInlineBoxGroup(value)) return error.InvalidPresentation;
         const result = try self.a.create(types.InlineBoxGroup(types.Span)); result.* = value;
         return result;
@@ -3045,6 +3158,34 @@ const Reader = struct {
         if (!types.validCellLineHeight(value)) return error.InvalidPresentation;
         return value;
     }
+    fn cellBoxHeight(self: *Reader) !types.CellBoxHeight {
+        if (!self.cell_box_heights_enabled or self.remaining_items == 0) return error.InvalidPresentation;
+        self.remaining_items -= 1;
+        if (self.metrics) |metrics| metrics.total_items = std.math.add(u64, metrics.total_items, 1) catch return error.InvalidPresentation;
+        const value: types.CellBoxHeight = .{ .value = @bitCast(try self.readU32()),
+            .font_scale_basis = try self.enumValue(types.FontScaleBasis), .box_sizing = try self.enumValue(types.ContainerBoxSizing) };
+        if (!types.validCellBoxHeight(value)) return error.InvalidPresentation;
+        return value;
+    }
+    fn principalBox(self: *Reader) !types.TablePrincipalBox {
+        return .{ .display = try self.enumValue(types.TablePrincipalDisplay),
+            .width = try self.enumValue(types.TablePrincipalWidth), .max_width = try self.enumValue(types.TablePrincipalMaxWidth),
+            .overflow_x = try self.enumValue(types.TablePrincipalOverflow), .overflow_y = try self.enumValue(types.TablePrincipalOverflow),
+            .box_sizing = try self.enumValue(types.ContainerBoxSizing), .margins = try self.containerMargins() };
+    }
+    fn principalViewport(self: *Reader) !*const types.TablePrincipalViewport {
+        if (!self.principal_viewports_enabled or self.remaining_items == 0) return error.InvalidPresentation;
+        self.remaining_items -= 1;
+        if (self.metrics) |metrics| metrics.total_items = std.math.add(u64, metrics.total_items, 1) catch return error.InvalidPresentation;
+        const value: types.TablePrincipalViewport = .{ .max_viewport_width_px = try self.readU32(),
+            .containing_direction = try self.enumValue(types.TableContainingDirection), .language = try self.string(),
+            .narrow = try self.principalBox(), .wide = try self.principalBox() };
+        if (!types.validTablePrincipalViewport(value)) return error.InvalidPresentation;
+        const owned = try self.a.create(types.TablePrincipalViewport);
+        owned.* = value;
+        return owned;
+    }
+
     fn cellStyle(self: *Reader) !?types.CellStyle {
         if (!try self.presence()) return null;
         const flags = try self.byte();
@@ -3124,10 +3265,11 @@ const Reader = struct {
             value.blocks = try self.blocks();
         }
         if (hasReferenceBlockFields(self.version)) value.style = try self.cellStyle();
+        if (self.cell_box_heights_enabled and try self.presence()) value.box_height = try self.cellBoxHeight();
         return value;
     }
     fn row(self: *Reader) !types.Row {
-        const len = try self.count(if (hasReferenceBlockFields(self.version)) 13 else if (hasCellBlockFields(self.version)) 12 else if (hasNestedFields(self.version)) 11 else if (hasRgb(self.version)) 10 else 9);
+        const len = try self.count(@as(usize, if (hasReferenceBlockFields(self.version)) 13 else if (hasCellBlockFields(self.version)) 12 else if (hasNestedFields(self.version)) 11 else if (hasRgb(self.version)) 10 else 9) + @as(usize, @intFromBool(self.cell_box_heights_enabled)));
         const out = try self.a.alloc(types.Cell, len);
         for (out) |*cell_value| cell_value.* = try self.cell();
         return .{ .cells = out };
@@ -3238,7 +3380,9 @@ const Reader = struct {
                 if (self.metrics) |metrics| metrics.total_items = std.math.add(u64, metrics.total_items, 1) catch return error.InvalidPresentation;
                 break :bound try self.readU32();
             } else null,
-            .caption_viewport = if (caption_viewport) try self.responsiveCaptionTable() else null };
+            .caption_viewport = if (caption_viewport) try self.responsiveCaptionTable() else null,
+            .principal_viewport = if (self.principal_viewports_enabled and try self.presence()) try self.principalViewport() else null };
+        if (!types.validTablePrincipalOwner(value)) return error.InvalidPresentation;
         if (!types.validResponsiveCaptionTable(value) or !types.validTableRowsVisibility(value) or !types.validResolvedStyleBorderTableDomain(value)) return error.InvalidPresentation;
         if (!types.validTableViewportHeaders(value.geometry, value.style, value.block_viewport, value.float_viewport)) return error.InvalidPresentation;
         if (value.caption_blocks != null and value.caption.len != 0) return error.InvalidPresentation;
@@ -4748,10 +4892,15 @@ pub fn encodeAlloc(a: A, stored: types.Stored) ![]u8 {
     const source_anchors_required = container_layouts.source_anchor;
     const inline_destinations_required = container_layouts.inline_destination;
     const caption_tables_required = container_layouts.responsive_caption_table;
+    const cell_heights_required = container_layouts.cell_box_height;
+    const principal_required = container_layouts.principal_viewport;
+    const authored_tables_required = cell_heights_required or principal_required;
+    const authored_table_census: u8 = (if (cell_heights_required) cell_box_height_feature else @as(u8, 0)) |
+        (if (principal_required) principal_viewport_feature else @as(u8, 0));
     const table_min_width_required = DeepTableWork.hasTableMinWidths(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references);
     const audio_required = DeepTableWork.hasAudioControls(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references);
     const resolved_style_borders_required = DeepTableWork.hasResolvedStyleBorders(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references);
-    const z_required = caption_tables_required or inline_destinations_required or responsive_flow_required or source_anchors_required or resolved_style_borders_required or positioned_required or table_min_width_required or columns_required or audio_required;
+    const z_required = authored_tables_required or caption_tables_required or inline_destinations_required or responsive_flow_required or source_anchors_required or resolved_style_borders_required or positioned_required or table_min_width_required or columns_required or audio_required;
     const v_required = z_required or y_required or DeepTableWork.hasInlineActionGroups(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references);
     const u_required = v_required or DeepTableWork.hasInlinePaddingOrRubyMargins(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references);
     const t_required = !u_required and hasDeepTables(stored.entry.sections, stored.entry.references);
@@ -4762,7 +4911,11 @@ pub fn encodeAlloc(a: A, stored: types.Stored) ![]u8 {
     if (u_required or t_required) try work.entry(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references);
     try ids.finish();
     const ruby_annotation_margins_required = work.ruby_annotation_margins_found;
-    const a_required = caption_tables_required or inline_destinations_required or responsive_flow_required or source_anchors_required or resolved_style_borders_required or ruby_annotation_margins_required;
+    const phonos_required = work.inline_box_phonos_found;
+    const authored_carriers_required = authored_tables_required or phonos_required;
+    const authored_census = authored_table_census |
+        (if (phonos_required) authored_phonos_feature else @as(u8, 0));
+    const a_required = authored_carriers_required or caption_tables_required or inline_destinations_required or responsive_flow_required or source_anchors_required or resolved_style_borders_required or ruby_annotation_margins_required;
     const y_features: u8 = (if (work.container_owner_font_found) owner_font_feature else @as(u8, 0)) |
         (if (body_required) body_typography_feature else @as(u8, 0)) |
         (if (work.inline_box_group_found) inline_box_feature else @as(u8, 0)) |
@@ -4773,6 +4926,7 @@ pub fn encodeAlloc(a: A, stored: types.Stored) ![]u8 {
         responsive_flow_required != work.responsive_container_flow_found or
         source_anchors_required != work.source_anchor_found or
         inline_destinations_required != work.inline_destination_found or
+        cell_heights_required != work.cell_box_height_found or principal_required != work.principal_viewport_found or
         caption_tables_required != work.responsive_caption_table_found or
         table_min_width_required != work.table_min_width_found or occurrence_required != work.image_occurrence_found or audio_required != work.audio_control_found or
         clipped_required != work.clipped_absolute_found or resolved_style_borders_required != work.resolved_style_border_found) return error.InvalidPresentation;
@@ -4791,10 +4945,11 @@ pub fn encodeAlloc(a: A, stored: types.Stored) ![]u8 {
     var inline_catalog: ?types.ImageCatalogIndex = null;
     defer if (inline_catalog) |*catalog| catalog.deinit(a);
     if (audio_required or hasInlineTableMedia(stored.entry.sections, stored.entry.references)) inline_catalog = try types.ImageCatalogIndex.init(a, stored.entry.media);
-    var encoder: Encoder = .{ .a = a, .version = version, .rule_styles = rule_styles, .inline_styles = inline_styles, .capability_p = s_required or r_required or q_required or pending_features != 0, .capability_q = s_required or r_required or q_required, .capability_r = s_required or r_required, .capability_s = s_required, .capability_t = t_required, .capability_u = u_required, .capability_v = v_required or a_required, .capability_w = w_required, .positioned_containers_enabled = positioned_required, .table_min_width_enabled = table_min_width_required, .column_layout_enabled = columns_required, .resolved_style_borders_enabled = resolved_style_borders_required, .ruby_annotation_margins_enabled = ruby_annotation_margins_required, .responsive_container_flow_enabled = responsive_flow_required, .source_anchors_enabled = source_anchors_required, .inline_destinations_enabled = inline_destinations_required, .responsive_caption_tables_enabled = caption_tables_required, .body_typography_enabled = body_required, .inline_box_groups = box_required, .clipped_absolute_enabled = clipped_required, .image_occurrences = occurrence_required, .audio_controls = audio_required, .text_flow = pending_features & 16 != 0, .inline_media_catalog = if (inline_catalog) |*catalog| catalog else null };
+    var encoder: Encoder = .{ .a = a, .version = version, .rule_styles = rule_styles, .inline_styles = inline_styles, .capability_p = s_required or r_required or q_required or pending_features != 0, .capability_q = s_required or r_required or q_required, .capability_r = s_required or r_required, .capability_s = s_required, .capability_t = t_required, .capability_u = u_required, .capability_v = v_required or a_required, .capability_w = w_required, .positioned_containers_enabled = positioned_required, .table_min_width_enabled = table_min_width_required, .column_layout_enabled = columns_required, .resolved_style_borders_enabled = resolved_style_borders_required, .ruby_annotation_margins_enabled = ruby_annotation_margins_required, .responsive_container_flow_enabled = responsive_flow_required, .source_anchors_enabled = source_anchors_required, .inline_destinations_enabled = inline_destinations_required, .cell_box_heights_enabled = cell_heights_required, .principal_viewports_enabled = principal_required, .responsive_caption_tables_enabled = caption_tables_required, .body_typography_enabled = body_required, .inline_box_groups = box_required, .clipped_absolute_enabled = clipped_required, .image_occurrences = occurrence_required, .audio_controls = audio_required, .inline_box_audio_capability = phonos_required, .text_flow = pending_features & 16 != 0, .inline_media_catalog = if (inline_catalog) |*catalog| catalog else null };
     defer encoder.deinit();
-    try encoder.out.appendSlice(a, if (a_required) resolved_style_borders_magic else if (z_required) positioned_containers_magic else if (y_required) owner_geometry_magic else if (v_required) inline_action_groups_magic else if (u_required) inline_padding_groups_magic else if (t_required) deep_tables_magic else if (s_required) ruby_magic else if (r_required) intrinsic_table_magic else if (q_required) table_corners_magic else if (pending_features != 0) body_adjoining_magic else if (inline_styles) inline_styles_magic else if (rule_styles) rule_styles_magic else versionMagic(version));
-    if (a_required) try encoder.writeU32(@as(u32, y_features) |
+    try encoder.out.appendSlice(a, if (authored_carriers_required) authored_presentation_magic else if (a_required) resolved_style_borders_magic else if (z_required) positioned_containers_magic else if (y_required) owner_geometry_magic else if (v_required) inline_action_groups_magic else if (u_required) inline_padding_groups_magic else if (t_required) deep_tables_magic else if (s_required) ruby_magic else if (r_required) intrinsic_table_magic else if (q_required) table_corners_magic else if (pending_features != 0) body_adjoining_magic else if (inline_styles) inline_styles_magic else if (rule_styles) rule_styles_magic else versionMagic(version));
+    if (a_required) {
+        const features = @as(u32, y_features) |
         (if (resolved_style_borders_required) resolved_style_borders_feature else @as(u32, 0)) |
         (if (ruby_annotation_margins_required) ruby_annotation_margins_feature else @as(u32, 0)) |
         (if (responsive_flow_required) responsive_container_flow_feature else @as(u32, 0)) |
@@ -4804,13 +4959,16 @@ pub fn encodeAlloc(a: A, stored: types.Stored) ![]u8 {
         (if (positioned_required) @as(u32, positioned_containers_feature) else 0) |
         (if (table_min_width_required) @as(u32, table_min_width_feature) else 0) |
         (if (columns_required) @as(u32, column_layout_feature) else 0) |
-        (if (audio_required) @as(u32, audio_control_feature) else 0))
-    else if (z_required) try encoder.writeU16(@as(u16, y_features) |
+        (if (audio_required) @as(u32, audio_control_feature) else 0);
+        if (authored_carriers_required and !validAuthoredInheritedFeatures(features, authored_census)) return error.UnsupportedPresentationVersion;
+        try encoder.writeU32(features);
+    } else if (z_required) try encoder.writeU16(@as(u16, y_features) |
         (if (positioned_required) positioned_containers_feature else @as(u16, 0)) |
         (if (table_min_width_required) table_min_width_feature else @as(u16, 0)) |
         (if (columns_required) column_layout_feature else @as(u16, 0)) |
         (if (audio_required) audio_control_feature else @as(u16, 0)))
     else if (y_required) try encoder.byte(y_features);
+    if (authored_carriers_required) try encoder.byte(authored_census);
     try encoder.spans(stored.entry.display_title);
     try encoder.sections(stored.entry.sections);
     try encoder.spans(stored.entry.preamble_spans);
@@ -4867,10 +5025,15 @@ pub fn encodeBuildWithBodyTypographyAlloc(
     const source_anchors_required = container_layouts.source_anchor;
     const inline_destinations_required = container_layouts.inline_destination;
     const caption_tables_required = container_layouts.responsive_caption_table;
+    const cell_heights_required = container_layouts.cell_box_height;
+    const principal_required = container_layouts.principal_viewport;
+    const authored_tables_required = cell_heights_required or principal_required;
+    const authored_table_census: u8 = (if (cell_heights_required) cell_box_height_feature else @as(u8, 0)) |
+        (if (principal_required) principal_viewport_feature else @as(u8, 0));
     const table_min_width_required = DeepTableWork.hasTableMinWidths(display_title, sections, @as([]const types.Span, &.{}), references_value);
     const audio_required = DeepTableWork.hasAudioControls(display_title, sections, @as([]const types.Span, &.{}), references_value);
     const resolved_style_borders_required = DeepTableWork.hasResolvedStyleBorders(display_title, sections, @as([]const types.Span, &.{}), references_value);
-    const z_required = caption_tables_required or inline_destinations_required or responsive_flow_required or source_anchors_required or resolved_style_borders_required or positioned_required or table_min_width_required or columns_required or audio_required;
+    const z_required = authored_tables_required or caption_tables_required or inline_destinations_required or responsive_flow_required or source_anchors_required or resolved_style_borders_required or positioned_required or table_min_width_required or columns_required or audio_required;
     const v_required = z_required or y_required or DeepTableWork.hasInlineActionGroups(display_title, sections, @as([]const types.Span, &.{}), references_value);
     const u_required = v_required or DeepTableWork.hasInlinePaddingOrRubyMargins(display_title, sections, @as([]const types.Span, &.{}), references_value);
     const t_required = !u_required and hasDeepTables(sections, references_value);
@@ -4881,7 +5044,11 @@ pub fn encodeBuildWithBodyTypographyAlloc(
     if (u_required or t_required) try work.entry(display_title, sections, @as([]const types.Span, &.{}), references_value);
     try ids.finish();
     const ruby_annotation_margins_required = work.ruby_annotation_margins_found;
-    const a_required = caption_tables_required or inline_destinations_required or responsive_flow_required or source_anchors_required or resolved_style_borders_required or ruby_annotation_margins_required;
+    const phonos_required = work.inline_box_phonos_found;
+    const authored_carriers_required = authored_tables_required or phonos_required;
+    const authored_census = authored_table_census |
+        (if (phonos_required) authored_phonos_feature else @as(u8, 0));
+    const a_required = authored_carriers_required or caption_tables_required or inline_destinations_required or responsive_flow_required or source_anchors_required or resolved_style_borders_required or ruby_annotation_margins_required;
     const y_features: u8 = (if (work.container_owner_font_found) owner_font_feature else @as(u8, 0)) |
         (if (body_required) body_typography_feature else @as(u8, 0)) |
         (if (work.inline_box_group_found) inline_box_feature else @as(u8, 0)) |
@@ -4892,6 +5059,7 @@ pub fn encodeBuildWithBodyTypographyAlloc(
         responsive_flow_required != work.responsive_container_flow_found or
         source_anchors_required != work.source_anchor_found or
         inline_destinations_required != work.inline_destination_found or
+        cell_heights_required != work.cell_box_height_found or principal_required != work.principal_viewport_found or
         caption_tables_required != work.responsive_caption_table_found or
         table_min_width_required != work.table_min_width_found or occurrence_required != work.image_occurrence_found or audio_required != work.audio_control_found or
         clipped_required != work.clipped_absolute_found or resolved_style_borders_required != work.resolved_style_border_found) return error.InvalidPresentation;
@@ -4910,10 +5078,11 @@ pub fn encodeBuildWithBodyTypographyAlloc(
     var inline_catalog: ?types.ImageCatalogIndex = null;
     defer if (inline_catalog) |*catalog| catalog.deinit(a);
     if (audio_required or hasInlineTableMedia(sections, references_value)) inline_catalog = try types.ImageCatalogIndex.init(a, media_value);
-    var encoder: Encoder = .{ .a = a, .version = version, .rule_styles = rule_styles, .inline_styles = inline_styles, .capability_p = s_required or r_required or q_required or pending_features != 0, .capability_q = s_required or r_required or q_required, .capability_r = s_required or r_required, .capability_s = s_required, .capability_t = t_required, .capability_u = u_required, .capability_v = v_required or a_required, .capability_w = w_required, .positioned_containers_enabled = positioned_required, .table_min_width_enabled = table_min_width_required, .column_layout_enabled = columns_required, .resolved_style_borders_enabled = resolved_style_borders_required, .ruby_annotation_margins_enabled = ruby_annotation_margins_required, .responsive_container_flow_enabled = responsive_flow_required, .source_anchors_enabled = source_anchors_required, .inline_destinations_enabled = inline_destinations_required, .responsive_caption_tables_enabled = caption_tables_required, .body_typography_enabled = body_required, .inline_box_groups = box_required, .clipped_absolute_enabled = clipped_required, .image_occurrences = occurrence_required, .audio_controls = audio_required, .text_flow = pending_features & 16 != 0, .inline_media_catalog = if (inline_catalog) |*catalog| catalog else null };
+    var encoder: Encoder = .{ .a = a, .version = version, .rule_styles = rule_styles, .inline_styles = inline_styles, .capability_p = s_required or r_required or q_required or pending_features != 0, .capability_q = s_required or r_required or q_required, .capability_r = s_required or r_required, .capability_s = s_required, .capability_t = t_required, .capability_u = u_required, .capability_v = v_required or a_required, .capability_w = w_required, .positioned_containers_enabled = positioned_required, .table_min_width_enabled = table_min_width_required, .column_layout_enabled = columns_required, .resolved_style_borders_enabled = resolved_style_borders_required, .ruby_annotation_margins_enabled = ruby_annotation_margins_required, .responsive_container_flow_enabled = responsive_flow_required, .source_anchors_enabled = source_anchors_required, .inline_destinations_enabled = inline_destinations_required, .cell_box_heights_enabled = cell_heights_required, .principal_viewports_enabled = principal_required, .responsive_caption_tables_enabled = caption_tables_required, .body_typography_enabled = body_required, .inline_box_groups = box_required, .clipped_absolute_enabled = clipped_required, .image_occurrences = occurrence_required, .audio_controls = audio_required, .inline_box_audio_capability = phonos_required, .text_flow = pending_features & 16 != 0, .inline_media_catalog = if (inline_catalog) |*catalog| catalog else null };
     defer encoder.deinit();
-    try encoder.out.appendSlice(a, if (a_required) resolved_style_borders_magic else if (z_required) positioned_containers_magic else if (y_required) owner_geometry_magic else if (v_required) inline_action_groups_magic else if (u_required) inline_padding_groups_magic else if (t_required) deep_tables_magic else if (s_required) ruby_magic else if (r_required) intrinsic_table_magic else if (q_required) table_corners_magic else if (pending_features != 0) body_adjoining_magic else if (inline_styles) inline_styles_magic else if (rule_styles) rule_styles_magic else versionMagic(version));
-    if (a_required) try encoder.writeU32(@as(u32, y_features) |
+    try encoder.out.appendSlice(a, if (authored_carriers_required) authored_presentation_magic else if (a_required) resolved_style_borders_magic else if (z_required) positioned_containers_magic else if (y_required) owner_geometry_magic else if (v_required) inline_action_groups_magic else if (u_required) inline_padding_groups_magic else if (t_required) deep_tables_magic else if (s_required) ruby_magic else if (r_required) intrinsic_table_magic else if (q_required) table_corners_magic else if (pending_features != 0) body_adjoining_magic else if (inline_styles) inline_styles_magic else if (rule_styles) rule_styles_magic else versionMagic(version));
+    if (a_required) {
+        const features = @as(u32, y_features) |
         (if (resolved_style_borders_required) resolved_style_borders_feature else @as(u32, 0)) |
         (if (ruby_annotation_margins_required) ruby_annotation_margins_feature else @as(u32, 0)) |
         (if (responsive_flow_required) responsive_container_flow_feature else @as(u32, 0)) |
@@ -4923,13 +5092,16 @@ pub fn encodeBuildWithBodyTypographyAlloc(
         (if (positioned_required) @as(u32, positioned_containers_feature) else 0) |
         (if (table_min_width_required) @as(u32, table_min_width_feature) else 0) |
         (if (columns_required) @as(u32, column_layout_feature) else 0) |
-        (if (audio_required) @as(u32, audio_control_feature) else 0))
-    else if (z_required) try encoder.writeU16(@as(u16, y_features) |
+        (if (audio_required) @as(u32, audio_control_feature) else 0);
+        if (authored_carriers_required and !validAuthoredInheritedFeatures(features, authored_census)) return error.UnsupportedPresentationVersion;
+        try encoder.writeU32(features);
+    } else if (z_required) try encoder.writeU16(@as(u16, y_features) |
         (if (positioned_required) positioned_containers_feature else @as(u16, 0)) |
         (if (table_min_width_required) table_min_width_feature else @as(u16, 0)) |
         (if (columns_required) column_layout_feature else @as(u16, 0)) |
         (if (audio_required) audio_control_feature else @as(u16, 0)))
     else if (y_required) try encoder.byte(y_features);
+    if (authored_carriers_required) try encoder.byte(authored_census);
     try encoder.spans(display_title);
     try encoder.sections(sections);
     try encoder.count(0); // no preamble is emitted by the bundle compiler
@@ -4981,12 +5153,22 @@ fn decodeImpl(
 ) !types.Stored {
     if (payload.len < magic.len) return error.InvalidPresentation;
     const owner_geometry_header = std.mem.eql(u8, payload[0..magic.len], owner_geometry_magic);
-    const a_header = std.mem.eql(u8, payload[0..magic.len], resolved_style_borders_magic);
+    const authored_presentation_header = std.mem.eql(u8, payload[0..magic.len], authored_presentation_magic);
+    const authored_census: u8 = if (authored_presentation_header) blk: {
+        if (payload.len < 9 or payload[8] == 0 or payload[8] & ~authored_presentation_features != 0) return error.InvalidPresentation;
+        break :blk payload[8];
+    } else 0;
+    const cell_heights_enabled = authored_census & cell_box_height_feature != 0;
+    const principal_enabled = authored_census & principal_viewport_feature != 0;
+    const phonos_enabled = authored_census & authored_phonos_feature != 0;
+    const a_header = authored_presentation_header or std.mem.eql(u8, payload[0..magic.len], resolved_style_borders_magic);
     const z_header = a_header or std.mem.eql(u8, payload[0..magic.len], positioned_containers_magic);
     const z_features: u32 = if (a_header) blk: {
         if (payload.len < magic.len + 4) return error.InvalidPresentation;
         const flags = std.mem.readInt(u32, payload[magic.len..][0..4], .little);
-        if (flags & a_high_features == 0 or flags & ~resolved_style_borders_features != 0) return error.InvalidPresentation;
+        if (authored_presentation_header) {
+            if (!validAuthoredInheritedFeatures(flags, authored_census)) return error.InvalidPresentation;
+        } else if (flags & a_high_features == 0 or flags & ~resolved_style_borders_features != 0) return error.InvalidPresentation;
         break :blk flags;
     } else if (z_header) blk: {
         if (payload.len < magic.len + 2) return error.InvalidPresentation;
@@ -5030,7 +5212,7 @@ fn decodeImpl(
         if (std.mem.eql(u8, payload[0..3], "DPR")) return error.UnsupportedPresentationVersion;
         return error.InvalidPresentation;
     };
-    var reader: Reader = .{ .a = a, .version = version, .rule_styles = rule_styles, .inline_styles = inline_styles, .capability_p = body_adjoining_header, .capability_q = ruby_header or intrinsic_header or table_corners_header, .capability_r = ruby_header or intrinsic_header, .capability_s = ruby_header, .capability_t = deep_tables_header, .capability_u = inline_groups_header, .capability_v = action_groups_header, .capability_w = owner_fonts_header, .positioned_containers_enabled = positioned_header, .table_min_width_enabled = table_min_width_header, .column_layout_enabled = column_layout_header, .resolved_style_borders_enabled = resolved_style_borders_enabled, .ruby_annotation_margins_enabled = ruby_annotation_margins_enabled, .responsive_container_flow_enabled = responsive_container_flow_enabled, .source_anchors_enabled = source_anchors_enabled, .inline_destinations_enabled = inline_destinations_enabled, .responsive_caption_tables_enabled = responsive_caption_tables_enabled, .body_typography_enabled = body_typography_header, .inline_box_groups = inline_box_header, .clipped_absolute_enabled = clipped_absolute_header, .image_occurrences = image_occurrence_header, .audio_controls = audio_control_header, .bytes = payload, .pos = magic.len + (if (a_header) @as(usize, 4) else if (z_header) @as(usize, 2) else @as(usize, @intFromBool(owner_geometry_header))), .metrics = metrics };
+    var reader: Reader = .{ .a = a, .version = version, .rule_styles = rule_styles, .inline_styles = inline_styles, .capability_p = body_adjoining_header, .capability_q = ruby_header or intrinsic_header or table_corners_header, .capability_r = ruby_header or intrinsic_header, .capability_s = ruby_header, .capability_t = deep_tables_header, .capability_u = inline_groups_header, .capability_v = action_groups_header, .capability_w = owner_fonts_header, .positioned_containers_enabled = positioned_header, .table_min_width_enabled = table_min_width_header, .column_layout_enabled = column_layout_header, .resolved_style_borders_enabled = resolved_style_borders_enabled, .ruby_annotation_margins_enabled = ruby_annotation_margins_enabled, .responsive_container_flow_enabled = responsive_container_flow_enabled, .source_anchors_enabled = source_anchors_enabled, .inline_destinations_enabled = inline_destinations_enabled, .cell_box_heights_enabled = cell_heights_enabled, .principal_viewports_enabled = principal_enabled, .responsive_caption_tables_enabled = responsive_caption_tables_enabled, .body_typography_enabled = body_typography_header, .inline_box_groups = inline_box_header, .clipped_absolute_enabled = clipped_absolute_header, .image_occurrences = image_occurrence_header, .audio_controls = audio_control_header, .inline_box_audio_capability = phonos_enabled, .bytes = payload, .pos = magic.len + @as(usize, @intFromBool(authored_presentation_header)) + (if (a_header) @as(usize, 4) else if (z_header) @as(usize, 2) else @as(usize, @intFromBool(owner_geometry_header))), .metrics = metrics };
     const display_title = try reader.spans();
     const sections = try reader.sections();
     const preamble = try reader.spans();
@@ -5051,6 +5233,7 @@ fn decodeImpl(
             if (positioned_header != inline_work.positioned_container_found or
                 column_layout_header != inline_work.column_layout_found or table_min_width_header != inline_work.table_min_width_found or
                 owner_fonts_header != inline_work.container_owner_font_found or
+                phonos_enabled != inline_work.inline_box_phonos_found or
                 inline_box_header != inline_work.inline_box_group_found or
                 clipped_absolute_header != inline_work.clipped_absolute_found or
                 image_occurrence_header != inline_work.image_occurrence_found or
@@ -5060,6 +5243,7 @@ fn decodeImpl(
                 responsive_container_flow_enabled != inline_work.responsive_container_flow_found or
                 source_anchors_enabled != inline_work.source_anchor_found or
                 inline_destinations_enabled != inline_work.inline_destination_found or
+                cell_heights_enabled != inline_work.cell_box_height_found or principal_enabled != inline_work.principal_viewport_found or
                 responsive_caption_tables_enabled != inline_work.responsive_caption_table_found or
                 body_typography_header != (body_typography != null)) return error.InvalidPresentation;
         } else if (action_groups_header) {
@@ -20612,4 +20796,266 @@ test "YI named-font contract01 synthetic Figure caption Stored roundtrip and ind
             }
         }
     }
+}
+
+const YiAuthoredCarrier01 = struct {
+    fn policy() types.TablePrincipalViewport {
+        const margins: types.ContainerMargins = .{ .top = .{ .length = .{ .unit = .px, .value = 0 } }, .right = .auto,
+            .bottom = .{ .length = .{ .unit = .px, .value = 0 } }, .left = .auto };
+        return .{ .max_viewport_width_px = 639, .containing_direction = .rtl, .language = "yi",
+            .narrow = .{ .display = .block, .width = .fit_content, .max_width = .containing_100_percent,
+                .overflow_x = .auto, .overflow_y = .auto, .box_sizing = .border_box, .margins = margins },
+            .wide = .{ .display = .table, .width = .auto, .max_width = .none,
+                .overflow_x = .visible, .overflow_y = .visible, .box_sizing = .border_box, .margins = margins } };
+    }
+    fn stored(a: A, height: bool, viewport: bool) !types.Stored {
+        const cells = try a.alloc(types.Cell, 6);
+        for (cells, 0..) |*cell, i| cell.* = .{ .spans = &.{.{ .text = "same semantic cell" }},
+            .box_height = if (height) .{ .value = if (i % 2 == 0) 0.5 else 4, .font_scale_basis = if (i % 2 == 0) .normal_body else .css_px,
+                .box_sizing = .border_box } else null,
+            .style = .{ .line_height = .{ .strut = .{ .font_scale = 1.5, .font_scale_basis = .normal_body }, .height = .normal } } };
+        const rows = try a.alloc(types.Row, 1); rows[0] = .{ .cells = cells };
+        const p = try a.create(types.TablePrincipalViewport); p.* = policy();
+        const blocks = try a.alloc(types.Block, 1); blocks[0] = .{ .kind = .table,
+            .table = .{ .rows = rows, .principal_viewport = if (viewport) p else null, .caption = &.{.{ .text = "one caption" }} } };
+        const sections = try a.alloc(types.Section, 1); sections[0] = .{ .title = "controlled", .level = 2, .blocks = blocks };
+        return .{ .entry = .{ .title = "yi-carrier-control", .kind = .supplemental, .sections = sections } };
+    }
+    fn decode(a: A, bytes: []const u8) !types.Stored { return decodeAlloc(a, bytes, "yi-carrier-control", .supplemental, null); }
+    fn emit(a: A, name: []const u8, bytes: []const u8, value: types.Stored) !void {
+        const digits = "0123456789abcdef"; const hex = try a.alloc(u8, bytes.len * 2);
+        for (bytes, 0..) |b, i| { hex[i*2] = digits[b >> 4]; hex[i*2+1] = digits[b & 15]; }
+        const record = try std.json.Stringify.valueAlloc(a, .{ .schema = "a2.yi.authored-carrier-control.v1", .name = name,
+            .synthetic = true, .source_authority = false, .dpr_hex = hex, .stored = value }, .{});
+        std.debug.print("YI_AUTHORED_CARRIER01 {s}\n", .{record});
+    }
+};
+
+test "YI authored carrier01 independent and combined Stored build JSON roundtrip" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = YiAuthoredCarrier01;
+    for ([_]u8{1,2,3}) |flags| {
+        const stored = try T.stored(a, flags & 1 != 0, flags & 2 != 0);
+        try types.validateStored(a, stored, stored.entry.title, .supplemental, null);
+        const bytes = try encodeAlloc(a, stored); try std.testing.expectEqualStrings("DPRc", bytes[0..4]);
+        try std.testing.expectEqual(flags, bytes[8]);
+        const decoded = try T.decode(a, bytes); try std.testing.expectEqualDeep(stored.entry.sections, decoded.entry.sections);
+        try std.testing.expectEqualSlices(u8, bytes, try encodeAlloc(a, decoded));
+        try std.testing.expectEqualSlices(u8, bytes, try encodeBuildAlloc(a, stored.entry.display_title, stored.entry.sections,
+            stored.entry.organization, stored.entry.references, stored.entry.media));
+        const json = try std.json.Stringify.valueAlloc(a, stored, .{});
+        const parsed = try std.json.parseFromSlice(types.Stored, a, json, .{}); defer parsed.deinit();
+        try types.validateStored(a, parsed.value, stored.entry.title, .supplemental, null);
+        try std.testing.expectEqualSlices(u8, bytes, try encodeAlloc(a, parsed.value));
+        try T.emit(a, if (flags == 1) "cell-only" else if (flags == 2) "principal-only" else "combined", bytes, decoded);
+    }
+}
+
+test "YI authored carrier01 legacy local bytes and unsupported capability refusal" {
+    const a = std.testing.allocator;
+    var enc: Encoder = .{ .a = a, .version = .container_fonts }; defer enc.deinit();
+    try enc.cell(@as(types.Cell, .{}));
+    try std.testing.expectEqualSlices(u8, &.{0,1,0,1,0,0,0,0,0,0,0,0,0}, enc.out.items);
+    const height: types.CellBoxHeight = .{ .value = 0.5, .font_scale_basis = .normal_body, .box_sizing = .border_box };
+    try std.testing.expectError(error.InvalidPresentation, enc.cell(@as(types.Cell, .{ .box_height = height })));
+    var p = YiAuthoredCarrier01.policy();
+    try std.testing.expectError(error.InvalidPresentation, enc.table(@as(?types.Table, .{ .principal_viewport = &p, .rows = &.{.{ .cells = &.{.{}} }} })));
+}
+
+test "YI authored carrier01 truncated unknown feature and missing occurrence refusal" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = YiAuthoredCarrier01; const bytes = try encodeAlloc(a, try T.stored(a, true, true));
+    for (0..bytes.len) |n| try std.testing.expectError(error.InvalidPresentation, T.decode(a, bytes[0..n]));
+    for ([_]u8{0,4,0x80,0xff,1,2}) |flags| {
+        const bad = try a.dupe(u8, bytes); bad[8] = flags;
+        try std.testing.expectError(error.InvalidPresentation, T.decode(a, bad));
+    }
+    const legacy = try encodeAlloc(a, try T.stored(a, false, false));
+    try std.testing.expect(!std.mem.eql(u8, legacy[0..4], "DPRc"));
+    // A syntactically complete DPRc envelope with its feature claimed but no
+    // owning field must fail census; no silent feature downgrade is accepted.
+    var e: Encoder = .{ .a = a, .version = .container_fonts, .capability_p = true,
+        .capability_q = true, .capability_r = true, .capability_s = true, .capability_u = true,
+        .cell_box_heights_enabled = true }; defer e.deinit();
+    try e.out.appendSlice(a, "DPRc"); try e.writeU32(0); try e.byte(1);
+    const empty: types.Stored = .{ .entry = .{ .title = "yi-carrier-control", .kind = .supplemental } };
+    try e.spans(empty.entry.display_title); try e.sections(empty.entry.sections); try e.spans(empty.entry.preamble_spans);
+    try e.layout(empty.entry.organization); try e.references(empty.entry.references); try e.media(empty.entry.media); try e.byte(0);
+    try std.testing.expectError(error.InvalidPresentation, T.decode(a, e.out.items));
+}
+
+test "YI authored carrier01 malformed minimum enums and owner item budgets" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const height: types.CellBoxHeight = .{ .value = 0.5, .font_scale_basis = .normal_body, .box_sizing = .border_box };
+    var enc: Encoder = .{ .a = a, .version = .container_fonts, .cell_box_heights_enabled = true }; defer enc.deinit();
+    try enc.cellBoxHeight(height); try std.testing.expectEqual(@as(usize, 6), enc.out.items.len);
+    for ([_]u32{0xbf800000,0x80000000,0x7f800000,0x7fc00000}) |bits| {
+        const bad = try a.dupe(u8, enc.out.items); std.mem.writeInt(u32, bad[0..4], bits, .little);
+        var r: Reader = .{ .a = a, .bytes = bad, .version = .container_fonts, .cell_box_heights_enabled = true };
+        try std.testing.expectError(error.InvalidPresentation, r.cellBoxHeight());
+    }
+    for ([_]usize{4,5}) |offset| {
+        const bad = try a.dupe(u8, enc.out.items); bad[offset] = 255;
+        var r: Reader = .{ .a = a, .bytes = bad, .version = .container_fonts, .cell_box_heights_enabled = true };
+        try std.testing.expectError(error.InvalidPresentation, r.cellBoxHeight());
+    }
+    var short: Encoder = .{ .a = a, .cell_box_heights_enabled = true, .remaining_items = 0 }; defer short.deinit();
+    try std.testing.expectError(error.PresentationTooLarge, short.cellBoxHeight(height));
+    var r: Reader = .{ .a = a, .bytes = enc.out.items, .cell_box_heights_enabled = true, .remaining_items = 0 };
+    try std.testing.expectError(error.InvalidPresentation, r.cellBoxHeight());
+}
+
+test "DPRc composes authored table carriers with inherited TT columns" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const first: types.Block = .{ .kind = .list_item, .list_path = "*", .column_break_inside = .avoid,
+        .spans = &.{.{ .text = "first" }} };
+    const detail: types.Block = .{ .kind = .list_detail, .list_path = "*:",
+        .spans = &.{.{ .kind = .link, .target = "word", .target_fragment = "sense", .text = "detail" }} };
+    const last: types.Block = .{ .kind = .list_item, .list_path = "*", .column_break_inside = .auto,
+        .spans = &.{.{ .text = "last" }} };
+    const column_box: types.Block = .{ .kind = .container, .container = .{
+        .style = .{ .columns = .{ .count = 2, .width = .{ .unit = .em, .value = 25 },
+            .gap = .{ .unit = .px, .value = 20 } } }, .blocks = &.{ first, detail, last } } };
+    var authored = try YiAuthoredCarrier01.stored(a, true, true);
+    const both = [_]types.Block{ authored.entry.sections[0].blocks[0], column_box };
+    authored.entry.sections = &.{.{ .level = 2, .title = "controlled", .blocks = &both }};
+    const payload = try encodeAlloc(a, authored);
+    try std.testing.expectEqualStrings("DPRc", payload[0..4]);
+    try std.testing.expectEqual(@as(u32, 0x1000), std.mem.readInt(u32, payload[4..8], .little));
+    try std.testing.expectEqual(@as(u8, 3), payload[8]);
+    try std.testing.expectEqualDeep(authored, try YiAuthoredCarrier01.decode(a, payload));
+    try std.testing.expectEqualSlices(u8, payload, try encodeBuildAlloc(a, authored.entry.display_title,
+        authored.entry.sections, authored.entry.organization, authored.entry.references, authored.entry.media));
+
+    var legacy = authored;
+    legacy.entry.sections = &.{.{ .level = 2, .title = "controlled", .blocks = &.{column_box} }};
+    const old = try encodeAlloc(a, legacy);
+    try std.testing.expectEqualStrings("DPRZ", old[0..4]);
+    try std.testing.expectEqual(@as(u16, 0x1000), std.mem.readInt(u16, old[4..6], .little));
+    try std.testing.expectEqualDeep(legacy, try YiAuthoredCarrier01.decode(a, old));
+
+    const bad = try a.dupe(u8, payload);
+    for ([_]u32{ 1, 0x9000, 0x01001000, 0x80001000 }) |word| {
+        std.mem.writeInt(u32, bad[4..8], word, .little);
+        try std.testing.expectError(error.InvalidPresentation, YiAuthoredCarrier01.decode(a, bad));
+    }
+    @memcpy(bad, payload);
+    bad[3] = 'b';
+    try std.testing.expectError(error.UnsupportedPresentationVersion, YiAuthoredCarrier01.decode(a, bad));
+}
+
+test "DPRc refuses combinations outside the shared inherited feature mask" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var authored = try YiAuthoredCarrier01.stored(a, true, false);
+    var block = authored.entry.sections[0].blocks[0];
+    block.table.?.style = .{ .min_width = .{ .unit = .px, .value = 40 } };
+    authored.entry.sections = &.{.{ .level = 2, .title = "controlled", .blocks = &.{block} }};
+    try std.testing.expectError(error.UnsupportedPresentationVersion, encodeAlloc(a, authored));
+    try std.testing.expectError(error.UnsupportedPresentationVersion, encodeBuildAlloc(a, authored.entry.display_title,
+        authored.entry.sections, authored.entry.organization, authored.entry.references, authored.entry.media));
+}
+
+test "DPRc EL box census, TT inheritance and legacy refusal remain independent" {
+    for ([_]u8{ 1, 2, 3, 4, 5, 6, 7 }) |census| {
+        const expected: u32 = if (census & 4 != 0) 0x2004 else 0;
+        for ([_]u32{ 0, 0x1000, 0x0004, 0x2000, 0x2004, 0x3004, 0x80003004 }) |word| {
+            try std.testing.expectEqual(word == expected or word == (expected | 0x1000),
+                validAuthoredInheritedFeatures(word, census));
+        }
+    }
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const T = AudioControlWireTest;
+    var child = T.owner(.{ .presentation = .phonos_button });
+    child.text = "";
+    child.tooltip = "Play a synthetic recording";
+    const group: types.InlineBoxGroup(types.Span) = .{
+        .padding = .{ .top = .{ .unit = .px, .value = 0 }, .right = .{ .unit = .px, .value = 0 },
+            .bottom = .{ .unit = .px, .value = 0 }, .left = .{ .unit = .px, .value = 0 } },
+        .border = .{ .top = .none, .right = .none, .bottom = .none, .left = .none },
+        .overlays = &.{}, .spans = &.{child},
+        .shadow = .{ .offset_x = 1, .offset_y = 2, .blur = 3, .spread = 0, .color = "#000000", .alpha = 0.2 },
+    };
+    const owner: types.Span = .{ .inline_box_group = &group };
+    var stored = try YiAuthoredCarrier01.stored(a, true, true);
+    const old_table = stored.entry.sections[0].blocks[0];
+    const blocks = [_]types.Block{ old_table, .{ .kind = .paragraph, .spans = &.{owner} } };
+    stored.entry.sections = &.{.{ .level = 2, .title = "controls", .blocks = &blocks }};
+    stored.entry.media = &.{.{ .kind = .audio, .file = T.file, .caption = "Synthetic audio" }};
+    const encoded = try encodeAlloc(a, stored);
+    try std.testing.expectEqualStrings("DPRc", encoded[0..4]);
+    try std.testing.expectEqual(@as(u32, 0x2004), std.mem.readInt(u32, encoded[4..8], .little));
+    try std.testing.expectEqual(@as(u8, 7), encoded[8]);
+    try std.testing.expectEqualDeep(stored, try YiAuthoredCarrier01.decode(a, encoded));
+    try std.testing.expectEqualSlices(u8, encoded, try encodeBuildAlloc(a, stored.entry.display_title,
+        stored.entry.sections, stored.entry.organization, stored.entry.references, stored.entry.media));
+    const malformed = try a.dupe(u8, encoded);
+    malformed[8] = 3;
+    try std.testing.expectError(error.InvalidPresentation, YiAuthoredCarrier01.decode(a, malformed));
+    stored.entry.sections = &.{.{ .level = 2, .title = "controls",
+        .blocks = &.{.{ .kind = .paragraph, .spans = &.{child} }} }};
+    try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, stored));
+}
+
+test "DPRc all three carrier families roundtrip with exact TT conditional bytes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const T = YiAuthoredCarrier01;
+    const Audio = AudioControlWireTest;
+    var child = Audio.owner(.{ .presentation = .phonos_button });
+    child.text = "";
+    child.tooltip = "Play synthetic audio";
+    const group: types.InlineBoxGroup(types.Span) = .{
+        .padding = .{ .top = .{ .unit = .px, .value = 1 }, .right = .{ .unit = .px, .value = 3 },
+            .bottom = .{ .unit = .px, .value = 1 }, .left = .{ .unit = .px, .value = 3 } },
+        .border = .{ .top = .none, .right = .none, .bottom = .none, .left = .none },
+        .overlays = &.{}, .spans = &.{child}, .radius = .{ .unit = .px, .value = 6 },
+        .shadow = .{ .offset_x = 1, .offset_y = 2, .blur = 3, .spread = 0, .color = "#000000", .alpha = 0.2 },
+    };
+    const tt: types.Block = .{ .kind = .container, .container = .{
+        .style = .{ .columns = .{ .count = 2, .width = .{ .unit = .em, .value = 25 },
+            .gap = .{ .unit = .px, .value = 20 } } },
+        .blocks = &.{
+            .{ .kind = .list_item, .list_path = "*", .column_break_inside = .avoid,
+                .spans = &.{.{ .text = "avoid" }} },
+            .{ .kind = .list_detail, .list_path = "*:",
+                .spans = &.{.{ .kind = .link, .target = "word", .target_fragment = "sense", .text = "absent" }} },
+            .{ .kind = .list_item, .list_path = "*", .column_break_inside = .auto,
+                .spans = &.{.{ .text = "auto" }} },
+        },
+    } };
+    var stored = try T.stored(a, true, true);
+    const blocks = [_]types.Block{
+        stored.entry.sections[0].blocks[0],
+        .{ .kind = .paragraph, .spans = &.{.{ .inline_box_group = &group }} },
+        tt,
+    };
+    stored.entry.sections = &.{.{ .level = 2, .title = "mixed carriers", .blocks = &blocks }};
+    stored.entry.media = &.{.{ .kind = .audio, .file = Audio.file, .caption = "Synthetic audio" }};
+    const encoded = try encodeAlloc(a, stored);
+    try std.testing.expectEqualStrings("DPRc", encoded[0..4]);
+    try std.testing.expectEqual(@as(u32, 0x3004), std.mem.readInt(u32, encoded[4..8], .little));
+    try std.testing.expectEqual(@as(u8, 7), encoded[8]);
+    const decoded = try T.decode(a, encoded);
+    try std.testing.expectEqualDeep(stored, decoded);
+    try std.testing.expectEqualSlices(u8, encoded, try encodeAlloc(a, decoded));
+    try std.testing.expectEqualSlices(u8, encoded, try encodeBuildAlloc(a, stored.entry.display_title,
+        stored.entry.sections, stored.entry.organization, stored.entry.references, stored.entry.media));
+    const malformed = try a.dupe(u8, encoded);
+    for ([_]u8{ 0, 3, 4, 5, 6, 8, 0x80 }) |census| {
+        malformed[8] = census;
+        try std.testing.expectError(error.InvalidPresentation, T.decode(a, malformed));
+    }
+    @memcpy(malformed, encoded);
+    for ([_]u32{ 0x1000, 0x1004, 0x3000, 0x80003004 }) |features| {
+        std.mem.writeInt(u32, malformed[4..8], features, .little);
+        try std.testing.expectError(error.InvalidPresentation, T.decode(a, malformed));
+    }
+    try T.emit(a, "yi-el-tt-mixed", encoded, decoded);
 }

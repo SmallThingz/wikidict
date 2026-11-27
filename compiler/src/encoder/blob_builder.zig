@@ -5479,6 +5479,32 @@ fn unchangedTableSourceProjection(sizing: ?presentation_document.FigureSizingSou
     return .{ .original = original, .prepared = prepared.bytes, .copies = copy };
 }
 
+// Requests the existing strict insertion projection only. It does not itself
+// authorize an original range, root, ancestry, style, action or presentation.
+fn selectedPhonosSourceCurrent(styles: ?*const @import("table_style_profile.zig").Profile,
+    original: MissingText) bool
+{
+    if (original.bytes.len == 0 or original.unknown or original.lost_missing_range or
+        original.generated_source != null) return false;
+    const profile = styles orelse return false;
+    if (profile.selected_phonos.len == 0) return false;
+    const Within = struct {
+        fn exact(container: []const u8, part: []const u8) bool {
+            if (part.len == 0) return false;
+            const offset = std.math.sub(usize, @intFromPtr(part.ptr), @intFromPtr(container.ptr)) catch return false;
+            return offset <= container.len and part.len <= container.len - offset;
+        }
+    };
+    for (profile.selected_phonos) |selected| {
+        if (!Within.exact(original.bytes, selected.source)) return false;
+        if (selected.decoration_source) |owner| {
+            if (!Within.exact(original.bytes, owner) or !Within.exact(owner, selected.source)) return false;
+        }
+    }
+    return true;
+}
+
+
 fn observeSourceElements(sizing: ?presentation_document.FigureSizingSource, source: []const u8) bool {
     const selected = sizing orelse return false;
     if (selected.selected_default_thumbnails) |thumbnails|
@@ -6192,7 +6218,8 @@ fn processMain(
     const numbered = try checkedWriterNumbering(page_allocator, try presentation_document.preparePageExternalLinksWithMissingAlloc(page_allocator, raw_missing, .{
         .title = title,
         .observe_source_elements = observeSourceElements(codes.figure_sizing, raw_missing.bytes) or
-            local_targets_selected or disclosure_selected or codes.timed_audio != null,
+            local_targets_selected or disclosure_selected or codes.timed_audio != null or
+                selectedPhonosSourceCurrent(codes.table_styles, raw_missing),
         .container_disclosures = codes.container_disclosures,
         .local_link_targets = codes.local_link_targets,
         .display_title_precedence = title_precedence,
@@ -7015,6 +7042,31 @@ fn processMain(
             break :lexical try sourceNumberedLexemes(page_allocator, codes, raw_source, source_missing, proved, heading_observation);
         };
         defer if (support_numbered_lexemes.len != 0) page_allocator.free(support_numbered_lexemes);
+        // A selected root TABLE can belong to an unclassified page. Keep
+        // the same final whole-body render and attach only its prior exact
+        // source projection. Language classification conveys no authority.
+        var root_table_fragment: [1]presentation_document.SourceFragment = undefined;
+        var root_table_copy: [1]presentation_document.SourceElementProjection.Copy = undefined;
+        const root_table_projection = if (numbered.source_element_projection == null)
+            unchangedTableSourceProjection(codes.figure_sizing, raw_missing, source_missing, &root_table_copy) else null;
+        const root_table_fragments: []const presentation_document.SourceFragment = root: {
+            if (language.code.len != 0) break :root &.{};
+            const sizing = codes.figure_sizing orelse break :root &.{};
+            const selected = sizing.table_containing_direction orelse break :root &.{};
+            if (!selected.root_only or selected.root_language_only or selected.source.ptr != source_raw.ptr or
+                selected.source.len != source_raw.len) break :root &.{};
+            const projection = if (numbered.source_element_projection) |*issued| issued else
+                if (root_table_projection) |*issued| issued else break :root &.{};
+            root_table_fragment[0] = .{ .source = source, .missing = source_missing, .original_start = 0, .whole_body = true };
+            const fragment = &root_table_fragment[0];
+            bindOwnerRootTableSource(source, source_raw, heading_observation, fragment);
+            bindOwnerSourceElements(source, source_raw, projection, fragment);
+            if (fragment.parser_output_range) |*owned| {
+                if (owned.source_element_projection == null) break :root &.{};
+                owned.timed_audio = timed_audio;
+            } else break :root &.{};
+            break :root &root_table_fragment;
+        };
         const payload = try presentation_document.compileClassifiedWithHeadingAnchorsAndSourceMediaRootAlloc(
             page_allocator,
             title,
@@ -7030,7 +7082,7 @@ fn processMain(
             reference_context,
             fallbacks,
             poem_phase,
-            whole_audio_fragments,
+            if (root_table_fragments.len != 0) root_table_fragments else whole_audio_fragments,
             if (support_numbered_lexemes.len != 0) &heading_observation else null,
             if (support_numbered_lexemes.len != 0)
                 &.{.{ .owner_start = 0, .page_start = 0, .len = source.len }}
@@ -25183,4 +25235,59 @@ test "paired orthography bona owns only closed root table cards and plain gloss 
         const negative = @embedFile("testdata/st-paired-orthography/" ++ name ++ ".raw.wikitext");
         try std.testing.expect(unsectionedPairedOrthographyLanguage(codes, negative, .untracked(negative)) == null);
     }
+}
+
+test "current selected Phonos requests only strict source element projection" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const retained: []const u8 = "<span style=\"\ntext-align:left; font-size:170%; background:#e8f4f8; border: 1px solid #c5e2f7; border-radius:6px; padding:4px 8px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.12);\"><span class=\"ext-phonos ext-phonos-PhonosButton\" lang=\"el\" data-phonos-audio=\"Ell-Genos.ogg\">Play audio</span></span>";
+    var digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(retained, &digest, .{});
+    try std.testing.expectEqual(@as(usize, 291), retained.len);
+    try std.testing.expectEqualStrings("0ff9bd67651fca8a5c8657716e1a078d6a5289799b76dbde7fd1d0eeb7473177", &std.fmt.bytesToHex(digest, .lower));
+    // This is a new Builder request fixture, not a replacement page context.
+    const prefix = "[https://example.invalid]\n";
+    const source = try std.mem.concat(a, u8, &.{ prefix, retained });
+    const owner = source[prefix.len..];
+    const syntax = blobs.wikitext_syntax;
+    const opening = syntax.tagAt(owner, 0).?;
+    const pair = syntax.matchingTag(owner, opening).?;
+    const child = owner[opening.end..pair.inner_end];
+    const tsp = @import("table_style_profile.zig");
+    var selected = [_]tsp.SelectedPhonos{.{ .source = child, .decoration_source = owner,
+        .button = .{ .file = "Ell-Genos.ogg", .language = "el", .caption = "", .caption_html = "",
+            .source_fallback_caption_html = "Play audio", .accessible_name = "Play audio",
+            .attribution_title = "File:Ell-Genos.ogg", .attribution_target = "https://commons.wikimedia.org/wiki/File:Ell-Genos.ogg", .attribution_text = "ⓘ" } }};
+    var profile = try tsp.parseAlloc(a, "");
+    defer profile.deinit();
+    profile.selected_phonos = &selected;
+    const original = MissingText.untracked(source);
+    try std.testing.expect(!observeSourceElements(null, source));
+    try std.testing.expect(selectedPhonosSourceCurrent(&profile, original));
+    const prepared = try presentation_document.preparePageExternalLinksWithMissingAlloc(a, original,
+        .{ .observe_source_elements = selectedPhonosSourceCurrent(&profile, original) });
+    const projection = prepared.source_element_projection orelse return error.TestMissingRequestedProjection;
+    const start = projection.preparedRange(prefix.len, owner.len) orelse return error.TestMissingOwnerCopy;
+    try std.testing.expectEqualStrings(owner, projection.prepared[start..][0..owner.len]);
+    try std.testing.expectEqual(prefix.len, projection.originalRange(start, owner.len).?);
+    try std.testing.expect(projection.observed_source == null);
+    for (0..8) |case| {
+        var changed = original;
+        const saved = selected[0];
+        switch (case) {
+            0 => changed.bytes = try a.dupe(u8, source),
+            1 => changed.unknown = true,
+            2 => changed.lost_missing_range = true,
+            3 => changed.generated_source = "generated",
+            4 => selected[0].source = try a.dupe(u8, child),
+            5 => selected[0].decoration_source = try a.dupe(u8, owner),
+            6 => selected[0].source = source[0..1],
+            else => profile.selected_phonos = &.{},
+        }
+        try std.testing.expect(!selectedPhonosSourceCurrent(&profile, changed));
+        selected[0] = saved;
+        profile.selected_phonos = &selected;
+    }
+    try std.testing.expect(!selectedPhonosSourceCurrent(null, original));
 }

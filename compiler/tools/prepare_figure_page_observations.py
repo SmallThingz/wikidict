@@ -1611,11 +1611,23 @@ def table_root_opening_attributes(text, name):
     return parser.attributes
 
 
-def table_root_configuration(text, html_classes):
+def table_root_configuration(text, html_classes, *, yi_current_table=False):
     # Exact non-selected prelude inventory from page_language_prefix.zig.
     marker = text.find('RLCONF=')
     if marker < 0: raise ValueError('Missing table configuration')
-    if marker:
+    if yi_current_table:
+        lead = 'client-nojs '
+        if (not isinstance(html_classes, str) or not html_classes.startswith(lead) or
+                len(html_classes) > 1536 or re.fullmatch(r'[A-Za-z0-9_ -]+', html_classes[len(lead):]) is None):
+            raise ValueError('Invalid Yiddish table classes')
+        static_program = ('(function(){var className="client-js ' + html_classes[len(lead):] +
+            r'";var cookie=document.cookie.match(/(?:^|; )yiwiktionarymwclientpreferences=([^;]+)/);'
+            r"if(cookie){cookie[1].split('%2C').forEach(function(pref){className=className.replace(new RegExp('(^| )'+"
+            r"pref.replace(/-clientpref-\w+$|[^\w-]+/g,'')+'-clientpref-\\w+( |$)'),'$1'+pref+'$2');});}"
+            r'document.documentElement.className=className;}());')
+        if not 0 < marker <= 2048 or text[:marker] != static_program:
+            raise ValueError('Unproved Yiddish table configuration program')
+    elif marker:
         hashes = {
             '4596a0a448783bdf5cd823d3b017520464502eba17da6e0277049df0c171bf39',
             '296e5797ae51141a36d124508c23b7e0aeb2cb5be620e060fc6eb5aceb39cc89',
@@ -1662,6 +1674,9 @@ def table_root_configuration(text, html_classes):
         raise ValueError('Nonstandard table configuration constant')
     value=json.loads(text[start:end],object_pairs_hook=unique,parse_constant=reject_constant)
     if not isinstance(value,dict): raise ValueError('Non-object table configuration')
+    if yi_current_table and ('wgUserName' not in value or value['wgUserName'] is not None or
+                             value.get('wgUserGroups') != ['*']):
+        raise ValueError('Yiddish table requires an anonymous view')
     return value
 
 
@@ -1821,6 +1836,7 @@ def validate_table_roots(roots, doc, defaults):
                 super().__init__(convert_charrefs=True)
                 self.path = []; self.script = None; self.configs = []; self.html_classes = None
                 self.body_end = None; self.head_closed = False; self.root_count = 0; self.tables = []
+                self.generators = []
                 self.root_stack = []; self.root_closed = False; self.root_nodes = 0
                 self.selected = None; self.header = None; self.header_text = ''; self.header_done = False; self.first_row = None; self.table_depth = None; self.tbody = False
             def position(self):
@@ -1835,7 +1851,11 @@ def validate_table_roots(roots, doc, defaults):
                 if tag == 'head' and (self.path != ['html'] or attrs or self.head_closed): raise ValueError('Invalid table HEAD')
                 if tag == 'body':
                     if self.body_end is not None or not self.head_closed or self.path != ['html']: raise ValueError('Invalid table BODY')
+                    if doc['wiki'] == 'yiwiktionary' and self.generators != ['MediaWiki 1.48.0-wmf.6']:
+                        raise ValueError('Unproved Yiddish table configuration generator')
                     self.body_end = at + len(self.get_starttag_text())
+                if tag == 'meta' and self.path == ['html', 'head'] and values.get('name') == 'generator':
+                    self.generators.append(values.get('content'))
                 if tag == 'script' and self.body_end is None:
                     self.script = (at + len(self.get_starttag_text()), attrs, self.path == ['html', 'head'])
                 if self.body_end is None and tag not in self.void:
@@ -1903,7 +1923,8 @@ def validate_table_roots(roots, doc, defaults):
                     marker = text.find('RLCONF=')
                     if marker >= 0:
                         if attrs or not direct: raise ValueError('Unproved table configuration script')
-                        self.configs.append(table_root_configuration(text,self.html_classes))
+                        yi_table = doc['wiki'] == 'yiwiktionary'
+                        self.configs.append(table_root_configuration(text,self.html_classes,yi_current_table=yi_table))
                 if self.body_end is None:
                     if not self.path or self.path[-1] != tag: raise ValueError('Unbalanced table head')
                     if tag == 'head': self.head_closed = True

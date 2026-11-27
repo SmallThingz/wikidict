@@ -181,8 +181,11 @@ export function audioControlView(span,label,settings,edition) {
     icon.src='assets/phonos/volumeUp.svg';
     icon.alt='';
     icon.setAttribute('aria-hidden','true');
-    label.classList.add('phonos-label');
-    control.append(icon,label);
+    control.append(icon);
+    if(span.text!==''){
+      label.classList.add('phonos-label');
+      control.append(label);
+    }
   }else{
     audio.controls=true;
     audio.setAttribute('aria-label',span.tooltip||span.text||span.target.slice(5));

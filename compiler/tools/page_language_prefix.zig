@@ -286,6 +286,14 @@ pub fn parseSelectedGetOldidWithGeneratorAlloc(a: A, bytes: []const u8, page_id:
             .selected_get_generator = generator });
 }
 
+// The canonical-current Yiddish table role matches the full anonymous
+// Vector program, including the page's own class inventory and Yiddish cookie.
+// Its caller still owns URL, body, table occurrence, and CSS correspondence.
+pub fn parseYiCurrentTableAlloc(a: A, bytes: []const u8, page_id: u64, revision_id: u64, title: []const u8) !Observation {
+    return parseForSelectedPage(a, bytes, page_id, revision_id, title,
+        .{ .namespace_id = 0, .title = title, .selected_get_wiki = "yiwiktionary", .selected_get_generator = .wmf6 });
+}
+
 // A new normal-text identity role may bind the exact maintained static
 // prelude after substituting only its selected wiki cookie literal. Existing
 // selected-oldid/style/exterior entry points retain their earlier contracts.

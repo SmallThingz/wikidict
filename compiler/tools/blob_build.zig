@@ -21307,7 +21307,9 @@ fn bindSourceRootTextContext(a: std.mem.Allocator, codes: *encoder.blob_builder.
     if (!std.mem.eql(u8, &root.namespace_sha256, &ns.source_sha256)) return error.InvalidPageLanguageSource;
     const direction = try figure_page_observations.bindSourceRootLanguageAlloc(a, expanded, ns, title,
         root.root_language, styles, sizing.table_containing_direction);
-    sizing.table_containing_direction = if (root.observation_kind == .selected_oldid_normal_text)
+    sizing.table_containing_direction = if (root.table_height_ids != null)
+        try figure_page_observations.bindWikiTableHeightIdAbsenceAlloc(a, root, expanded, ns, styles, direction)
+    else if (root.observation_kind == .selected_oldid_normal_text)
         try figure_page_observations.bindNormalTextClassesAlloc(a, root, expanded, ns, styles, .{
             .title = title, .namespace_catalog = ns, .behavior_switches = codes.behavior_switches,
             .image_options = codes.image_options, .link_trail = codes.link_trail,
