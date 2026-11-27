@@ -1,0 +1,326 @@
+<div class="noprint"><div style="padding:-10em; margin-bottom:.5em; border:1px solid #EEE; font-size:95%; text-align:left; background: transparent; color:#000;">
+[[Image:1leftarrow blue.svg|16px]]''Voce principale: '''[[enumero]]'''.''
+</div></div> [[Categoria:Coniugazioni in latino|enumero]]
+
+<div class="NonModificabile">
+=== [[coniugazione|Coniugazione]] ===
+</div>
+{| style="background:#F0F0F0;border-collapse:separate;border-spacing:2px; width:60%" class="inflection-table"
+|-
+! colspan="8" style="background:#ffe4c4; text-align:center" | '''Verbo di prima coniugazione'''[[Categoria:Coniugazioni dei verbi di prima coniugazione in latino|mw.title.getCurrentTitle().subpageText]]
+|-
+! colspan="2" style="background:#ffdead" | paradigma
+| colspan="6" |[[enumero#Latino|ēnumerō]], [[enumeras#Latino|ēnumerās]], [[enumeravi#Latino|ēnumerāvī]], [[enumeratum#Latino|ēnumerātum]], [[enumerare#Latino|ēnumerāre]]
+|-
+! colspan="2" rowspan="3" style="background:#e2e4c0" | infinito
+! colspan="2" style="background:#e2e4c0" | presente
+! colspan="2" style="background:#e2e4c0" | perfetto
+! colspan="2" style="background:#e2e4c0" | futuro
+|-
+! style="background:#e2e4c0;width:12.5%" | attivo
+! style="background:#e2e4c0;width:12.5%" | passivo
+! style="background:#e2e4c0;width:12.5%" | attivo
+! style="background:#e2e4c0;width:12.5%" | passivo
+! style="background:#e2e4c0;width:12.5%" | attivo
+! style="background:#e2e4c0;width:12.5%" | passivo
+|-
+|[[enumerare#Latino|ēnumerāre]]
+|[[enumerari#Latino|ēnumerārī]]
+|[[enumeravisse#Latino|ēnumerāvisse]]
+|[[enumeratum#Latino|ēnumerātum]] [[esse]]
+|[[enumeraturum#Latino|ēnumerātūrum]] [[esse]]
+|[[enumeratum#Latino|ēnumerātum]] [[īrī]]
+|-
+! colspan="2" rowspan="2" style="background:#e2e4c0" | participio
+! colspan="2" style="background:#e2e4c0" | presente
+! colspan="2" style="background:#e2e4c0" | perfetto
+! colspan="2" style="background:#e2e4c0" | futuro
+|-
+| colspan="2" | [[enumerans#Latino|ēnumerāns]]
+ | colspan="2" | [[enumeratus#Latino|ēnumerātus]]
+ | colspan="2" | [[enumeraturus#Latino|ēnumerātūrus]]
+|-
+! colspan="2" rowspan="2" style="background:#e2e4c0" | gerundio
+! style="background:#e2e4c0" colspan="2" | nominativo
+! style="background:#e2e4c0;width:20%" | genitivo
+! style="background:#e2e4c0;width:20%" | dativo
+! style="background:#e2e4c0;width:20%" | accusativo
+! style="background:#e2e4c0;width:20%" | ablativo
+|-
+| colspan="2" |''corrisponde all'infinito presente''
+|[[enumerandi#Latino|ēnumerandī]]
+|[[enumerando#Latino|ēnumerandō]]
+|[[enumerandum#Latino|ēnumerandum]]
+|[[enumerando#Latino|ēnumerandō]]
+|-
+! colspan="2" style="background:#e2e4c0" | gerundivo
+| colspan="2" | [[enumerandus#Latino|ēnumerandus]]
+|-
+! colspan="2" style="background:#e2e4c0" | supino
+| colspan="6" | [[enumeratum#Latino|ēnumerātum]] (ablativo: [[enumeratu#Latino|ēnumerātū]]) 
+|-
+|-
+! colspan="2" rowspan="2" style="background:#c0cfe4" | indicativo
+! colspan="3" style="background:#c0cfe4" | singolare
+! colspan="3" style="background:#c0cfe4" | plurale
+|-
+! style="background:#c0cfe4;width:12.5%" | prima
+! style="background:#c0cfe4;width:12.5%" | seconda
+! style="background:#c0cfe4;width:12.5%" | terza
+! style="background:#c0cfe4;width:12.5%" | prima
+! style="background:#c0cfe4;width:12.5%" | seconda
+! style="background:#c0cfe4;width:12.5%" | terza
+|-
+|-
+! colspan="1" rowspan ="6" style="background:#c0cfe4" | attivo
+! style="height:3em;background:#c0cfe4" colspan="1" | presente
+|[[enumero#Latino|ēnumerō]]
+|[[enumeras#Latino|ēnumerās]]
+|[[enumerat#Latino|ēnumerat]]
+|[[enumeramus#Latino|ēnumerāmus]]
+|[[enumeratis#Latino|ēnumerātis]]
+|[[enumerant#Latino|ēnumerant]]
+|-
+! style="height:3em;background:#c0cfe4" colspan="1" | imperfetto
+|[[enumerabam#Latino|ēnumerābam]]
+|[[enumerabas#Latino|ēnumerābās]]
+|[[enumerabat#Latino|ēnumerābat]]
+|[[enumerabamus#Latino|ēnumerābāmus]]
+|[[enumerabatis#Latino|ēnumerābātis]]
+|[[enumerabant#Latino|ēnumerābant]]
+|-
+! style="height:3em;background:#c0cfe4" colspan="1" | futuro semplice
+|[[enumerabo#Latino|ēnumerābō]]
+|[[enumerabis#Latino|ēnumerābis]]
+|[[enumerabit#Latino|ēnumerābit]]
+|[[enumerabimus#Latino|ēnumerābĭmus]]
+|[[enumerabitis#Latino|ēnumerābĭtis]]
+|[[enumerabunt#Latino|ēnumerābunt]]
+|-
+! style="height:3em;background:#c0cfe4" colspan="1" | perfetto
+|[[enumeravi#Latino|ēnumerāvī]]
+|[[enumeravisti#Latino|ēnumerāvīstī]]
+|[[enumeravit#Latino|ēnumerāvit]]
+|[[enumeravimus#Latino|ēnumerāvĭmus]]
+|[[enumeravistis#Latino|ēnumerāvīstis]]
+|[[enumeraverunt#Latino|ēnumerāvērunt]], [[enumeravere#Latino|ēnumerāvēre]]
+|-
+! style="height:3em;background:#c0cfe4" colspan="1" | piuccheperfetto
+|[[enumeraveram#Latino|ēnumerāvĕram]]
+|[[enumeraveras#Latino|ēnumerāvĕrās]]
+|[[enumeraverat#Latino|ēnumerāvĕrat]]
+|[[enumeraveramus#Latino|ēnumerāverāmus]]
+|[[enumeraveratis#Latino|ēnumerāverātis]]
+|[[enumeraverant#Latino|ēnumerāvĕrant]]
+|-
+! style="height:3em;background:#c0cfe4" colspan="1" | futuro anteriore
+|[[enumeravero#Latino|ēnumerāvĕrō]]
+|[[enumeraveris#Latino|ēnumerāvĕris]]
+|[[enumeraverit#Latino|ēnumerāvĕrit]]
+|[[enumeraverimus#Latino|ēnumerāverĭmus]]
+|[[enumeraveritis#Latino|ēnumerāverĭtis]]
+|[[enumeraverint#Latino|ēnumerāvĕrint]]
+|-
+|-
+! colspan="1" rowspan ="6" style="background:#c0cfe4" | passivo
+! style="height:3em;background:#c0cfe4" colspan="1" | presente
+|[[enumeror#Latino|ēnumeror]]
+|[[enumeraris#Latino|ēnumerāris]], [[enumerare#Latino|ēnumerāre]]
+|[[enumeratur#Latino|ēnumerātur]]
+|[[enumeramur#Latino|ēnumerāmur]]
+|[[enumeramini#Latino|ēnumerāmĭnī]]
+|[[enumerantur#Latino|ēnumerantur]]
+|-
+! style="height:3em;background:#c0cfe4" colspan="1" | imperfetto
+|[[enumerabar#Latino|ēnumerābar]]
+|[[enumerabaris#Latino|ēnumerābāris]], [[enumerabare#Latino|ēnumerābāre]]
+|[[enumerabatur#Latino|ēnumerabātur]]
+|[[enumerabamur#Latino|ēnumerābāmur]]
+|[[enumerabamini#Latino|ēnumerābāmĭnī]]
+|[[enumerabantur#Latino|ēnumerābantur]]
+|-
+! style="height:3em;background:#c0cfe4" colspan="1" | futuro semplice
+|[[enumerabor#Latino|ēnumerābor]]
+|[[enumeraberis#Latino|ēnumerābĕris]], [[enumerabere#Latino|ēnumerābere]]
+|[[enumerabitur#Latino|ēnumerābĭtur]]
+|[[enumerabimur#Latino|ēnumerābĭmur]]
+|[[enumerabimini#Latino|ēnumerābimĭnī]]
+|[[enumerabuntur#Latino|ēnumerābuntur]]
+|-
+! style="height:3em;background:#c0cfe4" colspan="1" | perfetto
+| style="background:#F0F0F0" colspan="6" | <div class="NavFrame" style="border:0"><div class="NavHead">participio passato ([[enumeratus#Latino|ēnumerātus]]) seguito dall’indicativo presente di [[sum]]</div><div class="NavContent">
+ {| style="background:#F0F0F0;border-collapse:separate;border-spacing:2px;width:100%" class="inflection-table" 
+ |- 
+ | [[enumeratus#Latino|ēnumerātus]] [[sum]]
+|[[enumeratus#Latino|ēnumerātus]] [[es]]
+|[[enumeratus#Latino|ēnumerātus]] [[est]]
+|[[enumerati#Latino|ēnumerātī]] [[sumus]]
+|[[enumerati#Latino|ēnumerātī]] [[estis]]
+|[[enumerati#Latino|ēnumerātī]] [[sunt]]
+ |- 
+ |}</div></div>
+|-
+! style="height:3em;background:#c0cfe4" colspan="1" | piuccheperfetto
+| style="background:#F0F0F0" colspan="6" | <div class="NavFrame" style="border:0"><div class="NavHead">participio passato ([[enumeratus#Latino|ēnumerātus]]) seguito dall’indicativo imperfetto di [[sum]]</div><div class="NavContent">
+ {| style="background:#F0F0F0;border-collapse:separate;border-spacing:2px;width:100%" class="inflection-table" 
+ |- 
+ | [[enumeratus#Latino|ēnumerātus]] [[eram]]
+|[[enumeratus#Latino|ēnumerātus]] [[erās]]
+|[[enumeratus#Latino|ēnumerātus]] [[erat]]
+|[[enumerati#Latino|ēnumerātī]] [[erāmus]]
+|[[enumerati#Latino|ēnumerātī]] [[erātis]]
+|[[enumerati#Latino|ēnumerātī]] [[erant]]
+ |- 
+ |}</div></div>
+|-
+! style="height:3em;background:#c0cfe4" colspan="1" | futuro anteriore
+| style="background:#F0F0F0" colspan="6" | <div class="NavFrame" style="border:0"><div class="NavHead">participio passato ([[enumeratus#Latino|ēnumerātus]]) seguito dall’indicativo futuro semplice di [[sum]]</div><div class="NavContent">
+ {| style="background:#F0F0F0;border-collapse:separate;border-spacing:2px;width:100%" class="inflection-table" 
+ |- 
+ | [[enumeratus#Latino|ēnumerātus]] [[erō]]
+|[[enumeratus#Latino|ēnumerātus]] [[eris]]
+|[[enumeratus#Latino|ēnumerātus]] [[erit]]
+|[[enumerati#Latino|ēnumerātī]] [[erimus]]
+|[[enumerati#Latino|ēnumerātī]] [[eritis]]
+|[[enumerati#Latino|ēnumerātī]] [[erunt]]
+ |- 
+ |}</div></div>
+|-
+|-
+! colspan="2" rowspan="2" style="background:#c0e4c0" | congiuntivo
+! colspan="3" style="background:#c0e4c0" | singolare
+! colspan="3" style="background:#c0e4c0" | plurale
+|-
+! style="background:#c0e4c0;width:12.5%" | prima
+! style="background:#c0e4c0;width:12.5%" | seconda
+! style="background:#c0e4c0;width:12.5%" | terza
+! style="background:#c0e4c0;width:12.5%" | prima
+! style="background:#c0e4c0;width:12.5%" | seconda
+! style="background:#c0e4c0;width:12.5%" | terza
+|-
+|-
+! colspan="1" rowspan ="4" style="background:#c0e4c0" | attivo
+! style="height:3em;background:#c0e4c0" | presente
+|[[enumerem#Latino|ēnumerem]]
+|[[enumeres#Latino|ēnumerēs]]
+|[[enumeret#Latino|ēnumeret]]
+|[[enumeremus#Latino|ēnumerēmus]]
+|[[enumeretis#Latino|ēnumerētis]]
+|[[enumerent#Latino|ēnumerent]]
+|-
+! style="height:3em;background:#c0e4c0" rowspan="1" | imperfetto
+|[[enumerarem#Latino|ēnumerārem]]
+|[[enumerares#Latino|ēnumerārēs]]
+|[[enumeraret#Latino|ēnumerāret]]
+|[[enumeraremus#Latino|ēnumerārēmus]]
+|[[enumeraretis#Latino|ēnumerārētis]]
+|[[enumerarent#Latino|ēnumerārent]]
+|-
+! style="height:3em;background:#c0e4c0" rowspan="1" | perfetto
+|[[enumeraverim#Latino|ēnumerāvĕrim]]
+|[[enumeraveris#Latino|ēnumerāvĕris]]
+|[[enumeraverit#Latino|ēnumerāvĕrit]]
+|[[enumeraverimus#Latino|ēnumerāverĭmus]]
+|[[enumeraveritis#Latino|ēnumerāverĭtis]]
+|[[enumeraverint#Latino|ēnumerāvĕrint]]
+|-
+! style="height:3em;background:#c0e4c0" rowspan="1" | piuccheperfetto
+|[[enumeravissem#Latino|ēnumerāvissem]]
+|[[enumeravisses#Latino|ēnumerāvissēs]]
+|[[enumeravisset#Latino|ēnumerāvisset]]
+|[[enumeravissemus#Latino|ēnumerāvissēmus]]
+|[[enumeravissetis#Latino|ēnumerāvissētis]]
+|[[enumeravissent#Latino|ēnumerāvissent]]
+|-
+|-
+! colspan="1" rowspan ="4" style="background:#c0e4c0" | passivo
+! style="height:3em;background:#c0e4c0" | presente
+|[[enumerer#Latino|ēnumerer]]
+|[[enumereris#Latino|ēnumerēris]], [[enumerere#Latino|ēnumerēre]]
+|[[enumeretur#Latino|ēnumerētur]]
+|[[enumeremur#Latino|ēnumerēmur]]
+|[[enumeremini#Latino|ēnumerēmĭnī]]
+|[[enumerentur#Latino|ēnumerentur]]
+|-
+! style="height:3em;background:#c0e4c0" rowspan="1" | imperfetto
+|[[enumerarer#Latino|ēnumerārer]]
+|[[enumerareris#Latino|ēnumerārēris]], [[enumerarere#Latino|ēnumerārēre]]
+|[[enumeraretur#Latino|ēnumerārētur]]
+|[[enumeraremur#Latino|ēnumerārēmur]]
+|[[enumeraremini#Latino|ēnumerārēminī]]
+|[[enumerarentur#Latino|ēnumerārentur]]
+|-
+! style="height:3em;background:#c0e4c0" rowspan="1" | perfetto
+| style="background:#F0F0F0" colspan="6" | <div class="NavFrame" style="border:0"><div class="NavHead">participio passato ([[enumeratus#Latino|ēnumerātus]]) seguito dal congiuntivo presente di [[sum]]</div><div class="NavContent">
+ {| style="background:#F0F0F0;border-collapse:separate;border-spacing:2px;width:100%" class="inflection-table" 
+ |- 
+ | [[enumeratus#Latino|ēnumerātus]] [[sim]]
+|[[enumeratus#Latino|ēnumerātus]] [[sis]]
+|[[enumeratus#Latino|ēnumerātus]] [[sit]]
+|[[enumerati#Latino|ēnumerātī]] [[simus]]
+|[[enumerati#Latino|ēnumerātī]] [[sitis]]
+|[[enumerati#Latino|ēnumerātī]] [[sint]]
+ |- 
+ |}</div></div>
+|-
+! style="height:3em;background:#c0e4c0" rowspan="1" | piuccheperfetto
+| style="background:#F0F0F0" colspan="6" | <div class="NavFrame" style="border:0"><div class="NavHead">participio passato ([[enumeratus#Latino|ēnumerātus]]) seguito dal congiuntivo imperfetto di [[sum]]</div><div class="NavContent">
+ {| style="background:#F0F0F0;border-collapse:separate;border-spacing:2px;width:100%" class="inflection-table" 
+ |- 
+ | [[enumeratus#Latino|ēnumerātus]] [[essem]]
+|[[enumeratus#Latino|ēnumerātus]] [[essēs]]
+|[[enumeratus#Latino|ēnumerātus]] [[esset]]
+|[[enumerati#Latino|ēnumerātī]] [[essēmus]]
+|[[enumerati#Latino|ēnumerātī]] [[essētis]]
+|[[enumerati#Latino|ēnumerāti]] [[essent]]
+ |- 
+ |}</div></div>
+|-
+! colspan="2" rowspan="2" style="background:#e4d4c0" | imperativo
+! colspan="3" style="background:#e4d4c0" | singolare
+! colspan="3" style="background:#e4d4c0" | plurale
+|-
+! style="background:#e4d4c0;width:12.5%" | prima
+! style="background:#e4d4c0;width:12.5%" | seconda
+! style="background:#e4d4c0;width:12.5%" | terza
+! style="background:#e4d4c0;width:12.5%" | prima
+! style="background:#e4d4c0;width:12.5%" | seconda
+! style="background:#e4d4c0;width:12.5%" | terza
+|-
+|-
+! colspan="1" rowspan ="2" style="background:#e4d4c0" | attivo
+! style="height:3em;background:#e4d4c0" | presente
+| — 
+|[[enumera#Latino|ēnumerā]]
+| — 
+| — 
+|[[enumerate#Latino|ēnumerāte]]
+| — 
+|-
+! style="height:3em;background:#e4d4c0" | futuro
+| — 
+|[[enumerato#Latino|ēnumerātō]]
+|[[enumerato#Latino|ēnumerātō]]
+| — 
+|[[enumeratote#Latino|ēnumerātōte]]
+|[[enumeranto#Latino|ēnumerantō]]
+|-
+|-
+! colspan="1" rowspan ="2" style="background:#e4d4c0" | passivo
+! style="height:3em;background:#e4d4c0" | presente
+| — 
+|[[enumerare#Latino|ēnumerāre]]
+| — 
+|— 
+|[[enumeramini#Latino|ēnumerāminī]]
+| — 
+|-
+! style="height:3em;background:#e4d4c0" | futuro
+| — 
+|[[enumerator#Latino|ēnumerātor]]
+|[[enumerator#Latino|ēnumerātor]]
+| — 
+|ēnumerāminor
+|[[enumerantor#Latino|ēnumerantor]]
+|-
+|}

@@ -94,8 +94,9 @@ inline ButtonModel buttonModel(const QJsonValue &value) {
         "line_height", "padding", "normal", "hover", "active", "hover_active"};
     const auto object = containerObject(value, required + QStringList{"focus_visible", "outline_colors"}, required);
     ButtonModel result;
-    require(object.value("appearance") == QStringLiteral("native_button"));
     result.appearance = object.value("appearance").toString();
+    // A present ButtonModel paints the declared states directly for either appearance.
+    require(result.appearance == QStringLiteral("native_button") || result.appearance == QStringLiteral("none"));
     result.fontFamily = namedFont(object.value("font_family"));
     result.fontSize = pixels(object.value("font_size"), true);
     require(object.value("font_weight").isDouble() && object.value("font_weight").toDouble() == 400);
@@ -159,6 +160,7 @@ struct LabelRun {
     int utf16Start = 0, utf16Length = 0;
     std::array<LabelPaint, 4> states;
     bool underlineOnFocus = false;
+    bool pointerOnRun = false;
 };
 inline LabelPaint labelPaint(const LabelRun &run, bool hover, bool active, bool focused) {
     auto result = run.states[stateIndex(hover, active)];
@@ -180,8 +182,12 @@ inline QString label(const QJsonValue &value) {
 }
 inline std::optional<LabelRun> labelRun(const QJsonValue &value, const QString &text) {
     if (!present(value)) return {};
-    const auto object = containerObject(value, {"start", "end", "paint"}, {"start", "end", "paint"});
+    const auto object = containerObject(value, {"start", "end", "paint", "pointer_on_run"}, {"start", "end", "paint"});
     LabelRun result;
+    if (object.contains("pointer_on_run")) {
+        require(object.value("pointer_on_run").isBool());
+        result.pointerOnRun = object.value("pointer_on_run").toBool();
+    }
     result.start = unsignedIndex(object.value("start")); result.end = unsignedIndex(object.value("end"));
     const auto bytes = text.toUtf8();
     require(result.start < result.end && result.end <= quint64(bytes.size()));
@@ -241,6 +247,8 @@ inline Model parse(const QJsonObject &owner) {
     }
     result.expandRun = labelRun(object.value("expand_run"), result.expandLabel);
     result.collapseRun = labelRun(object.value("collapse_run"), result.collapseLabel);
+    if ((result.expandRun && result.expandRun->pointerOnRun) || (result.collapseRun && result.collapseRun->pointerOnRun))
+        require(present(object.value("button")));
     result.legacyFocus = object.value("focus");
     if (present(object.value("button"))) {
         require(!present(result.legacyFocus));

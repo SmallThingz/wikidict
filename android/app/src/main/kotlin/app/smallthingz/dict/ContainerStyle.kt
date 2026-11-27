@@ -387,7 +387,8 @@ enum class ContainerDisclosurePlacement { InlineFlow, FloatLeft, FloatRight }
 /** A button has four independent pointer states and no visited history. */
 data class ContainerDisclosureTextPaint(val normal: LinkState, val hover: LinkState, val active: LinkState,
     val hoverActive: LinkState, val underlineOnFocus: Boolean = false)
-data class ContainerDisclosureLabelRun(val start: Long, val end: Long, val paint: ContainerDisclosureTextPaint) {
+data class ContainerDisclosureLabelRun(val start: Long, val end: Long, val paint: ContainerDisclosureTextPaint,
+    val pointerOnRun: Boolean = false) {
     init { require(start in 0..0xffff_ffffL && end in 0..0xffff_ffffL && start < end) { "Invalid disclosure label range" } }
 }
 /** Original UTF-8 byte boundaries; the label has already passed strict string validation. */
@@ -417,6 +418,9 @@ data class ContainerDisclosure(val contentIndex: Long, val initiallyCollapsed: B
     val button: ContainerDisclosureButton? = null) {
     init {
         require(contentIndex in 0..0xffff_ffffL) { "Invalid disclosure child index" }
+        require(button != null || (expandRun?.pointerOnRun != true && collapseRun?.pointerOnRun != true)) {
+            "Run pointer paint requires a typed disclosure button"
+        }
         require(button == null || focus == null) { "Button focus belongs to its own value record" }
         require(listOf(expandLabel, collapseLabel).all { label -> label.isNotEmpty() &&
             validPresentationString(label) && label.none { it.code < 0x20 || it.code == 0x7f } }) {

@@ -1,0 +1,216 @@
+<div class="disambig-see-also">''Такође погледајте:'' <b class="Hani">[[夲]]</b></div>
+
+{| class="wikitable floatright character-info" style="width:25em;"
+|-
+| style="width: 70px;" colspan="2" | <table><tr><td><span class="character-sample-primary Hani">&#26412;</span></td><td> [https://util.unicode.org/UnicodeJsps/character.jsp?a=672C U+672C], [[w:List of XML and HTML character entity references|&amp;#26412;]]
+<div class="character-sample-name">CJK UNIFIED IDEOGRAPH-672C</div></td></tr></table><table style="width:100%;font-size:80%;white-space:nowrap"><tr><td style="width:50%;text-align:left"></td><td style="width:50%;text-align:right"></td></tr></table>
+<table style="width:100%;text-align:center"><tr><td style="width:20%">[[末|<span title="CJK UNIFIED IDEOGRAPH-672B">← <span class="character-sample-secondary Hani">&#x672B;</span><br><small>[U+672B]</small></span>]]
+</td><td style="width:60%;font-size:110%;font-weight:bold">[[Додатак:Уникод/CJK Unified Ideographs|CJK Unified Ideographs]][[Категорија:CJK Unified Ideographs блок|*0000026412]]
+<td style="width:20%">[[札|<span title="CJK UNIFIED IDEOGRAPH-672D"><span class="character-sample-secondary Hani">&#x672D;</span> →<br><small>[U+672D]</small></span>]]
+</td></td></tr></table>
+|}[[Категорија:Han script characters| 本]]<templatestyles src="Шаблон:character info/style.css"/>
+__БЕЗСАДРЖАЈА____NOEDITSECTION____БЕЗКН__
+== -{ 本 }- <span style="font-size:80%;">([[Викиречник:Јапански|јапански]])</span> ==
+[[Категорија:Канђи]]
+
+{| style="float:right; margin-left:0.5em; margin-bottom:0.5em; border: 1px solid #AAAAAA; border-collapse:collapse;" cellpadding="3" rules="all"
+! colspan="3" | &nbsp;<br><font size="10" lang="ja">本</font><br>&nbsp;
+|- 
+| bgcolor="#FFFFE0" | [[Помоћ:Радикал|Радикал]]
+| colspan="2" align="right" | [[木]]+1 
+|- 
+| bgcolor="#FFFFE0" | Број цртица
+| colspan="2" align="right" | 5 [[Категорија:Канђи по броју цртица/5]]
+|-   
+| rowspan="1" valign="top" bgcolor="#F4F4F4" | [[Помоћ:On'yomi|On'yomi]]
+| backgroundcolor="" | [[ホン]]
+| backgroundcolor="" | HON
+|-   
+| bgcolor="#F4F4F4" | [[Помоћ:Kun'yomi|Kun'yomi]]
+| backgroundcolor="" | [[もと]]
+| backgroundcolor="" | moto
+|-   
+| bgcolor="#F4F4F4" | Имена
+| backgroundcolor="" | [[はじめ]]
+| backgroundcolor="" | hajime
+|}
+==== Техничке информације ====
+<p style="margin-bottom: -0.5em;">'''Unicode:''' </p>
+:<span style="font-variant:small-caps">Хексадецимално:</span> {{{1}}} 
+:<span style="font-variant:small-caps">Децимално:</span> {{{2}}} 
+<p style="margin-bottom: -0.5em;">'''Big5:''' </p>
+:<span style="font-variant:small-caps">Хексадецимално:</span> {{{3}}} 
+:<span style="font-variant:small-caps">Децимално:</span> {{{4}}} 
+</span>
+
+==== Речници ====
+<span style="font-variant:small-caps">KangXi:</span> {{{5}}}  <br>
+<span style="font-variant:small-caps">Morobashi:</span> {{{6}}} <br>
+<span style="font-variant:small-caps">Dae Jaweon:</span> {{{7}}} <br>
+<span style="font-variant:small-caps">Hanyu Da Zidian:</span> {{{8}}}
+<br clear="all">
+
+----
+<br clear="all">
+
+----
+__БЕЗСАДРЖАЈА____NOEDITSECTION____БЕЗКН__
+== -{ 本 }- <span style="font-size:80%;">([[Викиречник:Јапански|јапански]])</span> ==
+[[Категорија:Јапанска именица]]
+
+<p style="margin-bottom: -0.5em; cursor:help;" title="Објашњење изговора по међународном стандарду (IPA) и примери изговора речи">'''Изговор:'''</p>
+:[[Помоћ:МФА|IPA]]: <span style="text-decoration:none; font-family:'Arial Unicode MS','Lucida Sans Unicode','MS Mincho',Arial,sans-serif;">[...] </span> &nbsp;<table class="audiotable" style="vertical-align: top; display:inline-block; list-style:none;line-height: 1em;"><tr><td>'''Аудио: '''[[Слика:Loudspeaker.svg|12п]]</td><td class="audiofile">[[Image:Sr-hon.ogg|noicon|175px]]</td><td class="audiometa" style="font-size: 80%;">([[:Image:sr-hon.ogg|датотека]])</td></tr></table>
+
+
+<p style="margin-bottom: -0.5em; cursor: help;" title="Смисао или семантичко објашњење">'''Значења:''' 
+:[[књига]]
+</p>
+
+=== Преводи ===
+{| border="0" width="100%" title="Преводи на друге језике"
+|- 
+| style="color:#0000C0; background-color:#FFFFE0; border:5px solid #EEEEEE; padding:2px;" valign="top" width="48%" | 
+{|
+
+
+*Енглески: [1] -{ [[book]] [[:en:book|☞<sup>en</sup>]] }-
+
+*Немачки: [1] -{ [[Buch]] [[:de:Buch|☞<sup>de</sup>]] }-
+
+*Француски: 
+
+*Хрватски: [1] -{ [[knjiga]] [[:hr:knjiga|☞<sup>hr</sup>]] }-
+
+*Словеначки: 
+
+|} 
+| width="1%" | 
+| style="color:#0000C0; background-color:#FFFFE0; border:5px solid #EEEEEE; padding:2px;" valign="top" width="48%" | 
+{|
+
+*Руски: [1] -{ [[книга]] [[:ru:книга|☞<sup>ru</sup>]] }-
+
+*Италијански: 
+
+*Шпански: 
+
+*Бошњачки: 
+
+*Македонски: 
+
+|} 
+|}
+<p style="margin-bottom:-0.5em; cursor:help;" title="Сродни чланци са википедије">'''Сродни чланци са  [[w:|Википедије]]:''' </p>
+:[1] [http://ja.wikipedia.org/wiki/%E6%9C%AC 本 у јапанској Википедији]
+----
+
+__БЕЗСАДРЖАЈА____NOEDITSECTION____БЕЗКН__
+== -{ 本 }- <span style="font-size:80%;">([[Викиречник:Јапански|јапански]])</span> ==
+[[Категорија:Јапанска именица]]
+
+<p style="margin-bottom: -0.5em; cursor:help;" title="Објашњење изговора по међународном стандарду (IPA) и примери изговора речи">'''Изговор:'''</p>
+:[[Помоћ:МФА|IPA]]: <span style="text-decoration:none; font-family:'Arial Unicode MS','Lucida Sans Unicode','MS Mincho',Arial,sans-serif;">[...] </span> &nbsp;<table class="audiotable" style="vertical-align: top; display:inline-block; list-style:none;line-height: 1em;"><tr><td>'''Аудио: '''[[Слика:Loudspeaker.svg|12п]]</td><td class="audiofile">[[Image:Sr-moto.ogg|noicon|175px]]</td><td class="audiometa" style="font-size: 80%;">([[:Image:sr-moto.ogg|датотека]])</td></tr></table>
+
+
+<p style="margin-bottom: -0.5em; cursor: help;" title="Смисао или семантичко објашњење">'''Значења:''' 
+:[[порекло]], [[корен]]
+</p>
+
+
+=== Преводи ===
+{| border="0" width="100%" title="Преводи на друге језике"
+|- 
+| style="color:#0000C0; background-color:#FFFFE0; border:5px solid #EEEEEE; padding:2px;" valign="top" width="48%" | 
+{|
+
+
+*Енглески: [1] -{ [[origin]] [[:en:origin|☞<sup>en</sup>]] }-
+
+*Немачки: [1] -{ [[Wurzel]] [[:de:Wurzel|☞<sup>de</sup>]] }-
+
+*Француски: 
+
+*Хрватски: 
+
+*Словеначки: 
+
+|} 
+| width="1%" | 
+| style="color:#0000C0; background-color:#FFFFE0; border:5px solid #EEEEEE; padding:2px;" valign="top" width="48%" | 
+{|
+
+*Руски: [1] -{ [[корень]] [[:ru:корень|☞<sup>ru</sup>]] }-
+
+*Италијански: 
+
+*Шпански: 
+
+*Бошњачки: 
+
+*Македонски: 
+
+* Тајски: <span class="Thai" lang="th">[[พื้น#Тајски|พื้น]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="th-Latn" class="tr Latn">pʉ́ʉn</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Појмови са Тајским преводима|本]]
+|} 
+|}
+
+<p style="margin-bottom:-0.5em; cursor:help;" title="Сродни чланци са википедије">'''Сродни чланци са  [[w:|Википедије]]:''' </p>
+:[1]
+
+__БЕЗСАДРЖАЈА____NOEDITSECTION____БЕЗКН__
+== -{ 本 }- <span style="font-size:80%;">([[Викиречник:Кинески|кинески]])</span> ==
+[[Категорија:Кинеска реч]]
+
+[[Слика:%E6%9C%AC-order.gif|десно|250п|мини|Објашњење.]]
+
+<p style="margin-bottom: -0.5em; cursor:help;" title="Објашњење изговора по међународном стандарду (pinyin) и примери изговора речи">'''Изговор:'''</p>
+:[[pinyin|пинјин]]: <span style="text-decoration:none; font-family:'Arial Unicode MS','Lucida Sans Unicode','MS Mincho',Arial,sans-serif;">běn </span> &nbsp;<table class="audiotable" style="vertical-align: top; display:inline-block; list-style:none;line-height: 1em;"><tr><td>'''Аудио: '''[[Слика:Loudspeaker.svg|12п]]</td><td class="audiofile">[[Image:Zh-běn.ogg|noicon|175px]]</td><td class="audiometa" style="font-size: 80%;">([[:Image:zh-běn.ogg|датотека]])</td></tr></table>[[:Шаблон:zh-cir]]
+<p style="margin-bottom: -0.5em; cursor:help;" title="Важи за први карактер, ако је реч вишесложна.">'''Радикал:''' 
+: [[木]] 75
+
+</p>
+<p style="margin-bottom: -0.5em; cursor: help;" title="Смисао или семантичко објашњење">'''Значења:''' 
+:...
+</p>
+<p style="margin-bottom: -0.5em; cursor: help;" title="Примери свакодневне употребе"></p>'''Примери:''' 
+:#17 [[不可]][[露了]][[婦人]][[的]][[下體]]、[[又]][[露]][[他]][[女兒]][[的]][[下體]]、[[也]][[不可]][[娶]][[他]][[孫女]]、[[或]][[是]][[外孫女]]、[[露]][[他們]][[的]][[下體]]、[[他們]][[是]][[骨肉]][[之]][[親]]、[[這]]'''本'''<ref>[[利未記]] 18 [[章]][https://www.wordproject.org/bibles/big5/03/18.htm]</ref>[[是]][[大]][[惡]]。 
+:##17 Bùkě lùle fùrén de xiàtǐ, yòu lù tā nǚ'ér de xiàtǐ, yě bùkě qǔ tā sūnnǚ, huò shì wàisūnnǚ, lù tāmen de xiàtǐ, tāmen shì gǔròu zhī qīn, zhè běn shì dà è.
+:###17. [[Голотиње]] [[жене]] [[и]] [[кћери]] [[њене]] [[не]] [[откриј]]; [[кћери]] [[сина]] [[њеног]] [[ни]] [[кћери]] [[кћери]] [[њене]] [[немој]] [[узети]] [[да]] [[откријеш]] [[голотињу]] [[њихову]]; [[једна]] [[су]] [[крв]]; [[зло]] [[је]].
+<div class="toccolours mw-collapsible mw-collapsed">
+<p style="margin-bottom: -0.5em; cursor: help;" title="Речи које се у одређеном контексту равноправно користе или могу користити.">'''Синоними:''' 
+:...
+</p>
+<div class="mw-collapsible-content">
+
+
+</div>
+</div>
+<p style="margin-bottom: -0.5em; cursor:help;" title="Речи које се пишу различито, а изговарају исто као дата реч.">'''Хомофони:''' 
+:...
+</p>
+
+<p style="margin-bottom: -0.5em; cursor:help;" title="Речи које се изговарају различито, а пишу исто као дата реч.">'''Хомографи:''' 
+:...
+</p>
+
+<p style="margin-bottom: -0.5em; cursor:help;" title="Међународни тест кинеског језика, за који постоје листе речи по језичким нивоима.">'''ХСК ниво:''' 
+: 1
+</p>
+
+<p style="margin-bottom:-0.5em; cursor:help;" title="Асоцијације главне речи">'''Асоцијације:''' 
+:...
+</p>
+
+<p style="margin-bottom:-0.5em; cursor:help;" title="Изведенице и сложенице"></p>'''Изведене речи:''' 
+:...
+
+
+[[Категорија:Радикал 075- 木]]
+[[:Шаблон:Kateg3]]
+[[:Шаблон:Kateg]]
+<p style="margin-bottom:-0.5em; cursor:help;" title="Сродни чланци са википедије">'''Сродни чланци са  [[w:|Википедије]]:''' 
+:[[:w:zh:本|本]]
+</p>
+== ==
+* [hsk.academy [http://www.hsk.academy/en/characters/%E6%9C%AC]] [[北京|5]] [[不客氣|7]]
+== ==
+ [[末]] 003  [[札]] 005

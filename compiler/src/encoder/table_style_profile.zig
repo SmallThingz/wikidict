@@ -52,7 +52,7 @@ pub const ElementContext = struct {
     // Complete original ancestor tag inventory; null retains uncertainty.
     complete_font_ancestor_tags: ?[]const []const u8 = null,
 };
-pub const TableResolution = struct { captured_height_font_ids: ?[]const u8 = null, principal_viewport: ?*const types.TablePrincipalViewport = null, resolved_legacy_border: bool = false, float_viewport: ?types.TableFloatViewport = null, block_viewport: ?*const types.TableBlockViewport = null, style: ?types.TableStyle, scope: Scope, unresolved: bool, margin_basis_unresolved: bool = false, background_specified: bool = false, descendant_style_unresolved: bool = false, width_specified: bool = false, line_height_em: ?f32 = null };
+pub const TableResolution = struct { captured_height_font_ids: ?[]const u8 = null, principal_viewport: ?*const types.TablePrincipalViewport = null, resolved_legacy_border: bool = false, float_viewport: ?types.TableFloatViewport = null, block_viewport: ?*const types.TableBlockViewport = null, style: ?types.TableStyle, cell_spacing: ?u16 = null, scope: Scope, unresolved: bool, margin_basis_unresolved: bool = false, background_specified: bool = false, descendant_style_unresolved: bool = false, width_specified: bool = false, line_height_em: ?f32 = null };
 pub const CellSourceScopeHazards = struct { height: bool = false, font_context: bool = false };
 pub const CellResolution = struct { style: ?types.CellStyle, background: ?[]const u8, background_specified: bool, unresolved: bool, padding_basis_unresolved: bool = false, own_font_basis_unresolved: bool = false, alignment_specified: bool = false, line_height: ?cell_font_metrics.CellLineHeightSpecified = null, line_height_refused: bool = false,
     // Specified by a physical CSS height declaration on this cell. This is
@@ -66,13 +66,14 @@ pub const CellResolution = struct { style: ?types.CellStyle, background: ?[]cons
 const max_css_bytes = 1024 * 1024;
 const max_rules = 4096;
 const Target = enum { element, table, cell, th, td, other };
-const Property = enum { background, border, corner_radii, collapse, margins, margin_top, margin_right, margin_bottom, margin_left, padding, padding_top, padding_right, padding_bottom, padding_left, text_align, float_side, width, min_width, clear, box_sizing, layout_reset, display, vertical_align, line_height, list_style, font_size, text_color, cell_opacity, other };
+const Property = enum { background, border, corner_radii, collapse, spacing, margins, margin_top, margin_right, margin_bottom, margin_left, padding, padding_top, padding_right, padding_bottom, padding_left, text_align, float_side, width, min_width, clear, box_sizing, layout_reset, display, vertical_align, line_height, list_style, font_size, text_color, cell_opacity, other };
 const Value = union(enum) {
     color: []const u8,
     no_background,
     border: types.StyleBorder,
     corner_radii: types.TableCornerRadii,
     collapse: types.BorderCollapse,
+    spacing: u16,
     edges: types.StyleEdges,
     margin_values: types.ContainerMargins,
     margin_edge: types.ContainerMargin,
@@ -115,8 +116,10 @@ const Priority = struct {
     specificity: u64 = 0,
     order: u32 = 0,
     inline_style: bool = false,
+    presentational_hint: bool = false,
     fn wins(self: Priority, prior: Priority) bool {
         if (self.important != prior.important) return self.important;
+        if (self.presentational_hint != prior.presentational_hint) return !self.presentational_hint;
         if (self.inline_style != prior.inline_style) return self.inline_style;
         if (self.specificity != prior.specificity) return self.specificity > prior.specificity;
         return self.order >= prior.order;
@@ -130,6 +133,7 @@ const Winners = struct {
     defer_cell_height: bool = false,
     cell_height_deferred: bool = false,
     selector_unresolved: bool = false,
+    exterior_spacing: bool = false,
     font_basis_unresolved: bool = false,
     fn add(self: *Winners, declaration: Declaration, specificity: u64, conditional: bool, inline_style: bool) void {
         if (declaration.may_name_min_width) {
@@ -174,7 +178,7 @@ const Winners = struct {
             if (border.value) |known| return if (styleBorderFromContainer(known)) |style| .{ .border = style } else .unsupported;
         }
         var selected = self.slots[@backingInt(property)];
-        if (property == .corner_radii or property == .float_side or property == .text_align or property == .width or property == .min_width or property == .clear or property == .padding or property == .box_sizing or property == .display or property == .vertical_align or property == .line_height or property == .list_style or property == .font_size or property == .cell_opacity) if (self.slots[@backingInt(Property.layout_reset)]) |reset| {
+        if (property == .spacing or property == .corner_radii or property == .float_side or property == .text_align or property == .width or property == .min_width or property == .clear or property == .padding or property == .box_sizing or property == .display or property == .vertical_align or property == .line_height or property == .list_style or property == .font_size or property == .cell_opacity) if (self.slots[@backingInt(Property.layout_reset)]) |reset| {
             if (selected == null or reset.priority.wins(selected.?.priority)) selected = reset;
         };
         return if (selected) |winner| winner.value else null;
@@ -483,7 +487,7 @@ pub fn resolveInlineTableWithLegacyBorderBasisAlloc(a: std.mem.Allocator, css: [
         // This source-only component is confined to ordinary direct TABLEs.
         // Other geometry and any reset/unknown authority retain refusal.
         const ordinary = (style.display == null or style.display == .table) and style.float_side == null and
-            winners.value(.corner_radii) == null and winners.value(.layout_reset) == null and winners.value(.other) == null;
+            winners.value(.corner_radii) == null and winners.value(.layout_reset) == null and winners.value(.other) == null and winners.value(.spacing) == null;
         const border = if (ordinary) inlineBorderWithLegacyBasis(winners.borders, legacy_basis.?)
             else InlineLegacyBorderResolution{ .unresolved = true };
         style.border = border.value;
@@ -495,8 +499,9 @@ pub fn resolveInlineTableWithLegacyBorderBasisAlloc(a: std.mem.Allocator, css: [
     const corner_conflict = projectTableCorners(&style, winners);
     const flow_conflict = tableFlowFloatConflict(&style);
     const valid_style = types.validUnboundTableStyle(style);
-    const final_unresolved = unresolved or flow_conflict or corner_conflict or (use_legacy_basis and !valid_style);
-    return .{ .resolved_legacy_border = use_legacy_basis and !final_unresolved, .style = if (valid_style) style else null, .scope = 0, .unresolved = final_unresolved, .margin_basis_unresolved = winners.font_basis_unresolved, .width_specified = winners.value(.width) != null or unresolvedTableWidthBox(winners), .line_height_em = selectedLineHeight(winners) };
+    const spacing = tableSpacing(winners, style.collapse);
+    const final_unresolved = unresolved or spacing.unresolved or flow_conflict or corner_conflict or (use_legacy_basis and !valid_style);
+    return .{ .resolved_legacy_border = use_legacy_basis and !final_unresolved, .style = if (valid_style) style else null, .cell_spacing = spacing.value, .scope = 0, .unresolved = final_unresolved, .margin_basis_unresolved = winners.font_basis_unresolved, .width_specified = winners.value(.width) != null or unresolvedTableWidthBox(winners), .line_height_em = selectedLineHeight(winners) };
 }
 fn addCellWidthHint(winners: *Winners, raw: ?[]const u8) void {
     const value = raw orelse return;
@@ -568,7 +573,7 @@ pub fn resolveInlineCellWithLegacyBorderBasisAlloc(a: std.mem.Allocator, legacy_
         const name = trim(raw[0..colon]);
         const property = propertyFor(name) orelse continue;
         const escaped = std.mem.indexOfScalar(u8, name, '\\') != null;
-        if (legacy_basis != null and (property == .layout_reset or property == .corner_radii or property == .other or property == .display or property == .float_side or property == .clear or escaped)) border_context_unknown = true;
+        if (legacy_basis != null and (property == .layout_reset or property == .corner_radii or property == .other or property == .spacing or property == .display or property == .float_side or property == .clear or escaped)) border_context_unknown = true;
         if (property != .width and property != .min_width and property != .box_sizing and property != .layout_reset and property != .vertical_align and property != .line_height and property != .cell_opacity and !(legacy_basis != null and property == .border) and !escaped) continue;
         if (try declarationAlloc(a, raw, order)) |declaration| if (try cellLineHeightDeclarationAlloc(a, declaration, .cell, null)) |selected| winners.add(selected, 0, !representedDeclaration(.cell, selected), true);
     }
@@ -2259,6 +2264,7 @@ pub const SourceLiteralDivProof = struct {
 // Common tag only: no captured ordinal, parent identity or positive edge.
 pub const SourceDivParentTagProof = struct { range: SourceRootChildProof, candidate_count: u16, parent_tag: []const u8 };
 pub const TextElement = struct {
+    disclosure_local_proof: ?*const DisclosureLocalProof = null,
     container_root_per_owner: ?f32 = null,
     // A current source query owns the subject type. The optional preceding type
     // is refusal-only. Empty means no previous element in the literal parent.
@@ -2277,6 +2283,7 @@ pub const TextElement = struct {
     source_direct_parent_not_li: bool = false,
     source_fragment_target_absent: bool = false,
     source_nonlink_element: bool = false,
+    source_normal_paint_run: bool = false,
     // Immediate query only. These tokens can refute local source rules in inherited box checks.
     // Only the ordinary static P or OL/LI issuer can combine its proved
     // SPAN/I path with a returned page's revision-bound exterior.
@@ -2583,6 +2590,8 @@ pub const FigureObservedContext = struct {
     media: u32,
     caption: u32,
     generated_section_source: ?FigureGeneratedSectionSource = null,
+    // The authored size on the selected normal Missing caption's exact source/DOM join.
+    normal_missing_font_size: ?[]const u8 = null,
 };
 const ObservedAttributeOperator = enum { present, equals, includes, dash, prefix, suffix, substring };
 const ObservedAttributeSelector = struct {
@@ -2691,6 +2700,8 @@ fn observedFigureLinkPaintSamples(samples: []const ObservedFigureLinkPaintSample
 }
 const GeneratedFigureCompoundGroup = struct { alternatives: []const GeneratedFigureCompound };
 const ObservedFigureRule = struct {
+    disclosure_alias: ?GeneratedFigureSelector = null,
+    disclosure_list_known: bool = false,
     focus_inner_control_host: bool = false,
     raw_selector: []const u8,
     selector: ?GeneratedFigureSelector,
@@ -2822,6 +2833,12 @@ fn observedStyleGraphValid(styles: *const Profile, nodes: []const ObservedStyleN
     if (styles.reading_target != .screen) return false;
     if (nodes.len == 0 or nodes.len > 65_536 or root_index >= nodes.len or root_index == 0) return false;
     if (!std.ascii.eqlIgnoreCase(nodes[0].tag, "html") or nodes[0].parent != null) return false;
+    if (!observedStyleNodesValid(nodes)) return false;
+    const root = nodes[root_index];
+    return std.ascii.eqlIgnoreCase(root.tag, "div") and
+        Profile.hasClass(observedFigureAttribute(root, "class") orelse "", "mw-parser-output");
+}
+fn observedStyleNodesValid(nodes: []const ObservedStyleNode) bool {
     for (nodes, 0..) |node, index| {
         if (node.tag.len == 0 or !std.ascii.isAlphabetic(node.tag[0]) or node.attributes.len > 64) return false;
         if (node.empty == true and node.has_text == true) return false;
@@ -2837,9 +2854,7 @@ fn observedStyleGraphValid(styles: *const Profile, nodes: []const ObservedStyleN
                 if (std.ascii.eqlIgnoreCase(prior.name, attribute.name)) return false;
         }
     }
-    const root = nodes[root_index];
-    return std.ascii.eqlIgnoreCase(root.tag, "div") and
-        Profile.hasClass(observedFigureAttribute(root, "class") orelse "", "mw-parser-output");
+    return true;
 }
 pub const TableContainingDirectionContext = struct {
     intrinsic_viewport: bool = false,
@@ -3687,6 +3702,7 @@ fn observedFigureOtherPseudoEffectsWithWitness(context: FigureObservedContext, o
     return false;
 }
 const ObservedFigureEvaluation = struct {
+    disclosure: ?DisclosureEvaluation = null,
     selected_heading_language: bool = false,
     selected_list_language: bool = false,
     // Only observedListBox issues this for its physical, sole OL child.
@@ -3989,6 +4005,15 @@ fn appendObservedFigureDeclarations(a: std.mem.Allocator, result: *std.ArrayList
 fn observedStyleRuleMatch(rule: ObservedFigureRule, nodes: []const ObservedStyleNode, missing_media: ?u32,
     subject: u32, pseudo: ?GeneratedFigurePseudo, evaluation: ObservedFigureEvaluation) ContainerSelectorMatch
 {
+    if (evaluation.disclosure) |scope| if (scope.boundary) |boundary| {
+        if (scope.nodes.ptr != nodes.ptr or scope.nodes.len != nodes.len) return .unknown;
+        if (rule.selector) |selector| {
+            const matched = disclosurePartialSelector(selector, nodes, subject, pseudo, evaluation, boundary);
+            return if (matched == .known and (rule.list_uncertain or !selector.syntax_known)) .unknown else matched;
+        }
+        if (rule.weak_selector) |weak| if (disclosurePartialSelector(weak, nodes, subject, pseudo, evaluation, boundary) == .no) return .no;
+        return .unknown;
+    };
     if (rule.selector) |selector| {
         const result = observedStyleSelectorMatchValidated(selector, nodes, missing_media, subject, pseudo, evaluation);
         return if (result == .known and (rule.list_uncertain or !selector.syntax_known)) .unknown else result;
@@ -4080,7 +4105,13 @@ fn observedStyleNodeDeclarationsSelected(a: std.mem.Allocator, styles: *const Pr
             if (full_index == styles.observed_figure_rules.len) break;
             const value = full_index; full_index += 1; break :next value;
         };
-        const rule = styles.observed_figure_rules[index];
+        var rule = styles.observed_figure_rules[index];
+        if (evaluation.disclosure) |scope| {
+            if (scope.nodes.ptr != nodes.ptr or scope.nodes.len != nodes.len) return null;
+            if (scope.moz_focus_inner_absent and rule.focus_inner_control_host) continue;
+            if (rule.disclosure_alias) |alias| rule.selector = alias;
+            if (rule.disclosure_list_known) rule.list_uncertain = false;
+        }
         if (evaluation.table_focus) |domain| if (index < domain.rules.bit_length and domain.rules.isSet(index) and
             domain.contains(styles, nodes, subject)) continue;
         if (counts) |totals| totals.evaluated_rule_visits +|= 1;
@@ -4147,6 +4178,9 @@ fn observedFigureDeclarationsPrepared(a: std.mem.Allocator, operation: *Observed
     if (pseudo == null and subject == context.media) if (evaluation.missing_width) |width| {
         const css = try std.fmt.allocPrint(a, "width:{d}px", .{width}); defer a.free(css);
         try appendObservedFigureDeclarations(a, &result, css, .{ .inline_style = true, .order = max_rules * 1024 }, false, false, null, 0);
+    };
+    if (pseudo == null) if (normalMissingFontKeyword(context, subject)) |keyword| {
+        try appendNormalMissingFontHint(a, &result, keyword);
     };
     return try result.toOwnedSlice(a);
 }
@@ -4921,6 +4955,11 @@ fn observedFigureRelativeFontSizeInWithWitness(a: std.mem.Allocator, declaration
         const scale: f32 = if (std.ascii.eqlIgnoreCase(raw, "inherit") or std.ascii.eqlIgnoreCase(raw, "unset")) parent_scale
             else if (std.ascii.eqlIgnoreCase(raw, "initial") or std.ascii.eqlIgnoreCase(raw, "medium")) initial_scale orelse return null else blk: {
             if (!std.ascii.eqlIgnoreCase(candidate.name, "font-size")) return observedReadyNull(f32, witness, "observed_ready.observedFigureRelativeFontSizeIn.4");
+            if (@import("font_scale.zig").absoluteKeyword(raw)) |factor| {
+                const absolute = (initial_scale orelse return null) * factor;
+                if (!std.math.isFinite(absolute)) return null;
+                break :blk absolute;
+            }
             // Absolute font lengths require an independently established pixel
             // origin. No browser medium=16px or caption-origin guess is made.
             const percent = std.mem.endsWith(u8, raw, "%");
@@ -5967,7 +6006,24 @@ fn observedReadyCaptionLink(context: FigureObservedContext, index: u32) ?u32 {
     }
     return null;
 }
+fn appendNormalMissingFontHint(a: std.mem.Allocator, declarations: *std.ArrayList(ObservedFigureDeclaration), keyword: []const u8) !void {
+    const css = try std.fmt.allocPrint(a, "font-size:{s}", .{keyword});
+    defer a.free(css);
+    try appendObservedFigureDeclarations(a, declarations, css, .{ .presentational_hint = true }, false, false, null, 0);
+}
+
+fn normalMissingFontKeyword(context: FigureObservedContext, index: u32) ?[]const u8 {
+    const authored = context.normal_missing_font_size orelse return null;
+    if (context.media_kind != .missing or index >= context.nodes.len) return null;
+    const node = context.nodes[index];
+    if (node.parent != context.caption or node.has_text != true or !std.ascii.eqlIgnoreCase(node.tag, "font")) return null;
+    const observed = observedFigureAttribute(node, "size") orelse return null;
+    if (!std.mem.eql(u8, authored, observed) or authored.len != 1) return null;
+    return @import("font_scale.zig").htmlAbsoluteSizeKeyword(authored[0]);
+}
+
 fn observedReadyCaptionKindValid(context: FigureObservedContext, index: u32) bool {
+    if (normalMissingFontKeyword(context, index) != null) return true;
     if (!observedReadyCaptionAncestor(context, index, context.caption)) return false;
     const node = context.nodes[index];
     const link = std.ascii.eqlIgnoreCase(node.tag, "a");
@@ -6619,10 +6675,10 @@ fn observedFigureComputedFontsWithWitness(a: std.mem.Allocator, context: FigureO
     computed: []const ObservedFigureComputedNode, witness: ?*ObservedReadyFigureWitness) !?ObservedFigureFonts
 {
     if (!figureObservedContextValid(context) or computed.len == 0 or computed.len > 512) return observedReadyNull(ObservedFigureFonts, witness, "observed_ready.observedFigureComputedFonts.1");
-    return observedStyleComputedFonts(a, context.nodes, context.root, computed, witness);
+    return observedStyleComputedFonts(a, context.nodes, context.root, computed, witness, context);
 }
 fn observedStyleComputedFonts(a: std.mem.Allocator, nodes: []const ObservedStyleNode, root: u32,
-    computed: []const ObservedFigureComputedNode, witness: ?*ObservedReadyFigureWitness) !?ObservedFigureFonts
+    computed: []const ObservedFigureComputedNode, witness: ?*ObservedReadyFigureWitness, figure: ?FigureObservedContext) !?ObservedFigureFonts
 {
     if (root >= nodes.len or computed.len == 0 or computed.len > 512) return null;
     const result = try a.alloc(ObservedFigureComputedFont, computed.len);
@@ -6640,7 +6696,9 @@ fn observedStyleComputedFonts(a: std.mem.Allocator, nodes: []const ObservedStyle
         // Their non-inherited UA font defaults are outside this initial source
         // transform. Native model coverage of richer children does not admit
         // such source without independently resolving those defaults.
-        for ([_][]const u8{ "big", "small", "sup", "sub", "font", "code", "kbd", "samp", "tt", "pre",
+        if (std.ascii.eqlIgnoreCase(observed.tag, "font") and (if (figure) |context| normalMissingFontKeyword(context, node.index) == null else true))
+            return observedReadyNull(ObservedFigureFonts, witness, "observed_ready.observedFigureComputedFonts.font_hint");
+        for ([_][]const u8{ "big", "small", "sup", "sub", "code", "kbd", "samp", "tt", "pre",
             "h1", "h2", "h3", "h4", "h5", "h6", "th", "input", "button", "select", "textarea", "rt", "rp" }) |tag|
             if (std.ascii.eqlIgnoreCase(observed.tag, tag)) return observedReadyNull(ObservedFigureFonts, witness, "observed_ready.observedFigureComputedFonts.3");
         var parent = initial;
@@ -8714,10 +8772,10 @@ const ContainerCascade = struct {
                     } else .unknown, priority, uncertain_value);
                     continue;
                 }
+                if (!parsed.unknown and hasNegativeBoxLength(value)) continue;
                 const quartet = edges(value);
-                const first: usize = if (margin) 0 else 4;
                 const values: [4]?types.StyleLength = if (quartet) |q| .{ q.top, q.right, q.bottom, q.left } else @splat(null);
-                for (values, 0..) |edge, index| self.consider(@enumFromInt(first + index), if (edge) |known| .{ .edge = known } else .unknown, priority, uncertain_value);
+                for (values, 0..) |edge, index| self.consider(@enumFromInt(4 + index), if (edge) |known| .{ .edge = known } else .unknown, priority, uncertain_value);
                 continue;
             }
             var edge_slot: ?ContainerSlot = null;
@@ -8728,6 +8786,7 @@ const ContainerCascade = struct {
                 if (@intFromEnum(slot) < 4 and std.ascii.eqlIgnoreCase(value, "auto")) {
                     self.consider(slot, .margin_auto, priority, uncertain_value); continue;
                 }
+                if (@intFromEnum(slot) >= 4 and !parsed.unknown and hasNegativeBoxLength(value)) continue;
                 const ordinary = if (@intFromEnum(slot) < 4) containerMarginLength(value) else length(value);
                 const edge = ordinary orelse containerRootRelativeEdge(value, self.root_per_owner, @intFromEnum(slot) < 4);
                 self.consider(slot, if (edge) |known| .{ .edge = known } else .unknown, priority, uncertain_value);
@@ -10969,6 +11028,15 @@ pub const Profile = struct {
             // Custom properties remain owned by the separate custom environment.
             if (rule.declarations.len == 0) continue;
             const selector_value = rule.selector;
+            if (target == .table and selector_value.target == .other and !winners.exterior_spacing) {
+                const tag = selector_value.own_tag orelse "";
+                if (std.ascii.eqlIgnoreCase(tag, "html") or std.ascii.eqlIgnoreCase(tag, "body")) {
+                    for (rule.declarations) |declaration| if (declaration.property == .spacing) {
+                        winners.exterior_spacing = true;
+                        break;
+                    };
+                }
+            }
             if (selector_value.complete_own_attribute) |required| if (context.absent_own_attribute) |absent| {
                 if (std.ascii.eqlIgnoreCase(required, absent)) continue;
             };
@@ -11093,12 +11161,17 @@ pub const Profile = struct {
         };
         const corner_conflict = projectTableCorners(&style, winners);
         const flow_conflict = tableFlowFloatConflict(&style);
+        const spacing = tableSpacing(winners, style.collapse);
+        // The ordinary table has no computed HTML/body spacing basis. A
+        // definite table declaration replaces it. Collapsing uses no gap.
+        const exterior_spacing_unknown = winners.exterior_spacing and
+            winners.value(.spacing) == null and style.collapse != .collapse;
         // This complete source-bound ID census is used only to normalize a
         // declared cell minimum. It does not change legacy edge/font guards.
         const captured_height_font_ids = if (context.table_height_id_superset) |ids|
             (if (!winners.font_basis_unresolved and self.capturedCellHeightInheritedFontKnown(inherited_scope, ancestor_names, ids)) ids else null)
         else null;
-        return .{ .captured_height_font_ids = captured_height_font_ids, .style = if (types.validUnboundTableStyle(style)) style else null, .scope = inherited_scope | own_scope, .unresolved = winners.unresolvedWithFont(context.font_size_consumed) or flow_conflict or corner_conflict, .margin_basis_unresolved = winners.font_basis_unresolved or self.inheritedFontBasisUnresolved(inherited_scope, context.complete_table_ancestor_classes orelse ancestor_names, context.complete_font_ancestor_ids, context.complete_font_ancestor_tags, context.complete_table_ancestor_ids != null, null), .background_specified = winners.value(.background) != null, .width_specified = winners.value(.width) != null or unresolvedTableWidthBox(winners), .line_height_em = selectedLineHeight(winners) };
+        return .{ .captured_height_font_ids = captured_height_font_ids, .style = if (types.validUnboundTableStyle(style)) style else null, .cell_spacing = spacing.value, .scope = inherited_scope | own_scope, .unresolved = winners.unresolvedWithFont(context.font_size_consumed) or spacing.unresolved or exterior_spacing_unknown or flow_conflict or corner_conflict, .margin_basis_unresolved = winners.font_basis_unresolved or self.inheritedFontBasisUnresolved(inherited_scope, context.complete_table_ancestor_classes orelse ancestor_names, context.complete_font_ancestor_ids, context.complete_font_ancestor_tags, context.complete_table_ancestor_ids != null, null), .background_specified = winners.value(.background) != null, .width_specified = winners.value(.width) != null or unresolvedTableWidthBox(winners), .line_height_em = selectedLineHeight(winners) };
     }
 
     fn inheritedFontBasisUnresolved(self: *const Profile, scope: Scope, ancestor_names: ?[]const u8, complete_ids: ?[]const []const u8, complete_tags: ?[]const []const u8, source_bound: bool, cell_ids: ?[]const u8) bool {
@@ -11463,6 +11536,35 @@ pub const Profile = struct {
             inlineBoxSourceRejected(diagnostic, .source_inherited_defaults_rejected); return .{ .unresolved = true };
         }
         return result;
+    }
+
+    // Replay candidate selection without assigning a cascade winner.
+    pub fn traceInlineBoxTriggerForTest(self: *const Profile, a: std.mem.Allocator,
+        element: *const TextElement, css: []const u8) !void
+    {
+        if (comptime !@import("builtin").is_test) return;
+        var selected = try inlineBoxSelectionAlloc(a, css);
+        if (selected.position) {
+            std.debug.print("TH_HANI_TRIGGER query=0x{x} from=inline\n", .{@intFromPtr(element)});
+            return;
+        }
+        for (self.container_rules) |rule| {
+            const match = rule.selector.matchIn(element, self.page_style_parent != null);
+            if (match == .no) continue;
+            const candidate = try inlineBoxSelectionAlloc(a, rule.css);
+            if (candidate.position) {
+                if (rule.provenance) |origin| {
+                    std.debug.print("TH_HANI_TRIGGER query=0x{x} from=rule match={s} order={d} source={d} offset={d} selector={s} css={s}\n", .{
+                        @intFromPtr(element), @tagName(match), rule.order, origin.source_index, origin.css_byte_start,
+                        origin.selector[0..@min(origin.selector.len, 180)], rule.css[0..@min(rule.css.len, 240)] });
+                } else std.debug.print("TH_HANI_TRIGGER query=0x{x} from=unattributed_rule match={s} order={d}\n", .{
+                    @intFromPtr(element), @tagName(match), rule.order });
+                return;
+            }
+            selected.reset = selected.reset or candidate.reset;
+        }
+        std.debug.print("TH_HANI_TRIGGER query=0x{x} from={s}\n", .{
+            @intFromPtr(element), if (selected.reset and try inlineBoxResetParentCandidateAlloc(a, element, self)) "parent_reset" else "none" });
     }
 
     pub fn hasInlineBoxCandidateIn(self: *const Profile, a: std.mem.Allocator, element: *const TextElement, css: []const u8) !bool {
@@ -11908,6 +12010,7 @@ fn observedMissingCaptionEmpty(context: FigureObservedContext) bool {
 }
 
 fn observedMissingCaptionKindValid(context: FigureObservedContext, index: u32) bool {
+    if (normalMissingFontKeyword(context, index) != null) return true;
     if (!observedReadyCaptionKindValid(context, index)) return false;
     const node = context.nodes[index];
     const line_break = std.ascii.eqlIgnoreCase(node.tag, "br");
@@ -11998,6 +12101,18 @@ pub fn figureGeneratedSectionFocusAbsent(a: std.mem.Allocator, context: FigureOb
 fn observedFigureStateAt(nodes: []const ObservedStyleNode, index: u32,
     evaluation: ObservedFigureEvaluation) ?ObservedFigureLinkState
 {
+    if (evaluation.disclosure) |scope| {
+        if (scope.nodes.ptr == nodes.ptr and scope.nodes.len == nodes.len) {
+            if (index == scope.button) return scope.state;
+            // Pointer over the button need not be over the SPAN. Keep both
+            // child pointer predicates unknown unless excluded by the button.
+            if (index == scope.label) return .{
+                .hover = if (scope.state.hover == false) false else null,
+                .active = if (scope.state.active == false) false else null,
+                .focus = false, .focus_visible = false, .focus_within = false,
+            };
+        }
+    }
     if (evaluation.link_subject == index) return evaluation.link_state;
     if (evaluation.rich_inline_focus_absent) |issued| {
         if (issued.nodes.ptr == nodes.ptr and issued.nodes.len == nodes.len and
@@ -12745,9 +12860,18 @@ const Builder = struct {
             if (self.observed_figure_rules.items.len + pending.items.len >= self.selector_limit) return error.StyleProfileLimit;
             const owned = try self.a.dupe(u8, raw);
             const projected = try self.generatedFigureSelector(owned);
+            // Disclosure CSS mixes legacy :before with ordinary selectors in
+            // one unforgiving list. Validate every arm before admitting rank.
+            var alias: ?GeneratedFigureSelector = null;
+            if (projected == null) for ([_][]const u8{ ":before", ":after" }) |suffix| {
+                if (!std.ascii.endsWithIgnoreCase(owned, suffix)) continue;
+                const canonical = try std.mem.concat(self.a, u8, &.{ owned[0 .. owned.len - suffix.len], ":", suffix });
+                const parsed = (try self.generatedFigureSelector(canonical)) orelse continue;
+                if (parsed.syntax_known and (parsed.pseudo == .before or parsed.pseudo == .after)) alias = parsed;
+            };
             list_uncertain = list_uncertain or projected == null or !projected.?.syntax_known;
             try pending.append(self.a, .{
-                .raw_selector = owned, .selector = projected,
+                .raw_selector = owned, .selector = projected, .disclosure_alias = alias,
                 .weak_selector = if (projected == null) (try self.observedNecessarySelector(owned)) orelse
                     (try self.observedSiblingSubjectSelector(owned)) else null,
                 .list_uncertain = false, .css = css, .conditions = self.container_conditions, .conditional = conditional,
@@ -12756,7 +12880,15 @@ const Builder = struct {
                 .focus_inner_control_host = try self.figureFocusInnerControlHost(owned),
             });
         }
-        for (pending.items) |*rule| rule.list_uncertain = list_uncertain;
+        var disclosure_list_known = true;
+        for (pending.items) |rule| {
+            const projected_arm = rule.selector orelse rule.disclosure_alias orelse { disclosure_list_known = false; break; };
+            if (!projected_arm.syntax_known) { disclosure_list_known = false; break; }
+        }
+        for (pending.items) |*rule| {
+            rule.list_uncertain = list_uncertain;
+            rule.disclosure_list_known = disclosure_list_known;
+        }
         try self.observed_figure_rules.appendSlice(self.a, pending.items);
     }
 
@@ -14911,7 +15043,7 @@ fn representedDeclaration(target: Target, declaration: Declaration) bool {
 fn representedProperty(target: Target, property: Property) bool {
     return switch (property) {
         .background, .border, .text_color, .other, .layout_reset => true,
-        .corner_radii, .collapse, .margins, .margin_top, .margin_right, .margin_bottom, .margin_left, .float_side, .clear, .box_sizing => target == .table,
+        .corner_radii, .collapse, .spacing, .margins, .margin_top, .margin_right, .margin_bottom, .margin_left, .float_side, .clear, .box_sizing => target == .table,
         .width => target == .table or target == .td or target == .th or target == .cell,
         .display, .vertical_align, .line_height, .list_style => target == .table,
         .font_size => target == .table or target == .td or target == .th or target == .cell,
@@ -14939,9 +15071,7 @@ fn propertyFor(name: []const u8) ?Property {
         std.ascii.eqlIgnoreCase(name, "border-top-left-radius") or std.ascii.eqlIgnoreCase(name, "border-top-right-radius") or
         std.ascii.eqlIgnoreCase(name, "border-bottom-right-radius") or std.ascii.eqlIgnoreCase(name, "border-bottom-left-radius")) return .corner_radii;
     if (std.ascii.eqlIgnoreCase(name, "border-collapse")) return .collapse;
-    // Cell separation does not override any physical border component.
-    // Keep its independent refusal while retaining known border winners.
-    if (std.ascii.eqlIgnoreCase(name, "border-spacing")) return .other;
+    if (std.ascii.eqlIgnoreCase(name, "border-spacing")) return .spacing;
     if (std.ascii.eqlIgnoreCase(name, "border") or std.ascii.startsWithIgnoreCase(name, "border-")) return .border;
     if (std.ascii.eqlIgnoreCase(name, "margin")) return .margins;
     inline for (.{ "margin-top", "margin-right", "margin-bottom", "margin-left" }, .{ Property.margin_top, .margin_right, .margin_bottom, .margin_left }) |edge, property| if (std.ascii.eqlIgnoreCase(name, edge)) return property;
@@ -14957,7 +15087,7 @@ fn propertyFor(name: []const u8) ?Property {
     if (std.ascii.eqlIgnoreCase(name, "text-align")) return .text_align;
     if (std.ascii.eqlIgnoreCase(name, "opacity")) return .cell_opacity;
     // These affect table/cell presentation but have no projection in this ABI.
-    inline for (.{ "height", "max-width", "min-height", "max-height", "display", "visibility", "position", "color", "font", "font-size", "font-family", "font-weight", "vertical-align", "table-layout", "border-spacing", "transform", "all" }) |relevant| if (std.ascii.eqlIgnoreCase(name, relevant)) return .other;
+    inline for (.{ "height", "max-width", "min-height", "max-height", "display", "visibility", "position", "color", "font", "font-size", "font-family", "font-weight", "vertical-align", "table-layout", "transform", "all" }) |relevant| if (std.ascii.eqlIgnoreCase(name, relevant)) return .other;
     if (name.len == 0 or std.mem.startsWith(u8, name, "--")) return null;
     return .other;
 }
@@ -15011,6 +15141,22 @@ fn widthNumberSyntax(value: []const u8) bool {
     }
     return at == value.len;
 }
+// A negative literal invalidates the entire nonnegative box declaration.
+// Defer expressions and escapes, which can change when the value is computed.
+fn hasNegativeBoxLength(value: []const u8) bool {
+    if (std.mem.indexOfAny(u8, value, "()\\\"'") != null) return false;
+    var tokens = std.mem.tokenizeAny(u8, value, " \t\r\n\x0c");
+    while (tokens.next()) |token| {
+        if (token[0] != '-') continue;
+        for ([_][]const u8{ "px", "em", "rem", "ex", "ch", "vw", "vh", "vmin", "vmax", "cm", "mm", "in", "pt", "pc", "q", "%" }) |unit| {
+            if (!std.ascii.endsWithIgnoreCase(token, unit)) continue;
+            const number = token[0 .. token.len - unit.len];
+            if (widthNumberSyntax(number) and !widthNumberIsZero(number)) return true;
+        }
+    }
+    return false;
+}
+
 fn widthNumberIsZero(value: []const u8) bool {
     for (value) |byte| {
         if (byte == 'e' or byte == 'E') break;
@@ -15205,6 +15351,14 @@ fn declarationAlloc(a: std.mem.Allocator, raw: []const u8, order: u32) !?Declara
             } else if (std.ascii.eqlIgnoreCase(value, "separate")) {
                 projection = .{ .collapse = .separate };
             } else if (!dynamicValue(value)) return null;
+        },
+        .spacing => {
+            if (hasNegativeBoxLength(value)) return null;
+            if (std.ascii.eqlIgnoreCase(value, "initial")) {
+                projection = .{ .spacing = 0 };
+            } else if (uniformTableSpacingPx(value)) |spacing| {
+                projection = .{ .spacing = spacing };
+            }
         },
         .margins, .padding => {
             const shorthand = std.ascii.eqlIgnoreCase(name, if (property == .margins) "margin" else "padding");
@@ -31286,11 +31440,22 @@ pub fn observedTablePrefixAncestorsNeutral(a: std.mem.Allocator, contexts: []con
     return true;
 }
 
-// The HTML table rule supplies a lower-origin value at TABLE, not a guessed
-// inherited value. Explicit inherit/unset still consume the actual parent.
-const ObservedTableSpacing = struct { value: ?u16 = null, unresolved: bool = false };
+const TableSpacing = struct { value: ?u16 = null, unresolved: bool = false };
+
+fn tableSpacing(winners: Winners, collapse: ?types.BorderCollapse) TableSpacing {
+    const value = winners.value(.spacing) orelse return .{};
+    if (value != .spacing) return .{ .unresolved = true };
+    return switch (collapse orelse return .{ .unresolved = true }) {
+        .separate => .{ .value = value.spacing },
+        // Geometry stores the used gap, including zero over a legacy hint.
+        // A descendant requesting the computed value still needs a basis.
+        .collapse => .{ .value = 0 },
+    };
+}
+// The HTML table rule supplies a lower-origin value at TABLE. Explicit
+// inherit and unset consume the actual parent.
 fn observedTableSpacingValue(a: std.mem.Allocator, declaration: ObservedFigureDeclaration,
-    environment: CustomEnvironment, inherited: ?u16) !ObservedTableSpacing
+    environment: CustomEnvironment, inherited: ?u16) !TableSpacing
 {
     if (declaration.syntax_unknown) return .{ .unresolved = true };
     const computed = try customColorValue(a, environment, declaration.raw);
@@ -31303,25 +31468,30 @@ fn observedTableSpacingValue(a: std.mem.Allocator, declaration: ObservedFigureDe
         return .{ .value = inherited, .unresolved = inherited == null };
     if (std.ascii.eqlIgnoreCase(raw, "initial")) return .{ .value = 0 };
     if (!std.ascii.eqlIgnoreCase(declaration.name, "border-spacing")) return .{ .unresolved = true };
+    const spacing = uniformTableSpacingPx(raw) orelse return .{ .unresolved = true };
+    return .{ .value = spacing };
+}
+
+fn uniformTableSpacingPx(raw: []const u8) ?u16 {
     var atoms: [2][]const u8 = undefined;
-    const count = styleValueTokens(raw, &atoms) orelse return .{ .unresolved = true };
-    if (count == 0 or count > 2) return .{ .unresolved = true };
+    const count = styleValueTokens(raw, &atoms) orelse return null;
+    if (count == 0 or count > 2) return null;
     var selected: ?u16 = null;
     for (atoms[0..count]) |atom| {
         const pixels = atom.len > 2 and std.ascii.eqlIgnoreCase(atom[atom.len - 2 ..], "px");
         const number = if (pixels) atom[0 .. atom.len - 2] else atom;
-        if (!widthNumberSyntax(number)) return .{ .unresolved = true };
-        const value = std.fmt.parseFloat(f64, number) catch return .{ .unresolved = true };
+        if (!widthNumberSyntax(number)) return null;
+        const value = std.fmt.parseFloat(f64, number) catch return null;
         const mantissa = number[0 .. (std.mem.indexOfAny(u8, number, "eE") orelse number.len)];
         var nonzero = false;
         for (mantissa) |byte| if (byte >= '1' and byte <= '9') { nonzero = true; };
         if (!std.math.isFinite(value) or value < 0 or value > 65535 or @floor(value) != value or
-            (nonzero and value == 0) or (!pixels and value != 0)) return .{ .unresolved = true };
+            (nonzero and value == 0) or (!pixels and value != 0)) return null;
         const integer: u16 = @intFromFloat(value);
-        if (selected) |prior| { if (prior != integer) return .{ .unresolved = true }; }
+        if (selected) |prior| { if (prior != integer) return null; }
         else selected = integer;
     }
-    return .{ .value = selected };
+    return selected;
 }
 fn observedTableSpacing(a: std.mem.Allocator, declarations: []const ObservedFigureDeclaration,
     environment: CustomEnvironment, inherited: ?u16, absent: ?u16) !?u16
@@ -34540,7 +34710,7 @@ fn resolveObservedInlineMissingInternal(a: std.mem.Allocator, contexts: []const 
                             .focus = focus != .unfocused, .focus_visible = focus == .focus_visible, .focus_within = focus != .unfocused } };
                     const computed = (try inlineMissingComputedPath(alloc, context, evaluation)) orelse return null;
                     if (!try inlineMissingAncestorsVisible(alloc, context, computed, evaluation)) return null;
-                    const fonts = (try observedStyleComputedFonts(alloc, context.nodes, context.root, computed, null)) orelse return null;
+                    const fonts = (try observedStyleComputedFonts(alloc, context.nodes, context.root, computed, null, null)) orelse return null;
                     const parent = observedFigureFontAt(fonts, context.nodes[context.wrapper].parent.?) orelse return null;
                     const font = observedFigureFontAt(fonts, context.label) orelse return null;
                     if (!observedFigureDataEqual(types.FigureMediaStrut, parent, native_parent, 0)) return null;
@@ -38345,6 +38515,358 @@ fn positionedContainerInheritance(a: std.mem.Allocator, path: []const Positioned
         .direction = direction, .alignment = align_value };
 }
 
+pub const FixedInlineBoxComputed = struct {
+    layout: types.InlineBoxAtomicLayout,
+    font: types.InlineFontSnapshot,
+    padding: types.StyleEdges,
+    border: types.InlineBoxBorderEdges,
+    background: []const u8,
+    foreground: []const u8,
+};
+
+// Resolve the computed values of a selected fixed inline box. A caller must
+// supply the complete physical cascade and the already-issued immediate-parent
+// font. positionedContainerInheritance installs that metric at the final node
+// and applies only that node's font declarations to it. A root-origin metric
+// requires independent source derivation through the ancestor chain.
+// These values do not attest to a source token or permit emission themselves.
+fn fixedInlineBoxFromPath(a: std.mem.Allocator, path: []const PositionedContainerPathNode,
+    parent_font: types.InlineFontSnapshot) !?FixedInlineBoxComputed
+{
+    if (path.len == 0 or !std.ascii.eqlIgnoreCase(path[path.len - 1].tag, "span") or
+        !parent_font.font_normalized or parent_font.font_scale == null or parent_font.font_scale_basis == .context) return null;
+    const node = path[path.len - 1];
+    const inherited = (try positionedContainerInheritance(a, path, parent_font, null)) orelse return null;
+    const font = inherited.font orelse return null;
+    if (!std.ascii.eqlIgnoreCase(inherited.wrap orelse return null, "normal") or
+        !std.ascii.eqlIgnoreCase(inherited.direction orelse return null, "ltr")) return null;
+    const alignment: types.InlineBoxOverlayTextAlign = switch (inherited.alignment orelse return null) {
+        .left => .left, .right => .right, .center => .center,
+    };
+    const line_height: ?types.InlineLineHeight = switch (inherited.line_height orelse return null) {
+        .normal => null,
+        .multiplier => |factor| .{ .font_relative = .{ .factor = factor, .font = font } },
+        .length => |metric_length| .{ .computed = .{ .value = metric_length.value,
+            .font_scale_basis = if (metric_length.unit == .px) .css_px else .normal_body } },
+    };
+    var used = try ObservedFigurePropertyUse.init(a, node.declarations);
+    defer used.deinit(a);
+    used.customEnvironment();
+    if (!try used.staticMotion(a, node.environment)) return null;
+    inline for (.{
+        .{ "display", "inline-block", "inline" }, .{ "position", "static", "static" },
+        .{ "vertical-align", "baseline", "baseline" }, .{ "box-decoration-break", "slice", "slice" },
+        .{ "min-width", "auto", "auto" }, .{ "min-height", "auto", "auto" },
+        .{ "max-width", "none", "none" }, .{ "max-height", "none", "none" },
+        .{ "z-index", "auto", "auto" }, .{ "unicode-bidi", "normal", "normal" },
+        .{ "float", "none", "none" }, .{ "clear", "none", "none" },
+        .{ "transform", "none", "none" }, .{ "translate", "none", "none" },
+        .{ "rotate", "none", "none" }, .{ "scale", "none", "none" },
+        .{ "perspective", "none", "none" }, .{ "filter", "none", "none" },
+        .{ "backdrop-filter", "none", "none" }, .{ "clip", "auto", "auto" },
+        .{ "clip-path", "none", "none" }, .{ "box-shadow", "none", "none" },
+        .{ "opacity", "1", "1" }, .{ "isolation", "auto", "auto" },
+        .{ "mix-blend-mode", "normal", "normal" }, .{ "contain", "none", "none" },
+        .{ "will-change", "auto", "auto" }, .{ "zoom", "1", "1" },
+        .{ "cursor", "auto", "auto" }, .{ "content", "normal", "normal" },
+        .{ "overflow-x", "visible", "visible" }, .{ "overflow-y", "visible", "visible" },
+    }) |check| {
+        const aliases: []const []const u8 = if (comptime std.mem.startsWith(u8, check[0], "overflow-")) &.{"overflow"} else &.{};
+        const value = (try positionedContainerKeyword(a, node, check[0], aliases, &.{check[1]}, check[2], check[2], false)) orelse return null;
+        if (!std.ascii.eqlIgnoreCase(value, check[1])) return null;
+        used.property(check[0], aliases);
+    }
+    // Reject authored offsets in this static subset. Even a future relative
+    // carrier must keep its containing block and stacking semantics separately.
+    const insets = (try inlineBoxInsets(a, node.declarations, node.environment)) orelse return null;
+    inline for (.{ "left", "right", "top", "bottom" }) |side| {
+        if (@field(insets, side) != null) return null;
+        used.property(side, &.{"inset"});
+    }
+    const box_sizing = (try positionedContainerKeyword(a, node, "box-sizing", &.{},
+        &.{ "content-box", "border-box" }, "content-box", "", false)) orelse return null;
+    const width = try observedFigureComputedLength(a, node.declarations, "width", &.{}, node.environment,
+        1, "auto", .automatic, .unknown, false, false);
+    const height = try observedFigureComputedLength(a, node.declarations, "height", &.{}, node.environment,
+        1, "auto", .automatic, .unknown, false, false);
+    if (width != .known or height != .known or width.known.value <= 0 or height.known.value <= 0) return null;
+    used.property("width", &.{}); used.property("height", &.{}); used.property("box-sizing", &.{});
+    const padding = try observedFigureEdges(a, node.declarations, node.environment, true, false, 1, null);
+    const margins = try observedFigureEdges(a, node.declarations, node.environment, false, false, 1, null);
+    if (padding.unresolved or margins.unresolved) return null;
+    const padding_edges = observedFigureFixedEdges(padding.value orelse return null) orelse return null;
+    const margin_edges = observedFigureFixedEdges(margins.value orelse return null) orelse return null;
+    if (!types.validStyleEdges(padding_edges) or !types.validStyleEdges(margin_edges)) return null;
+    const border = (try inlineBoxBorders(a, node.declarations, node.environment, false, false)) orelse return null;
+    inline for (.{ "left", "right", "top", "bottom" }) |side| switch (@field(border, side)) {
+        .none => {},
+        .solid => |line| if (line.color != .rgb) return null,
+        else => return null,
+    };
+    used.boxEdges(true); used.boxEdges(false); used.borderEdges();
+    if (!try inlineBoxStaticBackgroundImageAbsent(a, node.declarations, node.environment)) return null;
+    const ink = try observedFigureColor(a, node.declarations, "color", node.environment, null, null);
+    const fill = try observedFigureColor(a, node.declarations, "background-color", node.environment, null, null);
+    if (ink.unresolved or fill.unresolved or ink.value == null or fill.value == null or
+        ink.value.?.kind != .rgb or fill.value.?.kind != .rgb) return null;
+    used.property("color", &.{}); used.property("background-color", &.{"background"});
+    used.property("background-image", &.{"background"});
+    for (authored_inherited_neutral) |item| used.property(item.property, if (item.shorthand) |value| &.{value} else &.{});
+    inline for (.{ "font-size", "font-weight", "font-style", "font-family", "font-feature-settings", "line-height" }) |property|
+        used.property(property, &.{});
+    used.property("direction", &.{}); used.property("text-align", &.{});
+    if (!used.complete()) return null;
+    return .{ .layout = .{ .width = width.known, .height = height.known, .margins = margin_edges,
+        .box_sizing = if (std.ascii.eqlIgnoreCase(box_sizing, "border-box")) .border_box else .content_box,
+        .text_align = alignment, .wrap = .normal, .line_height = line_height },
+        .font = font, .padding = padding_edges, .border = border, .background = fill.value.?.value orelse return null, .foreground = ink.value.?.value orelse return null };
+}
+
+
+/// Per-context source geometry for a closed, directly text-bearing SPAN.
+/// Context validation checks structure, not source authority: the caller must
+/// bind the full observed graph/rules and the subject's complete child inventory
+/// to the real source. No TextElement ancestry/completeness flags are synthesized.
+/// parent_font is the native-normalized computed font at this SPAN's immediate
+/// parent, not a root-origin metric; ancestor font sizes are not applied again.
+/// This result is not AuthoredElementComputedContext or paired native agreement.
+/// The producer still needs that computed-text/path adapter and exact text/NBSP
+/// binding. Resolve observations separately and refuse unproven paired agreement.
+/// A null layout.line_height here means proved CSS normal; unknown inheritance
+/// refuses in fixedInlineBoxFromPath instead of becoming normal.
+pub fn resolveObservedFixedInlineBox(a: std.mem.Allocator, context: AuthoredElementObservedContext,
+    parent_font: types.InlineFontSnapshot) !?FixedInlineBoxComputed
+{
+    return resolveObservedFixedInlineBoxChildIn(a, context, parent_font, null);
+}
+
+// Only the entity-proof consumer below may admit a child; legacy calls pass null.
+fn resolveObservedFixedInlineBoxChildIn(a: std.mem.Allocator, context: AuthoredElementObservedContext,
+    parent_font: types.InlineFontSnapshot, neutral_child: ?u32) !?FixedInlineBoxComputed
+{
+    // authoredElementObservedContextValid includes observedStyleGraphValid.
+    if (!authoredElementObservedContextValid(context) or context.styles.globally_unresolved) return null;
+    const subject = context.nodes[context.element];
+    if (!std.ascii.eqlIgnoreCase(subject.tag, "span") or subject.empty != false or
+        subject.has_text != (neutral_child == null) or !subject.known_complete_child_elements) return null;
+    // A proved entity owns all text in the child arm. No source/observed node
+    // is removed, and the direct-text arm still refuses every element child.
+    var child_seen = false;
+    for (context.nodes, 0..) |node, index| if (node.parent == context.element) {
+        if (neutral_child == null or index != neutral_child.?) return null;
+        child_seen = true;
+    };
+    if (child_seen != (neutral_child != null)) return null;
+
+    var reverse: [64]u32 = undefined;
+    var count: usize = 0;
+    var next: ?u32 = context.element;
+    while (next) |index| {
+        if (count == reverse.len) return null;
+        reverse[count] = index; count += 1;
+        next = context.nodes[index].parent;
+    }
+    if (count == 0 or reverse[count - 1] != 0) return null;
+    var lists: [64]std.ArrayList(ObservedFigureDeclaration) = @splat(.empty);
+    defer for (lists[0..count]) |*list| list.deinit(a);
+    var path: [64]PositionedContainerPathNode = undefined;
+    var computed: [64]ObservedFigureComputedNode = undefined;
+    var environment: CustomEnvironment = .{ .complete = true };
+    for (0..count) |ordinal| {
+        const index = reverse[count - ordinal - 1];
+        const node = context.nodes[index];
+        if (observedFigureAttribute(node, "hidden") != null or observedFigureAttribute(node, "inert") != null or
+            observedFigureAttribute(node, "contenteditable") != null) return null;
+        // This geometry path does not project HTML directional/alignment hints.
+        // Refuse them rather than silently treating them as CSS inheritance.
+        if (observedFigureAttribute(node, "dir") != null or observedFigureAttribute(node, "align") != null) return null;
+        // All observed rules, exact inline declarations and unresolved states
+        // reach the shared cascade; there is no invented viewport/link state.
+        lists[ordinal] = (try observedStyleNodeDeclarationsWithLanguage(a, context.styles, context.nodes,
+            index, null, null, .{}, true)) orelse return null;
+        environment = try observedFigureCustomEnvironment(a, lists[ordinal].items, environment, true);
+        if (!environment.complete) return null;
+        if (node.custom_environment) |issued| for (issued.values) |binding| {
+            if (binding.value != .unknown and !sameObservedCustomValue(binding.value, environment.get(binding.name))) return null;
+        };
+        path[ordinal] = .{ .tag = node.tag, .declarations = lists[ordinal].items, .environment = environment,
+            .language = observedFigureAttribute(node, "lang") };
+        computed[ordinal] = .{ .index = index, .declarations = lists[ordinal].items, .environment = environment };
+    }
+    if (!try observedInlineAncestorsVisible(a, context.styles, context.nodes, context.root,
+        context.element, computed[0..count], .{}, false)) return null;
+    if (!try authoredElementPseudoEmpty(a, context, context.element, .before, environment) or
+        !try authoredElementPseudoEmpty(a, context, context.element, .after, environment) or
+        !observedTableOtherPseudoEmpty(context, context.element)) return null;
+    // Own motion/property accounting, radius refusal, baseline and declaring-em
+    // dimensions stay in the same strict helper as the source-path query.
+    return fixedInlineBoxFromPath(a, path[0..count], parent_font);
+}
+
+
+/// Typed source text and fixed geometry for one independently observed arm.
+/// The text path retains authored font-size/line-height nodes, root family and
+/// parent identity for the producer's authoredElementComputedStyle conversion.
+/// box uses the caller's already computed immediate-parent native font. Before
+/// emission the producer must establish native-parent/owner agreement using
+/// text; CSS pixel equality is not that proof. This is not paired agreement.
+pub const ObservedFixedInlineBoxComputedContext = struct {
+    text: AuthoredElementComputedContext,
+    box: FixedInlineBoxComputed,
+};
+
+pub fn resolveObservedFixedInlineBoxWithText(a: std.mem.Allocator, context: AuthoredElementObservedContext,
+    parent_font: types.InlineFontSnapshot) !?ObservedFixedInlineBoxComputedContext
+{
+    // Retain the complete-child inventory and unconditional element-child
+    // refusal. A generated mw:Entity NBSP leaf is not erased or certified here.
+    const box = (try resolveObservedFixedInlineBox(a, context, parent_font)) orelse return null;
+    // Reuse the same typed text construction as resolveObservedAuthoredRule.
+    // table_cell=true selects text-only ownership: the separately checked fixed
+    // box owns geometry. It grants no table/source/pseudo/focus authorization.
+    // No HR focus exclusion or shell-visibility exception is imported.
+    const text = (try resolveObservedElementTextPathIn(a, context, .{}, true, null, true,
+        false, false, false)) orelse return null;
+    if (text.nodes.len < 2 or text.root != context.root or text.element != context.element) return null;
+    const own = text.nodes[text.nodes.len - 1];
+    const parent = context.nodes[context.element].parent orelse return null;
+    if (own.index != context.element or own.hidden or text.nodes[text.nodes.len - 2].index != parent) return null;
+    return .{ .text = text, .box = box };
+}
+
+
+/// One locally mapped entity child, bound to immutable observed/source inputs.
+/// Pointer containment is not a parser or a source mapping issuer: FPO must
+/// supply the exact operation, owner source span and decoded NBSP token mapping.
+/// No exterior entity, sibling, table or paired-arm authority is included.
+pub const ObservedFixedInlineEntityProof = struct {
+    context: AuthoredElementObservedContext,
+    source: []const u8,
+    owner_span: []const u8,
+    token: []const u8,
+    child: u32,
+
+    fn binds(self: @This(), context: AuthoredElementObservedContext, source: []const u8,
+        owner_span: []const u8, token: []const u8) bool
+    {
+        return self.context.styles == context.styles and self.context.nodes.ptr == context.nodes.ptr and
+            self.context.nodes.len == context.nodes.len and self.context.root == context.root and
+            self.context.element == context.element and self.source.ptr == source.ptr and self.source.len == source.len and
+            self.owner_span.ptr == owner_span.ptr and self.owner_span.len == owner_span.len and
+            self.token.ptr == token.ptr and self.token.len == token.len;
+    }
+};
+
+fn fixedInlineEntityNbspToken(token: []const u8) bool {
+    if (std.mem.eql(u8, token, "&nbsp;")) return true;
+    if (token.len < 4 or token.len > 32 or !std.mem.startsWith(u8, token, "&#") or token[token.len - 1] != ';') return false;
+    var digits = token[2 .. token.len - 1];
+    var radix: u16 = 10;
+    if (digits.len > 0 and (digits[0] == 'x' or digits[0] == 'X')) { radix = 16; digits = digits[1..]; }
+    if (digits.len == 0) return false;
+    var value: u16 = 0;
+    for (digits) |byte| {
+        const digit: u16 = if (byte >= '0' and byte <= '9') byte - '0'
+            else if (radix == 16 and byte >= 'a' and byte <= 'f') byte - 'a' + 10
+            else if (radix == 16 and byte >= 'A' and byte <= 'F') byte - 'A' + 10 else return false;
+        value = value * radix + digit;
+        if (value > 160) return false;
+    }
+    return value == 160;
+}
+
+pub fn proveObservedFixedInlineEntityNeutral(a: std.mem.Allocator, context: AuthoredElementObservedContext,
+    source: []const u8, owner_span: []const u8, token: []const u8) !?ObservedFixedInlineEntityProof
+{
+    if (!authoredElementObservedContextValid(context) or context.styles.globally_unresolved or
+        pageSourceFocusTokenOffset(source, owner_span) == null or !fixedInlineEntityNbspToken(token)) return null;
+    const token_offset = pageSourceFocusTokenOffset(owner_span, token) orelse return null;
+    if (token_offset == 0 or token_offset + token.len == owner_span.len) return null;
+    const owner = context.nodes[context.element];
+    if (!std.ascii.eqlIgnoreCase(owner.tag, "span") or owner.empty != false or owner.has_text != false or
+        !owner.known_complete_child_elements) return null;
+    var child_index: ?u32 = null;
+    for (context.nodes, 0..) |node, index| if (node.parent == context.element) {
+        if (child_index != null) return null;
+        child_index = @intCast(index);
+    };
+    const child = child_index orelse return null;
+    const leaf = context.nodes[child];
+    if (!std.ascii.eqlIgnoreCase(leaf.tag, "span") or leaf.attributes.len != 1 or
+        !std.mem.eql(u8, observedFigureAttribute(leaf, "typeof") orelse return null, "mw:Entity") or
+        leaf.empty != false or leaf.has_text != true or !leaf.known_complete_child_elements or
+        !std.mem.eql(u8, leaf.captured_entity_text orelse return null, "\xc2\xa0")) return null;
+    for (context.nodes) |node| if (node.parent == child) return null;
+
+    var reverse: [65]u32 = undefined; var count: usize = 0; var next: ?u32 = child;
+    while (next) |index| {
+        if (count == reverse.len) return null;
+        reverse[count] = index; count += 1; next = context.nodes[index].parent;
+    }
+    if (count == 0 or reverse[count - 1] != 0) return null;
+    var environment: CustomEnvironment = .{ .complete = true };
+    for (0..count) |ordinal| {
+        const index = reverse[count - ordinal - 1];
+        var declarations = (try observedStyleNodeDeclarationsWithLanguage(a, context.styles, context.nodes,
+            index, null, null, .{}, true)) orelse return null;
+        defer declarations.deinit(a);
+        // Even an invariant-looking custom/motion rule cannot hide an unknown
+        // selector, rank or state in this narrow child-neutrality proof.
+        for (declarations.items) |declaration|
+            if (declaration.syntax_unknown or declaration.rank_unknown or declaration.uncertain) return null;
+        environment = try observedFigureCustomEnvironment(a, declarations.items, environment, true);
+        if (!environment.complete) return null;
+        for (environment.values) |binding| if (binding.value == .unknown) return null;
+        if (context.nodes[index].custom_environment) |issued| for (issued.values) |binding| {
+            if (binding.value == .unknown or !sameObservedCustomValue(binding.value, environment.get(binding.name))) return null;
+        };
+        if (index == child) {
+            var used = try ObservedFigurePropertyUse.init(a, declarations.items); defer used.deinit(a);
+            used.customEnvironment();
+            // Exact prefix-entity pattern, without any prefix/table capability:
+            // no font, ink, bidi, box, radius or other own property is consumed.
+            if (!try used.staticMotion(a, environment) or !used.complete()) return null;
+        }
+    }
+    for ([_]GeneratedFigurePseudo{ .before, .after }) |pseudo| {
+        var declarations = (try observedStyleNodeDeclarationsWithLanguage(a, context.styles, context.nodes,
+            child, null, pseudo, .{}, true)) orelse return null;
+        defer declarations.deinit(a);
+        for (declarations.items) |declaration|
+            if (declaration.syntax_unknown or declaration.rank_unknown or declaration.uncertain) return null;
+        const pseudo_environment = try observedFigureCustomEnvironment(a, declarations.items, environment, true);
+        if (!pseudo_environment.complete) return null;
+        for (pseudo_environment.values) |binding| if (binding.value == .unknown) return null;
+        var used = try ObservedFigurePropertyUse.init(a, declarations.items); defer used.deinit(a);
+        used.customEnvironment(); used.property("content", &.{});
+        if (!try used.staticMotion(a, pseudo_environment) or !used.complete() or
+            !try authoredElementPseudoEmpty(a, context, child, pseudo, pseudo_environment)) return null;
+    }
+    if (!observedTableOtherPseudoEmpty(context, child)) return null;
+    return .{ .context = context, .source = source, .owner_span = owner_span, .token = token, .child = child };
+}
+
+/// Explicit opt-in for the single proved child. Keeps the full graph intact and
+/// returns the same typed text/native-parent obligations as the direct-text API.
+pub fn resolveObservedFixedInlineBoxWithEntity(a: std.mem.Allocator, context: AuthoredElementObservedContext,
+    source: []const u8, owner_span: []const u8, token: []const u8, parent_font: types.InlineFontSnapshot,
+    proof: ObservedFixedInlineEntityProof) !?ObservedFixedInlineBoxComputedContext
+{
+    if (!proof.binds(context, source, owner_span, token)) return null;
+    // Recheck current declarations and shape; a copied/stale/constructed proof
+    // cannot skip the neutrality checks, even if it retains matching pointers.
+    const current = (try proveObservedFixedInlineEntityNeutral(a, context, source, owner_span, token)) orelse return null;
+    if (current.child != proof.child) return null;
+    const box = (try resolveObservedFixedInlineBoxChildIn(a, context, parent_font, current.child)) orelse return null;
+    const text = (try resolveObservedElementTextPathIn(a, context, .{}, true, null, true,
+        false, false, false)) orelse return null;
+    if (text.nodes.len < 2 or text.root != context.root or text.element != context.element) return null;
+    const own = text.nodes[text.nodes.len - 1];
+    const parent = context.nodes[context.element].parent orelse return null;
+    if (own.index != context.element or own.hidden or text.nodes[text.nodes.len - 2].index != parent) return null;
+    return .{ .text = text, .box = box };
+}
+
 fn positionedContainerGeometry(a: std.mem.Allocator, node: PositionedContainerPathNode,
     inherited: PositionedContainerInherited, absolute: bool, diagnostic: ?*PositionedContainerQueryDiagnostic) !?types.ContainerStyle
 {
@@ -38493,19 +39015,23 @@ fn positionedStaticMotionRules(a: std.mem.Allocator, rules: []const ContainerRul
     return omitted;
 }
 
-fn positionedContainerTextPath(a: std.mem.Allocator, profile: *const Profile,
+fn positionedContainerTextPath(comptime Result: type, a: std.mem.Allocator, profile: *const Profile,
     reverse: []const *const TextElement, css: []const u8, environment: ?CustomEnvironment,
-    inherited_font: ?types.InlineFontSnapshot, absence: ?PositionedContainerAbsence, diagnostic: ?*PositionedContainerQueryDiagnostic) !?ContainerResolution
+    inherited_font: ?types.InlineFontSnapshot, absence: ?PositionedContainerAbsence, diagnostic: ?*PositionedContainerQueryDiagnostic) !?Result
 {
     const count = reverse.len;
-    if (count == 0 or count > 64) return positionedContainerQueryRefusal(ContainerResolution, diagnostic, .source_path_shape, null, null, null);
+    if (count == 0 or count > 64) return positionedContainerQueryRefusal(Result, diagnostic, .source_path_shape, null, null, null);
     var path: [64]PositionedContainerPathNode = undefined;
     var lists: [64]std.ArrayList(ObservedFigureDeclaration) = @splat(.empty);
     defer for (lists[0..count]) |*list| list.deinit(a);
     for (0..count) |index| {
         const node = reverse[count - index - 1];
-        const own_css = if (index + 1 == count) css else node.observed_inline_style orelse return positionedContainerQueryRefusal(ContainerResolution, diagnostic, .source_ancestor_style_missing, node.tag, null, null);
-        if (index + 1 == count) if (node.observed_inline_style) |known| if (!std.mem.eql(u8, known, css)) return positionedContainerQueryRefusal(ContainerResolution, diagnostic, .source_style_mismatch, node.tag, null, null);
+        if (comptime Result == FixedInlineBoxComputed) {
+            if (!node.physical_ancestry_complete or !node.ancestry_complete or node.observed_inline_style == null)
+                return positionedContainerQueryRefusal(Result, diagnostic, .source_ancestor_style_missing, node.tag, null, null);
+        }
+        const own_css = if (index + 1 == count) css else node.observed_inline_style orelse return positionedContainerQueryRefusal(Result, diagnostic, .source_ancestor_style_missing, node.tag, null, null);
+        if (index + 1 == count) if (node.observed_inline_style) |known| if (!std.mem.eql(u8, known, css)) return positionedContainerQueryRefusal(Result, diagnostic, .source_style_mismatch, node.tag, null, null);
         // Original parents and uncertainty flags remain attached to the query.
         // A known source suffix never masquerades as a complete physical root.
         var selector_query = node.*;
@@ -38523,7 +39049,7 @@ fn positionedContainerTextPath(a: std.mem.Allocator, profile: *const Profile,
             }
         }
         const matches = try profile.containerRuleMatchesIn(a, &selector_query); defer a.free(matches.rules);
-        if (matches.unresolved) return positionedContainerQueryRefusal(ContainerResolution, diagnostic, .rule_matches_unresolved, node.tag, null, null);
+        if (matches.unresolved) return positionedContainerQueryRefusal(Result, diagnostic, .rule_matches_unresolved, node.tag, null, null);
         const static_motion = try positionedStaticMotionRules(a, matches.rules, own_css);
         defer a.free(static_motion);
         for (matches.rules, 0..) |rule, rule_index| {
@@ -38542,36 +39068,41 @@ fn positionedContainerTextPath(a: std.mem.Allocator, profile: *const Profile,
             .{ .inline_style = true, .order = max_rules * 1024 }, false, false, null, 0);
         const env = if (index + 1 == count and environment != null) environment.? else node.observed_custom_environment orelse CustomEnvironment{};
         if (node.observed_custom_environment) |issued| for (issued.values) |binding| {
-            if (binding.value != .unknown and !sameObservedCustomValue(binding.value, env.get(binding.name))) return positionedContainerQueryRefusal(ContainerResolution, diagnostic, .custom_environment_conflict, node.tag, null, null);
+            if (binding.value != .unknown and !sameObservedCustomValue(binding.value, env.get(binding.name))) return positionedContainerQueryRefusal(Result, diagnostic, .custom_environment_conflict, node.tag, null, null);
         };
         path[index] = .{ .tag = node.tag, .declarations = lists[index].items, .environment = env, .language = node.language };
     }
-    const position = (try positionedContainerKeyword(a, path[count - 1], "position", &.{}, &.{ "static", "relative", "absolute" }, "static", "static", false)) orelse return positionedContainerQueryRefusal(ContainerResolution, diagnostic, .geometry_position, path[count - 1].tag, "position", null);
-    const containing = if (std.ascii.eqlIgnoreCase(position, "relative")) count - 1 else if (std.ascii.eqlIgnoreCase(position, "absolute") and count >= 2) count - 2 else return positionedContainerQueryRefusal(ContainerResolution, diagnostic, .source_path_shape, path[count - 1].tag, "position", null);
-    return positionedContainerFromPath(a, path[0..count], containing, inherited_font, diagnostic);
+    if (comptime Result == FixedInlineBoxComputed) {
+        const parent = inherited_font orelse return positionedContainerQueryRefusal(Result, diagnostic, .font_snapshot, path[count - 1].tag, null, null);
+        return fixedInlineBoxFromPath(a, path[0..count], parent);
+    } else {
+        const position = (try positionedContainerKeyword(a, path[count - 1], "position", &.{}, &.{ "static", "relative", "absolute" }, "static", "static", false)) orelse return positionedContainerQueryRefusal(Result, diagnostic, .geometry_position, path[count - 1].tag, "position", null);
+        const containing = if (std.ascii.eqlIgnoreCase(position, "relative")) count - 1 else if (std.ascii.eqlIgnoreCase(position, "absolute") and count >= 2) count - 2 else return positionedContainerQueryRefusal(Result, diagnostic, .source_path_shape, path[count - 1].tag, "position", null);
+        return positionedContainerFromPath(a, path[0..count], containing, inherited_font, diagnostic);
+    }
 }
 
-fn positionedContainerTextBranches(a: std.mem.Allocator, profile: *const Profile,
+fn positionedContainerTextBranches(comptime Result: type, a: std.mem.Allocator, profile: *const Profile,
     node: ?*const TextElement, reverse: *[64]*const TextElement, count: usize,
     css: []const u8, environment: ?CustomEnvironment, inherited_font: ?types.InlineFontSnapshot, absence: ?PositionedContainerAbsence,
-    work: *usize, diagnostic: ?*PositionedContainerQueryDiagnostic) error{ OutOfMemory, StyleProfileLimit }!?ContainerResolution
+    work: *usize, diagnostic: ?*PositionedContainerQueryDiagnostic) error{ OutOfMemory, StyleProfileLimit }!?Result
 {
-    if (work.* == 0) return positionedContainerQueryRefusal(ContainerResolution, diagnostic, .source_branch_work, if (node) |value| value.tag else null, null, null);
+    if (work.* == 0) return positionedContainerQueryRefusal(Result, diagnostic, .source_branch_work, if (node) |value| value.tag else null, null, null);
     work.* -= 1;
-    const current = node orelse return positionedContainerTextPath(a, profile, reverse[0..count], css, environment, inherited_font, absence, diagnostic);
-    if (count != 0 and current.observed_inline_style == null)
-        return positionedContainerTextPath(a, profile, reverse[0..count], css, environment, inherited_font, absence, diagnostic);
-    if (count == reverse.len) return positionedContainerQueryRefusal(ContainerResolution, diagnostic, .source_path_shape, current.tag, null, null);
-    for (reverse[0..count]) |prior| if (prior == current) return positionedContainerQueryRefusal(ContainerResolution, diagnostic, .source_cycle, current.tag, null, null);
+    const current = node orelse return positionedContainerTextPath(Result, a, profile, reverse[0..count], css, environment, inherited_font, absence, diagnostic);
+    if (Result == ContainerResolution and count != 0 and current.observed_inline_style == null)
+        return positionedContainerTextPath(Result, a, profile, reverse[0..count], css, environment, inherited_font, absence, diagnostic);
+    if (count == reverse.len) return positionedContainerQueryRefusal(Result, diagnostic, .source_path_shape, current.tag, null, null);
+    for (reverse[0..count]) |prior| if (prior == current) return positionedContainerQueryRefusal(Result, diagnostic, .source_cycle, current.tag, null, null);
     reverse[count] = current;
-    const selected = (try positionedContainerTextBranches(a, profile, current.parent, reverse, count + 1, css, environment, inherited_font, absence, work, diagnostic)) orelse return null;
+    const selected = (try positionedContainerTextBranches(Result, a, profile, current.parent, reverse, count + 1, css, environment, inherited_font, absence, work, diagnostic)) orelse return null;
     if (current.alternative_ancestry) |alternative| {
         if (alternative == current or alternative.alternative_ancestry != null or
-            !std.ascii.eqlIgnoreCase(current.tag, alternative.tag)) return positionedContainerQueryRefusal(ContainerResolution, diagnostic, .source_alternative_shape, current.tag, null, null);
-        for (reverse[0..count]) |prior| if (prior == alternative) return positionedContainerQueryRefusal(ContainerResolution, diagnostic, .source_cycle, alternative.tag, null, null);
+            !std.ascii.eqlIgnoreCase(current.tag, alternative.tag)) return positionedContainerQueryRefusal(Result, diagnostic, .source_alternative_shape, current.tag, null, null);
+        for (reverse[0..count]) |prior| if (prior == alternative) return positionedContainerQueryRefusal(Result, diagnostic, .source_cycle, alternative.tag, null, null);
         reverse[count] = alternative;
-        const other = (try positionedContainerTextBranches(a, profile, alternative.parent, reverse, count + 1, css, environment, inherited_font, absence, work, diagnostic)) orelse return null;
-        if (!observedFigureDataEqual(ContainerResolution, selected, other, 0)) return positionedContainerQueryRefusal(ContainerResolution, diagnostic, .source_alternative_disagreement, current.tag, null, null);
+        const other = (try positionedContainerTextBranches(Result, a, profile, alternative.parent, reverse, count + 1, css, environment, inherited_font, absence, work, diagnostic)) orelse return null;
+        if (!observedFigureDataEqual(Result, selected, other, 0)) return positionedContainerQueryRefusal(Result, diagnostic, .source_alternative_disagreement, current.tag, null, null);
     }
     return selected;
 }
@@ -38585,7 +39116,20 @@ fn resolvePositionedContainerFromText(a: std.mem.Allocator, profile: *const Prof
     if (!std.ascii.eqlIgnoreCase(element.tag, "div")) return positionedContainerQueryRefusal(ContainerResolution, diagnostic, .source_subject_tag, element.tag, null, null);
     var reverse: [64]*const TextElement = undefined;
     var work: usize = 512;
-    return positionedContainerTextBranches(a, profile, element, &reverse, 0, css, environment, inherited_font, absence, &work, diagnostic);
+    return positionedContainerTextBranches(ContainerResolution, a, profile, element, &reverse, 0, css, environment, inherited_font, absence, &work, diagnostic);
+}
+
+pub fn resolveSourceFixedInlineBoxIn(a: std.mem.Allocator, profile: *const Profile,
+    element: *const TextElement, css: []const u8, environment: ?CustomEnvironment,
+    parent_font: types.InlineFontSnapshot, absence: ?PositionedContainerAbsence, diagnostic: ?*PositionedContainerQueryDiagnostic) !?FixedInlineBoxComputed
+{
+    if (css.len > max_css_bytes) return positionedContainerQueryRefusal(FixedInlineBoxComputed, diagnostic, .source_css_limit, element.tag, null, null);
+    if (profile.globally_unresolved) return positionedContainerQueryRefusal(FixedInlineBoxComputed, diagnostic, .source_profile_unresolved, element.tag, null, null);
+    if (!std.ascii.eqlIgnoreCase(element.tag, "span")) return positionedContainerQueryRefusal(FixedInlineBoxComputed, diagnostic, .source_subject_tag, element.tag, null, null);
+    var reverse: [64]*const TextElement = undefined;
+    var work: usize = 512;
+    return positionedContainerTextBranches(FixedInlineBoxComputed, a, profile, element, &reverse, 0,
+        css, environment, parent_font, absence, &work, diagnostic);
 }
 
 // A border shorthand is a component list. Resolve a retained color var() in
@@ -41629,6 +42173,12 @@ fn staticInlineOwnerRulesWithFont(profile: *const Profile, element: *const TextE
                 if (font == null or rule.rank_unknown or !font.?.consumes(rule.css)) return false;
             },
             .unknown => {
+                if (element.source_normal_paint_run and !rule.rank_unknown) {
+                    const one = std.mem.trimEnd(u8, trim(rule.css), ";");
+                    if (std.mem.indexOfScalar(u8, one, ':')) |colon|
+                        if (std.ascii.eqlIgnoreCase(trim(one[0..colon]), "font-style") and
+                            std.ascii.eqlIgnoreCase(trim(one[colon + 1 ..]), "normal")) continue;
+                }
                 if (!staticInlineLocalRuleAbsent(profile, rule, element)) return false;
             },
         }
@@ -42629,324 +43179,149 @@ test "table physical padding longhands preserve independent cascade and cell ref
     try std.testing.expectEqualStrings("#f4f4f4", original.style.?.background.?);
 }
 
-pub const FixedInlineBoxComputed = struct {
-    layout: types.InlineBoxAtomicLayout,
-    font: types.InlineFontSnapshot,
-    padding: types.StyleEdges,
-    border: types.InlineBoxBorderEdges,
-    background: []const u8,
-    foreground: []const u8,
-};
 
-fn fixedInlineBoxFromPath(a: std.mem.Allocator, path: []const PositionedContainerPathNode,
-    parent_font: types.InlineFontSnapshot) !?FixedInlineBoxComputed
-{
-    if (path.len == 0 or !std.ascii.eqlIgnoreCase(path[path.len - 1].tag, "span") or
-        !parent_font.font_normalized or parent_font.font_scale == null or parent_font.font_scale_basis == .context) return null;
-    const node = path[path.len - 1];
-    const inherited = (try positionedContainerInheritance(a, path, parent_font, null)) orelse return null;
-    const font = inherited.font orelse return null;
-    if (!std.ascii.eqlIgnoreCase(inherited.wrap orelse return null, "normal") or
-        !std.ascii.eqlIgnoreCase(inherited.direction orelse return null, "ltr")) return null;
-    const alignment: types.InlineBoxOverlayTextAlign = switch (inherited.alignment orelse return null) {
-        .left => .left, .right => .right, .center => .center,
-    };
-    const line_height: ?types.InlineLineHeight = switch (inherited.line_height orelse return null) {
-        .normal => null,
-        .multiplier => |factor| .{ .font_relative = .{ .factor = factor, .font = font } },
-        .length => |metric_length| .{ .computed = .{ .value = metric_length.value,
-            .font_scale_basis = if (metric_length.unit == .px) .css_px else .normal_body } },
-    };
-    var used = try ObservedFigurePropertyUse.init(a, node.declarations);
-    defer used.deinit(a);
-    used.customEnvironment();
-    if (!try used.staticMotion(a, node.environment)) return null;
-    inline for (.{
-        .{ "display", "inline-block", "inline" }, .{ "position", "static", "static" },
-        .{ "vertical-align", "baseline", "baseline" }, .{ "box-decoration-break", "slice", "slice" },
-        .{ "min-width", "auto", "auto" }, .{ "min-height", "auto", "auto" },
-        .{ "max-width", "none", "none" }, .{ "max-height", "none", "none" },
-        .{ "z-index", "auto", "auto" }, .{ "unicode-bidi", "normal", "normal" },
-        .{ "float", "none", "none" }, .{ "clear", "none", "none" },
-        .{ "transform", "none", "none" }, .{ "translate", "none", "none" },
-        .{ "rotate", "none", "none" }, .{ "scale", "none", "none" },
-        .{ "perspective", "none", "none" }, .{ "filter", "none", "none" },
-        .{ "backdrop-filter", "none", "none" }, .{ "clip", "auto", "auto" },
-        .{ "clip-path", "none", "none" }, .{ "box-shadow", "none", "none" },
-        .{ "opacity", "1", "1" }, .{ "isolation", "auto", "auto" },
-        .{ "mix-blend-mode", "normal", "normal" }, .{ "contain", "none", "none" },
-        .{ "will-change", "auto", "auto" }, .{ "zoom", "1", "1" },
-        .{ "cursor", "auto", "auto" }, .{ "content", "normal", "normal" },
-        .{ "overflow-x", "visible", "visible" }, .{ "overflow-y", "visible", "visible" },
-    }) |check| {
-        const aliases: []const []const u8 = if (comptime std.mem.startsWith(u8, check[0], "overflow-")) &.{"overflow"} else &.{};
-        const value = (try positionedContainerKeyword(a, node, check[0], aliases, &.{check[1]}, check[2], check[2], false)) orelse return null;
-        if (!std.ascii.eqlIgnoreCase(value, check[1])) return null;
-        used.property(check[0], aliases);
-    }
-    // Reject authored offsets in this static subset. Even a future relative
-    // carrier must keep its containing block and stacking semantics separately.
-    const insets = (try inlineBoxInsets(a, node.declarations, node.environment)) orelse return null;
-    inline for (.{ "left", "right", "top", "bottom" }) |side| {
-        if (@field(insets, side) != null) return null;
-        used.property(side, &.{"inset"});
-    }
-    const box_sizing = (try positionedContainerKeyword(a, node, "box-sizing", &.{},
-        &.{ "content-box", "border-box" }, "content-box", "", false)) orelse return null;
-    const width = try observedFigureComputedLength(a, node.declarations, "width", &.{}, node.environment,
-        1, "auto", .automatic, .unknown, false, false);
-    const height = try observedFigureComputedLength(a, node.declarations, "height", &.{}, node.environment,
-        1, "auto", .automatic, .unknown, false, false);
-    if (width != .known or height != .known or width.known.value <= 0 or height.known.value <= 0) return null;
-    used.property("width", &.{}); used.property("height", &.{}); used.property("box-sizing", &.{});
-    const padding = try observedFigureEdges(a, node.declarations, node.environment, true, false, 1, null);
-    const margins = try observedFigureEdges(a, node.declarations, node.environment, false, false, 1, null);
-    if (padding.unresolved or margins.unresolved) return null;
-    const padding_edges = observedFigureFixedEdges(padding.value orelse return null) orelse return null;
-    const margin_edges = observedFigureFixedEdges(margins.value orelse return null) orelse return null;
-    if (!types.validStyleEdges(padding_edges) or !types.validStyleEdges(margin_edges)) return null;
-    const border = (try inlineBoxBorders(a, node.declarations, node.environment, false, false)) orelse return null;
-    inline for (.{ "left", "right", "top", "bottom" }) |side| switch (@field(border, side)) {
-        .none => {},
-        .solid => |line| if (line.color != .rgb) return null,
-        else => return null,
-    };
-    used.boxEdges(true); used.boxEdges(false); used.borderEdges();
-    if (!try inlineBoxStaticBackgroundImageAbsent(a, node.declarations, node.environment)) return null;
-    const ink = try observedFigureColor(a, node.declarations, "color", node.environment, null, null);
-    const fill = try observedFigureColor(a, node.declarations, "background-color", node.environment, null, null);
-    if (ink.unresolved or fill.unresolved or ink.value == null or fill.value == null or
-        ink.value.?.kind != .rgb or fill.value.?.kind != .rgb) return null;
-    used.property("color", &.{}); used.property("background-color", &.{"background"});
-    used.property("background-image", &.{"background"});
-    for (authored_inherited_neutral) |item| used.property(item.property, if (item.shorthand) |value| &.{value} else &.{});
-    inline for (.{ "font-size", "font-weight", "font-style", "font-family", "font-feature-settings", "line-height" }) |property|
-        used.property(property, &.{});
-    used.property("direction", &.{}); used.property("text-align", &.{});
-    if (!used.complete()) return null;
-    return .{ .layout = .{ .width = width.known, .height = height.known, .margins = margin_edges,
-        .box_sizing = if (std.ascii.eqlIgnoreCase(box_sizing, "border-box")) .border_box else .content_box,
-        .text_align = alignment, .wrap = .normal, .line_height = line_height },
-        .font = font, .padding = padding_edges, .border = border, .background = fill.value.?.value orelse return null, .foreground = ink.value.?.value orelse return null };
-}
-
-pub fn resolveObservedFixedInlineBox(a: std.mem.Allocator, context: AuthoredElementObservedContext,
-    parent_font: types.InlineFontSnapshot) !?FixedInlineBoxComputed
-{
-    return resolveObservedFixedInlineBoxChildIn(a, context, parent_font, null);
-}
-
-fn resolveObservedFixedInlineBoxChildIn(a: std.mem.Allocator, context: AuthoredElementObservedContext,
-    parent_font: types.InlineFontSnapshot, neutral_child: ?u32) !?FixedInlineBoxComputed
-{
-    // authoredElementObservedContextValid includes observedStyleGraphValid.
-    if (!authoredElementObservedContextValid(context) or context.styles.globally_unresolved) return null;
-    const subject = context.nodes[context.element];
-    if (!std.ascii.eqlIgnoreCase(subject.tag, "span") or subject.empty != false or
-        subject.has_text != (neutral_child == null) or !subject.known_complete_child_elements) return null;
-    // A proved entity owns all text in the child arm. No source/observed node
-    // is removed, and the direct-text arm still refuses every element child.
-    var child_seen = false;
-    for (context.nodes, 0..) |node, index| if (node.parent == context.element) {
-        if (neutral_child == null or index != neutral_child.?) return null;
-        child_seen = true;
-    };
-    if (child_seen != (neutral_child != null)) return null;
-
-    var reverse: [64]u32 = undefined;
-    var count: usize = 0;
-    var next: ?u32 = context.element;
-    while (next) |index| {
-        if (count == reverse.len) return null;
-        reverse[count] = index; count += 1;
-        next = context.nodes[index].parent;
-    }
-    if (count == 0 or reverse[count - 1] != 0) return null;
-    var lists: [64]std.ArrayList(ObservedFigureDeclaration) = @splat(.empty);
-    defer for (lists[0..count]) |*list| list.deinit(a);
-    var path: [64]PositionedContainerPathNode = undefined;
-    var computed: [64]ObservedFigureComputedNode = undefined;
-    var environment: CustomEnvironment = .{ .complete = true };
-    for (0..count) |ordinal| {
-        const index = reverse[count - ordinal - 1];
-        const node = context.nodes[index];
-        if (observedFigureAttribute(node, "hidden") != null or observedFigureAttribute(node, "inert") != null or
-            observedFigureAttribute(node, "contenteditable") != null) return null;
-        // This geometry path does not project HTML directional/alignment hints.
-        // Refuse them rather than silently treating them as CSS inheritance.
-        if (observedFigureAttribute(node, "dir") != null or observedFigureAttribute(node, "align") != null) return null;
-        // All observed rules, exact inline declarations and unresolved states
-        // reach the shared cascade; there is no invented viewport/link state.
-        lists[ordinal] = (try observedStyleNodeDeclarationsWithLanguage(a, context.styles, context.nodes,
-            index, null, null, .{}, true)) orelse return null;
-        environment = try observedFigureCustomEnvironment(a, lists[ordinal].items, environment, true);
-        if (!environment.complete) return null;
-        if (node.custom_environment) |issued| for (issued.values) |binding| {
-            if (binding.value != .unknown and !sameObservedCustomValue(binding.value, environment.get(binding.name))) return null;
-        };
-        path[ordinal] = .{ .tag = node.tag, .declarations = lists[ordinal].items, .environment = environment,
-            .language = observedFigureAttribute(node, "lang") };
-        computed[ordinal] = .{ .index = index, .declarations = lists[ordinal].items, .environment = environment };
-    }
-    if (!try observedInlineAncestorsVisible(a, context.styles, context.nodes, context.root,
-        context.element, computed[0..count], .{}, false)) return null;
-    if (!try authoredElementPseudoEmpty(a, context, context.element, .before, environment) or
-        !try authoredElementPseudoEmpty(a, context, context.element, .after, environment) or
-        !observedTableOtherPseudoEmpty(context, context.element)) return null;
-    // Own motion/property accounting, radius refusal, baseline and declaring-em
-    // dimensions stay in the same strict helper as the source-path query.
-    return fixedInlineBoxFromPath(a, path[0..count], parent_font);
-}
-
-pub const ObservedFixedInlineBoxComputedContext = struct {
-    text: AuthoredElementComputedContext,
-    box: FixedInlineBoxComputed,
-};
-
-pub fn resolveObservedFixedInlineBoxWithText(a: std.mem.Allocator, context: AuthoredElementObservedContext,
-    parent_font: types.InlineFontSnapshot) !?ObservedFixedInlineBoxComputedContext
-{
-    // Retain the complete-child inventory and unconditional element-child
-    // refusal. A generated mw:Entity NBSP leaf is not erased or certified here.
-    const box = (try resolveObservedFixedInlineBox(a, context, parent_font)) orelse return null;
-    // Reuse the same typed text construction as resolveObservedAuthoredRule.
-    // table_cell=true selects text-only ownership: the separately checked fixed
-    // box owns geometry. It grants no table/source/pseudo/focus authorization.
-    // No HR focus exclusion or shell-visibility exception is imported.
-    const text = (try resolveObservedElementTextPathIn(a, context, .{}, true, null, true,
-        false, false, false)) orelse return null;
-    if (text.nodes.len < 2 or text.root != context.root or text.element != context.element) return null;
-    const own = text.nodes[text.nodes.len - 1];
-    const parent = context.nodes[context.element].parent orelse return null;
-    if (own.index != context.element or own.hidden or text.nodes[text.nodes.len - 2].index != parent) return null;
-    return .{ .text = text, .box = box };
-}
-
-pub const ObservedFixedInlineEntityProof = struct {
-    context: AuthoredElementObservedContext,
-    source: []const u8,
-    owner_span: []const u8,
-    token: []const u8,
-    child: u32,
-
-    fn binds(self: @This(), context: AuthoredElementObservedContext, source: []const u8,
-        owner_span: []const u8, token: []const u8) bool
-    {
-        return self.context.styles == context.styles and self.context.nodes.ptr == context.nodes.ptr and
-            self.context.nodes.len == context.nodes.len and self.context.root == context.root and
-            self.context.element == context.element and self.source.ptr == source.ptr and self.source.len == source.len and
-            self.owner_span.ptr == owner_span.ptr and self.owner_span.len == owner_span.len and
-            self.token.ptr == token.ptr and self.token.len == token.len;
-    }
-};
-
-fn fixedInlineEntityNbspToken(token: []const u8) bool {
-    if (std.mem.eql(u8, token, "&nbsp;")) return true;
-    if (token.len < 4 or token.len > 32 or !std.mem.startsWith(u8, token, "&#") or token[token.len - 1] != ';') return false;
-    var digits = token[2 .. token.len - 1];
-    var radix: u16 = 10;
-    if (digits.len > 0 and (digits[0] == 'x' or digits[0] == 'X')) { radix = 16; digits = digits[1..]; }
-    if (digits.len == 0) return false;
-    var value: u16 = 0;
-    for (digits) |byte| {
-        const digit: u16 = if (byte >= '0' and byte <= '9') byte - '0'
-            else if (radix == 16 and byte >= 'a' and byte <= 'f') byte - 'a' + 10
-            else if (radix == 16 and byte >= 'A' and byte <= 'F') byte - 'A' + 10 else return false;
-        value = value * radix + digit;
-        if (value > 160) return false;
-    }
-    return value == 160;
-}
-
-pub fn proveObservedFixedInlineEntityNeutral(a: std.mem.Allocator, context: AuthoredElementObservedContext,
-    source: []const u8, owner_span: []const u8, token: []const u8) !?ObservedFixedInlineEntityProof
-{
-    if (!authoredElementObservedContextValid(context) or context.styles.globally_unresolved or
-        pageSourceFocusTokenOffset(source, owner_span) == null or !fixedInlineEntityNbspToken(token)) return null;
-    const token_offset = pageSourceFocusTokenOffset(owner_span, token) orelse return null;
-    if (token_offset == 0 or token_offset + token.len == owner_span.len) return null;
-    const owner = context.nodes[context.element];
-    if (!std.ascii.eqlIgnoreCase(owner.tag, "span") or owner.empty != false or owner.has_text != false or
-        !owner.known_complete_child_elements) return null;
-    var child_index: ?u32 = null;
-    for (context.nodes, 0..) |node, index| if (node.parent == context.element) {
-        if (child_index != null) return null;
-        child_index = @intCast(index);
-    };
-    const child = child_index orelse return null;
-    const leaf = context.nodes[child];
-    if (!std.ascii.eqlIgnoreCase(leaf.tag, "span") or leaf.attributes.len != 1 or
-        !std.mem.eql(u8, observedFigureAttribute(leaf, "typeof") orelse return null, "mw:Entity") or
-        leaf.empty != false or leaf.has_text != true or !leaf.known_complete_child_elements or
-        !std.mem.eql(u8, leaf.captured_entity_text orelse return null, "\xc2\xa0")) return null;
-    for (context.nodes) |node| if (node.parent == child) return null;
-
-    var reverse: [65]u32 = undefined; var count: usize = 0; var next: ?u32 = child;
-    while (next) |index| {
-        if (count == reverse.len) return null;
-        reverse[count] = index; count += 1; next = context.nodes[index].parent;
-    }
-    if (count == 0 or reverse[count - 1] != 0) return null;
-    var environment: CustomEnvironment = .{ .complete = true };
-    for (0..count) |ordinal| {
-        const index = reverse[count - ordinal - 1];
-        var declarations = (try observedStyleNodeDeclarationsWithLanguage(a, context.styles, context.nodes,
-            index, null, null, .{}, true)) orelse return null;
+test "fixed inline legend bounds use declaring em and preserve inherited baseline metrics" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const parent: types.InlineFontSnapshot = .{ .font_scale = 1.25, .font_scale_basis = .normal_body, .font_normalized = true };
+    const red = "display:inline-block; width:1.5em; height:1.5em; margin:1px 0; border:1px solid black; background-color:red; color:black; font-size:90%; text-align:center;";
+    const white = "display:inline-block; width:1.5em; height:1.5em; margin:1px 0; border:1px solid black; background-color:white; color:black; font-size:90%; text-align:center;";
+    var baseline: std.ArrayList(ObservedFigureDeclaration) = .empty;
+    defer baseline.deinit(a);
+    try appendObservedFigureDeclarations(a, &baseline, "white-space:normal;direction:ltr;line-height:1.6", .{}, false, false, null, 0);
+    for ([_][]const u8{ red, white }, [_][]const u8{ "#ff0000", "#ffffff" }) |css, color| {
+        var declarations: std.ArrayList(ObservedFigureDeclaration) = .empty;
         defer declarations.deinit(a);
-        // Even an invariant-looking custom/motion rule cannot hide an unknown
-        // selector, rank or state in this narrow child-neutrality proof.
-        for (declarations.items) |declaration|
-            if (declaration.syntax_unknown or declaration.rank_unknown or declaration.uncertain) return null;
-        environment = try observedFigureCustomEnvironment(a, declarations.items, environment, true);
-        if (!environment.complete) return null;
-        for (environment.values) |binding| if (binding.value == .unknown) return null;
-        if (context.nodes[index].custom_environment) |issued| for (issued.values) |binding| {
-            if (binding.value == .unknown or !sameObservedCustomValue(binding.value, environment.get(binding.name))) return null;
+        try appendObservedFigureDeclarations(a, &declarations, css, .{ .inline_style = true }, false, false, null, 0);
+        const path = [_]PositionedContainerPathNode{
+            .{ .tag = "html", .declarations = baseline.items, .environment = .{} },
+            .{ .tag = "span", .declarations = declarations.items, .environment = .{} },
         };
-        if (index == child) {
-            var used = try ObservedFigurePropertyUse.init(a, declarations.items); defer used.deinit(a);
-            used.customEnvironment();
-            // Exact prefix-entity pattern, without any prefix/table capability:
-            // no font, ink, bidi, box, radius or other own property is consumed.
-            if (!try used.staticMotion(a, environment) or !used.complete()) return null;
-        }
+        const result = (try fixedInlineBoxFromPath(a, &path, parent)) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualDeep(types.StyleLength{ .value = 1.5, .unit = .em }, result.layout.width);
+        try std.testing.expectEqualDeep(result.layout.width, result.layout.height);
+        try std.testing.expectEqualDeep(types.StyleLength{ .value = 1, .unit = .px }, result.layout.margins.top);
+        try std.testing.expectEqualDeep(result.layout.margins.top, result.layout.margins.bottom);
+        try std.testing.expectEqual(@as(f32, 0), result.layout.margins.left.value);
+        try std.testing.expectEqual(@as(f32, 0), result.layout.margins.right.value);
+        try std.testing.expectEqual(types.InlineBoxOverlayTextAlign.center, result.layout.text_align);
+        try std.testing.expectEqual(@as(f32, 1.125), result.font.font_scale.?);
+        try std.testing.expectEqual(@as(f32, 1.6), result.layout.line_height.?.font_relative.factor);
+        try std.testing.expectEqualDeep(result.font, result.layout.line_height.?.font_relative.font);
+        try std.testing.expectEqualStrings(color, result.background);
+        try std.testing.expectEqualStrings("#000000", result.foreground);
     }
-    for ([_]GeneratedFigurePseudo{ .before, .after }) |pseudo| {
-        var declarations = (try observedStyleNodeDeclarationsWithLanguage(a, context.styles, context.nodes,
-            child, null, pseudo, .{}, true)) orelse return null;
+    for ([_][]const u8{ "width:20%", "margin-left:auto", "vertical-align:top", "position:relative", "z-index:9",
+        "overflow:hidden", "background-image:url(x)", "width:0", "display:inline", "aspect-ratio:1", "font-stretch:expanded" }) |mutation| {
+        var declarations: std.ArrayList(ObservedFigureDeclaration) = .empty;
         defer declarations.deinit(a);
-        for (declarations.items) |declaration|
-            if (declaration.syntax_unknown or declaration.rank_unknown or declaration.uncertain) return null;
-        const pseudo_environment = try observedFigureCustomEnvironment(a, declarations.items, environment, true);
-        if (!pseudo_environment.complete) return null;
-        for (pseudo_environment.values) |binding| if (binding.value == .unknown) return null;
-        var used = try ObservedFigurePropertyUse.init(a, declarations.items); defer used.deinit(a);
-        used.customEnvironment(); used.property("content", &.{});
-        if (!try used.staticMotion(a, pseudo_environment) or !used.complete() or
-            !try authoredElementPseudoEmpty(a, context, child, pseudo, pseudo_environment)) return null;
+        const css = try std.mem.concat(a, u8, &.{ red, mutation });
+        try appendObservedFigureDeclarations(a, &declarations, css, .{ .inline_style = true }, false, false, null, 0);
+        const path = [_]PositionedContainerPathNode{
+            .{ .tag = "html", .declarations = baseline.items, .environment = .{} },
+            .{ .tag = "span", .declarations = declarations.items, .environment = .{} },
+        };
+        try std.testing.expect((try fixedInlineBoxFromPath(a, &path, parent)) == null);
     }
-    if (!observedTableOtherPseudoEmpty(context, child)) return null;
-    return .{ .context = context, .source = source, .owner_span = owner_span, .token = token, .child = child };
+
+    // Synthetic metric arithmetic exercises both entry contracts.
+    // The source root is 16px and its 125% child is the 20px immediate parent.
+    var root_style: std.ArrayList(ObservedFigureDeclaration) = .empty;
+    defer root_style.deinit(a);
+    try appendObservedFigureDeclarations(a, &root_style,
+        "font-size:16px;font-weight:normal;font-style:normal;font-family:sans-serif;" ++
+        "white-space:normal;direction:ltr;line-height:1.6;text-align:left;",
+        .{}, false, false, null, 0);
+    var parent_style: std.ArrayList(ObservedFigureDeclaration) = .empty;
+    defer parent_style.deinit(a);
+    try appendObservedFigureDeclarations(a, &parent_style, "font-size:125%;",
+        .{}, false, false, null, 0);
+    var own_style: std.ArrayList(ObservedFigureDeclaration) = .empty;
+    defer own_style.deinit(a);
+    try appendObservedFigureDeclarations(a, &own_style, red,
+        .{ .inline_style = true }, false, false, null, 0);
+    const metric_path = [_]PositionedContainerPathNode{
+        .{ .tag = "html", .declarations = root_style.items, .environment = .{} },
+        .{ .tag = "div", .declarations = parent_style.items, .environment = .{} },
+        .{ .tag = "span", .declarations = own_style.items, .environment = .{} },
+    };
+    const derived_from_root = (try positionedContainerInheritance(a, &metric_path, null, null)) orelse
+        return error.TestUnexpectedResult;
+    const parent_computed: types.InlineFontSnapshot = .{
+        .font_scale = 20, .font_scale_basis = .css_px, .font_normalized = true,
+        .font_family = .sans_serif,
+    };
+    const from_parent = (try fixedInlineBoxFromPath(a, &metric_path, parent_computed)) orelse
+        return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(f32, 18), from_parent.font.font_scale.?);
+    try std.testing.expectEqual(types.FontScaleBasis.css_px, from_parent.font.font_scale_basis);
+    try std.testing.expectEqualDeep(derived_from_root.font.?, from_parent.font);
+    try std.testing.expectEqualDeep(from_parent.font, from_parent.layout.line_height.?.font_relative.font);
+
+    // An ancestor em line-height needs that ancestor's own metric.
+    // An issued immediate-parent metric supplies no root-font observation.
+    var unresolved_root: std.ArrayList(ObservedFigureDeclaration) = .empty;
+    defer unresolved_root.deinit(a);
+    try appendObservedFigureDeclarations(a, &unresolved_root,
+        "font-size:16px;white-space:normal;direction:ltr;line-height:1.6em;",
+        .{}, false, false, null, 0);
+    var unknown_path = metric_path;
+    unknown_path[0].declarations = unresolved_root.items;
+    try std.testing.expect((try fixedInlineBoxFromPath(a, &unknown_path, parent_computed)) == null);
 }
 
-pub fn resolveObservedFixedInlineBoxWithEntity(a: std.mem.Allocator, context: AuthoredElementObservedContext,
-    source: []const u8, owner_span: []const u8, token: []const u8, parent_font: types.InlineFontSnapshot,
-    proof: ObservedFixedInlineEntityProof) !?ObservedFixedInlineBoxComputedContext
-{
-    if (!proof.binds(context, source, owner_span, token)) return null;
-    // Recheck current declarations and shape; a copied/stale/constructed proof
-    // cannot skip the neutrality checks, even if it retains matching pointers.
-    const current = (try proveObservedFixedInlineEntityNeutral(a, context, source, owner_span, token)) orelse return null;
-    if (current.child != proof.child) return null;
-    const box = (try resolveObservedFixedInlineBoxChildIn(a, context, parent_font, current.child)) orelse return null;
-    const text = (try resolveObservedElementTextPathIn(a, context, .{}, true, null, true,
-        false, false, false)) orelse return null;
-    if (text.nodes.len < 2 or text.root != context.root or text.element != context.element) return null;
-    const own = text.nodes[text.nodes.len - 1];
-    const parent = context.nodes[context.element].parent orelse return null;
-    if (own.index != context.element or own.hidden or text.nodes[text.nodes.len - 2].index != parent) return null;
-    return .{ .text = text, .box = box };
+
+test "source fixed box cascade refuses incomplete or disagreeing physical ancestry" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var profile = try parseAlloc(a, "");
+    defer profile.deinit();
+    const css = "display:inline-block; width:1.5em; height:1.5em; margin:1px 0; border:1px solid black; background-color:red; color:black; font-size:90%; text-align:center;";
+    const parent_font: types.InlineFontSnapshot = .{ .font_scale = 1, .font_scale_basis = .normal_body, .font_normalized = true };
+    // Synthetic completeness flags exercise the query contract only.
+    // The ordinary producer needs an independently observed subject issuer.
+    var root: TextElement = .{ .tag = "div", .observed_inline_style = "direction:ltr;white-space:normal;line-height:1.6;",
+        .ancestry_complete = true, .physical_ancestry_complete = true };
+    var subject: TextElement = .{ .tag = "span", .parent = &root, .observed_inline_style = css,
+        .ancestry_complete = true, .physical_ancestry_complete = true };
+    const fixed = (try resolveSourceFixedInlineBoxIn(a, &profile, &subject, css, null, parent_font, null, null)) orelse
+        return error.TestUnexpectedResult;
+    try std.testing.expectEqualDeep(types.StyleLength{ .unit = .em, .value = 1.5 }, fixed.layout.width);
+    try std.testing.expectEqual(@as(f32, 0.9), fixed.font.font_scale.?);
+    try std.testing.expectEqual(@as(f32, 1.6), fixed.layout.line_height.?.font_relative.factor);
+
+    var alternative = root;
+    root.alternative_ancestry = &alternative;
+    try std.testing.expect((try resolveSourceFixedInlineBoxIn(a, &profile, &subject, css, null, parent_font, null, null)) != null);
+    alternative.observed_inline_style = "direction:ltr;white-space:normal;line-height:1.4;";
+    try std.testing.expect((try resolveSourceFixedInlineBoxIn(a, &profile, &subject, css, null, parent_font, null, null)) == null);
+    alternative.observed_inline_style = root.observed_inline_style;
+    alternative.physical_ancestry_complete = false;
+    try std.testing.expect((try resolveSourceFixedInlineBoxIn(a, &profile, &subject, css, null, parent_font, null, null)) == null);
+    root.alternative_ancestry = null;
+    root.observed_inline_style = null;
+    try std.testing.expect((try resolveSourceFixedInlineBoxIn(a, &profile, &subject, css, null, parent_font, null, null)) == null);
+    root.observed_inline_style = alternative.observed_inline_style;
+    subject.observed_inline_style = "display:inline-block";
+    try std.testing.expect((try resolveSourceFixedInlineBoxIn(a, &profile, &subject, css, null, parent_font, null, null)) == null);
+
+    subject.observed_inline_style = css;
+    root.ancestry_complete = false;
+    try std.testing.expect((try resolveSourceFixedInlineBoxIn(a, &profile, &subject, css, null, parent_font, null, null)) == null);
+    root.ancestry_complete = true;
+    root.observed_inline_style = "direction:ltr;white-space:normal;";
+    try std.testing.expect((try resolveSourceFixedInlineBoxIn(a, &profile, &subject, css, null, parent_font, null, null)) == null);
+    root.observed_inline_style = "direction:ltr;white-space:normal;line-height:1.6;";
+    var unknown_font = parent_font;
+    unknown_font.font_scale_basis = .context;
+    try std.testing.expect((try resolveSourceFixedInlineBoxIn(a, &profile, &subject, css, null, unknown_font, null, null)) == null);
+    unknown_font = parent_font;
+    unknown_font.font_scale = null;
+    try std.testing.expect((try resolveSourceFixedInlineBoxIn(a, &profile, &subject, css, null, unknown_font, null, null)) == null);
 }
+
 
 const ObservedFixedInlineBoxTest = struct {
     const root_css = "html{font-family:sans-serif;font-size:16px;font-weight:normal;font-style:normal;" ++
@@ -43071,6 +43446,7 @@ test "observed fixed atom refuses unclosed children hidden paths pseudo motion a
     try std.testing.expect((try resolveObservedFixedInlineBox(a, context, unissued)) == null);
 }
 
+
 test "observed fixed atom typed paths retain independent source and native parent metrics" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
     const T = ObservedFixedInlineBoxTest;
@@ -43110,6 +43486,7 @@ test "observed fixed atom typed paths retain independent source and native paren
         }
     }
 }
+
 
 test "ordinary fixed atom entity proof binds only the mapped NBSP child and refuses own effects" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
@@ -43458,4 +43835,1267 @@ test "deferred cell physical height keeps independent unsupported declarations a
     var uncertain = try parseAlloc(a, "td:hover{height:2px}"); defer uncertain.deinit();
     const conditional = try uncertain.resolveCellWithContext(a, 0, 0, "", .{ .defer_cell_height = true }, false, null, "height:.25em");
     try std.testing.expect(conditional.unresolved);
+}
+
+test "observed Missing caption FONT uses initial native size and author cascade" {
+    var scratch = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer scratch.deinit();
+    const a = scratch.allocator();
+    const scale = @import("font_scale.zig");
+    const authored = scale.htmlAbsoluteSizeKeyword('4') orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("large", authored);
+    const observed: FigureObservedNode = .{ .tag = "font", .attributes = &.{.{ .name = "size", .value = "4" }}, .parent = 3, .has_text = true };
+    const parent: types.FigureMediaStrut = .{ .font_scale = 0.875, .direction = .rtl };
+    var declarations: std.ArrayList(ObservedFigureDeclaration) = .empty;
+    try appendNormalMissingFontHint(a, &declarations, authored);
+    var node: ObservedFigureComputedNode = .{ .index = 4, .declarations = declarations.items, .environment = .{ .complete = true } };
+    const with_hint = (try observedFigureOwnFontInWithWitness(a, observed, node, parent, 1, 1, true, null)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(scale.absoluteKeyword("large").?, with_hint.font_scale);
+    const reset = (try observedFigureOwnFontInWithWitness(a, observed, node, parent, 0.75, 1, true, null)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(f32, 0.75) * scale.absoluteKeyword("large").?, reset.font_scale);
+    try std.testing.expectEqual(@as(?types.FigureMediaStrut, null),
+        try observedFigureOwnFontInWithWitness(a, observed, node, parent, null, 1, true, null));
+
+    // A universal author rule is sufficient even if its source order equals
+    // the hint's. An ordinary declaration would tie without the hint rank.
+    try appendObservedFigureDeclarations(a, &declarations, "font-size:small", .{}, false, false, 0, 0);
+    try std.testing.expectEqual(declarations.items[0].priority.order, declarations.items[1].priority.order);
+    try std.testing.expectEqual(@as(u64, 0), declarations.items[1].priority.specificity);
+    node.declarations = declarations.items;
+    const author = (try observedFigureOwnFontInWithWitness(a, observed, node, parent, 1, 1, true, null)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(scale.absoluteKeyword("small").?, author.font_scale);
+
+    // An unsupported winning author shorthand cannot fall through to FONT.
+    try appendObservedFigureDeclarations(a, &declarations, "font:small sans-serif", .{ .order = 20 }, false, false, 0, 0);
+    node.declarations = declarations.items;
+    try std.testing.expectEqual(@as(?types.FigureMediaStrut, null),
+        try observedFigureOwnFontInWithWitness(a, observed, node, parent, 1, 1, true, null));
+}
+
+// Build-time only. The issuer binds each complete graph to the same physical
+// source owner and closed initializer, and authenticates the ordered sheets.
+pub const DisclosureGraph = struct {
+    nodes: []const ObservedStyleNode,
+    root: u32,
+    owner: u32,
+    button: u32,
+    label: u32,
+    label_text: []const u8,
+    // Source projection can omit Parsoid-added ID/RDFa/attributes.
+    source_only_owner: bool = false,
+    // Internal derivation operand; populated from the bound local proof.
+    reset_parent_font: ?DisclosureInheritedFont = null,
+};
+pub const DisclosureStates = struct {
+    collapsed: DisclosureGraph,
+    expanded: DisclosureGraph,
+    // Required when the source starts open. Initial aria-expanded=true has
+    // neither toggled state class until the first transition.
+    initially_expanded: ?DisclosureGraph = null,
+};
+// Isolated enabled type=button, sole plain SPAN, horizontal writing, zero
+// margins, UA-owned font/foreground and no decorations. Binding includes
+// platform, control appearance, fonts, palette, scale and screen environment.
+// Values must cover all reachable states. No policy from a page is a UA basis.
+pub const DisclosureUaBasis = struct {
+    button: types.ContainerDisclosureButton,
+    foreground: types.FigureColor,
+    margin: types.StyleEdges,
+    label_underline: bool,
+    initial_float: types.ContainerDisclosurePlacement,
+    color_scheme: []const u8,
+    moz_focus_inner_absent: bool,
+    focus_visible_supported: bool,
+};
+pub const DisclosurePaint = struct {
+    button: types.ContainerDisclosureButton,
+    expand_run: types.ContainerDisclosureLabelRun,
+    collapse_run: types.ContainerDisclosureLabelRun,
+    placement: types.ContainerDisclosurePlacement,
+    foreground: types.FigureColor,
+    direction: types.BidiResolvedDirection,
+};
+const DisclosureEvaluation = struct {
+    nodes: []const ObservedStyleNode,
+    button: u32,
+    label: u32,
+    state: ObservedFigureLinkState,
+    boundary: ?*const DisclosureBoundary,
+    partial_owner: ?u32,
+    candidates: []const ObservedFigureRuleCandidates = &.{},
+    float_ancestors: ?[]const u3 = null,
+    moz_focus_inner_absent: bool,
+};
+pub const DisclosureExterior = struct { nodes: []const ObservedStyleNode, root: u32, attach: u32 };
+pub const DisclosureSharedProfile = struct {
+    styles: *const Profile,
+    ua: DisclosureUaBasis,
+    exteriors: []const DisclosureExterior = &.{},
+    boundary: ?DisclosureBoundary = null,
+    placement_shell: ?[]const DisclosureShellStep = null,
+};
+pub const DisclosureLocalProof = struct {
+    owner: *const TextElement,
+    source_key: usize,
+    shared: *const DisclosureSharedProfile,
+    states: DisclosureStates,
+    root_placement: ?DisclosureRootPlacement = null,
+    reset_font_at_parent: ?DisclosureOwnerFont = null,
+    absent_tags: []const []const u8 = &.{},
+    absent_classes: []const []const u8 = &.{},
+};
+
+fn disclosureAttr(node: ObservedStyleNode, name: []const u8, value: []const u8) bool {
+    return std.mem.eql(u8, observedFigureAttribute(node, name) orelse return false, value);
+}
+fn disclosureLabelValid(value: []const u8) bool {
+    if (value.len == 0 or value.len > 65536 or !std.unicode.utf8ValidateSlice(value)) return false;
+    for (value) |byte| if (byte < 0x20 or byte == 0x7f) return false;
+    return true;
+}
+const DisclosurePhase = enum { collapsed, expanded, initially_expanded };
+fn disclosureGraphValid(styles: *const Profile, graph: DisclosureGraph, phase: DisclosurePhase, partial: bool) bool {
+    const nodes = graph.nodes;
+    if (partial) {
+        if (nodes.len == 0 or nodes.len > 65536 or graph.root != 0 or nodes[0].parent != null or
+            !observedStyleNodesValid(nodes)) return false;
+        for (nodes) |n| if (std.ascii.eqlIgnoreCase(n.tag, "html")) return false;
+    } else if (graph.source_only_owner or !observedStyleGraphValid(styles, nodes, graph.root) or graph.root >= graph.owner) return false;
+    if (graph.owner >= nodes.len or graph.button >= nodes.len or graph.label >= nodes.len or
+        !authoredElementDescendant(nodes, graph.owner, graph.root) or !disclosureLabelValid(graph.label_text)) return false;
+    const owner = nodes[graph.owner];
+    const button = nodes[graph.button];
+    const label = nodes[graph.label];
+    const collapsed = phase == .collapsed;
+    const owner_classes = observedFigureAttribute(owner, "class") orelse return false;
+    if (!std.ascii.eqlIgnoreCase(owner.tag, "div") or !Profile.hasClass(owner_classes, "mw-collapsible") or
+        !Profile.hasClass(owner_classes, "mw-made-collapsible") or Profile.hasClass(owner_classes, "mw-collapsed") != collapsed or
+        !disclosureAttr(owner, if (collapsed) "data-expandtext" else "data-collapsetext", graph.label_text)) return false;
+    if (!std.ascii.eqlIgnoreCase(button.tag, "button") or button.parent != graph.owner or button.has_text != false or
+        button.attributes.len != 4 or !disclosureAttr(button, "type", "button") or !disclosureAttr(button, "tabindex", "0") or
+        !disclosureAttr(button, "aria-expanded", if (collapsed) "false" else "true")) return false;
+    const classes = observedFigureAttribute(button, "class") orelse return false;
+    var tokens = std.mem.tokenizeAny(u8, classes, " \t\r\n\x0c");
+    var count: usize = 0;
+    while (tokens.next() != null) count += 1;
+    if (count != @as(usize, if (phase == .initially_expanded) 2 else 3) or
+        !Profile.hasClass(classes, "mw-collapsible-toggle") or !Profile.hasClass(classes, "mw-collapsible-toggle-default") or
+        Profile.hasClass(classes, "mw-collapsible-toggle-collapsed") != collapsed or
+        Profile.hasClass(classes, "mw-collapsible-toggle-expanded") != (phase == .expanded)) return false;
+    if (!std.ascii.eqlIgnoreCase(label.tag, "span") or label.parent != graph.button or label.has_text != true or
+        label.attributes.len != 1 or !disclosureAttr(label, "class", "mw-collapsible-text")) return false;
+    for (nodes, 0..) |node, i| {
+        if (node.parent == graph.label or (node.parent == graph.button and i != graph.label) or
+            (node.parent == graph.owner and i < graph.button)) return false;
+    }
+    return true;
+}
+
+// Only the terminal subjects receive pointer/focus facts. Ancestral dynamic
+// conditions and unspecified media keep their possible values in the cascade.
+fn disclosureDeclarations(a: std.mem.Allocator, styles: *const Profile, graph: DisclosureGraph,
+    index: u32, pseudo: ?GeneratedFigurePseudo, evaluation: ObservedFigureEvaluation,
+    inherited: CustomEnvironment) !?ObservedFigureComputedNode
+{
+    const scope = evaluation.disclosure.?;
+    var candidates: ?std.DynamicBitSetUnmanaged = null;
+    for (scope.candidates) |held| if (held.subject == index and held.pseudo == pseudo) {
+        candidates = held.rules;
+        break;
+    };
+    const ds = (try observedStyleNodeDeclarationsSelected(a, styles, graph.nodes, index, null,
+        pseudo, evaluation, !graph.source_only_owner, candidates, null)) orelse return null;
+    for (ds.items) |d| if (d.syntax_unknown or
+        (customName(d.name) and d.rank_unknown)) return null;
+    const env = try observedFigureCustomEnvironment(a, ds.items, inherited, true);
+    if (pseudo == null) if (graph.nodes[index].custom_environment) |issued| for (issued.values) |binding| {
+        if (binding.value != .unknown and !sameObservedCustomValue(binding.value, env.get(binding.name))) return null;
+    };
+    return .{ .index = index, .environment = env, .declarations = ds.items };
+}
+fn disclosureDirection(a: std.mem.Allocator, node: ObservedStyleNode, computed: ObservedFigureComputedNode,
+    inherited: types.BidiResolvedDirection) !?types.BidiResolvedDirection
+{
+    const hint = observedFigureAttribute(node, "dir") orelse @tagName(inherited);
+    if (!std.ascii.eqlIgnoreCase(hint, "ltr") and !std.ascii.eqlIgnoreCase(hint, "rtl")) return null;
+    const value = try observedFigureKeyword(a, computed.declarations, "direction", &.{}, computed.environment,
+        &.{ "ltr", "rtl" }, "ltr", @tagName(inherited), true, hint);
+    if (value.unresolved) return null;
+    return if (std.ascii.eqlIgnoreCase(value.value.?, "rtl")) .rtl else .ltr;
+}
+fn disclosureNoGenerated(a: std.mem.Allocator, styles: *const Profile, graph: DisclosureGraph,
+    node: ObservedFigureComputedNode, evaluation: ObservedFigureEvaluation) !bool
+{
+    for ([_]GeneratedFigurePseudo{ .before, .after, .marker, .other }) |pseudo| {
+        const p = (try disclosureDeclarations(a, styles, graph, node.index, pseudo, evaluation, node.environment)) orelse return false;
+        if (p.declarations.len == 0) continue;
+        if (pseudo == .other or pseudo == .marker) return false;
+        if (!try observedFigureStaticMotion(a, p.declarations, p.environment)) return false;
+        const content = try observedFigureKeyword(a, p.declarations, "content", &.{}, p.environment,
+            &.{ "none", "normal" }, "normal", null, false, "normal");
+        if (content.unresolved) return false;
+    }
+    return true;
+}
+// A font at the physical parent of this source owner, qualified for both
+// label strings (including bracket glyphs), the target and every admitted
+// state. The named face is a resolved platform face. A generic CSS family
+// or a computed font copied from another page cannot supply it.
+pub const DisclosureInheritedFont = struct {
+    family: types.ContainerDisclosureNamedFont,
+    size: types.StyleLength,
+    weight: u16,
+    italic: bool,
+    line_height: types.ContainerLineHeight,
+};
+pub const DisclosureOwnerFont = struct {
+    owner: *const TextElement,
+    shared: *const DisclosureSharedProfile,
+    source_key: usize,
+    expand: []const u8,
+    collapse: []const u8,
+    font: DisclosureInheritedFont,
+};
+const DisclosureResetBox = struct {
+    appearance: enum { none } = .none,
+    font: DisclosureInheritedFont,
+    padding: types.StyleEdges,
+    state: types.ContainerDisclosureButtonState,
+};
+
+fn disclosureFontInherits(a: std.mem.Allocator, node: ObservedFigureComputedNode) !bool {
+    // Accept only transparent inheritance across this one source-owned DIV.
+    // Unknown selectors may be present if either outcome preserves the font.
+    for (node.declarations) |d| {
+        if (d.syntax_unknown or std.ascii.eqlIgnoreCase(d.name, "all")) return false;
+        if (!std.ascii.eqlIgnoreCase(d.name, "font") and !std.ascii.startsWithIgnoreCase(d.name, "font-") and
+            !std.ascii.eqlIgnoreCase(d.name, "line-height")) continue;
+        const v = try customColorValue(a, node.environment, d.raw);
+        if (v != .known or !std.ascii.eqlIgnoreCase(trim(v.known), "inherit")) return false;
+    }
+    return true;
+}
+
+// Verify exact supported reset *values* among all possible cascade winners.
+// Require at least one certain declaration: an entirely conditional reset
+// would also leave the native UA control possible. All unconsumed longhands,
+// logical aliases, 'all', and malformed declarations still fail complete().
+fn disclosureResetProperty(a: std.mem.Allocator, use: *ObservedFigurePropertyUse,
+    node: ObservedFigureComputedNode, name: []const u8, expected: []const u8, optional: bool) !bool
+{
+    const ds = try observedFigurePropertyCandidates(a, node.declarations, name, &.{});
+    defer a.free(ds);
+    if (ds.len == 0) return optional;
+    var certain = false;
+    for (ds) |d| {
+        if (d.syntax_unknown or !std.ascii.eqlIgnoreCase(d.name, name)) return false;
+        const v = try customColorValue(a, node.environment, d.raw);
+        if (v != .known or !std.ascii.eqlIgnoreCase(trim(v.known), expected)) return false;
+        certain = certain or !d.uncertain;
+    }
+    if (!certain and !optional) return false;
+    use.property(name, &.{});
+    return true;
+}
+
+fn disclosureResetBox(a: std.mem.Allocator, node: ObservedFigureComputedNode,
+    use: *ObservedFigurePropertyUse, font: DisclosureInheritedFont) !?DisclosureResetBox
+{
+    if (!types.validFontFamilyName(font.family.name) or font.size.unit != .px or
+        !types.validStyleLength(font.size) or font.size.value <= 0 or font.weight != 400 or font.italic) return null;
+    switch (font.line_height) {
+        .length => |line| if (line.unit != .px or !types.validStyleLength(line) or line.value <= 0) return null,
+        .normal => {},
+        else => return null,
+    }
+    inline for (.{ .{ "appearance", "none" }, .{ "background", "none" }, .{ "border", "0" },
+        .{ "padding", "0" }, .{ "font", "inherit" } }) |p|
+        if (!try disclosureResetProperty(a, use, node, p[0], p[1], false)) return null;
+    inline for (.{ "-webkit-appearance", "-moz-appearance" }) |name|
+        if (!try disclosureResetProperty(a, use, node, name, "none", true)) return null;
+    return .{ .font = font, .padding = .all(.{ .unit = .px, .value = 0 }),
+        .state = .{ .background = .{ .kind = .transparent }, .border = .all(.none) } };
+}
+
+// The existing reader emits appearance:auto for native_button. Only emit
+// the reset if the versioned schema and consumers support an explicit none.
+fn disclosureApplyReset(button: *types.ContainerDisclosureButton, reset: DisclosureResetBox) bool {
+    if (comptime !@hasField(types.ContainerDisclosureButtonAppearance, "none")) return false;
+    button.appearance = @field(types.ContainerDisclosureButtonAppearance, "none");
+    button.font_family = reset.font.family;
+    button.font_size = reset.font.size;
+    button.font_weight = reset.font.weight;
+    button.font_italic = reset.font.italic;
+    button.line_height = reset.font.line_height;
+    button.padding = reset.padding;
+    inline for (.{ "normal", "hover", "active", "hover_active" }) |key| @field(button, key) = reset.state;
+    return true;
+}
+
+test "disclosure runtime reset consumes definite author box and inherits the qualified owner font" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // Byte-exact declaration body in normal09 active-css-1. Font is synthetic.
+    const css = "-webkit-appearance:none;-moz-appearance:none;appearance:none;background:none;margin:0;padding:0;border:0;font:inherit";
+    const font: DisclosureInheritedFont = .{ .family = .{ .name = "Fixture" }, .size = .{ .value = 19, .unit = .px },
+        .weight = 400, .italic = false, .line_height = .{ .length = .{ .value = 31, .unit = .px } } };
+    for ([_][]const u8{ "", ";appearance:auto", ";background:red", ";padding:1px", ";font:initial",
+        ";border:1px solid", ";font-size:24px", ";border-left:1px solid", ";all:unset" }, 0..) |tail, index| {
+        var ds: std.ArrayList(ObservedFigureDeclaration) = .empty;
+        try appendObservedFigureDeclarations(a, &ds, try std.mem.concat(a, u8, &.{ css, tail }), .{}, false, false, 0, 0);
+        const node: ObservedFigureComputedNode = .{ .index = 1, .environment = .{ .complete = true }, .declarations = ds.items };
+        var use = try ObservedFigurePropertyUse.init(a, ds.items);
+        use.boxEdges(false);
+        const resolved = try disclosureResetBox(a, node, &use, font);
+        if (index == 0) {
+            const box = resolved orelse return error.TestUnexpectedResult;
+            try std.testing.expect(use.complete());
+            try std.testing.expectEqualDeep(font, box.font);
+            try std.testing.expectEqual(types.FigureColorKind.transparent, box.state.background.kind);
+            try std.testing.expectEqual(@as(f32, 0), box.padding.left.value);
+            ds.items[ds.items.len - 1].uncertain = true;
+            try std.testing.expect((try disclosureResetBox(a, node, &use, font)) == null);
+        } else try std.testing.expect(resolved == null or !use.complete());
+    }
+    var inherited: std.ArrayList(ObservedFigureDeclaration) = .empty;
+    try appendObservedFigureDeclarations(a, &inherited, "font-family:inherit;line-height:inherit", .{}, true, false, 0, 0);
+    try std.testing.expect(try disclosureFontInherits(a, .{ .index = 0, .declarations = inherited.items, .environment = .{} }));
+    try appendObservedFigureDeclarations(a, &inherited, "line-height:1.7", .{}, true, false, 0, 0);
+    try std.testing.expect(!try disclosureFontInherits(a, .{ .index = 0, .declarations = inherited.items, .environment = .{} }));
+}
+
+const DisclosureAncestor = struct {
+    inherited_font: ?DisclosureInheritedFont = null,
+    env: CustomEnvironment = .{ .complete = true },
+    direction: types.BidiResolvedDirection = .ltr,
+    scheme: []const u8 = "normal",
+};
+fn disclosureAncestors(a: std.mem.Allocator, styles: *const Profile, graph: DisclosureGraph,
+    ua: DisclosureUaBasis, evaluation: ObservedFigureEvaluation) !?DisclosureAncestor
+{
+    var path: [64]u32 = undefined;
+    var count: usize = 0;
+    var cursor: ?u32 = graph.owner;
+    while (cursor) |index| : (cursor = graph.nodes[index].parent) {
+        if (count == path.len) return null;
+        path[count] = index;
+        count += 1;
+    }
+    var parent = if (evaluation.disclosure.?.boundary) |b| DisclosureAncestor{
+        .direction = b.direction orelse return null, .scheme = b.color_scheme, .env = b.custom_environment,
+    } else DisclosureAncestor{};
+    while (count > 0) {
+        count -= 1;
+        const index = path[count];
+        const node = graph.nodes[index];
+        var supported_tag = false;
+        for ([_][]const u8{ "html", "body", "div", "section", "main", "article", "ul", "ol", "li" }) |tag| {
+            if (std.ascii.eqlIgnoreCase(tag, node.tag)) supported_tag = true;
+        }
+        if (!supported_tag) return null;
+        for ([_][]const u8{ "hidden", "inert", "contenteditable" }) |attr|
+            if (observedFigureAttribute(node, attr) != null) return null;
+        const d = (try disclosureDeclarations(a, styles, graph, index, null, evaluation, parent.env)) orelse return null;
+        const direction = (try disclosureDirection(a, node, d, parent.direction)) orelse return null;
+        const scheme = try observedFigureKeyword(a, d.declarations, "color-scheme", &.{}, d.environment,
+            &.{ "normal", "light", "dark" }, "normal", parent.scheme, true, parent.scheme);
+        if (scheme.unresolved) return null;
+        var use = try ObservedFigurePropertyUse.init(a, d.declarations);
+        defer use.deinit(a);
+        use.customEnvironment();
+        if (!try use.staticMotion(a, d.environment)) return null;
+        // The existing container/shell path owns these outer boxes. They do
+        // not set a control longhand. UA qualification must establish the
+        // control's own font and foreground independent of ancestor font/color.
+        for ([_][]const u8{ "direction", "color-scheme", "color", "font-family", "font-size", "font-weight",
+            "font-style", "line-height", "background", "background-color", "background-image", "border-radius",
+            "box-sizing", "width", "height", "min-height", "min-width", "max-width", "max-height",
+            "position", "top", "left", "right", "bottom", "z-index", "outline-color", "box-shadow",
+            "grid-template-columns", "grid-template-rows", "grid-template-areas", "grid-area", "gap" }) |name| use.property(name, &.{});
+        use.boxEdges(false);
+        use.boxEdges(true);
+        use.borderEdges();
+        use.property("display", &.{});
+        if (!use.complete()) return null;
+        if (index == graph.owner) {
+            const display = try observedFigureKeyword(a, d.declarations, "display", &.{}, d.environment,
+                &.{ "block", "flow-root" }, "inline", null, false, "block");
+            if (display.unresolved or !try disclosureNoGenerated(a, styles, graph, d, evaluation)) return null;
+        } else if ((try observedRuleShellHidden(a, d.declarations, d.environment)) != false) return null;
+        const inherited_font = if (graph.reset_parent_font) |font| blk: {
+            if (!graph.source_only_owner or graph.owner != 0 or index != 0 or
+                evaluation.disclosure.?.boundary == null or !try disclosureFontInherits(a, d)) break :blk null;
+            break :blk @as(?DisclosureInheritedFont, font);
+        } else null;
+        parent = .{ .env = d.environment, .direction = direction, .scheme = scheme.value.?, .inherited_font = inherited_font };
+    }
+    if (!std.ascii.eqlIgnoreCase(parent.scheme, ua.color_scheme)) return null;
+    return parent;
+}
+// Issued for the entire edition/screen domain at the physical parent of
+// nodes[0]. Includes qualification of the inherited control text and palette
+// context and exterior visibility. Empty absence lists prove nothing.
+// Unknown custom bindings must remain unknown (incomplete environment).
+pub const DisclosureBoundary = struct {
+    direction: ?types.BidiResolvedDirection,
+    color_scheme: []const u8,
+    custom_environment: CustomEnvironment,
+    absent_tags: []const []const u8 = &.{},
+    absent_classes: []const []const u8 = &.{},
+};
+fn disclosureExteriorPossible(compound: GeneratedFigureCompound, boundary: *const DisclosureBoundary) bool {
+    if (compound.positive.tag) |tag| for (boundary.absent_tags) |absent| {
+        if (std.ascii.eqlIgnoreCase(tag, absent)) return false;
+    };
+    for (compound.positive.classes) |required| for (boundary.absent_classes) |absent| {
+        if (std.mem.eql(u8, required, absent)) return false;
+    };
+    return true;
+}
+fn disclosurePartialAt(selector: GeneratedFigureSelector, nodes: []const ObservedStyleNode, subject: u32,
+    term: usize, evaluation: ObservedFigureEvaluation, boundary: *const DisclosureBoundary, budget: *usize) ContainerSelectorMatch
+{
+    const part = selector.chain[term];
+    const node = nodes[subject];
+    var own = observedFigureCompoundMatchIn(part, node, false, budget, false, observedFigureStateAt(nodes, subject, evaluation));
+    if (evaluation.disclosure.?.partial_owner == subject and disclosureMayReadOmittedAttributes(part, node)) {
+        // Retain only necessary tag and class tokens. In particular, unknown
+        // ID or RDFa presence inside a negation cannot establish a match.
+        var required = GeneratedFigureCompound{ .positive = .{ .tag = part.positive.tag, .classes = part.positive.classes } };
+        required.excluded_tags = part.excluded_tags;
+        required.excluded_classes = part.excluded_classes;
+        own = if (observedFigureCompoundMatchIn(required, node, false, budget, false, null) == .no) .no else .unknown;
+    }
+    if (own == .no or term == 0) return own;
+    if (budget.* == 0) return .unknown;
+    var ancestor = nodes[subject].parent;
+    var possible = false;
+    while (ancestor) |index| : (ancestor = nodes[index].parent) {
+        if (budget.* == 0) return .unknown;
+        const outer = disclosurePartialAt(selector, nodes, index, term - 1, evaluation, boundary, budget);
+        if (outer == .known) return own;
+        possible = possible or outer == .unknown;
+        if (selector.direct_parent[term]) return if (possible) .unknown else .no;
+    }
+    // Only at the unobserved boundary. Every remaining compound would have
+    // to occur outside; no positive exterior match or order is inferred.
+    if (evaluation.disclosure.?.float_ancestors) |projected| {
+        if (disclosureProjectedPrefix(selector, term, projected)) |found| {
+            if (found) return own;
+            return if (possible) .unknown else .no;
+        }
+    }
+    for (selector.chain[0..term]) |outer_part| if (!disclosureExteriorPossible(outer_part, boundary))
+        return if (possible) .unknown else .no;
+    return .unknown;
+}
+fn disclosurePartialSelector(selector: GeneratedFigureSelector, nodes: []const ObservedStyleNode, subject: u32,
+    pseudo: ?GeneratedFigurePseudo, evaluation: ObservedFigureEvaluation, boundary: *const DisclosureBoundary) ContainerSelectorMatch
+{
+    if (selector.chain.len == 0 or selector.chain.len > 16 or selector.direct_parent.len != selector.chain.len or subject >= nodes.len) return .unknown;
+    if (selector.pseudo != pseudo) return .no;
+    if (evaluation.disclosure.?.partial_owner == null and observedCompletePreviousRefutes(selector, nodes, subject)) return .no;
+    if (selector.necessary_html_root) |root| if (!disclosureExteriorPossible(root, boundary)) return .no;
+    var budget: usize = 4096;
+    return disclosurePartialAt(selector, nodes, subject, selector.chain.len - 1, evaluation, boundary, &budget);
+}
+const DisclosureSample = struct {
+    reset: ?DisclosureResetBox,
+    placement: types.ContainerDisclosurePlacement,
+    direction: types.BidiResolvedDirection,
+    text: types.LinkState,
+    outline: types.FigureColor,
+};
+fn disclosurePlacementName(value: types.ContainerDisclosurePlacement) []const u8 {
+    return switch (value) { .float_left => "left", .float_right => "right", .inline_flow => "none" };
+}
+fn disclosureSample(a: std.mem.Allocator, styles: *const Profile, graph: DisclosureGraph, ua: DisclosureUaBasis,
+    evaluation: ObservedFigureEvaluation, parent: DisclosureAncestor, placement_path: ?DisclosurePlacementPath) !?DisclosureSample
+{
+    const b = (try disclosureDeclarations(a, styles, graph, graph.button, null, evaluation, parent.env)) orelse return null;
+    const l = (try disclosureDeclarations(a, styles, graph, graph.label, null, evaluation, b.environment)) orelse return null;
+    if (!try disclosureNoGenerated(a, styles, graph, b, evaluation) or !try disclosureNoGenerated(a, styles, graph, l, evaluation)) return null;
+    var button_use = try ObservedFigurePropertyUse.init(a, b.declarations);
+    defer button_use.deinit(a);
+    button_use.customEnvironment();
+    button_use.property("float", &.{});
+    button_use.property("outline-color", &.{});
+    button_use.property("direction", &.{});
+    button_use.boxEdges(false);
+    if (!try button_use.staticMotion(a, b.environment)) return null;
+    var reset: ?DisclosureResetBox = null;
+    if (!button_use.complete()) {
+        reset = (try disclosureResetBox(a, b, &button_use, parent.inherited_font orelse return null)) orelse return null;
+        if (!button_use.complete()) return null;
+    }
+    const direction = (try disclosureDirection(a, graph.nodes[graph.button], b, parent.direction)) orelse return null;
+    const margins = try observedFigureEdges(a, b.declarations, b.environment, false, direction == .rtl, 1, null);
+    if (margins.unresolved or margins.value == null) return null;
+    inline for (.{ "top", "right", "bottom", "left" }) |side| {
+        const edge = @field(margins.value.?, side);
+        if (edge != .length or edge.length.value != 0) return null;
+    }
+    var placement = try observedFigureKeyword(a, b.declarations, "float", &.{}, b.environment,
+        &.{ "none", "left", "right" }, "none", null, false, disclosurePlacementName(ua.initial_float));
+    if (placement.unresolved) {
+        const path = placement_path orelse return null;
+        placement = (try disclosureProjectedFloat(a, styles, graph, b, ua, evaluation, path)) orelse return null;
+    }
+    const state = evaluation.disclosure.?.state;
+    const ua_outline = (types.containerDisclosureButtonOutlineColor(ua.button, state.focus.?, state.focus_visible.?) catch return null) orelse return null;
+    // The property's CSS initial and explicit inherit are not the UA fallback.
+    // Admit only RGB/currentColor source values; include the UA value when
+    // every retained declaration is merely possible.
+    const candidates = try observedFigurePropertyCandidates(a, b.declarations, "outline-color", &.{});
+    var has_definite = false;
+    for (candidates) |d| has_definite = has_definite or !d.uncertain;
+    var outline: ?types.FigureColor = if (has_definite) null else ua_outline;
+    for (candidates) |d| {
+        const v = try customColorValue(a, b.environment, d.raw);
+        if (v != .known) return null;
+        const color = if (std.ascii.eqlIgnoreCase(trim(v.known), "currentcolor")) ua.foreground
+            else (try figureColor(a, trim(v.known))) orelse return null;
+        if (color.kind != .rgb) return null;
+        if (outline) |old| if (!observedFigureColorEqual(old, color)) return null;
+        outline = color;
+    }
+    var label_use = try ObservedFigurePropertyUse.init(a, l.declarations);
+    defer label_use.deinit(a);
+    label_use.customEnvironment();
+    label_use.property("color", &.{});
+    label_use.property("direction", &.{});
+    label_use.property("text-decoration-line", &.{"text-decoration"});
+    if (!try label_use.staticMotion(a, l.environment) or !label_use.complete()) return null;
+    const label_direction = (try disclosureDirection(a, graph.nodes[graph.label], l, direction)) orelse return null;
+    if (label_direction != direction) return null;
+    const ink = try observedFigureColor(a, l.declarations, "color", l.environment, ua.foreground, ua.foreground);
+    if (ink.unresolved or ink.value == null or ink.value.?.kind != .rgb) return null;
+    const decoration = try observedFigureKeyword(a, l.declarations, "text-decoration-line", &.{"text-decoration"},
+        l.environment, &.{ "none", "underline" }, "none", "none", false, "none");
+    if (decoration.unresolved) return null;
+    return .{
+        .reset = reset, .outline = outline orelse return null, .text = .{ .foreground = ink.value.?.value.?,
+            .underline = std.mem.eql(u8, decoration.value.?, "underline") },
+        .direction = direction, .placement = if (std.mem.eql(u8, placement.value.?, "left")) .float_left
+            else if (std.mem.eql(u8, placement.value.?, "right")) .float_right else .inline_flow,
+    };
+}
+const DisclosurePhasePaint = struct {
+    button: types.ContainerDisclosureButton,
+    placement: types.ContainerDisclosurePlacement,
+    direction: types.BidiResolvedDirection,
+    run: types.ContainerDisclosureLabelRun,
+};
+fn disclosurePhasePaint(a: std.mem.Allocator, styles: *const Profile, graph: DisclosureGraph, phase: DisclosurePhase,
+    ua: DisclosureUaBasis, boundary: ?*const DisclosureBoundary, placement_path: ?DisclosurePlacementPath) !?DisclosurePhasePaint
+{
+    if (!disclosureGraphValid(styles, graph, phase, boundary != null)) return null;
+    var evaluation: ObservedFigureEvaluation = .{ .focus_visible_supported = ua.focus_visible_supported,
+        .disclosure = .{ .nodes = graph.nodes, .button = graph.button, .label = graph.label, .state = .{},
+            .boundary = boundary, .partial_owner = if (graph.source_only_owner) graph.owner else null, .moz_focus_inner_absent = ua.moz_focus_inner_absent } };
+    const parent = (try disclosureAncestors(a, styles, graph, ua, evaluation)) orelse return null;
+    // Match each immutable selector domain once with all button states open.
+    // Only definite impossibility is cached. The normal collector evaluates
+    // retained conditions, specificity and state on each actual sample.
+    var cached: [10]ObservedFigureRuleCandidates = undefined;
+    var filled: usize = 0;
+    for ([_]u32{ graph.button, graph.label }) |subject| {
+        for ([_]?GeneratedFigurePseudo{ null, .before, .after, .marker, .other }) |pseudo| {
+            var bits = try std.DynamicBitSetUnmanaged.initEmpty(a, styles.observed_figure_rules.len);
+            for (styles.observed_figure_rules, 0..) |source_rule, ri| {
+                var rule = source_rule;
+                if (rule.disclosure_alias) |alias| rule.selector = alias;
+                if (observedStyleRuleMatch(rule, graph.nodes, null, subject, pseudo, evaluation) != .no) bits.set(ri);
+            }
+            cached[filled] = .{ .subject = subject, .pseudo = pseudo, .generated_style = false, .rules = bits };
+            filled += 1;
+        }
+    }
+    evaluation.disclosure.?.candidates = &cached;
+    var scratch = std.heap.ArenaAllocator.init(a);
+    defer scratch.deinit();
+    var samples: [4][3]DisclosureSample = undefined;
+    for (&samples, 0..) |*row, pointer| for (row, 0..) |*out, focus| {
+        evaluation.disclosure.?.state = .{ .hover = pointer & 1 != 0, .active = pointer & 2 != 0,
+            .focus = focus != 0, .focus_visible = focus == 2, .focus_within = focus != 0 };
+        defer _ = scratch.reset(.retain_capacity);
+        const sample = (try disclosureSample(scratch.allocator(), styles, graph, ua, evaluation, parent, placement_path)) orelse return null;
+        out.* = try observedFigureDataClone(DisclosureSample, a, sample, 0);
+        if (!observedFigureDataEqual(?DisclosureResetBox, sample.reset, samples[0][0].reset, 0) or
+            sample.direction != samples[0][0].direction or sample.placement != samples[0][0].placement or
+            !observedFigureColorEqual(sample.outline, samples[0][focus].outline)) return null;
+    };
+    var paint: types.ContainerDisclosureTextPaint = undefined;
+    var stable = true;
+    var focus_underlines = true;
+    inline for (.{ "normal", "hover", "active", "hover_active" }, 0..) |field, i| {
+        const plain = samples[i][0].text;
+        @field(paint, field) = plain;
+        for (samples[i][1..]) |focused| {
+            if (!std.mem.eql(u8, focused.text.foreground, plain.foreground)) return null;
+            stable = stable and focused.text.underline == plain.underline;
+            focus_underlines = focus_underlines and focused.text.underline;
+        }
+    }
+    if (!stable and !focus_underlines) return null;
+    paint.underline_on_focus = !stable;
+    var button = ua.button;
+    if (samples[0][0].reset) |box| if (!disclosureApplyReset(&button, box)) return null;
+    button.outline_colors = .{ .unfocused = samples[0][0].outline, .focused = samples[0][1].outline };
+    if (button.focus_visible) |*visible| visible.outline.color = samples[0][2].outline
+    else if (!observedFigureColorEqual(samples[0][2].outline, samples[0][1].outline)) return null;
+    return .{ .button = button, .placement = samples[0][0].placement, .direction = samples[0][0].direction,
+        .run = .{ .start = 0, .end = @intCast(graph.label_text.len), .paint = paint } };
+}
+fn disclosureResolve(a: std.mem.Allocator, styles: *const Profile, states: DisclosureStates, ua: DisclosureUaBasis,
+    boundary: ?*const DisclosureBoundary, placement_path: ?DisclosurePlacementPath) !?DisclosurePaint
+{
+    if (styles.reading_target != .screen or styles.globally_unresolved or styles.sources.len == 0 or !ua.focus_visible_supported or
+        !types.validContainerDisclosureButton(ua.button) or ua.button.outline_colors == null or
+        !types.validFigureColor(ua.foreground) or ua.foreground.kind != .rgb) return null;
+    if (ua.label_underline) return null;
+    inline for (.{ "top", "right", "bottom", "left" }) |side| {
+        const edge = @field(ua.margin, side);
+        if (edge.unit != .px or edge.value != 0) return null;
+    }
+    const closed = (try disclosurePhasePaint(a, styles, states.collapsed, .collapsed, ua, boundary, placement_path)) orelse return null;
+    const opened = (try disclosurePhasePaint(a, styles, states.expanded, .expanded, ua, boundary, placement_path)) orelse return null;
+    if (closed.placement != opened.placement or closed.direction != opened.direction or
+        !observedFigureDataEqual(types.ContainerDisclosureButton, closed.button, opened.button, 0)) return null;
+    if (states.initially_expanded) |initial| {
+        if (!std.mem.eql(u8, initial.label_text, states.expanded.label_text)) return null;
+        const first = (try disclosurePhasePaint(a, styles, initial, .initially_expanded, ua, boundary, placement_path)) orelse return null;
+        if (!observedFigureDataEqual(DisclosurePhasePaint, first, opened, 0)) return null;
+    }
+    const result: DisclosurePaint = .{ .placement = closed.placement, .direction = closed.direction,
+        .foreground = ua.foreground, .button = closed.button, .expand_run = closed.run, .collapse_run = opened.run };
+    return result;
+}
+pub fn resolveObservedDisclosurePaint(a: std.mem.Allocator, styles: *const Profile,
+    states: DisclosureStates, ua: DisclosureUaBasis) !?DisclosurePaint
+{
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    const result = (try disclosureResolve(arena.allocator(), styles, states, ua, null, null)) orelse return null;
+    return try observedFigureDataClone(DisclosurePaint, a, result, 0);
+}
+fn disclosureAttach(a: std.mem.Allocator, exterior: DisclosureExterior, local: DisclosureGraph) !?DisclosureGraph {
+    const offset = exterior.nodes.len;
+    if (offset == 0 or offset > 65535 or local.nodes.len == 0 or local.nodes.len > 65536 - offset or
+        exterior.attach != offset - 1 or exterior.root >= offset or local.root != 0 or
+        local.source_only_owner or local.owner >= local.nodes.len or local.button >= local.nodes.len or local.label >= local.nodes.len or
+        local.nodes[0].parent != null) return null;
+    // This prefix carries path facts only. The seam cannot prove siblings.
+    for (exterior.nodes, 0..) |n, i| {
+        if (i != 0) {
+            const parent = n.parent orelse return null;
+            const expected = std.math.cast(u32, i - 1) orelse return null;
+            if (parent != expected) return null;
+        }
+        if (n.known_complete_child_elements or n.known_no_next_element_sibling or n.known_next_element_sibling != null or
+            n.known_previous_element_sibling != null or n.known_no_previous_element_sibling) return null;
+    }
+    const nodes = try a.alloc(ObservedStyleNode, offset + local.nodes.len);
+    @memcpy(nodes[0..offset], exterior.nodes);
+    for (local.nodes, nodes[offset..], 0..) |src, *dst, i| {
+        dst.* = src;
+        if (i != 0 and (src.parent == null or src.parent.? >= i)) return null;
+        dst.parent = if (src.parent) |p| @intCast(offset + p) else exterior.attach;
+        if (src.known_previous_element_sibling) |p| {
+            if (p >= i) return null;
+            dst.known_previous_element_sibling = @intCast(offset + p);
+        }
+        if (src.known_next_element_sibling) |n| {
+            if (n <= i or n >= local.nodes.len) return null;
+            dst.known_next_element_sibling = @intCast(offset + n);
+        }
+    }
+    nodes[offset].known_no_previous_element_sibling = false;
+    nodes[offset].known_no_next_element_sibling = false;
+    return .{ .nodes = nodes, .root = exterior.root, .owner = @intCast(offset + local.owner),
+        .button = @intCast(offset + local.button), .label = @intCast(offset + local.label), .label_text = local.label_text };
+}
+pub fn resolveSharedDisclosurePaint(a: std.mem.Allocator, shared: *const DisclosureSharedProfile,
+    states: DisclosureStates) !?DisclosurePaint
+{
+    return resolveSharedDisclosurePaintWithPath(a, shared, states, null);
+}
+fn resolveSharedDisclosurePaintWithPath(a: std.mem.Allocator, shared: *const DisclosureSharedProfile,
+    states: DisclosureStates, placement_path: ?DisclosurePlacementPath) !?DisclosurePaint
+{
+    if (shared.boundary) |*boundary| {
+        if (shared.exteriors.len != 0 or boundary.absent_tags.len > 256 or boundary.absent_classes.len > 4096) return null;
+        var arena = std.heap.ArenaAllocator.init(a);
+        defer arena.deinit();
+        const result = (try disclosureResolve(arena.allocator(), shared.styles, states, shared.ua, boundary, placement_path)) orelse return null;
+        return try observedFigureDataClone(DisclosurePaint, a, result, 0);
+    }
+    if (shared.exteriors.len == 0 or shared.exteriors.len > 8) return null;
+    var held = std.heap.ArenaAllocator.init(a);
+    defer held.deinit();
+    var first: ?DisclosurePaint = null;
+    for (shared.exteriors) |ext| {
+        var arena = std.heap.ArenaAllocator.init(a);
+        defer arena.deinit();
+        const scratch = arena.allocator();
+        const graphs: DisclosureStates = .{
+            .collapsed = (try disclosureAttach(scratch, ext, states.collapsed)) orelse return null,
+            .expanded = (try disclosureAttach(scratch, ext, states.expanded)) orelse return null,
+            .initially_expanded = if (states.initially_expanded) |g| (try disclosureAttach(scratch, ext, g)) orelse return null else null,
+        };
+        const result = (try disclosureResolve(scratch, shared.styles, graphs, shared.ua, null, null)) orelse return null;
+        if (first) |prior| {
+            if (!observedFigureDataEqual(DisclosurePaint, prior, result, 0)) return null;
+        } else first = try observedFigureDataClone(DisclosurePaint, held.allocator(), result, 0);
+    }
+    return try observedFigureDataClone(DisclosurePaint, a, first.?, 0);
+}
+pub fn resolveSharedDisclosureAlloc(a: std.mem.Allocator, shared: *const DisclosureSharedProfile, owner: *const TextElement,
+    expand: []const u8, collapse: []const u8, initially_collapsed: bool) std.mem.Allocator.Error!?types.ContainerDisclosure
+{
+    if (!std.ascii.eqlIgnoreCase(owner.tag, "div") or !Profile.hasClass(owner.classes, "mw-collapsible") or
+        Profile.hasClass(owner.classes, "mw-collapsed") != initially_collapsed or
+        !disclosureLabelValid(expand) or !disclosureLabelValid(collapse)) return null;
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    var effective = shared.*;
+    const proof = owner.disclosure_local_proof orelse return null;
+    if (proof.owner != owner or proof.shared != shared or proof.source_key != owner.source_key or owner.source_key == 0 or
+        !disclosureOwnerAgrees(proof.states.collapsed, owner, expand, collapse) or
+        !disclosureOwnerAgrees(proof.states.expanded, owner, expand, collapse)) return null;
+    if (proof.states.initially_expanded) |g| if (!disclosureOwnerAgrees(g, owner, expand, collapse)) return null;
+    if (!try disclosureAddAbsences(arena.allocator(), &effective, proof.absent_tags, proof.absent_classes)) return null;
+    var states = proof.states;
+    const font: ?DisclosureInheritedFont = if (proof.reset_font_at_parent) |issued| blk: {
+        if (issued.owner != owner or issued.source_key != owner.source_key or issued.shared != shared or
+            effective.boundary == null or !std.mem.eql(u8, issued.expand, expand) or
+            !std.mem.eql(u8, issued.collapse, collapse)) return null;
+        break :blk issued.font;
+    } else null;
+    states.collapsed.reset_parent_font = font;
+    states.expanded.reset_parent_font = font;
+    if (states.initially_expanded) |*g| g.reset_parent_font = font;
+    if (effective.boundary != null) {
+        states.collapsed.source_only_owner = true;
+        states.expanded.source_only_owner = true;
+        if (states.initially_expanded) |*g| g.source_only_owner = true;
+    }
+    if ((states.initially_expanded == null) != initially_collapsed or
+        !std.mem.eql(u8, expand, states.collapsed.label_text) or !std.mem.eql(u8, collapse, states.expanded.label_text)) return null;
+    const path: ?DisclosurePlacementPath = if (proof.root_placement) |known| blk: {
+        const shell = shared.placement_shell orelse return null;
+        if (effective.boundary == null or known.subject != owner or known.shared != shared or known.key != owner.source_key or
+            known.start >= known.end or known.end > known.page.len or known.current.len < 5 or
+            owner.source_key != @intFromPtr(known.current[1..].ptr) or
+            !std.mem.eql(u8, known.page[known.start..known.end], known.current) or
+            states.collapsed.owner != 0 or states.expanded.owner != 0 or
+            (if (states.initially_expanded) |g| g.owner != 0 else false)) return null;
+        if (known.root_direction) |dir| {
+            const inferred = disclosureRootDirectionInvariant(arena.allocator(), shared.styles, dir) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return null,
+            };
+            if (inferred) {
+                if (effective.boundary.?.direction) |prior| if (prior != dir) return null;
+                effective.boundary.?.direction = dir;
+            }
+        }
+        break :blk .{ .root_direction = known.root_direction, .shell = shell };
+    } else null;
+    const paint = (resolveSharedDisclosurePaintWithPath(a, &effective, states, path) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return null,
+    }) orelse return null;
+    const value: types.ContainerDisclosure = .{ .initially_collapsed = initially_collapsed, .content_index = 0,
+        .expand_label = expand, .collapse_label = collapse, .expand_run = paint.expand_run, .collapse_run = paint.collapse_run,
+        .button = paint.button, .direction = paint.direction, .foreground = paint.foreground, .placement = paint.placement };
+    return if (types.validContainerDisclosure(value)) value else null;
+}
+fn disclosureMayReadOmittedAttributes(part: GeneratedFigureCompound, node: ObservedStyleNode) bool {
+    if ((part.positive.ids.len != 0 and observedFigureAttribute(node, "id") == null) or part.positive.typeof_token != null) return true;
+    for (part.attributes) |attr| {
+        // Toggling can reorder the owner's class attribute after a full cycle.
+        if (std.ascii.eqlIgnoreCase(attr.name, "class") or observedFigureAttribute(node, attr.name) == null) return true;
+    }
+    for (part.any_groups) |group| for (group.alternatives) |alt| {
+        if (disclosureMayReadOmittedAttributes(alt, node)) return true;
+    };
+    for (part.none_groups) |group| for (group.alternatives) |alt| {
+        if (disclosureMayReadOmittedAttributes(alt, node)) return true;
+    };
+    return false;
+}
+fn disclosureAddAbsences(a: std.mem.Allocator, shared: *DisclosureSharedProfile,
+    tags: []const []const u8, classes: []const []const u8) !bool
+{
+    const b = if (shared.boundary) |*bound| bound else return tags.len == 0 and classes.len == 0;
+    if (tags.len > 256 or b.absent_tags.len > 256 - tags.len or classes.len > 4096 or
+        b.absent_classes.len > 4096 - classes.len) return false;
+    b.absent_tags = try std.mem.concat(a, []const u8, &.{ b.absent_tags, tags });
+    b.absent_classes = try std.mem.concat(a, []const u8, &.{ b.absent_classes, classes });
+    return true;
+}
+fn disclosureOwnerAgrees(g: DisclosureGraph, owner: *const TextElement, expand: []const u8, collapse: []const u8) bool {
+    if (g.owner >= g.nodes.len) return false;
+    const node = g.nodes[g.owner];
+    const classes = observedFigureAttribute(node, "class") orelse return false;
+    var original = std.mem.tokenizeAny(u8, owner.classes, " \t\r\n\x0c");
+    while (original.next()) |token| if (!std.mem.eql(u8, token, "mw-collapsed") and !Profile.hasClass(classes, token)) return false;
+    var generated = std.mem.tokenizeAny(u8, classes, " \t\r\n\x0c");
+    while (generated.next()) |token| if (!std.mem.eql(u8, token, "mw-collapsed") and
+        !std.mem.eql(u8, token, "mw-made-collapsible") and !Profile.hasClass(owner.classes, token)) return false;
+    const css = owner.observed_inline_style orelse return false;
+    const presence = owner.attribute_presence orelse return false;
+    for ([_][]const u8{ "class", "data-expandtext", "data-collapsetext" }) |key|
+        if (presence.get(presence.ctx, key) != .present) return false;
+    switch (presence.get(presence.ctx, "style")) {
+        .unknown => return false,
+        .absent => if (css.len != 0 or observedFigureAttribute(node, "style") != null) return false,
+        .present => if (!disclosureAttr(node, "style", css)) return false,
+    }
+    if (owner.id.len != 0 and !disclosureAttr(node, "id", owner.id)) return false;
+    return disclosureAttr(node, "data-expandtext", expand) and disclosureAttr(node, "data-collapsetext", collapse);
+}
+
+test "generic disclosure source path preserves unknown exterior float, state and variable scope" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // Synthetic UA operands only. These values have no target qualification.
+    const ink: types.FigureColor = .{ .kind = .rgb, .value = "#123456" };
+    const box: types.ContainerDisclosureButtonState = .{ .background = ink, .border = .all(.none) };
+    const ua: DisclosureUaBasis = .{
+        .button = .{ .appearance = .native_button, .font_family = .{ .name = "Fixture" },
+            .font_size = .{ .value = 17, .unit = .px }, .font_weight = 400, .font_italic = false,
+            .line_height = .normal, .padding = .all(.{ .unit = .px, .value = 3 }),
+            .normal = box, .hover = box, .active = box, .hover_active = box,
+            .outline_colors = .{ .unfocused = ink, .focused = ink } },
+        .foreground = ink, .margin = .all(.{ .unit = .px, .value = 0 }), .label_underline = false,
+        .color_scheme = "normal", .initial_float = .inline_flow,
+        .focus_visible_supported = true, .moz_focus_inner_absent = true,
+    };
+    var sheets = try parseForTargetAlloc(a,
+        ".mw-collapsible:not(.mw-made-collapsible):before,.mw-collapsible-toggle{float:right}" ++
+        ".mw-content-ltr .mw-collapsible-toggle{float:right}.mw-content-rtl .mw-collapsible-toggle{float:left}" ++
+        "li .mw-collapsible-toggle{float:none}button:focus{outline-color:var(--focus-ink)}" ++
+        "button:hover .mw-collapsible-text{color:#abcdef}", .screen);
+    defer sheets.deinit();
+    const shared: DisclosureSharedProfile = .{ .styles = &sheets, .ua = ua,
+        .boundary = .{ .direction = .ltr, .color_scheme = "normal", .custom_environment = .{ .complete = true } } };
+    const Fixture = struct {
+        fn presence(_: ?*const anyopaque, key: []const u8) AttributePresence {
+            for ([_][]const u8{ "class", "data-expandtext", "data-collapsetext", "style" }) |attr|
+                if (std.mem.eql(u8, key, attr)) return .present;
+            return .absent;
+        }
+        fn graph(allocator: std.mem.Allocator, closed: bool) !DisclosureGraph {
+            const attrs = try allocator.dupe(FigureObservedAttribute, &.{
+                .{ .name = "class", .value = if (closed) "mw-collapsible mw-collapsed mw-made-collapsible" else "mw-collapsible mw-made-collapsible" },
+                .{ .name = "data-expandtext", .value = "Più" }, .{ .name = "data-collapsetext", .value = "Meno" },
+                .{ .name = "style", .value = "--focus-ink:#fedcba" },
+            });
+            const button_attrs = try allocator.dupe(FigureObservedAttribute, &.{
+                .{ .name = "class", .value = if (closed) "mw-collapsible-toggle mw-collapsible-toggle-default mw-collapsible-toggle-collapsed"
+                    else "mw-collapsible-toggle mw-collapsible-toggle-default mw-collapsible-toggle-expanded" },
+                .{ .name = "tabindex", .value = "0" }, .{ .name = "type", .value = "button" },
+                .{ .name = "aria-expanded", .value = if (closed) "false" else "true" },
+            });
+            return .{ .nodes = try allocator.dupe(ObservedStyleNode, &.{
+                .{ .tag = "div", .attributes = attrs, .parent = null, .empty = false },
+                .{ .tag = "button", .attributes = button_attrs, .parent = 0, .has_text = false, .empty = false },
+                .{ .tag = "span", .attributes = &.{.{ .name = "class", .value = "mw-collapsible-text" }},
+                    .parent = 1, .has_text = true, .empty = false },
+            }), .root = 0, .owner = 0, .button = 1, .label = 2, .label_text = if (closed) "Più" else "Meno" };
+        }
+    };
+    var owner: TextElement = .{ .tag = "div", .classes = "mw-collapsible mw-collapsed", .source_key = 73,
+        .observed_inline_style = "--focus-ink:#fedcba", .attribute_presence = .{ .ctx = null, .get = Fixture.presence } };
+    var path: DisclosureLocalProof = .{ .owner = &owner, .source_key = owner.source_key, .shared = &shared,
+        .states = .{ .collapsed = try Fixture.graph(a, true), .expanded = try Fixture.graph(a, false) } };
+    owner.disclosure_local_proof = &path;
+    const run = resolveSharedDisclosureAlloc;
+    try std.testing.expect((try run(a, &shared, &owner, "Più", "Meno", true)) == null);
+    path.absent_tags = &.{"li"};
+    try std.testing.expect((try run(a, &shared, &owner, "Più", "Meno", true)) == null);
+    path.absent_classes = &.{"mw-content-rtl"};
+    // With float settled, an exterior hovered BUTTON could still color the
+    // SPAN while the generated BUTTON is unhovered (descendant combinator).
+    try std.testing.expect((try run(a, &shared, &owner, "Più", "Meno", true)) == null);
+    path.absent_tags = &.{ "li", "button" };
+    const result = (try run(a, &shared, &owner, "Più", "Meno", true)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("#123456", result.collapse_run.?.paint.normal.foreground);
+    try std.testing.expectEqual(types.ContainerDisclosurePlacement.float_right, result.placement);
+    try std.testing.expectEqual(@as(u32, "Più".len), result.expand_run.?.end);
+    try std.testing.expectEqualStrings("#abcdef", result.collapse_run.?.paint.hover.foreground);
+    try std.testing.expectEqualStrings("#fedcba", result.button.?.outline_colors.?.focused.value.?);
+    path.source_key += 1;
+    try std.testing.expect((try run(a, &shared, &owner, "Più", "Meno", true)) == null);
+    path.source_key = owner.source_key;
+    owner.observed_inline_style = "";
+    try std.testing.expect((try run(a, &shared, &owner, "Più", "Meno", true)) == null);
+    sheets.globally_unresolved = true;
+    owner.observed_inline_style = "--focus-ink:#fedcba";
+    try std.testing.expect((try run(a, &shared, &owner, "Più", "Meno", true)) == null);
+}
+
+// A shared loss-limited shell description, ordered HTML through the physical
+// parent of ParserOutput. The loader authenticates the constructor and all
+// eligible variants. Null membership is unknown even on a known BODY tag.
+pub const DisclosureShellStep = struct { tag: []const u8, content_ltr: ?bool, content_rtl: ?bool };
+pub const DisclosureRootPlacement = struct {
+    subject: *const TextElement,
+    key: usize,
+    shared: *const DisclosureSharedProfile,
+    page: []const u8,
+    current: []const u8,
+    start: usize,
+    end: usize,
+    root_direction: ?types.BidiResolvedDirection,
+};
+const DisclosurePlacementPath = struct {
+    shell: []const DisclosureShellStep,
+    root_direction: ?types.BidiResolvedDirection,
+};
+
+// Match only descendant chains made exclusively of the three projected
+// positive tests. Every other selector keeps the existing three-way result.
+// No synthetic node, direct parent edge, :root match, ID or style is issued.
+fn disclosureProjectedPrefix(sel: GeneratedFigureSelector, count: usize, path: []const u3) ?bool {
+    var masks: [16]u3 = undefined;
+    for (sel.chain[0..count], 0..) |part, i| {
+        if (sel.direct_parent[i + 1] or part.root_only or part.requires_empty or part.dynamic_pseudos.len != 0 or
+            part.attributes.len != 0 or part.excluded_tags.len != 0 or part.excluded_classes.len != 0 or
+            part.any_groups.len != 0 or part.none_groups.len != 0 or part.positive.ids.len != 0 or
+            part.positive.typeof_token != null) return null;
+        var mask: u3 = 0;
+        if (part.positive.tag) |tag| {
+            if (!std.ascii.eqlIgnoreCase(tag, "li")) return null;
+            mask |= 4;
+        }
+        for (part.positive.classes) |name| {
+            if (std.mem.eql(u8, name, "mw-content-ltr")) mask |= 1
+            else if (std.mem.eql(u8, name, "mw-content-rtl")) mask |= 2
+            else return null;
+        }
+        if (mask == 0) return null;
+        masks[i] = mask;
+    }
+    var index: usize = 0;
+    for (masks[0..count]) |required| {
+        while (index < path.len and path[index] & required != required) index += 1;
+        if (index == path.len) return false;
+        index += 1;
+    }
+    return true;
+}
+
+fn disclosureVariantBit(fact: ?bool, bits: *usize) bool {
+    if (fact) |known| return known;
+    const on = bits.* & 1 != 0;
+    bits.* >>= 1;
+    return on;
+}
+fn disclosureProjectedFloat(a: std.mem.Allocator, styles: *const Profile, graph: DisclosureGraph,
+    b: ObservedFigureComputedNode, ua: DisclosureUaBasis, evaluation: ObservedFigureEvaluation,
+    path: DisclosurePlacementPath) !?ObservedFigureKeyword
+{
+    const shell = path.shell;
+    if (shell.len < 2 or shell.len > 32 or !std.ascii.eqlIgnoreCase(shell[0].tag, "html") or
+        !std.ascii.eqlIgnoreCase(shell[1].tag, "body")) return null;
+    var unknown: usize = @intFromBool(path.root_direction == null);
+    for (shell) |step| {
+        if (step.tag.len == 0 or !std.ascii.isAlphabetic(step.tag[0])) return null;
+        for (step.tag) |byte| if (!observedFigureNameByte(byte)) return null;
+        if (step.content_ltr == null) unknown += 1;
+        if (step.content_rtl == null) unknown += 1;
+    }
+    if (unknown > 5) return null;
+    var candidates: ?std.DynamicBitSetUnmanaged = null;
+    for (evaluation.disclosure.?.candidates) |held| if (held.subject == graph.button and held.pseudo == null) {
+        candidates = held.rules;
+        break;
+    };
+    var selected: ?[]const u8 = null;
+    var projected: [33]u3 = undefined;
+    var scratch = std.heap.ArenaAllocator.init(a);
+    defer scratch.deinit();
+    for (0..(@as(usize, 1) << @intCast(unknown))) |variant| {
+        defer _ = scratch.reset(.retain_capacity);
+        var bits = variant;
+        for (shell, 0..) |step, i| {
+            var mask: u3 = if (std.ascii.eqlIgnoreCase(step.tag, "li")) 4 else 0;
+            if (disclosureVariantBit(step.content_ltr, &bits)) mask |= 1;
+            if (disclosureVariantBit(step.content_rtl, &bits)) mask |= 2;
+            projected[i] = mask;
+        }
+        const rtl = if (path.root_direction) |dir| dir == .rtl else disclosureVariantBit(null, &bits);
+        projected[shell.len] = if (rtl) 2 else 1;
+        var scoped = evaluation;
+        scoped.disclosure.?.float_ancestors = projected[0 .. shell.len + 1];
+        const temp = scratch.allocator();
+        const ds = (try observedStyleNodeDeclarationsSelected(temp, styles, graph.nodes, graph.button,
+            null, null, scoped, false, candidates, null)) orelse return null;
+        // Keep the independently computed environment. Learning a shell
+        // direction token does not establish any custom-property binding.
+        const f = try observedFigureKeyword(temp, ds.items, "float", &.{}, b.environment,
+            &.{ "none", "left", "right" }, "none", null, false, disclosurePlacementName(ua.initial_float));
+        if (f.unresolved or f.value == null) return null;
+        if (selected) |old| {
+            if (!std.mem.eql(u8, old, f.value.?)) return null;
+        } else {
+            // The typed decoder canonicalizes these keywords to its literals.
+            selected = if (std.mem.eql(u8, f.value.?, "left")) "left" else if (std.mem.eql(u8, f.value.?, "right")) "right" else "none";
+        }
+    }
+    return .{ .value = selected orelse return null };
+}
+
+// The source operation and the normal constructor jointly delimit the gap
+// below ParserOutput. Here we check the original bytes, never a Renderer
+// text-parent chain. The bounded grammar permits balanced literal siblings,
+// line-local links and closed wiki tables. It issues only three placement
+// predicates (LI and the two direction classes), never a physical section
+// count, owner display, computed direction or complete-ancestor certificate.
+fn disclosureQuotedAttrs(raw: []const u8) bool {
+    var i: usize = 0;
+    while (i < raw.len) {
+        if (!std.ascii.isWhitespace(raw[i])) return false;
+        while (i < raw.len and std.ascii.isWhitespace(raw[i])) i += 1;
+        if (i == raw.len) break;
+        if (!std.ascii.isAlphabetic(raw[i])) return false;
+        i = identifierEnd(raw, i);
+        while (i < raw.len and std.ascii.isWhitespace(raw[i])) i += 1;
+        if (i == raw.len or raw[i] != '=') return false;
+        i += 1;
+        while (i < raw.len and std.ascii.isWhitespace(raw[i])) i += 1;
+        if (i == raw.len or (raw[i] != '"' and raw[i] != 39)) return false;
+        i = (std.mem.indexOfScalarPos(u8, raw, i + 1, raw[i]) orelse return false) + 1;
+    }
+    return true;
+}
+fn disclosureLineLink(line: []const u8, start: usize) ?usize {
+    var pos = start + 2;
+    var depth: usize = 1;
+    while (depth > 0) {
+        pos = std.mem.indexOfAnyPos(u8, line, pos, "<>[]{}") orelse return null;
+        if (std.mem.startsWith(u8, line[pos..], "[[")) {
+            if (depth == 16) return null;
+            depth += 1;
+        } else if (std.mem.startsWith(u8, line[pos..], "]]")) depth -= 1 else return null;
+        pos += 2;
+    }
+    return pos;
+}
+fn disclosureOrdinaryPrefix(prefix: []const u8) bool {
+    const syntax = @import("blob_encoder").wikitext_syntax;
+    if (prefix.len == 0) return true;
+    if (prefix[prefix.len - 1] != '\n' or !std.unicode.utf8ValidateSlice(prefix)) return false;
+    var tags: [32][]const u8 = undefined;
+    var depth: usize = 0;
+    var table_depth: ?usize = null;
+    var boundary = false;
+    var lines = std.mem.splitScalar(u8, prefix[0 .. prefix.len - 1], '\n');
+    while (lines.next()) |physical| {
+        const line = std.mem.trimEnd(u8, physical, "\r");
+        if (line.len > 65536 or std.mem.indexOfAny(u8, line, "\x00\r\x7f") != null) return false;
+        var pos: usize = 0;
+        if (std.mem.startsWith(u8, line, "{|")) {
+            if (table_depth != null) return false;
+            table_depth = depth;
+            pos = 2;
+        } else if (std.mem.startsWith(u8, line, "|}")) {
+            if (table_depth == null or table_depth.? != depth) return false;
+            table_depth = null;
+            pos = 2;
+            const tail = trim(line[pos..]);
+            if (tail.len != 0 and !std.mem.eql(u8, tail, "</div></div>")) return false;
+        }
+        while (pos < line.len) {
+            const next = std.mem.indexOfAnyPos(u8, line, pos, "<>[]{}") orelse break;
+            switch (line[next]) {
+                '<' => {
+                    const tag = syntax.tagAt(line, next) orelse return false;
+                    if (tag.html_pre or std.mem.indexOfAny(u8, tag.attrs, "<>{}[]&") != null) return false;
+                    if (tag.is("templatestyles")) {
+                        if (tag.closing or !tag.self_closing or !disclosureQuotedAttrs(tag.attrs) or tag.attr("src") == null or depth != 0 or table_depth != null or
+                            next != 0 or tag.end != line.len) return false;
+                    } else {
+                        var admitted = false;
+                        for ([_][]const u8{ "div", "span", "small", "sup", "sub", "i", "b", "table", "tr", "td", "th" }) |name|
+                            if (tag.is(name)) { admitted = true; break; };
+                        if (!admitted or tag.self_closing) return false;
+                        if (tag.closing) {
+                            if (depth == 0 or !tag.is(tags[depth - 1]) or trim(tag.attrs).len != 0) return false;
+                            depth -= 1;
+                        } else {
+                            if (!disclosureQuotedAttrs(tag.attrs) or line[tag.end - 2] == '/' or depth == tags.len or
+                                std.mem.indexOf(u8, tag.attrs, "mw-content-rtl") != null or
+                                std.mem.indexOf(u8, tag.attrs, "mw-content-ltr") != null) return false;
+                            tags[depth] = tag.name;
+                            depth += 1;
+                        }
+                    }
+                    pos = tag.end;
+                },
+                '[' => {
+                    const double = std.mem.startsWith(u8, line[next..], "[[");
+                    const end = if (double) disclosureLineLink(line, next) orelse return false else
+                        (std.mem.indexOfScalarPos(u8, line, next + 1, ']') orelse return false) + 1;
+                    if (!double and std.mem.indexOfAny(u8, line[next + 1 .. end - 1], "<>{}[]") != null) return false;
+                    pos = end;
+                },
+                else => return false,
+            }
+        }
+        // A cross-line formatting, HTML table or cell frame is outside the
+        // source grammar. Prior ordinary disclosure DIVs may span lines.
+        for (tags[0..depth]) |name| if (!std.ascii.eqlIgnoreCase(name, "div")) return false;
+        boundary = depth == 0 and table_depth == null and
+            (line.len == 0 or (line[0] == '=' and syntax.controlHeading(line, null) != null));
+    }
+    return boundary;
+}
+
+// PC supplies the actual whole expanded record and the original offset from
+// genericDisclosureInputOffset after its edition/owner/child custody checks.
+// The immutable live owner may be a projection copy of these same bytes.
+pub fn disclosureRootPlacement(shared: *const DisclosureSharedProfile, subject: *const TextElement,
+    whole: @import("missing_dependency").Text, original_start: usize, current_owner: []const u8,
+    root_direction: ?types.BidiResolvedDirection) ?DisclosureRootPlacement
+{
+    const syntax = @import("blob_encoder").wikitext_syntax;
+    if (shared.boundary == null or shared.placement_shell == null or shared.exteriors.len != 0 or
+        whole.bytes.len > 1024 * 1024 or whole.unknown or whole.lost_missing_range or whole.generated_source != null or
+        original_start > whole.bytes.len or current_owner.len == 0 or current_owner.len > 65536 or
+        current_owner.len > whole.bytes.len - original_start or
+        !std.mem.eql(u8, whole.bytes[original_start..][0..current_owner.len], current_owner)) return null;
+    const end = original_start + current_owner.len;
+    inline for (.{ "ranges", "literal_curly_ranges", "generated_links" }) |field| {
+        for (@field(whole, field)) |r| if (r.start >= r.end or r.end > whole.bytes.len or r.start < end) return null;
+    }
+    const opening = syntax.tagAt(current_owner, 0) orelse return null;
+    if (opening.closing or opening.self_closing or !opening.is("div") or
+        (syntax.matchingTag(current_owner, opening) orelse return null).end != current_owner.len or subject.source_key != @intFromPtr(opening.name.ptr) or
+        !std.ascii.eqlIgnoreCase(subject.tag, "div") or subject.parent != null or subject.alternative_ancestry != null or
+        !disclosureOrdinaryPrefix(whole.bytes[0..original_start])) return null;
+    return .{ .subject = subject, .key = subject.source_key, .shared = shared,
+        .page = whole.bytes, .current = current_owner, .start = original_start, .end = end, .root_direction = root_direction };
+}
+
+// An authenticated normal ParserOutput dir hint can reset inherited shell
+// direction. Only infer through the qualified neutral generated wrapper path
+// if every possibly active stylesheet declaration agrees with the hint.
+// CSS 'all' excludes direction. Inline declaration handling on the owner,
+// button and label remains with the ordinary observed cascade.
+fn disclosureRootDirectionInvariant(a: std.mem.Allocator, styles: *const Profile,
+    direction: types.BidiResolvedDirection) !bool
+{
+    if (styles.globally_unresolved or styles.reading_target != .screen or styles.sources.len == 0) return false;
+    if (styles.retained_sources.len != styles.sources.len) return false;
+    for (styles.retained_sources) |source| {
+        if (!try disclosureSheetDirection(a, source.css, direction, 0)) return false;
+    }
+    return true;
+}
+fn disclosureSheetDirection(a: std.mem.Allocator, css: []const u8, direction: types.BidiResolvedDirection,
+    depth: usize) anyerror!bool
+{
+    if (depth > 18) return false;
+    var pos: usize = 0;
+    while (true) {
+        try skipSpaceComments(css, &pos);
+        if (pos == css.len) return true;
+        const start = pos;
+        const token = try findBoundary(css, &pos);
+        const prelude = trim(css[start .. pos - 1]);
+        if (token == ';' and atRuleNamed(prelude, "charset")) continue;
+        if (token != '{' or prelude.len == 0) return false;
+        const content = pos;
+        const close = try closingBrace(css, &pos);
+        const body = css[content..close];
+        if (prelude[0] == '@') {
+            if (atRuleNamed(prelude, "counter-style")) continue;
+            if (readingMediaApplies(.screen, prelude)) |applies| if (!applies) continue;
+            if (!isConditionalGroup(prelude) and !keyframesDefinition(prelude, body)) return false;
+            if (!try disclosureSheetDirection(a, body, direction, depth + 1)) return false;
+            continue;
+        }
+        var cursor: usize = 0;
+        while (try nextDeclarationAlloc(a, body, &cursor)) |decl| {
+            defer a.free(decl);
+            const colon = std.mem.indexOfScalar(u8, decl, ':') orelse return false;
+            const name = trim(decl[0..colon]);
+            for (name) |ch| if (!std.ascii.isAlphanumeric(ch) and ch != '-' and ch != '_') return false;
+            if (!std.ascii.eqlIgnoreCase(name, "direction")) continue;
+            const parsed = customPriority(decl[colon + 1 ..]);
+            if (parsed.unknown or !std.ascii.eqlIgnoreCase(trim(parsed.value), @tagName(direction))) return false;
+        }
+    }
+}
+
+test "disclosure parser-root placement refuses open source frames and conflicting direction" {
+    try std.testing.expect(disclosureOrdinaryPrefix("# prior list\n\n"));
+    try std.testing.expect(disclosureOrdinaryPrefix("[[File:x|caption [[word]]]]\n\n"));
+    for ([_][]const u8{ "<li>\n\n", "# item\n", "{|\n| cell\n\n", "<div>\n\n", "[[File:x|\n\n", "<span broken>word</span>\n\n" }) |prefix|
+        try std.testing.expect(!disclosureOrdinaryPrefix(prefix));
+    try std.testing.expect(try disclosureSheetDirection(std.testing.allocator, "@media screen{.x{direction:ltr}}", .ltr, 0));
+    try std.testing.expect(!try disclosureSheetDirection(std.testing.allocator, "@keyframes changed{to{direction:rtl}}", .ltr, 0));
+}
+
+test "Italian Latin conjugation CSS keeps invalid padding out of the cascade" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var profile = try parseAlloc(a, ".box{padding:3px}.inflection-table{border-spacing:5px!important}");
+    defer profile.deinit();
+    const div: TextElement = .{ .tag = "div", .classes = "box" };
+
+    const kept = try profile.resolveContainerIn(a, &div,
+        "padding:1px -10em!important;padding-left:-1px!important;margin-bottom:.5em;border:1px solid #EEE");
+    try std.testing.expect(!kept.unresolved);
+    try std.testing.expectEqual(@as(f32, 3), kept.style.padding.?.left.value);
+    try std.testing.expectEqual(@as(f32, 3), kept.style.padding.?.top.value);
+    try std.testing.expectEqual(@as(f32, 0.5), kept.style.margins.?.bottom.value);
+    try std.testing.expect(kept.style.border != null);
+    for ([_][]const u8{ "padding:calc(1em + 1px)", "padding:-2px var(--edge)", "padding:12%", "transform:rotate(1deg)" }) |css|
+        try std.testing.expect((try profile.resolveContainerIn(a, &div, css)).unresolved);
+
+    const earlier = try resolveInlineTableAlloc(a, "border-collapse:separate;border-spacing:2px 2px;border-spacing:-1px!important");
+    try std.testing.expect(!earlier.unresolved);
+    try std.testing.expectEqual(@as(?u16, 2), earlier.cell_spacing);
+    const stronger = try profile.resolveTable(a, 0, "inflection-table", null,
+        "background:#F0F0F0;border-collapse:separate;border-spacing:2px;width:60%");
+    try std.testing.expect(!stronger.unresolved);
+    try std.testing.expectEqual(@as(?u16, 5), stronger.cell_spacing);
+    try std.testing.expectEqualStrings("#f0f0f0", stronger.style.?.background.?);
+    try std.testing.expectEqualDeep(types.StyleWidth{ .unit = .percent, .value = 60 }, stronger.style.?.width.?);
+
+    for ([_][]const u8{ "border-spacing:2px 3px", "border-spacing:1.5px", "border-spacing:inherit",
+        "border-spacing:2px;transform:rotate(1deg)",
+    }) |css| {
+        const input = try std.mem.concat(a, u8, &.{ "border-collapse:separate;", css });
+        try std.testing.expect((try profile.resolveTable(a, 0, "", null, input)).unresolved);
+    }
+}
+
+test "Italian Latin conjugation CSS refuses unbound spacing inheritance" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var profile = try parseAlloc(a, "body{border-spacing:7px}div.frame{border-spacing:9px}");
+    defer profile.deinit();
+    const div: TextElement = .{ .tag = "div", .classes = "frame" };
+    try std.testing.expect((try profile.resolveContainerIn(a, &div, "")).unresolved);
+    const unbound = try profile.resolveTableWithAncestors(a, 0, "", "frame", null, "border-collapse:separate");
+    try std.testing.expect(unbound.unresolved and unbound.cell_spacing == null);
+    const inherit = try profile.resolveTableWithAncestors(a, 0, "", "frame", null,
+        "border-spacing:inherit;border-collapse:separate");
+    try std.testing.expect(inherit.unresolved and inherit.cell_spacing == null);
+    const own = try profile.resolveTable(a, 0, "", null, "border-spacing:2px;border-collapse:separate");
+    try std.testing.expect(!own.unresolved);
+    try std.testing.expectEqual(@as(?u16, 2), own.cell_spacing);
+    const collapsed = try profile.resolveTable(a, 0, "", null, "border-spacing:2px;border-collapse:collapse");
+    try std.testing.expect(!collapsed.unresolved);
+    try std.testing.expectEqual(@as(?u16, 0), collapsed.cell_spacing);
 }

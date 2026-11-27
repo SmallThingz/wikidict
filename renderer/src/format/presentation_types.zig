@@ -3491,6 +3491,21 @@ pub const ContainerDisclosureLabelRun = struct {
     start: u32,
     end: u32,
     paint: ContainerDisclosureTextPaint,
+    // A typed button may delegate its label's pointer paint to the inline run.
+    pointer_on_run: bool = false,
+
+    pub fn jsonStringify(self: @This(), jw: anytype) !void {
+        try jw.beginObject();
+        inline for (.{ "start", "end", "paint" }) |name| {
+            try jw.objectField(name);
+            try jw.write(@field(self, name));
+        }
+        if (self.pointer_on_run) {
+            try jw.objectField("pointer_on_run");
+            try jw.write(true);
+        }
+        try jw.endObject();
+    }
 };
 pub fn validContainerDisclosureTextPaint(value: ContainerDisclosureTextPaint) bool {
     inline for (.{ "normal", "hover", "active", "hover_active" }) |name|
@@ -3517,7 +3532,11 @@ pub fn containerDisclosureItems(value: ContainerDisclosure) usize {
 // authored box or an inherited owner font. Consumers must bind the named font
 // and qualify native appearance; this record does not confer platform equality.
 pub const ContainerDisclosureNamedFont = struct { name: []const u8 };
-pub const ContainerDisclosureButtonAppearance = enum(u8) { native_button = 0 };
+pub const ContainerDisclosureButtonAppearance = enum(u8) {
+    native_button = 0,
+    // CSS appearance:none retains the explicit box, states and focus policy.
+    none = 1,
+};
 pub const ContainerDisclosureButtonState = struct {
     background: FigureColor,
     border: ResolvedStyleBorderEdges,
@@ -3587,7 +3606,8 @@ pub const ContainerDisclosureButton = struct {
     }
 };
 pub fn validContainerDisclosureButton(value: ContainerDisclosureButton) bool {
-    if (value.appearance != .native_button or !validFontFamilyName(value.font_family.name) or
+    if (value.appearance != .native_button and value.appearance != .none) return false;
+    if (!validFontFamilyName(value.font_family.name) or
         value.font_size.unit != .px or !validStyleLength(value.font_size) or value.font_size.value <= 0 or
         value.font_weight != 400 or value.font_italic or !validContainerLineHeight(value.line_height) or
         !validStyleEdges(value.padding)) return false;
@@ -3698,8 +3718,10 @@ pub fn validContainerDisclosure(value: ContainerDisclosure) bool {
     if (value.button) |button| if (value.focus != null or !validContainerDisclosureButton(button)) return false;
     if (!validContainerDisclosureLabel(value.expand_label) or !validContainerDisclosureLabel(value.collapse_label)) return false;
     if (value.foreground) |color| if (!validFigureColor(color) or (color.kind != .rgb and color.kind != .transparent)) return false;
-    if (value.expand_run) |run| if (!validContainerDisclosureRun(value.expand_label, run)) return false;
-    if (value.collapse_run) |run| if (!validContainerDisclosureRun(value.collapse_label, run)) return false;
+    if (value.expand_run) |run| if (!validContainerDisclosureRun(value.expand_label, run) or
+        (run.pointer_on_run and value.button == null)) return false;
+    if (value.collapse_run) |run| if (!validContainerDisclosureRun(value.collapse_label, run) or
+        (run.pointer_on_run and value.button == null)) return false;
     if (value.focus) |focus| {
         if (!validTableScrollFocusPaint(focus)) return false;
         if (focus.color) |color| if (color.kind != .rgb and color.kind != .transparent) return false;

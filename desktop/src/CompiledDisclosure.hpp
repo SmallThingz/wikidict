@@ -102,15 +102,33 @@ protected:
         QAbstractButton::focusInEvent(event); update();
     }
     void focusOutEvent(QFocusEvent *event) override {
+        pressedRun_ = false;
         focusVisible_ = false; enterDown_ = false; setDown(false);
         QAbstractButton::focusOutEvent(event); notifyMetrics(); update();
     }
     void mousePressEvent(QMouseEvent *event) override {
         focusVisible_ = false;
         hovered_ = hitButton(event->position().toPoint());
+        pointer_ = event->globalPosition();
+        if (event->button() == Qt::LeftButton) {
+            pressedRun_ = false;
+            const auto &run = currentRun();
+            if (run && run->pointerOnRun) {
+                QTextLayout layout(text(), font(), this);
+                layoutLabel(layout, *run);
+                pressedRun_ = runHit(layout, *run, mapFromGlobal(*pointer_));
+            }
+        }
         QAbstractButton::mousePressEvent(event); update();
     }
+    void mouseReleaseEvent(QMouseEvent *event) override {
+        pointer_ = event->globalPosition();
+        if (event->button() == Qt::LeftButton) pressedRun_ = false;
+        QAbstractButton::mouseReleaseEvent(event);
+    }
     void mouseMoveEvent(QMouseEvent *event) override {
+        pointer_ = event->globalPosition();
+        if (!(event->buttons() & Qt::LeftButton)) pressedRun_ = false;
         hovered_ = hitButton(event->position().toPoint());
         QAbstractButton::mouseMoveEvent(event); notifyMetrics(); update();
     }
@@ -133,10 +151,11 @@ protected:
         QAbstractButton::keyReleaseEvent(event);
     }
     void enterEvent(QEnterEvent *event) override {
+        pointer_ = event->globalPosition();
         hovered_ = hitButton(event->position().toPoint());
         QAbstractButton::enterEvent(event); notifyMetrics(); update();
     }
-    void leaveEvent(QEvent *event) override { hovered_ = false; QAbstractButton::leaveEvent(event); notifyMetrics(); update(); }
+    void leaveEvent(QEvent *event) override { pointer_.reset(); hovered_ = false; QAbstractButton::leaveEvent(event); notifyMetrics(); update(); }
     void paintEvent(QPaintEvent *) override {
         QPainter painter(this);
         if (!model_.button) {
@@ -170,17 +189,18 @@ protected:
                 state.border[end].width * scale, sides[side], styles[static_cast<int>(border.kind)], QBrush(border.color));
         }
         QTextLayout layout(text(), font(), this);
-        const auto &run = isChecked() ? model_.collapseRun : model_.expandRun;
+        const auto &run = currentRun();
+        QList<QTextLayout::FormatRange> selection;
         if (run) {
-            const auto paint = labelPaint(*run, hovered_, isDown(), hasFocus());
-            QTextCharFormat format; format.setForeground(paint.foreground);
-            format.setFontUnderline(paint.underline);
-            layout.setFormats({{run->utf16Start, run->utf16Length, format}});
-        }
-        configureLayout(layout);
+            layoutLabel(layout, *run);
+            if (run->pointerOnRun) {
+                const bool hover = pointer_ && runHit(layout, *run, mapFromGlobal(*pointer_));
+                selection.append({run->utf16Start, run->utf16Length,
+                    labelFormat(labelPaint(*run, hover, pressedRun_ && isDown(), hasFocus()))});
+            }
+        } else configureLayout(layout);
         painter.setPen(model_.foreground.value_or(inheritedForeground_));
-        layout.draw(&painter, QPointF(box.left() + (button.padding[3] + state.border[3].width) * scale,
-            box.top() + (button.padding[0] + state.border[0].width) * scale));
+        layout.draw(&painter, labelOrigin(), selection);
         if (focusVisible() && button.focusVisible) {
             const auto &outline = *button.focusVisible;
             const qreal expansion = (outline.offset + outline.width / 2) * scale;
@@ -189,6 +209,41 @@ protected:
         }
     }
 private:
+    const std::optional<LabelRun> &currentRun() const {
+        return isChecked() ? model_.collapseRun : model_.expandRun;
+    }
+    QPointF labelOrigin() const {
+        const auto &button = *model_.button;
+        const auto &state = button.states[stateIndex(hovered_, isDown())];
+        const auto scale = logicalDpiY() / qreal(96);
+        return borderOrigin() + QPointF((button.padding[3] + state.border[3].width) * scale,
+            (button.padding[0] + state.border[0].width) * scale);
+    }
+    static QTextCharFormat labelFormat(const LabelPaint &paint) {
+        QTextCharFormat format;
+        format.setForeground(paint.foreground);
+        format.setFontUnderline(paint.underline);
+        return format;
+    }
+    void layoutLabel(QTextLayout &layout, const LabelRun &run) const {
+        // Shape the range once. Pointer-only colors and underline can be overlaid at draw time.
+        const auto paint = labelPaint(run, !run.pointerOnRun && hovered_, !run.pointerOnRun && isDown(), hasFocus());
+        layout.setFormats({{run.utf16Start, run.utf16Length, labelFormat(paint)}});
+        configureLayout(layout);
+    }
+    bool runHit(const QTextLayout &layout, const LabelRun &run, const QPointF &point) const {
+        if (!QRectF(borderOrigin(), borderBoxSize()).contains(point)) return false;
+        const auto local = point - labelOrigin();
+        for (int i = 0; i < layout.lineCount(); ++i) {
+            const auto line = layout.lineAt(i);
+            const auto rect = line.naturalTextRect();
+            if (local.y() < rect.top() || local.y() >= rect.bottom() ||
+                local.x() < rect.left() || local.x() >= rect.right()) continue;
+            const int pos = line.xToCursor(local.x(), QTextLine::CursorOnCharacter);
+            if (pos >= run.utf16Start && pos < run.utf16Start + run.utf16Length) return true;
+        }
+        return false;
+    }
     QStyleOptionButton nativeOption(QString label) const {
         QStyleOptionButton option;
         option.initFrom(this);
@@ -203,6 +258,7 @@ private:
     }
     void notifyMetrics() { updateGeometry(); if (metricsChanged) metricsChanged(); }
     void updateLabel() {
+        pressedRun_ = false;
         setText(isChecked() ? model_.collapseLabel : model_.expandLabel);
         setAccessibleName(text()); notifyMetrics(); update();
     }
@@ -235,7 +291,8 @@ private:
             for (auto glyph : run.glyphIndexes()) require(glyph != 0);
         }
     }
-    std::optional<QPointF> borderOrigin_;
+    std::optional<QPointF> borderOrigin_, pointer_;
+    bool pressedRun_ = false;
     Model model_;
     QColor inheritedForeground_;
     bool focusVisible_ = false, enterDown_ = false, hovered_ = false;

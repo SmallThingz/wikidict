@@ -1,0 +1,113 @@
+{
+  "browser_graph_sha256": "cf25a898e3e4ad1ff94a20b61a015db31787da47ce82bfebf61bbddefc27d92c",
+  "expanded_sha256": "8d7e4d11612774935779d88c3c0ea9432c1126e396ce95e6a3c4b8a314ece6ba",
+  "full_expansion_post_sha256": "e2266f0028f3f2f783c0b2451bbbfb6d0a027c3022db3a29b3f363788932a8d3",
+  "index_offset": 2009,
+  "logical_styles_sha256": "552ad9aacc6b9fed016db4c84ebf475e842b9a07f7f221f72015772602b42957",
+  "native_predecessor": {
+    "error_name": "UncompiledPresentation",
+    "fragment_bytes": 219,
+    "labels_truncated": false,
+    "local_offset": 0,
+    "operation": "inline_box",
+    "reason": "unresolved_geometry",
+    "reason_bits": 1970324836974592,
+    "scope": "first instrumented compiler rejection; offset is local to the captured fragment, page offset unknown",
+    "window_hex": "3c7370616e20636c6173733d226c6567656e642d636f6c6f7222207374796c653d22646973706c61793a696e6c696e652d626c6f636b3b2077696474683a312e35656d3b206865696768743a312e35656d3b206d617267696e3a31707820303b20626f726465723a31707820736f6c696420626c61636b3b206261636b67726f756e642d636f6c6f723a7265643b20636f6c6f723a626c61636b3b20666f6e742d73697a653a3930253b20746578742d616c69676e3a63656e7465723b223e266e6273703b3c2f7370616e3e266e6273703b4f787967656e2c204f",
+    "window_offset": 0,
+    "window_truncated": false
+  },
+  "oldid_get_sha256": "aadfbf84363a866683ca1c175c172aee3b700dc00d009585c924fa06b59a3439",
+  "ordinal": 15,
+  "page_id": 609,
+  "raw_sha256": "34940f5fffc92d1d7b758d7b6c29196ddee94ed4930020fe836ab205d8ca0ab1",
+  "revision_id": 3518053,
+  "swatches": [
+    {
+      "computed_invariant": {
+        "background-color": "rgb(255, 0, 0)",
+        "border-top-color": "rgb(0, 0, 0)",
+        "border-top-style": "solid",
+        "border-top-width": "1px",
+        "box-sizing": "content-box",
+        "color": "rgb(0, 0, 0)",
+        "direction": "ltr",
+        "display": "inline-block",
+        "margin-bottom": "1px",
+        "margin-left": "0px",
+        "margin-right": "0px",
+        "margin-top": "1px",
+        "position": "static",
+        "text-align": "center",
+        "vertical-align": "baseline",
+        "writing-mode": "horizontal-tb"
+      },
+      "height_em": 1.5,
+      "inside": " ",
+      "label": "Oxygen, O",
+      "label_range": [
+        931,
+        940
+      ],
+      "line": [
+        721,
+        940
+      ],
+      "outside_prefix": " ",
+      "parent_font_scale": 0.9,
+      "row": [
+        701,
+        946
+      ],
+      "source_style": "display:inline-block; width:1.5em; height:1.5em; margin:1px 0; border:1px solid black; background-color:red; color:black; font-size:90%; text-align:center;",
+      "swatch": [
+        721,
+        925
+      ],
+      "width_em": 1.5
+    },
+    {
+      "computed_invariant": {
+        "background-color": "rgb(255, 255, 255)",
+        "border-top-color": "rgb(0, 0, 0)",
+        "border-top-style": "solid",
+        "border-top-width": "1px",
+        "box-sizing": "content-box",
+        "color": "rgb(0, 0, 0)",
+        "direction": "ltr",
+        "display": "inline-block",
+        "margin-bottom": "1px",
+        "margin-left": "0px",
+        "margin-right": "0px",
+        "margin-top": "1px",
+        "position": "static",
+        "text-align": "center",
+        "vertical-align": "baseline",
+        "writing-mode": "horizontal-tb"
+      },
+      "height_em": 1.5,
+      "inside": " ",
+      "label": "Hydrogen, H",
+      "label_range": [
+        1178,
+        1189
+      ],
+      "line": [
+        966,
+        1189
+      ],
+      "outside_prefix": " ",
+      "parent_font_scale": 0.9,
+      "row": [
+        946,
+        1195
+      ],
+      "source_style": "display:inline-block; width:1.5em; height:1.5em; margin:1px 0; border:1px solid black; background-color:white; color:black; font-size:90%; text-align:center;",
+      "swatch": [
+        966,
+        1172
+      ],
+      "width_em": 1.5
+    }
+  ]
+}

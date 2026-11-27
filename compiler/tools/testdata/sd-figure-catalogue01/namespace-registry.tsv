@@ -1,0 +1,28 @@
+# wikidict-namespace-registry-v1
+# wiki	sdwiktionary
+# dump-date	20261001
+# content-language	sd
+-2	ذريعات	Media	case-sensitive	0	0	0		compile_only	virtual_namespace
+-1	خاص	Special	first-letter	0	0	0		compile_only	virtual_namespace
+0			case-sensitive	0	1	0		main	dictionary_entries
+1	بحث	Talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+2	واپرائيندڙ	User	first-letter	1	0	0		compile_only	standard_build_input	يوزر
+3	واپرائيندڙ بحث	User talk	first-letter	1	0	0		compile_only	discussion_namespace	يوزر بحث
+4	Wiktionary	Project	case-sensitive	1	0	0		compile_only	standard_build_input	WT
+5	Wiktionary بحث	Project talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Wiktionary talk
+6	فائل	File	case-sensitive	0	0	0		compile_only	standard_build_input	Image	عڪس
+7	فائل بحث	File talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Image talk	عڪس بحث
+8	ذريعات وڪي	MediaWiki	first-letter	1	0	0		compile_only	standard_build_input
+9	ذريعات وڪي بحث	MediaWiki talk	first-letter	1	0	0		compile_only	discussion_namespace
+10	سانچو	Template	case-sensitive	1	0	0		compile_only	standard_build_input	سنچو
+11	سانچو بحث	Template talk	case-sensitive	1	0	0		compile_only	discussion_namespace	سنچو بحث
+12	مدد	Help	case-sensitive	1	0	0		compile_only	standard_build_input
+13	مدد بحث	Help talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+14	زمرو	Category	case-sensitive	0	0	0		compile_only	standard_build_input
+15	زمرو بحث	Category talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+710	TimedText	TimedText	case-sensitive	0	0	0		compile_only	ancillary_site_input
+711	TimedText talk	TimedText talk	case-sensitive	0	0	0		compile_only	discussion_namespace
+828	ماڊيول	Module	case-sensitive	1	0	0		compile_only	standard_build_input
+829	ماڊيول بحث	Module talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+1728	Event	Event	case-sensitive	1	0	0		compile_only	ancillary_site_input
+1729	Event talk	Event talk	case-sensitive	1	0	0		compile_only	discussion_namespace

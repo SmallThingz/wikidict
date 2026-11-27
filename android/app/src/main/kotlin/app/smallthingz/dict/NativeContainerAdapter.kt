@@ -5,7 +5,8 @@ import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RectF
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.withCompositionLocal
+import androidx.compose.runtime.withCompositionLocals
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.text.TextStyle
@@ -648,7 +649,6 @@ internal fun prepareNativeContainerTree(blocks: List<Block>, path: String, gridP
                     is ContainerColor.LightDark -> if (dark) value.dark else value.light
                     null, ContainerColor.Transparent -> LocalAuthoredBackground.current
                 }
-                val children = mutableListOf<NativeFloatContextSpec>()
                 val paddingTop = resolved.box.padding?.top?.let {
                     (it.value.toDouble() * if (it.unit == StyleLengthUnit.Px) density.density else positionedBodyPixels).toFloat()
                 } ?: 0f
@@ -674,7 +674,8 @@ internal fun prepareNativeContainerTree(blocks: List<Block>, path: String, gridP
                 val disclosure = container.disclosure
                 val expanded = disclosure?.let { disclosureState.isExpanded(container, paths[first]) } ?: true
                 val hiddenChild = nativeDisclosureHiddenChild(container, expanded)
-                val prepareChildren: @Composable () -> Unit = {
+                val prepareChildren: @Composable () -> List<NativeFloatContextSpec> = {
+                    val children = mutableListOf<NativeFloatContextSpec>()
                     if (disclosure != null) {
                         val identity = remember(disclosureState, NativeContainerDisclosureSourceIdentity(container), paths[first]) { Any() }
                         val columnDirection = LocalNativeColumnTextDirection.current
@@ -723,6 +724,7 @@ internal fun prepareNativeContainerTree(blocks: List<Block>, path: String, gridP
                         childScope, nextWrap, absoluteFormat?.getOrNull(), nextOrdinaryContainingBlock,
                         nextStaticScope, immediateStatic?.parent, resolved.box.textAlign?.composeAlign() ?: sourceAlign,
                         nextClippedScope, hiddenChild, resolved.box.layout == ContainerLayout.FlexColumn, resolved.box.columns != null)
+                    children.toList()
                 }
                 val cellForeground = LocalNativeCellForeground.current?.let { inherited ->
                     when (resolved.box.background) {
@@ -737,10 +739,11 @@ internal fun prepareNativeContainerTree(blocks: List<Block>, path: String, gridP
                             container, NativeSemanticBorderInkOrigin.Container, cellForeground, background)
                     null, ContainerColor.Transparent -> LocalNativeSemanticBorderInk.current
                 }
-                CompositionLocalProvider(LocalNativeSemanticBorderInk provides semanticBorderInk,
+                // Return one complete preparation to its consumer; no captured-list publication.
+                val children = withCompositionLocals(LocalNativeSemanticBorderInk provides semanticBorderInk,
                     LocalAuthoredBackground provides background,
                     LocalNativeCellForeground provides cellForeground) {
-                    if (resolved.box.columns == null) prepareChildren() else CompositionLocalProvider(
+                    if (resolved.box.columns == null) prepareChildren() else withCompositionLocals(
                         androidx.compose.ui.platform.LocalLayoutDirection provides
                             if (columnRtl) androidx.compose.ui.unit.LayoutDirection.Rtl else androidx.compose.ui.unit.LayoutDirection.Ltr,
                         LocalNativeColumnTextDirection provides
@@ -832,14 +835,14 @@ internal fun prepareNativeContainerTree(blocks: List<Block>, path: String, gridP
                         // rejects that represented child before fragmentation is attempted.
                         return (prepared as? NativeFloatContextSpec.Text)?.copy(columnBreakInside = policy, columnAvoidGroup = group) ?: prepared
                     }
-                    CompositionLocalProvider(LocalNativeClippedAbsoluteCoordinateScope provides clippedScope) {
+                    children += withCompositionLocal(LocalNativeClippedAbsoluteCoordinateScope provides clippedScope) {
                         if (excludesBody) {
-                            CompositionLocalProvider(LocalNativeContainerTextContext provides textContext) { children += leaf(child).map(::bindColumnPolicy) }
-                        } else if (format?.ownerFont == null) children += leaf(child).map(::bindColumnPolicy) else {
-                            CompositionLocalProvider(LocalCellWeight provides null,
+                            withCompositionLocal(LocalNativeContainerTextContext provides textContext) { leaf(child).map(::bindColumnPolicy) }
+                        } else if (format?.ownerFont == null) leaf(child).map(::bindColumnPolicy) else {
+                            withCompositionLocals(LocalCellWeight provides null,
                                 LocalTableLineHeightPixels provides null,
                                 LocalNativeContainerTextContext provides context.copy(cellText = null, fontFamily = format.sourceFamily)) {
-                                children += leaf(child).map(::bindColumnPolicy)
+                                leaf(child).map(::bindColumnPolicy)
                             }
                         }
                     }
@@ -856,12 +859,10 @@ internal fun prepareNativeContainerTree(blocks: List<Block>, path: String, gridP
         }
         return result
     }
-    var projected: List<NativeFloatContextSpec> = emptyList()
-    CompositionLocalProvider(LocalNativeContainerDisclosureState provides disclosureState) {
-    projected = visit(blocks, rootPaths ?: blocks.indices.map { "$path/block-$it" },
-        blocks.indices.map { "$gridPath/block-$it" }, rootGaps, inherited, inheritedAlign,
-        false, false, blocks.indices.map { it }, false, ownerWrap = inheritedWrap,
-        sourceAlign = staticInlineAlign ?: inheritedAlign?.composeAlign(), clippedScope = inheritedClippedScope)
+    return withCompositionLocal(LocalNativeContainerDisclosureState provides disclosureState) {
+        visit(blocks, rootPaths ?: blocks.indices.map { "$path/block-$it" },
+            blocks.indices.map { "$gridPath/block-$it" }, rootGaps, inherited, inheritedAlign,
+            false, false, blocks.indices.map { it }, false, ownerWrap = inheritedWrap,
+            sourceAlign = staticInlineAlign ?: inheritedAlign?.composeAlign(), clippedScope = inheritedClippedScope)
     }
-    return projected
 }

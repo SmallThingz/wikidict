@@ -2190,6 +2190,10 @@ pub fn hasBodyContentWithReferencesAndPoemFragmentsAlloc(
     poem_phase: ?*const PoemPhase,
     fragments: []const SourceFragment,
 ) !bool {
+    // This presence probe deliberately lacks final Figure/style authority.
+    // Handled probe refusals must not shadow the actual page failure capture.
+    const diagnostic_scope = RejectedFieldCapture.suspendCapture();
+    defer diagnostic_scope.deinit();
     // Failure to certify a standalone prefix cannot prove it is empty.
     // Retain it for the ordinary final Writer with its complete source context;
     // operational errors still propagate and successful Has rules stay exact.
@@ -17351,4 +17355,29 @@ test "Phonos fragment projection grants no whole page or ancestry authority" {
         projection = saved_projection;
         styles.selected_phonos = &selected;
     }
+}
+
+
+test "prefix presence probe keeps handled Figure refusal out of page diagnostics" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const namespaces = try @import("namespace_registry").englishTestRegistry();
+    var capture: RejectedFieldCapture = .{};
+    const scope = capture.begin();
+    defer scope.deinit();
+    const prefix = "[[File:Ambersweet oranges.jpg|thumb|left|<font size=\"4\">caption]]";
+    try std.testing.expect(try hasBodyContentWithReferencesAndPoemFragmentsAlloc(a,
+        "prefix", "Unclassified", prefix, .{}, namespaces, null, null, .{}, null, &.{}));
+    try std.testing.expect(rejectedCompilerSnapshot(error.UncompiledPresentation) == null);
+    try std.testing.expect(rejectedFieldSnapshot(error.UncompiledPresentation) == null);
+    // The real compile immediately following the probe still owns diagnostics.
+    var final: compiler.Renderer = .{ .a = a, .context = .{} };
+    try std.testing.expectError(error.UncompiledPresentation, final.renderBody("<imagemap>Not a file\n</imagemap>"));
+    const first = rejectedCompilerSnapshot(error.UncompiledPresentation) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("imagemap", first.operation);
+    try std.testing.expectEqualStrings("namespace", first.reason);
+    try std.testing.expect(try hasBodyContentWithReferencesAndPoemFragmentsAlloc(a,
+        "prefix", "Unclassified", prefix, .{}, namespaces, null, null, .{}, null, &.{}));
+    try std.testing.expectEqualDeep(first, rejectedCompilerSnapshot(error.UncompiledPresentation).?);
 }

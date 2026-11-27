@@ -120,8 +120,9 @@ fn uLen(_: ?*anyopaque, _: *rt.Context, args: []const Value, result_buffer: ?[]V
     return one(result_buffer, .{ .number = @floatFromInt(try countCodepoints(source)) });
 }
 
-fn uSub(_: ?*anyopaque, _: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
-    const source = try sourceArg(args);
+fn uSub(_: ?*anyopaque, runtime: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
+    if (args.len == 0) return error.StringExpected;
+    const source = try stringArg(runtime.allocator, args[0]);
     const len: i64 = @intCast(try countCodepoints(source));
     var first = normalizeIndex(if (args.len > 1 and args[1] != .nil) try integer(args[1]) else 1, len);
     var last = normalizeIndex(if (args.len > 2 and args[2] != .nil) try integer(args[2]) else -1, len);
@@ -131,6 +132,22 @@ fn uSub(_: ?*anyopaque, _: *rt.Context, args: []const Value, result_buffer: ?[]V
     const start = try byteOffset(source, @intCast(first));
     const end = try byteOffset(source, @intCast(last + 1));
     return one(result_buffer, .{ .string = source[start..end] });
+}
+
+test "AOT Unicode sub accepts a numeric source" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 0);
+    defer runtime.deinit();
+
+    var buffer: [1]Value = undefined;
+    const length = (try uLen(null, &runtime, &.{.{ .string = "cĭs" }}, &buffer))[0];
+    const numeric = try uSub(null, &runtime, &.{ length, .{ .number = 1 }, .{ .number = 1 } }, &buffer);
+    try std.testing.expectEqualStrings("3", numeric[0].string);
+    const unicode = try uSub(null, &runtime, &.{ .{ .string = "cĭs" }, .{ .number = -2 }, .{ .number = -2 } }, &buffer);
+    try std.testing.expectEqualStrings("ĭ", unicode[0].string);
+    try std.testing.expectError(error.StringExpected, uSub(null, &runtime, &.{.nil}, &buffer));
+    try std.testing.expectError(error.StringExpected, uSub(null, &runtime, &.{}, &buffer));
 }
 
 fn uChar(_: ?*anyopaque, runtime: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {

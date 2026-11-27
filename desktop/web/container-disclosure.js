@@ -41,7 +41,8 @@ function labelPaint(v){
 }
 function labelRun(label,v){
   if(v==null)return;
-  object(v,['start','end','paint']);labelPaint(v.paint);
+  object(v,['start','end','paint','pointer_on_run'],['start','end','paint']);labelPaint(v.paint);
+  check(!Object.hasOwn(v,'pointer_on_run')||typeof v.pointer_on_run==='boolean');
   const bytes=new TextEncoder().encode(label);
   check(Number.isInteger(v.start)&&Number.isInteger(v.end)&&v.start>=0&&v.start<v.end&&v.end<=bytes.length);
   // The common model uses UTF-8 byte boundaries, not JS/Qt UTF-16 offsets.
@@ -50,7 +51,7 @@ function labelRun(label,v){
 export function validateContainerDisclosureButton(v){
   const fields=['appearance','font_family','font_size','font_weight','font_italic','line_height','padding',...states,'focus_visible','outline_colors'];
   object(v,fields,fields.filter(k=>!['focus_visible','outline_colors'].includes(k)));
-  check(v.appearance==='native_button');
+  check(v.appearance==='native_button'||v.appearance==='none');
   fontFamily(v.font_family);px(v.font_size,true);check(v.font_weight===400&&v.font_italic===false);
   const line=one(v.line_height,['normal','length']);if(line==='normal')empty(v.line_height.normal);else px(v.line_height.length,true);
   object(v.padding,sides);for(const side of sides)px(v.padding[side]);
@@ -105,10 +106,10 @@ function borderCSS(v){
 }
 function stateCSS(v){return 'background-color:'+color(v.background)+';'+borderCSS(v.border);}
 function textStateCSS(v){return 'color:'+v.foreground+';text-decoration-line:'+(v.underline?'underline':'none');}
-function labelCSS(selector,paint){
+function labelCSS(selector,paint,pointerOnRun){
   let css=selector+'{box-sizing:content-box;'+textStateCSS(paint.normal)+'}';
   for(const [state,pseudo] of [['hover',':hover'],['active',':active'],['hover_active',':hover:active']])
-    css+=selector.replace(' > .compiled-disclosure-run',pseudo+' > .compiled-disclosure-run')+'{'+textStateCSS(paint[state])+'}';
+    css+=(pointerOnRun?selector+pseudo:selector.replace(' > .compiled-disclosure-run',pseudo+' > .compiled-disclosure-run'))+'{'+textStateCSS(paint[state])+'}';
   if(paint.underline_on_focus)for(const pseudo of [':focus',':focus:hover',':focus:active',':focus:hover:active'])
     css+=selector.replace(' > .compiled-disclosure-run',pseudo+' > .compiled-disclosure-run')+'{text-decoration-line:underline}';
   return css;
@@ -124,7 +125,7 @@ export function installContainerDisclosure(host,content,owner){
   if(p.direction!=null)button.style.direction=p.direction;
   const selector='.'+cls;
   const fixed='box-sizing:border-box;width:auto;height:auto;min-width:0;min-height:0;margin:0;border-radius:0;'+
-    'appearance:auto;font-family:'+family(v.font_family)+';font-size:'+v.font_size.value+'px;font-weight:400;font-style:normal;'+
+    'appearance:'+(v.appearance==='none'?'none':'auto')+';font-family:'+family(v.font_family)+';font-size:'+v.font_size.value+'px;font-weight:400;font-style:normal;'+
     'font-stretch:normal;font-variant:normal;letter-spacing:normal;word-spacing:normal;line-height:'+lineCSS(v.line_height)+';'+
     'text-transform:none;text-indent:0;text-align:center;text-shadow:none;white-space:normal;'+
     'padding:'+sides.map(s=>v.padding[s].value+'px').join(' ')+';'+
@@ -151,7 +152,7 @@ export function installContainerDisclosure(host,content,owner){
       const bytes=new TextEncoder().encode(label),decoder=new TextDecoder('utf-8',{fatal:true});
       const middle=document.createElement('span');middle.className='compiled-disclosure-run';middle.textContent=decoder.decode(bytes.subarray(run.start,run.end));
       button.append(decoder.decode(bytes.subarray(0,run.start)),middle,decoder.decode(bytes.subarray(run.end)));
-      labelStyle.textContent=labelCSS(selector+' > .compiled-disclosure-run',run.paint);
+      labelStyle.textContent=labelCSS(selector+' > .compiled-disclosure-run',run.paint,run.pointer_on_run===true);
     }else button.textContent=label;
     button.setAttribute('aria-expanded',String(!next));
     if(next)content.setAttribute('hidden','until-found');else content.removeAttribute('hidden');

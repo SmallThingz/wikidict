@@ -359,9 +359,10 @@ export function decode(bytes, metadata) {
   const disclosureLabelRun=()=>{
     charge();const start=u32(),end=u32(),paint={};
     for(const name of ['normal','hover','active','hover_active'])paint[name]={foreground:rgbValue(),underline:false};
-    const flags=byte();require((flags&~31)===0,'Unknown disclosure label paint');
+    const flags=byte();require((flags&~63)===0,'Unknown disclosure label paint');
     ['normal','hover','active','hover_active'].forEach((name,i)=>paint[name].underline=!!(flags&(1<<i)));
-    paint.underline_on_focus=!!(flags&16);return {start,end,paint};
+    paint.underline_on_focus=!!(flags&16);const run={start,end,paint};
+    if(flags&32)run.pointer_on_run=true;return run;
   };
   const resolvedButtonBorder=()=>Object.fromEntries(boxEdges.map(side=>{
     const kind=tag(['none','hidden','solid','dotted','inset','outset']);
@@ -371,7 +372,7 @@ export function decode(bytes, metadata) {
   }));
   const disclosureButton=()=>{
     require(disclosureButtonsEnabled,'Unsupported public disclosure button');charge();
-    const value={appearance:tag(['native_button']),font_family:{name:string()},font_size:styleLength(),font_weight:u16(),font_italic:presence(),line_height:containerLineHeight(),padding:edges()};
+    const value={appearance:tag(['native_button','none']),font_family:{name:string()},font_size:styleLength(),font_weight:u16(),font_italic:presence(),line_height:containerLineHeight(),padding:edges()};
     for(const name of ['normal','hover','active','hover_active'])value[name]={background:figureColor(),border:resolvedButtonBorder()};
     const fields=byte();require((fields&~3)===0,'Unknown button optional fields');
     value.focus_visible=null;

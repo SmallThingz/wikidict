@@ -318,3 +318,73 @@ test('typed consumer rejects unsupported button values and foreign child ownersh
   const installed = install(t);
   assert.throws(() => installContainerDisclosure(installed.host, new ElementDouble('div'), owner()));
 });
+
+test('explicit appearance none preserves the typed box and button behavior without native chrome', t => {
+  const value = owner();
+  value.disclosure.button.appearance = 'none';
+  const before = JSON.stringify(value);
+  const {result: {button}, style, content} = install(t, value);
+  const selector = '.' + button.className.split(' ')[0];
+  const rule = declarations(style.textContent, selector);
+  assert.ok(rule.includes('appearance:none'));
+  assert.ok(!rule.includes('appearance:auto'));
+  const native = install(t);
+  const nativeSelector = '.' + native.result.button.className.split(' ')[0];
+  assert.deepEqual(rule.filter(x => !x.startsWith('appearance:')),
+    declarations(native.style.textContent, nativeSelector).filter(x => !x.startsWith('appearance:')));
+  assert.equal(button.tagName, 'BUTTON');
+  assert.equal(button.type, 'button');
+  assert.equal(button.textContent, 'Mostra');
+  assert.equal(content.getAttribute('hidden'), 'until-found');
+  button.click();
+  assert.equal(button.textContent, 'Nascondi');
+  assert.equal(content.getAttribute('hidden'), null);
+  assert.equal(JSON.stringify(value), before);
+  for (const appearance of ['auto', 'NONE', 'link', '', null, 1]) {
+    const invalid = structuredClone(value);
+    invalid.disclosure.button.appearance = appearance;
+    assert.throws(() => validateContainerDisclosure(invalid));
+  }
+  for (const change of [v => {v.font_weight = 500;}, v => {v.padding.left.value = -1;}]) {
+    const invalid = structuredClone(value);
+    change(invalid.disclosure.button);
+    assert.throws(() => validateContainerDisclosure(invalid));
+  }
+});
+
+test('run-local pointer paint leaves bracket activation and keyboard focus on the button', t => {
+  const value=owner(), p=value.disclosure;
+  p.expand_label='[Mostra]';p.collapse_label='[Nascondi]';
+  for(const [name,end] of [['expand_run',7],['collapse_run',9]]) {
+    p[name].start=1;p[name].end=end;p[name].pointer_on_run=true;
+    p[name].paint.normal={foreground:'#3366cc',underline:false};
+    p[name].paint.hover={foreground:'#3056a9',underline:true};
+    p[name].paint.active={foreground:'#233566',underline:true};
+    p[name].paint.hover_active={foreground:'#233566',underline:true};
+    p[name].paint.underline_on_focus=true;
+  }
+  const unchanged=JSON.stringify(value), x=install(t,value), b=x.result.button;
+  const selector='.'+b.className.split(' ')[0], run=selector+' > .compiled-disclosure-run';
+  assert.equal(b.textContent,'[Mostra]');
+  assert.deepEqual([b.children[0],b.children[2]],['[',']']);
+  for(const state of [':hover',':active',':hover:active']) {
+    assert.ok(x.labelStyle.textContent.includes(run+state+'{'));
+    assert.ok(!x.labelStyle.textContent.includes(selector+state+' > .compiled-disclosure-run{'));
+  }
+  assert.ok(x.labelStyle.textContent.includes(selector+':focus > .compiled-disclosure-run{text-decoration-line:underline}'));
+  assert.deepEqual(b.listeners,['click']);assert.equal(b.children[1].listeners.length,0);
+  b.click();assert.equal(b.textContent,'[Nascondi]');assert.equal(x.content.getAttribute('hidden'),null);
+  assert.equal(JSON.stringify(value),unchanged);
+  for(const bad of [null,0,1,'true',{},[]]) {
+    const copy=structuredClone(value);copy.disclosure.expand_run.pointer_on_run=bad;
+    assert.throws(()=>validateContainerDisclosure(copy));
+  }
+  for(const old of [undefined,false]) {
+    const copy=structuredClone(value);
+    for(const key of ['expand_run','collapse_run']) {
+      if(old===undefined)delete copy.disclosure[key].pointer_on_run;else copy.disclosure[key].pointer_on_run=false;
+    }
+    const legacy=install(t,copy), oldSelector='.'+legacy.result.button.className.split(' ')[0];
+    assert.ok(legacy.labelStyle.textContent.includes(oldSelector+':hover > .compiled-disclosure-run{'));
+  }
+});

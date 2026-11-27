@@ -272,6 +272,16 @@ pub const Registry = struct {
         return false;
     }
 
+    pub const it_current_figure_core = "901a9d48bec3e17bdde40049604019ff62aa4491";
+
+    pub fn isCurrentItFigureDefaults(self: *const Registry, digest: [32]u8) bool {
+        return std.mem.eql(u8, self.wiki, "itwiktionary") and
+            std.mem.eql(u8, self.content_language, "it") and
+            std.mem.eql(u8, self.dump_date, "20261001") and
+            std.mem.eql(u8, &std.fmt.bytesToHex(self.source_sha256, .lower), "8fc73407a5f932ba725c3339034fc0aa9894078272b08a5ae62566a834496996") and
+            std.mem.eql(u8, &std.fmt.bytesToHex(digest, .lower), "32716ceb687585326759ee718aee17bee2701bc309b973c9905849528315d746");
+    }
+
     const sd_current_figure_core = "6b357ea5fbbafe4bde3dcc705aa129afb392fdb2";
 
     pub fn isCurrentSdFigureDefaults(self: *const Registry, digest: [32]u8) bool {
@@ -296,6 +306,7 @@ pub const Registry = struct {
         if (!include_sql) return null;
         if (self.isCurrentSqlFigureDefaults(digest)) return mon_current_figure_core;
         if (self.isCurrentCsbFigureDefaults(digest)) return csb_current_figure_core;
+        if (self.isCurrentItFigureDefaults(digest)) return it_current_figure_core;
         if (self.isCurrentSdFigureDefaults(digest)) return sd_current_figure_core;
         if (self.isCurrentYiFigureDefaults(digest)) return yi_current_figure_core;
         if (self.isSelectedJpegFigureDefaults(digest)) return selected_jpeg_core;

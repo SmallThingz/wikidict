@@ -34,10 +34,17 @@ pub fn parseRelative(raw: []const u8) ?f32 {
 // ancestor scale; they are not a claim about a captured browser's pixel sizes.
 pub fn absoluteKeyword(raw: []const u8) ?f32 {
     const value = std.mem.trim(u8, raw, " \t\r\n\x0c");
-    const names = .{ "xx-small", "x-small", "small", "medium", "large", "x-large", "xx-large" };
-    const factors = [_]f32{ 3.0 / 5.0, 3.0 / 4.0, 8.0 / 9.0, 1, 6.0 / 5.0, 3.0 / 2.0, 2 };
+    const names = .{ "xx-small", "x-small", "small", "medium", "large", "x-large", "xx-large", "xxx-large" };
+    const factors = [_]f32{ 3.0 / 5.0, 3.0 / 4.0, 8.0 / 9.0, 1, 6.0 / 5.0, 3.0 / 2.0, 2, 3 };
     inline for (names, factors) |name, factor| if (std.ascii.eqlIgnoreCase(value, name)) return factor;
     return null;
+}
+
+// HTML FONT's normalized absolute size is a presentational hint.
+pub fn htmlAbsoluteSizeKeyword(digit: u8) ?[]const u8 {
+    const keywords = [_][]const u8{ "x-small", "small", "medium", "large", "x-large", "xx-large", "xxx-large" };
+    if (digit < '1' or digit > '7') return null;
+    return keywords[digit - '1'];
 }
 
 pub const RelativeKeyword = enum { smaller, larger };

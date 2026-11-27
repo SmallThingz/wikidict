@@ -423,6 +423,21 @@ SD_JPEG_RESPONSE = ('3b9e78bbae62834749d361eb74116b444030cc6628650443109b1aace97
 SD_LOCAL_ANTENNA_RESPONSE = ('0ca647bf534b1223bb0ebc0ad673a1681b0c7f2861bb1f5c20827c000d99fd7d', 'فائل:antenna.jpg',
                              '2cc57e980dd9a87e4317e8bc149645123deaaed3')
 SD_JPEG_DEPLOYED_SOURCES = '9641bd2cfe64f9a0cef506a6a165b818dad212b000022d643aa9ac9480f620b7'
+# Exact 20261001 SQL inventory plus the separately authenticated literal seeds.
+SD_CATALOGUE_RAW_SHA = '2ea26965ea3eb6d110f7159a908ce39165b9485297d6d25447d83d65a4784a3a'
+SD_CATALOGUE_RESPONSES = (
+    '2150fc3d819c6891edbd91a3d3a1be2ceb04542a9d4a8568cd4ccfbbfd8bf39f',
+    '614c382171c086ec0da7b8bc8d17b8cf8f60f70f311784eeefd992e93d3bceb1',
+    '15bad8e5b8d7d2d5eef9191abe2fd52093e2e748c528e28f4945fa0ef8363dd3',
+    '529b4d26d1afe9dae079dbfdc59ebc91c0810de65da44b74b9e8fcef1764c149',
+    '742196730b98642022500f08ef5e07c2eabe8c937b6a3e802935a1998e97a5fc',
+    'c9adb51bc0787f1cacb897bd7c4e9e375ddb6674fe3e4a06bf554d8012646cca',
+    '8926cbc198e7344f9163b7c8b4dcb598b972a6add30b23f3921846fb3dbde3da',
+    '0996edcbd221fffa3ef316c778d43eba93d5c29549a7bcc7e47182f2ba6a94cc',
+    'deef4c701170ccec34a601c363e7028ae4438973066616cf3cd594c73d12337b',
+    '45a25ac38c65db8c148cab430bb7eb17ee931f402b78edf70f84b13845a87ff8',
+)
+SD_CATALOGUE_HANDLERS = ('image/gif', 'image/jpeg', 'image/png', 'image/svg', 'image/svg+xml')
 SD_JPEG_NAMESPACE = '1a335a658db305317b17e342af9a38fdfd12cf306244ba5e35fe102b703f1ff2'
 SELECTED_JPEG_REGISTRATION = {
     'PagedTiffHandler': '0dd1254beafb560f2cd76923c1997fb7d4aacda8',
@@ -1284,6 +1299,9 @@ def figure_stream_document(raw_path, namespace_raw, wiki, date, site_raw, *, pro
                           allow_compatible_epochs=allow_compatible_epochs,
                           allow_decimal_tiff_axes=allow_decimal_tiff_axes,
                           allow_default_tiff_page=allow_default_tiff_page, current_file_supplements=current_file_supplements)
+    if (wiki == 'sdwiktionary' and header['records_count'] == 343 and
+            identity['sha256'] != SD_CATALOGUE_RAW_SHA):
+        raise ValueError('SD Figure catalogue differs from the authenticated raw stream')
     for name in ('wiki', 'core_revision', 'namespace_registry_sha256', 'base_batches', 'observed_batches'):
         if result[name] != header[name]:
             raise ValueError('Figure raw stream differs from its declared identity or counts')
@@ -1682,6 +1700,7 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
     profile = None
     current_jpeg = core == site_info.SELECTED_JPEG_CORE
     sd_jpeg = current_jpeg and wiki == 'sdwiktionary'
+    sd_catalogue = sd_jpeg and record_limit == 343
     jpeg_file = None
     if current_jpeg:
         site_sha = digest(site_raw)
@@ -1720,6 +1739,9 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
         approved = figure_profile(site_info.FIGURE_WMF5_CORE if lean_rollout else core, profile_kind, _figure_media_extensions(registration), wiki=wiki)
         if approved is None:
             raise ValueError('Unreviewed Figure handler source version; retain the response for source reconciliation')
+        if sd_catalogue:
+            approved = dict(approved, handler_families={mime:FIGURE_WMF4_PROFILE['handler_families'][mime]
+                                                       for mime in SD_CATALOGUE_HANDLERS})
         profile = dict(approved, site_raw_sha256=digest(site_raw))
         _figure_site_registration(registration, site_general, wiki, approved)
     records, seen, canonical_facts, height_keys = [], set(), {}, set()
@@ -1778,7 +1800,13 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
             raise ValueError('Figure API response exceeds per-response bound')
         titles = batch['requests']
         sd_local = sd_jpeg and batch_index == 1
-        if current_jpeg:
+        sd_catalogue_batch = sd_catalogue and batch_index >= 2
+        if sd_catalogue_batch:
+            offset = batch_index - 2
+            if (set(batch) != {'requests', 'response'} or offset >= len(SD_CATALOGUE_RESPONSES) or
+                    digest(response_raw) != SD_CATALOGUE_RESPONSES[offset]):
+                raise ValueError('SD Figure catalogue batch differs from its authentic response')
+        elif current_jpeg:
             exact_response = (titles == [SD_LOCAL_ANTENNA_RESPONSE[1]] and digest(response_raw) == SD_LOCAL_ANTENNA_RESPONSE[0]
                               if sd_local else batch_index == 0 and titles == [jpeg_file] and response_raw == site_raw)
             if set(batch) != {'requests', 'response'} or not exact_response:
@@ -1814,9 +1842,9 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
             raise ValueError('Current full-inventory Figure source version changed')
         if mon_current and batch_core != core:
             raise ValueError('Current Mon Figure facts require the same observed deployment')
-        if sd_local and batch_core != SD_LOCAL_ANTENNA_RESPONSE[2]:
+        if (sd_local or sd_catalogue_batch) and batch_core != SD_LOCAL_ANTENNA_RESPONSE[2]:
             raise ValueError('SD local JPEG changed its observed deployment')
-        if (general.get('lang') != language or (batch_core != core and not (sd_local or scoped_observation or vi_imageinfo or rollout) and not (
+        if (general.get('lang') != language or (batch_core != core and not (sd_local or sd_catalogue_batch or scoped_observation or vi_imageinfo or rollout) and not (
                 allow_compatible_epochs and profile_kind in (FIGURE_PROFILE_V4, FIGURE_PROFILE_V5) and
                 core in FIGURE_RESPONSE_EPOCHS and batch_core in FIGURE_RESPONSE_EPOCHS))):
             raise ValueError('Figure batches mix site/source versions')
@@ -1831,8 +1859,10 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
             current_file_observation(batch, data, registry)
             batch_profile = approved
         else:
-            profile_core = core if sd_local else site_info.FIGURE_WMF5_CORE if rollout else batch_core
+            profile_core = core if sd_local or sd_catalogue_batch else site_info.FIGURE_WMF5_CORE if rollout else batch_core
             batch_profile = figure_profile(profile_core, profile_kind, _figure_media_extensions(data), wiki=wiki)
+            if sd_catalogue:
+                batch_profile = dict(batch_profile, handler_families=approved['handler_families'])
             # Exact per-core registrations differ, but the proved image profile does
             # not. Both complete registration inventories are checked below.
             if ({key: value for key, value in batch_profile.items() if key != 'media_extensions'} !=
@@ -1972,7 +2002,9 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
         if (target is not None and target is not record and
                 file_fact_identity(target) != file_fact_identity(record)):
             raise ValueError('Requested file conflicts with an authenticated canonical alias')
-    if current_jpeg and (base_count != len(records) or observed_count != 0 or
+    if sd_catalogue and (base_count != len(SD_CATALOGUE_RESPONSES)+2 or observed_count or len(records) != 343):
+        raise ValueError('Incomplete authenticated SD Figure catalogue')
+    if current_jpeg and not sd_catalogue and (base_count != len(records) or observed_count != 0 or
                          len(records) not in ((1, 2) if sd_jpeg else (1,))):
         raise ValueError('Selected JPEG replay omitted its source batch')
     if sd_jpeg:
@@ -1984,7 +2016,7 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
                 (row['original_width'], row['original_height']) != (2272, 1704) or
                 proof is None or proof['omitted'] or proof['veto'] or proof['repository'] != 'shared'):
             raise ValueError('SD JPEG metadata or unrotated axes differ')
-        if len(records) == 2:
+        if len(records) >= 2:
             row = records[1]
             local = SD_LOCAL_ANTENNA_RESPONSE[1]
             proof = jpeg_evidence.get(local)

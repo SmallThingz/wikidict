@@ -13,7 +13,8 @@ data class ContainerDisclosureNamedFont(val name: String) {
         }
     }
 }
-enum class ContainerDisclosureButtonAppearance { NativeButton }
+// BlobDecoder reads these in wire order. Both use the explicit four-state box painter.
+enum class ContainerDisclosureButtonAppearance { NativeButton, None }
 
 internal fun ResolvedStyleBorderEdge.disclosureLine(): Pair<StyleLength, StyleBorderPaint>? = when (this) {
     ResolvedStyleBorderEdge.None, ResolvedStyleBorderEdge.Hidden -> null
@@ -51,7 +52,8 @@ data class ContainerDisclosureButton(val appearance: ContainerDisclosureButtonAp
     val focusVisible: ContainerDisclosureButtonFocus? = null,
     val outlineColors: ContainerDisclosureButtonOutlineColors? = null) {
     init {
-        require(appearance == ContainerDisclosureButtonAppearance.NativeButton)
+        require(appearance == ContainerDisclosureButtonAppearance.NativeButton ||
+            appearance == ContainerDisclosureButtonAppearance.None)
         require(fontSize.unit == StyleLengthUnit.Px && fontSize.value > 0f && fontWeight == 400 && !fontItalic)
         require(lineHeight == ContainerLineHeight.Normal || lineHeight is ContainerLineHeight.Length &&
             lineHeight.value.unit == StyleLengthUnit.Px && lineHeight.value.value > 0f)

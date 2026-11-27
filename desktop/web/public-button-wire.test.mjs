@@ -27,7 +27,7 @@ const names = ['normal','hover','active','hover_active'];
 const sides = ['top','right','bottom','left'];
 const edgeKinds = ['none','hidden','solid','dotted','inset','outset'];
 const run = r => cat(u32(r.start),u32(r.end),...names.map(n=>string(r.paint[n].foreground)),
-  [names.reduce((v,n,i)=>v+(r.paint[n].underline?1<<i:0),r.paint.underline_on_focus?16:0)]);
+  [names.reduce((v,n,i)=>v+(r.paint[n].underline?1<<i:0),(r.paint.underline_on_focus?16:0)|(r.pointer_on_run?32:0))]);
 function button(b, changes={}) {
   const edge = e => {
     const [kind]=Object.keys(e), value=e[kind];
@@ -86,7 +86,7 @@ test('frozen public suffix order decodes authored data and reaches the renderer 
 test('button local fields and optional two-bit mask reject every unallocated bit', () => {
   for(const bit of [0x20,0x40,0x80])assert.throws(()=>policy(probe(capture,{fields:0x1f|bit}).bytes),/Unknown disclosure fields/);
   for(const bit of [4,8,16,32,64,128])assert.throws(()=>policy(probe(capture,{optional:1|bit}).bytes),/Unknown button optional fields/);
-  for(const n of [1,2,255])assert.throws(()=>policy(probe(capture,{appearance:n}).bytes));
+  for(const n of [2,255])assert.throws(()=>policy(probe(capture,{appearance:n}).bytes));
   for(const n of [1,2,255])assert.throws(()=>policy(probe(capture,{italic:n}).bytes));
   assert.throws(()=>policy(probe(capture,{collapsed:2}).bytes));
   assert.throws(()=>policy(probe(capture,{oldPresence:true}).bytes));
@@ -216,4 +216,48 @@ test('decoded public data builds exactly one button bound to the selected direct
   button.click();content.dispatchEvent(new Event('beforematch'));
   assert.equal(content.getAttribute('hidden'),null);
   assert.equal(JSON.stringify(entry),before);
+});
+
+test('explicit appearance none wire tag preserves old data and capability gates', () => {
+  const native = policy(probe(capture).bytes);
+  const {bytes} = probe(capture, {appearance: 1});
+  const value = policy(bytes);
+  const expected = structuredClone(native);
+  expected.button.appearance = 'none';
+  assert.deepEqual(value, expected);
+  assert.equal(native.button.appearance, 'native_button');
+  assert.equal(bytes.length, probe(capture).bytes.length);
+  assert.equal(containerDisclosureItems({blocks: [{}, {kind:'container',container:{}}], disclosure:value}),
+    containerDisclosureItems({blocks: [{}, {kind:'container',container:{}}], disclosure:native}));
+  assert.throws(() => renderEntry(decode(bytes, {}), () => {}), /document is not defined/);
+  for (const appearance of [2, 127, 255])
+    assert.throws(() => policy(probe(capture, {appearance}).bytes));
+  for (const features of [0, 0x100, 0x100000, 0x80100100])
+    assert.throws(() => policy(probe(capture, {appearance:1, features}).bytes));
+  const narrow = cat(Buffer.from('DPRZ'), u16(0x100), bytes.subarray(8));
+  assert.throws(() => policy(narrow), /Unsupported positioned container extension/);
+  for (const change of [p => {p.content_index=0;}, p => {p.button.font_family.name='sans-serif';},
+    p => {p.button.font_weight=500;}, p => {p.button.padding.left.value=-1;}]) {
+    const invalid = structuredClone(capture); change(invalid);
+    assert.throws(() => policy(probe(invalid, {appearance:1}).bytes));
+  }
+  assert.throws(() => policy(cat(bytes, [0])), /Trailing presentation data/);
+});
+
+test('run-local pointer wire bit preserves old omission, exact size and unknown-bit refusals', () => {
+  const value=structuredClone(capture);value.expand_run.pointer_on_run=true;value.collapse_run.pointer_on_run=true;
+  const old=probe(capture).bytes, next=probe(value).bytes;
+  assert.equal(old.length,next.length);
+  const changed=[];for(let i=0;i<old.length;i++)if(old[i]!==next[i])changed.push(i);
+  assert.equal(changed.length,2);
+  for(const i of changed)assert.equal(old[i]^next[i],32);
+  const decoded=policy(next);
+  assert.equal(decoded.expand_run.pointer_on_run,true);assert.equal(decoded.collapse_run.pointer_on_run,true);
+  for(const key of ['expand_run','collapse_run'])assert.equal(Object.hasOwn(policy(old)[key],'pointer_on_run'),false);
+  for(const at of changed)for(const bit of [64,128]) {
+    const malformed=Buffer.from(next);malformed[at]|=bit;
+    assert.throws(()=>policy(malformed),/Unknown disclosure label paint/);
+  }
+  for(const features of [0,0x100,0x100000])assert.throws(()=>policy(probe(value,{features}).bytes));
+  assert.throws(()=>decode(cat(next,[0]),{}),/Trailing presentation data/);
 });

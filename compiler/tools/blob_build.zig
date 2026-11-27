@@ -556,6 +556,10 @@ fn nextSelectedIndexPage(
 // Normal and captured Writers share the same optional source authority. Keep
 // every present/absent input visible to captured input guards before decoding.
 const WriterFigureInputs = struct {
+    const width_inventory_names = [_][]const u8{
+        "figure-width-inventory.defaults.json", "figure-width-inventory.json",
+        "figure-width-inventory.raw.json", "figure-width-inventory.site.json",
+    };
     const names = [_][]const u8{ "figure-siteinfo.raw.json", "figure-sizing.json", "figure-sizing.raw.json", "figure-sizing.site.json", "file-metadata.tsv" };
     guards: CapturedWriterInputs,
 
@@ -578,6 +582,15 @@ const WriterFigureInputs = struct {
         var self: WriterFigureInputs = .{ .guards = .{ .io = io, .a = a } };
         errdefer self.deinit();
         for (names) |name| _ = try self.required(figure_root, name);
+        var width_inventory_files: usize = 0;
+        for (width_inventory_names) |name| {
+            const path = try std.fs.path.join(a, &.{ figure_root, name });
+            defer a.free(path);
+            const index = try self.guards.hold(path, "writer-figure-width-inventory");
+            if (self.guards.records.items[index].file != null) width_inventory_files += 1;
+        }
+        if (width_inventory_files != 0 and width_inventory_files != width_inventory_names.len)
+            return error.InvalidWriterFigureInputs;
         // The selected complete Figure capture is authenticated by the ordinary
         // caller. Every worker-consumed or shared-default role must stay exact;
         // only the Writer's sizing projection/raw observations can differ.
@@ -934,10 +947,40 @@ fn loadNahMeasuredFigureSizing(io: std.Io, a: std.mem.Allocator, root: []const u
 }
 
 fn loadWriterFigureSizing(io: std.Io, a: std.mem.Allocator, worker_root: []const u8, figure_root: ?[]const u8, namespaces: *const namespace_registry.Registry, source_site: ?FigureSite) !?figure_sizing.Registry {
-    var loaded = (try loadFigureSizingWithMessages(io, a, figure_root orelse worker_root, worker_root, namespaces, source_site)) orelse return null;
-    errdefer loaded.deinit();
-    if (isNahMeasuredOnly(&loaded)) return error.InvalidWriterFigureInputs;
-    return loaded;
+    var primary = (try loadFigureSizingWithMessages(io, a, figure_root orelse worker_root, worker_root, namespaces, source_site)) orelse return null;
+    errdefer primary.deinit();
+    if (isNahMeasuredOnly(&primary) or primary.it_inventory) return error.InvalidWriterFigureInputs;
+    if (figure_root) |root| {
+        if (try loadWriterWidthInventory(io, a, worker_root, root, namespaces, source_site)) |loaded| {
+            var inventory = loaded;
+            errdefer inventory.deinit();
+            try primary.attachWidthInventory(inventory);
+        }
+    }
+    return primary;
+}
+
+fn loadWriterWidthInventory(io: std.Io, a: std.mem.Allocator, worker_root: []const u8, root: []const u8,
+    namespaces: *const namespace_registry.Registry, primary: ?FigureSite) !?figure_sizing.Registry
+{
+    const names = WriterFigureInputs.width_inventory_names;
+    var paths: [names.len][]const u8 = undefined;
+    var filled: usize = 0;
+    defer for (paths[0..filled]) |path| a.free(path);
+    for (names, &paths) |name, *path| {
+        path.* = try std.fs.path.join(a, &.{ root, name });
+        filled += 1;
+    }
+    const ns_path = try std.fs.path.join(a, &.{ worker_root, "namespace-registry.tsv" });
+    defer a.free(ns_path);
+    if ((try loadFigureSiteAt(io, a, ns_path, paths[0], namespaces))) |site| {
+        const selected = primary orelse return error.InvalidWriterFigureInputs;
+        if (!std.mem.eql(u8, site.core_revision, namespace_registry.Registry.it_current_figure_core) or
+            !std.meta.eql(site.source_context.defaults, selected.source_context.defaults))
+            return error.InvalidWriterFigureInputs;
+        return (try loadStreamFigureSizing(io, a, .{ paths[1], paths[2], paths[3] }, namespaces, site)) orelse return error.InvalidWriterFigureInputs;
+    }
+    return null;
 }
 
 fn loadFigureSizingWithMessages(io: std.Io, a: std.mem.Allocator, root: []const u8, message_root: []const u8, namespaces: *const namespace_registry.Registry, source_site: ?FigureSite) !?figure_sizing.Registry {
@@ -1076,6 +1119,13 @@ fn loadFigurePageObservations(io: std.Io, a: std.mem.Allocator, root: []const u8
 }
 
 fn loadFigurePageObservationsAt(io: std.Io, a: std.mem.Allocator, path: []const u8, required: bool, guards: ?*CapturedWriterInputs, namespaces: *const namespace_registry.Registry, registry: ?*const figure_sizing.Registry, site: ?FigureSite) !?figure_page_observations.Book {
+    return loadFigurePageObservationsRole(io, a, path, required, guards, namespaces, registry, site, false);
+}
+
+fn loadFigurePageObservationsRole(io: std.Io, a: std.mem.Allocator, path: []const u8, required: bool,
+    guards: ?*CapturedWriterInputs, namespaces: *const namespace_registry.Registry, registry: ?*const figure_sizing.Registry,
+    site: ?FigureSite, normal_missing_only: bool) !?figure_page_observations.Book
+{
     const observed = if (guards) |inputs| try inputs.hold(path, "normal-figure-page-observation-input") else null;
     var mapped = mmapPathLimitWithInputs(io, path, figure_page_observations.max_input, guards) catch |err| switch (err) {
         error.FileNotFound => {
@@ -1088,9 +1138,52 @@ fn loadFigurePageObservationsAt(io: std.Io, a: std.mem.Allocator, path: []const 
     defer mapped.deinit();
     if (guards) |inputs| if (observed) |index| try inputs.acceptBytes(index, mapped.bytes);
     const defaults = site orelse return error.InvalidFigurePageObservations;
-    return try figure_page_observations.Book.init(a, mapped.bytes, namespaces,
-        registry orelse return error.InvalidFigurePageObservations, defaults.source_sha256,
+    const files = registry orelse return error.InvalidFigurePageObservations;
+    return if (normal_missing_only)
+        try figure_page_observations.Book.initNormalMissing(a, mapped.bytes, namespaces, files, defaults.source_sha256, defaults.source_context.defaults)
+    else try figure_page_observations.Book.init(a, mapped.bytes, namespaces, files, defaults.source_sha256,
         defaults.source_context.defaults.default_thumbnail_width orelse return error.InvalidFigurePageObservations);
+}
+
+const NormalMissingInput = enum { ordinary, captured_absent, captured_present };
+
+fn normalMissingBookPath(io: std.Io, a: std.mem.Allocator, root: []const u8) ![]const u8 {
+    const resolved = if (std.fs.path.isAbsolute(root)) null else try std.Io.Dir.cwd().realPathFileAlloc(io, root, a);
+    defer if (resolved) |path| a.free(path);
+    return std.fs.path.join(a, &.{ resolved orelse root, figure_page_observations.missing_filename });
+}
+
+fn capturedNormalMissingInput(inputs: *CapturedWriterInputs, path: []const u8, dependencies: []const CapturedWriterFile) !NormalMissingInput {
+    for (dependencies) |dependency| {
+        if (!std.mem.eql(u8, dependency.path, path)) continue;
+        try inputs.pin(dependency);
+        return .captured_present;
+    }
+    const index = try inputs.hold(path, "normal-missing-book-absent");
+    if (inputs.records.items[index].identity != null) return error.UnpinnedCapturedWriterSourceDependency;
+    try inputs.checkRecord(index);
+    return .captured_absent;
+}
+
+fn attachNormalMissingFigureBook(io: std.Io, a: std.mem.Allocator, root: []const u8, guards: ?*CapturedWriterInputs,
+    selection: NormalMissingInput, namespaces: *const namespace_registry.Registry, registry: ?*const figure_sizing.Registry,
+    site: ?FigureSite, primary: *?figure_page_observations.Book) !void
+{
+    const path = try normalMissingBookPath(io, a, root);
+    defer a.free(path);
+    if (selection != .ordinary) {
+        const inputs = guards orelse return error.UnpinnedCapturedWriterSourceDependency;
+        const index = inputs.find(path) orelse return error.UnpinnedCapturedWriterSourceDependency;
+        try inputs.checkRecord(index);
+        if (selection == .captured_absent) return;
+        if (inputs.records.items[index].sha256 == null) return error.UnpinnedCapturedWriterSourceDependency;
+    }
+    var supplement = (try loadFigurePageObservationsRole(io, a, path, selection == .captured_present,
+        guards, namespaces, registry, site, true)) orelse return;
+    errdefer supplement.deinit();
+    if (primary.*) |*original| {
+        try original.attachNormalMissingBook(supplement);
+    } else primary.* = supplement;
 }
 
 fn installScreenStyleArticles(a: std.mem.Allocator, codes: *encoder.blob_builder.LanguageCodes,
@@ -3229,7 +3322,7 @@ const PresentationAudit = struct {
         try self.addInput(context.dump_path);
         try self.addInput(context.tool_path);
         // Exact runtime/provider assets plus source files consulted by languageCodes.
-        for ([_][]const u8{ "dict-bundle-expander", "lua-program.meta", "page-language.json", "page-language.raw.json", "page-language.html", "figure-sizing.json", "figure-sizing.raw.json", "figure-sizing.site.json", "figure-siteinfo.raw.json", "figure-page-observations.json", "stylesheet-imports.json", "page-index.tsv", dump_source.page_title_index_filename, "dump-streams.tsv", "namespace-registry.tsv", "namespace-siteinfo.raw.json", "site-statistics-format.json", "category-statistics-format.json", "language-registry.tsv", "behavior-switches.tsv", "image-options.tsv", "interwiki-map.tsv", "page-redirects.tsv", "transclusion-redirects.tsv", "commons-data.tsv", "category-stats.tsv", "interface-messages.tsv", "category-tree.tsv", "file-metadata.tsv", "wikibase-sitelinks.tsv", "wikibase-entity-text.tsv", "wikibase-page-links.tsv", "wikibase-entities.tsv", "wikibase-entity-terms.tsv", "date-numbering.tsv", "language-names.tsv", "language-fallbacks.tsv", "magic-words.tsv", "template-source.bin", "template-source.idx", "manifest.jsonl" }) |name| {
+        for ([_][]const u8{ "dict-bundle-expander", "lua-program.meta", "page-language.json", "page-language.raw.json", "page-language.html", "figure-sizing.json", "figure-sizing.raw.json", "figure-sizing.site.json", "figure-siteinfo.raw.json", "figure-page-observations.json", figure_page_observations.missing_filename, "stylesheet-imports.json", "page-index.tsv", dump_source.page_title_index_filename, "dump-streams.tsv", "namespace-registry.tsv", "namespace-siteinfo.raw.json", "site-statistics-format.json", "category-statistics-format.json", "language-registry.tsv", "behavior-switches.tsv", "image-options.tsv", "interwiki-map.tsv", "page-redirects.tsv", "transclusion-redirects.tsv", "commons-data.tsv", "category-stats.tsv", "interface-messages.tsv", "category-tree.tsv", "file-metadata.tsv", "wikibase-sitelinks.tsv", "wikibase-entity-text.tsv", "wikibase-page-links.tsv", "wikibase-entities.tsv", "wikibase-entity-terms.tsv", "date-numbering.tsv", "language-names.tsv", "language-fallbacks.tsv", "magic-words.tsv", "template-source.bin", "template-source.idx", "manifest.jsonl" }) |name| {
             if (std.mem.eql(u8, name, figure_page_observations.filename)) {
                 if (context.figure_page_observations_snapshot) |selected| {
                     try self.addInput(selected);
@@ -3240,7 +3333,7 @@ const PresentationAudit = struct {
             try self.addInput(path);
         }
         if (context.figure_input_root) |root| {
-            inline for (WriterFigureInputs.names ++ [_][]const u8{"site-info.namespace-registry.tsv"}) |name| {
+            inline for (WriterFigureInputs.names ++ WriterFigureInputs.width_inventory_names ++ [_][]const u8{"site-info.namespace-registry.tsv"}) |name| {
                 const path = try std.fs.path.join(a, &.{root, name});
                 defer a.free(path);
                 try self.addInput(path);
@@ -5870,6 +5963,8 @@ fn runBlobBuild(io: std.Io, a: std.mem.Allocator, args: []const []const u8, opti
             if (sizing_authority) |*value| value else null, figure_site)
     else try loadFigurePageObservations(io, a, options.expander_root, &namespaces,
         if (sizing_authority) |*value| value else null, figure_site);
+    try attachNormalMissingFigureBook(io, a, options.expander_root, &book_inputs, .ordinary, &namespaces,
+        if (sizing_authority) |*value| value else null, figure_site, &page_observations);
     if (setup_observations_started) |started| {
         var total: ParentPhaseTotals = .{};
         total.record(started, ParentProfileStamp.now(io));
@@ -5891,14 +5986,15 @@ fn runBlobBuild(io: std.Io, a: std.mem.Allocator, args: []const []const u8, opti
     disclosure_inputs = try loadContainerDisclosureInputs(io, a, options.expander_root, &namespaces);
     pool.disclosure_inputs = if (disclosure_inputs) |*value| value else null;
     pool.figure_defaults_sha256 = if (figure_site) |site| site.source_sha256 else null;
-    codes.figure_sizing = if (sizing_authority) |*value| .{ .ctx = value, .resolve_fn = figure_sizing.Registry.resolve,
+    codes.figure_sizing = if (sizing_authority) |*value| .{ .ctx = value, .resolve_fn = figure_sizing.Registry.resolveWriter,
+        .is_missing_file_fn = figure_sizing.Registry.isMissingFile,
         .resolve_intrinsic_size_fn = figure_sizing.Registry.resolveIntrinsicSize,
         .default_thumbnail_file_fn = if (value.defaultThumbnailPageIndex(page_index.bytes, if (figure_site) |site| site.source_sha256 else null)) figure_sizing.Registry.defaultThumbnailFile else null,
         .resolve_canonical_file_fn = figure_sizing.Registry.resolveCanonicalFile,
         .resolve_svg_explicit_box_fn = figure_sizing.Registry.resolveSvgExplicitBox,
         .resolve_default_tiff_page_fn = figure_sizing.Registry.resolveDefaultTiffPage,
         .resolve_height_only_width_fn = figure_sizing.Registry.resolveHeightOnlyWidth,
-        .resolve_width_limit_fn = figure_sizing.Registry.resolveWidthLimit,
+        .resolve_width_limit_fn = figure_sizing.Registry.resolveWriterWidthLimit,
         .resolve_height_occurrence_fn = figure_sizing.Registry.resolveHeightOccurrence,
         .source_context = try figureSourceContext(figure_site orelse return error.InvalidFigureSizingSource, style_observation.absence) } else null;
     if (first_failure_capture_context) |*capture| capture.manual_conversion_context = namespaces.manual_conversion_context;
@@ -21779,6 +21875,9 @@ fn capturedWriterValidateCategoryContext(request: CapturedWriterRequest, origin:
 
 fn capturedWriterRun(io: std.Io, a: std.mem.Allocator, request: CapturedWriterRequest, output_root: []const u8, stage: *[]const u8, shared: ?*CapturedWriterSharedInputs) !void {
     try capturedWriterCheckInputs(io, a, request);
+    const missing_book_path = try normalMissingBookPath(io, a, request.expander_root);
+    defer a.free(missing_book_path);
+    const missing_book_selection = try capturedNormalMissingInput(captured_writer_inputs.?, missing_book_path, request.dependencies);
     const captured = try capturedWriterAuthenticatedOriginWithShared(io, a, request, shared);
     defer captured.deinit(a);
     try capturedWriterRequireNormalRoles(io, a, request);
@@ -21937,16 +22036,19 @@ fn capturedWriterRun(io: std.Io, a: std.mem.Allocator, request: CapturedWriterRe
         captured_writer_inputs, namespaces, if (sizing_authority) |value| value else null, figure_site);
     defer if (page_observations) |*value| value.deinit();
     if (request.figure_page_observations_root != null and page_observations == null) return error.CapturedWriterFileMissing;
+    try attachNormalMissingFigureBook(io, a, root, captured_writer_inputs, missing_book_selection,
+        namespaces, sizing_authority, figure_site, &page_observations);
     var codes = languageCodes(registry, namespaces);
     codes.behavior_switches = if (behavior) |*value| value else null;
     codes.image_options = if (images) |*value| value else null;
-    codes.figure_sizing = if (sizing_authority) |value| .{ .ctx = value, .resolve_fn = figure_sizing.Registry.resolve,
+    codes.figure_sizing = if (sizing_authority) |value| .{ .ctx = value, .resolve_fn = figure_sizing.Registry.resolveWriter,
+        .is_missing_file_fn = figure_sizing.Registry.isMissingFile,
         .resolve_intrinsic_size_fn = figure_sizing.Registry.resolveIntrinsicSize,
         .default_thumbnail_file_fn = if (value.defaultThumbnailPageIndex(page_index.bytes, if (figure_site) |site| site.source_sha256 else null)) figure_sizing.Registry.defaultThumbnailFile else null,
         .resolve_canonical_file_fn = figure_sizing.Registry.resolveCanonicalFile,
         .resolve_svg_explicit_box_fn = figure_sizing.Registry.resolveSvgExplicitBox,
         .resolve_height_only_width_fn = figure_sizing.Registry.resolveHeightOnlyWidth,
-        .resolve_width_limit_fn = figure_sizing.Registry.resolveWidthLimit,
+        .resolve_width_limit_fn = figure_sizing.Registry.resolveWriterWidthLimit,
         .resolve_height_occurrence_fn = figure_sizing.Registry.resolveHeightOccurrence } else null;
 
     if (category_dump != null) {
@@ -22544,6 +22646,16 @@ fn capturedWriterRequireNormalRoles(io: std.Io, a: std.mem.Allocator, request: C
         if (!std.fs.path.isAbsolute(root)) return error.InvalidCapturedWriterPath;
         inline for (WriterFigureInputs.names ++ [_][]const u8{"site-info.namespace-registry.tsv"}) |name|
             try capturedWriterRequireNormalRole(io, a, request, root, name, true);
+        for (WriterFigureInputs.width_inventory_names) |name| {
+            const path = try std.fs.path.join(a, &.{ root, name });
+            defer a.free(path);
+            if (std.Io.Dir.cwd().access(io, path, .{})) |_| {
+                try capturedWriterRequireSourceDependency(request, path);
+            } else |err| switch (err) {
+                error.FileNotFound => {},
+                else => return err,
+            }
+        }
         try capturedWriterRequireNormalRole(io, a, request, request.expander_root, "file-metadata.tsv", true);
     }
     const language_root = request.language_registry_root orelse request.expander_root;
@@ -73672,6 +73784,505 @@ test "normal CSB Figure defaults preserve exact observed core without File autho
     try std.testing.expect(ns.currentFigureDefaultsCore(changed_digest, true) == null);
 }
 
+const CapturedNormalTextTest = struct {
+    const packet = @embedFile("testdata/normal-text-polvoroso01/page-language.json");
+    const raw = @embedFile("testdata/normal-text-polvoroso01/raw.wikitext");
+    const expanded = @embedFile("testdata/normal-text-polvoroso01/expanded.wikitext");
+    fn fixture(io: std.Io, a: std.mem.Allocator, root: []const u8) !CapturedWriterAuditTest.Fixture {
+        const original = try std.fs.path.join(a, &.{ root, "original" });
+        try std.Io.Dir.cwd().createDirPath(io, original);
+        const first = try CapturedWriterCliTest.fixture(io, a, original);
+        var audit = try CapturedWriterAuditTest.make(io, a, original, first);
+        const snapshot = try CapturedWriterCliTest.put(io, a, root, "normal-text-context.json", packet);
+        audit.request.normal_text_context_snapshot = snapshot;
+        audit.request.dependencies = try std.mem.concat(a, CapturedWriterFile, &.{ audit.request.dependencies, &.{snapshot} });
+        return audit;
+    }
+    fn selected(original: CapturedWriterRequest) CapturedWriterRequest {
+        // Select only the real retained identity for the typed loader controls.
+        // This is NOT a joined historical audit or an original Writer replay.
+        var request = original;
+        request.page.page_id = 1513544; request.page.revision_id = 6045117;
+        request.page.namespace = 0; request.page.title = "polvoroso";
+        return request;
+    }
+};
+
+test "captured normal text snapshot preserves historical audit absences and exact input roles" {
+    const io = std.testing.io;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(io, ".", a);
+    const audit = try CapturedNormalTextTest.fixture(io, a, root);
+    const request = audit.request;
+    const file = request.normal_text_context_snapshot.?;
+    try capturedWriterValidateRequest(request, CapturedWriterCliTest.fingerprint);
+    try capturedWriterCheckInputs(io, a, request);
+    try capturedWriterJoinAudit(a, request, audit.inputs, audit.summary, audit.row);
+    try std.testing.expect(capturedWriterSameFile(file, (try capturedWriterNormalTextFile(a, request)).?));
+    var legacy = request; legacy.normal_text_context_snapshot = null;
+    try std.testing.expect((try capturedWriterNormalTextFile(a, legacy)) == null);
+    var wrong = request; wrong.source_fingerprint = "wrong";
+    try std.testing.expectError(error.InvalidCapturedWriterRequest, capturedWriterValidateRequest(wrong, CapturedWriterCliTest.fingerprint));
+    wrong = request; wrong.schema = "wikidict.captured-writer.request.v2"; wrong.audit_capture = null;
+    try std.testing.expectError(error.InvalidCapturedWriterRequest, capturedWriterValidateRequest(wrong, CapturedWriterCliTest.fingerprint));
+    try std.testing.expectError(error.InvalidCapturedWriterNormalTextContext, capturedWriterNormalTextFile(a, wrong));
+    wrong = request; wrong.audit_capture = null;
+    try std.testing.expectError(error.InvalidCapturedWriterNormalTextContext, capturedWriterNormalTextFile(a, wrong));
+    wrong = request; wrong.dependencies = request.dependencies[0 .. request.dependencies.len - 1];
+    try std.testing.expectError(error.UnpinnedCapturedWriterSourceDependency, capturedWriterNormalTextFile(a, wrong));
+    wrong = request; wrong.dependencies = try std.mem.concat(a, CapturedWriterFile, &.{ request.dependencies, &.{file} });
+    try std.testing.expectError(error.InvalidCapturedWriterDependencies, capturedWriterNormalTextFile(a, wrong));
+    wrong = request; wrong.normal_text_context_snapshot.?.bytes += 1;
+    try std.testing.expectError(error.InvalidCapturedWriterNormalTextContext, capturedWriterNormalTextFile(a, wrong));
+    wrong = request; wrong.normal_text_context_snapshot.?.path = try std.fs.path.join(a, &.{ request.expander_root, "new-context.json" });
+    try std.testing.expectError(error.InvalidCapturedWriterNormalTextContext, capturedWriterNormalTextFile(a, wrong));
+    wrong = request; wrong.absent_dependencies = request.absent_dependencies[0 .. request.absent_dependencies.len - 1];
+    try std.testing.expectError(error.InvalidCapturedWriterNormalTextContext, capturedWriterNormalTextFile(a, wrong));
+    wrong = request; wrong.absent_dependencies = try std.mem.concat(a, []const u8, &.{ request.absent_dependencies, &.{file.path} });
+    try std.testing.expectError(error.InvalidCapturedWriterNormalTextContext, capturedWriterNormalTextFile(a, wrong));
+    // A currently materialized old normal role cannot masquerade as absent.
+    _ = try CapturedWriterCliTest.put(io, a, request.expander_root, "page-language.json", "{}");
+    try std.testing.expectError(error.CapturedWriterUnexpectedDependency, capturedWriterCheckInputs(io, a, request));
+}
+
+test "captured normal text typed snapshot binds actual oldid namespace raw expansion and isolated role" {
+    const io = std.testing.io;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(io, ".", a);
+    const fixture = try CapturedNormalTextTest.fixture(io, a, root);
+    const request = CapturedNormalTextTest.selected(fixture.request);
+    var ns = try namespace_registry.Registry.init(a, @embedFile("testdata/normal-text-polvoroso01/namespace-registry.tsv")); defer ns.deinit();
+    var selected = (try capturedWriterLoadNormalText(io, a, request, &ns, CapturedNormalTextTest.raw, CapturedNormalTextTest.expanded)).?;
+    defer selected.deinit();
+    const capsule = try capturedWriterNormalTextCapsule(&selected, &ns, request, CapturedNormalTextTest.raw, CapturedNormalTextTest.expanded);
+    try std.testing.expect(capsule.observation_kind == .selected_oldid_normal_text and capsule.styles.responses.len == 0);
+    inline for (.{ "page_id", "revision_id", "namespace" }) |field| {
+        var wrong = request; @field(wrong.page, field) += 1;
+        try std.testing.expectError(error.InvalidCapturedWriterNormalTextContext,
+            capturedWriterNormalTextCapsule(&selected, &ns, wrong, CapturedNormalTextTest.raw, CapturedNormalTextTest.expanded));
+    }
+    var wrong = request; wrong.page.title = "foreign page";
+    try std.testing.expectError(error.InvalidCapturedWriterNormalTextContext,
+        capturedWriterNormalTextCapsule(&selected, &ns, wrong, CapturedNormalTextTest.raw, CapturedNormalTextTest.expanded));
+    try std.testing.expectError(error.InvalidCapturedWriterNormalTextContext,
+        capturedWriterNormalTextCapsule(&selected, &ns, request, "changed raw", CapturedNormalTextTest.expanded));
+    try std.testing.expectError(error.InvalidCapturedWriterNormalTextContext,
+        capturedWriterNormalTextCapsule(&selected, &ns, request, CapturedNormalTextTest.raw, "changed expanded"));
+    var foreign_ns = try namespace_registry.Registry.init(a, namespace_registry.english_test_fixture); defer foreign_ns.deinit();
+    try std.testing.expectError(error.InvalidCapturedWriterNormalTextContext,
+        capturedWriterNormalTextCapsule(&selected, &foreign_ns, request, CapturedNormalTextTest.raw, CapturedNormalTextTest.expanded));
+    var legacy = request; legacy.normal_text_context_snapshot = null;
+    try std.testing.expect((try capturedWriterLoadNormalText(io, a, legacy, &ns, CapturedNormalTextTest.raw, CapturedNormalTextTest.expanded)) == null);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = request.normal_text_context_snapshot.?.path, .data = "changed" });
+    try std.testing.expectError(error.CapturedWriterFileMismatch,
+        capturedWriterLoadNormalText(io, a, request, &ns, CapturedNormalTextTest.raw, CapturedNormalTextTest.expanded));
+}
+
+test "captured normal text packet refuses unknown fields duplicate identities and legacy roles" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespace_registry.Registry.init(a, @embedFile("testdata/normal-text-polvoroso01/namespace-registry.tsv")); defer ns.deinit();
+    for (0..3) |index| {
+        const parsed = try std.json.parseFromSlice(std.json.Value, a, CapturedNormalTextTest.packet, .{ .allocate = .alloc_always });
+        var value = parsed.value;
+        switch (index) {
+            0 => try value.object.put(a, "unknown_context_role", .{ .bool = true }),
+            1 => {
+                const rows = value.object.getPtr("normal_text_get_contexts").?;
+                try rows.array.append(rows.array.items[0]);
+            },
+            2 => {
+                const rows = value.object.getPtr("normal_text_get_contexts").?;
+                try rows.array.items[0].object.put(a, "profile", .{ .string = "source-parent-direct-get-v1" });
+            },
+            else => unreachable,
+        }
+        const changed = try std.json.Stringify.valueAlloc(a, value, .{});
+        try std.testing.expectError(error.InvalidPageLanguageSource, page_source_context.Registry.init(a, changed, "", null, &ns));
+    }
+    const duplicate = try std.mem.concat(a, u8, &.{ "{\"normal_text_get_contexts\":[],", CapturedNormalTextTest.packet[1..] });
+    try std.testing.expectError(error.InvalidPageLanguageSource, page_source_context.Registry.init(a, duplicate, "", null, &ns));
+}
+
+// Exact retained SR p2398/r561214 raw+expanded bytes. This new single ordinary
+// Writer arm does not rewrite the GIF, fabricate an expansion phase or issue
+// source-parent/style authority. It is distinct from the older ben fixture.
+test "normal Writer authentic SR hon revision561214 reports current semantic frontier" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var checkpoint: []const u8 = "authentic retained source";
+    errdefer std.debug.print("SR HON NORMAL checkpoint={s}\n", .{checkpoint});
+    const raw = @embedFile("testdata/sr-gif226/ben/raw.wikitext");
+    const source = @embedFile("testdata/sr-hon-current01/expanded.wikitext");
+    try std.testing.expectEqualStrings("226bc55928087f631bb1ceeca29af69eba662ce51d38e04b14111b3c3b8d8af8", &SrGifSaved226.hash(raw));
+    try std.testing.expectEqualStrings("a5a4bec68eab02b67593aaa85cc05409f0e39a982a9ce56faec4c8cd101f8bac", &SrGifSaved226.hash(source));
+    const metadata_prefix = "testdata/sr-gif226/";
+        var ns = try namespace_registry.Registry.init(a, @embedFile("testdata/sr-iniuria129/namespace-registry.tsv")); defer ns.deinit();
+        try ns.attachInterwikiMap(@embedFile("testdata/sr-iniuria129/interwiki-map.tsv"));
+        try ns.attachLanguageConversion(@embedFile("testdata/sr-iniuria129/namespace-siteinfo.raw.json"));
+        const behavior_bytes = @embedFile("testdata/sr-iniuria129/behavior-switches.tsv");
+        var behavior = try namespace_registry.behavior_switches.Registry.init(a, behavior_bytes, ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256); defer behavior.deinit();
+        var digest: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(behavior_bytes, &digest, .{});
+        var images = try namespace_registry.image_options.Registry.init(a, @embedFile("testdata/sr-iniuria129/image-options.tsv"), ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256, digest); defer images.deinit();
+        const css = @embedFile("testdata/sr-iniuria129/common.css");
+        try std.testing.expectEqualStrings("58c27434e6c436e00e12aa98839fc5ae94cad6f233046331bde49d66b7c8b5da", &SrGifSaved226.hash(css));
+        var styles = try encoder.table_style_profile.parseForTargetAlloc(a, css, .screen); defer styles.deinit();
+        const metadata_root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/sr-hon-normal-metadata", .{tmp.sub_path});
+        try std.Io.Dir.cwd().createDirPath(io, try std.fs.path.join(a, &.{metadata_root, "modules"}));
+        const files = .{
+            .{ "namespace-registry.tsv", @embedFile("testdata/sr-iniuria129/namespace-registry.tsv") },
+            .{ "language-registry.tsv", @embedFile("testdata/sr-iniuria129/language-registry.tsv") },
+            .{ "language-names.tsv", @embedFile("testdata/sr-iniuria129/language-names.tsv") },
+            .{ "manifest.jsonl", @embedFile("testdata/sr-apatin223/manifest.jsonl") },
+            .{ "modules/234799.lua", @embedFile("testdata/sr-iniuria129/modules/234799.lua") },
+            .{ "modules/234807.lua", @embedFile("testdata/sr-iniuria129/modules/234807.lua") },
+            .{ "modules/234862.lua", @embedFile("testdata/sr-iniuria129/modules/234862.lua") },
+            .{ "modules/234912.lua", @embedFile("testdata/sr-iniuria129/modules/234912.lua") },
+            .{ "modules/235978.lua", @embedFile("testdata/sr-iniuria129/modules/235978.lua") },
+            .{ "modules/235979.lua", @embedFile("testdata/sr-iniuria129/modules/235979.lua") },
+            .{ "modules/235981.lua", @embedFile("testdata/sr-iniuria129/modules/235981.lua") },
+            .{ "modules/235983.lua", @embedFile("testdata/sr-iniuria129/modules/235983.lua") },
+            .{ "modules/235984.lua", @embedFile("testdata/sr-iniuria129/modules/235984.lua") },
+            .{ "modules/235985.lua", @embedFile("testdata/sr-iniuria129/modules/235985.lua") },
+            .{ "modules/235986.lua", @embedFile("testdata/sr-iniuria129/modules/235986.lua") },
+            .{ "modules/235987.lua", @embedFile("testdata/sr-iniuria129/modules/235987.lua") },
+            .{ "modules/235988.lua", @embedFile("testdata/sr-iniuria129/modules/235988.lua") },
+            .{ "modules/235989.lua", @embedFile("testdata/sr-iniuria129/modules/235989.lua") },
+            .{ "modules/235990.lua", @embedFile("testdata/sr-iniuria129/modules/235990.lua") },
+            .{ "modules/235991.lua", @embedFile("testdata/sr-iniuria129/modules/235991.lua") },
+            .{ "modules/235992.lua", @embedFile("testdata/sr-iniuria129/modules/235992.lua") },
+            .{ "modules/235993.lua", @embedFile("testdata/sr-iniuria129/modules/235993.lua") },
+            .{ "modules/235994.lua", @embedFile("testdata/sr-iniuria129/modules/235994.lua") },
+            .{ "modules/235995.lua", @embedFile("testdata/sr-iniuria129/modules/235995.lua") },
+            .{ "modules/235996.lua", @embedFile("testdata/sr-iniuria129/modules/235996.lua") },
+            .{ "modules/235997.lua", @embedFile("testdata/sr-iniuria129/modules/235997.lua") },
+            .{ "modules/235998.lua", @embedFile("testdata/sr-iniuria129/modules/235998.lua") },
+            .{ "modules/235999.lua", @embedFile("testdata/sr-iniuria129/modules/235999.lua") },
+            .{ "modules/236000.lua", @embedFile("testdata/sr-iniuria129/modules/236000.lua") },
+            .{ "modules/236001.lua", @embedFile("testdata/sr-iniuria129/modules/236001.lua") },
+            .{ "modules/236002.lua", @embedFile("testdata/sr-iniuria129/modules/236002.lua") },
+            .{ "modules/236003.lua", @embedFile("testdata/sr-iniuria129/modules/236003.lua") },
+            .{ "modules/240147.lua", @embedFile("testdata/sr-iniuria129/modules/240147.lua") },
+            .{ "modules/290117.lua", @embedFile("testdata/sr-iniuria129/modules/290117.lua") },
+            .{ "modules/29322.lua", @embedFile("testdata/sr-iniuria129/modules/29322.lua") },
+            .{ "modules/318829.lua", @embedFile("testdata/sr-iniuria129/modules/318829.lua") },
+            .{ "modules/329737.lua", @embedFile("testdata/sr-iniuria129/modules/329737.lua") },
+            .{ "modules/329738.lua", @embedFile("testdata/sr-iniuria129/modules/329738.lua") },
+            .{ "modules/329742.lua", @embedFile("testdata/sr-iniuria129/modules/329742.lua") },
+            .{ "modules/329743.lua", @embedFile("testdata/sr-iniuria129/modules/329743.lua") },
+            .{ "modules/329745.lua", @embedFile("testdata/sr-iniuria129/modules/329745.lua") },
+            .{ "modules/329749.lua", @embedFile("testdata/sr-iniuria129/modules/329749.lua") },
+            .{ "modules/329757.lua", @embedFile("testdata/sr-iniuria129/modules/329757.lua") },
+            .{ "modules/329760.lua", @embedFile("testdata/sr-iniuria129/modules/329760.lua") },
+            .{ "modules/329764.lua", @embedFile("testdata/sr-iniuria129/modules/329764.lua") },
+            .{ "modules/329769.lua", @embedFile("testdata/sr-iniuria129/modules/329769.lua") },
+            .{ "modules/329772.lua", @embedFile("testdata/sr-iniuria129/modules/329772.lua") },
+            .{ "modules/329775.lua", @embedFile("testdata/sr-iniuria129/modules/329775.lua") },
+            .{ "modules/329777.lua", @embedFile("testdata/sr-iniuria129/modules/329777.lua") },
+            .{ "modules/329779.lua", @embedFile("testdata/sr-iniuria129/modules/329779.lua") },
+            .{ "modules/329781.lua", @embedFile("testdata/sr-iniuria129/modules/329781.lua") },
+            .{ "modules/329783.lua", @embedFile("testdata/sr-iniuria129/modules/329783.lua") },
+            .{ "modules/329786.lua", @embedFile("testdata/sr-iniuria129/modules/329786.lua") },
+            .{ "modules/329788.lua", @embedFile("testdata/sr-iniuria129/modules/329788.lua") },
+            .{ "modules/329790.lua", @embedFile("testdata/sr-iniuria129/modules/329790.lua") },
+            .{ "modules/329792.lua", @embedFile("testdata/sr-iniuria129/modules/329792.lua") },
+            .{ "modules/329794.lua", @embedFile("testdata/sr-iniuria129/modules/329794.lua") },
+            .{ "modules/329796.lua", @embedFile("testdata/sr-iniuria129/modules/329796.lua") },
+            .{ "modules/329798.lua", @embedFile("testdata/sr-iniuria129/modules/329798.lua") },
+            .{ "modules/329800.lua", @embedFile("testdata/sr-iniuria129/modules/329800.lua") },
+            .{ "modules/329802.lua", @embedFile("testdata/sr-iniuria129/modules/329802.lua") },
+            .{ "modules/329806.lua", @embedFile("testdata/sr-iniuria129/modules/329806.lua") },
+            .{ "modules/329809.lua", @embedFile("testdata/sr-iniuria129/modules/329809.lua") },
+            .{ "modules/329811.lua", @embedFile("testdata/sr-iniuria129/modules/329811.lua") },
+        };
+        inline for (files) |file| try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ metadata_root, file[0] }), .data = file[1] });
+        var registry = try loadLanguageRegistry(io, a, metadata_root, &ns); defer registry.deinit();
+        var codes = languageCodes(&registry, &ns); codes.behavior_switches = &behavior; codes.image_options = &images; codes.table_styles = &styles;
+        inline for (.{ "figure-siteinfo.raw.json", "figure-sizing.json", "figure-sizing.raw.json", "figure-sizing.site.json" }) |name|
+            try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ metadata_root, name }), .data = @embedFile(metadata_prefix ++ name) });
+        checkpoint = "normal exact v4 provider";
+        const before_defaults = ns.figure_source_defaults; const before_conversion = ns.manual_conversion_context;
+        const site = (try loadFigureSite(io, a, metadata_root, &ns)) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualStrings("0470f6c99a6456a366635bf25a517a1f951de6f5", site.core_revision);
+        try std.testing.expectEqualDeep(before_defaults, ns.figure_source_defaults);
+        try std.testing.expectEqualDeep(before_conversion, ns.manual_conversion_context);
+        var sizing = (try loadFigureSizing(io, a, metadata_root, &ns, site)) orelse return error.TestUnexpectedResult; defer sizing.deinit();
+        codes.figure_sizing = .{ .ctx = &sizing, .resolve_fn = figure_sizing.Registry.resolve,
+            .resolve_height_only_width_fn = figure_sizing.Registry.resolveHeightOnlyWidth,
+            .resolve_width_limit_fn = figure_sizing.Registry.resolveWidthLimit,
+            .source_context = try figureSourceContext(site, null) };
+
+    const output = ".tmp/completion-council/SR-owner/cloud-normal-pipeline01/normal-output01";
+    var capture: encoder.presentation_document.RejectedFieldCapture = .{};
+    const capture_scope = capture.begin(); defer capture_scope.deinit();
+    checkpoint = "normal Writer actual retained expansion";
+    var writer = try encoder.blob_builder.Writer.init(io, a, output); defer writer.deinit();
+    writer.language_codes = codes;
+    writer.stats.pages_seen += 1;
+    writer.addExpandedPageWithReasonsAndPhases(a, .{ .id = 0, .kind = .language }, "本",
+        source, raw, null, &.{}, null, null) catch |err| {
+        writeDiagnosticJson(io, a, output, "normal-result.json", .{
+            .complete = true, .page_id = @as(u64, 2398), .revision_id = @as(u64, 561214),
+            .normal_writer_invoked = true, .raw_and_expanded_authenticated = true,
+            .full_corpus_or_expander_rerun = false, .semantic_acceptance = false,
+            .error_name = @errorName(err),
+            .rejected_field = encoder.presentation_document.rejectedFieldSnapshot(err),
+            .compiler_rejection = encoder.presentation_document.rejectedCompilerSnapshot(err),
+        }, 64 * 1024) catch {};
+        return err;
+    };
+    const first_field = if (capture.error_value) |err| capture.snapshot(err) else null;
+    const first_compiler_rejection = if (capture.compiler_rejection.failure) |err| capture.compiler_rejection.snapshot(err) else null;
+    const stats = try writer.finish(codes);
+    try writeDiagnosticJson(io, a, output, "normal-result.json", .{
+        .complete = false, .page_id = @as(u64, 2398), .revision_id = @as(u64, 561214),
+        .normal_writer_completed = true, .stats = stats, .decoder_completed = false,
+        .full_corpus_or_expander_rerun = false, .semantic_acceptance = false,
+    }, 64 * 1024);
+    checkpoint = "retained ordinary output and matching decoder";
+    const catalog = try std.Io.Dir.cwd().readFileAlloc(io,
+        try std.fs.path.join(a, &.{ output, encoder.blob_catalog.manifest_filename }), a, .limited(64 * 1024));
+    const fallbacks = try std.Io.Dir.cwd().readFileAlloc(io,
+        try std.fs.path.join(a, &.{ output, "fallback-pages.jsonl" }), a, .limited(64 * 1024));
+    var iterator = try encoder.blob_catalog.Iterator.init(catalog);
+    var records: usize = 0;
+    while (try iterator.next()) |row| {
+        const entry = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, output, row.heading, "本");
+        const stored: encoder.presentation_types.Stored = .{ .entry = entry };
+        const encoded = try encoder.presentation_codec.encodeAlloc(a, stored);
+        const decoded = try encoder.presentation_codec.decodeAlloc(a, encoded, "本", .language,
+            .{ .heading = row.heading, .code = entry.language_code });
+        try std.testing.expectEqualDeep(stored, decoded);
+        records += 1;
+    }
+    try writeDiagnosticJson(io, a, output, "normal-result.json", .{
+        .complete = true, .page_id = @as(u64, 2398), .revision_id = @as(u64, 561214),
+        .normal_writer_invoked = true, .raw_and_expanded_authenticated = true,
+        .full_corpus_or_expander_rerun = false, .new_source_authority = false,
+        .stats = stats, .decoded_records = records, .fallback_pages_jsonl = fallbacks,
+        .first_field_rejection = first_field, .first_compiler_rejection = first_compiler_rejection,
+        .context_limits = "Retained registry/figure metadata; no dump-backed automatic-conversion proof, template capabilities, page-observation Book or new source authority",
+        .semantic_acceptance = records > 0 and stats.fallback_pages == 0,
+    }, 128 * 1024);
+    std.debug.print("SR HON NORMAL records={d} fallback_pages={d}\n{s}\n", .{ records, stats.fallback_pages, fallbacks });
+    if (records == 0) return error.SrHonNormalWriterNoRecords;
+    if (stats.fallback_pages != 0) return error.SrHonNormalWriterFallbacks;
+}
+
+// Complete retained oldid GET, exact ordered CSS and four physical circle owners.
+// This new page-context diagnostic is not an ordinary dump/Writer invocation:
+// original raw/dump/Book custody remains unavailable and grants no paired proof.
+test "EN retained full article diagnoses all four advisory font producers" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const P = encoder.table_style_profile;
+    const Read = struct {
+        fn bytes(allocator: std.mem.Allocator, path: []const u8, expected: []const u8) ![]const u8 {
+            const data = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, path, allocator, .limited(1024 * 1024));
+            try std.testing.expectEqualStrings(expected, try auditHash(allocator, data));
+            return data;
+        }
+        fn gzip(allocator: std.mem.Allocator, path: []const u8, compressed: []const u8, decoded: []const u8) ![]const u8 {
+            const data = try bytes(allocator, path, compressed);
+            var input: std.Io.Reader = .fixed(data);
+            var inflater: std.compress.flate.Decompress = .init(&input, .gzip, &.{});
+            const plain = try inflater.reader.allocRemaining(allocator, .limited(1024 * 1024));
+            try std.testing.expect(inflater.err == null and inflater.state == .end);
+            try std.testing.expectEqualStrings(decoded, try auditHash(allocator, plain));
+            return plain;
+        }
+        fn attribute(node: P.ObservedStyleNode, name: []const u8) ?[]const u8 {
+            for (node.attributes) |item| if (std.mem.eql(u8, item.name, name)) return item.value;
+            return null;
+        }
+    };
+    var checkpoint: []const u8 = "retained inputs";
+    errdefer std.debug.print("EN_PAGE_FONT checkpoint={s} ordinary_writer=false whole=false\n", .{checkpoint});
+    const html = try Read.gzip(a, "compiler/tools/testdata/en-advisory-font-producers/request-02.response.gz", "9b8e972197866d9e6bc41079f05911675435e3c33360a69ae1c19ffa9baff190", "827a6a5fa184151a6010acd37c0db86f59ad0a1140635060d378ff5e090255f9");
+    const registry = try Read.bytes(a, "compiler/tools/testdata/en-empty-element271/namespace-registry.tsv",
+        "55df778e3d40f6acf08e10b8246bd28fab792d48ac619936202db15c29db0f08");
+    var ns = try namespace_registry.Registry.init(a, registry);
+    defer ns.deinit();
+    const url = "https://en.wiktionary.org/w/index.php?title=%E0%B9%81%E0%B8%A1%E0%B8%A7%E0%B9%80%E0%B8%AA%E0%B8%B7%E0%B8%AD&oldid=87816728&useskin=vector-2022";
+    const css3 = try Read.gzip(a, "compiler/tools/testdata/en-advisory-font-producers/request-03.response.gz", "1799a5c77c3ec78946292fb1ee99352456d1267d37ed944678a737dad31ad6aa", "80b47b515ceb7d7d4720bee72cce1917e738a353a5bb6eebca69a281b33a64c6");
+    const css4 = try Read.gzip(a, "compiler/tools/testdata/en-advisory-font-producers/request-04.response.gz", "628285b8c99db38065791e467e39eeb330851e068ced5d0a07a4173ee8364338", "1427eef774f4b0a9feee6e4ea8664756047be77324d4867b66e06e2f7baf3137");
+    const css5 = try Read.gzip(a, "compiler/tools/testdata/en-advisory-font-producers/request-05.response.gz", "fe0ab338e2d1ebfd94c827ac0ddf5eaa0685a20ab01a1247541a5b2051d58b90", "d9d64a19f8dafd11a07f8c925ab4543b2ac9ed32c7080b60c3c0f036f1ab060e");
+    const sheets = [_]P.Source{
+        .{ .css = css3, .base_url = "https://en.wiktionary.org/w/load.php?lang=en&modules=ext.uls.interlanguage%7Cext.visualEditor.desktopArticleTarget.noscript%7Cext.wikimediamessages.styles%7Cmediawiki.action.styles%7Cmediawiki.codex.messagebox.styles%7Cmediawiki.interface.helpers.linker.styles%7Cmediawiki.interface.helpers.styles%7Cmediawiki.skins.legacy%7Cskins.vector.icons%2Cstyles%7Cskins.vector.search.codex.styles&only=styles&skin=vector-2022" },
+        .{ .css = css4, .base_url = "https://en.wiktionary.org/w/load.php?lang=en&modules=ext.gadget.InflectionTable%2CLanguagesAndScripts%2CPalette%2CSite%2Creflist&only=styles&skin=vector-2022" },
+        .{ .css = css5, .base_url = "https://en.wiktionary.org/w/load.php?lang=en&modules=site.styles&only=styles&skin=vector-2022" },
+        .{ .css = html[40757..41661], .base_url = url ++ "#inline-style-0" },
+    };
+    checkpoint = "selected full article ancestors and exact ordered CSS";
+    const ancestors = try figure_page_observations.selectedArticleFontAncestors(a, &ns, html, url,
+        &sheets, 10500003, 87816728, "แมวเสือ");
+    const physical = (try figure_page_observations.selectedArticleStyleNodes(a, &ns, html, ancestors)) orelse
+        return error.MissingRetainedPhysicalGraph;
+    const schemes = (try figure_page_observations.selectedArticleSchemeNodes(a, html, ns.wiki, physical)) orelse
+        return error.MissingRetainedThemeScript;
+    const nodes = schemes.day;
+    var profile = try P.parseSourcesForTargetAlloc(a, &sheets, .screen);
+    defer profile.deinit();
+    checkpoint = "four physical circle producer queries";
+    var count: usize = 0;
+    for (nodes, 0..) |node, index| {
+        if (!std.mem.eql(u8, node.tag, "span")) continue;
+        const title = Read.attribute(node, "title") orelse continue;
+        if (!std.mem.eql(u8, title, "Vowel sign appearing in front of the initial consonant.")) continue;
+        const css = Read.attribute(node, "style") orelse return error.MissingRetainedCircleCss;
+        try std.testing.expectEqualStrings("border:1px dotted var(--wikt-palette-grey-9,gray);border-radius:50%;cursor:help", css);
+        const value = try P.observedHelpCircleBox(a, &profile, nodes, @intCast(ancestors.len - 1),
+            @intCast(index), "--wikt-palette-grey-9", false);
+        std.debug.print("EN_PAGE_FONT occurrence={d} node={d} producer_present={} family={s} ordinary_writer=false\n",
+            .{count, index, value != null, if (value) |v| if (v.geometry.font_family) |f| @tagName(f) else "UNKNOWN" else "UNKNOWN"});
+        const box = value orelse return error.RetainedCircleProducerRefused;
+        try std.testing.expect(box.geometry.font_family != null and box.geometry.font_family.? == .sans_serif);
+        count += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 4), count);
+    std.debug.print("EN_PAGE_FONT complete owners={d} ordinary_writer=false paired_proof=false whole=false\n", .{count});
+}
+
+test "ordinary fixed atom Tools callback is reset before an absent next page" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespace_registry.Registry.init(a, namespace_registry.english_test_fixture); defer ns.deinit();
+    var files: figure_sizing.Registry = .{ .arena = std.heap.ArenaAllocator.init(a), .namespace_catalog = &ns,
+        .records = &.{}, .file_authority = true }; defer files.deinit();
+    var parent = try encoder.table_style_profile.parseForTargetAlloc(a, "", .screen); defer parent.deinit();
+    var prior = try encoder.table_style_profile.parseForTargetAlloc(a, "", .screen); defer prior.deinit();
+    var codes: encoder.blob_builder.LanguageCodes = .{ .namespace_catalog = &ns, .table_styles = &prior,
+        .page_style_parent = &parent, .figure_sizing = .{ .ctx = &files, .resolve_fn = figure_sizing.Registry.resolve,
+            // A stale sentinel is cleared before Book lookup; never invoked.
+            .authored_fixed_inline_box_ctx = &files,
+            .resolve_authored_fixed_inline_box_fn = figure_page_observations.SelectedPageStyles.authoredFixedInlineBox } };
+    try attachFigurePageObservation(a, &codes, null, null, 0, 609, 3518053, "synthetic reset", "", "");
+    try std.testing.expect(codes.figure_sizing.?.authored_fixed_inline_box_ctx == null);
+    try std.testing.expect(codes.figure_sizing.?.resolve_authored_fixed_inline_box_fn == null);
+    try std.testing.expect(codes.table_styles == &parent and codes.page_style_parent == null);
+}
+
+// One unchanged retained page through the production Writer API. The local
+// namespace/language inputs match the old run. The one-page Book is rebuilt
+// from retained transports and must pass the normal native Book checks; its
+// serialization is not asserted equal to the missing historical whole Book.
+// This candidate uses the complete retained GET screen sheets as its parent,
+// not an invented claim that the missing indexed gadget sources were recovered.
+test "normal Writer retained EN advisory page reports paired screen frontier" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const io = std.testing.io;
+    const title = "แมวเสือ";
+    const F = struct {
+        fn read(allocator: std.mem.Allocator, path: []const u8, expected: []const u8) ![]const u8 {
+            const bytes = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, path, allocator, .limited(2 * 1024 * 1024));
+            try std.testing.expectEqualStrings(expected, try auditHash(allocator, bytes));
+            return bytes;
+        }
+        fn gzip(allocator: std.mem.Allocator, path: []const u8, expected: []const u8) ![]const u8 {
+            const bytes = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, path, allocator, .limited(1024 * 1024));
+            var input: std.Io.Reader = .fixed(bytes);
+            var inflater: std.compress.flate.Decompress = .init(&input, .gzip, &.{});
+            const decoded = try inflater.reader.allocRemaining(allocator, .limited(2 * 1024 * 1024));
+            try std.testing.expect(inflater.err == null and inflater.state == .end);
+            try std.testing.expectEqualStrings(expected, try auditHash(allocator, decoded));
+            return decoded;
+        }
+    };
+    var checkpoint: []const u8 = "exact raw and expanded";
+    errdefer std.debug.print("EN_NORMAL checkpoint={s} historical_global_equivalence=false whole=false\n", .{checkpoint});
+    const original = ".tmp/completion-council/S6-originals/R17/EN/";
+    const raw = try F.read(a, original ++ "raw.wikitext", "2f55e3ef2f3b660f84a3c921502c01659395040491af874d1bf916fbcf95f203");
+    const source = try F.read(a, original ++ "expanded.wikitext", "1b82552ae0845ac87a50041914fcc9a837e45296c3026ffe0e00ba713e8f572a");
+    const display = try F.read(a, original ++ "display_title.wikitext", "4e287e786f392acf8e70ab896f7d0d326f14a44ccf207e8680ddaeff5fb0e45c");
+    _ = try F.read(a, original ++ "index_row.tsv", "6ad191ed1587276baa963985364f1bc4b9ed5901a88c3451b710ba66b93d913e");
+    var ns = try namespace_registry.Registry.init(a, @embedFile("testdata/en-empty-element271/namespace-registry.tsv"));
+    defer ns.deinit();
+    try ns.attachInterwikiMap(@embedFile("testdata/en-empty-element271/interwiki-map.tsv"));
+    try ns.attachLanguageConversion(@embedFile("testdata/en-empty-element271/namespace-siteinfo.raw.json"));
+    const behavior_bytes = @embedFile("testdata/en-empty-element271/behavior-switches.tsv");
+    var behavior = try namespace_registry.behavior_switches.Registry.init(a, behavior_bytes, ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256);
+    defer behavior.deinit();
+    var behavior_hash: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(behavior_bytes, &behavior_hash, .{});
+    var images = try namespace_registry.image_options.Registry.init(a, @embedFile("testdata/en-empty-element271/image-options.tsv"), ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256, behavior_hash);
+    defer images.deinit();
+    var languages = language_registry.Registry.empty(a);
+    defer languages.deinit();
+    try languages.addTsv(@embedFile("testdata/en-empty-element271/language-registry.tsv"));
+    try languages.trustAutonymSnapshot(@embedFile("testdata/en-empty-element271/language-names.tsv"), ns.wiki, ns.dump_date, ns.content_language);
+    const thai = languages.resolveTrusted("Thai") orelse return error.MissingRetainedThaiOwner;
+    try std.testing.expectEqualStrings("th", thai.code);
+
+    checkpoint = "retained complete GET styles and separately validated file inputs";
+    const capture = ".tmp/completion-council/EN-circle-owner/client-packet01/source/";
+    const sheets = [_]encoder.table_style_profile.Source{
+        .{ .css = try F.gzip(a, capture ++ "request-03.response.gz", "80b47b515ceb7d7d4720bee72cce1917e738a353a5bb6eebca69a281b33a64c6"),
+            .base_url = "https://en.wiktionary.org/w/load.php?lang=en&modules=ext.uls.interlanguage%7Cext.visualEditor.desktopArticleTarget.noscript%7Cext.wikimediamessages.styles%7Cmediawiki.action.styles%7Cmediawiki.codex.messagebox.styles%7Cmediawiki.interface.helpers.linker.styles%7Cmediawiki.interface.helpers.styles%7Cmediawiki.skins.legacy%7Cskins.vector.icons%2Cstyles%7Cskins.vector.search.codex.styles&only=styles&skin=vector-2022" },
+        .{ .css = try F.gzip(a, capture ++ "request-04.response.gz", "1427eef774f4b0a9feee6e4ea8664756047be77324d4867b66e06e2f7baf3137"),
+            .base_url = "https://en.wiktionary.org/w/load.php?lang=en&modules=ext.gadget.InflectionTable%2CLanguagesAndScripts%2CPalette%2CSite%2Creflist&only=styles&skin=vector-2022" },
+        .{ .css = try F.gzip(a, capture ++ "request-05.response.gz", "d9d64a19f8dafd11a07f8c925ab4543b2ac9ed32c7080b60c3c0f036f1ab060e"),
+            .base_url = "https://en.wiktionary.org/w/load.php?lang=en&modules=site.styles&only=styles&skin=vector-2022" },
+    };
+    var styles = try encoder.table_style_profile.parseSourcesForTargetAlloc(a, &sheets, .screen);
+    defer styles.deinit();
+    const site = (try loadFigureSiteAt(io, a, "compiler/tools/testdata/en-empty-element271/namespace-registry.tsv",
+        "compiler/tools/testdata/en-missing-tayassu/figure-siteinfo.raw.json", &ns)) orelse return error.MissingRetainedFigureSite;
+    var files = (try loadFigureSizingAt(io, a, .{
+        "compiler/tools/testdata/en-missing-tayassu/figure-sizing.json",
+        "compiler/tools/testdata/en-missing-tayassu/figure-sizing.raw.json",
+        "compiler/tools/testdata/en-missing-tayassu/figure-sizing.site.json",
+    }, &ns, site)) orelse return error.MissingRetainedFileAuthority;
+    defer files.deinit();
+    checkpoint = "new one-page Book validation without historical hash waiver";
+    const book_path = std.mem.span(getenv("WIKIDICT_EN_NORMAL_BOOK") orelse return error.MissingBookCandidatePath);
+    const book_hash = std.mem.span(getenv("WIKIDICT_EN_NORMAL_BOOK_SHA") orelse return error.MissingBookCandidateHash);
+    const book_bytes = try F.gzip(a, book_path, book_hash);
+    var book = try figure_page_observations.Book.init(a, book_bytes, &ns, &files, site.source_sha256,
+        site.source_context.defaults.default_thumbnail_width orelse return error.MissingDefaultWidth);
+    defer book.deinit();
+    var codes = languageCodes(&languages, &ns);
+    codes.behavior_switches = &behavior;
+    codes.image_options = &images;
+    codes.table_styles = &styles;
+    codes.figure_sizing = .{ .ctx = &files, .resolve_fn = figure_sizing.Registry.resolve,
+        .resolve_intrinsic_size_fn = figure_sizing.Registry.resolveIntrinsicSize,
+        .resolve_canonical_file_fn = figure_sizing.Registry.resolveCanonicalFile,
+        .source_context = try figureSourceContext(site, null) };
+    checkpoint = "normal page attachment";
+    try attachFigurePageObservation(a, &codes, &book, site.source_sha256, 0, 10500003, 87816728, title, raw, source);
+    const output = std.mem.span(getenv("WIKIDICT_EN_NORMAL_OUTPUT") orelse return error.MissingPrivateOutput);
+    try std.testing.expect(std.mem.startsWith(u8, output, "/workspace/wikidict/.tmp/s6-en-font-family-cloud01/normal-page01/"));
+    const data_root = try std.fs.path.join(a, &.{output, "data"});
+    var writer = try encoder.blob_builder.Writer.init(io, a, data_root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    checkpoint = "actual unchanged complete expanded page through Writer";
+    writer.addExpandedPageWithReasonsAndPhases(a, .{ .id = 0, .kind = .language }, title, source, raw, display, &.{}, null, null) catch |err| {
+        try writeDiagnosticJson(io, a, output, "normal-failure.json", .{
+            .normal_writer_invoked = true, .error_name = @errorName(err),
+            .rejected_field = encoder.presentation_document.rejectedFieldSnapshot(err),
+            .compiler_rejection = encoder.presentation_document.rejectedCompilerSnapshot(err),
+            .historical_global_style_equivalence = false, .full_corpus_or_expander_rerun = false,
+            .semantic_acceptance = false,
+        }, 64 * 1024);
+        return err;
+    };
+    const stats = try writer.finish(codes);
+    checkpoint = "complete Stored decode and output before geometry assertions";
+    const records = try capturedWriterExportCurrent(io, a, output, title);
+    try writeDiagnosticJson(io, a, output, "normal-result.json", .{
+        .normal_writer_completed = true, .stats = stats, .records = records.len,
+        .matching_codec_roundtrip = records.len != 0, .historical_global_style_equivalence = false,
+        .full_corpus_or_expander_rerun = false, .semantic_acceptance = false,
+    }, 64 * 1024);
+    checkpoint = "four native advisory owner-child font and geometry pairs";
+    try expectEnglishThaiAdvisoryCircles(io, a, data_root);
+}
+
 // Focused dated source fixtures; minimal registry rows are test scaffolding,
 // not a replacement for the missing historical captured name provider.
 const FjVosaTest = struct {
@@ -73947,143 +74558,111 @@ test "FJ indexed source banner binds actual expanded root and preserves typed bo
     try std.testing.expectError(error.DuplicateLanguageTemplateSource,loadLanguageRegistry(io,a,dup,&ns));
 }
 
-test "ordinary fixed atom Tools callback is reset before an absent next page" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
-    var ns = try namespace_registry.Registry.init(a, namespace_registry.english_test_fixture); defer ns.deinit();
-    var files: figure_sizing.Registry = .{ .arena = std.heap.ArenaAllocator.init(a), .namespace_catalog = &ns,
-        .records = &.{}, .file_authority = true }; defer files.deinit();
-    var parent = try encoder.table_style_profile.parseForTargetAlloc(a, "", .screen); defer parent.deinit();
-    var prior = try encoder.table_style_profile.parseForTargetAlloc(a, "", .screen); defer prior.deinit();
-    var codes: encoder.blob_builder.LanguageCodes = .{ .namespace_catalog = &ns, .table_styles = &prior,
-        .page_style_parent = &parent, .figure_sizing = .{ .ctx = &files, .resolve_fn = figure_sizing.Registry.resolve,
-            // A stale sentinel is cleared before Book lookup; never invoked.
-            .authored_fixed_inline_box_ctx = &files,
-            .resolve_authored_fixed_inline_box_fn = figure_page_observations.SelectedPageStyles.authoredFixedInlineBox } };
-    try attachFigurePageObservation(a, &codes, null, null, 0, 609, 3518053, "synthetic reset", "", "");
-    try std.testing.expect(codes.figure_sizing.?.authored_fixed_inline_box_ctx == null);
-    try std.testing.expect(codes.figure_sizing.?.resolve_authored_fixed_inline_box_fn == null);
-    try std.testing.expect(codes.table_styles == &parent and codes.page_style_parent == null);
-}
-
-const CapturedNormalTextTest = struct {
-    const packet = @embedFile("testdata/normal-text-polvoroso01/page-language.json");
-    const raw = @embedFile("testdata/normal-text-polvoroso01/raw.wikitext");
-    const expanded = @embedFile("testdata/normal-text-polvoroso01/expanded.wikitext");
-    fn fixture(io: std.Io, a: std.mem.Allocator, root: []const u8) !CapturedWriterAuditTest.Fixture {
-        const original = try std.fs.path.join(a, &.{ root, "original" });
-        try std.Io.Dir.cwd().createDirPath(io, original);
-        const first = try CapturedWriterCliTest.fixture(io, a, original);
-        var audit = try CapturedWriterAuditTest.make(io, a, original, first);
-        const snapshot = try CapturedWriterCliTest.put(io, a, root, "normal-text-context.json", packet);
-        audit.request.normal_text_context_snapshot = snapshot;
-        audit.request.dependencies = try std.mem.concat(a, CapturedWriterFile, &.{ audit.request.dependencies, &.{snapshot} });
-        return audit;
-    }
-    fn selected(original: CapturedWriterRequest) CapturedWriterRequest {
-        // Select only the real retained identity for the typed loader controls.
-        // This is NOT a joined historical audit or an original Writer replay.
-        var request = original;
-        request.page.page_id = 1513544; request.page.revision_id = 6045117;
-        request.page.namespace = 0; request.page.title = "polvoroso";
-        return request;
-    }
-};
-
-test "captured normal text snapshot preserves historical audit absences and exact input roles" {
+test "KU retained leker188 maintained PreparedPage diagnoses table binding" {
+    // Retained expanded bytes use the maintained PreparedPage processMain path.
+    // This is a component context reconstruction, not a normal dump/expander replay.
+    // The page bytes and conversion context are authentic; the six local CSS
+    // sources retain their normal module order and conditional applicability.
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
     const io = std.testing.io;
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
-    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
-    const root = try tmp.dir.realPathFileAlloc(io, ".", a);
-    const audit = try CapturedNormalTextTest.fixture(io, a, root);
-    const request = audit.request;
-    const file = request.normal_text_context_snapshot.?;
-    try capturedWriterValidateRequest(request, CapturedWriterCliTest.fingerprint);
-    try capturedWriterCheckInputs(io, a, request);
-    try capturedWriterJoinAudit(a, request, audit.inputs, audit.summary, audit.row);
-    try std.testing.expect(capturedWriterSameFile(file, (try capturedWriterNormalTextFile(a, request)).?));
-    var legacy = request; legacy.normal_text_context_snapshot = null;
-    try std.testing.expect((try capturedWriterNormalTextFile(a, legacy)) == null);
-    var wrong = request; wrong.source_fingerprint = "wrong";
-    try std.testing.expectError(error.InvalidCapturedWriterRequest, capturedWriterValidateRequest(wrong, CapturedWriterCliTest.fingerprint));
-    wrong = request; wrong.schema = "wikidict.captured-writer.request.v2"; wrong.audit_capture = null;
-    try std.testing.expectError(error.InvalidCapturedWriterRequest, capturedWriterValidateRequest(wrong, CapturedWriterCliTest.fingerprint));
-    try std.testing.expectError(error.InvalidCapturedWriterNormalTextContext, capturedWriterNormalTextFile(a, wrong));
-    wrong = request; wrong.audit_capture = null;
-    try std.testing.expectError(error.InvalidCapturedWriterNormalTextContext, capturedWriterNormalTextFile(a, wrong));
-    wrong = request; wrong.dependencies = request.dependencies[0 .. request.dependencies.len - 1];
-    try std.testing.expectError(error.UnpinnedCapturedWriterSourceDependency, capturedWriterNormalTextFile(a, wrong));
-    wrong = request; wrong.dependencies = try std.mem.concat(a, CapturedWriterFile, &.{ request.dependencies, &.{file} });
-    try std.testing.expectError(error.InvalidCapturedWriterDependencies, capturedWriterNormalTextFile(a, wrong));
-    wrong = request; wrong.normal_text_context_snapshot.?.bytes += 1;
-    try std.testing.expectError(error.InvalidCapturedWriterNormalTextContext, capturedWriterNormalTextFile(a, wrong));
-    wrong = request; wrong.normal_text_context_snapshot.?.path = try std.fs.path.join(a, &.{ request.expander_root, "new-context.json" });
-    try std.testing.expectError(error.InvalidCapturedWriterNormalTextContext, capturedWriterNormalTextFile(a, wrong));
-    wrong = request; wrong.absent_dependencies = request.absent_dependencies[0 .. request.absent_dependencies.len - 1];
-    try std.testing.expectError(error.InvalidCapturedWriterNormalTextContext, capturedWriterNormalTextFile(a, wrong));
-    wrong = request; wrong.absent_dependencies = try std.mem.concat(a, []const u8, &.{ request.absent_dependencies, &.{file.path} });
-    try std.testing.expectError(error.InvalidCapturedWriterNormalTextContext, capturedWriterNormalTextFile(a, wrong));
-    // A currently materialized old normal role cannot masquerade as absent.
-    _ = try CapturedWriterCliTest.put(io, a, request.expander_root, "page-language.json", "{}");
-    try std.testing.expectError(error.CapturedWriterUnexpectedDependency, capturedWriterCheckInputs(io, a, request));
-}
-
-test "captured normal text typed snapshot binds actual oldid namespace raw expansion and isolated role" {
-    const io = std.testing.io;
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
-    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
-    const root = try tmp.dir.realPathFileAlloc(io, ".", a);
-    const fixture = try CapturedNormalTextTest.fixture(io, a, root);
-    const request = CapturedNormalTextTest.selected(fixture.request);
-    var ns = try namespace_registry.Registry.init(a, @embedFile("testdata/normal-text-polvoroso01/namespace-registry.tsv")); defer ns.deinit();
-    var selected = (try capturedWriterLoadNormalText(io, a, request, &ns, CapturedNormalTextTest.raw, CapturedNormalTextTest.expanded)).?;
-    defer selected.deinit();
-    const capsule = try capturedWriterNormalTextCapsule(&selected, &ns, request, CapturedNormalTextTest.raw, CapturedNormalTextTest.expanded);
-    try std.testing.expect(capsule.observation_kind == .selected_oldid_normal_text and capsule.styles.responses.len == 0);
-    inline for (.{ "page_id", "revision_id", "namespace" }) |field| {
-        var wrong = request; @field(wrong.page, field) += 1;
-        try std.testing.expectError(error.InvalidCapturedWriterNormalTextContext,
-            capturedWriterNormalTextCapsule(&selected, &ns, wrong, CapturedNormalTextTest.raw, CapturedNormalTextTest.expanded));
-    }
-    var wrong = request; wrong.page.title = "foreign page";
-    try std.testing.expectError(error.InvalidCapturedWriterNormalTextContext,
-        capturedWriterNormalTextCapsule(&selected, &ns, wrong, CapturedNormalTextTest.raw, CapturedNormalTextTest.expanded));
-    try std.testing.expectError(error.InvalidCapturedWriterNormalTextContext,
-        capturedWriterNormalTextCapsule(&selected, &ns, request, "changed raw", CapturedNormalTextTest.expanded));
-    try std.testing.expectError(error.InvalidCapturedWriterNormalTextContext,
-        capturedWriterNormalTextCapsule(&selected, &ns, request, CapturedNormalTextTest.raw, "changed expanded"));
-    var foreign_ns = try namespace_registry.Registry.init(a, namespace_registry.english_test_fixture); defer foreign_ns.deinit();
-    try std.testing.expectError(error.InvalidCapturedWriterNormalTextContext,
-        capturedWriterNormalTextCapsule(&selected, &foreign_ns, request, CapturedNormalTextTest.raw, CapturedNormalTextTest.expanded));
-    var legacy = request; legacy.normal_text_context_snapshot = null;
-    try std.testing.expect((try capturedWriterLoadNormalText(io, a, legacy, &ns, CapturedNormalTextTest.raw, CapturedNormalTextTest.expanded)) == null);
-    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = request.normal_text_context_snapshot.?.path, .data = "changed" });
-    try std.testing.expectError(error.CapturedWriterFileMismatch,
-        capturedWriterLoadNormalText(io, a, request, &ns, CapturedNormalTextTest.raw, CapturedNormalTextTest.expanded));
-}
-
-test "captured normal text packet refuses unknown fields duplicate identities and legacy roles" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
-    var ns = try namespace_registry.Registry.init(a, @embedFile("testdata/normal-text-polvoroso01/namespace-registry.tsv")); defer ns.deinit();
-    for (0..3) |index| {
-        const parsed = try std.json.parseFromSlice(std.json.Value, a, CapturedNormalTextTest.packet, .{ .allocate = .alloc_always });
-        var value = parsed.value;
-        switch (index) {
-            0 => try value.object.put(a, "unknown_context_role", .{ .bool = true }),
-            1 => {
-                const rows = value.object.getPtr("normal_text_get_contexts").?;
-                try rows.array.append(rows.array.items[0]);
-            },
-            2 => {
-                const rows = value.object.getPtr("normal_text_get_contexts").?;
-                try rows.array.items[0].object.put(a, "profile", .{ .string = "source-parent-direct-get-v1" });
-            },
-            else => unreachable,
+    const Read = struct {
+        fn exact(allocator: std.mem.Allocator, path: []const u8, size: usize, digest: []const u8) ![]const u8 {
+            const bytes = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, path, allocator, .limited(128 * 1024));
+            try std.testing.expectEqual(size, bytes.len);
+            try std.testing.expectEqualStrings(digest, try auditHash(allocator, bytes));
+            return bytes;
         }
-        const changed = try std.json.Stringify.valueAlloc(a, value, .{});
-        try std.testing.expectError(error.InvalidPageLanguageSource, page_source_context.Registry.init(a, changed, "", null, &ns));
+    };
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const base = "compiler/src/encoder/testdata/ku-leker-display188/";
+    const source = try Read.exact(a, base ++ "failure-00000001-expanded.wikitext", 63138,
+        "17bb4950b4668e809523de89ee496da7e541b5b784370fbf68cc68f0775e0e2c");
+    const display = try Read.exact(a, base ++ "failure-00000001-display-title.wikitext", 32,
+        "27d38988c4992a05e01bf0488ce1aec68919b335502b2b365dc31078dc5f3468");
+    const capture = try Read.exact(a, base ++ "capture.json", 7177,
+        "37881cfd4f29900e39a5870f0f7acc1a9d3da283af171ce2de3fa1132dba84c8");
+    const namespaces = try Read.exact(a, base ++ "metadata/namespace-registry.tsv", 3840,
+        "d52c0c1b2684e236567955191d4d0ed0360eb518ae1b85c5eda5718e114efb83");
+    const site = try Read.exact(a, base ++ "metadata/namespace-siteinfo.raw.json", 6123,
+        "f993d95042a6345607e52a273359074d774197a9f212f2cb39cdd249a9d2be8a");
+    const switches = try Read.exact(a, base ++ "metadata/behavior-switches.tsv", 1098,
+        "2d9ec3e9f061ac41661c34a58fbf9595be01cab9e3c8127cb5aff00b2f3b089c");
+    try std.testing.expectEqualStrings("{|", source[59982..59984]);
+    try std.testing.expectEqualStrings("<span style=\"border-bottom: 1px dotted #555555; \">yj.</span>", source[60202..60262]);
+    var ns = try namespace_registry.Registry.init(a, namespaces);
+    defer ns.deinit();
+    try ns.attachLanguageConversion(site);
+    const parsed = try std.json.parseFromSlice(std.json.Value, a, capture, .{});
+    defer parsed.deinit();
+    const manual = parsed.value.object.get("manual_conversion_context") orelse return error.TestUnexpectedResult;
+    const retained = try std.json.parseFromValueLeaky(namespace_registry.ManualConversionContext, a, manual, .{});
+    try std.testing.expectEqualStrings(ns.manual_conversion_context.?.source_core, retained.source_core);
+    try std.testing.expectEqualStrings(ns.manual_conversion_context.?.source_converter_sha256, retained.source_converter_sha256);
+    try std.testing.expectEqualStrings(ns.manual_conversion_context.?.siteinfo_sha256, retained.siteinfo_sha256);
+    ns.manual_conversion_context = retained;
+    var behavior = try namespace_registry.behavior_switches.Registry.init(a, switches, ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256);
+    defer behavior.deinit();
+    const sheets = [_]encoder.table_style_profile.Source{
+        .{ .css = @embedFile("testdata/ku-default-gadgets/Gadget-LanguagesAndScripts.css"), .base_url = "" },
+        .{ .css = @embedFile("testdata/ku-default-gadgets/Gadget-Palette.css"), .base_url = "" },
+        .{ .css = @embedFile("testdata/ku-default-gadgets/Gadget-Site.css"), .base_url = "" },
+        .{ .css = @embedFile("testdata/ku-default-gadgets/Gadget-TreeDescs-pagestyles.css"), .base_url = "", .unknown_applicability = true },
+        .{ .css = @embedFile("testdata/ku-default-gadgets/Gadget-charinsert-styles.css"), .base_url = "" },
+        .{ .css = @embedFile("testdata/ku-default-gadgets/Common.css"), .base_url = "" },
+    };
+    var profile = try encoder.table_style_profile.parseSourcesForTargetAlloc(a, &sheets, .screen);
+    defer profile.deinit();
+    try std.testing.expectEqual(@as(usize, 6), profile.retained_sources.len);
+    const raw = try Read.exact(a, "compiler/tools/testdata/ku-leker108/page.raw.wikitext", 7567,
+        "58fad69fae5b5a3e7f90abeee0bb4e2a88cbbd7e64221082cca967ba545ffbf7");
+    const interwiki = try Read.exact(a, "compiler/tools/testdata/ku-malper/interwiki-map.tsv", 40642,
+        "f8073f35836e75559ad075ad5ee1b0606f82e58c1c033d3b734f52f9588cbdcc");
+    try ns.attachInterwikiMap(interwiki);
+    const image_source = try Read.exact(a, "compiler/tools/testdata/ku-malper/image-options.tsv", 1317,
+        "f9e8c83ce1fac2fe9549db923f01c7a68e8f10875c6203181f7dada2a0ef5729");
+    var behavior_sha: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(switches, &behavior_sha, .{});
+    var images = try namespace_registry.image_options.Registry.init(a, image_source,
+        ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256, behavior_sha);
+    defer images.deinit();
+    // Reuse the existing retained KU loader recipe, not a synthetic language
+    // callback or a hand-minted source-range/class proof. Only four bounded
+    // metadata files are materialized for the loader's existing file interface.
+    const metadata_root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/ku-prepared-page-metadata", .{tmp.sub_path});
+    try std.Io.Dir.cwd().createDirPath(io, try std.fs.path.join(a, &.{metadata_root, "modules"}));
+    inline for (.{
+        .{ "language-registry.tsv", @embedFile("testdata/ku-malper/language-registry.tsv"), "029c9b076af14accf40139298a42b924b62b7d6ebe7c900cf2d7e44bb5184ab9" },
+        .{ "manifest.jsonl", @embedFile("testdata/ku-qaz/canonical-modules.jsonl"), "f4c5fd979549dc59d2535e097f334e7b10a1a5061748f116fc8cd7c6fa07dabc" },
+        .{ "modules/1358088.lua", @embedFile("testdata/ku-qaz/canonical-forward.lua"), "74b5cf410ecc3e81e92d53fc21fba43db4a2defd15c08b0746cb047d4287e9d9" },
+        .{ "modules/875909.lua", @embedFile("testdata/ku-qaz/canonical-names.lua"), "72ee4e07b2392fbcedbd978ea0e4005fffdeaca35522758bce15b9c89403bee7" },
+    }) |file| {
+        try std.testing.expectEqualStrings(file[2], try auditHash(a, file[1]));
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{metadata_root, file[0]}), .data = file[1] });
     }
-    const duplicate = try std.mem.concat(a, u8, &.{ "{\"normal_text_get_contexts\":[],", CapturedNormalTextTest.packet[1..] });
-    try std.testing.expectError(error.InvalidPageLanguageSource, page_source_context.Registry.init(a, duplicate, "", null, &ns));
+    var registry = try loadLanguageRegistry(io, a, metadata_root, &ns);
+    defer registry.deinit();
+    const owner = registry.resolveStrong("kurmancî") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("ku", owner.code);
+    var codes = languageCodes(&registry, &ns);
+    codes.behavior_switches = &behavior;
+    codes.image_options = &images;
+    codes.table_styles = &profile;
+    var page: encoder.blob_builder.PreparedPage = .{ .ns = .{ .id = 0, .kind = .language }, .title = "lêker" };
+    std.debug.print("KU_PREPARED_PAGE_CONTEXT begin page=867 revision=6426542 raw_bytes={d} expanded_bytes={d} registry_owner={s}/{s} sheets={d} provider_replay=false\n", .{raw.len, source.len, owner.code, owner.heading, sheets.len});
+    page.compileWithPhasesAndRoot(a, codes, source, raw, display, null, null, null, .parser_output) catch |failure| {
+        std.debug.print("KU_PREPARED_PAGE_CONTEXT result={s} records={d} main_pages={d} provider_replay=false\n", .{@errorName(failure), page.records.items.len, page.stats.main_pages});
+        return failure;
+    };
+    for (page.records.items) |record| {
+        const stored = try encoder.presentation_codec.decodeAlloc(a, record.payload, record.title, record.kind,
+            .{ .heading = record.key, .code = record.language_code });
+        try std.testing.expectEqualSlices(u8, record.payload, try encoder.presentation_codec.encodeAlloc(a, stored));
+    }
+    try std.testing.expect(page.records.items.len != 0);
+    std.debug.print("KU_PREPARED_PAGE_CONTEXT result=PreparedPageCompiled records={d} main_pages={d} provider_replay=false\n", .{page.records.items.len, page.stats.main_pages});
 }
 
 test "FR18 genuine paired captures bind wiki table alignment absence and preserve custody" {
@@ -74593,6 +75172,51 @@ test "IT capture input loader rejects crossed edition duplicate page and widened
     changed = input; changed.pages = &.{page}; try F.reject(a, changed, &ns);
 }
 
+test "IT finite normal disclosure book rejects stale page raw expanded range and label evidence" {
+    const B = container_disclosure_inputs;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var registry = try namespace_registry.Registry.init(a, @embedFile("testdata/it-per/namespace-registry.tsv"));
+    defer registry.deinit();
+    var input = try std.json.parseFromSliceLeaky(B.Input, a, @embedFile("testdata/it-cediglia-normal-disclosure/capture-input.json"), .{});
+    var pages = [_]B.Page{input.pages[0]}; const page = &pages[0];
+    var rows = [_]B.Capture{page.captures[0]}; const row = &rows[0];
+    row.reference.scope = "normal_current_initialized_component";
+    row.source_labels = .{ .expand = "Mostra", .collapse = "Nascondi" };
+    row.policy.content_index = 0;
+    row.policy.expand_label = "[Mostra]"; row.policy.collapse_label = "[Nascondi]";
+    row.policy.expand_run.?.start = 1; row.policy.expand_run.?.end = 7;
+    row.policy.collapse_run.?.start = 1; row.policy.collapse_run.?.end = 9;
+    page.captures = &rows; input.pages = &pages;
+    const bytes = try std.json.Stringify.valueAlloc(a, input, .{});
+    var book = try B.Book.init(a, bytes, &registry); defer book.deinit();
+    const raw = @embedFile("testdata/it-cediglia-right-default/raw.wikitext");
+    const src = @embedFile("testdata/it-cediglia-right-default/expanded.wikitext");
+    const held = (try book.bind(a, 0, true, false, page.title, page.page_id, page.revision_id, raw, src)).?;
+    try std.testing.expectEqualStrings("Mostra", held.captures[0].source_labels.?.expand);
+    try std.testing.expectError(error.InvalidContainerDisclosureInput, book.bind(a, 0, true, false, "other", page.page_id, page.revision_id, raw, src));
+    try std.testing.expectError(error.InvalidContainerDisclosureInput, book.bind(a, 0, true, false, page.title, page.page_id, page.revision_id + 1, raw, src));
+    try std.testing.expectError(error.InvalidContainerDisclosureInput, book.bind(a, 0, true, false, page.title, page.page_id, page.revision_id, raw[1..], src));
+    try std.testing.expectError(error.InvalidContainerDisclosureInput, book.bind(a, 0, true, false, page.title, page.page_id, page.revision_id, raw, src[1..]));
+    const original = row.*;
+    for (0..8) |i| {
+        row.* = original;
+        switch (i) {
+            0 => row.source_labels = null,
+            1 => row.source_labels.?.collapse = "Different",
+            2 => row.policy.expand_label = "(Mostra)",
+            3 => row.reference.scope = "controlled_component_current_initializer_css",
+            4 => row.reference.full_page_cascade_qualified = true,
+            5 => row.reference.historical_deployment_qualified = true,
+            6 => row.policy.content_index = 1,
+            else => row.content_end = row.owner_end,
+        }
+        try std.testing.expectError(error.InvalidContainerDisclosureInput,
+            B.Book.init(a, try std.json.Stringify.valueAlloc(a, input, .{}), &registry));
+    }
+}
+
 test "IT capture input loader binds only current page bytes and owns unmapped metadata" {
     const B = container_disclosure_inputs;
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
@@ -74776,75 +75400,197 @@ test "IT capture input loader ordinary slot emits retained cediglia" {
     std.debug.print("IT_CEDIGLIA_INPUT_LOADER_STORED bytes={d} sections={d} content_index={d} full_source_bytes={d}\n", .{bytes.len, entry.sections.len, policy.content_index, source.len});
 }
 
-// Exact dated GET/CSS producer diagnostic; no ordinary Writer or paired-source grant.
-test "EN retained full article diagnoses all four advisory font producers" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
+test "normal Missing Book ordinary relative root and captured late appearance" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    const relative = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(relative);
+    const absolute = try std.Io.Dir.cwd().realPathFileAlloc(io, relative, a);
+    defer a.free(absolute);
+    const path = try normalMissingBookPath(io, a, absolute);
+    defer a.free(path);
+    var inputs: CapturedWriterInputs = .{ .a = a, .io = io };
+    defer inputs.deinit();
+    var primary: ?figure_page_observations.Book = null;
+    var ns: namespace_registry.Registry = undefined; // Unused while the role is absent or refused.
+    try attachNormalMissingFigureBook(io, a, relative, &inputs, .ordinary, &ns, null, null, &primary);
+    try std.testing.expect(primary == null);
+    try std.testing.expect(inputs.find(path) != null);
+
+    var captured: CapturedWriterInputs = .{ .a = a, .io = io };
+    defer captured.deinit();
+    const selection = try capturedNormalMissingInput(&captured, path, &.{});
+    try std.testing.expectEqual(NormalMissingInput.captured_absent, selection);
+    try attachNormalMissingFigureBook(io, a, absolute, &captured, selection, &ns, null, null, &primary);
+    try tmp.dir.writeFile(io, .{ .sub_path = figure_page_observations.missing_filename, .data = "{}" });
+    try std.testing.expectError(error.CapturedWriterUnexpectedDependency,
+        attachNormalMissingFigureBook(io, a, absolute, &captured, selection, &ns, null, null, &primary));
+    try std.testing.expectError(error.CapturedWriterUnexpectedDependency, captured.verify());
+    try std.testing.expect(primary == null);
+
+    var present: CapturedWriterInputs = .{ .a = a, .io = io };
+    defer present.deinit();
+    try std.testing.expectError(error.UnpinnedCapturedWriterSourceDependency, capturedNormalMissingInput(&present, path, &.{}));
+    const digest = try auditHash(a, "{}");
+    defer a.free(digest);
+    const dependency: CapturedWriterFile = .{ .path = path, .bytes = 2, .sha256 = digest };
+    try std.testing.expectEqual(NormalMissingInput.captured_present, try capturedNormalMissingInput(&present, path, &.{dependency}));
+    var altered = dependency;
+    const crossed_digest: [64]u8 = @splat('0');
+    altered.sha256 = &crossed_digest;
+    try std.testing.expectError(error.CapturedWriterFileMismatch, capturedNormalMissingInput(&present, path, &.{altered}));
+}
+
+test "IT shared disclosure input owns its styles and preserves finite capture refusal" {
+    const B = container_disclosure_inputs;
+    const F = struct {
+        fn hash(a: std.mem.Allocator, bytes: []const u8) ![]const u8 {
+            var value: [32]u8 = undefined;
+            std.crypto.hash.sha2.Sha256.hash(bytes, &value, .{});
+            return a.dupe(u8, &std.fmt.bytesToHex(value, .lower));
+        }
+        fn reject(a: std.mem.Allocator, input: B.Input, ns: *const namespace_registry.Registry) !void {
+            const bytes = try std.json.Stringify.valueAlloc(a, input, .{});
+            try std.testing.expectError(error.InvalidContainerDisclosureInput, B.Book.init(a, bytes, ns));
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
     const a = arena.allocator();
-    const P = encoder.table_style_profile;
-    const Read = struct {
-        fn bytes(allocator: std.mem.Allocator, path: []const u8, expected: []const u8) ![]const u8 {
-            const data = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, path, allocator, .limited(1024 * 1024));
-            try std.testing.expectEqualStrings(expected, try auditHash(allocator, data));
-            return data;
-        }
-        fn gzip(allocator: std.mem.Allocator, path: []const u8, compressed: []const u8, decoded: []const u8) ![]const u8 {
-            const data = try bytes(allocator, path, compressed);
-            var input: std.Io.Reader = .fixed(data);
-            var inflater: std.compress.flate.Decompress = .init(&input, .gzip, &.{});
-            const plain = try inflater.reader.allocRemaining(allocator, .limited(1024 * 1024));
-            try std.testing.expect(inflater.err == null and inflater.state == .end);
-            try std.testing.expectEqualStrings(decoded, try auditHash(allocator, plain));
-            return plain;
-        }
-        fn attribute(node: P.ObservedStyleNode, name: []const u8) ?[]const u8 {
-            for (node.attributes) |item| if (std.mem.eql(u8, item.name, name)) return item.value;
-            return null;
-        }
-    };
-    var checkpoint: []const u8 = "retained inputs";
-    errdefer std.debug.print("EN_PAGE_FONT checkpoint={s} ordinary_writer=false whole=false\n", .{checkpoint});
-    const html = try Read.gzip(a, "compiler/tools/testdata/en-advisory-font-producers/request-02.response.gz", "9b8e972197866d9e6bc41079f05911675435e3c33360a69ae1c19ffa9baff190", "827a6a5fa184151a6010acd37c0db86f59ad0a1140635060d378ff5e090255f9");
-    const registry = try Read.bytes(a, "compiler/tools/testdata/en-empty-element271/namespace-registry.tsv",
-        "55df778e3d40f6acf08e10b8246bd28fab792d48ac619936202db15c29db0f08");
-    var ns = try namespace_registry.Registry.init(a, registry);
+    var ns = try namespace_registry.Registry.init(a, @embedFile("testdata/it-per/namespace-registry.tsv")); defer ns.deinit();
+    const old_bytes = @embedFile("testdata/it-cediglia-normal-disclosure/capture-input.json");
+    const old = try std.json.parseFromSliceLeaky(B.Input, a, old_bytes, .{});
+    const unit = old.pages[0].captures[0].policy;
+    const css = ".mw-collapsible-toggle{float:right}";
+    const css_hash = try F.hash(a, css);
+    const reference_hash = try F.hash(a, "synthetic-loader-control-not-authenticated-UA");
+    // The old finite button is a typed loader control only. Loading this
+    // synthetic input earns no normal-page/UA or edition policy authority.
+    const styles = [_]B.SharedStyleInput{.{ .url = "https://example.invalid/fixture.css", .sha256 = css_hash, .body = css }};
+    var shared: B.SharedInput = .{ .protocol = "mediawiki-native-div-disclosure.v1",
+        .reference = .{ .scope = "current_normal_shared_initializer_css", .historical_deployment_qualified = false,
+            .initializer_sha256 = reference_hash, .source_closure_sha256 = reference_hash,
+            .validation_sha256 = reference_hash, .ua_basis_sha256 = reference_hash },
+        .styles = &styles,
+        .ua = .{ .button = unit.button.?, .foreground = unit.foreground.?, .margin = .all(.{ .unit = .px, .value = 0 }),
+            .label_underline = false, .initial_float = .inline_flow, .color_scheme = "normal",
+            .moz_focus_inner_absent = true, .focus_visible_supported = true },
+        .boundary = .{ .direction = .ltr, .color_scheme = "normal", .custom_environment = .{ .complete = true } } };
+    var input = old; input.schema = "wikidict.container-disclosure-inputs.v2"; input.pages = &.{}; input.shared = shared;
+    const mutable = try std.json.Stringify.valueAlloc(a, input, .{});
+    var book = try B.Book.init(a, mutable, &ns); defer book.deinit();
+    @memset(mutable, 0);
+    try std.testing.expectEqualStrings(css, book.input.shared.?.styles[0].body);
+    const source = "<div>Source</div>";
+    const held = (try book.bind(a, 0, true, false, "ordinary", 12, 34, "raw", source)) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(held.source.ptr == source.ptr and held.source.len == source.len);
+    try std.testing.expect(held.shared_profile == book.shared and held.captures.len == 0);
+    try std.testing.expect(try book.bind(a, 0, true, true, "ordinary", 12, 34, "raw", source) == null);
+    try std.testing.expect(try book.bind(a, 1, true, false, "ordinary", 12, 34, "raw", source) == null);
+    try std.testing.expect(try book.bind(a, 0, false, false, "ordinary", 12, 34, "raw", source) == null);
+    var changed = input; changed.wiki = "sdwiktionary"; try F.reject(a, changed, &ns);
+    changed = input; changed.shared = null; try F.reject(a, changed, &ns);
+    changed = input; changed.schema = old.schema; try F.reject(a, changed, &ns);
+    var bad_styles = styles; bad_styles[0].body = ".mw-collapsible-toggle{float:left}";
+    shared.styles = &bad_styles; changed = input; changed.shared = shared; try F.reject(a, changed, &ns);
+    shared = input.shared.?; shared.reference.historical_deployment_qualified = true;
+    changed = input; changed.shared = shared; try F.reject(a, changed, &ns);
+    shared = input.shared.?; shared.boundary.absent_classes = &.{"mw-content-rtl"};
+    changed = input; changed.shared = shared; try F.reject(a, changed, &ns);
+    input.pages = old.pages;
+    var finite = try B.Book.init(a, try std.json.Stringify.valueAlloc(a, input, .{}), &ns); defer finite.deinit();
+    const raw = @embedFile("testdata/it-cediglia-right-default/raw.wikitext");
+    const expanded = @embedFile("testdata/it-cediglia-right-default/expanded.wikitext");
+    const exact = (try finite.bind(a, 0, true, false, "cediglia", 143745, 3991833, raw, expanded)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 1), exact.captures.len);
+    try std.testing.expect(exact.shared_profile == finite.shared);
+    try std.testing.expectError(error.InvalidContainerDisclosureInput,
+        finite.bind(a, 0, true, false, "cediglia", 143745, 3991834, raw, expanded));
+    try std.testing.expectError(error.InvalidContainerDisclosureInput,
+        finite.bind(a, 0, true, false, "other", 143745, 3991833, raw, expanded));
+}
+
+test "IT dated Figure inventory supplies ordinary widths without becoming Book authority" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    const root = std.mem.span(getenv("WIKIDICT_IT_FIGURE_TEST_ROOT") orelse return error.SkipZigTest);
+    var path_arena = std.heap.ArenaAllocator.init(a);
+    defer path_arena.deinit();
+    const path_alloc = path_arena.allocator();
+    const namespace_path = try std.fs.path.join(path_alloc, &.{ root, "site-info.namespace-registry.tsv" });
+    const defaults_path = try std.fs.path.join(path_alloc, &.{ root, "figure-siteinfo.raw.json" });
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(io, namespace_path, a, .limited(1024 * 1024));
+    defer a.free(bytes);
+    var ns = try namespace_registry.Registry.init(a, bytes);
     defer ns.deinit();
-    const url = "https://en.wiktionary.org/w/index.php?title=%E0%B9%81%E0%B8%A1%E0%B8%A7%E0%B9%80%E0%B8%AA%E0%B8%B7%E0%B8%AD&oldid=87816728&useskin=vector-2022";
-    const css3 = try Read.gzip(a, "compiler/tools/testdata/en-advisory-font-producers/request-03.response.gz", "1799a5c77c3ec78946292fb1ee99352456d1267d37ed944678a737dad31ad6aa", "80b47b515ceb7d7d4720bee72cce1917e738a353a5bb6eebca69a281b33a64c6");
-    const css4 = try Read.gzip(a, "compiler/tools/testdata/en-advisory-font-producers/request-04.response.gz", "628285b8c99db38065791e467e39eeb330851e068ced5d0a07a4173ee8364338", "1427eef774f4b0a9feee6e4ea8664756047be77324d4867b66e06e2f7baf3137");
-    const css5 = try Read.gzip(a, "compiler/tools/testdata/en-advisory-font-producers/request-05.response.gz", "fe0ab338e2d1ebfd94c827ac0ddf5eaa0685a20ab01a1247541a5b2051d58b90", "d9d64a19f8dafd11a07f8c925ab4543b2ac9ed32c7080b60c3c0f036f1ab060e");
-    const sheets = [_]P.Source{
-        .{ .css = css3, .base_url = "https://en.wiktionary.org/w/load.php?lang=en&modules=ext.uls.interlanguage%7Cext.visualEditor.desktopArticleTarget.noscript%7Cext.wikimediamessages.styles%7Cmediawiki.action.styles%7Cmediawiki.codex.messagebox.styles%7Cmediawiki.interface.helpers.linker.styles%7Cmediawiki.interface.helpers.styles%7Cmediawiki.skins.legacy%7Cskins.vector.icons%2Cstyles%7Cskins.vector.search.codex.styles&only=styles&skin=vector-2022" },
-        .{ .css = css4, .base_url = "https://en.wiktionary.org/w/load.php?lang=en&modules=ext.gadget.InflectionTable%2CLanguagesAndScripts%2CPalette%2CSite%2Creflist&only=styles&skin=vector-2022" },
-        .{ .css = css5, .base_url = "https://en.wiktionary.org/w/load.php?lang=en&modules=site.styles&only=styles&skin=vector-2022" },
-        .{ .css = html[40757..41661], .base_url = url ++ "#inline-style-0" },
+    const defaults = (try loadFigureSiteAt(io, a, namespace_path, defaults_path, &ns)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings(namespace_registry.Registry.it_current_figure_core, defaults.core_revision);
+    try std.testing.expectEqual(@as(?u32, 250), defaults.source_context.defaults.default_thumbnail_width);
+    const primary_site = (try loadFigureSiteAt(io, a, namespace_path, "compiler/tools/testdata/it-basco238/figure-siteinfo.raw.json", &ns)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualDeep(primary_site.source_context.defaults, defaults.source_context.defaults);
+    const paths = [3][]const u8{
+        try std.fs.path.join(path_alloc, &.{ root, "figure-sizing.json" }),
+        try std.fs.path.join(path_alloc, &.{ root, "figure-sizing.raw.json" }),
+        try std.fs.path.join(path_alloc, &.{ root, "figure-sizing.site.json" }),
     };
-    checkpoint = "selected full article ancestors and exact ordered CSS";
-    const ancestors = try figure_page_observations.selectedArticleFontAncestors(a, &ns, html, url,
-        &sheets, 10500003, 87816728, "แมวเสือ");
-    const physical = (try figure_page_observations.selectedArticleStyleNodes(a, &ns, html, ancestors)) orelse
-        return error.MissingRetainedPhysicalGraph;
-    const schemes = (try figure_page_observations.selectedArticleSchemeNodes(a, html, ns.wiki, physical)) orelse
-        return error.MissingRetainedThemeScript;
-    const nodes = schemes.day;
-    var profile = try P.parseSourcesForTargetAlloc(a, &sheets, .screen);
-    defer profile.deinit();
-    checkpoint = "four physical circle producer queries";
-    var count: usize = 0;
-    for (nodes, 0..) |node, index| {
-        if (!std.mem.eql(u8, node.tag, "span")) continue;
-        const title = Read.attribute(node, "title") orelse continue;
-        if (!std.mem.eql(u8, title, "Vowel sign appearing in front of the initial consonant.")) continue;
-        const css = Read.attribute(node, "style") orelse return error.MissingRetainedCircleCss;
-        try std.testing.expectEqualStrings("border:1px dotted var(--wikt-palette-grey-9,gray);border-radius:50%;cursor:help", css);
-        const value = try P.observedHelpCircleBox(a, &profile, nodes, @intCast(ancestors.len - 1),
-            @intCast(index), "--wikt-palette-grey-9", false);
-        std.debug.print("EN_PAGE_FONT occurrence={d} node={d} producer_present={} family={s} ordinary_writer=false\n",
-            .{count, index, value != null, if (value) |v| if (v.geometry.font_family) |f| @tagName(f) else "UNKNOWN" else "UNKNOWN"});
-        const box = value orelse return error.RetainedCircleProducerRefused;
-        try std.testing.expect(box.geometry.font_family != null and box.geometry.font_family.? == .sans_serif);
-        count += 1;
+    var primary: figure_sizing.Registry = .{
+        .arena = std.heap.ArenaAllocator.init(a),
+        .namespace_catalog = &ns,
+        .records = &.{},
+        .file_authority = true,
+    };
+    defer primary.deinit();
+    {
+        var inventory = (try loadStreamFigureSizing(io, a, paths, &ns, defaults)) orelse return error.TestUnexpectedResult;
+        errdefer inventory.deinit();
+        try std.testing.expect(inventory.it_inventory);
+        try std.testing.expect(inventory.records.len >= 13484);
+        try std.testing.expect((try figure_sizing.Registry.resolve(&inventory, a, "魚-bw.png", .thumbnail, 560, null)) == null);
+        try primary.attachWidthInventory(inventory);
     }
-    try std.testing.expectEqual(@as(usize, 4), count);
-    std.debug.print("EN_PAGE_FONT complete owners={d} ordinary_writer=false paired_proof=false whole=false\n", .{count});
+    const Registry = figure_sizing.Registry;
+    const Policy = encoder.presentation_types.FigureSizingPolicy;
+    for ([_]struct { file: []const u8, width: u32 }{
+        .{ .file = "魚-bw.png", .width = 560 },
+        .{ .file = "Trogolo (älbi) - Musei del cibo - salame - 005.tif", .width = 250 },
+        .{ .file = "2017 Buckingham Palace 003.jpg", .width = 250 },
+        .{ .file = "Crescent symbol (fixed width).svg", .width = 250 },
+    }) |sample| {
+        try std.testing.expectEqual(@as(?Policy, .requested_fit),
+            try Registry.resolveWriter(&primary, a, sample.file, .thumbnail, sample.width, null));
+        try std.testing.expect((try Registry.resolveWriter(&primary, a, sample.file, .thumbnail, sample.width, 100)) == null);
+        try std.testing.expect((try Registry.resolveWriter(&primary, a, sample.file, .framed, null, null)) == null);
+    }
+    try std.testing.expect((try Registry.resolveWriter(&primary, a, "魚-bw.png", .thumbnail, 1207, null)) == null);
+    try std.testing.expectEqual(@as(?u32, 1206), try Registry.resolveWriterWidthLimit(&primary, a, "魚-bw.png", .thumbnail));
+    try std.testing.expect((try Registry.resolveWriterWidthLimit(&primary, a, "2017 Buckingham Palace 003.jpg", .thumbnail)) == null);
+    try std.testing.expect((try Registry.resolveWriter(&primary, a, "Uncaptured figure example.png", .thumbnail, 250, null)) == null);
+    // A pre-existing authenticated negative must retain authority over a
+    // supplemental cohort, even if that cohort has since seen a positive file.
+    try primary.missing_files.put(primary.arena.allocator(), "File:魚-bw.png", {});
+    try std.testing.expect((try Registry.resolveWriter(&primary, a, "魚-bw.png", .thumbnail, 560, null)) == null);
+    try std.testing.expect((try Registry.resolveWriterWidthLimit(&primary, a, "魚-bw.png", .thumbnail)) == null);
+}
+
+test "normal Missing imports the full five-page Book with the genuine SD file registry" {
+    var scratch = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer scratch.deinit();
+    const a = scratch.allocator();
+    const io = std.testing.io;
+    const root = try std.Io.Dir.cwd().realPathFileAlloc(io, "compiler/tools/testdata/sd-figure-catalogue01", a);
+    var ns = try namespace_registry.Registry.load(io, a, root);
+    defer ns.deinit();
+    const site = (try loadWriterFigureSite(io, a, root, null, &ns)) orelse return error.TestUnexpectedResult;
+    var files = (try loadWriterFigureSizing(io, a, root, null, &ns, site)) orelse return error.TestUnexpectedResult;
+    defer files.deinit();
+    const source = "compiler/tools/testdata/sd-figure-catalogue01/figure-missing-page-observations.json";
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(io, source, a, .limited(figure_page_observations.max_input));
+    var book = try figure_page_observations.Book.initNormalMissing(a, bytes, &ns, &files, site.source_sha256, site.source_context.defaults);
+    defer book.deinit();
+    try std.testing.expectEqual(@as(usize, 5), book.pages.len);
+    for (book.pages, [_]u64{ 1819, 1831, 2384, 2429, 4353 }) |page, id| {
+        try std.testing.expectEqual(id, page.page_id);
+        try std.testing.expectEqual(@as(usize, 1), page.occurrences.len);
+    }
 }

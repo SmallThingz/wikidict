@@ -1575,7 +1575,8 @@ const Encoder = struct {
         if (self.remaining_items == 0) return error.PresentationTooLarge;
         self.remaining_items -= 1;
         try self.writeU32(value.start); try self.writeU32(value.end);
-        var flags: u8 = @as(u8, @intFromBool(value.paint.underline_on_focus)) << 4;
+        var flags: u8 = (@as(u8, @intFromBool(value.paint.underline_on_focus)) << 4) |
+            (@as(u8, @intFromBool(value.pointer_on_run)) << 5);
         inline for (.{ "normal", "hover", "active", "hover_active" }, 0..) |name, state_index| {
             const state = @field(value.paint, name);
             try self.string(state.foreground);
@@ -3558,12 +3559,12 @@ const Reader = struct {
         var paint: types.ContainerDisclosureTextPaint = undefined;
         inline for (.{ "normal", "hover", "active", "hover_active" }) |name|
             @field(paint, name) = .{ .foreground = try self.string(), .underline = false };
-        const flags = try self.byte(); if (flags & ~@as(u8, 31) != 0) return error.InvalidPresentation;
+        const flags = try self.byte(); if (flags & 0xc0 != 0) return error.InvalidPresentation;
         inline for (.{ "normal", "hover", "active", "hover_active" }, 0..) |name, state_index|
             @field(paint, name).underline = flags & (@as(u8, 1) << state_index) != 0;
         paint.underline_on_focus = flags & 16 != 0;
         if (!types.validContainerDisclosureTextPaint(paint)) return error.InvalidPresentation;
-        return .{ .start = start, .end = end, .paint = paint };
+        return .{ .start = start, .end = end, .paint = paint, .pointer_on_run = flags & 0x20 != 0 };
     }
     fn containerDisclosureButton(self: *Reader) !types.ContainerDisclosureButton {
         if (!self.positioned_containers_enabled or !self.resolved_style_borders_enabled or
@@ -20356,6 +20357,124 @@ test "IT public disclosure button captured JSON roundtrip both writers and full 
         .dpr_hex = hex, .stored = original, .metrics = metrics,
     }, .{});
     std.debug.print("IT_PUBLIC_BUTTON_FIXTURE {s}\n", .{record});
+}
+
+test "DPRa disclosure run pointer flag preserves legacy JSON bytes capabilities and budget" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const T = PublicITButtonTest;
+    var policy = try T.capture(a);
+    const run = policy.expand_run.?;
+    const opts: std.json.Stringify.Options = .{};
+    const legacy_json = try std.json.Stringify.valueAlloc(a, .{ .start = run.start, .end = run.end, .paint = run.paint }, opts);
+    try std.testing.expectEqualStrings(legacy_json, try std.json.Stringify.valueAlloc(a, run, opts));
+    const wrong_type = try std.fmt.allocPrint(a, "{s},\"pointer_on_run\":1}}", .{legacy_json[0 .. legacy_json.len - 1]});
+    try std.testing.expectError(error.UnexpectedToken, std.json.parseFromSliceLeaky(types.ContainerDisclosureLabelRun, a, wrong_type, .{}));
+    const explicit = try std.fmt.allocPrint(a, "{s},\"pointer_on_run\":false}}", .{legacy_json[0 .. legacy_json.len - 1]});
+    policy.expand_run = try std.json.parseFromSliceLeaky(types.ContainerDisclosureLabelRun, a, explicit, .{});
+    try std.testing.expectEqualStrings(legacy_json, try std.json.Stringify.valueAlloc(a, policy.expand_run.?, opts));
+
+    var sections = [_]types.Section{.{ .level = 2, .title = "body", .blocks = &.{T.owner(policy)} }};
+    const stored = T.stored(&sections);
+    const e = stored.entry;
+    const old = try encodeAlloc(a, stored);
+    var digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(old, &digest, .{});
+    try std.testing.expectEqualStrings("27031256936c60f44ab50494bc2854b404ea6b556b60c1cecbdf91b86b889502",
+        &std.fmt.bytesToHex(digest, .lower));
+
+    policy.expand_run.?.pointer_on_run = true;
+    sections[0].blocks = &.{T.owner(policy)};
+    const bytes = try encodeAlloc(a, stored);
+    const expected = try a.dupe(u8, old);
+    const expand_flags = 166; // Pinned public fixture, end of its first 53-byte run.
+    expected[expand_flags] |= 0x20;
+    try std.testing.expectEqualSlices(u8, expected, bytes);
+    var metrics: DecodeMetrics = .{};
+    try std.testing.expectEqualDeep(stored, try decodeWithMetricsAlloc(a, bytes, e.title, e.kind, null, &metrics));
+    try std.testing.expectEqual(@as(u64, 13), metrics.total_items);
+    const json = try std.json.Stringify.valueAlloc(a, stored, opts);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"pointer_on_run\":true") != null);
+    try std.testing.expectEqualDeep(stored, try std.json.parseFromSliceLeaky(types.Stored, a, json, .{}));
+    try std.testing.expectEqualSlices(u8, bytes, try encodeBuildAlloc(a, e.display_title, e.sections, e.organization, e.references, e.media));
+
+    for ([_]u8{ 0x40, 0x80 }) |reserved| {
+        const bad = try a.dupe(u8, bytes);
+        bad[expand_flags] |= reserved;
+        try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, bad, e.title, e.kind, null));
+    }
+    const bad_range = try a.dupe(u8, bytes);
+    std.mem.writeInt(u32, bad_range[118..122], 7, .little); // "Mostra" has six bytes.
+    try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, bad_range, e.title, e.kind, null));
+    for ([_]u32{ positioned_containers_feature, resolved_style_borders_feature }) |missing| {
+        const bad = try a.dupe(u8, bytes);
+        std.mem.writeInt(u32, bad[4..8], std.mem.readInt(u32, bytes[4..8], .little) & ~missing, .little);
+        try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, bad, e.title, e.kind, null));
+    }
+    const count = types.containerDisclosureItems(policy);
+    var leaf = T.encoder(a);
+    defer leaf.deinit();
+    leaf.remaining_items = count;
+    try leaf.containerDisclosure(policy);
+    try std.testing.expectEqual(@as(usize, 0), leaf.remaining_items);
+    var short = T.reader(a, leaf.out.items);
+    short.remaining_items = count - 1;
+    try std.testing.expectError(error.InvalidPresentation, short.containerDisclosure());
+    var limited = T.encoder(a);
+    defer limited.deinit();
+    limited.remaining_items = count - 1;
+    try std.testing.expectError(error.PresentationTooLarge, limited.containerDisclosure(policy));
+    policy.button = null;
+    try std.testing.expect(!types.validContainerDisclosure(policy));
+}
+
+test "DPRa disclosure button appearance none roundtrips with strict tags and existing capability gates" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const T = PublicITButtonTest;
+    const native = try T.capture(a);
+    try std.testing.expectEqual(types.ContainerDisclosureButtonAppearance.native_button, native.button.?.appearance);
+    const native_sections = [_]types.Section{.{ .level = 2, .title = "body", .blocks = &.{T.owner(native)} }};
+    const native_bytes = try encodeAlloc(a, T.stored(&native_sections));
+
+    var policy = native;
+    policy.button.?.appearance = .none;
+    const sections = [_]types.Section{.{ .level = 2, .title = "body", .blocks = &.{T.owner(policy)} }};
+    const stored = T.stored(&sections);
+    const e = stored.entry;
+    try types.validateStored(a, stored, e.title, e.kind, null);
+    const bytes = try encodeAlloc(a, stored);
+    try std.testing.expectEqualDeep(stored, try decodeAlloc(a, bytes, e.title, e.kind, null));
+    try std.testing.expectEqualSlices(u8, bytes, try encodeBuildAlloc(a, e.display_title, e.sections, e.organization, e.references, e.media));
+
+    try std.testing.expectEqualStrings("DPRa", bytes[0..4]);
+    const flags = std.mem.readInt(u32, bytes[4..8], .little);
+    try std.testing.expectEqual(@as(u32, positioned_containers_feature | resolved_style_borders_feature), flags);
+    try std.testing.expectEqual(native_bytes.len, bytes.len);
+    var appearance_at: ?usize = null;
+    for (native_bytes, bytes, 0..) |old, new, i| {
+        if (old == new) continue;
+        try std.testing.expect(appearance_at == null and old == 0 and new == 1);
+        appearance_at = i;
+    }
+    const tag = appearance_at orelse return error.TestUnexpectedResult;
+    for ([_]u8{ 2, 255 }) |unknown| {
+        bytes[tag] = unknown;
+        try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, bytes, e.title, e.kind, null));
+    }
+    bytes[tag] = 1;
+    for ([_]u32{ positioned_containers_feature, resolved_style_borders_feature }) |required| {
+        std.mem.writeInt(u32, bytes[4..8], flags & ~required, .little);
+        try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, bytes, e.title, e.kind, null));
+    }
+
+    var invalid = policy;
+    invalid.button.?.font_weight = 500;
+    try std.testing.expect(!types.validContainerDisclosureButton(invalid.button.?));
+    const bad = [_]types.Section{.{ .level = 2, .title = "body", .blocks = &.{T.owner(invalid)} }};
+    try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, T.stored(&bad)));
 }
 
 test "IT public disclosure button none hidden borders keep capability discovery and exact budgets" {

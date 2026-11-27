@@ -731,3 +731,142 @@ test "Amharic screen observation joins indexed absence and exact article without
         try std.testing.expectError(error.InvalidStylesheetImports, observeWithImportsForTarget(a, &ns, &reader, index, titles, snapshot, .print));
     }
 }
+
+test "KU retained leker188 with local default gadgets diagnoses table binding" {
+    // This is one retained Document invocation, not a normal dump/expander replay.
+    // The page bytes and conversion context are authentic; the six local CSS
+    // sources retain their normal module order and conditional applicability.
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const io = std.testing.io;
+    const D = encoder.presentation_document;
+    const Read = struct {
+        fn exact(allocator: std.mem.Allocator, path: []const u8, size: usize, digest: []const u8) ![]const u8 {
+            const bytes = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, path, allocator, .limited(128 * 1024));
+            try std.testing.expectEqual(size, bytes.len);
+            try std.testing.expectEqualStrings(digest, &sha256(bytes));
+            return bytes;
+        }
+    };
+    _ = io;
+    const base = "compiler/src/encoder/testdata/ku-leker-display188/";
+    const source = try Read.exact(a, base ++ "failure-00000001-expanded.wikitext", 63138,
+        "17bb4950b4668e809523de89ee496da7e541b5b784370fbf68cc68f0775e0e2c");
+    const display = try Read.exact(a, base ++ "failure-00000001-display-title.wikitext", 32,
+        "27d38988c4992a05e01bf0488ce1aec68919b335502b2b365dc31078dc5f3468");
+    const capture = try Read.exact(a, base ++ "capture.json", 7177,
+        "37881cfd4f29900e39a5870f0f7acc1a9d3da283af171ce2de3fa1132dba84c8");
+    const namespaces = try Read.exact(a, base ++ "metadata/namespace-registry.tsv", 3840,
+        "d52c0c1b2684e236567955191d4d0ed0360eb518ae1b85c5eda5718e114efb83");
+    const site = try Read.exact(a, base ++ "metadata/namespace-siteinfo.raw.json", 6123,
+        "f993d95042a6345607e52a273359074d774197a9f212f2cb39cdd249a9d2be8a");
+    const switches = try Read.exact(a, base ++ "metadata/behavior-switches.tsv", 1098,
+        "2d9ec3e9f061ac41661c34a58fbf9595be01cab9e3c8127cb5aff00b2f3b089c");
+    try std.testing.expectEqualStrings("{|", source[59982..59984]);
+    try std.testing.expectEqualStrings("<span style=\"border-bottom: 1px dotted #555555; \">yj.</span>", source[60202..60262]);
+    var ns = try namespace_registry.Registry.init(a, namespaces);
+    defer ns.deinit();
+    try ns.attachLanguageConversion(site);
+    const parsed = try std.json.parseFromSlice(std.json.Value, a, capture, .{});
+    defer parsed.deinit();
+    const manual = parsed.value.object.get("manual_conversion_context") orelse return error.TestUnexpectedResult;
+    const retained = try std.json.parseFromValueLeaky(namespace_registry.ManualConversionContext, a, manual, .{});
+    try std.testing.expectEqualStrings(ns.manual_conversion_context.?.source_core, retained.source_core);
+    try std.testing.expectEqualStrings(ns.manual_conversion_context.?.source_converter_sha256, retained.source_converter_sha256);
+    try std.testing.expectEqualStrings(ns.manual_conversion_context.?.siteinfo_sha256, retained.siteinfo_sha256);
+    ns.manual_conversion_context = retained;
+    var behavior = try namespace_registry.behavior_switches.Registry.init(a, switches, ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256);
+    defer behavior.deinit();
+    const sheets = [_]encoder.table_style_profile.Source{
+        .{ .css = @embedFile("testdata/ku-default-gadgets/Gadget-LanguagesAndScripts.css"), .base_url = "" },
+        .{ .css = @embedFile("testdata/ku-default-gadgets/Gadget-Palette.css"), .base_url = "" },
+        .{ .css = @embedFile("testdata/ku-default-gadgets/Gadget-Site.css"), .base_url = "" },
+        .{ .css = @embedFile("testdata/ku-default-gadgets/Gadget-TreeDescs-pagestyles.css"), .base_url = "", .unknown_applicability = true },
+        .{ .css = @embedFile("testdata/ku-default-gadgets/Gadget-charinsert-styles.css"), .base_url = "" },
+        .{ .css = @embedFile("testdata/ku-default-gadgets/Common.css"), .base_url = "" },
+    };
+    var profile = try encoder.table_style_profile.parseSourcesForTargetAlloc(a, &sheets, .screen);
+    defer profile.deinit();
+    try std.testing.expectEqual(@as(usize, 6), profile.retained_sources.len);
+    var report: D.Fallbacks = .{};
+    std.debug.print("KU_LOCAL_CONTEXT begin page=867 revision=6426542 source_bytes={d} sheets={d} table_offset=59982 fragment_offset=60202 ordinary_provider_replay=false\n", .{source.len, sheets.len});
+    const bytes = D.compileReportedWithOptionsAndPhasesAndTableStylesAlloc(a, "lêker", .language, "Kurmancî", "ku",
+        D.MissingText.untracked(source), .{ .source = display, .page_title = "lêker" }, .{}, &ns, &behavior, null, &report, null, &profile) catch |failure| {
+        std.debug.print("KU_LOCAL_CONTEXT result={s} records=0 ordinary_provider_replay=false\n", .{@errorName(failure)});
+        return failure;
+    };
+    const stored = try encoder.presentation_codec.decodeAlloc(a, bytes, "lêker", .language, .{ .heading = "Kurmancî", .code = "ku" });
+    try std.testing.expectEqualSlices(u8, bytes, try encoder.presentation_codec.encodeAlloc(a, stored));
+    std.debug.print("KU_LOCAL_CONTEXT result=DocumentCompiled bytes={d} sections={d} ordinary_provider_replay=false\n", .{bytes.len, stored.entry.sections.len});
+}
+
+test "KU retained leker188 parser-output owner diagnoses table binding" {
+    // Retained expanded bytes use the maintained Writer parser-output root API.
+    // This is a component context reconstruction, not a normal dump/expander replay.
+    // The page bytes and conversion context are authentic; the six local CSS
+    // sources retain their normal module order and conditional applicability.
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const io = std.testing.io;
+    const D = encoder.presentation_document;
+    const Read = struct {
+        fn exact(allocator: std.mem.Allocator, path: []const u8, size: usize, digest: []const u8) ![]const u8 {
+            const bytes = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, path, allocator, .limited(128 * 1024));
+            try std.testing.expectEqual(size, bytes.len);
+            try std.testing.expectEqualStrings(digest, &sha256(bytes));
+            return bytes;
+        }
+    };
+    _ = io;
+    const base = "compiler/src/encoder/testdata/ku-leker-display188/";
+    const source = try Read.exact(a, base ++ "failure-00000001-expanded.wikitext", 63138,
+        "17bb4950b4668e809523de89ee496da7e541b5b784370fbf68cc68f0775e0e2c");
+    const display = try Read.exact(a, base ++ "failure-00000001-display-title.wikitext", 32,
+        "27d38988c4992a05e01bf0488ce1aec68919b335502b2b365dc31078dc5f3468");
+    const capture = try Read.exact(a, base ++ "capture.json", 7177,
+        "37881cfd4f29900e39a5870f0f7acc1a9d3da283af171ce2de3fa1132dba84c8");
+    const namespaces = try Read.exact(a, base ++ "metadata/namespace-registry.tsv", 3840,
+        "d52c0c1b2684e236567955191d4d0ed0360eb518ae1b85c5eda5718e114efb83");
+    const site = try Read.exact(a, base ++ "metadata/namespace-siteinfo.raw.json", 6123,
+        "f993d95042a6345607e52a273359074d774197a9f212f2cb39cdd249a9d2be8a");
+    const switches = try Read.exact(a, base ++ "metadata/behavior-switches.tsv", 1098,
+        "2d9ec3e9f061ac41661c34a58fbf9595be01cab9e3c8127cb5aff00b2f3b089c");
+    try std.testing.expectEqualStrings("{|", source[59982..59984]);
+    try std.testing.expectEqualStrings("<span style=\"border-bottom: 1px dotted #555555; \">yj.</span>", source[60202..60262]);
+    var ns = try namespace_registry.Registry.init(a, namespaces);
+    defer ns.deinit();
+    try ns.attachLanguageConversion(site);
+    const parsed = try std.json.parseFromSlice(std.json.Value, a, capture, .{});
+    defer parsed.deinit();
+    const manual = parsed.value.object.get("manual_conversion_context") orelse return error.TestUnexpectedResult;
+    const retained = try std.json.parseFromValueLeaky(namespace_registry.ManualConversionContext, a, manual, .{});
+    try std.testing.expectEqualStrings(ns.manual_conversion_context.?.source_core, retained.source_core);
+    try std.testing.expectEqualStrings(ns.manual_conversion_context.?.source_converter_sha256, retained.source_converter_sha256);
+    try std.testing.expectEqualStrings(ns.manual_conversion_context.?.siteinfo_sha256, retained.siteinfo_sha256);
+    ns.manual_conversion_context = retained;
+    var behavior = try namespace_registry.behavior_switches.Registry.init(a, switches, ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256);
+    defer behavior.deinit();
+    const sheets = [_]encoder.table_style_profile.Source{
+        .{ .css = @embedFile("testdata/ku-default-gadgets/Gadget-LanguagesAndScripts.css"), .base_url = "" },
+        .{ .css = @embedFile("testdata/ku-default-gadgets/Gadget-Palette.css"), .base_url = "" },
+        .{ .css = @embedFile("testdata/ku-default-gadgets/Gadget-Site.css"), .base_url = "" },
+        .{ .css = @embedFile("testdata/ku-default-gadgets/Gadget-TreeDescs-pagestyles.css"), .base_url = "", .unknown_applicability = true },
+        .{ .css = @embedFile("testdata/ku-default-gadgets/Gadget-charinsert-styles.css"), .base_url = "" },
+        .{ .css = @embedFile("testdata/ku-default-gadgets/Common.css"), .base_url = "" },
+    };
+    var profile = try encoder.table_style_profile.parseSourcesForTargetAlloc(a, &sheets, .screen);
+    defer profile.deinit();
+    try std.testing.expectEqual(@as(usize, 6), profile.retained_sources.len);
+    var report: D.Fallbacks = .{};
+    std.debug.print("KU_PARSER_OUTPUT_CONTEXT begin page=867 revision=6426542 source_bytes={d} sheets={d} table_offset=59982 fragment_offset=60202 ordinary_provider_replay=false\n", .{source.len, sheets.len});
+    const bytes = D.compileClassifiedWithHeadingAnchorsAndSourceMediaRootAlloc(a, "lêker", .language, "Kurmancî", "ku",
+        D.MissingText.untracked(source), .{ .source = display, .page_title = "lêker" }, .{}, &ns, &behavior, null, .{}, &report, null, &.{}, null, &.{}, null, &profile, null, .parser_output) catch |failure| {
+        std.debug.print("KU_PARSER_OUTPUT_CONTEXT result={s} records=0 ordinary_provider_replay=false\n", .{@errorName(failure)});
+        return failure;
+    };
+    const stored = try encoder.presentation_codec.decodeAlloc(a, bytes, "lêker", .language, .{ .heading = "Kurmancî", .code = "ku" });
+    try std.testing.expectEqualSlices(u8, bytes, try encoder.presentation_codec.encodeAlloc(a, stored));
+    std.debug.print("KU_PARSER_OUTPUT_CONTEXT result=DocumentCompiled bytes={d} sections={d} ordinary_provider_replay=false\n", .{bytes.len, stored.entry.sections.len});
+}

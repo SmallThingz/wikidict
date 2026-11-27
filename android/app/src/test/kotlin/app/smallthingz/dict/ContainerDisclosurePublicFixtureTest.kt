@@ -25,7 +25,8 @@ class ContainerDisclosurePublicFixtureTest {
         return bytes
     }
 
-    private fun expectedEntry(): Entry {
+    private fun expectedEntry(appearance: ContainerDisclosureButtonAppearance =
+        ContainerDisclosureButtonAppearance.NativeButton): Entry {
         fun px(value: Float) = StyleLength(StyleLengthUnit.Px, value)
         fun edges(edge: ResolvedStyleBorderEdge) = StyleBorder.ResolvedEdges(edge, edge, edge, edge)
         val normal = ContainerDisclosureButtonState(FigureColor.Rgb("#efefef"),
@@ -40,7 +41,7 @@ class ContainerDisclosurePublicFixtureTest {
             foreground = FigureColor.Rgb("#000000"), direction = BidiResolvedDirection.Ltr,
             expandRun = ContainerDisclosureLabelRun(0, 6, labelPaint),
             collapseRun = ContainerDisclosureLabelRun(0, 8, labelPaint),
-            button = ContainerDisclosureButton(ContainerDisclosureButtonAppearance.NativeButton,
+            button = ContainerDisclosureButton(appearance,
                 ContainerDisclosureNamedFont("Arial"), px(13.3333f), 400, false, ContainerLineHeight.Normal,
                 StyleEdges(px(1f), px(6f), px(1f), px(6f)), normal, normal, pressed, pressed,
                 ContainerDisclosureButtonFocus(ContainerDisclosureFocusMode.UaAuto,
@@ -53,6 +54,30 @@ class ContainerDisclosurePublicFixtureTest {
         return Entry(title = "disclosure", displayTitle = emptyList(), kind = "supplemental",
             language = null, languageCode = "", sections = listOf(Section(2, "body", listOf(owner))),
             references = emptyList(), organization = PresentationOrganization(emptyList(), emptyList()))
+    }
+
+    @Test fun appearanceNonePreservesPublicButtonAndRequiresExistingCapabilities() {
+        val bytes = pinnedFile("capture-public.dpr", 910,
+            "27031256936c60f44ab50494bc2854b404ea6b556b60c1cecbdf91b86b889502")
+        val appearanceOffset = 220 // Immediately before the length-prefixed Arial family in this fixture.
+        assertEquals(0, bytes[appearanceOffset].toInt())
+        fun withAppearance(tag: Int) = bytes.copyOf().also { it[appearanceOffset] = tag.toByte() }
+        fun decode(input: ByteArray) = BlobDecoder.decode(input, "disclosure", "supplemental", null, "")
+
+        val none = withAppearance(1)
+        assertEquals(expectedEntry(ContainerDisclosureButtonAppearance.None), decode(none))
+        for (tag in listOf(2, 255))
+            assertThrows(IllegalStateException::class.java) { decode(withAppearance(tag)) }
+        for (missing in listOf(0x100, 0x100000)) {
+            val invalid = none.copyOf()
+            ByteBuffer.wrap(invalid).order(ByteOrder.LITTLE_ENDIAN).putInt(4, 0x100100 and missing.inv())
+            assertThrows(Exception::class.java) { decode(invalid) }
+        }
+        val invalidWeight = none.copyOf()
+        val wire = ByteBuffer.wrap(invalidWeight).order(ByteOrder.LITTLE_ENDIAN)
+        assertEquals(400, wire.getShort(235).toInt())
+        wire.putShort(235, 500)
+        assertThrows(IllegalArgumentException::class.java) { decode(invalidWeight) }
     }
 
     @Test fun public910ByteEntryMatchesPinnedTypedGraphAndEnforcesEnvelope() {

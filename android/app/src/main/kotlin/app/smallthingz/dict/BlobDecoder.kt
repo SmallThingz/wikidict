@@ -1076,10 +1076,11 @@ object BlobDecoder {
             remainingItems--
             val start = u32(); val end = u32()
             val normal = string(); val hover = string(); val active = string(); val hoverActive = string()
-            val flags = byte().also { require(it and 31 == it) { "Unknown disclosure text paint flags" } }
+            val flags = byte().also { require(it and 63 == it) { "Unknown disclosure text paint flags" } }
             return ContainerDisclosureLabelRun(start, end, ContainerDisclosureTextPaint(
                 LinkState(normal, flags and 1 != 0), LinkState(hover, flags and 2 != 0),
-                LinkState(active, flags and 4 != 0), LinkState(hoverActive, flags and 8 != 0), flags and 16 != 0))
+                LinkState(active, flags and 4 != 0), LinkState(hoverActive, flags and 8 != 0), flags and 16 != 0),
+                pointerOnRun = flags and 0x20 != 0)
         }
         private fun containerDisclosureButtonState() = ContainerDisclosureButtonState(figureColor(),
             StyleBorder.ResolvedEdges(resolvedStyleBorderEdge(), resolvedStyleBorderEdge(),

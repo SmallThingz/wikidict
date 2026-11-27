@@ -165,7 +165,7 @@ class ContainerDisclosureButtonDecoderTest {
 
     @Test fun malformedEnumsBooleansUnitsUtf8ColorsAndTruncationReject() {
         val packet=packet(options=3)
-        for ((key,value,offset) in listOf(Triple("appearance",1,0),Triple("italic",2,0),
+        for ((key,value,offset) in listOf(Triple("appearance",2,0),Triple("italic",2,0),
             Triple("italic",1,0),Triple("size",1,0),Triple("padding",1,0),Triple("weight",0,0),
             Triple("lineHeight",3,0),Triple("family",0xff,4),Triple("state0",0,0),
             Triple("edge0-0",6,0),Triple("edge0-0",1,6),Triple("focus",0,0),

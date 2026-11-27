@@ -33,6 +33,8 @@ const wmf4_core = "d45799ff7a503ab18523e720d5e3686761c84c87";
 const d191_core = "d1919ec5e4ebd7b0dea1ff6ea1cb4347a9349ca2";
 const wmf5_imageinfo_core = "87f311882d8c84ec21e288d0bde8aa289df8dc56";
 const wmf5_rollout_core = "57f2a6bfacc3c5cecc269214a8d726b0b6faa596";
+// This deployment is accepted only for the independently replayed file inventory.
+const it_current_core = namespaces.Registry.it_current_figure_core;
 const sr_selected_defaults = "cd0624188c22163e38bdee69bbe0e67bf74f231eeeb023a2834abd84de4cc2d7";
 const vi_selected_defaults = "eb0dd59011bfb846be294843217806fa3c2de3eeec75d24fb9960eb083d19efc";
 const vi_observed_defaults = "36f91d60b106a4cd26045775717de845d267faa5e76b4a801682db2dcd497ad4";
@@ -729,12 +731,20 @@ const sd_local_antenna = "فائل:antenna.jpg";
 const sd_local_antenna_core = "2cc57e980dd9a87e4317e8bc149645123deaaed3";
 const sd_local_antenna_response = "0ca647bf534b1223bb0ebc0ad673a1681b0c7f2861bb1f5c20827c000d99fd7d";
 
+// Holds the exact original two frames, nine dated SQL batches, and the
+// raw response for 11 separately authenticated lexical file titles.
+const sd_catalogue_raw = "2ea26965ea3eb6d110f7159a908ce39165b9485297d6d25447d83d65a4784a3a";
+
+fn sdCatalogue(raw_digest: []const u8, records: u64, batches: u64) bool {
+    return records == 343 and batches == 12 and equal(raw_digest, sd_catalogue_raw);
+}
+
 fn selectedSdJpeg(site: []const u8) ?[]const u8 {
     const exact = "3b9e78bbae62834749d361eb74116b444030cc6628650443109b1aace970ffcb";
     return if (digestMatches(site, exact)) "فائل:Devil's Staircase Wales.jpg" else null;
 }
 
-const ImageInfoScope = enum { ordinary, rollout_base, mon_current, sql_current, selected_jpeg, sd_current_jpeg, svg_width, french_jpeg, hungarian_missing_ogg, greek_audio_ogg, vietnamese_svg };
+const ImageInfoScope = enum { ordinary, rollout_base, mon_current, sql_current, it_current, selected_jpeg, sd_current_jpeg, svg_width, french_jpeg, hungarian_missing_ogg, greek_audio_ogg, vietnamese_svg };
 
 // These roles use only the file state or explicit thumbnail returned by
 // ImageInfo. The deployment does not supply general file or parser authority.
@@ -769,12 +779,14 @@ fn generalWithEpoch(value: Value, wiki: []const u8, language: []const u8, server
     if (scope == .sql_current and (!equal(core, wmf5_rollout_core) or
         (!equal(wiki, "sawiktionary") and !equal(wiki, "shwiktionary")) or
         !equal(try string(item, "generator"), "MediaWiki 1.48.0-wmf.5"))) return invalid;
+    if (scope == .it_current and (!equal(core, it_current_core) or !equal(wiki, "itwiktionary") or
+        !equal(language, "it") or !equal(try string(item, "generator"), "MediaWiki 1.48.0-wmf.6"))) return invalid;
     if (scope == .selected_jpeg and (!equal(core, selected_jpeg_core) or
         (!equal(wiki, "nnwiktionary") and !equal(wiki, "nahwiktionary")) or
         !equal(try string(item, "generator"), "MediaWiki 1.48.0-wmf.6"))) return invalid;
     if (scope == .sd_current_jpeg and ((!equal(core, selected_jpeg_core) and !equal(core, sd_local_antenna_core)) or !equal(wiki, "sdwiktionary") or
         !equal(try string(item, "generator"), "MediaWiki 1.48.0-wmf.6"))) return invalid;
-    if (scope == .rollout_base or scope == .mon_current or scope == .sql_current or scope == .selected_jpeg or scope == .sd_current_jpeg or equal(core, wmf5_imageinfo_core)) {
+    if (scope == .rollout_base or scope == .mon_current or scope == .sql_current or scope == .it_current or scope == .selected_jpeg or scope == .sd_current_jpeg or equal(core, wmf5_imageinfo_core)) {
         if (scope == .rollout_base and (!equal(core, wmf5_rollout_core) or
             (!equal(wiki, "dewiktionary") and !equal(wiki, "ruwiktionary") and !equal(wiki, "thwiktionary")) or
             !equal(try string(item, "generator"), "MediaWiki 1.48.0-wmf.5"))) return invalid;
@@ -820,6 +832,29 @@ const profile_strings = [_][2][]const u8{
     .{"timed_media_presets_sha256", "06c3e0c9a65d840d0d8e391389b3b0986699b57c3a9836af1bd6a76b8d6d8529"},
     .{"timed_media_namespaces_sha256", "a1043b29b314adb045baa66faefaf007238ae2411297760c33ced75cfcf39ed2"},
 };
+const it_current_profile_strings = [_][2][]const u8{
+    .{"local_file_sha256", "067dff585a8028a92c897ca5a021c25ef80e55c891fe305803a70e3e7cde4352"},
+    .{"bitmap_handler_sha256", "0adb3a33a92091f2612aa4523ab304f5c1186af3d6f56e59f6584e9194e02da9"},
+    .{"imageinfo_api_sha256", "b070f6cbf5d1fa780ce1636f1c44a2433434f9f9b82eaf6ece6681e05efcd386"},
+    .{"media_handler_sha256", "e40c1f45b7a314c4c71e481c0dc2d80d34a6ce80b69f50b2a73988c6158533be"},
+    .{"svg_handler_sha256", "679fb0ddf86b0225ef270207776dad086006b9409861cb83d3e933b59260aa04"},
+    .{"handler_factory_sha256", "d39f3a9af1f52bc351fe83ad94ad1fdd9e380e461d97d5178b9cf5d1f3f45fa7"},
+    .{"service_wiring_sha256", "0e2da3fe702c5eab5590a331245be05c6fd5cc8321c528101295f81f4bfe8c21"},
+    .{"wmf_common_sha256", "bed28c827a161a2861e3550d5c03d74a2ebe8cab16c808623ad66fd38e0a99eb"},
+    .{"wmf_initialise_sha256", "fe7264349d97f158569ece6ea5c8a5be507d6d344f018aea84b25d0a1f1cd130"},
+    .{"paged_tiff_manifest_sha256", "efb7202e2b197fd160daae4c0d956c2f59b06e8f4315586a04f5b0dd702e121b"},
+    .{"timed_media_manifest_sha256", "3647c50813dac435030750cbc1805222bff5d5b4f797df03d5b3212bff8dffea"},
+    .{"pdf_manifest_sha256", "4dc6cbcfb86ce40607fd7f3fcdbb491f05011c3b99616e297d7cda570cf46843"},
+    .{"three_d_manifest_sha256", "b8f65b4564dd11c13427e92427479c013a1f7d2d314d4451a17197c9e033c0a3"},
+    .{"timed_media_presets_sha256", "772087505e58bce76966aacf01031d596b63aff9d6b5b3872dfec0dab602096e"},
+    .{"main_config_schema_sha256", "f7cd22d03eafd54a2b7f280a9b57c37636b60c8d73b8bbf41472a032955e6657"},
+};
+fn profileString(core: []const u8, key: []const u8, historical: []const u8) []const u8 {
+    if (equal(core, it_current_core)) for (it_current_profile_strings) |pair| {
+        if (equal(key, pair[0])) return pair[1];
+    };
+    return historical;
+}
 const media_extensions = [_][2][]const u8{
     .{"PagedTiffHandler", "053e6a37f77c35fb19a7adb699fdc87af137cc41"},
     .{"TimedMediaHandler", "2d3ee29044041c34a456981b50ad53e87bc12c6a"},
@@ -881,6 +916,11 @@ fn mediaVariant(core: []const u8) ?[media_extensions.len][]const u8 {
     return null;
 }
 fn mediaSetAccepted(core: []const u8, actual: [media_extensions.len][]const u8) bool {
+    if (equal(core, it_current_core)) {
+        const selected = [_][]const u8{ "0dd1254beafb560f2cd76923c1997fb7d4aacda8", "8d9c271fb65e04e13a16acc5d5ed7da1cc51accc", "0ee572467a13edd54af80ab38fed86d71cab6ebf", "9d3ea849f1ebb3aafe7d4f75228d41ef018ea488" };
+        for (selected, actual) |expected, revision| if (!equal(expected, revision)) return false;
+        return true;
+    }
     // This newly observed epoch proves one complete set, not the older WMF set.
     if (equal(core, selected_jpeg_core) or equal(core, d191_core) or equal(core, wmf5_imageinfo_core) or equal(core, wmf5_rollout_core)) {
         for (mediaVariant(core).?, actual) |expected, revision| if (!equal(expected, revision)) return false;
@@ -917,6 +957,7 @@ fn profile(value: Value, site_bytes: []const u8, core: []const u8, binding: ?Ord
     if (!d191Profile(core, value)) return invalid;
     const gif = gifProfile(value);
     const webp = webpProfile(value);
+    if (equal(core, it_current_core) and !webp) return invalid;
     if (equal(core, wmf5_imageinfo_core) != (binding != null)) return invalid;
     if (binding) |bound| {
         if (!equal(try string(value, "selected_defaults_sha256"), bound.selected) or
@@ -924,12 +965,12 @@ fn profile(value: Value, site_bytes: []const u8, core: []const u8, binding: ?Ord
     }
     if (value != .object or value.object.count() != profile_strings.len + 3 + @as(usize, if (binding != null or vietnameseDefaults(value, core)) 2 else 0) + @as(usize, if (gif) 2 else 0) + @as(usize, if (webp) 2 else 0)) return invalid;
     for (profile_strings) |pair| {
-        const expected = if (webp and equal(pair[0], "kind")) "wikimedia-imagehandler-v5" else if (gif and equal(pair[0], "kind")) "wikimedia-imagehandler-v4" else pair[1];
+        const expected = if (webp and equal(pair[0], "kind")) "wikimedia-imagehandler-v5" else if (gif and equal(pair[0], "kind")) "wikimedia-imagehandler-v4" else profileString(core, pair[0], pair[1]);
         if (!equal(try string(value, pair[0]), expected)) return invalid;
     }
     if (gif and (!equal(try string(value, "gif_handler_sha256"), "f9ba4542bcbfbcdaee7db0c99a463b3f97e9e1e82b0e11adcae927c6638dbf52") or
-        !equal(try string(value, "main_config_schema_sha256"), "cf37b0e27b01de513fa9ac81bb4424f48c9892107543a0697622c677c7a1de52"))) return invalid;
-    if (webp and (!equal(try string(value, "webp_handler_core_revision"), current_core) or
+        !equal(try string(value, "main_config_schema_sha256"), profileString(core, "main_config_schema_sha256", "cf37b0e27b01de513fa9ac81bb4424f48c9892107543a0697622c677c7a1de52")))) return invalid;
+    if (webp and (!equal(try string(value, "webp_handler_core_revision"), if (equal(core, it_current_core)) it_current_core else current_core) or
         !equal(try string(value, "webp_handler_sha256"), "4a3fa93de539a2a13ce9cc9475af5e3e45037a5a576cac2df21139120593fe5a"))) return invalid;
     const families = try field(value, "handler_families");
     if (families != .object or families.object.count() != handler_families.len + @as(usize, if (gif) 1 else 0) + @as(usize, if (webp) 1 else 0)) return invalid;
@@ -955,19 +996,22 @@ fn profile(value: Value, site_bytes: []const u8, core: []const u8, binding: ?Ord
     if (!mediaSetAccepted(core, try mediaProfileSet(extensions))) return invalid;
     if (!digestMatches(site_bytes, try string(value, "site_raw_sha256"))) return invalid;
 }
-fn sdJpegProfile(value: Value, site: []const u8) !void {
+fn sdJpegProfile(value: Value, site: []const u8, catalogue: bool) !void {
     if (value != .object or value.object.count() != 6 or
         !equal(try string(value, "kind"), "wikimedia-imagehandler-v4") or
         !equal(try string(value, "site_family"), "wikimedia-wiktionary") or
         !equal(try string(value, "deployed_jpeg_sources_sha256"), "9641bd2cfe64f9a0cef506a6a165b818dad212b000022d643aa9ac9480f620b7") or
         !digestMatches(site, try string(value, "site_raw_sha256"))) return invalid;
     const handlers = try field(value, "handler_families");
-    if (handlers != .object or handlers.object.count() != 1) return invalid;
-    const jpeg = try field(handlers, "image/jpeg");
-    const family = handlerFamily("image/jpeg").?;
-    if (jpeg != .object or jpeg.object.count() != 2 or
-        !equal(try string(jpeg, "handler_class"), family.handler_class) or
-        !equal(try string(jpeg, "mediatype"), family.mediatype)) return invalid;
+    if (handlers != .object or handlers.object.count() != @as(usize, if (catalogue) 5 else 1)) return invalid;
+    for ([_]HandlerFamily{ handlerFamily("image/jpeg").?, handlerFamily("image/png").?,
+        handlerFamily("image/svg").?, handlerFamily("image/svg+xml").?, gif_handler }, 0..) |family, index| {
+        if (!catalogue and index != 0) break;
+        const item = try field(handlers, family.mime);
+        if (item != .object or item.object.count() != 2 or
+            !equal(try string(item, "handler_class"), family.handler_class) or
+            !equal(try string(item, "mediatype"), family.mediatype)) return invalid;
+    }
     const extensions = try mediaProfileSet(try field(value, "media_extensions"));
     if (!mediaSetAccepted(selected_jpeg_core, extensions)) return invalid;
 }
@@ -1261,7 +1305,14 @@ fn validateFileSource(a: A, doc: anytype, records_count: u64, batch_count: u64, 
     const binding = if (equal(doc.core_revision, wmf5_imageinfo_core)) ordinaryImageInfoDefaults(ns.wiki) orelse return invalid else null;
     const current = equal(doc.core_revision, wmf5_rollout_core);
     const current_jpeg = equal(doc.core_revision, selected_jpeg_core);
+    const it_current = equal(doc.core_revision, it_current_core);
     var current_scope: ImageInfoScope = .ordinary;
+    if (it_current) {
+        const digest = defaults.sha256 orelse return invalid;
+        if (!contract or !epochs or records_count == 0 or batch_count == 0 or
+            !equal(source_core, it_current_core) or !ns.isCurrentItFigureDefaults(digest)) return invalid;
+        current_scope = .it_current;
+    }
     if (current_jpeg) {
         const digest = defaults.sha256 orelse return invalid;
         if (!contract or !epochs or !equal(source_core, selected_jpeg_core)) return invalid;
@@ -1269,7 +1320,8 @@ fn validateFileSource(a: A, doc: anytype, records_count: u64, batch_count: u64, 
             if (records_count != 1 or batch_count != 1) return invalid;
             current_scope = .selected_jpeg;
         } else if (ns.isCurrentSdFigureDefaults(digest) and selectedSdJpeg(site) != null) {
-            if (records_count != batch_count or (records_count != 1 and records_count != 2)) return invalid;
+            if (!sdCatalogue(doc.raw_sha256, records_count, batch_count) and
+                (records_count != batch_count or (records_count != 1 and records_count != 2))) return invalid;
             current_scope = .sd_current_jpeg;
         } else return invalid;
     }
@@ -1309,14 +1361,14 @@ fn validateFileSource(a: A, doc: anytype, records_count: u64, batch_count: u64, 
             !equal(try string(empty_general, "git-hash"), doc.core_revision)) return invalid;
         return null;
     }
-    if ((binding == null and !current and !current_jpeg and !acceptedResponseCore(doc.core_revision, epochs)) or !d191Profile(source_core, doc.source_profile)) return invalid;
+    if ((binding == null and !current and !current_jpeg and !it_current and !acceptedResponseCore(doc.core_revision, epochs)) or !d191Profile(source_core, doc.source_profile)) return invalid;
     if (current_scope == .sd_current_jpeg) {
-        try sdJpegProfile(doc.source_profile, site);
+        try sdJpegProfile(doc.source_profile, site, sdCatalogue(doc.raw_sha256, records_count, batch_count));
     } else try profile(doc.source_profile, site, doc.core_revision, binding);
     if (webpProfile(doc.source_profile) and (!contract or !epochs)) return invalid;
     const gif = gifProfile(doc.source_profile);
     if ((equal(doc.core_revision, response_core) or registrationEpoch(doc.core_revision) or wmf4Epoch(doc.core_revision)) and !gif) return invalid;
-    if (gif and (!(binding != null or current or current_jpeg or equal(doc.core_revision, current_core) or (epochs and responseEpoch(doc.core_revision))) or (!contract and !svgOccurrenceGenerator(doc.generator_sha256) and
+    if (gif and (!(binding != null or current or current_jpeg or it_current or equal(doc.core_revision, current_core) or (epochs and responseEpoch(doc.core_revision))) or (!contract and !svgOccurrenceGenerator(doc.generator_sha256) and
         !equal(doc.generator_sha256, "7bce7ec0bd0acdf6a9d726ed50c1e85a64bc089731d0347d048f1787003d4c0b")))) return invalid;
     const server = try officialServer(a, ns.wiki);
     const site_query = try generalWithEpoch(registration, ns.wiki, ns.content_language, server, doc.core_revision, epochs, current_scope);
@@ -1349,6 +1401,9 @@ fn readStreamHeaders(a: A, temp: A, projection: *StreamInput, raw: *StreamInput)
     const header = try std.json.parseFromValueLeaky(StreamHeader, a, try replayDocumentShape(a, header_value), .{ .allocate = .alloc_always });
     if ((equal(header.core_revision, selected_jpeg_core) or equal(header.core_revision, wmf5_imageinfo_core) or equal(header.core_revision, wmf5_rollout_core)) and
         (!contract or !equal(try string(header_value, "replay_contract"), replay_contract_v6))) return invalid;
+    if (equal(header.core_revision, it_current_core) and (!contract or
+        !equal(try string(header_value, "replay_contract"), replay_contract_v6) or
+        header.records_count == 0 or header.base_batches == 0 or header.observed_batches != 0)) return invalid;
     const count_u64 = std.math.add(u64, header.base_batches, header.observed_batches) catch return invalid;
     const max_requests = std.math.mul(u64, header.base_batches, 50) catch return invalid;
     // Counts are bounded by the authenticated physical inputs, not an
@@ -1621,6 +1676,7 @@ const StreamBatches = struct {
     raw_sha256: []const u8,
     allow_tiff_companion: bool = false,
     encoded_records: bool = false,
+    it_inventory: bool = false,
     cursor: usize = 0,
     fn next(self: *StreamBatches, a: A) !RawFileBatch {
         const start = self.input.diagnosticPosition();
@@ -1636,6 +1692,8 @@ const StreamBatches = struct {
         // The outer record has bounded depth independently of its quoted HTTP
         // response. The response itself uses the existing strict preflight.
         const value = try rawStreamRecordValue(a, bytes, self.encoded_records);
+        if (self.it_inventory and (value != .object or value.object.count() != 2 or
+            !value.object.contains("requests") or !value.object.contains("response"))) return invalid;
         try validateTiffCompanionField(value, self.allow_tiff_companion);
         const batch = try std.json.parseFromValueLeaky(RawFileBatch, a, value, .{ .allocate = .alloc_always });
         if ((batch.observed_svg_width_px != null or batch.observed_svg_occurrences != null or batch.jpeg_metadata_only != null) != (self.cursor >= self.base_count)) return invalid;
@@ -2122,6 +2180,10 @@ pub const Registry = struct {
     // Registry still withholds resolveCanonicalFile, file and intrinsic roles.
     yi_measured_thumbnail_rename: bool = false,
     reviewed_thumbnail_site: bool = false,
+    it_inventory: bool = false,
+    // Owned independently of the default/Book registry. Only Writer width
+    // resolution consults it, so its epoch cannot satisfy Book callbacks.
+    width_inventory: ?*Registry = null,
     // Parallel to records; derived only after complete raw file-fact replay.
     resolved_files: []const []const u8 = &.{},
     // Authenticated API missing=true facts only; no geometry or link authority.
@@ -2372,6 +2434,7 @@ pub const Registry = struct {
             .allow_tiff_companion = parsed_header.contract or equal(header.generator_sha256, file_generator_sha256),
             .streamed_v6 = parsed_header.streamed_v6,
             .encoded_records = parsed_header.encoded_records,
+            .it_inventory = equal(header.core_revision, it_current_core),
             .scratch_reset_mode = switch (reset_mode) { .free_all => .free_all, else => .{ .retain_with_limit = raw_batch_retained_limit } } };
         return validateFileFacts(&arena, .{ .schema = "wikidict.figure-sizing-files.v1", .wiki = header.wiki,
             .content_language = header.content_language, .core_revision = header.core_revision,
@@ -2419,15 +2482,22 @@ pub const Registry = struct {
             return .{ .arena = arena.*, .namespace_catalog = ns, .records = &.{}, .file_authority = true };
         };
         const sd_jpeg = equal(doc.core_revision, selected_jpeg_core) and equal(ns.wiki, "sdwiktionary");
+        // validateFileSource and the streaming hash bind the whole exact input.
+        const sd_catalogue = sd_jpeg and equal(doc.raw_sha256, sd_catalogue_raw);
         const jpeg_file = if (equal(doc.core_revision, selected_jpeg_core))
             (if (sd_jpeg) selectedSdJpeg(site) else selectedJpeg(ns.wiki, site)) orelse return invalid else null;
         if (jpeg_file) |file| {
-            if (!batches.streamed_v6 or !equal(doc.records[0].requested_file, file) or
+            if (!batches.streamed_v6) return invalid;
+            // The complete projection is title sorted. Its original authority
+            // remains tied to the unchanged first raw response, not record 0.
+            if (!sd_catalogue and (!equal(doc.records[0].requested_file, file) or
                 !equal(doc.records[0].canonical_file, file) or doc.records[0].state != .eligible or
-                !equal(doc.records[0].mime, "image/jpeg") or !equal(doc.records[0].mediatype, "BITMAP")) return invalid;
+                !equal(doc.records[0].mime, "image/jpeg") or !equal(doc.records[0].mediatype, "BITMAP"))) return invalid;
         }
         const gif = gifProfile(doc.source_profile);
         const webp = webpProfile(doc.source_profile);
+        const it_current = equal(doc.core_revision, it_current_core);
+        if (it_current and !batches.streamed_v6) return invalid;
         const italian_wmf5_document = batches.streamed_v6 and gif and !webp and equal(doc.core_revision, wmf5_imageinfo_core) and
             equal(ns.wiki, "itwiktionary") and equal(ns.content_language, "it") and equal(ns.dump_date, "20261001");
         const sr_jpeg_document = batches.streamed_v6 and gif and !webp and equal(doc.core_revision, wmf5_imageinfo_core) and
@@ -2451,6 +2521,7 @@ pub const Registry = struct {
             const slot = try facts.getOrPut(arena.child_allocator, fact.requested_file);
             if (slot.found_existing) return invalid;
             slot.value_ptr.* = .{ .fact = fact };
+            if (it_current and (fact.observed_svg_width_px != null or fact.observed_batch != null or fact.observed_svg_heights != null)) return invalid;
             if ((fact.observed_svg_width_px == null) != (fact.observed_batch == null)) return invalid;
             if (fact.observed_batch) |observed_batch| {
                 if (observed_batch <= fact.batch or observed_batch >= batches.count or
@@ -2525,7 +2596,15 @@ pub const Registry = struct {
             // rows may use the new core. The first authenticated registration, defaults
             // and every supplemental observation retain their original source rules.
             const sd_local = sd_jpeg and batch_index == 1;
-            const scope: ImageInfoScope = if (jpeg_file) |file| scope: {
+            const sd_catalogue_batch = sd_catalogue and batch_index >= 2;
+            const scope: ImageInfoScope = if (it_current) scope: {
+                if (!equal(batch_core, it_current_core) or supplement or batch.tiff_metadata_response != null or
+                    (batch_index == 0 and !equal(batch.response, site))) return invalid;
+                break :scope .it_current;
+            } else if (sd_catalogue_batch) scope: {
+                if (supplement or batch.tiff_metadata_response != null or !equal(batch_core, sd_local_antenna_core)) return invalid;
+                break :scope .sd_current_jpeg;
+            } else if (jpeg_file) |file| scope: {
                 if (supplement or batch.tiff_metadata_response != null or batch.requests.len != 1) return invalid;
                 if (sd_local) {
                     if (!equal(batch_core, sd_local_antenna_core) or !equal(batch.requests[0], sd_local_antenna) or
@@ -2560,9 +2639,9 @@ pub const Registry = struct {
                 break :blk try TiffCompanion.init(temp, response, ns, server, batch_core, batch.requests.len, epochs,
                     if (scope == .rollout_base or scope == .mon_current) scope else .ordinary, try mediaRegistration(query, null));
             } else null;
-            // The exact local batch has the same registered handlers as
-            // the selected deployment, and is digest-bound above.
-            _ = if (sd_local) try mediaRegistrationForCore(query, null, selected_jpeg_core) else try mediaRegistration(query, null);
+            // Both SD capture roles at 2cc57e9 use the exact selected
+            // extension set. Keep validation against that whole registration.
+            _ = if (sd_local or sd_catalogue_batch) try mediaRegistrationForCore(query, null, selected_jpeg_core) else try mediaRegistration(query, null);
             const observed = try timestamp(try string(source, "curtimestamp"));
             if (observed.fraction.len != 0) return invalid;
             const pages = try field(query, "pages");
@@ -2696,8 +2775,9 @@ pub const Registry = struct {
                 if (!known_media_type) return invalid;
                 var eligible = width > 0 and height > 0;
                 var default_page = false;
-                if (if (webp and equal(batch_core, current_core) and equal(fact.mime, webp_handler.mime)) @as(?HandlerFamily, webp_handler)
-                    else if (gif and equal(fact.mime, gif_handler.mime)) @as(?HandlerFamily, gif_handler) else handlerFamily(fact.mime)) |family| {
+                if (if (webp and (equal(batch_core, current_core) or scope == .it_current) and equal(fact.mime, webp_handler.mime)) @as(?HandlerFamily, webp_handler)
+                    else if (gif and equal(fact.mime, gif_handler.mime)) @as(?HandlerFamily, gif_handler)
+                    else if (sd_catalogue and equal(fact.mime, "image/tiff")) null else handlerFamily(fact.mime)) |family| {
                     if (!equal(family.mediatype, fact.mediatype)) return invalid;
                     if (equal(fact.mime, "image/webp")) {
                         staticWebPAxes(temp, image, width, height) catch |err| switch (err) {
@@ -2769,13 +2849,14 @@ pub const Registry = struct {
                     proof.value_ptr.* = if (proof.found_existing) proof.value_ptr.* and proven else proven;
                 }
                 if (!eligible and !default_page) continue;
-                const jpeg_epoch = scope == .sd_current_jpeg or sr_jpeg_epoch or equal(batch_core, current_core) or (epochs and responseEpoch(batch_core)) or
+                const jpeg_epoch = scope == .it_current or scope == .sd_current_jpeg or sr_jpeg_epoch or equal(batch_core, current_core) or (epochs and responseEpoch(batch_core)) or
                     (italian_wmf5_document and equal(batch_core, wmf5_imageinfo_core) and scope == .ordinary);
                 if ((jpeg_epoch or italian_wmf5_document) and equal(fact.mime, "image/jpeg")) {
                     // Keep every IT alias in the existing AND proof, even if
                     // a future admitted base epoch cannot supply JPEG authority.
                     const proven = jpeg_epoch and try jpegUnrotatedMetadata(temp, image);
-                    if (scope == .sd_current_jpeg and (!proven or !equal(repository, if (sd_local) "local" else "shared"))) return invalid;
+                    if (scope == .sd_current_jpeg and !sd_catalogue_batch and
+                        (!proven or !equal(repository, if (sd_local) "local" else "shared"))) return invalid;
                     const evidence = try jpeg_evidence.getOrPut(a, fact.canonical_file);
                     const size = (try field(image, "size")).integer;
                     if (evidence.found_existing) {
@@ -2891,7 +2972,7 @@ pub const Registry = struct {
         const image_map_no_link_policy = equal(doc.core_revision, "f45897451256aa3799aecc5d7ee320ade22beaec") and
             try imageMapNoLinkPolicy(a, site, ns);
         return .{ .arena = arena.*, .namespace_catalog = ns, .records = records.items,
-            .file_authority = true, .resolved_files = resolved_files, .missing_files = missing_files, .height_bound_records = height_bounds, .height_occurrences = height_occurrences,
+            .file_authority = true, .it_inventory = it_current, .resolved_files = resolved_files, .missing_files = missing_files, .height_bound_records = height_bounds, .height_occurrences = height_occurrences,
             .static_poster_files = static_poster_files, .svg_language_file_models = svg_languages,
             .intrinsic_only_jpeg_index = intrinsic_only_jpeg_index,
             .reviewed_thumbnail_site = equal(doc.core_revision, current_core) and equal(ns.wiki, "viwiktionary") and
@@ -2978,6 +3059,7 @@ pub const Registry = struct {
 
     pub fn resolveHeightOnlyWidth(raw: ?*const anyopaque, a: A, file: []const u8, format_value: types.FigureFormat, height: u32) A.Error!?u32 {
         const self: *const Registry = @ptrCast(@alignCast(raw orelse return null));
+        if (self.it_inventory) return null;
         if (!self.file_authority or format_value != .thumbnail or height == 0) return null;
         const canonical = canonicalFile(a, self.namespace_catalog, file) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory, else => return null,
@@ -2994,6 +3076,7 @@ pub const Registry = struct {
         return null;
     }
     fn rasterGeometryIndex(self: *const Registry, a: A, file: []const u8, allow_intrinsic_only: bool) A.Error!?usize {
+        if (self.it_inventory) return null;
         if (!self.file_authority) return null;
         const canonical = canonicalFile(a, self.namespace_catalog, file) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory, else => return null,
@@ -3186,7 +3269,76 @@ pub const Registry = struct {
         }
         return null;
     }
-    pub fn deinit(self: *Registry) void { self.arena.deinit(); self.* = undefined; }
+    pub fn attachWidthInventory(self: *Registry, inventory: Registry) !void {
+        if (!self.file_authority or self.it_inventory or self.width_inventory != null or !inventory.it_inventory or
+            self.namespace_catalog != inventory.namespace_catalog) return invalid;
+        const owned = try self.arena.allocator().create(Registry);
+        owned.* = inventory;
+        self.width_inventory = owned;
+    }
+
+    pub fn deinit(self: *Registry) void {
+        if (self.width_inventory) |inventory| inventory.deinit();
+        self.arena.deinit();
+        self.* = undefined;
+    }
+
+    fn fileRecordIndex(self: *const Registry, key: []const u8) ?usize {
+        var lo: usize = 0;
+        var hi = self.records.len;
+        while (lo < hi) {
+            const mid = lo + (hi - lo) / 2;
+            switch (std.mem.order(u8, self.records[mid].canonical_file, key)) {
+                .lt => lo = mid + 1,
+                .gt => hi = mid,
+                .eq => return mid,
+            }
+        }
+        return null;
+    }
+
+    const SupplementalWidth = struct { record: Record, handler: HeightBound };
+
+    fn supplementalWidthRecord(self: *const Registry, a: A, file: []const u8) A.Error!?SupplementalWidth {
+        const inventory = self.width_inventory orelse return null;
+        const key = canonicalFile(a, self.namespace_catalog, file) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return null,
+        };
+        defer a.free(key);
+        if (self.fileRecordIndex(key) != null or self.missing_files.contains(key)) return null;
+        const index = inventory.fileRecordIndex(key) orelse return null;
+        const record = inventory.records[index];
+        // The independent file Provider owns redirects. Grant only a positive
+        // same-title fact with validated logical axes. ApiQueryImageInfo and
+        // ImageHandler read the same File.getWidth/getHeight values, including
+        // logical JPEG axes after the source handler's EXIF normalization.
+        if (!equal(inventory.resolved_files[index], key) or
+            !equal(record.proof_kind, "file-logical-axes-width-bound")) return null;
+        return .{ .record = record, .handler = inventory.height_bound_records[index] };
+    }
+
+    pub fn resolveWriter(raw: ?*const anyopaque, a: A, file: []const u8, format_value: types.FigureFormat, width: ?u32, height: ?u32) A.Error!?types.FigureSizingPolicy {
+        if (try resolve(raw, a, file, format_value, width, height)) |policy| return policy;
+        const self: *const Registry = @ptrCast(@alignCast(raw orelse return null));
+        if (format_value != .thumbnail or height != null or width == null or width.? == 0) return null;
+        const fact = (try self.supplementalWidthRecord(a, file)) orelse return null;
+        // The reviewed SvgHandler preserves the existing logical fit while
+        // choosing a separate physical raster size.
+        return if (width.? <= fact.record.original_width or
+            (fact.handler == .svg_redundant_height and sourceSvgRasterLogicalWidth(fact.record, width.?, height))) .requested_fit else null;
+    }
+
+    pub fn resolveWriterWidthLimit(raw: ?*const anyopaque, a: A, file: []const u8, format_value: types.FigureFormat) A.Error!?u32 {
+        if (try resolveWidthLimit(raw, a, file, format_value)) |width| return width;
+        const self: *const Registry = @ptrCast(@alignCast(raw orelse return null));
+        if (format_value != .thumbnail) return null;
+        const fact = (try self.supplementalWidthRecord(a, file)) orelse return null;
+        return switch (fact.handler) {
+            .png, .gif, .webp, .jpeg_unrotated => fact.record.original_width,
+            else => null,
+        };
+    }
     pub fn resolve(raw: ?*const anyopaque, a: A, file: []const u8, format_value: types.FigureFormat, width: ?u32, height: ?u32) A.Error!?types.FigureSizingPolicy {
         return resolveScoped(raw, a, file, format_value, width, height, false);
     }
@@ -3194,6 +3346,7 @@ pub const Registry = struct {
     // observed height-only callbacks retain their original refusal domains.
     pub fn resolveSvgExplicitBox(raw: ?*const anyopaque, a: A, file: []const u8, format_value: types.FigureFormat, width: ?u32, height: ?u32) A.Error!?types.FigureSizingPolicy {
         const self: *const Registry = @ptrCast(@alignCast(raw orelse return null));
+        if (self.it_inventory) return null;
         if (!self.file_authority or format_value != .thumbnail or width == null or height == null or width.? == 0 or height.? == 0) return null;
         const canonical = canonicalFile(a, self.namespace_catalog, file) catch |err| switch (err) { error.OutOfMemory => return error.OutOfMemory, else => return null };
         defer a.free(canonical);
@@ -3217,6 +3370,7 @@ pub const Registry = struct {
     }
     fn resolveScoped(raw: ?*const anyopaque, a: A, file: []const u8, format_value: types.FigureFormat, width: ?u32, height: ?u32, default_page: bool) A.Error!?types.FigureSizingPolicy {
         const self: *const Registry = @ptrCast(@alignCast(raw orelse return null));
+        if (self.it_inventory) return null;
         // Linker uses File.getUnscaledThumb for a bare frame. Keep this
         // bare-frame grant separate from authored dimensions and all thumbnail
         // bounds. The parallel classification is derived only by full file
@@ -9399,4 +9553,65 @@ test "NAH exact selected JPEG certifies intrinsic axes without width authority" 
     try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null), try Registry.resolve(&registry, a, authored, .framed, null, null));
     try std.testing.expect((try Registry.resolveIntrinsicSize(&registry, a, "File:WhereRainbowRises.jpg")) == null);
     try std.testing.expect((try Registry.resolveIntrinsicSize(&registry, a, "File:Star-Vega.png")) == null);
+}
+
+test "Sindhi Figure catalogue replays the complete authenticated registry" {
+    const a = std.testing.allocator;
+    const fixture = "testdata/sd-figure-catalogue01/";
+    var ns = try namespaces.Registry.init(a, @embedFile(fixture ++ "namespace-registry.tsv"));
+    defer ns.deinit();
+    var defaults_sha: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(@embedFile(fixture ++ "figure-siteinfo.raw.json"), &defaults_sha, .{});
+    const core = ns.currentFigureDefaultsCore(defaults_sha, true) orelse return error.MissingSindhiDefaults;
+    const defaults: DefaultsSource = .{ .core = core, .sha256 = defaults_sha };
+    const projection_bytes = @embedFile(fixture ++ "figure-sizing.json");
+    const raw_bytes = @embedFile(fixture ++ "figure-sizing.raw.json");
+    const site = @embedFile(fixture ++ "figure-sizing.site.json");
+    var p: StreamTestSource.Slice = .{ .bytes = projection_bytes };
+    var r: StreamTestSource.Slice = .{ .bytes = raw_bytes };
+    var projection = p.input();
+    var raw = r.input();
+    var registry = try Registry.initStreamWithDefaults(a, &projection, &raw, site, &ns, defaults);
+    defer registry.deinit();
+
+    for ([_]struct { file: []const u8, width: u32, height: u32 }{
+        .{ .file = "فائل:Bactrian Camel.jpg", .width = 226, .height = 140 },
+        .{ .file = "فائل:Beagle.png", .width = 180, .height = 142 },
+        .{ .file = "فائل:Germany map.gif", .width = 325, .height = 349 },
+    }) |expected| {
+        const intrinsic = (try Registry.resolveIntrinsicSize(&registry, a, expected.file)) orelse return error.MissingCatalogueRaster;
+        try std.testing.expectEqual(expected.width, intrinsic.width_px);
+        try std.testing.expectEqual(expected.height, intrinsic.height_px);
+    }
+    try std.testing.expectEqual(@as(?types.FigureSizingPolicy, .requested_fit),
+        try Registry.resolve(&registry, a, "فائل:Simple triangle.svg", .thumbnail, 80, null));
+
+    var rows = std.mem.splitScalar(u8, projection_bytes, '\n');
+    _ = rows.next();
+    var count: usize = 0;
+    var missing: usize = 0;
+    while (rows.next()) |line| {
+        if (line.len == 0) break;
+        const fact = try std.json.parseFromSlice(FileFact, a, line, .{});
+        defer fact.deinit();
+        count += 1;
+        if (fact.value.state != .missing) continue;
+        missing += 1;
+        const target = try Registry.resolveCanonicalFile(&registry, a, fact.value.requested_file);
+        defer if (target) |name| a.free(name);
+        try std.testing.expectEqual(@as(?[]const u8, null), target);
+    }
+    try std.testing.expectEqual(@as(usize, 343), count);
+    try std.testing.expectEqual(@as(usize, 15), missing);
+
+    const edited = try a.dupe(u8, raw_bytes);
+    defer a.free(edited);
+    const observed = "2026-11-27T13:47:23Z";
+    const offset = std.mem.indexOf(u8, edited, observed) orelse return error.MissingCatalogueTimestamp;
+    // Change one second without changing the request, file facts or record shape.
+    edited[offset + observed.len - 2] = '4';
+    r = .{ .bytes = edited };
+    projection = p.input();
+    raw = r.input();
+    try std.testing.expectError(invalid, Registry.initStreamWithDefaults(a, &projection, &raw, site, &ns, defaults));
 }

@@ -1,0 +1,673 @@
+{{chembox
+| verifiedrevid  = 477162647
+| Name           = Water
+| ImageFile      = 
+| ImageFile1     = H2O 2D labelled.svg
+| ImageSize1     = 150px
+| ImageName1     = The water molecule has this basic geometric structure
+| ImageClass1    = skin-invert-image
+| ImageFileL1    = Water-3D-balls-A.png
+| ImageClassL1   = bg-transparent
+| ImageSizeL1    = 100px
+| ImageNameL1    = Ball-and-stick model of a water molecule
+| ImageFileR1    = Water molecule 3D.svg
+| ImageClassR1   = bg-transparent
+| ImageSizeR1    = 100px
+| ImageNameR1    = Space filling model of a water molecule
+| ImageCaptionR1 = {{legend|red|Oxygen, O}}{{legend|white|Hydrogen, H}}
+| ImageFile2     = Water drop 001.jpg
+| ImageSize2     = 264px
+| ImageName2     = A drop of water falling towards water in a glass
+| OtherNames     = {{ubl
+|Hydrogen oxide
+|Hydrogen hydroxide (H<sub>2</sub>O or HOH)
+|Hydroxylic acid
+|[[Dihydrogen monoxide]] (DHMO) (parody name)
+|Dihydrogen oxide
+|Hydric acid
+|Hydrohydroxic acid
+|Hydroxic acid
+|Hydroxoic acid
+|Hydrol
+|μ-Oxidodihydrogen
+|κ<sup>1</sup>-Hydroxylhydrogen(0)
+|Aqua
+|Neutral liquid
+|Oxygen dihydride (may be considered incorrect)
+}}
+| data page pagename = Water (data page)
+| PIN            = Water
+| SystematicName = Oxidane (not in common use)
+| Section1       = {{Chembox Identifiers
+| CASNo = 7732-18-5
+| CASNo_Ref = {{cascite|correct|CAS}}
+| Beilstein = 3587155
+| ChEBI_Ref = {{ebicite|correct|EBI}}
+| ChEBI = 15377
+| ChEMBL_Ref = {{ebicite|correct|EBI}}
+| ChEMBL = 1098659
+| ChemSpiderID_Ref = {{chemspidercite|correct|chemspider}}
+| ChemSpiderID = 937
+| DrugBank = DB09145
+| EC_number = 231-791-2
+| Gmelin = 117
+| KEGG = C00001
+| PubChem = 962 
+| RTECS = ZC0110000
+| UNII_Ref = {{fdacite|correct|FDA}}
+| UNII = 059QF0KO0R
+| StdInChI_Ref = {{stdinchicite|correct|chemspider}}
+| StdInChI = 1S/H2O/h1H2
+| StdInChIKey_Ref = {{stdinchicite|correct|chemspider}}
+| StdInChIKey = XLYOFNOQVPJJNP-UHFFFAOYSA-N
+| SMILES = O
+}}
+| Section2       = {{Chembox Properties
+| Formula = {{chem|H|2|O}}
+| MolarMass = 18.01528(33) g/mol
+| Odor = Odorless
+| Appearance = Almost colorless or white crystalline solid, almost colorless liquid, with a [[Color of water|hint of blue]], colorless gas<ref name="Braun_1993_612" />
+| Density = {{ubl|Liquid (1 atm, [[Vienna Standard Mean Ocean Water|VSMOW]]):
+|{{val|0.99984283|(84)|u=g/mL}} at {{val|0|u=degC}}<ref name=Tanaka>{{cite journal |last1=Tanaka |first1=M |last2=Girard |first2=G |last3=Davis |first3=R |last4=Peuto |first4=A |last5=Bignell |first5=N |title=Recommended table for the density of water between 0 C and 40 C based on recent experimental reports |journal=Metrologia |date=August 2001 |volume=38 |issue=4 |pages=301–309 |doi=10.1088/0026-1394/38/4/3|bibcode=2001Metro..38..301T }}</ref>
+|{{val|0.99997495|(84)|u=g/mL}} at {{val|3.983035|(670)|u=degC}} (temperature of maximum density, often 4 °C)<ref name=Tanaka/>
+|{{val|0.99704702|(83)|u=g/mL}} at {{val|25|u=degC}}<ref name=Tanaka/>
+|{{val|0.96188791|(96)|u=g/mL}} at {{val|95|u=degC}}<ref>{{cite book|first1=Eric W.|last1=Lemmon|first2=Ian H.|last2=Bell|first3=Marcia L.|last3=Huber|first4=Mark O.|last4=McLinden|chapter=Thermophysical Properties of Fluid Systems|title=NIST Chemistry WebBook, NIST Standard Reference Database Number 69|date=1997 |editor-first1=P.J.|editor-last1=Linstrom|editor-first2=W.G.|editor-last2=Mallard|publisher=National Institute of Standards and Technology|doi=10.18434/T4D303|access-date=17 October 2023|url=https://webbook.nist.gov/cgi/fluid.cgi?Action=Load&ID=C7732185&Type=IsoBar&Digits=12&P=1&THigh=100&TLow=90&TInc=1&RefState=DEF&TUnit=C&PUnit=atm&DUnit=g%2Fml&HUnit=kJ%2Fmol&WUnit=m%2Fs&VisUnit=uPa*s&STUnit=N%2Fm|archive-date=23 October 2023|archive-url=https://web.archive.org/web/20231023083019/https://webbook.nist.gov/cgi/fluid.cgi?Action=Load&ID=C7732185&Type=IsoBar&Digits=12&P=1&THigh=100&TLow=90&TInc=1&RefState=DEF&TUnit=C&PUnit=atm&DUnit=g%2Fml&HUnit=kJ%2Fmol&WUnit=m%2Fs&VisUnit=uPa*s&STUnit=N%2Fm|url-status=live}}</ref>
+|Solid:
+|0.9167 g/mL at 0 °C
+}}
+| MeltingPtC = 0.00
+| MeltingPt_notes =
+| BoilingPtC = 99.98
+| BoilingPt_ref =
+| pKa = 13.995
+| pKb = 13.995
+| ConjugateAcid = [[Hydronium]] H<sub>3</sub>O<sup>+</sup> (pK<sub>a</sub> = 0)
+| ConjugateBase = [[Hydroxide]] OH<sup>–</sup> (pK<sub>b</sub> = 0)
+| Viscosity = 0.890 mPa·s (0.890 [[Poise (unit)|cP]])
+| RefractIndex = 1.3330 (20&nbsp;°C) at 25&nbsp;°C 
+
+| SolubleOther =  Poorly soluble in [[haloalkane]]s, [[aliphatic]] and [[aromatic]] hydrocarbons, [[ether]]s.<ref name=chemister>{{cite web| title = Properties of substance: water| url = http://chemister.ru/Database/properties-en.php?dbid=1&id=1| first = Kiper Ruslan| last = Anatolievich| access-date = 2014-06-01| archive-date = 2014-06-02| archive-url = https://web.archive.org/web/20140602200111/http://chemister.ru/Database/properties-en.php?dbid=1&id=1| url-status = live}}</ref> <br> Improved solubility in [[carboxylate]]s, [[alcohols]], [[ketones]], [[amines]]. <br> Miscible with [[methanol]], [[ethanol]], [[propanol]], [[isopropanol]], [[acetone]], [[glycerol]], [[1,4-dioxane]], [[tetrahydrofuran]], [[sulfolane]], [[acetaldehyde]], [[dimethylformamide]], [[dimethoxyethane]], [[dimethyl sulfoxide]], [[acetonitrile]]. <br> Partially miscible with [[diethyl ether]], [[methyl ethyl ketone]], [[dichloromethane]], [[ethyl acetate]], [[bromine]].
+| ThermalConductivity = 0.6065 W/(m·K)<ref>{{Cite journal|last1=Ramires|first1=Maria L. V.|last2=Castro|first2=Carlos A. Nieto de|last3=Nagasaka|first3=Yuchi|last4=Nagashima|first4=Akira|last5=Assael|first5=Marc J.|last6=Wakeham|first6=William A.|date=1995-05-01|title=Standard Reference Data for the Thermal Conductivity of Water|journal=Journal of Physical and Chemical Reference Data|volume=24|issue=3|pages=1377–1381|doi=10.1063/1.555963|issn=0047-2689|bibcode=1995JPCRD..24.1377R}}</ref>
+}}
+| Section3       = {{Chembox Structure
+| MolShape = [[bent (chemistry)|Bent]]
+| CrystalStruct = [[ice|Hexagonal]]
+| Dipole = 1.8546 [[Debye|D]]
+| PointGroup = C<sub>2v</sub>
+}}
+| Section4       = {{Chembox Thermochemistry
+| DeltaHf = −285.83 ± 0.04&nbsp;kJ/mol<ref name=chemister /><ref name=nist>{{nist|name=Water|id=C7732185|access-date=2014-06-01|mask=FFFF|units=SI}}</ref>
+| DeltaGf = −237.24&nbsp;kJ/mol<ref name=chemister />
+| Entropy = 69.95 ± 0.03&nbsp;J/(mol·K)<ref name=nist />
+| HeatCapacity = 75.385 ± 0.05&nbsp;J/(mol·K)<ref name=nist />
+}}
+| Section5       = 
+| Section6       = 
+| Section7       = {{Chembox Hazards
+| MainHazards = [[Drowning]]<br />[[Avalanche]] (as snow)<br />[[Water intoxication]]
+| NFPA-H = 0
+| NFPA-F = 0
+| NFPA-R = 0
+| FlashPt= Non-flammable
+| GHSPictograms = 
+| GHSSignalWord =
+| HPhrases = 
+| PPhrases = 
+| GHS_ref =<ref>GHS: [https://pubchem.ncbi.nlm.nih.gov/compound/962 PubChem 962] {{Webarchive|url=https://web.archive.org/web/20230728173927/https://pubchem.ncbi.nlm.nih.gov/compound/962 |date=2023-07-28 }}</ref>
+| ExternalSDS = 
+}}
+| Section9       = {{Chembox Related
+| OtherAnions = {{ubl|[[Hydrogen sulfide]]|[[Hydrogen selenide]]|[[Hydrogen telluride]]|[[Hydrogen polonide]]|[[Hydrogen peroxide]]}}
+| OtherFunction_label = [[solvent]]s
+| OtherFunction = {{ubl|[[Acetone]]|[[Ethanol]]|[[Methanol]]|[[Hydrogen fluoride]]|[[Ammonia]]}}
+}}
+}}
+{{hunfn}}
+# {{label|hu|gyógyszertan}} A víz a Föld egyik legelterjedtebb, legfontosabb és legkülönlegesebb vegyülete. Kémiai képlete egyszerű: '''H₂O''', vagyis két hidrogénatom és egy oxigénatom alkotja. Minden ismert élőlény létezéséhez elengedhetetlen, és a Föld felszínének mintegy 71%-át borítja. A víz nélkülözhetetlen az '''élet fenntartásához''', és különleges fizikai-kémiai tulajdonságainak köszönhetően számos tudományterület központi témája.
+
+
+-----
+
+<span id="a-víz-kémiai-szerkezete-és-molekulája"></span>
+== 2. A víz kémiai szerkezete és molekulája ==
+
+<span id="a-molekula-szerkezete"></span>
+=== 2.1 A molekula szerkezete ===
+
+A vízmolekula egy '''poláris kovalens kötésű''' háromatomos molekula:
+
+* Központi atom: '''oxigén (O)'''
+* Két hidrogénatom kapcsolódik hozzá '''két darab σ-kötéssel'''
+* Kötésszög: kb. '''104,5°''', ami meghatározza a molekula hajlított (V-alakú) szerkezetét
+
+<span id="polaritás"></span>
+=== 2.2 Polaritás ===
+
+A víz rendkívül '''poláris molekula''':
+
+* Az oxigén nagyobb '''elektronegativitása''' miatt a kötéseknél elektroneltolódás jön létre
+* Ez '''részleges negatív töltést''' eredményez az oxigénnél, míg a hidrogéneknél '''pozitív töltés'''
+* A molekula '''dipólusmomentuma''': 1,85 D (Debye)
+
+<span id="hidrogénkötés"></span>
+=== 2.3 Hidrogénkötés ===
+
+A vízmolekulák között '''hidrogénkötések''' alakulnak ki:
+
+* Egy vízmolekula akár '''4 hidrogénkötésben''' is részt vehet
+* Ez felelős a víz '''magas olvadás- és forráspontjáért''', '''felületi feszültségéért''', '''anomáliáiért'''
+
+
+-----
+
+<span id="fizikai-tulajdonságok"></span>
+== 3. Fizikai tulajdonságok ==
+
+{| class="wikitable"
+|-
+! Tulajdonság
+! Érték
+|-
+| Képlet
+| H₂O
+|-
+| Moláris tömeg
+| 18,015 g/mol
+|-
+| Olvadáspont
+| 0 °C
+|-
+| Forráspont
+| 100 °C
+|-
+| Legnagyobb sűrűség
+| 4 °C-on
+|-
+| Dielektromos állandó
+| ~80 (20 °C-on)
+|-
+| Viszkozitás
+| 0,89 mPa·s (25 °C-on)
+|-
+| Felületi feszültség
+| 72,8 mN/m
+|-
+| Párolgáshő
+| 2260 kJ/kg (100 °C-on)
+|}
+
+<span id="anomáliák"></span>
+=== 3.1 Anomáliák ===
+
+* A víz '''4 °C-on sűrűbb''', mint fagyott (jég) formájában
+* Ez lehetővé teszi, hogy a jég '''úszik''' a víz felszínén → élet fennmaradása tavak mélyén
+* A víz '''nagy fajhője''' stabilizálja a hőmérsékletet → éghajlati szabályozó
+
+
+-----
+
+<span id="a-víz-halmazállapotai"></span>
+== 4. A víz halmazállapotai ==
+
+<span id="szilárd-jég"></span>
+=== 4.1 Szilárd: jég ===
+
+* Rendezett kristályos szerkezet, hexagonális rács
+* Kisebb sűrűség → úszik a vízen
+* 14 különböző '''jég-fázis''' ismert extrém nyomáson és hőmérsékleten
+
+<span id="folyékony"></span>
+=== 4.2 Folyékony ===
+
+* Legelterjedtebb forma a Földön
+* Dinamikus hidrogénkötés-hálózat, ami állandóan változik
+
+<span id="gáz-vízgőz"></span>
+=== 4.3 Gáz: vízgőz ===
+
+* Légkör fontos komponense
+* Felelős az '''üvegházhatás''' egy részéért
+
+
+-----
+
+<span id="víz-a-földön"></span>
+== 5. Víz a Földön ==
+
+<span id="eloszlás"></span>
+=== 5.1 Eloszlás ===
+
+{| class="wikitable"
+|-
+! Forrás
+! Megoszlás
+|-
+| Óceánok
+| ~97,5%
+|-
+| Édesvíz
+| ~2,5%
+|-
+| - Jégtakarók, gleccserek
+| ~68% az édesvízből
+|-
+| - Felszín alatti víz
+| ~30%
+|-
+| - Felszíni víz (tavak, folyók)
+| &lt;1%
+|}
+
+<span id="hidrológiai-ciklus"></span>
+=== 5.2 Hidrológiai ciklus ===
+
+A víz '''körforgása''' elengedhetetlen a Föld klímájának és élővilágának fenntartásához:
+
+# '''Párolgás'''
+# '''Kondenzáció'''
+# '''Csapadék'''
+# '''Lefolyás''', '''beszivárgás'''
+# '''Talajvízmozgás'''
+# '''Visszakerülés''' a tengerekbe
+
+
+-----
+
+<span id="biológiai-jelentőség"></span>
+== 6. Biológiai jelentőség ==
+
+<span id="az-élő-szervezetekben"></span>
+=== 6.1 Az élő szervezetekben ===
+
+* Az emberi test '''60–70%-a víz'''
+* Sejtek belsejében az anyagcsere '''vizes közegben''' történik
+* A víz a '''tápanyagok, ionok, gázok oldószere'''
+
+<span id="enzimek-és-fehérjék"></span>
+=== 6.2 Enzimek és fehérjék ===
+
+* A víz strukturálja a fehérjéket
+* A hidrogénkötések szerepet játszanak a '''fehérjeszerkezet stabilitásában'''
+
+<span id="hőszabályozás"></span>
+=== 6.3 Hőszabályozás ===
+
+* A víz '''magas fajhője''' segíti a '''testhőmérséklet szabályozását'''
+* Az izzadás párologtatása '''hőt von el''', így hűt
+
+
+-----
+
+<span id="a-víz-környezeti-szerepe"></span>
+== 7. A víz környezeti szerepe ==
+
+<span id="klímastabilizáló"></span>
+=== 7.1 Klímastabilizáló ===
+
+* A víz jelenléte '''mérsékli a napi és szezonális hőingásokat'''
+* Az '''óceánok hőelnyelő képessége''' kulcsfontosságú a globális éghajlatban
+
+<span id="ökoszisztémák"></span>
+=== 7.2 Ökoszisztémák ===
+
+* Tavak, folyók, mocsarak: '''élőhelyek'''
+* Halak, kétéltűek, vízinövények víz nélkül nem élnek
+
+<span id="vízszennyezés"></span>
+=== 7.3 Vízszennyezés ===
+
+* Nehézfémek, nitrátok, szerves szennyezők, mikroplasztikok veszélyt jelentenek
+* Tisztítás: fizikai, kémiai, biológiai módszerekkel
+
+
+-----
+
+<span id="technológiai-és-ipari-jelentőség"></span>
+== 8. Technológiai és ipari jelentőség ==
+
+<span id="víz-mint-oldószer"></span>
+=== 8.1 Víz, mint oldószer ===
+
+* '''Poláris oldószer''', ionos vegyületeket jól old
+* Használják gyógyszerészetben, vegyiparban, laboratóriumokban
+
+<span id="ipari-alkalmazás"></span>
+=== 8.2 Ipari alkalmazás ===
+
+* '''Hűtőfolyadék''' – például erőművekben
+* '''Gőzturbina''' működtetése
+* '''Oldószerként''' vegyi reakciókban
+
+<span id="desztillált-és-ultrapure-víz"></span>
+=== 8.3 Desztillált és ultrapure víz ===
+
+* '''Desztillált víz''': ionmentes, laboratóriumi célokra
+* '''Ultrapure (18 MΩ·cm)''': elektronikai iparban (pl. félvezetők gyártása)
+
+
+-----
+
+<span id="víz-a-gyógyszerészetben"></span>
+== 9. Víz a gyógyszerészetben ==
+
+<span id="típusai"></span>
+=== 9.1 Típusai ===
+
+{| class="wikitable"
+|-
+! Típus
+! Felhasználás
+|-
+| '''Aqua purificata''' (tisztított víz)
+| gyógyszergyártás
+|-
+| '''Aqua pro injectione''' (injekcióhoz való víz)
+| parenterális készítmények
+|-
+| '''Aqua destillata'''
+| laboratóriumokban
+|-
+| '''Fiziológiás sóoldat'''
+| 0,9% NaCl – izotóniás oldat
+|-
+| '''Vízmentes készítmények'''
+| érzékeny hatóanyagokhoz
+|}
+
+<span id="szerepe"></span>
+=== 9.2 Szerepe ===
+
+* Oldószer, vivőanyag, injekciós készítmények alapja
+* A víz mikrobiológiai tisztasága döntő fontosságú
+
+
+-----
+
+<span id="a-víz-a-történelemben-és-kultúrában"></span>
+== 10. A víz a történelemben és kultúrában ==
+
+<span id="víz-és-civilizációk"></span>
+=== 10.1 Víz és civilizációk ===
+
+* Folyóvölgyi kultúrák: '''Nílus, Tigris–Eufrátesz, Indus, Jangce'''
+* A víz közelsége alapja volt a '''mezőgazdaság és letelepedett élet''' kialakulásának
+
+<span id="szimbolikus-jelentés"></span>
+=== 10.2 Szimbolikus jelentés ===
+
+* Tisztaság, élet, újjászületés
+* Vallási rítusok (keresztelés, rituális fürdés)
+
+
+-----
+
+<span id="vízhiány-és-hozzáférés"></span>
+== 11. Vízhiány és hozzáférés ==
+
+<span id="globális-kihívás"></span>
+=== 11.1 Globális kihívás ===
+
+* A világ lakosságának kb. '''25–30%-a''' nem fér hozzá biztonságos ivóvízhez
+* Szárazság, vízhiány → élelmiszer-ellátási problémák, migráció
+
+<span id="ivóvíztisztítás"></span>
+=== 11.2 Ivóvíztisztítás ===
+
+* '''Ülepítés, szűrés, fertőtlenítés (klórozás, UV, ózon)'''
+* Membrántechnológia (fordított ozmózis)
+
+
+-----
+
+<span id="a-víz-különleges-jelenségei"></span>
+== 12. A víz különleges jelenségei ==
+
+<span id="felületi-feszültség"></span>
+=== 12.1 Felületi feszültség ===
+
+* A víz molekulái a felszínen '''erősebben vonzzák egymást''', mint a levegő molekuláit
+* Ezért '''“vízcsepp” alak''' alakul ki, és a rovarok (pl. vízi poloska) a felszínen maradnak
+
+<span id="kapillaritás"></span>
+=== 12.2 Kapillaritás ===
+
+* A víz képes '''“felmászni”''' szűk csövekben a hidrogénkötések révén
+* Fontos szerepe van a '''növények vízszállításában'''
+
+<span id="anomáliák-listája"></span>
+=== 12.3 Anomáliák listája ===
+
+* Jég úszik a vízen
+* Magas olvadás- és forráspont
+* Nagy párolgáshő
+* Magas dielektromos állandó
+* Tágulás fagyáskor (ellentétben más folyadékokkal)
+
+
+-----
+
+<span id="víz-a-világűrben-és-asztrobiológiában"></span>
+== 13. Víz a világűrben és asztrobiológiában ==
+
+* Víz jelenléte kimutatható '''Marson''', a '''Jupiter holdjain (Europa, Ganymedes)''', és '''Enceladuson'''
+* A folyékony víz a '''földön kívüli élet lehetőségének''' egyik feltétele
+* A víz '''abszorpciós spektruma''' segíti a bolygók elemzését
+
+
+-----
+
+<span id="összegzés"></span>
+== 14. Összegzés ==
+
+A víz az '''élet alapja''', a '''tudomány és technológia egyik központi szereplője''', és '''a természet legcsodálatosabb anyaga'''. Kémiai egyszerűsége ellenére rendkívül komplex viselkedést mutat, anomáliái és oldószertulajdonságai révén. A biológiától a geológián, fizikán és kémián át a társadalmi, gazdasági és politikai rendszerekig '''mindenhol szerepet játszik'''.
+
+A víz az emberi túlélés és a bolygó ökológiai egyensúlyának kulcsa – éppen ezért a '''fenntartható vízgazdálkodás és hozzáférés biztosítása''' a jövő egyik legnagyobb globális kihívása.
+
+
+{{-ford-}}
+{{trans-top|H₂O}}
+*{{ab}}: {{t|ab|аӡы}}
+*{{ady}}: {{t|ady|псы}}
+*{{aa}}: {{t|aa|lee}}
+*{{af}}: {{t|af|water}}
+*{{ay}}: {{t|ay|uma}}
+*{{ak}}: {{t|ak|nsu}}
+*{{sq}}: {{t|sq|ujë|m}}
+*{{am}}: {{t-|am|ውሃ|tr=wəḫa}}
+*{{en}}: {{t|en|water}}
+*{{ar}}: {{t|ar|مَاء}}
+*{{an}}: {{t|an|aigua}}, {{t|an|augua}}
+*{{arc}}: [[ܡܝܐ]] 
+*{{rup}}: {{t|rup|apã}}
+*{{as}}: {{t|as|পানী}}
+*{{ast}}: {{t|ast|agua}}
+*{{av}}: {{t|av|лъим|tr=l”im}}
+*{{az}}: {{t|az|su}}
+*{{bm}}: {{t-|bm|ji}}
+*{{ba}}: {{t-|ba|һыу|tr=ḥıw}}
+*{{eu}}: {{t|eu|ur}}
+*{{bar}}: {{t|bar|Wossa}}, {{t|bar|boßər}}
+*{{be}}: {{t-|be|вада|f}}
+*{{bn}}: {{t|bn|জল|tr=jal}}, {{t+|bn|পানি|tr=pāni}}
+*{{bh}}: {{t|bh|पानी|tr=pānī}}
+*{{bi}}: {{t-|bi|wota}}
+*{{bg}}: {{t|bg|вода|f}}
+*{{br}}: {{t|br|dour|m}}
+*{{my}}: {{t|my|ရေ|tr=ye}}
+*{{bua}}: {{t|bua|уһан}}
+*{{ceb}}: {{t|ceb|tubig}}
+*{{rom}}: {{t|rom|páji}}, {{t|rom|pányi}}, {{t|rom|páni}}
+*{{ch}}: {{t-|ch|hånom}}
+*{{ce}}: {{t|ce|хи|tr=khi}}
+*{{chr}}: {{t|chr|ᎠᎹ}}
+*{{ny}}: {{t-|ny|madzi}}
+*{{cs}}: {{t|cs|voda|f}}
+*{{cv}}: {{t|cv|шыв}}
+*{{da}}: {{t|da|vand|}}
+*{{myv}}: {{t|myv|ведь}}
+*{{eo}}: {{t|eo|akvo}}
+*{{se}}: {{t|se|čáhci}}
+*{{et}}: {{t|et|vesi}}
+*{{ee}}: {{t|ee|tsi}}
+*{{hsb}}: {{t|hsb|woda|f}}
+*{{fo}}: {{t|fo|vatn|n}}
+*{{fj}}: {{t|fj|wai}}
+*{{fi}}: {{t|fi|vesi}}
+*{{fr}}: {{t|fr|eau|f}}
+*{{fy}}: {{t|fy|wetter}}
+*{{fur}}: {{t|fur|aghe}}
+*{{ff}}: {{t-|ff|ndiyam}}
+*{{gd}}: {{t|gd|uisge|m}}
+*{{gl}}: {{t|gl|auga|f}}
+*{{lg}}: {{t-|lg|mazzi}}
+*{{el}}: {{t|el|νερό}}
+*{{ka}}: {{t|ka|წყალი}}
+*{{kl}}: {{t-|kl|imeq}}
+*{{gn}}: {{t-|gn|y}}
+*{{gu}}: {{t|gu|પાણી|tr=pāṇī}}
+*{{ht}}: {{t|ht|dlo}}
+*{{kjh}}: {{t|kjh|суғ}}
+*{{ha}}: {{t|ha|ruwa}}
+*{{haw}}: {{t|haw|wai}}
+*{{he}}: {{t|he|מַיִם}}
+*{{hi}}: {{t|hi|पानी}}, {{t|hi|जल|tr=jal}}, {{t-|hi|आब|tr=āb}}
+*{{nl}}: {{t|nl|water|n}}
+*{{ig}}: {{t-|ig|mmiri}}
+*{{id}}: {{t|id|air}}
+*{{ik}}: {{t-|ik|imiq}}
+*{{ga}}: {{t|ga|uisce|m}}, {{t|ga|dobhar|m}}
+*{{is}}: {{t|is|vatn|n}}
+*{{sah}}: {{t|sah|уу}}
+*{{ja}}: {{t|ja|水}}
+*{{yi}}: {{t-|yi|װאַסער|n}}
+*{{yo}}: {{t|yo|omi}}
+*{{xal}}: {{t|xal|усн}}
+*{{kn}}: {{t-|kn|ನೀರು|tr=nīru}}
+*{{kr}}: {{t-|kr|nji}}
+*{{pam}}: {{t|pam|danum}}
+*{{ks}}: {{t|ks|आब|tr=āb}}, {{t|ks|पोञ|tr=pōn}}, {{t|ks|ज़ल|tr=zal}}
+*{{kr}}: {{t|kr|nji}}
+*{{ca}}: {{t|ca|aigua|f}}
+*{{kk}}: {{t-|kk|су|tr=suw}}
+*{{qu}}: {{t|qu|unu}}, {{t|qu|yaku}}
+*{{km}}: {{t|km|ទឹក}}
+*{{ki}}: {{t-|ki|maĩ}}
+*{{zh}}: {{t|zh|水}}
+*{{ky}}: {{t|ky|суу}}
+*{{kg}}: {{t-|kg|maza}}, {{t-|kg|masa}}
+*{{ko}}: {{t|ko|물|tr=mul}}}, {{t|ko|수|tr=su, 水}}
+*{{cr}}: {{t-|cr|ᓃᐲᔾ}}
+*{{kw}}: {{t|kw|dowr|m}}
+*{{co}}: {{t|co|acqua}}
+*{{crh}}: {{t|crh|suv}}
+*{{kum}}: {{t|kum|сув}}
+*{{ku}}: {{t|ku|av}}, {{t|ku|ئاو|f}}
+*{{kj}}: {{t-|kj|omeva}}
+{{trans-mid}}
+*{{lad}}: {{t|lad|agua}}
+*{{lo}}: {{t|lo|ນ້ຳ|tr=nam}}
+*{{la}}: {{t|la|aqua|f}}
+*{{pl}}: {{t|pl|woda|f}}
+*{{lv}}: {{t|lv|ūdens|m}}
+*{{li}}: {{t|li|water}}
+*{{ln}}: {{t-|ln|mái}}
+*{{lt}}: {{t|lt|vanduo|m}}
+*{{lmo}}: {{t|lmo|acqua}}; {{t|lmo|ègua}}, {{t|lmo|aiva}}
+*{{lu}}: {{t-|lu|mema}}
+*{{lb}}: {{t-|lb|Waasser|n}}
+*{{mk}}: {{t-|mk|вода|tr=vóda}}
+*{{mg}}: {{t|mg|rano}}
+*{{ml}}: {{t+|ml|ജലം}}, {{t|ml|വെള്ളം}}
+*{{ms}}: {{t|ms|air}}
+*{{dv}}: {{t|dv|ފެން|tr=fen}}
+*{{mns}}: {{t|mns|вит}}
+*{{gv}}: {{t-|gv|ushtey|m}}
+*{{mi}}: {{t|mi|wai}}
+*{{chm}}: {{t|chm|вӱд}}
+*{{mt}}: {{t|mt|ilma|m}}
+*{{mr}}: {{t-|mr|पाणी|tr=pāṇī}}, {{t|mr|जल|tr=jal}}
+*{{mn}}: {{t|mn|ус}}
+*{{nh}}: {{t-|nah|atl}}
+*{{na}}: {{t|na|ebok}}
+*{{nv}}: {{t|nv|tó}}
+*{{ng}}: {{t-|ng|omeya}}
+*{{nap}}: {{t|nap|acqua}}
+*{{de}}: {{t|de|Wasser|n}}
+*{{ne}}: {{t-|ne|पानी|tr=paani}}, {{t|ne|जल|tr=jal}}
+*{{no}}: {{t|no|vann|n}}
+*:{{nn}}: {{t|nn|vatn|n}}
+*{{oc}}: {{t|oc|aiga}}
+*{{oj}}: {{t|oj|nibi}}
+*{{it}}: {{t|it|acqua|f}}
+*{{om}}: {{t-|om|bishaan}}, {{t-|om|biye}}
+*{{or}}: {{t|or|ପାଣି}}
+*{{ru}}: {{t|ru|вода|f}}
+*{{os}}: {{t|os|дон}}
+*{{ang}}: {{t|ang|wæd|n}}, {{t|ang|wæter|n}}
+*{{egy}}: {{t|egy|mw}}
+*:<hiero>n:n:n</hiero>
+*{{goh}}: {{t|goh|wazzar|n}}
+*{{grc}}: {{t|grc|ὕδωρ|n}}
+*{{cu}}: {{t|cu|вода|f}}
+*{{hy}}: {{t|hy|ջուր}}
+*{{pi}}: {{t-|pi|āpa}}, {{t-|pi|jala}}
+*{{ps}}: {{t-|ps|اوبه}}
+*{{fa}}: {{t|fa|آب|tr=âb}}, {{t+|fa|او|tr=ow, aw}}
+*{{pt}}: {{t|pt|água|f}}
+*{{pa}}: {{t-|pa|ਪਾਣੀ|tr=pāṇī}}, {{t-|pa|ਜਲ}}, {{t-|pa|ਆਬ}}
+*{{rhg}}: {{t|rhg|faní}}
+*{{ro}}: {{t|ro|apă|f}}
+*{{rm}}: {{t-|rm|aua}}
+*{{rw}}: {{t-|rw|amazi}}
+*{{cjs}}: {{t|cjs|суғ}}
+*{{es}}: {{t|es|agua|f}}
+*{{sv}}: {{t|sv|vatten|n}}; {{t-|sv|vätur}}
+*{{sm}}: {{t-|sm|vai}}
+*{{sa}}: {{t|sa|जल}}, {{t|sa|अंब}}, {{t|sa|पानीय}}
+*{{sg}}: {{t-|sg|ngu}}
+*{{sc}}: {{t|sc|aba}}
+*{{sh}}: {{t|sh|вода|f}}, {{t|sh|voda}}
+*{{scn}}: {{t|scn|acqua}}
+*{{sd}}: {{t-|sd|پاڻي|tr=pāṇī}}, {{t-|sd|آب|tr=āb}}
+*{{si}}: {{t|si|ජලය}}, {{t|si|වතුර}}
+*{{sk}}: {{t|sk|voda|f}}
+*{{sl}}: {{t|sl|voda|f}}
+*{{so}}: {{t|so|biyo}}, {{t|so|waraabin}}
+*{{st}}: {{t-|st|metsi}}
+*{{su}}: {{t-|su|cai}}
+*{{sw}}: {{t|sw|maji|p}}
+*{{ss}}: {{t-|ss|emanti}}
+*{{tl}}: {{t-|tl|tubig}}
+*{{ty}}: {{t|ty|pape}}, {{t-|ty|vai}}
+*{{tg}}: {{t-|tg|об|tr=ob}}
+*{{ta}}: {{t|ta|தண்ணீர்|tr=taṇṇīr}}, {{t+|ta|நீர்|tr=nīr}}
+*{{tt}}: {{t|tt|су}}
+*{{te}}: {{t|te|నీరు}}, {{t|te|జలము}}
+*{{th}}: {{t|th|น้ำ}}
+*{{bo}}: {{t|bo|ཆུ|tr=chu}}
+*{{ti}}: {{t|ti|ማይ}}
+*{{tpi}}: {{t|tpi|wara}}
+*{{to}}: {{t-|to|vai}}
+*{{ts}}: {{t-|ts|mati}}
+*{{tr}}: {{t|tr|su}}, {{t-|tr|ab}}
+*{{tk}}: {{t-|tk|suw}}
+*{{udm}}: {{t|udm|ву}}
+*{{uk}}: {{t|uk|вода|f}}
+*{{ur}}: {{t|ur|پانی|tr=pāni}}, {{t|ur|آب|tr=āb}}, {{t|ur|جل|tr=jal}}
+*{{ug}}: {{t|ug|سۇ|tr=su}}
+*{{uz}}: {{t-|uz|suv}}
+*{{ve}}: {{t-|ve|maḓi}}
+*{{vec}}: {{t|vec|aqua}}
+*{{vi}}: {{t|vi|nước}}
+*{{vro}}: {{t|vro|vesi}}
+*{{wa}}: {{t-|wa|aiwe}}
+*{{cy}}: {{t|cy|dŵr}}
+*{{wo}}: {{t|wo|ndoh}}
+*{{xh}}: {{t|xh|amanzi|p}}
+*{{zza}}: {{t|zza|awk}}, {{t|zza|aw}}
+*{{za}}: {{t-|za|raemx}}
+*{{zu}}: {{t|zu|amanzi|p}}
+{{trans-bottom}}
+{{-der-}}
+* [[vizel]], [[vizes]], [[vizez]], [[vízhatlan]], [[vízi]], [[víztelen]]
+{{hunl}}

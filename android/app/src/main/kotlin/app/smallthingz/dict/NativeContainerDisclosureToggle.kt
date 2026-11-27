@@ -13,6 +13,7 @@ import android.view.View
 import android.view.accessibility.AccessibilityNodeInfo
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.withCompositionLocals
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -28,8 +29,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.Font
-import androidx.compose.ui.text.font.DeviceFontFamilyName
+import androidx.compose.ui.text.font.FontSynthesis
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.style.TextAlign
@@ -69,7 +69,8 @@ internal fun nativeDisclosureLabelRange(label: String, start: Long, end: Long): 
 }
 
 internal data class NativeDisclosureInteraction(val hovered: Boolean = false,
-    val active: Boolean = false, val focused: Boolean = false)
+    val active: Boolean = false, val focused: Boolean = false,
+    val buttonHovered: Boolean = hovered, val buttonActive: Boolean = active)
 
 internal fun nativeDisclosureLabelAnnotation(label: String, run: ContainerDisclosureLabelRun?,
     interaction: NativeDisclosureInteraction, base: SpanStyle): AnnotatedString {
@@ -115,11 +116,10 @@ internal fun prepareNativeContainerDisclosureToggle(disclosure: ContainerDisclos
     val configuration = LocalConfiguration.current
     val buttonFont = remember(button?.fontFamily, context, configuration, probe) {
         try { Result.success(button?.let {
-                if (probe.load(context, it.fontFamily.name, FontWeight.Normal, FontStyle.Normal) == null)
-                    throw UnsupportedFloatLayout("Disclosure named font is unavailable: " + it.fontFamily.name)
-                // OptionalLocal presence is checked before the matching Compose family request.
-                // Availability by name does not prove source/device face or glyph identity.
-                FontFamily(Font(DeviceFontFamilyName(it.fontFamily.name), FontWeight.Normal, FontStyle.Normal))
+                val face = probe.load(context, it.fontFamily.name, FontWeight.Normal, FontStyle.Normal)
+                    ?: throw UnsupportedFloatLayout("Disclosure named font is unavailable: " + it.fontFamily.name)
+                // Keep the exact real face returned by the probe, including registered file fonts.
+                FontFamily(face)
             })
         } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
         catch (failure: Exception) { Result.failure<FontFamily?>(failure) }
@@ -133,12 +133,13 @@ internal fun prepareNativeContainerDisclosureToggle(disclosure: ContainerDisclos
     // Null preserves W's declaring font; a button owns its complete typography.
     val declaring = if (button == null) format.ownerFont?.style ?: format.style else TextStyle(
         fontFamily = buttonFont.getOrNull(), fontSize = button.fontSize.value.sp,
-        fontWeight = FontWeight.Normal, fontStyle = FontStyle.Normal, textAlign = TextAlign.Center)
+        fontWeight = FontWeight.Normal, fontStyle = FontStyle.Normal, fontSynthesis = FontSynthesis.None,
+        textAlign = TextAlign.Center)
     val style = nativeCellLineStyle(declaring, lineHeight, density).copy(
         color = disclosure.foreground?.let(::disclosureColor)
             ?: nativeMarkedCellForeground()?.let { Color(it) } ?: format.style.color,
         background = Color.Transparent)
-    val buttonState = button?.state(interaction.hovered, interaction.active)
+    val buttonState = button?.state(interaction.buttonHovered, interaction.buttonActive)
     val insets = button?.let { nativeDisclosureButtonInsets(it, checkNotNull(buttonState), density.density) }
     val annotated = nativeDisclosureLabelAnnotation(label, run, interaction, style.toSpanStyle())
     // This internal text-only adapter supplies the formatter's real label range. It is never
@@ -153,13 +154,11 @@ internal fun prepareNativeContainerDisclosureToggle(disclosure: ContainerDisclos
     val prepared = if (button == null) prepareLabel() else {
         // An independent button must not retain a table cell strut or inherited TextStyle
         // after replacing only the label's font. Keep the original path for null buttons.
-        var isolated: PreparedNativeFloatText? = null
-        CompositionLocalProvider(LocalTextStyle provides style,
+        withCompositionLocals(LocalTextStyle provides style,
             LocalNativeContainerTextContext provides null, LocalNativePreformattedText provides false,
             LocalCellWeight provides null, LocalCellLetterSpacingPixels provides null) {
-            isolated = prepareLabel()
+            prepareLabel()
         }
-        checkNotNull(isolated)
     }
     val native = prepared.native
     val factory = prepared.geometryAtWidth
@@ -179,11 +178,11 @@ internal fun prepareNativeContainerDisclosureToggle(disclosure: ContainerDisclos
     }
     val failure = buttonFont.exceptionOrNull()?.let { it.message ?: "Disclosure named font probe failed" }
         ?: widths.exceptionOrNull()?.message ?: focusPreparation.exceptionOrNull()?.message
-    return remember(identity, prepared.revision, expanded, disclosure.focus, focusPreparation, button, buttonState, insets, density.density) {
+    return remember(identity, prepared.revision, expanded, run, disclosure.focus, focusPreparation, button, buttonState, insets, density.density) {
         NativeContainerDisclosureToggle(identity, label, expanded, disclosure.focus,
             disclosure.direction ?: direction, widths.getOrNull(), failure, focusPreparation.getOrNull(),
             run?.let { nativeDisclosureLabelRange(label, it.start, it.end) }, prepared, factory, activate, update,
-            button, buttonState, insets, density.density)
+            button, buttonState, insets, density.density, run?.pointerOnRun == true)
     }
 }
 
@@ -212,6 +211,7 @@ internal class NativeContainerDisclosureToggle internal constructor(
     internal val buttonState: ContainerDisclosureButtonState? = null,
     private val buttonInsets: NativeDisclosureButtonInsets? = null,
     internal val density: Float = 1f,
+    internal val pointerOnRun: Boolean = false,
 ) {
     val intrinsic: ContainerWidths get() {
         failureReason?.let { throw UnsupportedFloatLayout(it) }
@@ -312,6 +312,7 @@ internal class NativeContainerDisclosureView(context: Context) : View(context) {
     private var policyBound = false
     private var focusDrawable: NativeDisclosureFocusDrawable? = null
     private var logicalPointerDown = false
+    private var pressedRun = false
     private var indicatedPointer: android.graphics.PointF? = null
     private var hoveringPointer: android.graphics.PointF? = null
     internal var currentMeasuredGeometry: NativeSurfaceGeometry? = null
@@ -334,6 +335,9 @@ internal class NativeContainerDisclosureView(context: Context) : View(context) {
     }
     internal fun bind(next: NativeContainerDisclosureToggle, geometry: NativeLayoutInput<NativeDisclosureViewMeasure?>) {
         val before = control
+        if (before == null || before.identity !== next.identity || before.expanded != next.expanded ||
+            before.pointerOnRun != next.pointerOnRun || before.paintRange != next.paintRange)
+            pressedRun = false
         control = next
         geometryInput = geometry
         layoutDirection = if (next.direction == BidiResolvedDirection.Rtl) LAYOUT_DIRECTION_RTL else LAYOUT_DIRECTION_LTR
@@ -398,6 +402,7 @@ internal class NativeContainerDisclosureView(context: Context) : View(context) {
         else if (event.actionMasked == MotionEvent.ACTION_DOWN) hoveringPointer = null
         if (event.actionMasked == MotionEvent.ACTION_DOWN) {
             logicalPointerDown = insideLogicalBox(event.x, event.y)
+            pressedRun = control?.pointerOnRun == true && runIndicated(indicatedPointer)
             if (!logicalPointerDown) { indicatedPointer = null; publishInteraction(); return false }
         } else if (logicalPointerDown && event.actionMasked in listOf(MotionEvent.ACTION_MOVE, MotionEvent.ACTION_UP) &&
             !insideLogicalBox(event.x, event.y)) {
@@ -461,10 +466,14 @@ internal class NativeContainerDisclosureView(context: Context) : View(context) {
     }
     private fun publishInteraction() {
         val current = control ?: return
-        current.interactionChanged.invoke(if (current.button == null)
-            NativeDisclosureInteraction(runIndicated(hoveringPointer),
-                logicalPointerDown && runIndicated(indicatedPointer), hasFocus())
-        else NativeDisclosureInteraction(wholeBoxIndicated(hoveringPointer), isPressed, hasFocus()))
+        val boxHover = wholeBoxIndicated(hoveringPointer)
+        val runHover = if (current.button == null || current.pointerOnRun) runIndicated(hoveringPointer) else boxHover
+        val runActive = when {
+            current.button == null -> logicalPointerDown && runIndicated(indicatedPointer)
+            current.pointerOnRun -> logicalPointerDown && pressedRun
+            else -> isPressed
+        }
+        current.interactionChanged(NativeDisclosureInteraction(runHover, runActive, hasFocus(), boxHover, isPressed))
         invalidate()
     }
     override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {

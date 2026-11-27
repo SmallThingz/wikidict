@@ -261,7 +261,6 @@ private class NativeStaticFloatGeometry private constructor(
         layout.getOffsetForHorizontal(line, x - originX(line)) else linePainter.getOffsetForHorizontal(line,
             x - linePainter.horizontalShift(NativeLinePaintPlacement(line, flow.baselines[line],
                 flow.left[line], flow.right[line], originX(line))))
-    override val nodes: List<FloatInteractionNode> = nodeFactory(this)
     private fun linePresent(line: Int): Boolean = flow.sourceLinePresent?.get(line) ?: true
     override val textBaselines: NativeTextBaselines? get() {
         if (flow.sourceLinePresent == null) return NativeTextBaselines(flow.baselines.first(), flow.baselines.last())
@@ -345,6 +344,10 @@ private class NativeStaticFloatGeometry private constructor(
             listOf(caretRect(0), caretRect(text.length)))
         NativeGeometryExtents(width, height.toFloat(), ink, interaction)
     }
+
+    // Factories may query selection geometry while constructing interaction nodes.
+    // Publish them only after the line placements and geometry delegates are initialized.
+    override val nodes: List<FloatInteractionNode> = nodeFactory(this)
 
     override fun containsInteraction(x: Float, y: Float): Boolean =
         selectableFragments.any { it.contains(x, y) } || nativeInlineBoxCursorBounds.any { it.contains(x, y) } ||
@@ -519,7 +522,7 @@ private class NativeStaticFloatGeometry private constructor(
                 if (bounds.width() <= 0f) continue
                 if (!bounds.height().isFinite() || bounds.height() <= 0f)
                     throw UnsupportedFloatLayout("Inline action selection has positive width without a native height")
-                // A node factory can query during construction, before linePaintPositions exists.
+                // Use the same exact line placement for the native selection contour.
                 val position = NativeLinePaintPlacement(line, flow.baselines[line], flow.left[line], flow.right[line], originX(line))
                 val shift = linePainter.horizontalShift(position)
                 val scale = 1f / bounds.height()
