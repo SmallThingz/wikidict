@@ -9867,6 +9867,7 @@ pub const Renderer = struct {
     // Exact original DIV -> single physical list edge, never inferred from
     // inherited style ancestry or generated block owners.
     display_parent_region: ?DisplayParentRegion = null,
+    literal_container_parent: ?LiteralContainerDispatch = null,
     table_style_scope: table_style_profile.Scope = 0,
     resolved_legacy_table_border: bool = false,
     table_css_ancestor_classes: []const u8 = "",
@@ -46153,7 +46154,10 @@ pub const Renderer = struct {
                         const offset = @intFromPtr(wrapper_source.ptr) - @intFromPtr(input.ptr);
                         try observer.enter(observer.ctx, input, origin, offset, offset + tag.end, offset + pair.inner_end, offset + pair.end, true, kind, self.block_formatting, "", self.observerFormattingAttributes());
                     };
-                    var container_resolution = try self.containerResolution(tag, parent_language_direction orelse .{}, scoped_style);
+                    const literal_dispatch: ?LiteralContainerDispatch = if (tag.is("div") and grid_tail == null)
+                        .{ .source = wrapper_source[0..pair.end], .pair = pair }
+                    else null;
+                    var container_resolution = try self.containerResolutionForDispatch(tag, parent_language_direction orelse .{}, scoped_style, literal_dispatch);
                     const force_container_owner = self.container_parent_flex or self.genericDisclosureTargetChild(input, wrapper_source[0..pair.end]);
                     const previous_parent_flex = self.container_parent_flex;
                     defer self.container_parent_flex = previous_parent_flex;
@@ -46190,6 +46194,9 @@ pub const Renderer = struct {
                         const previous_disclosure = self.generic_disclosure_child_binding;
                         defer self.generic_disclosure_child_binding = previous_disclosure;
                         if (disclosure_binding) |*binding| self.generic_disclosure_child_binding = binding;
+                        const enclosing_literal_parent = self.literal_container_parent;
+                        defer self.literal_container_parent = enclosing_literal_parent;
+                        self.literal_container_parent = literal_dispatch;
                         break :children try self.renderBodySlice(wrapper_source[tag.end..pair.inner_end], true, false, if (origin) |base| base + (@intFromPtr(wrapper_source.ptr) - @intFromPtr(input.ptr)) + tag.end else null, scoped_quote);
                     };
                     const disclosure: ?presentation_types.ContainerDisclosure = if (disclosure_source) |query| resolved: {
@@ -47930,7 +47937,67 @@ pub const Renderer = struct {
             current.attrs.ptr == tag.attrs.ptr and current.attrs.len == tag.attrs.len;
     }
 
+    const LiteralContainerDispatch = struct { source: []const u8, pair: syntax.Pair };
+
+    // Both pairs come from normal DIV dispatch. For this geometry query only,
+    // the closed first child does not depend on the grammar of its later siblings.
+    fn pairedLiteralContainerParent(self: *Renderer, tag: syntax.Tag, parent: Style,
+        actual: *const table_style_profile.TextElement, subject: *const table_style_profile.TextElement,
+        child: LiteralContainerDispatch) Error!?table_style_profile.TextElement
+    {
+        const enclosing = self.literal_container_parent orelse return null;
+        const held = switch (parent.native_inline_motion) { .proved => |value| value, else => return null };
+        const entry = held.last orelse return null;
+        const host = self.native_article_host orelse return null;
+        const body = self.body_missing orelse return null;
+        const native_parent = parent.text_element orelse return null;
+        if (!subject.literal_subject_bound or subject.parent != null or actual.parent != native_parent or
+            subject.alternative_ancestry != null or subject.ancestry_complete or subject.physical_ancestry_complete or
+            subject.element_index != null or subject.page_style_root != null or
+            native_parent.alternative_ancestry != null or native_parent.ancestry_complete or
+            native_parent.physical_ancestry_complete or native_parent.page_style_root != null or
+            !self.currentAncestorScope(native_parent) or !self.literalSubjectContext(tag, actual, held.root, held.epoch, host) or
+            !host.matchesActive(self, held.root.source) or self.body_link_target.len != 0 or self.explicit_wiki_label != null or
+            self.table_float_source_active or entry.origin != .html or
+            !std.mem.eql(u8, entry.opening, entry.opening_snapshot) or !noLiParentSourceRange(entry.source, entry.opening)) return null;
+
+        const outer = syntax.tagAt(enclosing.source, 0) orelse return null;
+        const inner = syntax.tagAt(child.source, 0) orelse return null;
+        if (!pairedLiteralContainerDiv(enclosing, outer) or !pairedLiteralContainerDiv(child, inner) or
+            !inlineOverlaySameSourceSlice(enclosing.source[0..outer.end], entry.opening) or
+            native_parent.source_key != @intFromPtr(outer.name.ptr) or !std.ascii.eqlIgnoreCase(native_parent.tag, outer.name) or
+            !inlineOverlaySameSourceSlice(inner.name, tag.name) or !inlineOverlaySameSourceSlice(inner.attrs, tag.attrs) or
+            child.source.len > 4096 or child.source.len > enclosing.pair.inner_end - outer.end or
+            !inlineOverlaySameSourceSlice(enclosing.source[outer.end..][0..child.source.len], child.source)) return null;
+        const live = liveLiteralOpening(body, tag) orelse return null;
+        if (!inlineOverlaySameSourceSlice(live, child.source[0..inner.end]) or !noLiParentSourceRange(body, child.source)) return null;
+        const child_body = child.source[inner.end..child.pair.inner_end];
+        if (std.mem.indexOfAny(u8, child_body, "<>[]{}|'\r\n\x00") != null or !std.unicode.utf8ValidateSlice(child_body)) return null;
+        const prefix = enclosing.source[0 .. outer.end + child.source.len];
+        const original = self.nativeOriginalCopiedRange(held.root.source, prefix) orelse return null;
+        if (!std.mem.eql(u8, original, prefix) or
+            !std.mem.eql(u8, native_parent.classes, (try self.semanticAttribute(outer, "class")) orelse "") or
+            !std.mem.eql(u8, native_parent.id, (try self.semanticAttribute(outer, "id")) orelse "") or
+            !std.mem.eql(u8, entry.css, (try self.semanticAttribute(outer, "style")) orelse "")) return null;
+        return .{ .tag = outer.name, .classes = native_parent.classes, .id = native_parent.id };
+    }
+
+    fn pairedLiteralContainerDiv(dispatch: LiteralContainerDispatch, tag: syntax.Tag) bool {
+        return tag.is("div") and !tag.closing and !tag.self_closing and !tag.html_pre and
+            tag.end <= dispatch.pair.inner_end and dispatch.pair.end == dispatch.source.len and
+            !std.mem.endsWith(u8, dispatch.source[0..tag.end], "/>") and !std.mem.endsWith(u8, dispatch.source, "/>") and
+            tableNestedSourceClose(dispatch.source, "div", dispatch.pair, false) and
+            std.mem.indexOfAny(u8, tag.attrs, "<>[]{}\x0b") == null and
+            htmlNestedAttributes(tag.attrs, &.{ "class", "id", "style" }) and htmlOwnAttributePresence(&tag, "class") != .unknown;
+    }
+
     fn containerResolution(self: *Renderer, tag: syntax.Tag, parent: Style, scoped: Style) Error!table_style_profile.ContainerResolution {
+        return self.containerResolutionForDispatch(tag, parent, scoped, null);
+    }
+
+    fn containerResolutionForDispatch(self: *Renderer, tag: syntax.Tag, parent: Style, scoped: Style,
+        dispatch: ?LiteralContainerDispatch) Error!table_style_profile.ContainerResolution
+    {
         if (positionedContainerCurrent(tag, scoped)) return scoped.positioned_container_resolution.?;
         if (self.tableConstructedBoxForTag(tag)) |box| return box;
         if (!tag.is("div")) return .{};
@@ -47968,7 +48035,17 @@ pub const Renderer = struct {
                     scoped.table_collapse == .unknown) return .{ .unresolved = true };
                 return box.box;
             }
-            const box_node = literal_query orelse &query;
+            var box_node = literal_query orelse &query;
+            var local_parent: table_style_profile.TextElement = undefined;
+            var local_subject: table_style_profile.TextElement = undefined;
+            if (literal_query) |proved_subject| if (dispatch) |child| {
+                if (try self.pairedLiteralContainerParent(tag, parent, element, proved_subject, child)) |proved_parent| {
+                    local_parent = proved_parent;
+                    local_subject = proved_subject.*;
+                    local_subject.parent = &local_parent;
+                    box_node = &local_subject;
+                }
+            };
             const result = try profile.resolveContainerInWithInheritance(self.a, box_node, css, scoped.custom_properties, consumed);
             self.traceContainerQuery("profile", tag, box_node, scoped.custom_properties, consumed, result);
             return result;
@@ -52057,7 +52134,11 @@ pub const Renderer = struct {
         const tracked_body = if (self.body_missing) |missing_parent| try self.missingSliceWithHeadingSource(missing_parent, body) else MissingText.untracked(body);
         const body_blocks = try self.renderBodyWithOrphanOrigin(tracked_body, body.ptr == source.ptr);
         const cell_alignment = self.body_formatting_attributes.text_align;
-        if (retained) |output| if (blocksNeedCellRetention(body_blocks, cell_alignment) or self.figure_caption_depth != 0) {
+        // A list starting on its own physical line after an empty cell opener
+        // owns real list items. Inline bullet text discards the list boundary.
+        // A marker on the cell opener was already handled by the prefix path.
+        const leading_list = starts(source, "\n*") and body_blocks.len != 0 and body_blocks[0].kind == .list_item;
+        if (retained) |output| if (leading_list or blocksNeedCellRetention(body_blocks, cell_alignment) or self.figure_caption_depth != 0) {
             const blocks = try self.relativeCellBlocks(body_blocks, cell_alignment);
             if (prefix.len == 0) {
                 output.* = blocks;
@@ -56684,11 +56765,20 @@ test "ordinary table cells preserve list labels links and literal markers" {
         fn checkRows(allocator: A, values: anytype) !void {
             try std.testing.expectEqual(@as(usize, 4), values.len);
             for (values) |row| try std.testing.expectEqual(@as(usize, 1), row.cells.len);
-            for ([_]usize{ 0, 2, 3 }) |row_index| {
+            for ([_]usize{ 2, 3 }) |row_index| {
                 try std.testing.expect(values[row_index].cells[0].blocks == null);
                 try std.testing.expect(values[row_index].cells[0].nested_table == null);
             }
-            try std.testing.expectEqualStrings("• first\n• second", try FormattingScopeTest.text(allocator, values[0].cells[0].spans));
+            const unordered = values[0].cells[0];
+            try std.testing.expect(unordered.spans.len == 0 and unordered.nested_table == null);
+            const items = unordered.blocks orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqual(@as(usize, 2), items.len);
+            for (items, [_][]const u8{ "first", "second" }) |item, word| {
+                try std.testing.expectEqualStrings("list_item", @tagName(item.kind));
+                try std.testing.expectEqualStrings("*", item.list_path);
+                try std.testing.expectEqualStrings(word, try FormattingScopeTest.text(allocator, item.spans));
+            }
+            try std.testing.expectEqualStrings("first", items[0].spans[0].target);
             const numbered_cell = values[1].cells[0];
             try std.testing.expect(numbered_cell.spans.len == 0 and numbered_cell.nested_table == null);
             const numbered = numbered_cell.blocks orelse return error.TestUnexpectedResult;
@@ -98563,7 +98653,7 @@ test "unresolved table alignment cannot borrow an outer value while explicit cel
     }
 }
 
-test "cell inherited alignment preserves plain list spans and complete stored representation" {
+test "cell inherited alignment preserves leading list ownership and complete stored representation" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
     const a = arena.allocator();
     var profile = try table_style_profile.parseAlloc(a, ""); defer profile.deinit();
@@ -98582,8 +98672,15 @@ test "cell inherited alignment preserves plain list spans and complete stored re
         const rows = try a.dupe(Row, table.rows);
         const cells = try a.dupe(Cell, rows[0].cells);
         try std.testing.expectEqual(@as(usize, 1), cells.len);
-        try std.testing.expect(cells[0].blocks == null and cells[0].nested_table == null and cells[0].style == null);
-        try std.testing.expectEqualStrings("• One\n• Two", try flattened(a, cells[0].spans));
+        try std.testing.expect(cells[0].nested_table == null and cells[0].style == null and cells[0].spans.len == 0);
+        const items = cells[0].blocks orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(@as(usize, 2), items.len);
+        for (items, [_][]const u8{ "One", "Two" }) |item, word| {
+            try std.testing.expectEqual(Kind.list_item, item.kind);
+            try std.testing.expectEqualStrings("*", item.list_path);
+            try std.testing.expectEqualStrings(word, item.spans[0].target);
+            try std.testing.expect(item.text_align == null);
+        }
         cells[0].style = .{ .text_align = .right };
         rows[0].cells = cells; table.rows = rows; expected[0].table = table;
         try std.testing.expectEqualDeep(expected, actual_blocks);
@@ -137723,6 +137820,68 @@ test "a class inventory cannot promote a descendant rule to a matched literal fi
     const details = try profile.resolveAlignmentIn(a, &summary, null, "");
     try std.testing.expect(details.unresolved);
 }
+
+pub const LiteralDivGeometryEdgeSourceControl = if (@import("builtin").is_test) struct {
+    pub fn run() !void {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const a = arena.allocator();
+        const outer_source = "<div class='frame' id='one'><div class='head'>title</div>" ++
+            "<div><table><tr><td>x</td></tr></table></div></div>";
+        const input = try a.dupe(u8, outer_source ++ outer_source);
+        const tracked = MissingText.untracked(input);
+        const root: NativeInlineMotionRoot = .{ .source = tracked };
+        var profile = try table_style_profile.parseForTargetAlloc(a, "div.frame div.head{margin:2px}", .screen);
+        defer profile.deinit();
+        var renderer: Renderer = .{ .a = a, .context = .{ .title = "word", .table_styles = &profile },
+            .body_missing = tracked, .content_root = .parser_output, .native_body_language = "en",
+            .native_inline_motion_active = true, .native_inline_motion_root = &root, .native_inline_motion_epoch = 1 };
+        var host: NativeArticleHost = .{ .renderer = &renderer, .source = tracked, .title = "word", .language_code = "en",
+            .active_source = tracked, .active_snapshot = NativeArticleHost.snapshot(tracked), .native_paragraph_css_subjects = true };
+        renderer.native_article_host = &host;
+
+        const outer = input[0..outer_source.len];
+        const opener = syntax.tagAt(outer, 0).?;
+        const outer_pair = syntax.matchingTag(outer, opener).?;
+        const inner_body = outer[opener.end..outer_pair.inner_end];
+        const child_tag = syntax.tagAt(inner_body, 0).?;
+        const child_pair = syntax.matchingTag(inner_body, child_tag).?;
+        const child: Renderer.LiteralContainerDispatch = .{ .source = inner_body[0..child_pair.end], .pair = child_pair };
+        const initial: NativeInlineMotionState = .{ .proved = .{ .root = &root, .epoch = 1 } };
+        const motion = try renderer.nativeInlineMotionEntry(opener, initial);
+        const parent_node = try renderer.textElement(opener, null, "");
+        const parent: Style = .{ .native_inline_motion = motion, .text_element = parent_node };
+        const child_node = try renderer.textElement(child_tag, parent_node, "");
+        const scoped: Style = .{ .text_element = child_node };
+        renderer.body_missing = MissingText.untracked(inner_body);
+        const subject = (try renderer.literalFirstDivQuery(child_tag, child_node, motion, child_node)).?;
+        try std.testing.expect(subject.literal_subject_bound and subject.parent == null);
+        const detached = try renderer.containerResolutionForDispatch(child_tag, parent, scoped, child);
+        try std.testing.expect(detached.specified and detached.unresolved);
+
+        renderer.literal_container_parent = .{ .source = outer, .pair = outer_pair };
+        const witness = (try renderer.pairedLiteralContainerParent(child_tag, parent, child_node, subject, child)).?;
+        try std.testing.expectEqualStrings("frame", witness.classes);
+        try std.testing.expect(witness.parent == null and !witness.ancestry_complete and !witness.physical_ancestry_complete);
+        const local = try renderer.containerResolutionForDispatch(child_tag, parent, scoped, child);
+        try std.testing.expect(local.specified and !local.unresolved);
+        try std.testing.expectEqual(@as(f32, 2), local.style.margins.?.top.value);
+        try std.testing.expect(subject.parent == null and !subject.literal_first_div_pair and subject.element_index == null);
+
+        // Equal bytes at a different authored position and an unregistered copy
+        // cannot become this dispatch's parent or current first child.
+        renderer.literal_container_parent = .{ .source = input[outer_source.len..], .pair = outer_pair };
+        try std.testing.expect((try renderer.pairedLiteralContainerParent(child_tag, parent, child_node, subject, child)) == null);
+        renderer.literal_container_parent = .{ .source = outer, .pair = outer_pair };
+        const copied = try a.dupe(u8, child.source);
+        const copied_tag = syntax.tagAt(copied, 0).?;
+        const copied_child: Renderer.LiteralContainerDispatch = .{ .source = copied, .pair = child_pair };
+        try std.testing.expect((try renderer.pairedLiteralContainerParent(child_tag, parent, child_node, subject, copied_child)) == null);
+        try std.testing.expect((try renderer.pairedLiteralContainerParent(copied_tag, parent, child_node, subject, copied_child)) == null);
+        renderer.native_inline_motion_epoch += 1;
+        try std.testing.expect((try renderer.pairedLiteralContainerParent(child_tag, parent, child_node, subject, child)) == null);
+    }
+} else struct {};
 
 test "ordinary literal DIV issuer keeps unknown exterior and incompatible subject source separate" {
     const Case = struct {

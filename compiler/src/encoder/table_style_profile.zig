@@ -16576,6 +16576,10 @@ const CustomBuilder = struct {
             const boundary = try findBoundary(css, &pos);
             const prelude = trim(css[start .. pos - 1]);
             if (boundary == ';') {
+                // Inputs are decoded UTF-8. This exact leading encoding
+                // declaration contributes no rules or custom properties.
+                if (depth == 0 and start == 0 and std.mem.eql(u8, css[0..pos], "@charset \"utf-8\";") and
+                    std.unicode.utf8ValidateSlice(css)) continue;
                 // Imports/namespace/layer order are not implicit dependencies.
                 self.is_opaque = true;
                 continue;
@@ -16667,6 +16671,31 @@ const CustomPropertyFixture = struct {
         try std.testing.expectEqualStrings(expected, value.known);
     }
 };
+test "served custom properties accept the exact leading UTF-8 encoding declaration" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const encoded = "@charset \"utf-8\";";
+    const selected = ":root{--source-ink:#123456}";
+    var profile = try CustomPropertyFixture.profile(a, encoded ++ selected);
+    defer profile.deinit();
+    const environment = profile.custom_properties.?.root_environment;
+    try std.testing.expect(environment.complete);
+    try CustomPropertyFixture.known(environment, "--source-ink", "#123456");
+
+    for ([_][]const u8{
+        selected ++ encoded,
+        "@media screen {" ++ encoded ++ "}" ++ selected,
+        "@charset \"iso-8859-1\";" ++ selected,
+        encoded ++ "@import url(held.css);" ++ selected,
+    }) |css| {
+        var refused = try CustomPropertyFixture.profile(a, css);
+        defer refused.deinit();
+        const unresolved = refused.custom_properties.?.root_environment;
+        try std.testing.expect(!unresolved.complete and unresolved.get("--source-ink") == .unknown);
+    }
+}
+
 test "selected custom properties preserve computed inheritance local priority and sibling scope" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
     const a = arena.allocator();

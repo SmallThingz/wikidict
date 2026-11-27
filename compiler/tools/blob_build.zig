@@ -64717,6 +64717,10 @@ test "normal Writer retained MG kampi unknown phase preserves full diagnostic bo
     try MgKampiUnknownOpeningSaved.run();
 }
 
+test "VI p646 NavHead36 paired literal container source edge" {
+    try encoder.presentation_compile.LiteralDivGeometryEdgeSourceControl.run();
+}
+
 test "normal page stylesheet attachment resets before absent invalid and failed next page without reference media authority" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator(); const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
