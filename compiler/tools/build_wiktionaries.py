@@ -3262,13 +3262,12 @@ def resolve_edition_snapshot_options(manifest, groups, downloads, overrides=None
                     if all(present):snapshots[name]=path
                 snapshots.update(preferred)
                 if "magic-words" not in (overrides or {}):
-                    from prepare_magic_words_file_page import selected_snapshot_root
+                    from prepare_magic_words_raw import selected_snapshot_root
                     magic_root=selected_snapshot_root(root)
                     if magic_root.exists() or magic_root.is_symlink():
                         if magic_root.is_symlink() or not magic_root.is_dir():raise ValueError('Unsafe magic-word capture root')
                         path=magic_root/'magic-words.tsv'
-                        from prepare_magic_words_file_page import validate_snapshot
-                        validate_snapshot(path,edition,date)
+                        validated_auxiliary_capture('magic-words',path,edition,date)
                         snapshots['magic-words']=path
             elif (downloads/edition/date/'namespace-registry.tsv').is_file():
                 snapshots['namespace-registry']=downloads/edition/date/'namespace-registry.tsv'

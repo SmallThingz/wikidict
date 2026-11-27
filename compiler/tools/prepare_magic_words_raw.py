@@ -7,19 +7,38 @@ import json
 from pathlib import Path
 import unicodedata
 import prepare_magic_words_category as category
+import prepare_magic_words_file_page as file_page
+import prepare_magic_words_lst as lst
+import prepare_magic_words_statistics as statistics
 
 legacy = category.legacy
 VERSION = 11
 PROFILE = 'captured-raw-transclusion-v1'
+DERIVED_DIRECTORY = 'magic-words-raw-v1'
 SOURCE_MANIFEST = 'magic-words.raw-source.manifest.json'
 SOURCE_TSV = 'magic-words.raw-source.tsv'
+HISTORICAL_PRODUCER_SHA256 = '77ef3e7b679105d6dd4597dd1ebf9b49df1622d56930a7886aef6498d83bcf7c'
 PRODUCER_SHA256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 
 
 def predecessor(manifest):
-    if manifest.get('version') in (7, 9):
-        return category
-    raise ValueError('RAW derivation requires an authenticated category predecessor')
+    if not isinstance(manifest, dict) or type(manifest.get('version')) is not int:
+        raise ValueError('Invalid RAW predecessor')
+    version = manifest['version']
+    if version == 5:
+        return lst, lst.ARTIFACTS
+    if version == 7:
+        return category, category.ARTIFACTS
+    if version == 9:
+        return category, category.ISBN_ARTIFACTS
+    if version == file_page.VERSION:
+        inventory = manifest.get('artifacts')
+        if isinstance(inventory, dict):
+            for names in (category.ARTIFACTS, category.ISBN_ARTIFACTS):
+                expected = names | {file_page.SOURCE_MANIFEST, file_page.SOURCE_TSV}
+                if set(inventory) == expected:
+                    return file_page, expected
+    raise ValueError('RAW derivation requires an authenticated LST, category, ISBN, or file/page predecessor')
 
 
 def render_snapshot(data, old_tsv):
@@ -55,7 +74,8 @@ def render_snapshot(data, old_tsv):
 def validate_capture(manifest, blobs, wiki=None, date=None):
     if not isinstance(manifest, dict) or manifest.get('version') != VERSION or manifest.get('profile') != PROFILE:
         raise ValueError('Invalid RAW projection profile')
-    if manifest.get('generator_sha256') != PRODUCER_SHA256:
+    generator = manifest.get('generator_sha256')
+    if generator not in (PRODUCER_SHA256, HISTORICAL_PRODUCER_SHA256):
         raise ValueError('RAW producer identity mismatch')
     if (wiki is not None and manifest.get('wiki') != wiki or date is not None and manifest.get('date') != date):
         raise ValueError('RAW projection differs from requested edition/date')
@@ -64,10 +84,12 @@ def validate_capture(manifest, blobs, wiki=None, date=None):
     if any(legacy.digest(raw) != manifest['artifacts'][name] for name,raw in blobs.items()):
         raise ValueError('Changed RAW projection artifact')
     old = legacy.parse_json(blobs[SOURCE_MANIFEST])
-    prior = predecessor(old)
-    if set(blobs) != set(old['artifacts']) | {SOURCE_MANIFEST,SOURCE_TSV}:
+    prior, source_names = predecessor(old)
+    if generator == HISTORICAL_PRODUCER_SHA256 and old['version'] not in (7, 9):
+        raise ValueError('Historical RAW producer requires a category or ISBN predecessor')
+    if set(blobs) != source_names | {SOURCE_MANIFEST,SOURCE_TSV}:
         raise ValueError('RAW projection contains unexpected artifacts')
-    old_blobs = {name:blobs[name] for name in old['artifacts']}
+    old_blobs = {name:blobs[name] for name in source_names}
     old_blobs['magic-words.tsv'] = blobs[SOURCE_TSV]
     prior.validate_capture(old,old_blobs,wiki,date)
     expected_source = dict(profile=old['profile'],manifest_sha256=legacy.digest(blobs[SOURCE_MANIFEST]),output_sha256=legacy.digest(blobs[SOURCE_TSV]))
@@ -90,8 +112,8 @@ def validate_snapshot(path,wiki=None,date=None):
     path=Path(path);path=path.parent if path.name=='magic-words.tsv' else path
     manifest=legacy.parse_json(legacy.read_regular(path/'magic-words.manifest.json'))
     old=legacy.parse_json(legacy.read_regular(path/SOURCE_MANIFEST))
-    predecessor(old)
-    names=(category.ARTIFACTS if old['version']==7 else category.ISBN_ARTIFACTS) | {SOURCE_MANIFEST,SOURCE_TSV}
+    _, source_names = predecessor(old)
+    names = source_names | {SOURCE_MANIFEST,SOURCE_TSV}
     blobs={name:legacy.read_regular(path/name) for name in names}
     return validate_capture(manifest,blobs,wiki,date)
 
@@ -103,12 +125,32 @@ def capture_artifacts(path,manifest=None):
     return {**actual['artifacts'],'magic-words.manifest.json':legacy.digest(legacy.read_regular(path/'magic-words.manifest.json'))}
 
 
+def selected_snapshot_root(root):
+    root = Path(root)
+    derived = root / DERIVED_DIRECTORY
+    if not (derived.exists() or derived.is_symlink()):
+        return file_page.selected_snapshot_root(root)
+    if derived.is_symlink() or not derived.is_dir():
+        raise ValueError('Unsafe RAW capture root')
+    selected = validate_snapshot(derived)
+    other_profiles = (file_page.DERIVED_DIRECTORY, category.ISBN_DIRECTORY, category.DERIVED_DIRECTORY,
+                      statistics.DERIVED_DIRECTORY, lst.DERIVED_DIRECTORY)
+    if any((root/name).exists() or (root/name).is_symlink() for name in other_profiles):
+        fallback = file_page.selected_snapshot_root(root)
+        file_page.validate_snapshot(fallback, selected['wiki'], selected['date'])
+        kept = set(legacy.read_regular(derived / 'magic-words.tsv').splitlines()[4:])
+        previous = set(legacy.read_regular(fallback / 'magic-words.tsv').splitlines()[4:])
+        if not previous.issubset(kept):
+            raise ValueError('RAW capture drops aliases from the ordinary predecessor')
+    return derived
+
+
 def derive_snapshot(source,output,wiki=None,date=None):
     source=Path(source);source=source.parent if source.name=='magic-words.tsv' else source
     output=Path(output)
     old_raw=legacy.read_regular(source/'magic-words.manifest.json');old=legacy.parse_json(old_raw)
-    prior=predecessor(old);prior.validate_snapshot(source,wiki,date)
-    blobs={name:legacy.read_regular(source/name) for name in old['artifacts']}
+    prior, source_names = predecessor(old)
+    blobs={name:legacy.read_regular(source/name) for name in source_names}
     prior.validate_capture(old,blobs,wiki,date)
     identity=dict(profile=old['profile'],manifest_sha256=legacy.digest(old_raw),output_sha256=legacy.digest(blobs['magic-words.tsv']))
     if output.exists() or output.is_symlink():

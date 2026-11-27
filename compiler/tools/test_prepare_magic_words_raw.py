@@ -4,6 +4,8 @@ from pathlib import Path
 import tempfile
 import unittest
 import prepare_magic_words_raw as raw
+import prepare_magic_words_int as int_magic
+import prepare_magic_words_language as language
 
 B=Path(__file__).parent
 CAPTURE=B/'testdata'/'ml-raw-transclusion'
@@ -71,5 +73,58 @@ class RawProjectionTests(unittest.TestCase):
             manifest['artifacts']['../outside']=raw.legacy.digest(b'outside')
             (root/'magic-words.manifest.json').write_bytes(raw.legacy.document(manifest))
             with self.assertRaises(ValueError):raw.validate_snapshot(root)
+
+    def write_source(self, path, manifest, blobs, active_tsv):
+        source = {name: blobs[name] for name in manifest['artifacts']}
+        source['magic-words.tsv'] = active_tsv
+        raw.legacy.write_capture(path, source, manifest)
+
+    def test_lst_capture_can_add_raw_without_statistics_or_category_aliases(self):
+        _, blobs = self.inputs()
+        original = raw.legacy.parse_json(blobs[raw.legacy.SOURCE_MANIFEST])
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            title = root / 'magic-words'
+            self.write_source(title, original, blobs, blobs[raw.legacy.SOURCE_TSV])
+            parser = root / int_magic.DERIVED_DIRECTORY
+            int_magic.derive_snapshot(title, parser)
+            language_root = root / language.DERIVED_DIRECTORY
+            language.derive_snapshot(parser, language_root)
+            lst = root / raw.lst.DERIVED_DIRECTORY
+            raw.lst.derive_snapshot(language_root, lst)
+            chosen = root / raw.DERIVED_DIRECTORY
+            new, changed = raw.derive_snapshot(lst, chosen)
+            self.assertTrue(changed)
+            self.assertEqual(raw.selected_snapshot_root(root), chosen)
+            before = (lst / 'magic-words.tsv').read_bytes().splitlines()
+            after = (chosen / 'magic-words.tsv').read_bytes().splitlines()
+            self.assertEqual(before, [row for row in after if not row.startswith(b'raw\t')])
+            self.assertEqual(raw.validate_snapshot(chosen), new)
+            lst.rename(root / 'embedded-lst-only')
+            self.assertEqual(raw.selected_snapshot_root(root), chosen)
+
+    def test_raw_preserves_file_page_and_refuses_default_alias_loss(self):
+        old_raw, blobs = self.inputs()
+        original = raw.legacy.parse_json(blobs[raw.SOURCE_MANIFEST])
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            category = root / 'category-input'
+            self.write_source(category, original, blobs, blobs[raw.SOURCE_TSV])
+            file_page = root / raw.file_page.DERIVED_DIRECTORY
+            raw.file_page.derive_snapshot(category, file_page)
+            raw_capture = root / raw.DERIVED_DIRECTORY
+            raw.legacy.write_capture(raw_capture, blobs, old_raw)
+            with self.assertRaisesRegex(ValueError, 'drops aliases'):
+                raw.selected_snapshot_root(root)
+            separate = root / 'composed'
+            raw.derive_snapshot(file_page, separate)
+            before = (file_page / 'magic-words.tsv').read_bytes().splitlines()
+            after = (separate / 'magic-words.tsv').read_bytes().splitlines()
+            self.assertEqual(before, [row for row in after if not row.startswith(b'raw\t')])
+            self.assertTrue(any(row.startswith(b'filepath\t') for row in after))
+            self.assertTrue(any(row.startswith(b'pagesize\t') for row in after))
+            raw_capture.rename(root / 'historical-raw')
+            separate.rename(raw_capture)
+            self.assertEqual(raw.selected_snapshot_root(root), raw_capture)
 
 if __name__=='__main__':unittest.main()

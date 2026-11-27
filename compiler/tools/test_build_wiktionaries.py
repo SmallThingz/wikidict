@@ -1520,7 +1520,7 @@ def write_namespace_fixture(folder, edition=None, date=None):
     return {'namespace-registry':namespace,'language-registry':language}
 
 
-def write_magic_fixture(folder, edition='arwiktionary', date='20261001', observation='first', alias='اسم_الصفحة', parser_functions=False, content_language='ar', complete_magic_projection=False):
+def write_magic_fixture(folder, edition='arwiktionary', date='20261001', observation='first', alias='اسم_الصفحة', parser_functions=False, content_language='ar', complete_magic_projection=False, raw_modifier=False):
     import prepare_magic_words as magic
     folder.mkdir(parents=True,exist_ok=True)
     namespace=magic.document({'query':{'general':{'wikiid':edition,'lang':content_language}}})
@@ -1537,6 +1537,8 @@ def write_magic_fixture(folder, edition='arwiktionary', date='20261001', observa
         # real projections require int and language and retain captured lst.
         words += [dict(name=name, **{'case-sensitive':False}, aliases=[alias])
                   for name,alias in (('int','INT:'),('language','#language'),('lst','#section'))]
+    if raw_modifier:
+        words.append({'name':'raw','case-sensitive':False,'aliases':['RAW:']})
     raw=magic.document({'query':{'general':{'wikiid':edition,'lang':content_language,'sitename':observation},'magicwords':words}})
     def fetcher(url):
         return raw,dict(source_url=url,response_url=url,status=200,
@@ -6465,12 +6467,36 @@ class LoopMessageSelectionTests(unittest.TestCase):
         with patch.object(b,'PROJECT',self.project),self.assertRaises(ValueError):
             b.resolve_edition_snapshot_options(self.manifest,self.groups,self.downloads,overrides)
 
+    def test_default_magic_selection_propagates_captured_raw_to_native_args(self):
+        import prepare_magic_words_int as int_magic
+        import prepare_magic_words_language as language_magic
+        import prepare_magic_words_lst as lst_magic
+        import prepare_magic_words_raw as raw_magic
+        capture = self.project/'raw-magic-capture'
+        title = write_magic_fixture(capture, self.wiki, self.date, parser_functions=True,
+                                    content_language='bn', complete_magic_projection=True, raw_modifier=True)
+        parser = capture/int_magic.DERIVED_DIRECTORY
+        int_magic.derive_snapshot(title, parser)
+        language = capture/language_magic.DERIVED_DIRECTORY
+        language_magic.derive_snapshot(parser, language)
+        lst = capture/lst_magic.DERIVED_DIRECTORY
+        lst_magic.derive_snapshot(language, lst)
+        derived = self.root/raw_magic.DERIVED_DIRECTORY
+        raw_magic.derive_snapshot(lst, derived)
+        selected = self.resolve()['magic-words']
+        self.assertEqual(selected, derived/'magic-words.tsv')
+        self.assertEqual(b.auxiliary_snapshot_args({'magic-words': selected}),
+                         ['--magic-words-snapshot', str(selected)])
+        self.assertIn(b'raw\t0\tRAW:\n', selected.read_bytes())
+        self.assertEqual(raw_magic.validate_snapshot(selected)['version'], 11)
+
     def test_explicit_magic_ignores_corrupt_unused_default(self):
         import shutil
         import prepare_magic_words_lst as lst_magic
         default=self.root/lst_magic.DERIVED_DIRECTORY
         selected=self.project/'explicit-magic'
         shutil.copytree(default,selected)
+        (default/'magic-words.tsv').chmod((default/'magic-words.tsv').stat().st_mode | stat.S_IWUSR)
         (default/'magic-words.tsv').write_bytes(b'corrupt unused magic')
         overrides={'magic-words':selected/'magic-words.tsv'}
         with patch.object(b,'PROJECT',self.project):
@@ -6482,6 +6508,7 @@ class LoopMessageSelectionTests(unittest.TestCase):
         import prepare_magic_words_lst as lst_magic
         selected=self.project/'explicit-magic'
         shutil.copytree(self.root/lst_magic.DERIVED_DIRECTORY,selected)
+        (selected/'magic-words.tsv').chmod((selected/'magic-words.tsv').stat().st_mode | stat.S_IWUSR)
         (selected/'magic-words.tsv').write_bytes(b'corrupt selected magic')
         with patch.object(b,'PROJECT',self.project),self.assertRaises(ValueError):
             b.resolve_edition_snapshot_options(self.manifest,self.groups,self.downloads,{'magic-words':selected/'magic-words.tsv'})
