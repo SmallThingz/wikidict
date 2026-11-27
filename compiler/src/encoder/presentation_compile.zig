@@ -1633,7 +1633,16 @@ pub const SelectedDefaultThumbnails = struct {
     }
 };
 
+pub const StandaloneSvgSource = struct {
+    page: []const u8,
+    operation: []const u8,
+    file: []const u8,
+    width: u32,
+    height: u32,
+    style: presentation_types.ContainerStyle,
+};
 pub const FigureSizingSource = struct {
+    standalone_svg: ?StandaloneSvgSource = null,
     // An exact ordinary caption direction; no page style or sizing authority.
     standalone_figure_caption: ?StandaloneFigureCaptionSource = null,
     selected_default_thumbnails: ?SelectedDefaultThumbnails = null,
@@ -8611,6 +8620,31 @@ pub const Renderer = struct {
             self.poem_depth == 0 and (self.media_depth == 0 or self.figure_caption_depth != 0) and !self.image_block_suppressed and
             (self.bidi_scope_depth == 0 or self.active_bidi_capture != null) and
             (if (self.semantic_capture) |hints| hints.figure_blocks else false);
+    }
+    // A selected frameless image is one authored responsive block. Its image
+    // and default File action remain ordinary media, while the box owns flow.
+    fn emitStandaloneSvg(self: *Renderer, token: []const u8, file: []const u8, parent: Style) Error!bool {
+        const source = self.context.figure_sizing orelse return false;
+        const selected = source.standalone_svg orelse return false;
+        if (!std.mem.eql(u8, selected.file, file) or !std.mem.eql(u8, selected.operation, token)) return false;
+        const page = self.literal_url_root orelse return self.figureUnavailable();
+        if (self.content_root != .parser_output or !std.mem.eql(u8, selected.page, page) or
+            !self.blockMediaEmissionAllowed(parent) or !presentation_types.validContainerStyle(selected.style))
+            return self.figureUnavailableAt("standalone_svg_source", token, 0, 0);
+        const caption: MediaCaptionCapture = .{ .mode = .literal, .style = .{} };
+        _ = try self.mediaFileKindWithSpans(file, file, null, caption);
+        var action = try self.mediaActionStyle(parent, file, null);
+        action.classes = try self.mediaCaptionClasses(try self.mediaClasses(file), parent.classes);
+        const blocks = try self.a.alloc(Block, 1);
+        {
+            const outer = self.spans;
+            self.spans = .empty;
+            defer self.spans = outer;
+            try self.emitInlineImage(action, .{ .file = file, .width_px = selected.width, .height_px = selected.height });
+            blocks[0] = .{ .kind = .paragraph, .spans = try self.spans.toOwnedSlice(self.a) };
+        }
+        try self.blocksInline(&.{.{ .kind = .container, .container = .{ .style = selected.style, .blocks = blocks } }}, parent);
+        return true;
     }
     fn closedReadyBlockMediaOwed(self: *Renderer, token: []const u8) Error!bool {
         const selected = if (self.context.figure_sizing) |sizing| sizing.text_class_scope else null;
@@ -41860,6 +41894,10 @@ pub const Renderer = struct {
                             continue;
                         }
                         if (try self.emitObservedInlineMissing(prepared_missing, input[token_start .. it.cursor - trail.len], file_name, s)) {
+                            try self.text(trail, s);
+                            continue;
+                        }
+                        if (try self.emitStandaloneSvg(input[token_start .. it.cursor - trail.len], file_name, s)) {
                             try self.text(trail, s);
                             continue;
                         }

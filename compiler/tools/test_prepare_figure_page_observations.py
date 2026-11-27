@@ -970,6 +970,29 @@ class SelectedFullGetRootContract(unittest.TestCase):
 
 
 
+
+class SelectedSunStandaloneSvgTests(unittest.TestCase):
+    def test_genuine_yiddish_svg_book_accepts_only_its_observed_capsule(self):
+        fixture = Path(__file__).parent / 'testdata/yi-sun-standalone/selected-book.json.gz'
+        bundle = json.loads(gzip.decompress(fixture.read_bytes()))
+        book, namespace, defaults = (bundle[name].encode() for name in ('book', 'namespace', 'defaults'))
+        doc = observed.validate_document(book, namespace, defaults)
+        root, = doc['table_roots']
+        self.assertEqual((root['title'], root['page_id'], root['revision_id']), ('☉', 5463, 17199))
+        capsule = root['standalone_svg']
+        box = json.loads(capsule)
+        self.assertEqual((box['width'], box['height'], box['screen_max']), (80, 80, 639))
+        self.assertEqual(root['source'].encode()[box['start']:box['end']],
+                         b'[[File:Sun symbol (fixed width).svg|80px|left|frameless]]')
+        for key, bad in (('standalone_svg', capsule + ' '), ('revision_id', 17200), ('page_id', 8372)):
+            with self.subTest(key=key):
+                rejected = copy.deepcopy(doc)
+                rejected['table_roots'][0][key] = bad
+                with self.assertRaisesRegex(ValueError, 'Unbound selected standalone SVG observation'):
+                    observed.validate_document(observed.encoded(rejected), namespace, defaults)
+        del root['standalone_svg']
+        self.assertEqual(observed.validate_document(observed.encoded(doc), namespace, defaults), doc)
+
 class RootOnlyObservationTests(unittest.TestCase):
  def test_saved_aragonese_sun_table_and_closed_heading_parent(self):
   folder = Path(__file__).parent / 'testdata/an-planet-table'

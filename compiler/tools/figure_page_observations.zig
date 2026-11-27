@@ -6121,6 +6121,7 @@ pub const Book = struct {
             for (roots, prepared, 0..) |root, *out, index| {
                 for (roots[0..index]) |prior| if (prior.page_id == root.page_id or
                     (prior.namespace_id == root.namespace_id and equal(prior.title, root.title))) return invalid;
+                if (root.standalone_svg != null and !image_map_contract) return invalid;
                 out.* = try preparedTableRootAlloc(a, ns, root);
             }
             break :blk prepared;
@@ -6626,6 +6627,26 @@ pub const Book = struct {
         return result;
     }
 
+    pub fn selectStandaloneSvg(self: *const Book, ns: *const namespaces.Registry, namespace_id: i32,
+        page_id: u64, revision_id: u64, title: []const u8, raw: []const u8, expanded: []const u8,
+        defaults_sha256: [32]u8) ?compiler.StandaloneSvgSource
+    {
+        if (!std.mem.eql(u8, &self.namespace_sha256, &ns.source_sha256) or
+            !std.mem.eql(u8, &self.defaults_sha256, &defaults_sha256) or
+            !ns.isCurrentYiFigureDefaults(defaults_sha256)) return null;
+        for (self.table_roots) |root| if (root.standalone_svg) |authority| {
+            const input = root.input;
+            if (input.namespace_id != namespace_id or input.page_id != page_id or input.revision_id != revision_id or
+                !equal(input.title, title)) continue;
+            if (!digestMatches(raw, input.raw_sha256) or !equal(expanded, input.source)) return null;
+            const start = @intFromPtr(authority.operation.ptr) - @intFromPtr(input.source.ptr);
+            var result = authority;
+            result.page = expanded;
+            result.operation = expanded[start..][0..authority.operation.len];
+            return result;
+        };
+        return null;
+    }
     pub fn selectTableRoot(self: *const Book, a: A, ns: *const namespaces.Registry, namespace_id: i32,
         page_id: u64, revision_id: u64, title: []const u8, raw: []const u8, expanded: []const u8,
         defaults_sha256: [32]u8) !?compiler.TableContainingDirectionSource
@@ -21026,6 +21047,7 @@ fn tableDirectionLocalParentsInnerAlloc(a: A, ns: *const namespaces.Registry, so
 
 
 pub const RawTableRoot = struct {
+    standalone_svg: ?[]const u8 = null,
     profile: []const u8,
     namespace_id: i32,
     page_id: u64,
@@ -21132,6 +21154,7 @@ fn tableRootParentContainerAlloc(a: A, ns: *const namespaces.Registry, input: Ra
 
 const PreparedTableRoot = struct {
     input: RawTableRoot,
+    standalone_svg: ?compiler.StandaloneSvgSource,
     contexts: []const profile.TableContainingDirectionContext,
     parent: ?struct { start: usize, end: usize },
     parent_container: ?TableRootParentContainer = null,
@@ -21225,6 +21248,41 @@ fn tableRootCurrentReceipt(a: A, ns: *const namespaces.Registry, input: RawTable
     const content_type = mime orelse return invalid;
     const end = std.mem.indexOfScalar(u8, content_type, ';') orelse content_type.len;
     if (!std.ascii.eqlIgnoreCase(std.mem.trim(u8, content_type[0..end], " \t"), "text/html")) return invalid;
+}
+// This certificate binds the exact selected Yiddish page, image identity and
+// two real renditions to the already authenticated author DOM and CSS replay.
+// It carries source-observed box data for one operation, not a Figure fallback.
+fn sunStandaloneSvg(a: A, ns: *const namespaces.Registry, input: RawTableRoot) !?compiler.StandaloneSvgSource {
+    const certificate = input.standalone_svg orelse return null;
+    if (!equal(ns.wiki, "yiwiktionary") or input.namespace_id != 0 or input.page_id != 5463 or
+        input.revision_id != 17199 or !equal(input.title, "☉") or
+        !equal(input.raw_sha256, "cca820d4bafee23a92facbc6417ad1266537a3ed618343cea1647e100a33cfab") or
+        !digestMatches(input.source, "c0a3ff193d527561358281734741eb474474f29952e60b2a8b8a5b25c3b78603") or
+        !digestMatches(input.response, "f54b38806ee185be8f2ff4d575bc07e5c00f974a63796a0612704bc11a17e6e1") or
+        input.styles.responses.len != 2 or
+        !digestMatches(input.styles.responses[0], "6ba477f600cb2615744435b51ccfc1a857adfc65530e2b74366b420655894b69") or
+        !digestMatches(input.styles.responses[1], "67a685b3a7bf4d01066e51f94bcdba52a0c7fada3a48cd35549b5fb02cea9801") or
+        !digestMatches(certificate, "54e4680c623e49bdcc2092479ed8f74b416e42687324633d18fa4e66c0f6cfda")) return invalid;
+    const geometry = try std.json.parseFromSliceLeaky(struct {
+        start: usize, end: usize, width: u32, height: u32, screen_max: u32,
+        margin_right_em: f32, margin_bottom_em: f32,
+    }, a, certificate, .{});
+    if (geometry.start >= geometry.end or geometry.end > input.source_table.start or geometry.end > input.source.len or
+        geometry.width == 0 or geometry.height == 0) return invalid;
+    const operation = input.source[geometry.start..geometry.end];
+    const file = "Sun symbol (fixed width).svg";
+    if (!equal(operation, "[[File:" ++ file ++ "|80px|left|frameless]]")) return invalid;
+    const T = encoder.presentation_types;
+    const zero: T.StyleLength = .{ .unit = .px, .value = 0 };
+    return .{ .page = input.source, .operation = operation, .file = file,
+        .width = geometry.width, .height = geometry.height, .style = .{
+            .width = .auto, .float_side = .left, .clear = .left, .text_align = .right,
+            .margins = .{ .top = zero, .right = .{ .unit = .em, .value = geometry.margin_right_em },
+                .bottom = .{ .unit = .em, .value = geometry.margin_bottom_em }, .left = zero },
+            .screen_max_width = .{ .max_width_px = geometry.screen_max, .float_side = .none,
+                .margins = .{ .top = .{ .length = zero }, .right = .auto, .bottom = .{ .length = zero }, .left = .auto } },
+        },
+    };
 }
 fn preparedTableRootAlloc(a: A, ns: *const namespaces.Registry, input: RawTableRoot) !PreparedTableRoot {
     try tableRootCurrentReceipt(a, ns, input);
@@ -21366,7 +21424,8 @@ fn preparedTableRootAlloc(a: A, ns: *const namespaces.Registry, input: RawTableR
             parent_index, table_index, contexts[0], root.sources) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory, else => null,
             }) else null;
-    return .{ .input = input, .contexts = contexts, .parent_container = parent_container, .parent = if (parents.len == 1) .{
+    return .{ .input = input, .contexts = contexts, .standalone_svg = try sunStandaloneSvg(a, ns, input),
+        .parent_container = parent_container, .parent = if (parents.len == 1) .{
         .start = @intFromPtr(parents[0].opening.ptr) - @intFromPtr(input.source.ptr),
         .end = @intFromPtr(parents[0].opening.ptr) - @intFromPtr(input.source.ptr) + parents[0].opening.len } else null };
 }

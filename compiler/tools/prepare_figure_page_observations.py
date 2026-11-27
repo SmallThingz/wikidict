@@ -1783,7 +1783,15 @@ def validate_table_roots(roots, doc, defaults):
     seen_ids, seen_titles = set(), set()
     fields = {'profile', 'namespace_id', 'page_id', 'revision_id', 'title', 'raw_sha256', 'source', 'source_table', 'observed_table', 'response', 'receipt', 'styles'}
     for root in roots:
-        if (not isinstance(root, dict) or set(root) != fields or root['profile'] != 'canonical-current-root-table-v1' or
+        allowed = fields
+        if isinstance(root, dict) and 'standalone_svg' in root:
+            witness = root['standalone_svg']
+            if (doc['schema'] != 'wikidict.figure-page-observations.v8' or doc['wiki'] != 'yiwiktionary' or
+                    (root.get('page_id'), root.get('revision_id'), root.get('title')) != (5463, 17199, '☉') or
+                    not isinstance(witness, str) or digest(witness.encode()) != '54e4680c623e49bdcc2092479ed8f74b416e42687324633d18fa4e66c0f6cfda'):
+                raise ValueError('Unbound selected standalone SVG observation')
+            allowed = fields | {'standalone_svg'}
+        if (not isinstance(root, dict) or set(root) != allowed or root['profile'] != 'canonical-current-root-table-v1' or
                 type(root['namespace_id']) is not int or root['namespace_id'] != 0 or
                 any(type(root[k]) is not int or not 0 < root[k] <= (1 << 64) - 1 for k in ('page_id', 'revision_id')) or
                 not isinstance(root['title'], str) or not 0 < len(root['title'].encode()) <= 4096 or '\0' in root['title'] or
