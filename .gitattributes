@@ -643,3 +643,7 @@ compiler/tools/testdata/it-disclosure-prepass01/informatica-raw.wikitext whitesp
 compiler/tools/testdata/it-disclosure-prepass01/informatica-expanded.wikitext whitespace=-blank-at-eol
 compiler/tools/testdata/it-shared-disclosure11/mancese-expanded.wikitext whitespace=-blank-at-eol
 compiler/tools/testdata/it-shared-disclosure11/numerale-expanded.wikitext whitespace=-blank-at-eol
+
+# Preserve the authenticated Libero regression source byte for byte.
+compiler/tools/testdata/it-libero-disclosure13/libero-raw.wikitext -text whitespace=-blank-at-eol
+compiler/tools/testdata/it-libero-disclosure13/libero-expanded.wikitext -text whitespace=-blank-at-eol

@@ -45981,6 +45981,7 @@ fn disclosureOrdinaryPrefix(prefix: []const u8) bool {
         var pos: usize = 0;
         if (std.mem.startsWith(u8, line, "{|")) {
             if (table_depth != null) return false;
+            for (tags[0..depth]) |name| if (std.ascii.eqlIgnoreCase(name, "table")) return false;
             table_depth = depth;
             pos = 2;
         } else if (std.mem.startsWith(u8, line, "|}")) {
@@ -45996,7 +45997,14 @@ fn disclosureOrdinaryPrefix(prefix: []const u8) bool {
                 '<' => {
                     const tag = syntax.tagAt(line, next) orelse return false;
                     if (tag.html_pre or std.mem.indexOfAny(u8, tag.attrs, "<>{}[]&") != null) return false;
-                    if (tag.is("templatestyles")) {
+                    if (tag.is("br")) {
+                        // Attribute-free BR is void, including the maintained
+                        // parser's exact closing-BR spelling. It neither opens
+                        // an ancestor nor closes the surrounding notice cell.
+                        if ((depth != 0 and (std.ascii.eqlIgnoreCase(tags[depth - 1], "table") or
+                            std.ascii.eqlIgnoreCase(tags[depth - 1], "tr"))) or trim(tag.attrs).len != 0 or
+                            (tag.closing and !std.ascii.eqlIgnoreCase(line[next..tag.end], "</br>"))) return false;
+                    } else if (tag.is("templatestyles")) {
                         if (tag.closing or !tag.self_closing or !disclosureQuotedAttrs(tag.attrs) or tag.attr("src") == null or depth != 0 or table_depth != null or
                             next != 0 or tag.end != line.len) return false;
                     } else {
@@ -46011,6 +46019,17 @@ fn disclosureOrdinaryPrefix(prefix: []const u8) bool {
                             if (!disclosureQuotedAttrs(tag.attrs) or line[tag.end - 2] == '/' or depth == tags.len or
                                 std.mem.indexOf(u8, tag.attrs, "mw-content-rtl") != null or
                                 std.mem.indexOf(u8, tag.attrs, "mw-content-ltr") != null) return false;
+                            // Validate each opening, including frames closed
+                            // again before EOL. An implied cell close or fostered
+                            // DIV cannot stand in for this exact table chain.
+                            const parent = if (depth == 0) "" else tags[depth - 1];
+                            const eq = std.ascii.eqlIgnoreCase;
+                            if (tag.is("table") and (table_depth != null or
+                                (depth != 0 and !eq(parent, "div") and !eq(parent, "td") and !eq(parent, "th")))) return false;
+                            if (tag.is("tr") and !eq(parent, "table")) return false;
+                            if ((tag.is("td") or tag.is("th")) and !eq(parent, "tr")) return false;
+                            if (eq(parent, "table") and !tag.is("tr")) return false;
+                            if (eq(parent, "tr") and !tag.is("td") and !tag.is("th")) return false;
                             tags[depth] = tag.name;
                             depth += 1;
                         }
@@ -46027,9 +46046,18 @@ fn disclosureOrdinaryPrefix(prefix: []const u8) bool {
                 else => return false,
             }
         }
-        // A cross-line formatting, HTML table or cell frame is outside the
-        // source grammar. Prior ordinary disclosure DIVs may span lines.
-        for (tags[0..depth]) |name| if (!std.ascii.eqlIgnoreCase(name, "div")) return false;
+        // Closed notice tables may span physical lines. Keep their exact
+        // table/row/cell chain and ordinary DIV wrappers; formatting elements
+        // still cannot cross a line. No nested wiki-table frame is admitted
+        // inside this HTML chain. The final boundary below still requires every
+        // frame closed, so no table, cell, list or direction ancestor is issued.
+        for (tags[0..depth]) |name| {
+            const admitted = for ([_][]const u8{ "div", "table", "tr", "td", "th" }) |allowed| {
+                if (std.ascii.eqlIgnoreCase(name, allowed)) break true;
+            } else false;
+            if (!admitted) return false;
+        }
+
         boundary = depth == 0 and table_depth == null and
             (line.len == 0 or (line[0] == '=' and syntax.controlHeading(line, null) != null));
     }
@@ -46116,6 +46144,28 @@ fn disclosureSheetDirection(a: std.mem.Allocator, css: []const u8, direction: ty
 test "disclosure parser-root placement refuses open source frames and conflicting direction" {
     try std.testing.expect(disclosureOrdinaryPrefix("# prior list\n\n"));
     try std.testing.expect(disclosureOrdinaryPrefix("[[File:x|caption [[word]]]]\n\n"));
+    for ([_][]const u8{
+        "<table><tr><td><div>notice<br />\n----\n<div>edit link</div></div></td></tr></table>\n\n",
+        "<div><table><tr><th>notice\nsecond line</th></tr></table></div>\n\n",
+        "<table><tr><td>notice</br>\nsecond line</td></tr></table>\n== Heading ==\n",
+        "<table><tr><td>notice<br>\nsecond line</td></tr></table>\n\n",
+    }) |prefix| try std.testing.expect(disclosureOrdinaryPrefix(prefix));
+    for ([_][]const u8{
+        "<table><tr><td>open\n\n",
+        "<table><tr><td>notice\n</td></tr></table>\n",
+        "<table><tr><td class=\"mw-content-rtl\">notice\n</td></tr></table>\n\n",
+        "<table><tr><td><i>formatting\n</i></td></tr></table>\n\n",
+        "<table><div>fostered\n</div></table>\n\n",
+        "<table><tr><td>notice<br class=\"mw-content-ltr\" />\n</td></tr></table>\n\n",
+        "<table><tr><td>notice</br >\n</td></tr></table>\n\n",
+        "<table><tr><td>notice\n{|\n| nested\n|}\n</td></tr></table>\n\n",
+        "<table><tr><td>notice\n<li>item</li></td></tr></table>\n\n",
+        "<table>\n<div>fostered</div><tr><td>notice\n</td></tr></table>\n\n",
+        "<table>\n<tr><td>A<td>B</td></td></tr>\n</table>\n\n",
+        "{|\n| <table><tr><td>x</td></tr></table>\n|}\n\n",
+        "<table><tr><td>notice\n{|\n|x\n|}\n</td></tr></table>\n\n",
+        "<table><br/><tr><td>x</td></tr></table>\n\n",
+    }) |prefix| try std.testing.expect(!disclosureOrdinaryPrefix(prefix));
     for ([_][]const u8{ "<li>\n\n", "# item\n", "{|\n| cell\n\n", "<div>\n\n", "[[File:x|\n\n", "<span broken>word</span>\n\n" }) |prefix|
         try std.testing.expect(!disclosureOrdinaryPrefix(prefix));
     try std.testing.expect(try disclosureSheetDirection(std.testing.allocator, "@media screen{.x{direction:ltr}}", .ltr, 0));

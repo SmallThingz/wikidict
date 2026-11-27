@@ -1,0 +1,317 @@
+<templatestyles src="Mbox/common.css" />
+ <table class="plainlinks ombox ombox-notice" role="presentation" style="background-color: #D8E8FF; border:1px solid #A0CCA0; color:#000;"><tr><td class="mbox-image">[[File:Blue_Glass_Arrow.svg|30px]]</td><td class="mbox-text">Vedi anche: [[liberò]]</td></tr></table>
+<templatestyles src="Mbox/common.css" />
+<templatestyles src="Ambox/styles.css" />
+<table class="plainlinks metadata ambox ambox-style" role="presentation"><tr><td class="mbox-image"><div style="width:52px">[[File:Edit-clear.svg|40x40px|link=|alt=]]</div></td><td class="mbox-text"><div class="mbox-text-span">Questo lemma  non è ancora "[[Aiuto:Wikificare|wikificato]]", ovvero [[Wikizionario:Guida_essenziale|formattato]] secondo gli [[Wikizionario:Manuale di stile|standard]] di Wikizionario (vedi l'[[:Categoria:Da wikificare|elenco dei lemmi da wikificare]]). <br /> '''Motivo:'''  dividere le traduzioni per significato.
+----
+<div style="font-size:90%;">[//it.wiktionary.org/w/index.php?title=libero&action=edit Contribuisci] a migliorarlo seguendo le [[Aiuto:Wikificare|linee guida]] e quindi rimuovi questo avviso.</div></div></td></tr></table>[[Categoria:Da wikificare|libero]]
+== [[File:Flag of Italy.svg|40px|border|bandiera italiana]] [[Appendice:Italiano|Italiano]] ==
+===[[Image:Open_book_01.svg|30px|]]''[[aggettivo|Aggettivo]]''===
+[[Categoria:Aggettivi in italiano]] 
+
+{|border="1" cellpadding="2" style="float:right; margin:1em 1em 1em 0;background:#f9f9f9; color:#000;border:1px #aaaaaa solid;border-collapse:collapse"
+|- align="center"
+| &nbsp;
+!bgcolor="#FFFFE0" color="#000"|&nbsp;''[[singolare]]''&nbsp;
+!bgcolor="#FFFFE0" color="#000"|&nbsp;''[[plurale]]''&nbsp;
+|- align="center"
+!bgcolor="#FFFFE0" color="#000" colspan="3"|&nbsp;''[[positivo]]''&nbsp;
+|- align="center"
+!bgcolor="#FFFFE0" color="#000"|&nbsp;''[[maschile]]''&nbsp;
+|&nbsp; [[libero]] &nbsp;
+|&nbsp; [[liberi]] &nbsp;
+|- align="center"
+!bgcolor="#FFFFE0" color="#000"|&nbsp;''[[femminile]]''&nbsp;
+|&nbsp; [[libera]] &nbsp;
+|&nbsp; [[libere]] &nbsp;
+|- align="center"
+!bgcolor="#FFFFE0" color="#000" colspan="3"|&nbsp;''[[superlativo assoluto]]''&nbsp;
+|- align="center"
+!bgcolor="#FFFFE0" color="#000"|&nbsp;''[[maschile]]''&nbsp;
+|&nbsp; [[liberissimo]] &nbsp;
+|&nbsp; [[liberissimi]] &nbsp;
+|- align="center"
+!bgcolor="#FFFFE0" color="#000"|&nbsp;''[[femminile]]''&nbsp;
+|&nbsp; [[liberissima]] &nbsp;
+|&nbsp; [[liberissime]] &nbsp;
+|}
+'''libero'''<small>&nbsp;([[File:Wikipedia-logo.svg|20px|Wikipedia]] '''[[w:libero|approfondimento]]''')</small> ''m sing''
+# non [[imprigionato]] o in [[schiavitù]]
+#* ''dopo due anni di galera sono tornato '''libero'''<small></small>''
+# con [[possibilità]] di [[scelta]] [[arbitraria]] o [[personale]]
+#* ''oggi scriveremo un testo '''libero'''<small></small>''
+# non [[bloccato]]
+#* ''il cane è '''libero'''<small></small> dal guinzaglio''
+# relativo al [[telefono]], [[quando]] è [[possibile]] [[effettuare]] una [[chiamata]] o quando [[segnala]], in genere con [[segnale]] [[acustico]], che il [[ricevente]] non è [[impegnato]] in una [[conversazione]]
+#* ''riesci a telefonare? sì, dà '''libero'''<small></small>''
+#* ''gli sto telefonando adesso, dà '''libero'''<small></small>''
+# [[privo]], [[senza]] qualche cosa
+#* ''hai un impegno? no, sono '''libero'''<small></small>
+#* ''finalmente sono '''libero'''<small></small> dagli esami!''
+# <small>(<i>[[sport]]</i>)</small>[[Categoria:Sport-IT]] nel gioco della [[pallavolo]], il [[giocatore]] che può [[sostituire]] un [[difensore]] per un [[numero]] [[arbitrario]] di volte durante la [[partita]]
+
+===[[Image:Open_book_01.svg|30px|]]''[[sostantivo|Sostantivo]]''===
+[[Categoria:Sostantivi in italiano]] 
+
+'''libero'''<small></small> ''m sing''
+
+{| style="float:right; margin-left:0.5em; margin-bottom:0.5em;border: 1px solid #AAAAAA; border-collapse:collapse;" cellpadding="3" rules="all"
+|- align="center"
+!&nbsp;
+! bgcolor="#FFFFE0" |&nbsp;''[[singolare]]''&nbsp;
+! bgcolor="#FFFFE0" |&nbsp;''[[plurale]]''&nbsp;
+|- align="center"
+! bgcolor="#FFFFE0" |&nbsp;''[[maschile]]''&nbsp;
+| &nbsp; [[libero]]&nbsp;
+| &nbsp; [[liberi]]&nbsp;
+|- align="center"
+! bgcolor="#FFFFE0" |&nbsp;''[[femminile]]''&nbsp;
+| &nbsp; [[libera]]&nbsp;
+| &nbsp; [[libere]]&nbsp;
+|}
+
+#<small>(<i>[[calcio]]</i>)</small>[[Categoria:Calcio-IT]] nel [[gioco]] del calcio, [[difensore]] a [[cui]] sono [[affidate]] [[operazioni]] sia d'[[attacco]] che di [[difesa]], [[poi]] [[sostituito]] dal [[mediano]] [[difensivo]]
+
+===[[Image:Open_book_01.svg|30px|]]''[[voce verbale|Voce verbale]]''===
+[[Categoria:Voci verbali in italiano]] 
+
+'''libero'''<small></small>
+# prima persona singolare dell'indicativo presente di [[liberare]]
+
+=== [[File:Hyph abc.svg|45px]] [[sillabazione|Sillabazione]] ===
+
+; lì | be | ro
+
+===[[Image:Nuvola apps edu languages.svg|30px]] [[pronuncia|Pronuncia]]===
+
+[[Aiuto:IPA|AFI]]: <span class="IPA" style="font-family:'Segoe UI', 'Calibri', 'DejaVu Sans', 'Charis SIL', 'Doulos SIL', 'Gentium Plus', Gentium, GentiumAlt, 'Lucida Grande', 'Arial Unicode MS', sans-serif; font-size: 110%;">/ˈlibero/</span>
+
+===[[Image:Nuvola kdict glass.svg|30px|]][[etimologia|Etimologia]] / [[derivazione|Derivazione]]===
+
+* (aggettivo) derivato dal latino ''[[liber]]''
+* (voce verbale) vedi [[liberare#Etimologia / Derivazione|liberare]]
+
+===[[File:Icona_sinonimi.png|35px]] [[sinonimi|Sinonimi]]===
+
+*[[autonomo]], [[franco]], [[indipendente]], [[sovrano]], [[svincolato]]
+*''(di schiavo)'' [[affrancato]], [[emancipato]]
+*[[democratico]], [[liberale]], [[libertario]]
+* <small>(''[[spregiativo]]'')</small> [[audace]], [[licenzioso]], [[sfrenato]], [[spregiudicato]]
+*[[discrezionale]], [[facoltativo]], [[gratuito]], [[lecito]], [[permesso]], [[volontario]] 
+*''(da obbligo)'' [[dispensato]], [[esente]], [[immune]], [[privo]]
+*''(di individuo)'' [[celibe]],  [[disimpegnato]], [[disoccupato]], [[disponibile]], [[divorziato]], [[nubile]], [[scapolo]], [[separato]],
+*''(di posto)'' [[sgombro]], [[utilizzabile]], [[vacante]], [[vuoto]]
+*''(di animale)'' [[brado]], [[selvatico]], [[selvaggio]] 
+*''(di spazio)'' [[ampio]], [[aperto]], [[esteso]], [[infinito]], [[praticabile]]
+*''(di traduzione)'' a senso
+* padrone di sé, arbitro del proprio destino,  [[redento]] 
+* [[spontaneo]], 
+*[[facoltativo]]
+* [[sciolto]], [[prosciolto]],    [[assolto]],  [[scarcerato]], [[liberato]], 
+* [[accessibile]],   [[scoperto]], 
+* ''(di popolo)''   [[autogovernato]],  [[autosufficiente]]
+* <small>(''per estensione'')</small>''(nel comportamento)'' non soggetto a regole, , [[ardito]], [[immorale]], [[indecente]], [[sconveniente]], 
+* ''(di posto, tavolo)'' non occupato, non riservato
+* ''(di passaggio, di ingresso)'' [[permesso]], [[consentito]], [[incontrollato]], [[illimitato]], [[lecito]]
+* ''(di incarico)'' [[scoperto]], [[vacante]], [[vuoto]]
+*   [[scevro]],
+* [[sgombro]], [[pulito]]  
+* <small>(<i>[[chimica]]</i>)</small>[[Categoria:Chimica-IT]] allo stato [[puro]]
+*''(calcio)'' battitore libero
+
+===[[immagine:Fairytale right blue.png|20px]][[immagine:Fairytale left blue.png|20px]] [[contrario|Contrari]]===
+
+*[[controllato]], [[dipendente]], [[soggetto]]
+*[[schiavo]], [[servo]]
+*''(politica)'' [[antidemocratico]],  [[assolutista]], [[dittatoriale]], [[opprimente]], [[oppressore]], [[totalitario]]
+*[[castigato]], [[censurato]], [[controllato]], [[frenato]]
+*a pagamento, [[forzato]], [[forzoso]], [[obbligatorio]], [[proibito]], [[regolamentato]]
+* ''(da obbligo)''  [[assoggettato]], [[costretto]], [[legato]], [[soggetto]]  [[vincolato]]
+* ''(di individuo)'' [[impegnato]], [[occupato]]
+* ''(di posto)''  [[prenotato]], [[riservato]]
+*''(di animale)'' [[addomesticato]], [[domestico]], in cattività
+*''(di spazio)'' [[chiuso]], [[concluso]], [[delimitato]], [[limitato]]
+*''(di traduzione)'' [[letterale]], [[testuale]]
+*[[sottomesso]],   [[oppresso]],  [[schiacciato]], [[dipendente ]], [[asservito]], [[tiranneggiato]],  [[servo]], [[schiavo]]
+* [[frustrato]], [[complessato]], [[bloccato]]
+* [[schiavizzato]]
+*[[imprigionato]], [[rinchiuso]], [[recluso]]
+* ''(di popolo)'' [[dipendente]], [[soggetto]], [[obbligato]]
+* <small>(''per estensione'')</small> ''(nel comportamento)'' [[morale]], [[decente]]
+* <small>(<i>[[chimica]]</i>)</small>[[Categoria:Chimica-IT]] [[combinato]]
+*[[incarcerato]], [[rinchiuso]], [[detenuto]]
+* [[indaffarato]], , [[riservato]], [[ingombro]], [[vietato]], [[pieno]], [[colmo]]
+* [[sposato]], [[coniugato]]
+
+===[[File:Nuvola apps tree.svg|30px]]  [[parole|Parole]] [[derivate]]===
+
+* [[liberamente]], [[liberare]],  [[semilibero]]
+
+===[[Image:Books-aj.svg aj ashton 01.svg|30px]] [[termine|Termini]] [[correlato|correlati]]===
+
+* [[libertà]]
+
+=== [[Image:Gnome-globe.svg|30px]] [[traduzione|Traduzione]] ===
+<div class="mw-collapsible mw-collapsed" data-expandtext="Mostra" data-collapsetext="Nascondi" style="padding:0.2em 0.6em 0.2em 0.6em; border-right:1px solid #BEBEBE; border-bottom:1px dotted black; background:#EDEDED; color:#000;">non soggetto al volere altrui
+<div class="z-index:-1; toccolours mw-collapsible-content" style="border:0;">
+{| border="0" width="100%" class="translations"
+|-
+| bgcolor="beige" valign="top" width="48%" |
+:*[[afrikaans]]: [[vry]]
+:*[[basso sassone]]: [[fri]], [[leddig]], [[lerrig]], [[ledig]]
+:*[[catalano]]: [[lliure]] (1,3), [[obert]] (2)
+:*[[ceco]]: [[svobodný]]
+:*[[cinese]]: [[自由]] (zìyóu)
+:*[[croato]]: [[slobodan]]; [[besplatan]]
+:*[[danese]]: [[fri]] (1, 2, 3)
+:*[[ebraico]]: 1[[בלי]]4 [[פנוי]]1 [[חפש]]
+:*[[ekspreso]]: [[libera]]
+:*[[esperanto]]: [[libera]]
+:*[[estone]]: [[vaba]]
+:*[[finlandese]]: [[vapaa]]; [[rajoittamaton]]
+:*[[francese]]: [[libre]] (1, 2); [[sans]] (3)
+:*[[giapponese]]: [[自由な]] (じゆうな, jiyu) (1), [[無料]] (無料, muryou) / [[ただ]] (tada) (2)
+:*[[greco]] [[antico]]: [[ἐλεύθερος]] (elèutʰeros) (1, 2 e 3)
+:*[[greco]]: [[ελεύθερος]] (elèftheros) o [[λεύτερος]] (lèftheros) (1, 2 e 3)
+:*[[indonesiano]]: [[bebas]] / [[merdeka]], [[cuma-cuma]], [[tanpa]], [[kosong]]
+:*[[inglese]]: [[free]] (1, 2, 4, 5); -[[free]] (3) (''suffix'')
+:*[[interlingua]]: [[libere]]
+:*[[irlandese]]: [[saor]]
+| width=1% |
+|bgcolor="beige" valign=top width=48%|
+
+:*[[kazako]]: [[ашық]]
+:*[[latino]]: [[liber]] (1, 2)
+:*[[ligure]]: [[franco]]
+:*[[napoletano]]: [[lìbbero]]
+:*[[norvegese]]: [[fri]]
+:*[[occitano]]: [[liure]]
+:*[[olandese]]: [[vrij]]
+:*[[piemontese]]: [[lìbero]]
+:*[[polacco]]: [[wolny]]
+:*[[portoghese]]: [[livre]] (1,2), [[livre]] de (3)'
+:*[[romeno]]: [[liber]]
+:*[[siciliano]]: [[lìbbiru]]
+:*[[sloveno]]: [[bezplatju]]
+:*[[spagnolo]]: [[libre]]
+:*[[svedese]]: [[fri]]
+:*[[tedesco]]: [[frei]]
+:*[[turco]]: [[serbest]], [[bedava]]
+:*[[ungherese]]: [[szabad]] (1, 2)
+:*[[usbeco]]: [[ochiq]]
+:*[[veneto]]: [[łibaro]]
+:*[[volapük]]: [[libik]], [[livik]]
+|}</div></div>
+
+<div class="mw-collapsible mw-collapsed" data-expandtext="Mostra" data-collapsetext="Nascondi" style="padding:0.2em 0.6em 0.2em 0.6em; border-right:1px solid #BEBEBE; border-bottom:1px dotted black; background:#EDEDED; color:#000;">(di posto, tavolo) non [[riservato]] o [[prenotato]]
+<div class="z-index:-1; toccolours mw-collapsible-content" style="border:0;">
+{| border="0" width="100%" class="translations"
+|-
+| bgcolor="beige" valign="top" width="48%" |
+:*[[inglese]]: [[free]], [[unoccupied]], [[unreserved]]
+| width=1% |
+|bgcolor="beige" valign=top width=48%|
+
+:*[[portoghese]]: [[livre]], [[disponível]], [[desocupado]]
+|}</div></div>
+
+<div class="mw-collapsible mw-collapsed" data-expandtext="Mostra" data-collapsetext="Nascondi" style="padding:0.2em 0.6em 0.2em 0.6em; border-right:1px solid #BEBEBE; border-bottom:1px dotted black; background:#EDEDED; color:#000;">[[esente]], [[privo]]
+<div class="z-index:-1; toccolours mw-collapsible-content" style="border:0;">
+{| border="0" width="100%" class="translations"
+|-
+| bgcolor="beige" valign="top" width="48%" |
+:*[[inglese]]:free of, [[unencumbered]]
+|}</div></div>
+
+<div class="mw-collapsible mw-collapsed" data-expandtext="Mostra" data-collapsetext="Nascondi" style="padding:0.2em 0.6em 0.2em 0.6em; border-right:1px solid #BEBEBE; border-bottom:1px dotted black; background:#EDEDED; color:#000;">prima persona singolare dell'indicativo presente di liberare
+<div class="z-index:-1; toccolours mw-collapsible-content" style="border:0;">
+{| border="0" width="100%" class="translations"
+|-
+| bgcolor="beige" valign="top" width="48%" |
+:* [[inglese]]
+|}</div></div>
+
+== [[File:SPQRomani.svg|border|40px]] [[latino|Latino]] ==
+===[[Image:Open book 01.svg|30px]] ''[[aggettivo|Aggettivo]], [[forma]] [[flessa]]''===
+[[Categoria:Forme flesse aggettivali in latino]]
+'''libero'''<small></small>
+# dativo maschile singolare di [[liber#Latino|liber]]
+# ablativo maschile singolare di [[liber#Latino|liber]]
+# dativo neutro singolare di [[liber#Latino|liber]]
+# ablativo neutro singolare di [[liber#Latino|liber]]
+
+===[[Image:Open_book_01.svg|30px|]]''[[verbo|Verbo]]''===
+[[Categoria:Verbi in latino]] 
+
+====[[transitivo|Transitivo]]====
+[[Categoria:Verbi transitivi_in_latino]]
+'''libero'''<small>&nbsp;([[Appendice:Coniugazioni/Latino/libero|vai alla coniugazione]])</small> prima coniugazione[[Categoria:Verbi di prima coniugazione in latino]] ([[paradigma]]: '''līberō''', '''[[liberas#Latino|līberās]]''', '''[[liberavi#Latino|līberāvī]]''', '''[[liberatum#Latino|līberātum]]''', '''[[liberare#Latino|līberāre]]''')
+# [[liberare]], [[rendere]] [[#Latino|libero]] <small>''(in senso proprio o figurato)''</small>
+#* ''sit aeterna [[gloria]] Marius, qui bis [[Italiam]] [[obsidione]] et [[metu]] [[servitutis]] '''liberavit''''' - sia eterna [[gloria]] a Mario, che per due volte [[liberò]] l'[[Italia]] dall'[[assedio]] e dall'[[incubo]] della [[schiavitù]] <small>(<i>[[:w:Marco Tullio Cicerone|Cicerone]], [[:w:Catilinarie|Catilinarie]], [[:s:la:Oratio_in_Catilinam_Quarta_in_Senatu_Habita|oratio IV, XXI]]</i>)</small>
+#* ''et ne nos [[inducas]] in [[tentationem]], sed '''libera''' nos a [[malo]]'' - e non ci [[indurre]] in [[tentazione]], ma [[liberare|liberaci]] dal [[male]] <small>(<i>[[:s:la:Pater noster|Pater noster]]</i>)</small>
+# <small>''(in particolare)''</small> [[liberare]], [[affrancare]], [[rimettere]] in [[libertà]] uno [[schiavo]]
+# <small>(<i>[[diritto]]</i>)</small>[[Categoria:Diritto-LA]] [[assolvere]], [[liberare]] dalle [[accuse]], [[giudicare]] [[innocente]]
+#* ''et eum omni [[ignominia]] '''liberat''''' - e lo [[assolve]] da ogni [[ignominia]] <small>(<i>[[:w:Marco Tullio Cicerone|Cicerone]], [[:w:Pro Cluentio|Pro Cluentio]], [[:s:la:Pro_Aulo_Cluentio_Habito|XLVII, 132]]</i>)</small>
+# <small>(''per estensione'')</small> [[liberare]] [[da]], [[estinguere]], [[rimettere]] (un [[obbligo]], un [[debito]]...)
+
+=== [[File:Hyph abc.svg|45px]] [[sillabazione|Sillabazione]] ===
+
+; lī | bĕ | rō
+
+===[[Image:Nuvola apps edu languages.svg|30px]] [[pronuncia|Pronuncia]]===
+
+* <small>''(pronuncia classica[[Categoria:Glossario pronuncia classica]]'')</small> [[Aiuto:IPA|AFI]]: <span class="IPA" style="font-family:'Segoe UI', 'Calibri', 'DejaVu Sans', 'Charis SIL', 'Doulos SIL', 'Gentium Plus', Gentium, GentiumAlt, 'Lucida Grande', 'Arial Unicode MS', sans-serif; font-size: 110%;">/ˈliː.be.roː/</span>
+* <small>''(pronuncia ecclesiastica[[Categoria:Glossario pronuncia ecclesiastica]]'')</small> [[Aiuto:IPA|AFI]]: <span class="IPA" style="font-family:'Segoe UI', 'Calibri', 'DejaVu Sans', 'Charis SIL', 'Doulos SIL', 'Gentium Plus', Gentium, GentiumAlt, 'Lucida Grande', 'Arial Unicode MS', sans-serif; font-size: 110%;">/ˈli.be.ro/</span>
+
+===[[Image:Nuvola kdict glass.svg|30px|]][[etimologia|Etimologia]] / [[derivazione|Derivazione]]===
+
+* (forma flessa aggettivale) vedi [[liber#Latino|liber]]
+* (verbo) dall'aggettivo ''[[liber#Latino|liber]]'', "[[#Latino|libero]]"
+
+===[[File:Icona_sinonimi.png|35px]] [[sinonimi|Sinonimi]]===
+
+* (liberare) [[emancipo#Latino|emancipo]], [[levo#Latino|levo]]
+* (assolvere) [[absolvo]]
+
+===[[File:Nuvola apps tree.svg|30px]]  [[parole|Parole]] [[derivate]]===
+
+* [[liberatio]], [[liberator]]/[[liberatrix]]
+===[[Image:Books-aj.svg aj ashton 01.svg|30px]] [[termine|Termini]] [[correlato|correlati]]===
+
+* [[liber#Latino|liber]], [[liberalis]], [[liberalitas]], [[liberaliter]], [[libere#Latino|libere]], [[libertas]], [[libertus]], [[libertinus]]
+
+=== [[Image:Gnome-globe.svg|30px]] [[traduzione|Traduzione]] ===
+
+<div class="mw-collapsible mw-collapsed" data-expandtext="Mostra" data-collapsetext="Nascondi" style="padding:0.2em 0.6em 0.2em 0.6em; border-right:1px solid #BEBEBE; border-bottom:1px dotted black; background:#EDEDED; color:#000;">Vedi le traduzioni
+<div class="z-index:-1; toccolours mw-collapsible-content" style="border:0;">
+{| border="0" width="100%" class="translations"
+|-
+| bgcolor="beige" valign="top" width="48%" |
+:* [[catalano]]: [[lliurar]]
+:* [[francese]]: [[livrer]], [[libérer]]
+:* [[inglese]]: to [[liberate#Inglese|liberate]]
+:* [[portoghese]]: [[livrar]], [[liberar#Portoghese|liberar]]
+:* [[spagnolo]]: [[librar]], [[liberar#Spagnolo|liberar]]
+|}</div></div>
+
+<div class="mw-collapsible mw-collapsed" data-expandtext="Mostra" data-collapsetext="Nascondi" style="padding:0.2em 0.6em 0.2em 0.6em; border-right:1px solid #BEBEBE; border-bottom:1px dotted black; background:#EDEDED; color:#000;">prima persona singolare dell'indicativo presente di liberare
+<div class="z-index:-1; toccolours mw-collapsible-content" style="border:0;">
+{| border="0" width="100%" class="translations"
+|-
+| bgcolor="beige" valign="top" width="48%" |
+:* [[inglese]]
+|}</div></div>
+
+<div class="NonModificabile">
+== [[Image:Nuvola apps bookcase.svg|30px|]] [[note|Note]] / [[riferimenti|Riferimenti]] ==
+</div>
+* italiano
+** AA.VV., [https://www.treccani.it/vocabolario/ricerca/libero/ ''Vocabolario Treccani''] edizione online su ''[https://www.treccani.it treccani.it]'', Istituto dell'Enciclopedia Italiana
+** AA.VV., [http://www.garzantilinguistica.it/ricerca/?q=libero ''Lemmario italiano''] edizione on line su ''[http://www.garzantilinguistica.it garzantilinguistica.it]'', De Agostini Scuola
+** AA.VV., [https://dizionari.corriere.it/dizionario_sinonimi_contrari/L/libero.shtml ''Dizionario dei Sinonimi e dei Contrari''] edizione on line su ''[https://dizionari.corriere.it corriere.it]'', RCS Mediagroup
+** Enrico Olivetti, [https://www.dizionario-italiano.it/dizionario-italiano.php?lemma=LIBERO100 ''Dizionario Italiano Olivetti''] edizione on line su ''[https://www.dizionario-italiano.it www.dizionario-italiano.it]'', Olivetti Media Communication
+**WordReference.com, [http://www.wordreference.com/iten/libero Versione on-line] Italiano-Inglese
+**AA.VV., ''Dizionario sinonimi e contrari'', Mariotti, 2006, pagina 312
+* latino
+** Enrico Olivetti, [http://www.dizionario-latino.com/dizionario-latino-italiano.php?lemma=libero100 ''Dizionario Latino Olivetti''] edizione on line su ''[https://www.dizionario-latino.com www.dizionario-latino.com]'', Olivetti Media Communication
+** Charlton T. Lewis, Charles Short, ''A Latin Dictionary'', [http://www.perseus.tufts.edu/hopper/morph?l=libero&la=la#lexicon lemma libero] (edizione online sul [http://www.perseus.tufts.edu/hopper/ portale] del [[:w:Perseus Project|Progetto Perseus]])

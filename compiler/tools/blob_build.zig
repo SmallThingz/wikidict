@@ -75674,6 +75674,9 @@ test "IT ordinary family excludes Vector pinnable header operands before invento
         "<span class=\"local\">A &fjlig; &#x76; &#45;</span>",
         "vector-pinnable-\nheader",
         "vector&hyphen;pinnable-header",
+        "[//it.wiktionary.org/w/index.php?title=libero&action=edit Contribuisci]",
+        "[https://example.test/?a=b&next=c&last=d label]",
+        "literal &field=value followed by &#45;",
         "[[https://example.org/ ] source]",
     }, 0..) |operand, i| {
         const actual = B.ordinaryFamilySourceSelected(&calls, raw, operand);
@@ -75687,6 +75690,10 @@ test "IT ordinary family excludes Vector pinnable header operands before invento
         "&#118;ector-pinnable-header", "vector&amp;#45;pinnable-header",
         "vector&#38;#x2d;pinnable-header", "vector&amp;amp;#45;pinnable-header",
         "vector&unknown;pinnable-header", "vector&#45pinnable-header",
+        "vector-&query=value&pinnable=-header",
+        "[//example.test/?q=x&next=vector-pinnable-header label]",
+        "literal &field=value then vector&#45;pinnable-header",
+        "literal &field=value then vector&unknown;pinnable-header",
         "[[File:A.svg|class=vector-pin\nnable-header]]",
         "[[https://example.org/ ] source]vector-pin\nnable-header",
         "vector-pin<i>nable</i>-header", "vector-{x}-pinnable-header",
@@ -75997,6 +76004,12 @@ test "IT worker effect reply binds page scope selects TOC and independently plac
         .{ .expanded = prefix ++ media, .tmh = true },
         .{ .expanded = prefix ++ headings ++ media, .toc = true, .tmh = true },
         .{ .expanded = prefix ++ "plain" },
+        .{ .expanded = prefix ++ "[//it.wiktionary.org/w/index.php?title=libero&action=edit Contribuisci]" },
+        .{ .expanded = prefix ++ "[//it.wiktionary.org/wiki/Entry label]\n" ++ media, .tmh = true },
+        .{ .expanded = prefix ++ "[//it.wiktionary.org/wiki/Entry label]\n" ++ headings, .toc = true },
+        .{ .expanded = prefix ++ "[// label]", .accepted = false },
+        .{ .expanded = prefix ++ "[relative/path label]", .accepted = false },
+        .{ .expanded = prefix ++ "[//example.test label [[File:Unknown.svg]]]", .accepted = false },
         .{ .expanded = prefix ++ "</br>\n" ++ headings, .toc = true },
         .{ .expanded = prefix ++ "<div>a</br>b</BR>c</div>\n" ++ headings, .toc = true },
         .{ .expanded = prefix ++ "<div>\n{|\n|a</br>b\n|}</div>\n" ++ headings, .toc = true },
@@ -76471,4 +76484,210 @@ test "IT owner attribute manifest binds constructor and preserves conservative i
         const changed = try std.json.Stringify.valueAlloc(a, root, .{});
         try std.testing.expectError(error.InvalidContainerDisclosureInput, B.Book.init(a, changed, &ns));
     }
+}
+
+test "IT anchored stylesheet keys retain one body key without guessing fostered order" {
+    const B = container_disclosure_inputs;
+    const a_tag = "<templatestyles src=\"A/common.css\" />";
+    const b_tag = "<templatestyles src=\"B/common.css\" />";
+    const c_tag = "<templatestyles src=\"C/common.css\" />";
+    const Case = struct { source: []const u8, accepted: bool };
+    for ([_]Case{
+        .{ .source = a_tag, .accepted = true },
+        .{ .source = a_tag ++ "\ntext\n" ++ a_tag, .accepted = true },
+        .{ .source = a_tag ++ "\n<table><tr><td>notice</td></tr></table>\n" ++ a_tag ++ "\n" ++ b_tag, .accepted = true },
+        .{ .source = a_tag ++ "\n" ++ b_tag ++ "\ntext\n" ++ c_tag ++ "\n" ++ b_tag, .accepted = true },
+        .{ .source = a_tag ++ "\n<table>\n<tr><td>\n" ++ b_tag ++ "\n</td></tr>\n<div>\n" ++ b_tag ++ "\n</div>\n</table>", .accepted = true },
+        .{ .source = a_tag ++ "\n<table>\n<tr><td>\n" ++ b_tag ++ "\n</td></tr>\n<div>\n" ++ c_tag ++ "\n</div>\n</table>", .accepted = false },
+        .{ .source = a_tag ++ "\nbody\n" ++ b_tag ++ "\n" ++ c_tag, .accepted = false },
+        .{ .source = "body\n" ++ a_tag, .accepted = false },
+        .{ .source = " " ++ a_tag, .accepted = false },
+        .{ .source = " \n" ++ a_tag, .accepted = false },
+        .{ .source = "<div>\n" ++ a_tag ++ "\n</div>", .accepted = false },
+        .{ .source = a_tag ++ "\n<nowiki>\n" ++ b_tag ++ "\n</nowiki>", .accepted = false },
+        .{ .source = a_tag ++ "\n<!--\n" ++ b_tag ++ "\n-->", .accepted = false },
+        .{ .source = a_tag ++ "\n<table><tr><td>unclosed\n" ++ b_tag, .accepted = false },
+        .{ .source = a_tag ++ "\n<div hidden>\n" ++ b_tag ++ "\n</div>", .accepted = false },
+    }) |case| {
+        var ops: [8]B.OrdinaryStyleImport = undefined;
+        var count: usize = 0;
+        var cursor: usize = 0;
+        while (std.mem.indexOfPos(u8, case.source, cursor, "<templatestyles")) |start| {
+            const end = (std.mem.indexOfScalarPos(u8, case.source, start, '>') orelse unreachable) + 1;
+            const tag = case.source[start..end];
+            ops[count] = .{ .start = start, .end = end, .src = if (std.mem.eql(u8, tag, a_tag)) "A/common.css"
+                else if (std.mem.eql(u8, tag, b_tag)) "B/common.css" else "C/common.css" };
+            count += 1;
+            cursor = end;
+        }
+        try std.testing.expectEqual(case.accepted, B.ordinaryStyleAnchoredKeys(case.source, ops[0..count]));
+        if (case.accepted) {
+            var crossed = ops;
+            crossed[0].end -= 1;
+            try std.testing.expect(!B.ordinaryStyleAnchoredKeys(case.source, crossed[0..count]));
+            crossed = ops;
+            crossed[0].src = "foreign.css";
+            try std.testing.expect(!B.ordinaryStyleAnchoredKeys(case.source, crossed[0..count]));
+            if (count > 1) {
+                try std.testing.expect(!B.ordinaryStyleAnchoredKeys(case.source, ops[0 .. count - 1]));
+                crossed = ops;
+                std.mem.swap(B.OrdinaryStyleImport, &crossed[0], &crossed[1]);
+                try std.testing.expect(!B.ordinaryStyleAnchoredKeys(case.source, crossed[0..count]));
+            }
+        }
+    }
+}
+test "IT genuine libero compiles both languages and retains all six typed disclosures" {
+    const B = container_disclosure_inputs;
+    const protocol = @import("bundle_protocol");
+    const F = struct {
+        const T = encoder.presentation_types;
+        fn countFlow(parts: []const T.FlowPart) anyerror!usize {
+            var count: usize = 0;
+            for (parts) |part| {
+                if (part.figure) |figure| if (figure.caption_blocks) |caption| { count += try countDisclosures(caption); };
+                if (part.scope) |scope| { count += try countFlow(scope.parts); }
+            }
+            return count;
+        }
+        fn countDisclosures(values: []const T.Block) anyerror!usize {
+            var count: usize = 0;
+            for (values) |block| {
+                if (T.contentBox(block)) |box| {
+                    if (box.disclosure) |policy| {
+                        try std.testing.expect(T.validContainerDisclosureOwner(box));
+                        try std.testing.expect(policy.initially_collapsed and policy.button != null);
+                        try std.testing.expectEqualStrings("[Mostra]", policy.expand_label);
+                        try std.testing.expectEqualStrings("[Nascondi]", policy.collapse_label);
+                        const expand = policy.expand_run orelse return error.TestUnexpectedResult;
+                        const collapse = policy.collapse_run orelse return error.TestUnexpectedResult;
+                        try std.testing.expect(encoder.table_style_profile.disclosureSourceLabelAgrees(policy.expand_label, expand, "Mostra"));
+                        try std.testing.expect(encoder.table_style_profile.disclosureSourceLabelAgrees(policy.collapse_label, collapse, "Nascondi"));
+                        const child = box.blocks[policy.content_index].container orelse return error.TestUnexpectedResult;
+                        try std.testing.expect(child.blocks.len != 0);
+                        count += 1;
+                    }
+                    count += try countDisclosures(box.blocks);
+                }
+                if (block.table) |table| {
+                    if (table.caption_blocks) |caption| { count += try countDisclosures(caption); }
+                    for (table.rows) |row| for (row.cells) |cell| if (cell.blocks) |children| { count += try countDisclosures(children); };
+                }
+                if (block.figure) |figure| if (figure.caption_blocks) |caption| { count += try countDisclosures(caption); };
+                if (block.flow) |flow| { count += try countFlow(flow); }
+            }
+            return count;
+        }
+        fn hash(bytes: []const u8, expected: []const u8) !void {
+            var digest: [32]u8 = undefined;
+            std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
+            try std.testing.expectEqualStrings(expected, &std.fmt.bytesToHex(digest, .lower));
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var checkpoint: []const u8 = "exact genuine source, input13 and retained Worker v6 receipt";
+    errdefer std.debug.print("IT_LIBERO_INPUT13 checkpoint={s}\n", .{checkpoint});
+    const raw = @embedFile("testdata/it-libero-disclosure13/libero-raw.wikitext");
+    const source = @embedFile("testdata/it-libero-disclosure13/libero-expanded.wikitext");
+    const collector = @embedFile("testdata/it-libero-disclosure13/libero-effects.json");
+    const binding_bytes = @embedFile("testdata/it-libero-disclosure13/libero-effects-binding.bin");
+    const input = @embedFile("testdata/it-shared-disclosure13/input.json");
+    try F.hash(raw, "941570c961f61fda066f836a79d162d3b9c394f8312ca38263cff6e75436ba70");
+    try F.hash(source, "305d6b5f6aa368f76a35e078e7a27d099066bec63b8a9d7e217823bdd863abdf");
+    try F.hash(input, "4112cd8e35989b7a4a02de60df2ca6ff9eceef18d780ffcf283237c4d074a5fe");
+    try F.hash(collector, "d4f8e42997a2b466da2a12a94e71aba38488d9c728145e5f672003c23dfa98ef");
+    var ns = try namespace_registry.Registry.init(a, @embedFile("testdata/it-per/namespace-registry.tsv"));
+    defer ns.deinit();
+    try ns.attachInterwikiMap(@embedFile("testdata/it-consistente/interwiki-map.tsv"));
+    try ns.attachLanguageConversion(@embedFile("testdata/it-consistente/namespace-siteinfo.raw.json"));
+    var book = try B.Book.init(a, input, &ns); defer book.deinit();
+    const profile = book.workerEffectProfile(0, true, false, "libero", 778) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("30d6e5f210049d0719af679bb399abcfa53389e71756527184cba5ee3c8cd220", &std.fmt.bytesToHex(profile, .lower));
+    const id: protocol.PageIdentity = .{ .index_offset = 9591, .namespace = 0, .page_id = 778, .revision_id = 4256556 };
+    var binding: [32]u8 = undefined;
+    @memcpy(&binding, binding_bytes);
+    try std.testing.expectEqualSlices(u8, &binding, &protocol.pageEffectBinding(profile, 74, id, "libero", raw, source, collector));
+    const payload: protocol.BoundPageEffects = .{ .binding = binding, .collector = collector };
+    const receipt = (try book.styleReceiptFromExpansion(a, 74, id, "libero", raw, source, "", false, payload, &ns)) orelse return error.TestUnexpectedResult;
+    const held = (try book.bindWithStyleReceipt(a, 0, true, false, "libero", 778, 4256556, raw, source, receipt)) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(held.captures.len == 0 and held.shared_profile != null);
+    const style_scope = held.page_style_scope orelse return error.TestUnexpectedResult;
+    try std.testing.expect(held.shared_profile == style_scope.shared and
+        held.source.ptr == style_scope.source.ptr and held.source.len == style_scope.source.len);
+
+    const behavior_bytes = @embedFile("testdata/it-per/behavior-switches.tsv");
+    var behavior = try namespace_registry.behavior_switches.Registry.init(a, behavior_bytes, ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256);
+    defer behavior.deinit();
+    var digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(behavior_bytes, &digest, .{});
+    var images = try namespace_registry.image_options.Registry.init(a, @embedFile("testdata/it-per/image-options.tsv"), ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256, digest);
+    defer images.deinit();
+    var registry = language_registry.Registry.empty(a);
+    defer registry.deinit();
+    try registry.addTsv(@embedFile("testdata/it-per/language-registry.tsv"));
+    var codes = languageCodes(&registry, &ns);
+    codes.behavior_switches = &behavior;
+    codes.image_options = &images;
+    const gadget = @embedFile("testdata/it-cediglia-normal-disclosure/IndiceOrizzontale.css");
+    const common = @embedFile("testdata/it-consistente/it-common.css");
+    try F.hash(gadget, "e709e719949c725531cad0cfba932c7efa2bff992098a74a27c81910c94d81ac");
+    try F.hash(common, "98694865a8a0da877f6cad072dbf74ff605b410afaa3587b39c7864ddacc294a");
+    var table_styles = try encoder.table_style_profile.parseSourcesAlloc(a, &.{
+        .{ .css = gadget, .base_url = "" },
+        .{ .css = common, .base_url = "" },
+    });
+    defer table_styles.deinit();
+    codes.table_styles = &table_styles;
+    codes.container_disclosures = held;
+    const attributes = held.shared_profile.?.owner_attribute_projection orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 1), attributes.absent.len);
+    try std.testing.expectEqualStrings("hidden", attributes.absent[0]);
+    const id_domain = attributes.generated_id orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("mw", id_domain.prefix);
+    try std.testing.expectEqualStrings("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_", id_domain.suffix_alphabet);
+    try std.testing.expectEqual(@as(usize, 2), id_domain.min_suffix_bytes);
+    try std.testing.expectEqual(@as(usize, 11), id_domain.max_suffix_bytes);
+    var page: encoder.blob_builder.PreparedPage = .{ .ns = .{ .id = 0, .kind = .language }, .title = "libero" };
+    checkpoint = "genuine ordinary PreparedPage compilation";
+    try page.compileWithPhasesAndRoot(a, codes, source, raw, null, null, null, null, .parser_output);
+    // The page-level notices precede two language boundaries. The ordinary
+    // processMain prefix rule preserves that unowned context once instead of
+    // attributing it to either language or silently dropping it.
+    for (page.records.items) |record|
+        std.debug.print("IT_LIBERO_RECORD_ID kind={s} language={s} heading={s} bytes={d}\n",
+            .{ @tagName(record.kind), record.language_code, record.key, record.payload.len });
+    try std.testing.expectEqual(@as(usize, 3), page.records.items.len);
+
+    var total_disclosures: usize = 0;
+    for (page.records.items, [_][]const u8{ "it", "la", "" }) |record, code| {
+        checkpoint = "all decoded whole-page records";
+        try std.testing.expectEqualStrings("libero", record.title);
+        try std.testing.expect(record.kind == .language);
+        try std.testing.expectEqualStrings(code, record.language_code);
+        if (code.len == 0) try std.testing.expectEqualStrings("Unclassified", record.key);
+        const decoded = try encoder.presentation_codec.decodeAlloc(a, record.payload, record.title, record.kind,
+            .{ .heading = record.key, .code = record.language_code });
+        const semantic = try std.json.Stringify.valueAlloc(a, decoded.entry, .{});
+        const targets: []const []const u8 = if (std.mem.eql(u8, code, "it"))
+            &.{ "\"target\":\"vry\"", "\"target\":\"free\"" } else
+            if (code.len != 0) &.{ "\"target\":\"lliurar\"", "\"target\":\"livrer\"" } else
+            &.{ "\"target\":\"liberò\"", "\"target\":\"Aiuto:Wikificare\"" };
+        for (targets) |target| try std.testing.expect(std.mem.indexOf(u8, semantic, target) != null);
+        var actual: [32]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash(record.payload, &actual, .{});
+        std.debug.print("IT_LIBERO_WHOLE_PAGE_RECORD language={s} heading={s} bytes={d} sha256={s}\n",
+            .{ code, record.key, record.payload.len, std.fmt.bytesToHex(actual, .lower) });
+        var count: usize = 0;
+        for (decoded.entry.sections) |section| { count += try F.countDisclosures(section.blocks); }
+        try std.testing.expectEqual(@as(usize, if (std.mem.eql(u8, code, "it")) 4 else if (code.len != 0) 2 else 0), count);
+        if (code.len == 0) {
+            try std.testing.expect(std.mem.indexOf(u8, semantic, "\"target\":\"vry\"") == null);
+            try std.testing.expect(std.mem.indexOf(u8, semantic, "\"target\":\"lliurar\"") == null);
+        }
+        total_disclosures += count;
+    }
+    checkpoint = "all six source disclosures present with typed controls and nonempty content";
+    try std.testing.expectEqual(@as(usize, 6), total_disclosures);
+    std.debug.print("IT_LIBERO_WHOLE_PAGE PASS records={d} typed_disclosures={d}\n", .{ page.records.items.len, total_disclosures });
 }

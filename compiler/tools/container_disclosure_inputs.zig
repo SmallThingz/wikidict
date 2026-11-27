@@ -541,6 +541,17 @@ fn ordinaryPinHeaderAbsent(expanded: []const u8) bool {
         var cursor: usize = 0;
         while (std.mem.indexOfScalarPos(u8, line, cursor, '&')) |amp| {
             if (ordinaryPinMatch(line[cursor..amp], &matched)) return false;
+            // An alphanumeric query key followed by '=' cannot be a character
+            // reference in the maintained single-pass decoder. Keep every
+            // literal byte in the marker observation; do not swallow a later
+            // ampersand or relax unknown/numeric reference handling.
+            var key_end = amp + 1;
+            while (key_end < line.len and std.ascii.isAlphanumeric(line[key_end])) : (key_end += 1) {}
+            if (key_end > amp + 1 and key_end < line.len and line[key_end] == '=') {
+                if (ordinaryPinMatch(line[amp .. key_end + 1], &matched)) return false;
+                cursor = key_end + 1;
+                continue;
+            }
             const window = line[amp..][0..@min(line.len - amp, 64)];
             const semi = std.mem.indexOfScalar(u8, window, ';') orelse return false;
             const spelling = window[0 .. semi + 1];
@@ -684,7 +695,8 @@ fn workerProjectionValid(w: WorkerProjection, m: OrdinaryManifest) !bool {
     _ = try digest(w.feature_source_sha256);
     if (w.placement_source_sha256) |pin| if (!std.mem.eql(u8, pin, m.local_registry.?.placement_sha256)) return false;
     if (w.local_placement) |mode| {
-        if (!std.mem.eql(u8, mode, "document-prefix-first-key.v1") or w.placement_source_sha256 == null) return false;
+        if ((!std.mem.eql(u8, mode, "document-prefix-first-key.v1") and
+            !std.mem.eql(u8, mode, "document-prefix-one-tail-key.v1")) or w.placement_source_sha256 == null) return false;
     }
     for (w.toc_on, m.sheets) |x, y| if (!sheetEqual(x, y)) return false;
     if (w.toc_off) |off| {
@@ -738,11 +750,58 @@ pub fn ordinaryStylePrefix(expanded: []const u8, imports: []const OrdinaryStyleI
     return true;
 }
 
+// First occurrences in the document prefix cannot be moved behind body nodes
+// by table foster parenting. Repeated keys have already been deduplicated there.
+// Permit one further distinct key: its internal placement cannot change its
+// order relative to the anchored keys. Two unanchored keys would require an
+// independent final-tree ordering proof, even for lexically balanced HTML.
+pub fn ordinaryStyleAnchoredKeys(expanded: []const u8, imports: []const OrdinaryStyleImport) bool {
+    if (imports.len == 0) return true;
+    if (imports.len > 4096 or expanded.len > 1024 * 1024 or !ordinaryLiteralHtml(expanded, imports)) return false;
+    var anchored: [32][]const u8 = undefined;
+    var anchored_count: usize = 0;
+    var cursor: usize = 0;
+    var in_prefix = true;
+    var tail_key: ?[]const u8 = null;
+    for (imports) |op| {
+        if (op.start < cursor or op.end <= op.start or op.end > expanded.len) return false;
+        if (in_prefix) {
+            var gap = cursor;
+            if (cursor != 0) while (gap < op.start and (expanded[gap] == ' ' or expanded[gap] == '\t')) : (gap += 1) {};
+            while (gap < op.start) {
+                if (expanded[gap] == '\n') {
+                    gap += 1;
+                } else if (expanded[gap] == '\r' and gap + 1 < op.start and expanded[gap + 1] == '\n') {
+                    gap += 2;
+                } else break;
+            }
+            in_prefix = gap == op.start and (op.start == 0 or expanded[op.start - 1] == '\n');
+        }
+        if (anchored_count == 0 and !in_prefix) return false;
+        const known = for (anchored[0..anchored_count]) |key| {
+            if (std.mem.eql(u8, key, op.src)) break true;
+        } else false;
+        if (!known) {
+            if (in_prefix) {
+                if (anchored_count == anchored.len) return false;
+                anchored[anchored_count] = op.src;
+                anchored_count += 1;
+            } else if (tail_key) |key| {
+                if (!std.mem.eql(u8, key, op.src)) return false;
+            } else tail_key = op.src;
+        }
+        cursor = op.end;
+    }
+    return true;
+}
+
 fn workerLocalPlacementValid(w: WorkerProjection, expanded: []const u8, imports: []const OrdinaryStyleImport) bool {
     if (imports.len == 0) return true;
-    return w.placement_source_sha256 != null and
-        std.mem.eql(u8, w.local_placement orelse return false, "document-prefix-first-key.v1") and
-        ordinaryStylePrefix(expanded, imports);
+    if (w.placement_source_sha256 == null) return false;
+    const mode = w.local_placement orelse return false;
+    if (std.mem.eql(u8, mode, "document-prefix-first-key.v1")) return ordinaryStylePrefix(expanded, imports);
+    if (std.mem.eql(u8, mode, "document-prefix-one-tail-key.v1")) return ordinaryStyleAnchoredKeys(expanded, imports);
+    return false;
 }
 
 fn workerStyleImports(a: std.mem.Allocator, expanded: []const u8, registry: OrdinaryLocalRegistry) !?[]const OrdinaryStyleImport {
@@ -921,7 +980,10 @@ fn workerFeatures(expanded: []const u8, ns: *const namespace_registry.Registry, 
                 const end = std.mem.indexOfAnyPos(u8, line, start + 1, "[]<>") orelse return null;
                 if (line[end] != ']') return null;
                 const content = line[start + 1 .. end];
-                if (!std.mem.startsWith(u8, content, "https://") and !std.mem.startsWith(u8, content, "http://")) return null;
+                const space = std.mem.indexOfAny(u8, content, " \t") orelse content.len;
+                const target = content[0..space];
+                if ((!std.mem.startsWith(u8, target, "https://") and !std.mem.startsWith(u8, target, "http://") and
+                    !std.mem.startsWith(u8, target, "//")) or !encoder.document_ir.validExternalUrl(target)) return null;
                 pos = end + 1;
                 continue;
             }
