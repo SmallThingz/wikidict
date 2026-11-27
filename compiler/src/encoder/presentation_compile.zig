@@ -48284,7 +48284,12 @@ pub const Renderer = struct {
                 if (ids) |complete| alternative.complete_ancestor_ids = complete;
                 query.alternative_ancestry = &alternative;
             };
-            const literal_query = try self.literalFirstDivQuery(tag, element, parent.native_inline_motion, &query);
+            // Preserve source-wide negative class/ID knowledge locally to this
+            // query; existing Book-bound queries retain their own issuer.
+            const general = if (classes == null and ids == null and parent_tag == null)
+                (try self.nativeSourceClassQuery(tag, profile, &query, parent.native_inline_motion)) orelse &query
+            else &query;
+            const literal_query = try self.literalFirstDivQuery(tag, element, parent.native_inline_motion, general);
             const observed_box = (if (literal_query) |bound| bound.literal_screen_root_box else null) orelse
                 self.observedScreenRootForOpening(tag, element);
             if (observed_box) |box| {
@@ -48292,7 +48297,7 @@ pub const Renderer = struct {
                     scoped.table_collapse == .unknown) return .{ .unresolved = true };
                 return box.box;
             }
-            var box_node = literal_query orelse &query;
+            var box_node = literal_query orelse general;
             var local_parent: table_style_profile.TextElement = undefined;
             var local_subject: table_style_profile.TextElement = undefined;
             if (literal_query) |proved_subject| if (dispatch) |child| {
@@ -140146,5 +140151,95 @@ test "deferred cell physical height late refusal cannot lose the pending warning
         try std.testing.expectEqual(case.refused, r.fallbacks.unresolved_table_style);
         try std.testing.expectEqual(case.refused, output.box_height == null);
         try std.testing.expectEqualStrings("body", try flattened(a, output.spans));
+    }
+}
+
+test "ordinary container class absence uses current native source without granting ancestry" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const source = try a.dupe(u8, "<div class='outside'><div class='target' style='clear:both'>body</div></div>");
+    var profile = try table_style_profile.parseForTargetAlloc(a, ".absent div{width:13px}", .screen); defer profile.deinit();
+    const input = MissingText.untracked(source);
+    const proof = (try nativeSourceClassProofAlloc(a, input, &profile)) orelse return error.TestUnexpectedResult;
+    var renderer: Renderer = .{ .a = a, .context = .{ .table_styles = &profile, .text_paint_styles = &profile },
+        .content_root = .parser_output, .body_depth = 1, .body_missing = input,
+        .native_source_class_range = .{ .proof = proof, .start = 0, .prepared = input } };
+    var root: NativeInlineMotionRoot = .{ .source = input };
+    const motion_scope = renderer.nativeInlineMotionBegin(&root, false); defer motion_scope.deinit();
+    const outer = syntax.tagAt(source, 0).?;
+    const inner = syntax.tagAt(source, outer.end).?;
+    const parent_state = try renderer.nativeInlineMotionEntry(outer, renderer.body_formatting_attributes.native_inline_motion);
+    const parent_element = try renderer.textElement(outer, null, "");
+    const element = try renderer.textElement(inner, parent_element, "");
+    const parent: Style = .{ .text_element = parent_element, .native_inline_motion = parent_state };
+    const scoped: Style = .{ .text_element = element };
+    try std.testing.expect(renderer.source_element_binding == null);
+    try std.testing.expect((try renderer.containerQueryClasses(inner, &profile, element)) == null);
+    const resolved = try renderer.containerResolution(inner, parent, scoped);
+    try std.testing.expect(!resolved.unresolved and resolved.specified);
+    try std.testing.expectEqual(presentation_types.FigureClear.both, resolved.style.clear.?);
+    try std.testing.expect(resolved.style.width == null);
+    // Query-local absence must never mutate the later parent or its issuer.
+    for ([_]*const table_style_profile.TextElement{ element, parent_element }) |node| {
+        try std.testing.expect(node.complete_ancestor_classes == null and node.complete_ancestor_ids == null);
+        try std.testing.expect(!node.ancestry_complete and !node.physical_ancestry_complete);
+        try std.testing.expect(node.page_style_root == null and node.source_root_child == null and node.source_literal_div == null);
+    }
+    const held = renderer.native_source_class_range;
+    renderer.native_source_class_range = null;
+    try std.testing.expect((try renderer.containerResolution(inner, parent, scoped)).unresolved);
+    renderer.native_source_class_range = held;
+    var stale = parent; stale.native_inline_motion.proved.epoch += 1;
+    try std.testing.expect((try renderer.containerResolution(inner, stale, scoped)).unresolved);
+    const saved = source[source.len - 1]; source[source.len - 1] = 'X';
+    try std.testing.expect((try renderer.containerResolution(inner, parent, scoped)).unresolved);
+    source[source.len - 1] = saved;
+    try std.testing.expect(!(try renderer.containerResolution(inner, parent, scoped)).unresolved);
+}
+
+test "ordinary container source absence preserves possible selector and parent uncertainty" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const Case = struct { name: []const u8, css: []const u8, represented_parent: bool = true, unresolved: bool = true };
+    for ([_]Case{
+        .{ .name = "possible ancestor class", .css = ".possible div{width:13px}" },
+        .{ .name = "possible ancestor ID", .css = "#possible div{width:13px}" },
+        // The unscoped selector path can match this already represented edge.
+        // A class-absence certificate neither creates nor invalidates that edge.
+        .{ .name = "represented direct parent", .css = "div > div{width:13px}.absent div{height:17px}", .unresolved = false },
+        // The same negative inventory must not invent an unrepresented parent.
+        .{ .name = "unrepresented direct parent", .css = "div > div{width:13px}.absent div{height:17px}", .represented_parent = false },
+    }) |case| {
+        errdefer std.debug.print("ordinary container uncertainty fixture: {s}\n", .{case.name});
+        const source = try a.dupe(u8, "<div><div style='clear:both'>body</div></div><span class='possible' id='possible'>later</span>");
+        var profile = try table_style_profile.parseForTargetAlloc(a, case.css, .screen); defer profile.deinit();
+        const input = MissingText.untracked(source);
+        const proof = (try nativeSourceClassProofAlloc(a, input, &profile)) orelse return error.TestUnexpectedResult;
+        var renderer: Renderer = .{ .a = a, .context = .{ .table_styles = &profile, .text_paint_styles = &profile },
+            .content_root = .parser_output, .body_depth = 1, .body_missing = input,
+            .native_source_class_range = .{ .proof = proof, .start = 0, .prepared = input } };
+        var root: NativeInlineMotionRoot = .{ .source = input };
+        const motion_scope = renderer.nativeInlineMotionBegin(&root, false); defer motion_scope.deinit();
+        const outer = syntax.tagAt(source, 0).?;
+        const inner = syntax.tagAt(source, outer.end).?;
+        const state = try renderer.nativeInlineMotionEntry(outer, renderer.body_formatting_attributes.native_inline_motion);
+        const parent_element = try renderer.textElement(outer, null, "");
+        const represented_parent: ?*const table_style_profile.TextElement = if (case.represented_parent) parent_element else null;
+        const element = try renderer.textElement(inner, represented_parent, "");
+        const projected = (try renderer.nativeSourceClassQuery(inner, &profile, element, state)) orelse return error.TestUnexpectedResult;
+        try std.testing.expect(projected.complete_ancestor_classes != null);
+        try std.testing.expect(!projected.ancestry_complete and !projected.physical_ancestry_complete);
+        const result = try renderer.containerResolution(inner, .{ .text_element = represented_parent, .native_inline_motion = state }, .{ .text_element = element });
+        try std.testing.expectEqual(case.unresolved, result.unresolved);
+        if (!case.unresolved) {
+            try std.testing.expect(result.specified);
+            try std.testing.expectEqual(presentation_types.FigureClear.both, result.style.clear.?);
+            try std.testing.expect(result.style.width != null and result.style.width.? == .length);
+            try std.testing.expectEqualDeep(presentation_types.StyleWidth{ .unit = .px, .value = 13 }, result.style.width.?.length);
+            try std.testing.expect(result.style.height == null);
+        }
+        // Neither the positive match nor the negative projection closes ancestry.
+        for ([_]*const table_style_profile.TextElement{ element, parent_element }) |node| {
+            try std.testing.expect(node.complete_ancestor_classes == null and node.complete_ancestor_ids == null);
+            try std.testing.expect(!node.ancestry_complete and !node.physical_ancestry_complete);
+        }
     }
 }
