@@ -428,7 +428,8 @@ export function spans(values = [], onLink = () => {}, preserve = false, explanat
     if(rubyFontContext||normalizedEmphasis){el.style.fontWeight=span.bold?'bold':'normal';el.style.fontStyle=span.italic?'italic':'normal';}
     if(span.image){const image=inlineImageElement(span.image,explanations?.inlineImage,{sizing:explanations?.figureSizing,figureImage:explanations?.figureImage,intrinsic_size:explanations?.figureIntrinsicSize});el.append(span.image.map?mappedImage(image,span.image,onLink,explanations):image);}
     colorSpan(el,span);
-    if(!canonicalRGB(span.foreground)&&inkFor(span)&&((span.kind==='link'&&(span.target||span.target_fragment))||(span.kind==='external_link'&&safeURL(span.target))))el.style.textDecoration='underline';
+    const externalURL=span.kind==='external_link'?safeURL(span.target,explanations?.sourceEdition):null;
+    if(!canonicalRGB(span.foreground)&&inkFor(span)&&((span.kind==='link'&&(span.target||span.target_fragment))||(span.kind==='external_link'&&externalURL)))el.style.textDecoration='underline';
     if(canonicalRGB(span.background)){
       el.style.backgroundColor=span.background;
       // A box owns decoration and preserves the source's inherited text wrapping.
@@ -469,8 +470,8 @@ export function spans(values = [], onLink = () => {}, preserve = false, explanat
         link.setAttribute('aria-label', span.explanation?.trim() || (span.target_fragment ? `${span.target}#${span.target_fragment}` : span.target));
       }
       link.addEventListener('click', event => { event.preventDefault(); if(withinSummary)event.stopPropagation(); if(span.target_fragment==null)onLink(span.target);else onLink(span.target,span.target_fragment); }); link.append(el); el = link;
-    } else if (span.kind === 'external_link' && safeURL(span.target) && !span.image?.map) {
-      const link = node('a'); link.href = safeURL(span.target); link.rel = 'noopener noreferrer'; link.target = '_blank';
+    } else if (span.kind === 'external_link' && externalURL && !span.image?.map) {
+      const link = node('a'); link.href = externalURL; link.rel = 'noopener noreferrer'; link.target = '_blank';
       // Prefer URL separators to emergency breaks inside a displayed address.
       if (!preserve && textStart && span.text === span.target && /^https?:\/\//i.test(span.target)) {
         const parts = span.text.split(/(?<!:\/\/)(?<=[/?&#])(?=[^/?&#])/u);
@@ -483,7 +484,7 @@ export function spans(values = [], onLink = () => {}, preserve = false, explanat
           textStart.replaceWith(label);
         }
       }
-      if(!span.image&&!span.ruby&&!span.clipped_absolute&&!el.textContent.trim()&&!span.tooltip?.trim())link.setAttribute('aria-label',span.explanation?.trim()||safeURL(span.target));
+      if(!span.image&&!span.ruby&&!span.clipped_absolute&&!el.textContent.trim()&&!span.tooltip?.trim())link.setAttribute('aria-label',span.explanation?.trim()||externalURL);
       if(withinSummary)link.addEventListener('click',event=>event.stopPropagation()); link.append(el); el = link;
     }
     if(described.has(i) && el.tagName==='A')el.setAttribute('aria-describedby',described.get(i));
@@ -756,7 +757,7 @@ function validateRichEntry(entry){
 }
 function richAction(action,onLink,explanations,label=action.label){
   const el=node('a',label);let href=null;
-  if(action.kind==='external')href=safeURL(action.target);
+  if(action.kind==='external')href=safeURL(action.target,explanations?.sourceEdition);
   else if(action.target.startsWith('File:'))href=safeURL(explanations?.imageActionURL?.(action.target,action.target_fragment));
   else {const p=linkTargetParts(action.target,action.target_fragment);href='#'+encodeURIComponent(p.title)+(p.fragment===undefined?'':'#'+encodeURIComponent(p.fragment));el.addEventListener('click',event=>{event.preventDefault();event.stopPropagation();action.target_fragment==null?onLink(action.target):onLink(action.target,action.target_fragment);});}
   if(href){el.href=href;if(action.kind==='external'||action.target.startsWith('File:')){el.target='_blank';el.rel='noopener noreferrer';}}

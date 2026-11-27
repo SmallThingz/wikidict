@@ -35,7 +35,16 @@ export function validate(value) {
   }
   return value;
 }
-export function safeURL(target) {
+export function safeURL(target, sourceEdition) {
+  if(typeof target==='string'&&target.startsWith('//')){
+    if(typeof sourceEdition!=='string'||!/^[a-z0-9_-]+wiktionary$/.test(sourceEdition)||
+       /[\u0000-\u0020\u007f\\]/u.test(target)||/^\/\/[/?#]/.test(target))return null;
+    const authority=target.slice(2).split(/[/?#]/,1)[0];
+    if(!authority||authority.includes('@'))return null;
+    const base='https://'+sourceEdition.slice(0,-10).replaceAll('_','-')+'.wiktionary.org/';
+    try{const url=new URL(target,base);return url.protocol==='https:'&&!url.username&&!url.password?url.href:null;}
+    catch{return null;}
+  }
   try { const url = new URL(target); return ['http:', 'https:'].includes(url.protocol) ? url.href : null; } catch { return null; }
 }
 

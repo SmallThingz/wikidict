@@ -36,3 +36,13 @@ test('explicit unavailable source editions do not become a current edition or po
  const special='Special:Booksources/978#literal';for(const edition of [undefined,null,'']){assert.equal(bookSourcesURL(special,edition,''),null);assert.deepEqual(linkTargetParts('Page#literal',''),{title:'Page#literal',fragment:''});}
  assert.equal(bookSourcesURL(special,'mgwiktionary',''),'https://mg.wiktionary.org/wiki/'+encodeURIComponent(special));
 });
+
+// Scheme-relative external destinations retain their authored authority.
+test('exact-retained-NDS-target',()=>assert.equal(safeURL("//nds.wiktionary.org/w/index.php?title=V%C3%B6rlaag:%C3%96_-bor&action=edit",'ndswiktionary'),'https:'+"//nds.wiktionary.org/w/index.php?title=V%C3%B6rlaag:%C3%96_-bor&action=edit"));
+test('retained-RO-absolute-unchanged',()=>assert.equal(safeURL('https://ro.wikipedia.org/wiki/Limba_nepalez%C4%83'),'https://ro.wikipedia.org/wiki/Limba_nepalez%C4%83'));
+test('authored-cross-host-query-fragment-preserved',()=>assert.equal(safeURL('//example.org/a%20b?x=1#part','ndswiktionary'),'https://example.org/a%20b?x=1#part'));
+test('no-basis-no-default',()=>{for(const edition of [undefined,null,'','nds','wiktionary','enwikipedia','bad hostwiktionary'])assert.equal(safeURL("//nds.wiktionary.org/w/index.php?title=V%C3%B6rlaag:%C3%96_-bor&action=edit",edition),null);});
+test('malformed-network-authority-refuses',()=>{for(const target of ['//','///example.org/a','//?x','//#part','//user:password@example.org/a','//user@example.org','//example.org:bad/a','//%2fexample.org'])assert.equal(safeURL(target,'ndswiktionary'),null);});
+test('backslash-controls-whitespace-refuse',()=>{for(const target of ['//'+String.fromCharCode(92)+'/example.org','//example.org/a'+String.fromCharCode(92)+'b','//example.org/a b','//example.org/'+String.fromCharCode(0),'//example.org/'+String.fromCharCode(10),'//example.org/'+String.fromCharCode(127)])assert.equal(safeURL(target,'ndswiktionary'),null);});
+test('ordinary-relative-and-non-http-refuse',()=>{for(const target of ['/a','a','../a','#part','javascript:alert(1)','data:text/plain,x','mailto:x@example.org'])assert.equal(safeURL(target,'ndswiktionary'),null);});
+test('existing-absolute-http-https-policy-preserved',()=>{for(const target of ['http://example.org/a?b#c','https://example.org/a','https://example.org:443/a'])assert.equal(safeURL(target),new URL(target).href);});
