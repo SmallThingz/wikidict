@@ -1305,7 +1305,11 @@ fn validateFileSource(a: A, doc: anytype, records_count: u64, batch_count: u64, 
     const binding = if (equal(doc.core_revision, wmf5_imageinfo_core)) ordinaryImageInfoDefaults(ns.wiki) orelse return invalid else null;
     const current = equal(doc.core_revision, wmf5_rollout_core);
     const current_jpeg = equal(doc.core_revision, selected_jpeg_core);
-    const it_current = equal(doc.core_revision, it_current_core);
+    // Yiddish selected Book defaults can share the Italian deployment core.
+    // A zero-fact Yiddish registry still follows the ordinary exact site checks.
+    const yi_empty = records_count == 0 and equal(ns.wiki, "yiwiktionary") and
+        equal(doc.core_revision, namespaces.Registry.yi_current_figure_core);
+    const it_current = equal(doc.core_revision, it_current_core) and !yi_empty;
     var current_scope: ImageInfoScope = .ordinary;
     if (it_current) {
         const digest = defaults.sha256 orelse return invalid;
@@ -3458,6 +3462,45 @@ const FileTestSource = struct {
         return .{ .projection = projection, .raw = raw };
     }
 };
+
+
+test "selected empty Yiddish file facts sharing the current Italian core stay ordinary" {
+    const backing = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(backing);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var stream: std.Io.Reader = .fixed(@embedFile("testdata/yi-sun-standalone/selected-book.json.gz"));
+    var inflater: std.compress.flate.Decompress = .init(&stream, .gzip, &.{});
+    const snapshot = try inflater.reader.allocRemaining(a, .limited(512 * 1024));
+    try std.testing.expect(inflater.err == null and inflater.state == .end);
+    const input = try std.json.parseFromSliceLeaky(struct {
+        book: []const u8,
+        namespace: []const u8,
+        defaults: []const u8,
+    }, a, snapshot, .{});
+    var ns = try namespaces.Registry.init(backing, input.namespace);
+    defer ns.deinit();
+    const document = try std.json.parseFromSliceLeaky(Value, a, input.defaults, .{});
+    const site = try std.json.Stringify.valueAlloc(a, .{ .query = try field(document, "query") }, .{});
+    const raw = "{\"schema\":\"wikidict.figure-sizing-raw-batches.v1\",\"batches\":[]}";
+    var hash: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(raw, &hash, .{});
+    try std.testing.expect(equal(namespaces.Registry.yi_current_figure_core, it_current_core));
+    const facts: FilesDocument = .{
+        .schema = "wikidict.figure-sizing-files.v1", .wiki = ns.wiki, .content_language = ns.content_language,
+        .core_revision = namespaces.Registry.yi_current_figure_core,
+        .namespace_registry_sha256 = &std.fmt.bytesToHex(ns.source_sha256, .lower),
+        .raw_sha256 = &std.fmt.bytesToHex(hash, .lower), .generator_sha256 = file_generator_sha256,
+        .source_profile = .null, .records = &.{},
+    };
+    const projection = try std.json.Stringify.valueAlloc(a, facts, .{});
+    var registry = try Registry.init(backing, projection, raw, site, &ns, facts.core_revision, generator_sha256);
+    defer registry.deinit();
+    try std.testing.expect(registry.file_authority and !registry.it_inventory and registry.records.len == 0);
+    try std.testing.expectError(invalid, Registry.init(backing, projection, raw, site, &ns, accepted_core, generator_sha256));
+    try std.testing.expectError(invalid, validateFileSource(a, facts, 0, 1, site, &ns, .{ .core = facts.core_revision }, true, true));
+    try std.testing.expectError(invalid, validateFileSource(a, facts, 1, 1, site, &ns, .{ .core = facts.core_revision }, true, true));
+}
 
 test "figure file axes authorize only bounded thumbnail widths without computing heights" {
     const a = std.testing.allocator;
