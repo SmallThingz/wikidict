@@ -3,6 +3,7 @@ import {readFile, writeFile} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 import {chromium} from 'playwright';
 import {build} from 'esbuild';
+import {checkTableFloatMargins} from './table-float-margin-cases.mjs';
 
 const root = new URL('.', import.meta.url);
 const output = process.env.WIKIDICT_TABLE_FIT_OUTPUT;
@@ -111,7 +112,7 @@ try {
     }, direction);
     observed.push(...controls);
     for (const c of controls) {
-      if (c.name === 'indented-auto') {
+      if (c.name === 'indented-auto' || c.name === 'floated') {
         assert.ok(c.left >= c.hostLeft - 1 && c.right <= c.hostRight + 1, JSON.stringify(c));
         assert.ok(c.width > 0 && c.extent > c.width, JSON.stringify(c));
       } else {
@@ -123,6 +124,7 @@ try {
       if (c.name === 'floated') assert.equal(c.float, 'left');
     }
   }
+  observed.push(...await checkTableFloatMargins(page));
   assert.deepEqual(errors, []);
   if (output) await writeFile(output + '/maintained-observations.json', JSON.stringify(observed, null, 2) + '\n', {flag: 'wx'});
 } finally { await browser.close(); }

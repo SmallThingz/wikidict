@@ -1444,6 +1444,9 @@ function blockView(block, onLink, explanations, legacy = '', context = {}) {
       // Keep semantic indentation in addition to the authored physical margin.
       wrap.style.removeProperty('margin-inline-start');
       wrap.style.marginInlineStart=`calc(${margin} + var(--compiled-float-inline-margin))`;
+      // Bound the whole float margin box, not just its scrollable content box.
+      // The table keeps its intrinsic width and remains horizontally reachable.
+      wrap.style.maxWidth=`max(0px, calc(100% - ${margin} - var(--compiled-float-left) - var(--compiled-float-right)))`;
       if(block.table.geometry?.width?.unit==='percent'){wrap.style.width=block.table.geometry.width.value+'%';table.style.width='100%';}
       for(const side of ['Top','Right','Bottom','Left'])table.style['margin'+side]='0';
     }
