@@ -107,8 +107,12 @@ fn directDocumentUrl(a: A, ns: *const namespaces.Registry, record: anytype, url:
         const marker = "/wiki/";
         const at = std.mem.indexOf(u8, canonical, marker) orelse return invalid;
         const oldid = try std.fmt.allocPrint(a, "https://{s}.wiktionary.org/w/index.php?oldid={d}", .{ host, record.page.revision });
-        const named = try std.fmt.allocPrint(a, "https://{s}.wiktionary.org/w/index.php?title={s}&oldid={d}&useskin=vector-2022", .{ host, canonical[at + marker.len ..], record.page.revision });
-        if (!eq(url, oldid) and !eq(url, named)) return invalid;
+        const legacy_named = try std.fmt.allocPrint(a, "https://{s}.wiktionary.org/w/index.php?title={s}&oldid={d}&useskin=vector-2022", .{ host, canonical[at + marker.len ..], record.page.revision });
+        const query_title = try encodedTitle(a, record.page.title, .query_value);
+        const named = try std.fmt.allocPrint(a, "https://{s}.wiktionary.org/w/index.php?title={s}&oldid={d}&useskin=vector-2022", .{ host, query_title, record.page.revision });
+        // Keep exact previously admitted captures, alongside the query-value
+        // serialization used by named oldid GETs. Do not normalize arbitrary URLs.
+        if (!eq(url, oldid) and !eq(url, legacy_named) and !eq(url, named)) return invalid;
     }
 }
 const Transport = struct { url: []const u8, observation: prefix_parser.Observation };
@@ -293,17 +297,60 @@ fn utc(value: []const u8) bool {
 // Exact same-core source chain. The admitted language set is deliberately the
 // single proven trivial-converter/html-code case; other converters stay unknown.
 
-pub fn canonicalCurrentUrl(a: A, host: []const u8, title: []const u8) ![]const u8 {
+fn encodedTitle(a: A, title: []const u8, mode: enum { article_path, query_value }) ![]const u8 {
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(a);
-    try out.appendSlice(a, "https://"); try out.appendSlice(a, host); try out.appendSlice(a, ".wiktionary.org/wiki/");
     const hex = "0123456789ABCDEF";
     for (title) |byte| {
-        if (byte == ' ') try out.append(a, '_')
-        else if (std.ascii.isAlphanumeric(byte) or std.mem.indexOfScalar(u8, "-._~/:", byte) != null) try out.append(a, byte)
+        if (mode == .article_path and byte == ' ') try out.append(a, '_')
+        else if (std.ascii.isAlphanumeric(byte) or std.mem.indexOfScalar(u8, "-._~", byte) != null or
+            (mode == .article_path and (byte == '/' or byte == ':'))) try out.append(a, byte)
         else try out.appendSlice(a, &.{ '%', hex[byte >> 4], hex[byte & 15] });
     }
     return out.toOwnedSlice(a);
+}
+
+pub fn canonicalCurrentUrl(a: A, host: []const u8, title: []const u8) ![]const u8 {
+    const path = try encodedTitle(a, title, .article_path);
+    defer a.free(path);
+    return std.fmt.allocPrint(a, "https://{s}.wiktionary.org/wiki/{s}", .{ host, path });
+}
+
+test "historical named URLs encode query titles and preserve exact article paths" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile("testdata/normal-text-polvoroso01/namespace-registry.tsv"));
+    defer ns.deinit();
+    const Record = struct {
+        page: struct { title: []const u8, revision: u64 },
+        mode: enum { @"historical-oldid", @"current-canonical" },
+    };
+    var record: Record = .{ .page = .{ .title = "og/eða", .revision = 6188363 }, .mode = .@"historical-oldid" };
+    // This URL is the unchanged request in the retained og/eða capture.
+    try directDocumentUrl(a, &ns, record, "https://zh.wiktionary.org/w/index.php?title=og%2Fe%C3%B0a&oldid=6188363&useskin=vector-2022");
+    try directDocumentUrl(a, &ns, record, "https://zh.wiktionary.org/w/index.php?title=og/e%C3%B0a&oldid=6188363&useskin=vector-2022");
+    try directDocumentUrl(a, &ns, record, "https://zh.wiktionary.org/w/index.php?oldid=6188363");
+    for ([_][]const u8{
+        "https://zh.wiktionary.org/w/index.php?title=og%252Fe%C3%B0a&oldid=6188363&useskin=vector-2022",
+        "https://zh.wiktionary.org/w/index.php?title=og%2Fe%C3%B0a&oldid=6188364&useskin=vector-2022",
+        "https://en.wiktionary.org/w/index.php?title=og%2Fe%C3%B0a&oldid=6188363&useskin=vector-2022",
+        "http://zh.wiktionary.org/w/index.php?title=og%2Fe%C3%B0a&oldid=6188363&useskin=vector-2022",
+        "https://zh.wiktionary.org/w/index.php?title=og%2Fe%C3%B0a&oldid=6188363&useskin=vector",
+        "https://zh.wiktionary.org/w/index.php?title=og%2Fe%C3%B0a&oldid=6188363&useskin=vector-2022&extra=1",
+    }) |url| try std.testing.expectError(invalid, directDocumentUrl(a, &ns, record, url));
+
+    record.page.title = "A/B:C D%?&#é";
+    try directDocumentUrl(a, &ns, record, "https://zh.wiktionary.org/w/index.php?title=A%2FB%3AC%20D%25%3F%26%23%C3%A9&oldid=6188363&useskin=vector-2022");
+    try directDocumentUrl(a, &ns, record, "https://zh.wiktionary.org/w/index.php?title=A/B:C_D%25%3F%26%23%C3%A9&oldid=6188363&useskin=vector-2022");
+    try std.testing.expectError(invalid, directDocumentUrl(a, &ns, record,
+        "https://zh.wiktionary.org/w/index.php?title=A%2FB%3AC%20D%25%3F&%23%C3%A9&oldid=6188363&useskin=vector-2022"));
+    try std.testing.expectEqualStrings("https://zh.wiktionary.org/wiki/A/B:C_D%25%3F%26%23%C3%A9",
+        try canonicalCurrentUrl(a, "zh", record.page.title));
+    record.page.title = "og/eða";
+    record.mode = .@"current-canonical";
+    try directDocumentUrl(a, &ns, record, "https://zh.wiktionary.org/wiki/og/e%C3%B0a");
+    try std.testing.expectError(invalid, directDocumentUrl(a, &ns, record, "https://zh.wiktionary.org/wiki/og%2Fe%C3%B0a"));
 }
 
 

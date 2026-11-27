@@ -2078,6 +2078,7 @@ const tools_partitions = [_]ToolsPartition{
         "page_source_context.test",
         "source_internal_link.test",
         "page_language.test",
+        "direct_source_get.test",
         "page_language_prefix.test",
         "source_title_variant.test",
         "title_conservation.test",
