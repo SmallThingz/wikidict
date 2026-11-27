@@ -419,6 +419,9 @@ SELECTED_JPEG_EDITIONS = {
         }),
 }
 SD_JPEG_RESPONSE = ('3b9e78bbae62834749d361eb74116b444030cc6628650443109b1aace970ffcb', "فائل:Devil's Staircase Wales.jpg")
+# Exact local SD file source with byte-identical selected handler/API leaves.
+SD_LOCAL_ANTENNA_RESPONSE = ('0ca647bf534b1223bb0ebc0ad673a1681b0c7f2861bb1f5c20827c000d99fd7d', 'فائل:antenna.jpg',
+                             '2cc57e980dd9a87e4317e8bc149645123deaaed3')
 SD_JPEG_DEPLOYED_SOURCES = '9641bd2cfe64f9a0cef506a6a165b818dad212b000022d643aa9ac9480f620b7'
 SD_JPEG_NAMESPACE = '1a335a658db305317b17e342af9a38fdfd12cf306244ba5e35fe102b703f1ff2'
 SELECTED_JPEG_REGISTRATION = {
@@ -1774,9 +1777,12 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
         if len(response_raw) > MAX_RESPONSE:
             raise ValueError('Figure API response exceeds per-response bound')
         titles = batch['requests']
-        if current_jpeg and (batch_index != 0 or set(batch) != {'requests', 'response'} or
-                             titles != [jpeg_file] or response_raw != site_raw):
-            raise ValueError('Selected JPEG replay requires its exact single-file response')
+        sd_local = sd_jpeg and batch_index == 1
+        if current_jpeg:
+            exact_response = (titles == [SD_LOCAL_ANTENNA_RESPONSE[1]] and digest(response_raw) == SD_LOCAL_ANTENNA_RESPONSE[0]
+                              if sd_local else batch_index == 0 and titles == [jpeg_file] and response_raw == site_raw)
+            if set(batch) != {'requests', 'response'} or not exact_response:
+                raise ValueError('Selected JPEG replay requires its exact file responses')
         if any(not isinstance(title, str) for title in titles) or len(set(titles)) != len(titles):
             raise ValueError('Duplicate or invalid Figure batch request')
         for title in titles:
@@ -1808,7 +1814,9 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
             raise ValueError('Current full-inventory Figure source version changed')
         if mon_current and batch_core != core:
             raise ValueError('Current Mon Figure facts require the same observed deployment')
-        if (general.get('lang') != language or (batch_core != core and not (scoped_observation or vi_imageinfo or rollout) and not (
+        if sd_local and batch_core != SD_LOCAL_ANTENNA_RESPONSE[2]:
+            raise ValueError('SD local JPEG changed its observed deployment')
+        if (general.get('lang') != language or (batch_core != core and not (sd_local or scoped_observation or vi_imageinfo or rollout) and not (
                 allow_compatible_epochs and profile_kind in (FIGURE_PROFILE_V4, FIGURE_PROFILE_V5) and
                 core in FIGURE_RESPONSE_EPOCHS and batch_core in FIGURE_RESPONSE_EPOCHS))):
             raise ValueError('Figure batches mix site/source versions')
@@ -1823,8 +1831,8 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
             current_file_observation(batch, data, registry)
             batch_profile = approved
         else:
-            batch_profile = figure_profile(site_info.FIGURE_WMF5_CORE if rollout else batch_core,
-                                          profile_kind, _figure_media_extensions(data), wiki=wiki)
+            profile_core = core if sd_local else site_info.FIGURE_WMF5_CORE if rollout else batch_core
+            batch_profile = figure_profile(profile_core, profile_kind, _figure_media_extensions(data), wiki=wiki)
             # Exact per-core registrations differ, but the proved image profile does
             # not. Both complete registration inventories are checked below.
             if ({key: value for key, value in batch_profile.items() if key != 'media_extensions'} !=
@@ -1964,7 +1972,8 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
         if (target is not None and target is not record and
                 file_fact_identity(target) != file_fact_identity(record)):
             raise ValueError('Requested file conflicts with an authenticated canonical alias')
-    if current_jpeg and (base_count != 1 or observed_count != 0 or len(records) != 1):
+    if current_jpeg and (base_count != len(records) or observed_count != 0 or
+                         len(records) not in ((1, 2) if sd_jpeg else (1,))):
         raise ValueError('Selected JPEG replay omitted its source batch')
     if sd_jpeg:
         row = records[0]
@@ -1975,6 +1984,16 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
                 (row['original_width'], row['original_height']) != (2272, 1704) or
                 proof is None or proof['omitted'] or proof['veto'] or proof['repository'] != 'shared'):
             raise ValueError('SD JPEG metadata or unrotated axes differ')
+        if len(records) == 2:
+            row = records[1]
+            local = SD_LOCAL_ANTENNA_RESPONSE[1]
+            proof = jpeg_evidence.get(local)
+            if (row['requested_file'] != local or row['canonical_file'] != local or row['state'] != 'eligible' or
+                    row['file_sha1'] != '4490fbf3fc2de1a0f35e7e633e68ac756d136c67' or
+                    row['file_timestamp'] != '2006-04-19T22:26:32Z' or
+                    (row['original_width'], row['original_height']) != (150, 107) or
+                    proof is None or proof['omitted'] or proof['veto'] or proof['repository'] != 'local'):
+                raise ValueError('SD local JPEG metadata or unrotated axes differ')
     records.sort(key=lambda row: row['requested_file'].encode('utf-8'))
     return {'wiki': wiki, 'content_language': language, 'core_revision': core,
             'namespace_registry_sha256': digest(namespace_raw), 'source_profile': profile,

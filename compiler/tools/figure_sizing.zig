@@ -723,6 +723,12 @@ fn selectedJpeg(wiki: []const u8, site: []const u8) ?[]const u8 {
     return null;
 }
 
+// Exact dated local ImageInfo, qualified against the same 14 handler/API
+// source leaves as the existing selected SD JPEG deployment.
+const sd_local_antenna = "فائل:antenna.jpg";
+const sd_local_antenna_core = "2cc57e980dd9a87e4317e8bc149645123deaaed3";
+const sd_local_antenna_response = "0ca647bf534b1223bb0ebc0ad673a1681b0c7f2861bb1f5c20827c000d99fd7d";
+
 fn selectedSdJpeg(site: []const u8) ?[]const u8 {
     const exact = "3b9e78bbae62834749d361eb74116b444030cc6628650443109b1aace970ffcb";
     return if (digestMatches(site, exact)) "فائل:Devil's Staircase Wales.jpg" else null;
@@ -766,7 +772,7 @@ fn generalWithEpoch(value: Value, wiki: []const u8, language: []const u8, server
     if (scope == .selected_jpeg and (!equal(core, selected_jpeg_core) or
         (!equal(wiki, "nnwiktionary") and !equal(wiki, "nahwiktionary")) or
         !equal(try string(item, "generator"), "MediaWiki 1.48.0-wmf.6"))) return invalid;
-    if (scope == .sd_current_jpeg and (!equal(core, selected_jpeg_core) or !equal(wiki, "sdwiktionary") or
+    if (scope == .sd_current_jpeg and ((!equal(core, selected_jpeg_core) and !equal(core, sd_local_antenna_core)) or !equal(wiki, "sdwiktionary") or
         !equal(try string(item, "generator"), "MediaWiki 1.48.0-wmf.6"))) return invalid;
     if (scope == .rollout_base or scope == .mon_current or scope == .sql_current or scope == .selected_jpeg or scope == .sd_current_jpeg or equal(core, wmf5_imageinfo_core)) {
         if (scope == .rollout_base and (!equal(core, wmf5_rollout_core) or
@@ -967,6 +973,10 @@ fn sdJpegProfile(value: Value, site: []const u8) !void {
 }
 fn mediaRegistration(query: Value, expected: ?[media_extensions.len][]const u8) ![media_extensions.len][]const u8 {
     const core = try string(try field(query, "general"), "git-hash");
+    return mediaRegistrationForCore(query, expected, core);
+}
+
+fn mediaRegistrationForCore(query: Value, expected: ?[media_extensions.len][]const u8, core: []const u8) ![media_extensions.len][]const u8 {
     const extensions = try field(query, "extensions");
     if (extensions != .array or extensions.array.items.len > 1024) return invalid;
     var seen: [media_extensions.len]bool = @splat(false);
@@ -1254,11 +1264,12 @@ fn validateFileSource(a: A, doc: anytype, records_count: u64, batch_count: u64, 
     var current_scope: ImageInfoScope = .ordinary;
     if (current_jpeg) {
         const digest = defaults.sha256 orelse return invalid;
-        if (!contract or !epochs or records_count != 1 or batch_count != 1 or
-            !equal(source_core, selected_jpeg_core)) return invalid;
+        if (!contract or !epochs or !equal(source_core, selected_jpeg_core)) return invalid;
         if (ns.isSelectedJpegFigureDefaults(digest)) {
+            if (records_count != 1 or batch_count != 1) return invalid;
             current_scope = .selected_jpeg;
         } else if (ns.isCurrentSdFigureDefaults(digest) and selectedSdJpeg(site) != null) {
+            if (records_count != batch_count or (records_count != 1 and records_count != 2)) return invalid;
             current_scope = .sd_current_jpeg;
         } else return invalid;
     }
@@ -2433,9 +2444,14 @@ pub const Registry = struct {
             // The rollout occurred during three full captures. Only their later ordinary
             // rows may use the new core. The first authenticated registration, defaults
             // and every supplemental observation retain their original source rules.
+            const sd_local = sd_jpeg and batch_index == 1;
             const scope: ImageInfoScope = if (jpeg_file) |file| scope: {
-                if (!equal(batch_core, selected_jpeg_core) or supplement or batch.tiff_metadata_response != null or
-                    batch.requests.len != 1 or !equal(batch.requests[0], file) or !equal(batch.response, site)) return invalid;
+                if (supplement or batch.tiff_metadata_response != null or batch.requests.len != 1) return invalid;
+                if (sd_local) {
+                    if (!equal(batch_core, sd_local_antenna_core) or !equal(batch.requests[0], sd_local_antenna) or
+                        !digestMatches(batch.response, sd_local_antenna_response)) return invalid;
+                } else if (!equal(batch_core, selected_jpeg_core) or !equal(batch.requests[0], file) or
+                    !equal(batch.response, site)) return invalid;
                 break :scope if (sd_jpeg) .sd_current_jpeg else .selected_jpeg;
             } else if (equal(doc.core_revision, wmf5_rollout_core)) scope: {
                 // validateFileSource already bound this exact Book defaults observation.
@@ -2464,7 +2480,9 @@ pub const Registry = struct {
                 break :blk try TiffCompanion.init(temp, response, ns, server, batch_core, batch.requests.len, epochs,
                     if (scope == .rollout_base or scope == .mon_current) scope else .ordinary, try mediaRegistration(query, null));
             } else null;
-            _ = try mediaRegistration(query, null);
+            // The exact local batch has the same registered handlers as
+            // the selected deployment, and is digest-bound above.
+            _ = if (sd_local) try mediaRegistrationForCore(query, null, selected_jpeg_core) else try mediaRegistration(query, null);
             const observed = try timestamp(try string(source, "curtimestamp"));
             if (observed.fraction.len != 0) return invalid;
             const pages = try field(query, "pages");
@@ -2677,7 +2695,7 @@ pub const Registry = struct {
                     // Keep every IT alias in the existing AND proof, even if
                     // a future admitted base epoch cannot supply JPEG authority.
                     const proven = jpeg_epoch and try jpegUnrotatedMetadata(temp, image);
-                    if (scope == .sd_current_jpeg and (!proven or !equal(repository, "shared"))) return invalid;
+                    if (scope == .sd_current_jpeg and (!proven or !equal(repository, if (sd_local) "local" else "shared"))) return invalid;
                     const evidence = try jpeg_evidence.getOrPut(a, fact.canonical_file);
                     const size = (try field(image, "size")).integer;
                     if (evidence.found_existing) {
