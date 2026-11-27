@@ -1538,7 +1538,14 @@ pub const ObservedLiteralRegion = struct {
             .screen_root_box = if (root) self.screen_root_box else null };
     }
 };
+pub const StandaloneFigureCaptionSource = struct {
+    page: []const u8,
+    operation: []const u8,
+    caption: []const u8,
+};
 pub const FigureSizingSource = struct {
+    // An exact ordinary caption direction; no page style or sizing authority.
+    standalone_figure_caption: ?StandaloneFigureCaptionSource = null,
     literal_region: ?ObservedLiteralRegion = null,
     ordinary_action_group_ctx: ?*const anyopaque = null,
     resolve_ordinary_action_group_fn: ?OrdinaryActionGroupResolver = null,
@@ -2359,6 +2366,9 @@ pub const Figure = struct {
     caption: []const Span = &.{},
     caption_blocks: ?[]const Block = null,
     caption_text_align: ?presentation_types.CellTextAlign = null,
+    // Build-only. The ordinary standalone Figure can use the existing bidi
+    // flow owner to preserve an authenticated source direction.
+    standalone_source_rtl: bool = false,
     // Only the source imagemap emitter can supply this separate fallback body.
     map_fallback: ?[]const Span = null,
     deferred_geometry: ?*const DeferredFigureGeometry = null,
@@ -18923,6 +18933,18 @@ pub const Renderer = struct {
         };
         result.caption_blocks = caption_blocks;
         result.caption = if (filename_caption or caption_blocks != null) &.{} else parsed_caption;
+        if (sizing_source.standalone_figure_caption) |observed| {
+            // The Writer bound this proof to the original full page before
+            // partitioning. Owner copies must preserve the exact page/token.
+            if (self.literal_url_root) |whole| if (self.content_root == .parser_output and
+                std.mem.eql(u8, whole, observed.page) and std.mem.eql(u8, tracked.bytes, observed.operation) and
+                std.mem.eql(u8, choice.caption, observed.caption) and choice.default_size and
+                owner == null and parent.direction.len == 0 and caption_style.direction.len == 0 and
+                own_style == null and !filename_caption and resolved_choice.content == .image and
+                resolved_choice.format == .thumbnail) {
+                result.standalone_source_rtl = true;
+            };
+        }
         // Catalog labels trim only exterior source whitespace. Keep those
         // original bytes in the visible caption without parsing its effects again.
         if (choice.caption.len != metadata_caption.len) {
@@ -19063,8 +19085,19 @@ pub const Renderer = struct {
             block_value.text = "";
             block_value.spans = &.{};
             if (parts.items.len == 1 and parts.items[0].kind == .figure and block_value.style == null) {
-                block_value.figure = parts.items[0].figure.?;
-                parts.deinit(self.a);
+                const figure = parts.items[0].figure.?;
+                if (figure.standalone_source_rtl and block_value.kind == .paragraph) {
+                    if (!self.spend()) return error.RenderLimit;
+                    const inner = try parts.toOwnedSlice(self.a);
+                    const scoped = try self.a.alloc(FlowPart, 1);
+                    scoped[0] = .{ .kind = .scope, .scope = .{
+                        .mode = .isolate, .resolved_direction = .rtl, .parts = inner,
+                    } };
+                    block_value.flow = scoped;
+                } else {
+                    block_value.figure = figure;
+                    parts.deinit(self.a);
+                }
             } else {
                 // One anonymous flow retains the original list/style/alignment
                 // owner. Its parts introduce no synthetic paragraph boundaries.

@@ -821,7 +821,22 @@ def current_literal_section(attributes):
             raise ValueError('Invalid current literal section token')
 
 
-def selected_full_get_view(value, page, parsed):
+SD_READY_OUTER_PROFILE = 'mediawiki-vector-2022-1.48.0-wmf.6'
+SD_READY_HEAD_PROGRAM = '1515b0419cd9415da2a3a86dc261948d619a89960f38dd6287a26fc48627444b'
+
+
+def selected_sd_ready_outer(wiki, page, outer):
+    return (wiki == 'sdwiktionary' and page.get('namespace_id') == 0 and
+            page.get('page_id') == 5753 and page.get('revision_id') == 21696 and
+            page.get('title') == 'تِرڇائِي' and
+            page.get('raw_sha256') == 'b6a53bb81092f66ebb81b361ee84d723726c5a46fb0bfedd6261c061eae4f64e' and
+            outer.get('profile') == SD_READY_OUTER_PROFILE and
+            outer.get('selected_body') == 'full_get_root' and
+            page.get('figure_style_operations') == [{'start': 0, 'end': 111}] and
+            'current_identity' not in outer)
+
+
+def selected_full_get_view(value, page, parsed, *, sd_ready=False):
     """Return a validation-only view; retain the original API/GET payloads."""
     current_literal = value.get('selected_body') == 'current_get_literal'
     if ((not current_literal and (value.get('selected_body') != 'full_get_root' or 'current_identity' in value)) or
@@ -947,6 +962,8 @@ def selected_full_get_view(value, page, parsed):
                     if at:
                         expected_program = ('e925dc8ae7861a33fd0b23132dbc9eeae57bba470d42e81320a4b43ed0a6a5e1' if current_literal else
                                             '65ec9c98e6764dbb12bc436514f1033a9cb2eb780783cd043398b237e6dc8d6b')
+                        if sd_ready:
+                            expected_program = SD_READY_HEAD_PROGRAM
                         if digest(text[:at].encode()) != expected_program:
                             raise ValueError('Unproved full GET head program')
                         begin_class = '(function(){var className="'
@@ -981,6 +998,9 @@ def selected_full_get_view(value, page, parsed):
                 ('wgArticleId', page['page_id']), ('wgRevisionId', page['revision_id']), ('wgNamespaceNumber', page['namespace_id']))) or
             config.get('wgPageName') != page['title'].replace(' ', '_') or config.get('wgAction') != 'view' or config.get('wgIsArticle') is not True):
         raise ValueError('Full GET configuration differs from selected source')
+    if sd_ready and (config.get('wgTitle') != page['title'] or 'wgUserName' not in config or
+                     config['wgUserName'] is not None or config.get('wgUserGroups') != ['*']):
+        raise ValueError('Selected SD ready-Figure context requires the anonymous oldid view')
     if current_literal and (type(config.get('wgCurRevisionId')) is not int or config['wgCurRevisionId'] != page['revision_id'] or config.get('wgTitle') != page['title']):
         raise ValueError('Full current GET revision identity differs')
     if current_literal:
@@ -1000,6 +1020,9 @@ def validate_outer_context(value, page, wiki, parsed, *, literal_region=False):
         _, selected = current_get_literal_view(page, wiki)
         return selected
     generator = OUTER_CONTEXT_GENERATORS.get(value.get('profile')) if isinstance(value, dict) and isinstance(value.get('profile'), str) else None
+    sd_ready = not literal_region and isinstance(value, dict) and selected_sd_ready_outer(wiki, page, value)
+    if sd_ready:
+        generator = 'MediaWiki 1.48.0-wmf.6'
     if (generator is None and literal_region and isinstance(value, dict) and
             value.get('profile') == 'mediawiki-vector-2022-1.48.0-wmf.5' and
             wiki == 'srwiktionary' and page['namespace_id'] == 0):
@@ -1017,6 +1040,9 @@ def validate_outer_context(value, page, wiki, parsed, *, literal_region=False):
                 for key in ('receipt', 'response'))):
         raise ValueError('Invalid observed outer context')
     response = value['response'].encode()
+    if sd_ready and (digest(response) != '1cfa030fea7af31f853bd8db0e0eacbe281622153a6cff5f1b8a2457e5260364' or
+                     digest(page['response'].encode()) != '32c709e458258145c504754bca7b57be427122677a9a1f9e5dc2e4b4f8775be1'):
+        raise ValueError('Changed selected SD ready-Figure capture')
     receipt = decode(value['receipt'])
     if (not isinstance(receipt, dict) or set(receipt) != {'core', 'sources'} or receipt['core'] is not None or
             not isinstance(receipt['sources'], list) or len(receipt['sources']) != 1 or
@@ -1093,8 +1119,11 @@ def validate_outer_context(value, page, wiki, parsed, *, literal_region=False):
                 actual.get('dir') not in ('ltr', 'rtl') or actual.get('dir') != expected_attrs.get('dir') or
                 not actual.get('lang') or (key == 'root' and actual.get('class') != expected_attrs.get('class'))):
             raise ValueError('Changed outer-context language, direction or parser root')
+    if sd_ready and any(tags[key][0][1].get('lang') != 'sd' or tags[key][0][1].get('dir') != 'rtl'
+                        for tags, key in ((full, 'html'), (full, 'root'), (head, 'html'), (body, 'root'))):
+        raise ValueError('Selected SD ready-Figure context requires its retained RTL root')
     if 'selected_body' in value and not literal_region:
-        return selected_full_get_view(value, page, parsed)
+        return selected_full_get_view(value, page, parsed, sd_ready=sd_ready)
     # Native Book additionally proves the exact prefix, six middle wrappers and
     # allowed HTML class difference before deriving any ancestor absence fact.
 

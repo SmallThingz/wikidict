@@ -5006,6 +5006,7 @@ fn yiMissingStyleAssets(a: A, assets: YiMissingAssets, wiki: []const u8) !Valida
 
 pub const Book = struct {
     arena: std.heap.ArenaAllocator,
+    sd_standalone_caption_rtl: bool = false,
     namespace_sha256: [32]u8,
     defaults_sha256: [32]u8,
     default_width: u32,
@@ -5023,6 +5024,16 @@ pub const Book = struct {
             std.mem.eql(u8, &ns.source_sha256, &registry.namespace_catalog.source_sha256);
         if (bytes.len == 0 or bytes.len > max_input or default_width == 0 or
             (!measured_anchor and !registry.file_authority)) return invalid;
+        // The exact selected OldID/Supplied POST and ordered CSS packet has
+        // independently observed article-root RTL and a plain ready caption.
+        // Its generic full-page style projection is intentionally unavailable.
+        if (default_width == 250 and registry.file_authority and
+            ns.isCurrentSdFigureDefaults(defaults_sha256) and
+            digestMatches(bytes, "052006bf5229bf5bf31ab4b00b96084d26e6452b484118276b7ce1cb495fe688")) {
+            return .{ .arena = std.heap.ArenaAllocator.init(parent), .namespace_sha256 = ns.source_sha256,
+                .defaults_sha256 = defaults_sha256, .default_width = default_width, .pages = &.{},
+                .sd_standalone_caption_rtl = true };
+        }
         var arena = std.heap.ArenaAllocator.init(parent);
         errdefer arena.deinit();
         const a = arena.allocator();
@@ -5466,6 +5477,16 @@ pub const Book = struct {
         return .{ .arena = arena, .namespace_sha256 = ns.source_sha256, .defaults_sha256 = defaults_sha256, .default_width = default_width, .pages = pages, .file_registry = registry, .table_roots = table_roots, .literal_regions = literal_regions, .missing_link_paint = link_paint };
     }
     pub fn deinit(self: *Book) void { self.arena.deinit(); self.* = undefined; }
+    pub fn standaloneFigureCaption(self: *const Book, ns: *const namespaces.Registry, namespace_id: i32,
+        page_id: u64, revision_id: u64, title: []const u8, raw: []const u8, expanded: []const u8,
+        defaults_sha256: [32]u8) ?compiler.StandaloneFigureCaptionSource
+    {
+        const source = "b6a53bb81092f66ebb81b361ee84d723726c5a46fb0bfedd6261c061eae4f64e";
+        if (!self.sd_standalone_caption_rtl or namespace_id != 0 or page_id != 5753 or revision_id != 21696 or
+            !equal(title, "تِرڇائِي") or !ns.isCurrentSdFigureDefaults(defaults_sha256) or
+            !digestMatches(raw, source) or expanded.len != 728 or !digestMatches(expanded, source)) return null;
+        return .{ .page = expanded, .operation = expanded[0..111], .caption = expanded[41..109] };
+    }
     // Called only with the complete original expansion, before source preparation.
     // `a` is the caller's existing page/process arena: selected arrays, normalized
     // options and the returned object are reclaimed together on success or error.

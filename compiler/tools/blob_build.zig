@@ -1119,6 +1119,7 @@ fn attachFigurePageObservation(a: std.mem.Allocator, codes: *encoder.blob_builde
     };
     const sizing_source = if (codes.figure_sizing) |*value| value else return;
     sizing_source.default_thumbnail_page = if (namespace_id == 0 and sizing_source.default_thumbnail_file_fn != null) expanded else null;
+    sizing_source.standalone_figure_caption = null;
     if (sizing_source.table_containing_direction) |direction| {
         if (direction.root_only) sizing_source.table_containing_direction = null;
     }
@@ -1151,6 +1152,8 @@ fn attachFigurePageObservation(a: std.mem.Allocator, codes: *encoder.blob_builde
     const namespaces = codes.namespace_catalog orelse return;
     const defaults = sizing_source.source_context orelse return;
     const selected_defaults = defaults_sha256 orelse return;
+    sizing_source.standalone_figure_caption = observations.standaloneFigureCaption(namespaces,
+        namespace_id, page_id, revision_id, title, raw, expanded, selected_defaults);
     sizing_source.literal_region = try observations.selectLiteralRegionForPage(a, namespaces, namespace_id, page_id, revision_id,
         title, raw, expanded, selected_defaults);
     const table_root = try observations.selectTableRoot(a, namespaces, namespace_id, page_id, revision_id,
