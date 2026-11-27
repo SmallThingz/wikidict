@@ -108580,7 +108580,6 @@ test "relative source contexts and nonplaintext descendants refuse without dropp
     for ([_][]const u8{
         "<div style='position:relative'>[[Kept|body]]</div>",
         "<div style='position:relative'><span>[[Kept|body]]</span></div>",
-        "<div style='position:relative'><span style='position:absolute'>[[Kept|body]]</span></div>",
         "<div style='position:relative;top:0'>[[Kept|body]]</div>",
         "<div style='position:relative;z-index:0'>[[Kept|body]]</div>",
         "<div style='opacity:.5'><div style='position:relative'>body</div>[[Kept|tail]]</div>",
@@ -108602,6 +108601,19 @@ test "relative source contexts and nonplaintext descendants refuse without dropp
         const codec = @import("blob_encoder").presentation_codec; const bytes = try codec.encodeAlloc(a, saved);
         const decoded = try codec.decodeAlloc(a, bytes, saved.entry.title, .language, .{ .heading = saved.entry.language.?, .code = saved.entry.language_code });
         try std.testing.expectEqualDeep(saved, decoded);
+    }
+    {
+        // An absolute SPAN without resolved inline geometry is unsupported.
+        var positioned: Renderer = .{ .a = a, .context = .{ .table_styles = &profile } };
+        var rejection: RejectedCompilerCapture = .{};
+        const scope = rejection.begin();
+        defer scope.deinit();
+        try std.testing.expectError(error.UncompiledPresentation, positioned.renderBody(
+            "<div style='position:relative'><span style='position:absolute'>[[Kept|body]]</span></div>",
+        ));
+        const observed = rejection.snapshot(error.UncompiledPresentation) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualStrings("inline_box", observed.operation);
+        try std.testing.expectEqualStrings("unresolved_geometry", observed.reason);
     }
     var via_rule = try table_style_profile.parseAlloc(a, "div[data-context]{translate:0px}"); defer via_rule.deinit();
     var ruled: Renderer = .{ .a = a, .context = .{ .table_styles = &via_rule } };
