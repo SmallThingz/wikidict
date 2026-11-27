@@ -2200,6 +2200,9 @@ test "Tools partitions cover exact decoded names and retain unnamed controls" {
     try std.testing.expectEqual(@as(usize, 0), try toolsPartitionForName("blob_build.test.normal Writer check extra"));
     try std.testing.expectEqual(@as(usize, 3), try toolsPartitionForName("blob_build.test_0"));
     try std.testing.expectEqual(@as(usize, 2), try toolsPartitionForName("blob_build.test.EN retained full article diagnoses all four advisory font producers"));
+    try std.testing.expectEqual(@as(usize, 2), try toolsPartitionForName("figure_page_observations.test.explicit WMF6 outer ancestry preserves the authentic supplied ZH body"));
+    try std.testing.expectEqual(@as(usize, 2), try toolsPartitionForName("figure_page_observations.test.explicit WMF6 Book retains the complete unchanged authentic ZH snapshot"));
+    try std.testing.expectEqual(@as(usize, 2), try toolsPartitionForName("figure_page_observations.test.explicit WMF6 outer admission rejects crossed identities and coherent structural counterexamples"));
     try std.testing.expectError(error.UnmappedToolsTestName, toolsPartitionForName("blob_build.test.new-family check"));
 }
 

@@ -424,6 +424,7 @@ OUTER_CONTEXT_PROFILE = 'mediawiki-vector-2022-1.48.0-wmf.3'
 OUTER_CONTEXT_GENERATORS = {
     OUTER_CONTEXT_PROFILE: 'MediaWiki 1.48.0-wmf.3',
     'mediawiki-vector-2022-1.48.0-wmf.4': 'MediaWiki 1.48.0-wmf.4',
+    'mediawiki-vector-2022-1.48.0-wmf.6': 'MediaWiki 1.48.0-wmf.6',
 }
 
 

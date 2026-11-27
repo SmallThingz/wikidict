@@ -1,0 +1,24 @@
+{
+  "schema": "wikidict.retained-observation-fixture.v1",
+  "purpose": "Regression for explicit WMF6 Vector outer context structural validation",
+  "source_capture": "zh193-capture01/zh-book-style01/figure-page-observations.json",
+  "source_bytes": 610976,
+  "source_sha256": "615fcbca8c0d1b916751b78b3051d525215e77fda90434a6774207e50d0c641b",
+  "compressed_bytes": 88738,
+  "compressed_sha256": "c9dfe6ed23d2df39d208f1c982a71856c91de0e70a37151756e94e1b43e9c923",
+  "compression": {
+    "format": "gzip",
+    "mtime": 0,
+    "level": 9
+  },
+  "page": {
+    "wiki": "zhwiktionary",
+    "title": "咱人學堂",
+    "page_id": 1500194,
+    "revision_id": 9255758
+  },
+  "source_transport": "Exact original JSON includes supplied-parse and named-oldid GET receipts, payloads and stylesheet receipts",
+  "scope": "Historical revision captured with WMF6; packaging and native structural gates only, no claim of complete edition generation or rendering",
+  "namespace_fixture": "compiler/tools/testdata/zh-magal/namespace-registry.tsv",
+  "defaults_fixture": "compiler/src/encoder/testdata/zh-gugli176/figure-siteinfo.raw.json"
+}

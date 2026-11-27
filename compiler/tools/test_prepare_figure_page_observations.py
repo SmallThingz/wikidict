@@ -792,6 +792,90 @@ class MissingObservationContract(unittest.TestCase):
             self.helper.validate_document(self.helper.encoded(document), namespace, defaults + b'\n')
 
 
+class Wmf6OuterContextContract(unittest.TestCase):
+    def actual(self):
+        folder = Path(__file__).parent / 'testdata' / 'zh-outer-wmf6'
+        raw = gzip.decompress((folder / 'figure-page-observations.json.gz').read_bytes())
+        self.assertEqual((len(raw), observed.digest(raw)),
+                         (610976, '615fcbca8c0d1b916751b78b3051d525215e77fda90434a6774207e50d0c641b'))
+        namespace = (FIXTURES.parent / 'zh-magal' / 'namespace-registry.tsv').read_bytes()
+        defaults = (FIXTURES.parents[2] / 'src' / 'encoder' / 'testdata' /
+                    'zh-gugli176' / 'figure-siteinfo.raw.json').read_bytes()
+        return observed.decode(raw), namespace, defaults
+
+    def validate(self, doc, namespace, defaults):
+        return observed.validate_document(observed.encoded(doc), namespace, defaults)
+
+    def test_actual_wmf6_retains_the_complete_captured_page(self):
+        doc, namespace, defaults = self.actual()
+        original = copy.deepcopy(doc)
+        self.assertEqual(self.validate(doc, namespace, defaults), original)
+        self.assertEqual(doc, original)
+        page = doc['pages'][0]
+        self.assertEqual((page['title'], page['page_id'], page['revision_id']),
+                         ('咱人學堂', 1500194, 9255758))
+        self.assertEqual(observed.digest(page['outer_context']['response'].encode()),
+                         '66456db0fead53640b57757c3f8b5b7cc9fce76a9f52c77e40f8ad7840d91d3a')
+        self.assertEqual(observed.digest(page['response'].encode()),
+                         'ec2685fd714adefe8af8090d0b13dcca0cddb078dcc5ccd7af70e59d6c074f05')
+
+    def test_wmf6_refuses_unknown_or_mismatched_profiles_and_transport(self):
+        doc, namespace, defaults = self.actual()
+        for profile in ('mediawiki-vector-2022-1.48.0-wmf.7',
+                        'mediawiki-vector-2022-1.48.0-wmf.3', 'unknown'):
+            changed = copy.deepcopy(doc)
+            changed['pages'][0]['outer_context']['profile'] = profile
+            with self.subTest(profile=profile), self.assertRaises(ValueError):
+                self.validate(changed, namespace, defaults)
+        outer = doc['pages'][0]['outer_context']
+        base = observed.decode(outer['receipt'])['sources'][0]['url']
+        for url in (base.replace('oldid=9255758', 'oldid=9255759'),
+                    base.replace('zh.wiktionary', 'en.wiktionary'),
+                    base.replace('vector-2022', 'monobook'),
+                    base + '&oldid=9255758', base + '#fragment'):
+            changed = copy.deepcopy(doc)
+            selected = changed['pages'][0]['outer_context']
+            receipt = observed.decode(selected['receipt'])
+            receipt['sources'][0].update(url=url, final_url=url)
+            selected['receipt'] = observed.encoded(receipt).decode()
+            with self.subTest(url=url), self.assertRaises(ValueError):
+                self.validate(changed, namespace, defaults)
+
+    def test_wmf6_rehashed_generator_body_and_root_changes_still_refuse(self):
+        doc, namespace, defaults = self.actual()
+        html = doc['pages'][0]['outer_context']['response']
+        changes = (
+            ('MediaWiki 1.48.0-wmf.6', 'MediaWiki 1.48.0-wmf.7'),
+            ('skin-vector-2022', 'skin-monobook'),
+            ('class="mw-content-ltr mw-parser-output" lang="zh" dir="ltr"',
+             'class="mw-content-ltr mw-parser-output" lang="en" dir="ltr"'),
+            ('<body ', '<body class="duplicate" '),
+        )
+        for before, after in changes:
+            self.assertIn(before, html)
+            changed = copy.deepcopy(doc)
+            outer = changed['pages'][0]['outer_context']
+            outer['response'] = html.replace(before, after)
+            receipt = observed.decode(outer['receipt'])
+            body = outer['response'].encode()
+            receipt['sources'][0].update(bytes=len(body), sha256=observed.digest(body))
+            outer['receipt'] = observed.encoded(receipt).decode()
+            with self.subTest(mutation=before), self.assertRaises(ValueError):
+                self.validate(changed, namespace, defaults)
+
+    def test_wmf6_requires_unchanged_source_registry_and_scope(self):
+        doc, namespace, defaults = self.actual()
+        for flag in (False, None, 0):
+            changed = copy.deepcopy(doc)
+            changed['pages'][0]['text_class_scope'] = flag
+            with self.subTest(scope=flag), self.assertRaises(ValueError):
+                self.validate(changed, namespace, defaults)
+        for ns, source_defaults in ((namespace + b'\n', defaults),
+                                    (namespace, defaults + b'\n')):
+            with self.assertRaises(ValueError):
+                self.validate(doc, ns, source_defaults)
+
+
 class SelectedFullGetRootContract(unittest.TestCase):
     def actual(self):
         folder = FIXTURES / 'ku-missing-served-set'

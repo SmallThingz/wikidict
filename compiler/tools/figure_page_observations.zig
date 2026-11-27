@@ -10846,7 +10846,7 @@ fn observedOuterContext(a: A, ns: *const namespaces.Registry, page: RawPage, out
         "MediaWiki 1.48.0-wmf.3"
     else if (equal(outer.profile, "mediawiki-vector-2022-1.48.0-wmf.4"))
         "MediaWiki 1.48.0-wmf.4"
-    else if (equal(ns.wiki, "yiwiktionary") and yiMissingStyledPage(page))
+    else if (equal(outer.profile, "mediawiki-vector-2022-1.48.0-wmf.6"))
         "MediaWiki 1.48.0-wmf.6"
     else if (suppliedScreen(page)) screen: {
         _ = (try verifiedThemePreferenceSeed(a, ns, page, false)) orelse return invalid;
@@ -35166,4 +35166,101 @@ test "normal text standalone numbered owner refuses ambiguity altered actions sc
     var links: std.ArrayList([]const u8) = .empty;
     try normalTextStandaloneNumberedLinks(a, f.ns, duplicate_source, digest, html, nodes.items, f.context, authored, &links);
     try std.testing.expectEqual(@as(usize, 0), links.items.len);
+}
+
+const Wmf6OuterTesting = if (@import("builtin").is_test) struct {
+    fn bytes(a: A) ![]const u8 {
+        const compressed = @embedFile("testdata/zh-outer-wmf6/figure-page-observations.json.gz");
+        try std.testing.expect(digestMatches(compressed, "c9dfe6ed23d2df39d208f1c982a71856c91de0e70a37151756e94e1b43e9c923"));
+        var input: std.Io.Reader = .fixed(compressed);
+        var inflater: std.compress.flate.Decompress = .init(&input, .gzip, &.{});
+        const result = try inflater.reader.allocRemaining(a, .limited(610976));
+        try std.testing.expect(inflater.err == null and inflater.state == .end and input.seek == compressed.len);
+        try std.testing.expectEqual(@as(usize, 610976), result.len);
+        try std.testing.expect(digestMatches(result, "615fcbca8c0d1b916751b78b3051d525215e77fda90434a6774207e50d0c641b"));
+        return result;
+    }
+    fn document(a: A) !Document {
+        const doc = try std.json.parseFromSliceLeaky(Document, a, try bytes(a), .{ .allocate = .alloc_always });
+        try std.testing.expectEqual(@as(usize, 1), doc.pages.len);
+        try std.testing.expectEqual(@as(u64, 1500194), doc.pages[0].page_id);
+        try std.testing.expectEqual(@as(u64, 9255758), doc.pages[0].revision_id);
+        return doc;
+    }
+} else struct {};
+
+test "explicit WMF6 outer ancestry preserves the authentic supplied ZH body" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile("testdata/zh-magal/namespace-registry.tsv")); defer ns.deinit();
+    const doc = try Wmf6OuterTesting.document(a); const page = doc.pages[0];
+    const supplied = try responseSource(a, &ns, page);
+    try std.testing.expect(digestMatches(supplied.source, "665f9f0293f99151ee4d08ee6bd2121be429f191e8f76ca5bad3007edf7204d1"));
+    try std.testing.expect(digestMatches(supplied.html, "ef343073770fcb9dbc7dd04ed6c452adae1e440fccbbe25110f54e24bc46cfbb"));
+    const scope = try observedTextClassScope(a, &ns, supplied.html);
+    const outer = page.outer_context orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("mediawiki-vector-2022-1.48.0-wmf.6", outer.profile);
+    const result = try observedOuterContext(a, &ns, page, outer, scope);
+    const tags = [_][]const u8{ "html", "body", "div", "div", "div", "main", "div", "div" };
+    try std.testing.expectEqual(tags.len, result.ancestors.len);
+    for (result.ancestors, tags) |node, tag| try std.testing.expectEqualStrings(tag, node.tag);
+    try std.testing.expectEqualStrings("content", result.ancestors[5].attributes.get("id").?);
+    try std.testing.expectEqualStrings("bodyContent", result.ancestors[6].attributes.get("id").?);
+    try std.testing.expectEqualStrings("mw-content-text", result.ancestors[7].attributes.get("id").?);
+    const root = result.root_attributes orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings(scope.root_classes, root.get("class").?);
+    try std.testing.expectEqualStrings("zh", root.get("lang").?);
+    try std.testing.expectEqualStrings("ltr", root.get("dir").?);
+    // An ancestry census does not grant computed paint or a selector match.
+    try std.testing.expect(digestMatches(supplied.html, "ef343073770fcb9dbc7dd04ed6c452adae1e440fccbbe25110f54e24bc46cfbb"));
+}
+
+test "explicit WMF6 Book retains the complete unchanged authentic ZH snapshot" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const bytes = try Wmf6OuterTesting.bytes(a);
+    const doc = try std.json.parseFromSliceLeaky(Document, a, bytes, .{ .allocate = .alloc_always });
+    var ns = try namespaces.Registry.init(a, @embedFile("testdata/zh-magal/namespace-registry.tsv")); defer ns.deinit();
+    var files = try Testing.registry(a, &ns, doc); defer files.deinit();
+    // Exact independently pinned defaults body; it is outside the Tools package.
+    var defaults: [32]u8 = undefined;
+    _ = try std.fmt.hexToBytes(&defaults, "a860f1c2c8b9d50c7016f171a45d69d52d648a0240d86a5a5532f0b71907d70b");
+    var book = try Book.init(a, bytes, &ns, &files, defaults, 250); defer book.deinit();
+    try std.testing.expectEqual(@as(usize, 1), book.pages.len);
+    try std.testing.expect(book.pages[0].text_class_scope != null);
+    try std.testing.expect(digestMatches(bytes, "615fcbca8c0d1b916751b78b3051d525215e77fda90434a6774207e50d0c641b"));
+}
+
+test "explicit WMF6 outer admission rejects crossed identities and coherent structural counterexamples" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile("testdata/zh-magal/namespace-registry.tsv")); defer ns.deinit();
+    const doc = try Wmf6OuterTesting.document(a); const page = doc.pages[0]; const outer = page.outer_context.?;
+    const supplied = try responseSource(a, &ns, page); const scope = try observedTextClassScope(a, &ns, supplied.html);
+    for ([_][]const u8{ "", "unknown", "mediawiki-vector-2022-1.48.0-wmf.60", "mediawiki-vector-2022-1.48.0-wmf.4" }) |profile_name| {
+        var wrong = outer; wrong.profile = profile_name;
+        try std.testing.expectError(invalid, observedOuterContext(a, &ns, page, wrong, scope));
+    }
+    var changed = page; changed.title = "wrong title";
+    try std.testing.expectError(invalid, observedOuterContext(a, &ns, changed, outer, scope));
+    changed = page; changed.revision_id += 1;
+    try std.testing.expectError(invalid, observedOuterContext(a, &ns, changed, outer, scope));
+    changed = page; changed.text_class_scope = false;
+    try std.testing.expectError(invalid, observedOuterContext(a, &ns, changed, outer, scope));
+    var changed_scope = scope; changed_scope.root_classes = "mw-parser-output";
+    try std.testing.expectError(invalid, observedOuterContext(a, &ns, page, outer, changed_scope));
+    // Each response mutation rebinds its exact byte count and digest, so these
+    // exercise structural/source gates rather than stale receipt rejection.
+    for ([_][2][]const u8{
+        .{ "content=\"MediaWiki 1.48.0-wmf.6\"", "content=\"MediaWiki 1.48.0-wmf.4\"" },
+        .{ "<body class=", "<body data-unrepresented=\"changed\" class=" },
+        .{ "<main id=\"content\"", "<main id=\"wrongContent\"" },
+        .{ "<div class=\"mw-content-container\">", "" },
+        .{ "<div class=\"mw-content-container\">", "<div class=\"mw-content-container\"><div class=\"unrepresented\">" },
+        .{ "id=\"bodyContent\" class=\"vector-body\"", "id=\"bodyContent\" class=\"vector-body\" onload=\"change()\"" },
+        .{ "<div class=\"mw-content-ltr mw-parser-output\" lang=\"zh\" dir=\"ltr\">", "<div class=\"mw-content-ltr mw-parser-output\" lang=\"en\" dir=\"ltr\">" },
+        .{ "<div class=\"mw-content-ltr mw-parser-output\" lang=\"zh\" dir=\"ltr\">", "<div class=\"mw-content-ltr mw-parser-output\" lang=\"zh\" dir=\"rtl\">" },
+        .{ "<div class=\"mw-content-ltr mw-parser-output\" lang=\"zh\" dir=\"ltr\">", "<div class=\"mw-parser-output\" lang=\"zh\" dir=\"ltr\">" },
+    }, 0..) |mutation, index| {
+        errdefer std.debug.print("WMF6 rebound structural refusal index={d}\n", .{index});
+        const wrong = try OuterContextTesting.replaced(a, outer, mutation[0], mutation[1]);
+        try std.testing.expectError(invalid, observedOuterContext(a, &ns, page, wrong, scope));
+    }
 }
