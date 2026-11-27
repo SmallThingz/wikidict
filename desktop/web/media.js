@@ -40,18 +40,25 @@ async function mediaResource(media,settings,sourceEdition,canonicalIdentity=fals
 }
 async function fetchMediaResource(media,settings,sourceEdition,canonicalIdentity){
    const title=canonicalIdentity?media.file:media.file.replace(/^(File|Image):/i,'');
-   const edition=/^[a-z0-9_-]+wiktionary$/.test(sourceEdition||'')?sourceEdition.slice(0,-10).replaceAll('_','-'):null;
+   const canonicalImage=canonicalIdentity&&media.kind==='image';
+   const edition=canonicalImage?canonicalImageEdition(sourceEdition):/^[a-z0-9_-]+wiktionary$/.test(sourceEdition||'')?sourceEdition.slice(0,-10).replaceAll('_','-'):null;
    const hosts=['commons.wikimedia.org'];if(edition)hosts.push(edition+'.wiktionary.org');
-   let info,sourceHost;
-   for(const host of hosts){
+   let info,sourceHost,canonicalFile;
+   const sourceWikiImage=canonicalImage;
+   if(sourceWikiImage){
+    sourceHost=edition+'.wiktionary.org';
+    const url=`https://${sourceHost}/w/api.php?action=query&format=json&formatversion=2&origin=*&prop=imageinfo&iiprop=url%7Csize%7Cmime%7Cextmetadata%7Ccanonicaltitle&iiurlwidth=960&titles=${encodeURIComponent('File:'+title)}`;
+    const response=await fetch(url,{redirect:'error'});if(!response.ok)throw Error('Media server unavailable');
+    const selected=canonicalImageInfo(await response.json(),title,edition);info=selected.info;canonicalFile=selected.canonical_file;
+   }else for(const host of hosts){
     const url=`https://${host}/w/api.php?action=query&format=json&formatversion=2&origin=*&prop=imageinfo&iiprop=url%7Csize%7Cmime%7Cextmetadata&iiurlwidth=960&titles=${encodeURIComponent('File:'+title)}`;
     const response=await fetch(url);if(!response.ok)throw Error('Media server unavailable');const data=await response.json();info=data.query?.pages?.[0]?.imageinfo?.[0];if(info){sourceHost=host;break;}
    }
-   if(!info)throw Error('Media unavailable');const url=media.kind==='audio'?info.url:info.thumburl||info.url;
+   if(!info)throw Error('Media unavailable');const url=media.kind==='audio'?info.url:sourceWikiImage?canonicalImageURL(info,canonicalFile):info.thumburl||info.url;
    if(new URL(url).protocol!=='https:')throw Error('Invalid media URL');
    const cacheKey='https://'+sourceHost+'/.wikidict-media-cache?url='+encodeURIComponent(url);
    const cache=await caches.open(CACHE);let response=await cache.match(cacheKey);
-   if(!response){response=await fetch(url);if(!response.ok)throw Error('Media download failed');const declared=Number(response.headers.get('content-length'));if(declared>50*1024*1024)throw Error('Media too large');const reader=response.body.getReader(),parts=[];let size=0;try{while(true){const {value,done}=await reader.read();if(done)break;size+=value.length;if(size>50*1024*1024)throw Error('Media too large');parts.push(value);}}finally{await reader.cancel();}response=new Response(new Blob(parts),{headers:{'Content-Type':response.headers.get('content-type')||'application/octet-stream'}});if(settings.mediaCacheMb&&size<=settings.mediaCacheMb*1024*1024){await cache.put(cacheKey,response.clone());await trimMedia(settings.mediaCacheMb);}}
+   if(!response){response=await fetch(url,sourceWikiImage?{redirect:'error'}:undefined);if(!response.ok)throw Error('Media download failed');const declared=Number(response.headers.get('content-length'));if(declared>50*1024*1024)throw Error('Media too large');const reader=response.body.getReader(),parts=[];let size=0;try{while(true){const {value,done}=await reader.read();if(done)break;size+=value.length;if(size>50*1024*1024)throw Error('Media too large');parts.push(value);}}finally{await reader.cancel();}response=new Response(new Blob(parts),{headers:{'Content-Type':response.headers.get('content-type')||'application/octet-stream'}});if(settings.mediaCacheMb&&size<=settings.mediaCacheMb*1024*1024){await cache.put(cacheKey,response.clone());await trimMedia(settings.mediaCacheMb);}}
    const blob=await response.blob();return {blob,info,title,sourceHost};
 }
 export function inlineImageActionURL(target,sourceEdition,targetFragment){
@@ -249,4 +256,84 @@ export function audioControlView(span,label,settings,edition) {
   }
   state(enabled?'ready':'disabled',enabled?'':'Enable online audio in Settings.');
   return root;
+}
+
+// Canonical image authority is the compiled source wiki. A negative response
+// never authorizes a second Commons lookup or a JavaScript case guess.
+export function canonicalImageEdition(sourceEdition){
+ if(typeof sourceEdition!=='string'||!/^[a-z0-9_-]+wiktionary$/.test(sourceEdition))throw Error('Canonical source edition unavailable');
+ return sourceEdition.slice(0,-10).replaceAll('_','-');
+}
+export function canonicalImageInfo(data,file,edition){
+ const fail=()=>{throw Error('Canonical source image unavailable');};
+ if(!data||data.error||!Array.isArray(data.query?.pages)||data.query.pages.length!==1)fail();
+ const requested='File:'+file,query=data.query,mappings=new Map();
+ for(const name of ['normalized','redirects']){
+  const rows=query[name]??[];if(!Array.isArray(rows)||rows.length>8)fail();
+  for(const row of rows){
+   if(!row||typeof row.from!=='string'||!row.from||typeof row.to!=='string'||!row.to||
+      row.from===row.to||row.tofragment||mappings.has(row.from))fail();
+   mappings.set(row.from,row.to);
+  }
+ }
+ let resolved=requested;const seen=new Set();
+ while(mappings.has(resolved)){
+  if(seen.has(resolved)||seen.size>=16)fail();seen.add(resolved);resolved=mappings.get(resolved);
+ }
+ const page=query.pages[0];
+ if(!page||page.invalid||page.ns!==6||page.title!==resolved||
+    !['local','shared'].includes(page.imagerepository)||(page.missing&&page.imagerepository!=='shared')||
+    !Array.isArray(page.imageinfo)||page.imageinfo.length!==1||mappings.size!==seen.size)fail();
+ const info=page.imageinfo[0];
+ const filename=title=>typeof title==='string'&&title.includes(':')?title.slice(title.indexOf(':')+1):null;
+ if(!info||typeof info!=='object'||Array.isArray(info))fail();
+ const selected=filename(page.title);
+ const canonical=Object.hasOwn(info,'canonicaltitle')?filename(info.canonicaltitle):selected;
+ if(!canonical||canonical!==selected||!Number.isInteger(info.width)||info.width<=0||
+    !Number.isInteger(info.height)||info.height<=0||typeof info.mime!=='string')fail();
+ let original;try{original=new URL(info.url);}catch{fail();}
+ if(original.protocol!=='https:'||original.hostname!=='upload.wikimedia.org'||original.username||original.password||original.hash)fail();
+ const parts=original.pathname.split('/');
+ const local=parts[1]==='wiktionary'&&parts[2]?.replaceAll('_','-')===edition;
+ const shared=parts[1]==='wikipedia'&&parts[2]==='commons';
+ if(!(page.imagerepository==='local'?local:shared))fail();
+ let uploaded;try{uploaded=decodeURIComponent(parts.at(-1)).replaceAll('_',' ');}catch{fail();}
+ if(uploaded!==canonical.replaceAll('_',' '))fail();
+ // A missing local description page can still resolve a shared file.
+ return {info,canonical_file:canonical,repository:page.imagerepository,requested_title:requested,resolved_title:resolved};
+}
+export function canonicalImageURL(info,canonicalFile){
+ const fail=()=>{throw Error('Unbound canonical image rendition');};
+ const fallback=info.thumburl||info.url;
+ let source,selected;try{source=new URL(info.url);selected=new URL(fallback);}catch{fail();}
+ if(source.origin!=='https://upload.wikimedia.org'||source.username||source.password||source.hash||
+    selected.username||selected.password||selected.hash)fail();
+ const sameOrigin=selected.origin===source.origin;
+ // The retained API response binds this one HTTPS thumbnail service. It is
+ // not a general cross-host permission or an HTTP redirect allowance.
+ const thumbnailOrigin=selected.origin==='https://thumb.wikimedia.org';
+ if(!sameOrigin&&!thumbnailOrigin)fail();
+ const sameStaticResource=sameOrigin&&selected.pathname===source.pathname;
+ if(!sameStaticResource){
+  // Both allowed rendition hosts must carry the complete original repository
+  // and upload path, followed by exactly one opaque rendition component.
+  const parts=source.pathname.split('/');
+  const owner=parts.slice(0,3).join('/')+'/thumb/'+parts.slice(3).join('/')+'/';
+  if(!selected.pathname.startsWith(owner)||!selected.pathname.slice(owner.length)||
+     selected.pathname.slice(owner.length).includes('/'))fail();
+ }
+
+ // Bounded native JPEG case: choose the supplied original only when both URLs
+ // identify the identical static upload resource. No thumbwidth/MIME-only or
+ // SVG/TIFF/transcoded rendition inference, and no arbitrary query stripping.
+ if(info.mime!=='image/jpeg'||!/^.+\.(?:jpg|jpeg)$/i.test(canonicalFile)||!info.thumburl)return fallback;
+ let original,thumbnail;try{original=new URL(info.url);thumbnail=new URL(info.thumburl);}catch{return fallback;}
+ if(original.protocol!=='https:'||thumbnail.protocol!=='https:'||original.hostname!=='upload.wikimedia.org'||
+    original.origin!==thumbnail.origin||original.pathname!==thumbnail.pathname||
+    original.pathname.includes('/thumb/')||original.username||thumbnail.username||original.hash||thumbnail.hash)return fallback;
+ for(const u of [original,thumbnail]){
+  for(const name of ['utm_source','utm_campaign','utm_content'])u.searchParams.delete(name);
+  u.searchParams.sort();
+ }
+ return original.href===thumbnail.href?info.url:fallback;
 }

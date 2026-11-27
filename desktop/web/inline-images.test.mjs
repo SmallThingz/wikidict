@@ -54,7 +54,7 @@ test('unavailable inline images retain distinct authored alt through consent, lo
   const pending=images.slice(0,2).map(()=>element());images.slice(0,2).forEach((image,i)=>loadInlineImage(pending[i],image,{allowImages:true},'hewiktionary'));await tick();
   assert.deepEqual(pending.map(el=>el.siblings[0].textContent),['איקס','וי']);assert.ok(pending.every(el=>el.siblings[0].dataset.mediaState==='loading'&&el.style.display==='none'));
   rejectors.forEach(reject=>reject(Error('controlled missing asset')));await tick();assert.deepEqual(pending.map(el=>el.siblings[0].textContent),['איקס','וי']);assert.ok(pending.every(el=>el.siblings[0].dataset.mediaState==='error'&&el.style.display==='none'));
-  globalThis.caches={open:async()=>({match:async()=>null})};globalThis.fetch=async url=>url.includes('/w/api.php')?new Response(JSON.stringify({query:{pages:[{imageinfo:[{url:'https://upload.wikimedia.org/control.png',width:128,height:214}]}]}})):new Response(new Uint8Array([1]),{headers:{'Content-Type':'image/png'}});
+  globalThis.caches={open:async()=>({match:async()=>null})};globalThis.fetch=async url=>url.includes('/w/api.php')?new Response(JSON.stringify({query:{pages:[{ns:6,title:'File:X mark.svg',imagerepository:'local',imageinfo:[{url:'https://upload.wikimedia.org/wiktionary/he/a/ab/X_mark.svg',width:128,height:214,mime:'image/svg+xml'}]}]}})):new Response(new Uint8Array([1]),{headers:{'Content-Type':'image/svg+xml'}});
   const loaded=element(),geometry=[];loaded.addEventListener('wikidict-image-geometry',event=>geometry.push(event.detail));loadInlineImage(loaded,images[0],{allowImages:true,mediaCacheMb:0},'hewiktionary');
   const readyDeadline=Date.now()+5000;
   while(typeof loaded.src!=='string'){
