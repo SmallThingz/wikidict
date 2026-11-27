@@ -44877,18 +44877,17 @@ test "normal Writer GOM linked peers isolate unknown regions and preserve both c
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{input, "manifest.jsonl"}), .data = @embedFile("testdata/gom-linked-peer/canonical-manifest.jsonl") });
     try std.Io.Dir.cwd().createDirPath(io, try std.fs.path.join(a, &.{input, "modules"}));
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{input, "modules", "4729.lua"}), .data = @embedFile("testdata/gom-linked-peer/canonical-names.lua") });
-    // The historical marker digest is retained and must fail against the current
-    // reviewed payload. Its sixteen exact records are unchanged in that payload;
-    // rebind only this controlled input, then exercise the normal marker gate.
-    try std.testing.expectError(error.InvalidLanguageRegistry, loadLanguageRegistry(io, a, input, &ns));
+    // Keep the authenticated historical catalogue unchanged. An unknown digest
+    // must still fail before any of its reviewed aliases can become authority.
     const captured_registry = @embedFile("testdata/gom-linked-peer/language-registry.tsv");
     const historical_digest = "5a9097bf32aca51849bdd5e78bbf18e4c0c721a97b5e2e575867cd0d9b70a3dc";
     try std.testing.expectEqual(@as(usize, 16), std.mem.count(u8, captured_registry, historical_digest));
-    var reviewed_digest: [32]u8 = undefined;
-    std.crypto.hash.sha2.Sha256.hash(@embedFile("reviewed_language_aliases.json"), &reviewed_digest, .{});
-    const reviewed_hex = std.fmt.bytesToHex(reviewed_digest, .lower);
-    const current_registry = try std.mem.replaceOwned(u8, a, captured_registry, historical_digest, &reviewed_hex);
-    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{input, "language-registry.tsv"}), .data = current_registry });
+    const unrecognized_digest = "0000000000000000000000000000000000000000000000000000000000000000";
+    const corrupted_registry = try std.mem.replaceOwned(u8, a, captured_registry, historical_digest, unrecognized_digest);
+    const registry_path = try std.fs.path.join(a, &.{input, "language-registry.tsv"});
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = registry_path, .data = corrupted_registry });
+    try std.testing.expectError(error.InvalidLanguageRegistry, loadLanguageRegistry(io, a, input, &ns));
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = registry_path, .data = captured_registry });
     var registry = try loadLanguageRegistry(io, a, input, &ns); defer registry.deinit();
     const codes = languageCodes(&registry, &ns);
     const hindi = codes.resolve("Hindi") orelse return error.TestUnexpectedResult;
