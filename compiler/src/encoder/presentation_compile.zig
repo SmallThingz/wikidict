@@ -9868,6 +9868,7 @@ pub const Renderer = struct {
     // inherited style ancestry or generated block owners.
     display_parent_region: ?DisplayParentRegion = null,
     literal_container_parent: ?LiteralContainerDispatch = null,
+    literal_container_font_dispatch: ?LiteralContainerDispatch = null,
     table_style_scope: table_style_profile.Scope = 0,
     resolved_legacy_table_border: bool = false,
     table_css_ancestor_classes: []const u8 = "",
@@ -28823,6 +28824,17 @@ pub const Renderer = struct {
             .css_px, .root_relative, .unknown => .unknown,
         };
     }
+    fn htmlContainerFontStyle(self: *Renderer, tag: syntax.Tag, parent: Style,
+        dispatch: ?LiteralContainerDispatch, comptime inline_metadata: bool) Error!Style
+    {
+        // The enclosing parent is already live during renderBodySlice. Borrow
+        // only this current child dispatch while constructing its own style.
+        const previous = self.literal_container_font_dispatch;
+        self.literal_container_font_dispatch = dispatch;
+        defer self.literal_container_font_dispatch = previous;
+        return if (inline_metadata) self.htmlInlineStyle(tag, parent) else self.htmlLanguageDirection(tag, parent);
+    }
+
     fn htmlComputedFontSizeWithPixels(self: *Renderer, tag: syntax.Tag, parent: Style, own_pixels: bool) Error!?RelativeFontSize {
         if (self.observedFigureCaptionTagStyle(tag)) |known| return .{
             .value = known.font_scale, .normal_body = true, .unknown = false,
@@ -28852,8 +28864,20 @@ pub const Renderer = struct {
                 };
                 break :query null;
             }
-            const font_node = (try self.literalFirstDivQuery(tag, element, parent.native_inline_motion, &projected)) orelse &projected;
-            break :query try profile.resolveFontSizeIn(self.a, font_node, css, .{ .ctx = &tag, .get = htmlOwnAttributePresence });
+            const unpaired_font_node = (try self.literalFirstDivQuery(tag, element, parent.native_inline_motion, &projected)) orelse &projected;
+            var font_node = unpaired_font_node;
+            var local_parent: table_style_profile.TextElement = undefined;
+            var local_subject: table_style_profile.TextElement = undefined;
+            if (self.literal_container_font_dispatch) |child| {
+                if (try self.pairedLiteralContainerParent(tag, parent, element, unpaired_font_node, child)) |proved_parent| {
+                    local_parent = proved_parent;
+                    local_subject = unpaired_font_node.*;
+                    local_subject.parent = &local_parent;
+                    font_node = &local_subject;
+                }
+            }
+            const queried_font = try profile.resolveFontSizeIn(self.a, font_node, css, .{ .ctx = &tag, .get = htmlOwnAttributePresence });
+            break :query queried_font;
         } else query: {
             if (own_pixels) {
                 const selected = try table_style_profile.resolveObservedCellInlineFontSizeAlloc(self.a, css);
@@ -46112,7 +46136,10 @@ pub const Renderer = struct {
                     const parent_language_direction = self.body_language_direction;
                     // Resolve from the inherited state before installing this
                     // wrapper's own aligned metadata as its child's state.
-                    const scoped_style = try self.htmlLanguageDirection(tag, self.blockParentWithNativeMotion());
+                    const literal_dispatch: ?LiteralContainerDispatch = if (tag.is("div") and grid_tail == null)
+                        .{ .source = wrapper_source[0..pair.end], .pair = pair }
+                    else null;
+                    const scoped_style = try self.htmlContainerFontStyle(tag, self.blockParentWithNativeMotion(), literal_dispatch, false);
                     const parent_text_align = alignment_parent_attributes.text_align;
                     self.body_formatting_attributes.text_align = try self.htmlTextAlignment(tag, parent_text_align);
                     defer self.body_formatting_attributes = alignment_parent_attributes;
@@ -46132,7 +46159,7 @@ pub const Renderer = struct {
                             const previous_capture = self.semantic_capture;
                             self.semantic_capture = &alignment_hints;
                             defer self.semantic_capture = previous_capture;
-                            break :metadata try self.htmlInlineStyle(tag, self.bodyFormattingStyle(self.body_language_direction orelse .{}));
+                            break :metadata try self.htmlContainerFontStyle(tag, self.bodyFormattingStyle(self.body_language_direction orelse .{}), literal_dispatch, true);
                         };
                         self.body_formatting_attributes = .{ .text_align = self.body_formatting_attributes.text_align, .classes = metadata_style.classes, .role = metadata_style.role, .relation_note = alignment_hints.relation_note, .native_inline_motion = metadata_style.native_inline_motion, .text_element = metadata_style.text_element, .custom_properties = metadata_style.custom_properties, .table_collapse = metadata_style.table_collapse, .table_inheritance_scoped = metadata_style.table_inheritance_scoped, .relative_context_policy_present = metadata_style.relative_context_policy_present, .column_fragmentation_policy_present = metadata_style.column_fragmentation_policy_present, .language = metadata_style.language, .direction = metadata_style.direction, .captured_direction = metadata_style.captured_direction, .explanation = metadata_style.explanation, .explanation_set = metadata_style.explanation_set, .tooltip = metadata_style.tooltip, .tooltip_set = metadata_style.tooltip_set, .foreground = metadata_style.foreground, .foreground_set = metadata_style.foreground_set, .font_scale = metadata_style.font_scale, .font_scale_basis = metadata_style.font_scale_basis, .font_features = metadata_style.font_features, .font_family = metadata_style.font_family, .font_scale_set = metadata_style.font_scale_set, .font_size_unknown = metadata_style.font_size_unknown };
                     }
@@ -46154,9 +46181,6 @@ pub const Renderer = struct {
                         const offset = @intFromPtr(wrapper_source.ptr) - @intFromPtr(input.ptr);
                         try observer.enter(observer.ctx, input, origin, offset, offset + tag.end, offset + pair.inner_end, offset + pair.end, true, kind, self.block_formatting, "", self.observerFormattingAttributes());
                     };
-                    const literal_dispatch: ?LiteralContainerDispatch = if (tag.is("div") and grid_tail == null)
-                        .{ .source = wrapper_source[0..pair.end], .pair = pair }
-                    else null;
                     var container_resolution = try self.containerResolutionForDispatch(tag, parent_language_direction orelse .{}, scoped_style, literal_dispatch);
                     const force_container_owner = self.container_parent_flex or self.genericDisclosureTargetChild(input, wrapper_source[0..pair.end]);
                     const previous_parent_flex = self.container_parent_flex;
@@ -137820,6 +137844,119 @@ test "a class inventory cannot promote a descendant rule to a matched literal fi
     const details = try profile.resolveAlignmentIn(a, &summary, null, "");
     try std.testing.expect(details.unresolved);
 }
+
+pub const NavHeadOwnerFontSourceControl = if (@import("builtin").is_test) struct {
+    pub fn run() !void {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const a = arena.allocator();
+        const outer_source = "<div class='frame' id='one'><div class='head'>title</div>" ++
+            "<div><table><tr><td>x</td></tr></table></div></div>";
+        const input = try a.dupe(u8, outer_source ++ outer_source);
+        const tracked = MissingText.untracked(input);
+        const root: NativeInlineMotionRoot = .{ .source = tracked };
+        var profile = try table_style_profile.parseForTargetAlloc(a,
+            "div.frame div.head{font-size:100%;min-height:1.6em}", .screen);
+        defer profile.deinit();
+        const profile_rules = profile.container_rules;
+        const profile_text_rules = profile.text_rules;
+        var renderer: Renderer = .{ .a = a, .context = .{ .title = "word", .table_styles = &profile },
+            .body_missing = tracked, .content_root = .parser_output, .native_body_language = "en", .body_depth = 2,
+            .native_inline_motion_active = true, .native_inline_motion_root = &root, .native_inline_motion_epoch = 1 };
+        var host: NativeArticleHost = .{ .renderer = &renderer, .source = tracked, .title = "word", .language_code = "en",
+            .active_source = tracked, .active_snapshot = NativeArticleHost.snapshot(tracked), .native_paragraph_css_subjects = true };
+        renderer.native_article_host = &host;
+        const outer = input[0..outer_source.len];
+        const opener = syntax.tagAt(outer, 0).?;
+        const outer_pair = syntax.matchingTag(outer, opener).?;
+        const inner_body = outer[opener.end..outer_pair.inner_end];
+        const child_tag = syntax.tagAt(inner_body, 0).?;
+        const child_pair = syntax.matchingTag(inner_body, child_tag).?;
+        const child: Renderer.LiteralContainerDispatch = .{ .source = inner_body[0..child_pair.end], .pair = child_pair };
+        const initial: NativeInlineMotionState = .{ .proved = .{ .root = &root, .epoch = 1 } };
+        const motion = try renderer.nativeInlineMotionEntry(opener, initial);
+        const parent_node = try renderer.textElement(opener, null, "");
+        // This is explicit control input, not a conclusion about actual p646.
+        const parent: Style = .{ .native_inline_motion = motion, .text_element = parent_node,
+            .font_scale = 0.95, .font_scale_basis = .normal_body, .font_scale_set = true };
+        const child_node = try renderer.textElement(child_tag, parent_node, "");
+        renderer.body_missing = MissingText.untracked(inner_body);
+        renderer.literal_container_parent = .{ .source = outer, .pair = outer_pair };
+        const subject = (try renderer.literalFirstDivQuery(child_tag, child_node, motion, child_node)).?;
+        try std.testing.expect(subject.literal_subject_bound and subject.parent == null);
+        const unresolved = (try renderer.htmlComputedFontSizeWithPixels(child_tag, parent, false)).?;
+        try std.testing.expect(unresolved.unknown);
+
+        // The new scoped entry must be sufficient for both native wrapper
+        // style calls, and must restore the borrowed dispatch on return.
+        const scoped = try renderer.htmlContainerFontStyle(child_tag, parent, child, false);
+        try std.testing.expect(renderer.literal_container_font_dispatch == null);
+        try std.testing.expect(!scoped.font_size_unknown and scoped.font_scale_set and scoped.font_scale_basis == .normal_body);
+        try std.testing.expectApproxEqAbs(@as(f32, 0.95), scoped.font_scale.?, 0.00001);
+        const metadata = try renderer.htmlContainerFontStyle(child_tag, parent, child, true);
+        try std.testing.expect(renderer.literal_container_font_dispatch == null);
+        try std.testing.expect(!metadata.font_size_unknown and metadata.font_scale_basis == .normal_body);
+        try std.testing.expectApproxEqAbs(@as(f32, 0.95), metadata.font_scale.?, 0.00001);
+
+        const spans = [_]Span{.{ .text = "title", .font_scale = 0.95, .font_scale_basis = .normal_body, .font_scale_set = true }};
+        const children = [_]Block{.{ .kind = .paragraph, .spans = &spans }};
+        const child_body = child.source[child_tag.end..child_pair.inner_end];
+        const resolution = try renderer.containerResolutionForDispatch(child_tag, parent, scoped, child);
+        try std.testing.expect(resolution.specified and !resolution.unresolved);
+        const owner = (try renderer.containerGeometry(child_tag, parent, scoped, child_body, &children, resolution, false)).?;
+        // Ordinary ownership stores only the established body-relative scale,
+        // not an invented measured font snapshot or pixel origin.
+        try std.testing.expect(owner.style.owner_font == null);
+        try std.testing.expectApproxEqAbs(@as(f32, 0.95), owner.style.owner_font_scale.?, 0.00001);
+        try std.testing.expect(owner.style.min_height.?.unit == .em);
+        try std.testing.expectApproxEqAbs(@as(f32, 1.52), owner.style.min_height.?.value, 0.00001);
+
+        var uncertain_parent = parent;
+        uncertain_parent.font_size_unknown = true;
+        const uncertain = try renderer.htmlContainerFontStyle(child_tag, uncertain_parent, child, false);
+        try std.testing.expect(uncertain.font_size_unknown);
+        try std.testing.expect((try renderer.containerGeometry(child_tag, uncertain_parent, uncertain, child_body, &children, resolution, false)) == null);
+        var context_parent = parent;
+        context_parent.font_scale_basis = .context;
+        const context_only = try renderer.htmlContainerFontStyle(child_tag, context_parent, child, false);
+        try std.testing.expect(!context_only.font_size_unknown and context_only.font_scale_basis == .context);
+        try std.testing.expectApproxEqAbs(@as(f32, 0.95), context_only.font_scale.?, 0.00001);
+        try std.testing.expect((try renderer.containerGeometry(child_tag, context_parent, context_only, child_body, &children, resolution, false)) == null);
+        renderer.body_formatting_attributes.font_size_unknown = true;
+        try std.testing.expect((try renderer.containerGeometry(child_tag, parent, scoped, child_body, &children, resolution, false)) == null);
+        renderer.body_formatting_attributes.font_size_unknown = false;
+
+        // Equal child bytes from a detached allocation or a different authored
+        // parent cannot issue the new font-query parent edge.
+        const copied = try a.dupe(u8, child.source);
+        const copied_child: Renderer.LiteralContainerDispatch = .{ .source = copied, .pair = child_pair };
+        const detached = try renderer.htmlContainerFontStyle(child_tag, parent, copied_child, false);
+        try std.testing.expect(detached.font_size_unknown);
+        try std.testing.expect(renderer.literal_container_font_dispatch == null);
+        renderer.literal_container_parent = .{ .source = input[outer_source.len..], .pair = outer_pair };
+        const foreign_parent = try renderer.htmlContainerFontStyle(child_tag, parent, child, false);
+        try std.testing.expect(foreign_parent.font_size_unknown);
+        renderer.literal_container_parent = .{ .source = outer, .pair = outer_pair };
+        renderer.native_inline_motion_epoch += 1;
+        try std.testing.expect((try renderer.pairedLiteralContainerParent(child_tag, parent, child_node, subject, child)) == null);
+        renderer.native_inline_motion_epoch -= 1;
+        try std.testing.expect((try renderer.pairedLiteralContainerParent(child_tag, parent, child_node, subject, child)) != null);
+
+        // Existing local nodes/profile retain their original authority bounds.
+        try std.testing.expect(subject.parent == null and subject.element_index == null and
+            !subject.ancestry_complete and !subject.physical_ancestry_complete and subject.page_style_root == null);
+        try std.testing.expect(parent_node.parent == null and !parent_node.ancestry_complete and
+            !parent_node.physical_ancestry_complete and parent_node.page_style_root == null);
+        try std.testing.expectEqualStrings("frame", parent_node.classes);
+        try std.testing.expectEqualStrings("one", parent_node.id);
+        try std.testing.expect(profile.container_rules.ptr == profile_rules.ptr and profile.container_rules.len == profile_rules.len);
+        try std.testing.expect(profile.text_rules.ptr == profile_text_rules.ptr and profile.text_rules.len == profile_text_rules.len);
+        try std.testing.expect(profile.custom_properties == null and profile.page_style_parent == null and !profile.globally_unresolved);
+        try std.testing.expect(scoped.custom_properties == null and metadata.custom_properties == null);
+        try std.testing.expect(renderer.literal_container_font_dispatch == null and renderer.context.table_styles == &profile);
+        try std.testing.expectEqualStrings(outer_source ++ outer_source, input);
+    }
+} else struct {};
 
 pub const LiteralDivGeometryEdgeSourceControl = if (@import("builtin").is_test) struct {
     pub fn run() !void {

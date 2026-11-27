@@ -64717,6 +64717,10 @@ test "normal Writer retained MG kampi unknown phase preserves full diagnostic bo
     try MgKampiUnknownOpeningSaved.run();
 }
 
+test "VI NavHead owner font paired-source and inherited-basis guards" {
+    try encoder.presentation_compile.NavHeadOwnerFontSourceControl.run();
+}
+
 test "VI p646 NavHead36 paired literal container source edge" {
     try encoder.presentation_compile.LiteralDivGeometryEdgeSourceControl.run();
 }
