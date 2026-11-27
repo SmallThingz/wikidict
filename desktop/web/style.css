@@ -9,6 +9,9 @@
 
 /* Typed table floats share the entry flow; no section clear is inferred. */
 .compiled-table-flow{display:flow-root}
+/* Keep section headings wide enough to avoid a float before breaking words. */
+.compiled-table-flow summary{width:fit-content;max-width:100%}
+.compiled-table-flow summary>.heading-label,.compiled-table-flow summary>.heading-label a{overflow-wrap:break-word}
 .compiled-table-flow .block{display:block}
 .compiled-table-flow .block>.body{display:inline}
 .compiled-table-flow .prefix{display:inline-block;margin-inline-end:10px}

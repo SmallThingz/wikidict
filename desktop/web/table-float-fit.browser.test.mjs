@@ -4,11 +4,15 @@ import {createHash} from 'node:crypto';
 import {chromium} from 'playwright';
 import {build} from 'esbuild';
 import {checkTableFloatMargins} from './table-float-margin-cases.mjs';
+import {checkTableFloatBody} from './table-float-body-cases.mjs';
 
 const root = new URL('.', import.meta.url);
 const output = process.env.WIKIDICT_TABLE_FIT_OUTPUT;
 const observed = [];
 const fixture = await readFile(new URL('testdata/yi-named-font/tog.dpr', root));
+const floatBodyFixture = await readFile(new URL('testdata/it-float-body/crepans.dpr', root));
+assert.equal(createHash('sha256').update(floatBodyFixture).digest('hex'),
+  '73e12e7e2e0717ab9dc1079a1c5659d37899d6d25baf43e1a858d7d4dbdb01f2');
 assert.equal(createHash('sha256').update(fixture).digest('hex'),
   '351046ab2224cd239539115b2b6b7a43bcf8377265c56b90e1f6b3a6d1b03f26');
 const assets = new Map(await Promise.all(['index.html', 'style.css', 'reader.ttf'].map(async name =>
@@ -125,6 +129,7 @@ try {
     }
   }
   observed.push(...await checkTableFloatMargins(page));
+  observed.push(...await checkTableFloatBody(page, floatBodyFixture));
   assert.deepEqual(errors, []);
   if (output) await writeFile(output + '/maintained-observations.json', JSON.stringify(observed, null, 2) + '\n', {flag: 'wx'});
 } finally { await browser.close(); }
