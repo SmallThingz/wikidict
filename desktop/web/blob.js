@@ -2,7 +2,7 @@ import {validateFontFamily} from './font-family.js';
 // WIKBLB08 contains compiled semantic pages or typed DAL1 redirect envelopes.
 // A leading U+FEFF belongs to a compiled title or field, not a file BOM.
 import {validateDescriptionBody,validateDarkForeground,validateContainerBlock,validateCellMetrics,validateRuby,validateRubyOwner,validateRubySpan,validateActionGroupSpan,validateInlineBoxSpan,validateFigureIntrinsicSize,validateClippedSpan,validateAudioControl,validateWrappedHeading,validateTableDisclosure} from './validate.js';
-import {validateSourceAnchor,validateSourceAnchorDestinations} from './validate.js';
+import {validateColumnBreakInside,validateSourceAnchor,validateSourceAnchorDestinations} from './validate.js';
 import {validateInlineDestinationList,validateInlineDestinationEntry} from './validate.js';
 import {validateResponsiveCaptionTable} from './validate.js';
 import {validateContainerDisclosureButton} from './container-disclosure.js';
@@ -14,15 +14,17 @@ const roles = ['normal','label','pronunciation','headword','example','quotation'
 // DPRZ owns a two-byte mask. Each accepted feature must have a real occurrence.
 const imageOccurrenceFeature=0x20;
 const containerOwnerFontFeature=1;
+const columnLayoutFeature=0x1000;
+const preferredColumnWidthFlag=0x02000000;
 const resolvedBorderFeature=0x100000;
 const responsiveFlowFeature=0x01000000;
 const sourceAnchorFeature=0x08000000;
 const inlineDestinationFeature=0x10000000;
 const responsiveCaptionTableFeature=0x02000000;
-const supportedExtendedFeatures=features=>(features&~(0x2184|imageOccurrenceFeature|containerOwnerFontFeature))===0&&
-  (features&0x2100)!==0&&(!(features&containerOwnerFontFeature)||!!(features&0x100));
+const supportedExtendedFeatures=features=>(features&~(0x2184|columnLayoutFeature|imageOccurrenceFeature|containerOwnerFontFeature))===0&&
+  (features&(0x2100|columnLayoutFeature))!==0&&(!(features&containerOwnerFontFeature)||!!(features&0x100));
 const supportedWideFeatures=features=>(features&(resolvedBorderFeature|responsiveFlowFeature|sourceAnchorFeature|inlineDestinationFeature|responsiveCaptionTableFeature))!==0&&
-  (features&~(0x2184|imageOccurrenceFeature|containerOwnerFontFeature|resolvedBorderFeature|responsiveFlowFeature|sourceAnchorFeature|inlineDestinationFeature|responsiveCaptionTableFeature))===0&&
+  (features&~(0x2184|columnLayoutFeature|imageOccurrenceFeature|containerOwnerFontFeature|resolvedBorderFeature|responsiveFlowFeature|sourceAnchorFeature|inlineDestinationFeature|responsiveCaptionTableFeature))===0&&
   (!(features&resolvedBorderFeature)||!!(features&0x100))&&
   (!(features&containerOwnerFontFeature)||!!(features&sourceAnchorFeature)&&!!(features&0x100));
 const magicStrings = new Set('23456789ABCDEFGHIJKLMPSVYZa'.split('').map(version=>'DPR'+version));
@@ -79,7 +81,7 @@ export function decode(bytes, metadata) {
   };
   const charge=()=>{require(budget>0);budget--;};
   const content=fn=>{require(contentDepth<16,'Content depth exceeds limit');contentDepth++;try{return fn();}finally{contentDepth--;}};
-  const blockMinimum=()=>(rich?29:blockGeometry?27:aligned?26:anchored?25:17)+(inlineDestinationsEnabled?4:0);
+  const blockMinimum=()=>(rich?29:blockGeometry?27:aligned?26:anchored?25:17)+(inlineDestinationsEnabled?4:0)+(columnLayoutEnabled?1:0);
   const mapString=()=>{const n=u32();require(n<=32*1024*1024&&n<=mapStringBudget);mapStringBudget-=n;return text(n);};
   const mapAction=()=>{const kind=tag(['internal','external']),target=mapString(),target_fragment=presence()?mapString():null,label=mapString();require(kind==='internal'?(target.length>0||target_fragment!==null):(target.length>0&&target_fragment===null));return {kind,target,target_fragment,label};};
   const imageMap=()=>{
@@ -107,6 +109,7 @@ export function decode(bytes, metadata) {
   };
   let clippedEnabled=false,insideClipped=false,clipCount=0;
   let imageOccurrences=false,imageOccurrenceCount=0,responsiveFlowEnabled=false,responsiveFlowCount=0;
+  let columnLayoutEnabled=false,columnLayoutFound=false;
   let audioEnabled=false,positionedHeadings=false,positionedBody=false,containerOwnerFonts=false,containerOwnerFontCount=0;
   let sourceAnchorsEnabled=false,sourceAnchorCount=0;
   let inlineDestinationsEnabled=false;
@@ -386,7 +389,8 @@ export function decode(bytes, metadata) {
     const authored=ordinary&&positionedHeadings;
     const fields=[['margins',()=>edges(containerMarginLength)],['padding',edges],['width',()=>containerWidth(ordinary)],['float_side',()=>tag(['left','right'])],['clear',()=>tag(['none','left','right','both'])],['max_width',containerMaxWidth],['box_sizing',()=>tag(['content_box','border_box'])],['layout',layout],['align_items',()=>tag(['stretch','start','center','end'])],['flex_item',()=>tag(['none'])],['background',containerColor],['border',containerBorder],['line_height',containerLineHeight],['text_align',()=>tag(['left','center','right'])],['screen_max_width',containerScreen],['overflow',()=>tag(authored?['visible','auto','hidden']:['visible','auto'])],['owner_font_scale',f32],['height',styleLength],['columns',()=>({count:u16(),gap:styleLength()})]];
     const ordinaryFields=authored?(0x380000|(containerOwnerFonts?0x1000000:0)):0;
-    require((flags&~(0x7ffff|ordinaryFields|(description?0x80000:0)))===0,'Unsupported container layout policy');
+    const columnFields=columnLayoutEnabled?preferredColumnWidthFlag:0;
+    require((flags&~(0x7ffff|ordinaryFields|columnFields|(description?0x80000:0)))===0,'Unsupported container layout policy');
     fields.forEach(([key,read],bit)=>{if(flags&(1<<bit))style[key]=read();});
     if(flags&0x80000){style.positioning=tag(['relative_auto']);positionedBody=true;}
     if(flags&0x100000)style.min_height=styleLength();
@@ -409,6 +413,12 @@ export function decode(bytes, metadata) {
         if(shape&2)style.corner_radius_px=f32();
         if(shape&4)style.inline_atomic=tag(['adjacent','after_space']);
       }
+    }
+    if(flags&preferredColumnWidthFlag){
+      require(style.columns&&byte()===1,'Invalid preferred column width');
+      if(style.columns.count===0)style.columns.count=null;
+      style.columns.width=styleLength();
+      columnLayoutFound=true;
     }
     return style;
   };
@@ -616,6 +626,14 @@ export function decode(bytes, metadata) {
       validateContainerBlock(value,{containerFonts,positioned:positionedHeadings,parentStyle,containerDisclosureButtons:disclosureButtonsEnabled});
     }
     if((rubyEnabled||namedSpanFontsEnabled)&&kind==='rule')require(byte()===0,'Unsupported record rule style');
+    if(columnLayoutEnabled){
+      const policy=tag([null,'auto','avoid']);
+      if(policy!==null){
+        value.column_break_inside=policy;
+        validateColumnBreakInside(value);
+        columnLayoutFound=true;
+      }
+    }
     // Historical blocks can carry inert anchor metadata. The extended writers
     // require an advertised, validated source owner for a nonheading destination.
     if((magic==='DPRY'||magic==='DPRZ'||magic==='DPRa')&&kind!=='heading'&&(value.anchor||value.anchor_fallback)){
@@ -653,6 +671,7 @@ export function decode(bytes, metadata) {
     responsiveCaptionTablesEnabled=!!(features&responsiveCaptionTableFeature);
     imageOccurrences=!!(features&imageOccurrenceFeature);
     audioEnabled=!!(features&0x2000);
+    columnLayoutEnabled=!!(features&columnLayoutFeature);
     clippedEnabled=!!(features&128);
     positionedHeadings=!!(features&0x100);
     disclosureButtonsEnabled=magic==='DPRa'&&positionedHeadings&&!!(features&resolvedBorderFeature);
@@ -710,6 +729,7 @@ export function decode(bytes, metadata) {
     require(inlineDestinationsEnabled===(inlineDestinationOwners.length>0),'Invalid inline destination feature census');
     require(responsiveCaptionTablesEnabled===(responsiveCaptionTableCount>0),'Invalid responsive caption table feature census');
     validateInlineDestinationEntry(entry,inlineDestinationOwners);
+    require(columnLayoutEnabled===columnLayoutFound,'Invalid column layout feature census');
     require(containerOwnerFonts===(containerOwnerFontCount>0),'Invalid container owner font census');
     require(disclosureButtonsEnabled===(disclosureButtonCount>0),'Invalid disclosure button feature census');
     if(imageOccurrences)require(imageOccurrenceCount>0,'Missing inline image occurrence');
@@ -721,7 +741,7 @@ export function decode(bytes, metadata) {
     }
     if(clippedEnabled)require(clipCount>0,'Missing clipped absolute payload');
     if(inlineBoxGroups)require(boxCount>0,'Missing inline box payload');
-    else if(!namedSpanFontsEnabled&&!clippedEnabled&&!audioEnabled&&!positionedHeadings&&!imageOccurrences&&!responsiveFlowEnabled&&!sourceAnchorsEnabled&&!inlineDestinationsEnabled&&!responsiveCaptionTablesEnabled)require(actionGroupsEnabled?actionGroupCount>0:rubyCount>0,actionGroupsEnabled?'DPRV requires inline action payload':'DPRS requires ruby payload');
+    else if(!namedSpanFontsEnabled&&!clippedEnabled&&!audioEnabled&&!positionedHeadings&&!columnLayoutEnabled&&!imageOccurrences&&!responsiveFlowEnabled&&!sourceAnchorsEnabled&&!inlineDestinationsEnabled&&!responsiveCaptionTablesEnabled)require(actionGroupsEnabled?actionGroupCount>0:rubyCount>0,actionGroupsEnabled?'DPRV requires inline action payload':'DPRS requires ruby payload');
   }
   const images=[];
   const inspect=values=>{for(const span of values||[])if(span.image)images.push(span.image);};

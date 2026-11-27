@@ -336,6 +336,13 @@ function validatePositionedContainerStyle(style){
        style.border?.solid?.width?.unit!=='px'||!style.border.solid.color?.rgb||!style.padding||Object.values(style.padding).some(edge=>edge.unit!=='px'))containerError();
   }
 }
+export function validateColumnBreakInside(block){
+  const policy=block.column_break_inside;
+  if(policy==null)return;
+  if(!['auto','avoid'].includes(policy)||!['paragraph','definition','example','quotation','list_item','list_detail','indent','term'].includes(block.kind)||
+     ['table','feature','container','figure','flow','rule_style','description_body'].some(field=>block[field]!=null))
+    throw Error('Invalid compiled column break policy');
+}
 export function validateContainerStyle(style,{containerFonts=false,positioned=false}={}){
   const keys=[...containerKeys];
   if(containerFonts)keys.push('owner_font_scale','height','columns');
@@ -345,9 +352,11 @@ export function validateContainerStyle(style,{containerFonts=false,positioned=fa
   if(style.owner_font_scale!=null)containerNumber(style.owner_font_scale);
   if(style.height!=null)containerLength(style.height);
   if(style.columns!=null){
-    containerObject(style.columns,['count','gap'],['count','gap']);
-    if(!Number.isInteger(style.columns.count)||style.columns.count<1||style.columns.count>65535)containerError();
-    containerLength(style.columns.gap);
+    const columns=style.columns;
+    containerObject(columns,['count','gap','width'],['count','gap']);
+    if(columns.count===null?columns.width==null:!Number.isInteger(columns.count)||columns.count<1||columns.count>65535)containerError();
+    containerLength(columns.gap);
+    if(Object.hasOwn(columns,'width'))containerLength(columns.width);
     if(style.height!=null||style.min_height!=null||style.layout==='flex_row'||style.overflow==='auto'||style.overflow==='hidden'||style.positioning!=null||style.absolute_position!=null)containerError();
   }
   if(style.margins!=null)containerEdges(style.margins,length=>containerMarginLength(length,containerFonts));

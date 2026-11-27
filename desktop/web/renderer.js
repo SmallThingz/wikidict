@@ -19,7 +19,7 @@ function darkReadingInk(foreground,background){
   return '#'+mix(low).map(channel=>channel.toString(16).padStart(2,'0')).join('');
 }
 import {safeURL,linkTargetParts,bookSourcesURL,validateDescriptionBody,validateDarkForeground,validateContainerBlock,validateCellMetrics,validateRuby,validateRubyOwner,validateRubySpan,validateActionGroupSpan,validateInlineBoxSpan,validateFigureIntrinsicSize,validateClippedSpan,validateAudioControl,validateWrappedHeading,validateTableDisclosure} from './validate.js';
-import {validateSourceAnchor,validateSourceAnchorDestinations} from './validate.js';
+import {validateColumnBreakInside,validateSourceAnchor,validateSourceAnchorDestinations} from './validate.js';
 import {validateInlineDestinationList,validateInlineDestinationEntry} from './validate.js';
 import {validateResponsiveCaptionTable} from './validate.js';
 import {containerDisclosureItems,installContainerDisclosure} from './container-disclosure.js';
@@ -726,6 +726,7 @@ function validateRichEntry(entry){
   const blocks=(values,tableDepth=0,depth=0,inReference=false,parentStyle=null,sectionRoot=false)=>{
     if(depth>16)richError();
     for(const block of array(values)){
+      validateColumnBreakInside(block);
       const destinations=validateInlineDestinationList(block);charge(destinations.length);
       if(destinations.length)inlineOwners.push(block);
       spanList(block.spans);const owner=richListKinds.has(block.kind)||(block.kind==='paragraph'&&!(block.depth||0)&&!block.list_path);
@@ -1135,6 +1136,7 @@ function appendBlocks(parent,values,render,sourceAnchors){
       }
       lists.length=at+1;
       const current=lists[at],item=node('li',null,'compiled-list-item');
+      if(block.column_break_inside!=null)item.style.breakInside=block.column_break_inside;
       if(sourceAnchors&&sense&&block.anchor)destination(item,block);
       if(key.endsWith('#')&&/^-?\d+$/.test(block.number||'')){
         const number=Number(block.number);
@@ -1233,7 +1235,11 @@ function containerDeclarations(style,dark=false){
     set('transform',`translate(${positionedLength(placement.translate_x)}, ${positionedLength(placement.translate_y)})`);
     if(z_index!=null)set('z-index',String(z_index));
   }
-  if(style.columns){set('column-count',String(style.columns.count));set('column-gap',styleLength(style.columns.gap));set('column-fill','balance');}
+  if(style.columns){
+    if(style.columns.count!=null)set('column-count',String(style.columns.count));
+    if(style.columns.width)set('column-width',styleLength(style.columns.width));
+    set('column-gap',styleLength(style.columns.gap));set('column-fill','balance');
+  }
   return css.join(';');
 }
 function orderedContainerView(value,onLink,explanations,context){
@@ -1247,6 +1253,7 @@ function orderedContainerView(value,onLink,explanations,context){
     const {style,blocks:[head,...details]}=block.container;
     const item=node('li',null,'compiled-ordered-item');
     item.style.cssText=containerDeclarations(style);
+    if(head.column_break_inside!=null)item.style.breakInside=head.column_break_inside;
     if(explanations?.sourceAnchors&&head.kind==='definition'&&head.anchor)destination(item,head);
     const view=blockView(head,onLink,explanations,'',childContext);
     view.querySelector(':scope > .prefix')?.remove();
@@ -1405,6 +1412,7 @@ function blockView(block, onLink, explanations, legacy = '', context = {}) {
   const kind = allowed.has(block.kind) ? block.kind : 'paragraph';
   const el = node(kind === 'heading'?'h'+(Number.isInteger(block.level)&&block.level>=1&&block.level<=6?block.level:4):'div',null,'block '+kind);
   el.style.marginInlineStart = margin;
+  if(block.column_break_inside!=null)el.style.breakInside=block.column_break_inside;
   if(context.tableDepth||block.text_align!=null)el.classList.add('compiled-aligned-block');
   if(block.text_align!=null)el.style.textAlign=block.text_align;
   if(context.header)el.style.fontWeight='inherit';
