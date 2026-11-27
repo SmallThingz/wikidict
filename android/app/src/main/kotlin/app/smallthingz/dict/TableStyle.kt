@@ -93,7 +93,11 @@ internal fun tableHasComputedCellStyle(table: Table): Boolean = (table.style?.bo
 } }
 /** Enrolled native Figure cells supply real intrinsic widths even with padding-only styles. */
 internal fun tableUsesContentWidths(table: Table, inherited: Boolean = false): Boolean =
-    inherited || table.style?.minWidth != null || tableHasComputedCellStyle(table) || nativeDelegatedFigureTable(table) || nativeDelegatedAbsoluteTable(table)
+    inherited || table.style?.minWidth != null || tableHasComputedCellStyle(table) || nativeDelegatedFigureTable(table) || nativeDelegatedAbsoluteTable(table) ||
+        // A percentage requests a width; it cannot erase these real cells' intrinsic minima.
+        // Reuse the existing intrinsic-safe cell domain without admitting rich block subtrees.
+        (table.style?.width?.unit == StyleWidthUnit.Percent && table.rows.any { it.isNotEmpty() } &&
+            table.rows.all { row -> row.all(::inlineTableCellShape) })
 
 /** A hard table floor keeps its original-body units and real containing-width authority. */
 internal fun tableMinimumWidthPixels(value: StyleWidth, density: Float, normalBodyPixels: Float,
