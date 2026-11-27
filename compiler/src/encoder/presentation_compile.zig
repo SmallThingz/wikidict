@@ -1016,6 +1016,50 @@ pub fn normalTextManualComparisonAlloc(a: A, source: []const u8, expected_sha256
         .comparison = try output.toOwnedSlice(a), .end = frame.closing + 2, .nested_frames = children };
 }
 
+
+test "normal text recursive comparison preserves numeric slash entities without creating syntax" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const NS = @import("namespace_registry");
+    var ns = try NS.Registry.init(a, NS.english_test_fixture);
+    defer ns.deinit();
+    ns.content_language = "zh";
+    ns.language_conversion = &.{ "zh", "zh-hans", "zh-hant" };
+    ns.manual_conversion_context = SourceRecursiveManualTest.profile();
+    const context: Context = .{ .namespace_catalog = &ns, .content_conversion = true };
+    for ([_][]const u8{ "&#47;", "&#047;", "&#x2f;", "&#X2F;" }) |reference| {
+        const source = try std.mem.concat(a, u8, &.{ "-{[[:og#冰島語|-{og}-]]", reference,
+            "[[:eða#冰島語|-{eða}-]]}-" });
+        var digest: [32]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash(source, &digest, .{});
+        const actual = (try normalTextManualComparisonAlloc(a, source, digest, 0, context, true)) orelse
+            return error.TestUnexpectedResult;
+        const expected = try std.mem.concat(a, u8, &.{ "[[:og#冰島語|og]]", reference, "[[:eða#冰島語|eða]]" });
+        try std.testing.expectEqualStrings(expected, actual.comparison);
+        try std.testing.expectEqual(@as(usize, 2), actual.nested_frames);
+        try std.testing.expect(actual.original_frame.ptr == source.ptr and actual.original_frame.len == source.len);
+        try std.testing.expectEqual(source.len, actual.end);
+        var after: [32]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash(source, &after, .{});
+        try std.testing.expectEqualSlices(u8, &digest, &after);
+    }
+    // Numeric references cannot hide a variant, choice, tag, link, quote,
+    // second entity, or control character in the recursive proof.
+    for ([_][]const u8{
+        "-{&#58;}-", "-{&#59;}-", "-{&#124;}-", "-{&#123;}-", "-{&#125;}-",
+        "-{&#91;}-", "-{&#93;}-", "-{&#60;}-", "-{&#62;}-", "-{&#39;}-",
+        "-{&#38;#47;}-", "-{&#10;}-", "-{&#9;}-", "-{&#0;}-", "-{&#xD800;}-",
+        "-{&#47}-", "-{&#x2G;}-", "-{&#;}-", "-{&sol;}-", "-{&amp;}-",
+        "-{&#47;zh:converted}-", "-{&#47;|rule}-", "-{&#47;;rule}-",
+        "-{[[foo&#47;bar|label]]}-",
+    }) |source| {
+        var digest: [32]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash(source, &digest, .{});
+        try std.testing.expect((try normalTextManualComparisonAlloc(a, source, digest, 0, context, true)) == null);
+    }
+}
+
 pub const NormalTextClassOperation = struct {
     source: []const u8,
     opening: []const u8,
@@ -39511,6 +39555,18 @@ pub const Renderer = struct {
                     try output.appendSlice(self.a, body[label_at + node.text.len..links.cursor]);
                 }
                 cursor = links.cursor;
+                continue;
+            }
+            // A complete numeric slash reference is ordinary display text.
+            // Preserve its exact spelling for the later entity phase: decoding
+            // this scratch proof must not manufacture syntax or alter actions.
+            // No named reference or other numeric character is admitted here.
+            if (starts(body[cursor..], "&#")) {
+                var scratch: [4]u8 = undefined;
+                const slash = decodeEntity(body[cursor..], &scratch, false) orelse return false;
+                if (!std.mem.eql(u8, slash.bytes, "/")) return false;
+                try output.appendSlice(self.a, body[cursor..][0..slash.consumed]);
+                cursor += slash.consumed;
                 continue;
             }
             const byte = body[cursor];
