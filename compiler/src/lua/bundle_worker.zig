@@ -27,6 +27,7 @@ const Expansion = struct {
     unsupported_parser_function: bool,
     poem_metadata: ?[]const u8 = null,
     missing_dependency_metadata: ?[]const u8 = null,
+    page_effect_metadata: ?protocol.BoundPageEffects = null,
 };
 
 fn limit(resource: std.posix.rlimit_resource, value: u64) !void {
@@ -190,6 +191,7 @@ const Engine = struct {
         page_work.context_ns +|= work_stats.elapsed(context_start);
         defer ctx.deinit();
         var expander = lua_program.initExpanderShared(&ctx, self.provider.api(), &self.load_data_cache);
+        if (request.effect_profile != null) expander.enablePageEffects(request.page_ordinal);
         expander.invoke_reuse = if (self.invoke_reuse) |*stats| stats else null;
         stage.* = "expand";
         const expand_start = work_stats.cpuNow();
@@ -203,7 +205,13 @@ const Engine = struct {
             return err;
         };
         page_work.expand_ns +|= work_stats.elapsed(expand_start);
-        return .{ .output = output, .display_title = expander.display_title orelse "", .unsupported_parser_function = expander.unsupported_parser_function, .poem_metadata = expander.poem_metadata, .missing_dependency_metadata = expander.missing_dependency_metadata };
+        const effects: ?protocol.BoundPageEffects = if (request.effect_profile) |profile| blk: {
+            const phase = expander.page_effect_metadata orelse break :blk null;
+            if (phase.len == 0 or phase.len > protocol.max_page_effect_bytes) break :blk null;
+            break :blk .{ .binding = protocol.pageEffectBinding(profile, request.page_ordinal, request.identity,
+                request.title, request.source, output, phase), .collector = phase };
+        } else null;
+        return .{ .page_effect_metadata = effects, .output = output, .display_title = expander.display_title orelse "", .unsupported_parser_function = expander.unsupported_parser_function, .poem_metadata = expander.poem_metadata, .missing_dependency_metadata = expander.missing_dependency_metadata };
     }
 };
 
@@ -283,7 +291,7 @@ pub fn run(io: std.Io, persistent: A) !void {
                 try protocol.writeTimedReplyWithClock(&output.interface, processCpuNow, .{ .failure = .{ .stage = stage, .error_name = "ExpandedSourceTooLarge", .detail = "" } });
                 continue;
             }
-            try protocol.writeTimedReplyWithClock(&output.interface, processCpuNow, .{ .output = .{ .output = value.output, .display_title = value.display_title, .unsupported_parser_function = value.unsupported_parser_function, .poem_metadata = value.poem_metadata, .missing_dependency_metadata = value.missing_dependency_metadata } });
+            try protocol.writeTimedReplyWithClock(&output.interface, processCpuNow, .{ .output = .{ .output = value.output, .display_title = value.display_title, .unsupported_parser_function = value.unsupported_parser_function, .poem_metadata = value.poem_metadata, .missing_dependency_metadata = value.missing_dependency_metadata, .page_effect_metadata = value.page_effect_metadata } });
         } else {
             try protocol.writeTimedReplyWithClock(&output.interface, processCpuNow, .skip);
         }

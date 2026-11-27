@@ -6,6 +6,8 @@ pub const max_display_title_bytes: usize = 64 * 1024;
 pub const max_path_bytes: usize = 4096;
 pub const max_title_bytes: usize = 4096;
 const request_version: u8 = 5;
+const effect_request_version: u8 = 6;
+pub const max_page_effect_bytes: usize = 64 * 1024;
 // Disjoint from all legacy reply payload tags (0..6).
 const reply_envelope_version: u8 = 0x85;
 const cpu_envelope_len: usize = 9;
@@ -24,6 +26,7 @@ pub const PageIdentity = struct {
 };
 
 pub const Request = struct {
+    effect_profile: ?[32]u8 = null,
     root: []const u8,
     dump: []const u8,
     now_unix: i64,
@@ -33,7 +36,35 @@ pub const Request = struct {
     source: []const u8,
 };
 
+// Correlation across both sides of one worker job. The build verifies the
+// worker binary separately. This digest detects substitution, and binds the
+// collector payload even if phases/identity happen to have equal lengths.
+pub fn pageEffectBinding(profile: [32]u8, ordinal: u64, id: PageIdentity, title: []const u8,
+    raw: []const u8, expanded: []const u8, collector: []const u8) [32]u8
+{
+    var h = std.crypto.hash.sha2.Sha256.init(.{});
+    h.update("wikidict.worker-page-effects.v1");
+    h.update(&profile);
+    var word: [8]u8 = undefined;
+    for ([_]u64{ ordinal, id.index_offset, id.page_id, id.revision_id, id.namespace }) |value| {
+        std.mem.writeInt(u64, &word, value, .little);
+        h.update(&word);
+    }
+    for ([_][]const u8{ title, raw, expanded, collector }) |part| {
+        std.mem.writeInt(u64, &word, @intCast(part.len), .little);
+        h.update(&word);
+        h.update(part);
+    }
+    return h.finalResult();
+}
+
+pub const BoundPageEffects = struct {
+    binding: [32]u8,
+    collector: []const u8,
+};
+
 pub const SuccessReply = struct {
+    page_effect_metadata: ?BoundPageEffects = null,
     output: []const u8,
     display_title: []const u8,
     unsupported_parser_function: bool = false,
@@ -75,11 +106,12 @@ pub fn validateRequest(request: Request) !void {
 
 pub fn writeRequest(w: *std.Io.Writer, request: Request) !void {
     try validateRequest(request);
-    const payload_len = try checkedFramePayload(&.{ request_header_len, request.root.len, request.dump.len, request.title.len, request.source.len });
+    const profile_bytes: usize = if (request.effect_profile != null) 32 else 0;
+    const payload_len = try checkedFramePayload(&.{ request_header_len, profile_bytes, request.root.len, request.dump.len, request.title.len, request.source.len });
     var outer: [4]u8 = undefined;
     std.mem.writeInt(u32, &outer, payload_len, .little);
     var header: [request_header_len]u8 = undefined;
-    header[0] = request_version;
+    header[0] = if (request.effect_profile == null) request_version else effect_request_version;
     std.mem.writeInt(i64, header[1..9], request.now_unix, .little);
     std.mem.writeInt(u64, header[9..17], request.page_ordinal, .little);
     std.mem.writeInt(u64, header[17..25], request.identity.index_offset, .little);
@@ -92,6 +124,7 @@ pub fn writeRequest(w: *std.Io.Writer, request: Request) !void {
     try putU32(header[57..61], request.source.len);
     try w.writeAll(&outer);
     try w.writeAll(&header);
+    if (request.effect_profile) |profile| try w.writeAll(&profile);
     try w.writeAll(request.root);
     try w.writeAll(request.dump);
     try w.writeAll(request.title);
@@ -112,7 +145,7 @@ fn takeU32(bytes: []const u8, cursor: *usize) !usize {
 }
 
 pub fn decodeRequest(bytes: []const u8) !Request {
-    if (bytes.len < request_header_len or bytes[0] != request_version) return error.InvalidFrame;
+    if (bytes.len < request_header_len or (bytes[0] != request_version and bytes[0] != effect_request_version)) return error.InvalidFrame;
     var cursor: usize = 1;
     const now_unix = std.mem.readInt(i64, (try take(bytes, &cursor, 8))[0..8], .little);
     const page_ordinal = std.mem.readInt(u64, (try take(bytes, &cursor, 8))[0..8], .little);
@@ -127,6 +160,7 @@ pub fn decodeRequest(bytes: []const u8) !Request {
     const title_len = try takeU32(bytes, &cursor);
     const source_len = try takeU32(bytes, &cursor);
     const request: Request = .{
+        .effect_profile = if (bytes[0] == effect_request_version) (try take(bytes, &cursor, 32))[0..32].* else null,
         .root = try take(bytes, &cursor, root_len),
         .dump = try take(bytes, &cursor, dump_len),
         .title = try take(bytes, &cursor, title_len),
@@ -151,6 +185,16 @@ fn writeSuccessWithPoem(w: *std.Io.Writer, output: []const u8, display_title: []
 // Missing-dependency phase bytes are opaque here. The shared phase decoder
 // authenticates occurrence IDs/ranges against these exact output/title bytes.
 fn writeSuccessWithMetadata(w: *std.Io.Writer, output: []const u8, display_title: []const u8, unsupported_parser_function: bool, poem_metadata: ?[]const u8, missing_dependency_metadata: ?[]const u8, timed: bool) !void {
+    return writeSuccessPayload(w, .{ .output = output, .display_title = display_title,
+        .unsupported_parser_function = unsupported_parser_function, .poem_metadata = poem_metadata,
+        .missing_dependency_metadata = missing_dependency_metadata }, timed);
+}
+
+fn writeSuccessPayload(w: *std.Io.Writer, reply: SuccessReply, timed: bool) !void {
+    const output = reply.output;
+    const display_title = reply.display_title;
+    const poem_metadata = reply.poem_metadata;
+    const missing_dependency_metadata = reply.missing_dependency_metadata;
     if (poem_metadata) |metadata| {
         if (metadata.len == 0 or metadata.len > max_poem_metadata_bytes or !std.unicode.utf8ValidateSlice(metadata)) return error.InvalidPoemMetadata;
     }
@@ -159,13 +203,24 @@ fn writeSuccessWithMetadata(w: *std.Io.Writer, output: []const u8, display_title
     }
     if (output.len > max_source_bytes or display_title.len > max_display_title_bytes) return error.FrameTooLarge;
     const payload_len = try checkedFramePayload(&.{ success_header_len, if (poem_metadata != null) @as(usize, 4) else 0, if (missing_dependency_metadata != null) @as(usize, 4) else 0, output.len, display_title.len, if (poem_metadata) |metadata| metadata.len else 0, if (missing_dependency_metadata) |metadata| metadata.len else 0 });
+    // The optional field may use only the space left after the ordinary
+    // payload and CPU trailer. A tight frame preserves every existing field.
+    const envelope: usize = if (timed) cpu_envelope_len else 0;
+    const spare = max_frame_bytes -| envelope -| @as(usize, payload_len);
+    const effects: ?BoundPageEffects = if (reply.page_effect_metadata) |v| blk: {
+        if (v.collector.len == 0 or v.collector.len > max_page_effect_bytes or v.collector.len + 36 > spare) break :blk null;
+        if (!std.unicode.utf8ValidateSlice(v.collector)) break :blk null;
+        break :blk v;
+    } else null;
     var header: [success_header_len]u8 = undefined;
     // Existing success0/4 are byte-for-byte unchanged without the new phase.
     header[0] = if (missing_dependency_metadata != null) (if (poem_metadata != null) @as(u8, 6) else 5) else (if (poem_metadata != null) @as(u8, 4) else 0);
     try putU32(header[1..5], output.len);
     try putU32(header[5..9], display_title.len);
-    header[9] = @intFromBool(unsupported_parser_function);
-    try writeReplyHeader(w, payload_len, timed);
+    header[9] = @intFromBool(reply.unsupported_parser_function);
+    if (effects != null) header[0] |= 0x10;
+    const extended_len = try checkedFramePayload(&.{ payload_len, if (effects) |v| 36 + v.collector.len else 0 });
+    try writeReplyHeader(w, extended_len, timed);
     try w.writeAll(&header);
     if (poem_metadata) |metadata| {
         var length: [4]u8 = undefined;
@@ -177,10 +232,19 @@ fn writeSuccessWithMetadata(w: *std.Io.Writer, output: []const u8, display_title
         try putU32(&length, metadata.len);
         try w.writeAll(&length);
     }
+    if (effects) |v| {
+        var length: [4]u8 = undefined;
+        try putU32(&length, v.collector.len);
+        try w.writeAll(&length);
+    }
     try w.writeAll(output);
     try w.writeAll(display_title);
     if (poem_metadata) |metadata| try w.writeAll(metadata);
     if (missing_dependency_metadata) |metadata| try w.writeAll(metadata);
+    if (effects) |v| {
+        try w.writeAll(&v.binding);
+        try w.writeAll(v.collector);
+    }
     try w.flush();
 }
 
@@ -215,7 +279,9 @@ fn writeError(w: *std.Io.Writer, stage: []const u8, error_name: []const u8, deta
 
 fn decodeReply(bytes: []const u8) !Reply {
     if (bytes.len == 0 or bytes.len > max_frame_bytes) return error.InvalidFrame;
-    if (bytes[0] == 0 or bytes[0] == 4 or bytes[0] == 5 or bytes[0] == 6) {
+    const has_effects = bytes[0] & 0x10 != 0;
+    const tag = bytes[0] & ~@as(u8, 0x10);
+    if (tag == 0 or tag == 4 or tag == 5 or tag == 6) {
         if (bytes.len < success_header_len) return error.InvalidFrame;
         var cursor: usize = 1;
         const output_len = try takeU32(bytes, &cursor);
@@ -223,10 +289,12 @@ fn decodeReply(bytes: []const u8) !Reply {
         if (output_len > max_source_bytes or display_title_len > max_display_title_bytes) return error.InvalidFrame;
         const diagnostic = (try take(bytes, &cursor, 1))[0];
         if (diagnostic > 1) return error.InvalidFrame;
-        const has_poem = bytes[0] == 4 or bytes[0] == 6;
-        const has_missing = bytes[0] == 5 or bytes[0] == 6;
+        const has_poem = tag == 4 or tag == 6;
+        const has_missing = tag == 5 or tag == 6;
         const metadata_len = if (has_poem) try takeU32(bytes, &cursor) else 0;
         const missing_len = if (has_missing) try takeU32(bytes, &cursor) else 0;
+        const effects_len = if (has_effects) try takeU32(bytes, &cursor) else 0;
+        if (has_effects and (effects_len == 0 or effects_len > max_page_effect_bytes)) return error.InvalidFrame;
         if (has_poem and (metadata_len == 0 or metadata_len > max_poem_metadata_bytes)) return error.InvalidFrame;
         if (has_missing and (missing_len == 0 or missing_len > max_missing_dependency_metadata_bytes)) return error.InvalidFrame;
         const success: SuccessReply = .{
@@ -235,8 +303,13 @@ fn decodeReply(bytes: []const u8) !Reply {
             .display_title = try take(bytes, &cursor, display_title_len),
             .poem_metadata = if (has_poem) try take(bytes, &cursor, metadata_len) else null,
             .missing_dependency_metadata = if (has_missing) try take(bytes, &cursor, missing_len) else null,
+            .page_effect_metadata = if (has_effects) .{
+                .binding = (try take(bytes, &cursor, 32))[0..32].*,
+                .collector = try take(bytes, &cursor, effects_len),
+            } else null,
         };
         if (cursor != bytes.len) return error.InvalidFrame;
+        if (success.page_effect_metadata) |v| if (!std.unicode.utf8ValidateSlice(v.collector)) return error.InvalidFrame;
         if (success.poem_metadata) |metadata| if (!std.unicode.utf8ValidateSlice(metadata)) return error.InvalidFrame;
         if (success.missing_dependency_metadata) |metadata| if (!std.unicode.utf8ValidateSlice(metadata)) return error.InvalidFrame;
         return .{ .output = success };
@@ -478,7 +551,7 @@ pub const TimedReply = struct { cpu_ns: u64, reply: Reply };
 
 fn writeTimedPayload(w: *std.Io.Writer, reply: Reply) !void {
     switch (reply) {
-        .output => |v| try writeSuccessWithMetadata(w, v.output, v.display_title, v.unsupported_parser_function, v.poem_metadata, v.missing_dependency_metadata, true),
+        .output => |v| try writeSuccessPayload(w, v, true),
         .failure => |v| try writeError(w, v.stage, v.error_name, v.detail, true),
         .ready, .skip => {
             try writeReplyHeader(w, 1, true);
@@ -566,4 +639,60 @@ test "producer CPU trailer samples after payload and clock failure leaves an inc
     defer partial.deinit();
     try std.testing.expectError(error.WorkerCpuClockUnavailable, writeTimedReplyWithClock(&partial.writer, Clock.unavailable, .ready));
     try std.testing.expectError(error.InvalidFrame, decodeTimedReply(partial.written()[4..]));
+}
+
+test "page effects opt in per request and preserve legacy timed reply fields" {
+    const a = std.testing.allocator;
+    var query: Request = .{ .root = "/root", .dump = "/dump", .title = "Entry", .source = "raw",
+        .now_unix = 1, .page_ordinal = 0, .identity = .{ .index_offset = 2, .page_id = 3, .revision_id = 4, .namespace = 0 } };
+    for ([_]bool{ false, true }) |collect| {
+        query.effect_profile = if (collect) @as([32]u8, @splat(0x42)) else null;
+        var out: std.Io.Writer.Allocating = .init(a);
+        defer out.deinit();
+        try writeRequest(&out.writer, query);
+        const message = out.written()[4..];
+        const decoded = try decodeRequest(message);
+        try std.testing.expectEqual(query.effect_profile, decoded.effect_profile);
+        try std.testing.expectEqualStrings(query.source, decoded.source);
+        try std.testing.expectEqual(@as(u8, if (collect) 6 else 5), message[0]);
+        try std.testing.expectError(error.InvalidFrame, decodeRequest(message[0 .. message.len - 1]));
+    }
+    for ([_]?[]const u8{ null, "{}" }) |poem| for ([_]?[]const u8{ null, "[]" }) |missing| {
+        for ([_]?[]const u8{ null, "{\"schema\":1}" }) |effects| {
+            var out: std.Io.Writer.Allocating = .init(a);
+            defer out.deinit();
+            try writeTimedReply(&out.writer, 77, .{ .output = .{ .output = "expanded", .display_title = "Shown",
+                .unsupported_parser_function = true, .poem_metadata = poem, .missing_dependency_metadata = missing,
+                .page_effect_metadata = if (effects) |v| .{ .binding = @splat(7), .collector = v } else null } });
+            const frame = out.written()[4..];
+            const timed = try decodeTimedReply(frame);
+            try std.testing.expectEqual(@as(u64, 77), timed.cpu_ns);
+            const got = timed.reply.output;
+            try std.testing.expect(got.unsupported_parser_function);
+            try std.testing.expectEqualStrings("expanded", got.output);
+            try std.testing.expectEqualStrings("Shown", got.display_title);
+            if (poem) |v| try std.testing.expectEqualStrings(v, got.poem_metadata.?) else try std.testing.expect(got.poem_metadata == null);
+            if (missing) |v| try std.testing.expectEqualStrings(v, got.missing_dependency_metadata.?) else try std.testing.expect(got.missing_dependency_metadata == null);
+            if (effects) |v| {
+                try std.testing.expectEqualStrings(v, got.page_effect_metadata.?.collector);
+                const copied = try a.dupe(u8, frame);
+                defer a.free(copied);
+                const offset: usize = 1 + success_header_len + @as(usize, @intFromBool(poem != null)) * 4 + @as(usize, @intFromBool(missing != null)) * 4;
+                for ([_]u32{ 0, max_page_effect_bytes + 1, 1 }) |wrong| {
+                    std.mem.writeInt(u32, copied[offset..][0..4], wrong, .little);
+                    try std.testing.expectError(error.InvalidFrame, decodeTimedReply(copied));
+                }
+                @memcpy(copied, frame);
+                copied[copied.len - 9] = 0xff;
+                try std.testing.expectError(error.InvalidFrame, decodeTimedReply(copied));
+            } else try std.testing.expect(got.page_effect_metadata == null);
+        }
+    };
+    const over = try a.alloc(u8, max_page_effect_bytes + 1);
+    defer a.free(over);
+    @memset(over, 'x');
+    var bounded: std.Io.Writer.Allocating = .init(a);
+    defer bounded.deinit();
+    try writeTimedReply(&bounded.writer, 1, .{ .output = .{ .output = "body", .display_title = "", .page_effect_metadata = .{ .binding = @splat(7), .collector = over } } });
+    try std.testing.expect((try decodeTimedReply(bounded.written()[4..])).reply.output.page_effect_metadata == null);
 }

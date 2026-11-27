@@ -65,6 +65,7 @@ fn afterIdlePoll(budget: *PageCpuBudget, source: anytype, pipe: anytype) !bool {
 }
 
 pub const Expansion = struct {
+    page_effect_metadata: ?protocol.BoundPageEffects = null,
     source: []const u8,
     display_title: ?[]const u8 = null,
     unsupported_parser_function: bool = false,
@@ -114,6 +115,7 @@ fn validateReplyPhase(reply: protocol.Reply, awaiting_ready: bool) !void {
 }
 
 pub const Worker = struct {
+    effect_profile: ?[32]u8 = null,
     io: std.Io,
     root: []const u8,
     executable: []const u8,
@@ -292,6 +294,7 @@ pub const Worker = struct {
             .dump = self.dump,
             .now_unix = self.now_unix,
             .page_ordinal = page_ordinal,
+            .effect_profile = self.effect_profile,
             .identity = identity,
             .title = title,
             .source = source,
@@ -415,6 +418,7 @@ pub const Worker = struct {
                 },
                 .output => |success| return .{
                     .source = success.output,
+                    .page_effect_metadata = success.page_effect_metadata,
                     .poem_metadata = success.poem_metadata,
                     .missing_dependency_metadata = success.missing_dependency_metadata,
                     .unsupported_parser_function = success.unsupported_parser_function,

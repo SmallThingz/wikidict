@@ -19,6 +19,7 @@ const invoke_reuse_stats = @import("invoke_reuse_stats.zig");
 const InvokeReuseStats = invoke_reuse_stats.Stats;
 const namespace_lib = @import("namespaces.zig");
 const preprocess = @import("lua_wikitext_preprocess");
+const page_effects_lib = @import("page_effects.zig");
 const parser_expr = @import("lua_wikitext_expression");
 const language_lib = @import("language.zig");
 const plural_rules = @import("plural_rules.zig");
@@ -257,6 +258,9 @@ pub const Expander = struct {
     unsupported_parser_function: bool = false,
     poem_metadata: ?[]const u8 = null,
     missing_dependency_metadata: ?[]const u8 = null,
+    page_effect_generation: ?u64 = null,
+    page_effect_metadata: ?[]const u8 = null,
+    page_effects_collector: page_effects_lib.Collector = .{},
     dependency_page: dependency.Page = .{},
     dependency_display_title: dependency.Text = .{ .bytes = "" },
     dependency_arguments: std.ArrayList(DependencyArgument) = .empty,
@@ -325,7 +329,91 @@ pub const Expander = struct {
         host_api.set(self.runtime, &self.host);
     }
 
+    // Set for each request BEFORE expandStoredFragment. beginPage consumes it;
+    // reusing an Expander without a fresh opt-in cannot issue old metadata.
+    pub fn enablePageEffects(self: *Expander, generation: u64) void {
+        self.page_effect_generation = generation;
+        self.page_effect_metadata = null;
+    }
+
+    fn rejectPageEffects(self: *Expander) void {
+        self.page_effect_metadata = null;
+        if (self.page_effects_collector.generation == null) return;
+        self.page_effects_collector.reject();
+        // In particular this survives a caught Lua error and excludes a
+        // loadData/module initializer from cross-page promotion.
+        rt.markLoadDataEffect();
+    }
+
+    fn observePageExtension(self: *Expander, name: []const u8, attrs: ?*rt.Table) void {
+        if (self.page_effects_collector.generation == null) return;
+        self.page_effect_metadata = null;
+        rt.markLoadDataEffect();
+        var src: ?[]const u8 = null;
+        var supported = true;
+        if (std.ascii.eqlIgnoreCase(name, "templatestyles")) {
+            if (attrs) |table| {
+                var it = table.iterator();
+                var count: usize = 0;
+                while (it.next()) |entry| {
+                    count += 1;
+                    if (count > 32) { supported = false; break; }
+                    if (entry.value_ptr.* == .nil) continue;
+                    if (entry.key_ptr.* != .string or !std.ascii.eqlIgnoreCase(entry.key_ptr.string, "src") or
+                        entry.value_ptr.* != .string or src != null)
+                    { supported = false; break; }
+                    // Never evaluate a metamethod or stringify twice for an observer.
+                    src = entry.value_ptr.string;
+                }
+            }
+        } else if (attrs) |table| {
+            var it = table.iterator();
+            var count: usize = 0;
+            while (it.next()) |entry| {
+                count += 1;
+                if (count > 32 or entry.value_ptr.* != .nil) { supported = false; break; }
+            }
+        }
+        self.page_effects_collector.extension(self.page_allocator orelse self.runtime.allocator,
+            name, src, supported, .extension_call);
+    }
+
+    fn observePageLiteral(self: *Expander, text: []const u8, state: *page_effects_lib.LiteralState) void {
+        self.page_effect_metadata = null;
+        const before = self.page_effects_collector.operations;
+        const was_unknown = self.page_effects_collector.unknown;
+        self.page_effects_collector.scan(self.page_allocator orelse self.runtime.allocator, text, state, .literal_input);
+        if (before != self.page_effects_collector.operations or was_unknown != self.page_effects_collector.unknown)
+            rt.markLoadDataEffect();
+    }
+
+    fn observePreprocessResult(self: *Expander, text: []const u8) void {
+        self.page_effect_metadata = null;
+        const before = self.page_effects_collector.operations;
+        const was_unknown = self.page_effects_collector.unknown;
+        self.page_effects_collector.scanComplete(self.page_allocator orelse self.runtime.allocator, text, .preprocess_result);
+        if (before != self.page_effects_collector.operations or was_unknown != self.page_effects_collector.unknown)
+            rt.markLoadDataEffect();
+    }
+
+    fn finishPageEffects(self: *Expander, output: []const u8) void {
+        self.page_effect_metadata = null;
+        if (self.page_effects_collector.generation == null) return;
+        const current = self.host.current_page orelse { self.rejectPageEffects(); return; };
+        if (self.unsupported_parser_function or self.host.page_identity_failure != null or
+            self.missing_provider_input != null or !std.mem.eql(u8, current.metadata.content_model, "wikitext"))
+        { self.rejectPageEffects(); return; }
+        const source = self.current_source orelse { self.rejectPageEffects(); return; };
+        self.page_effect_metadata = self.page_effects_collector.finish(self.page_allocator orelse self.runtime.allocator,
+            .{ .title = self.host.current_title, .namespace = current.namespace,
+               .page_id = current.metadata.page_id, .revision_id = current.metadata.revision_id },
+            source, output, self.display_title orelse "");
+    }
+
     pub fn beginPage(self: *Expander, title: []const u8, source: []const u8, now_unix: ?i64) void {
+        self.page_effect_metadata = null;
+        self.page_effects_collector.begin(self.page_effect_generation);
+        self.page_effect_generation = null;
         self.script_cpu_budget.reset();
         self.releasePageModuleTemplates();
         self.host.current_title = title;
@@ -613,6 +701,7 @@ pub const Expander = struct {
 
     pub fn expandStoredFragment(self: *Expander, title: []const u8, source: []const u8, now_unix: ?i64, current: ?host_api.CurrentPage) anyerror![]const u8 {
         self.beginPage(title, source, now_unix);
+        errdefer self.rejectPageEffects();
         self.host.current_page = current;
         // This entry point has no target-language/variant override or interface
         // parser mode. {{int:}} expands Message::plain in this same root parser.
@@ -702,6 +791,7 @@ pub const Expander = struct {
             if (encoded.limited or self.dependency_page.metadata_unknown)
                 work_stats.logLine("warning: missing dependency provenance capacity: page={s} source-bytes={d} title-bytes={d} occurrence-count={d} phase={s} semantic-completeness=unknown\n", .{ title[0..@min(title.len, 256)], output.len, final_title.len, self.dependency_page.occurrences.items.len, if (encoded.metadata != null) @as([]const u8, "bounded") else "absent" });
         }
+        self.finishPageEffects(output);
         return output;
     }
 
@@ -1172,7 +1262,8 @@ pub const Expander = struct {
         }
         try preprocess.appendParsingText(a, out, text[copied..]);
     }
-    fn appendPoemLiteralTracked(self: *Expander, out: *dependency.Builder, text: []const u8, prepared: bool, protect_literal_curly: bool, literal_state: *preprocess.ParsingLiteralState) anyerror!void {
+    fn appendPoemLiteralTracked(self: *Expander, out: *dependency.Builder, text: []const u8, prepared: bool, protect_literal_curly: bool, literal_state: *preprocess.ParsingLiteralState, effect_state: *page_effects_lib.LiteralState) anyerror!void {
+        self.observePageLiteral(text, effect_state);
         const a = self.runtime.allocator;
         if (self.poem_argument_depth == 0 and std.mem.indexOf(u8, text, poem_prefix) == null and std.mem.indexOf(u8, text, isbn_marker_prefix) == null and std.mem.indexOf(u8, text, generated_link.prefix) == null)
             return preprocess.appendParsingTextTrackedState(a, out, text, protect_literal_curly, literal_state);
@@ -1289,6 +1380,10 @@ pub const Expander = struct {
         return out.toOwnedSlice(a);
     }
     fn expandPoemNode(self: *Expander, source: []const u8, region: preprocess.PoemRegion, params: *rt.Table, title: []const u8, depth: usize, trusted_items: bool) anyerror![]const u8 {
+        // This executed extension becomes an opaque Poem token. A discarded
+        // preprocess return cannot be recovered by scanning final output, so
+        // it cannot carry the optional complete page-effects receipt.
+        self.rejectPageEffects();
         const opening = if (region.self_closing) try std.fmt.allocPrint(self.runtime.allocator, "{s}>", .{source[region.open .. region.opening_end - 2]}) else source[region.open..region.opening_end];
         return self.expandPoemPrepared(opening, if (region.self_closing) "" else source[region.opening_end..region.inner_end], "</poem>", params, title, depth, trusted_items);
     }
@@ -1390,12 +1485,13 @@ pub const Expander = struct {
         var expansion_scan: preprocess.ExpansionScan = .{ .conversion_enabled = self.provider.language_conversion_enabled orelse false };
         const protect_literal_curly = preprocess.hasParsingBoundary(text);
         var literal_state: preprocess.ParsingLiteralState = .{};
+        var effect_state: page_effects_lib.LiteralState = .{};
         while (expansion_scan.next(text, pos, allow_poem)) |node| {
             const open = switch (node) {
                 .construct => |v| v.open,
                 .poem => |v| v.open,
             };
-            try self.appendPoemLiteralTracked(&out, text[pos..open], prepared, protect_literal_curly, &literal_state);
+            try self.appendPoemLiteralTracked(&out, text[pos..open], prepared, protect_literal_curly, &literal_state, &effect_state);
             literal_state.after_boundary = false;
             literal_state.last_source_byte = null;
             if (work_stats.current()) |work| work.constructs +|= 1;
@@ -1421,7 +1517,8 @@ pub const Expander = struct {
                 },
             }
         }
-        try self.appendPoemLiteralTracked(&out, text[pos..], prepared, protect_literal_curly, &literal_state);
+        try self.appendPoemLiteralTracked(&out, text[pos..], prepared, protect_literal_curly, &literal_state, &effect_state);
+        if (effect_state.ordinary_open) self.rejectPageEffects();
         // The closer must sit in this ordinary, copied suffix. A close consumed
         // by an active template construct cannot supply literal authority.
         if (code_close) |close| if (close >= pos) try markTranscludedCodeExampleClose(self.runtime.allocator, &out);
@@ -1526,6 +1623,7 @@ pub const Expander = struct {
         var expansion_scan: preprocess.ExpansionScan = .{ .conversion_enabled = self.provider.language_conversion_enabled orelse false };
         const protect_literal_curly = preprocess.hasParsingBoundary(text);
         var literal_state: preprocess.ParsingLiteralState = .{};
+        var effect_state: page_effects_lib.LiteralState = .{};
         while (expansion_scan.next(text, pos, true)) |node| {
             if (work_stats.current()) |work| work.constructs +|= 1;
             const open = switch (node) {
@@ -1535,7 +1633,7 @@ pub const Expander = struct {
             const literal = text[pos..open];
             try self.observePageOutput(literal);
             const literal_output_start = out.bytes.items.len;
-            try self.appendPoemLiteralTracked(&out, literal, false, protect_literal_curly, &literal_state);
+            try self.appendPoemLiteralTracked(&out, literal, false, protect_literal_curly, &literal_state, &effect_state);
             if (self.poem_argument_depth == 0)
                 try preprocess.markRootSingletonLiteralCurly(self.runtime.allocator, &out, text, pos, open, literal_output_start);
             literal_state.after_boundary = false;
@@ -1581,9 +1679,10 @@ pub const Expander = struct {
         }
         try self.observePageOutput(text[pos..]);
         const tail_output_start = out.bytes.items.len;
-        try self.appendPoemLiteralTracked(&out, text[pos..], false, protect_literal_curly, &literal_state);
+        try self.appendPoemLiteralTracked(&out, text[pos..], false, protect_literal_curly, &literal_state, &effect_state);
         if (self.poem_argument_depth == 0)
             try preprocess.markRootSingletonLiteralCurly(self.runtime.allocator, &out, text, pos, text.len, tail_output_start);
+        if (effect_state.ordinary_open) self.rejectPageEffects();
         return out.finish(self.runtime.allocator);
     }
 
@@ -3391,6 +3490,7 @@ pub const Expander = struct {
     }
 
     fn expandTagParserTracked(self: *Expander, raw_tag: []const u8, raw_args: []const []const u8, params: *rt.Table, host_title: []const u8, depth: usize) anyerror!dependency.Text {
+        errdefer self.rejectPageEffects();
         var provenance: NativeSerializationProvenance = .{
             .conversion_enabled = self.provider.language_conversion_enabled orelse false,
             .known = std.ascii.eqlIgnoreCase(std.mem.trim(u8, raw_tag, " \t\r\n\x00\x0b"), "references"),
@@ -4185,15 +4285,21 @@ pub const Expander = struct {
     // CoreParserFunctions::tagObj emits an ordinary tag when no extension hook
     // owns its name. Keep this path distinct from registered extension effects.
     fn serializeOrdinaryTag(self: *Expander, raw_name: []const u8, content: ?Value, attrs: ?*rt.Table) ![]const u8 {
+        errdefer self.rejectPageEffects();
         const raw = std.mem.trim(u8, try text_lib.killMarkersAlloc(self.runtime.allocator, raw_name), " \t\r\n\x00\x0b");
         if (raw.len == 0 or !std.ascii.isAlphabetic(raw[0]) or canonicalExtensionTag(raw) != null) return error.UnsupportedExtensionTag;
         for (raw[1..]) |ch| if (!std.ascii.isAlphanumeric(ch) and ch != ':' and ch != '-' and ch != '_') return error.UnsupportedExtensionTag;
+        self.page_effect_metadata = null;
+        self.page_effects_collector.ordinary(raw);
+        if (self.page_effects_collector.unknown) rt.markLoadDataEffect();
         const name = try self.runtime.allocator.dupe(u8, raw);
         for (name) |*ch| ch.* = std.ascii.toLower(ch.*);
         return self.serializeTagElement(name, content, attrs, true);
     }
 
     fn serializeExtension(self: *Expander, name: []const u8, content: ?Value, attrs: ?*rt.Table) ![]const u8 {
+        errdefer self.rejectPageEffects();
+        self.observePageExtension(name, attrs);
         if (std.mem.eql(u8, name, "phonos")) return self.renderPhonos(content, attrs);
         return self.serializeTagElement(name, content, attrs, false);
     }
@@ -4352,6 +4458,7 @@ pub const Expander = struct {
 
     fn hostFramePreprocess(raw: ?*anyopaque, a: std.mem.Allocator, source: []const u8, title: []const u8, args: *rt.Table) anyerror![]const u8 {
         const self: *Expander = @ptrCast(@alignCast(raw orelse return error.MissingWikitextHost));
+        errdefer self.rejectPageEffects();
         self.invalidateNativeDependencyArguments();
         const stripped = try preprocess.stripDecodedCommentsForParsingPreservingPoem(a, source);
         defer a.free(stripped);
@@ -4365,24 +4472,31 @@ pub const Expander = struct {
             return std.fmt.allocPrint(a, "\x7f'\"`UNIQ--h-{d}--QINU`\"'\x7f", .{number});
         }
         const expanded = try self.expandWikitext(stripped, args, title, 0);
+        self.observePreprocessResult(expanded);
         return self.stripPreprocessedHiero(a, expanded);
     }
 
     fn hostFrameExpandTemplate(raw: ?*anyopaque, _: std.mem.Allocator, title: []const u8, args: *rt.Table) anyerror![]const u8 {
         const self: *Expander = @ptrCast(@alignCast(raw orelse return error.MissingWikitextHost));
+        errdefer self.rejectPageEffects();
         self.invalidateNativeDependencyArguments();
-        return self.expandTemplateByName(title, args, null, 0, .lua_error);
+        const expanded = try self.expandTemplateByName(title, args, null, 0, .lua_error);
+        self.observePreprocessResult(expanded);
+        return expanded;
     }
 
     fn hostFrameExtensionTag(raw: ?*anyopaque, a: std.mem.Allocator, name: []const u8, content: ?Value, attrs: ?*rt.Table) anyerror![]const u8 {
         const self: *Expander = @ptrCast(@alignCast(raw orelse return error.MissingWikitextHost));
+        errdefer self.rejectPageEffects();
         self.invalidateNativeDependencyArguments();
         const tag = std.mem.trim(u8, try text_lib.killMarkersAlloc(a, name), " \t\r\n\x00\x0b");
         if (std.ascii.eqlIgnoreCase(tag, "poem")) {
+            self.observePageExtension("poem", attrs);
             const params = try self.runtime.newTable();
             return self.expandPoemValue(if (content) |value| try self.scalarText(value) else "", attrs, params, self.host.current_title, self.poem_hook_depth + 1);
         }
         if (std.ascii.eqlIgnoreCase(tag, "nowiki")) {
+            self.observePageExtension("nowiki", attrs);
             if (self.poem_argument_depth != 0) return self.poemLiteral("nowiki", if (content) |value| try self.scalarText(value) else "");
             const text = if (content) |value| if (value == .string) value.string else "" else "";
             const id = self.strip_counter;
@@ -4503,6 +4617,7 @@ pub const Expander = struct {
     }
 
     fn frameParserTag(self: *Expander, raw: ?*anyopaque, a: std.mem.Allocator, name: []const u8, args: *rt.Table) ![]const u8 {
+        errdefer self.rejectPageEffects();
         const plain = std.ascii.eqlIgnoreCase(name, "#tag");
         const prefixed = std.ascii.startsWithIgnoreCase(name, "#tag:");
         if (!plain and !prefixed) return error.UnsupportedParserFunction;
@@ -4992,6 +5107,7 @@ pub const Expander = struct {
 
     fn hostFrameParserFunction(raw: ?*anyopaque, a: std.mem.Allocator, raw_name: []const u8, args: *rt.Table) anyerror![]const u8 {
         const self: *Expander = @ptrCast(@alignCast(raw orelse return error.MissingWikitextHost));
+        errdefer self.rejectPageEffects();
         self.invalidateNativeDependencyArguments();
         if (std.mem.indexOfScalar(u8, raw_name, 58)) |colon| {
             const head = raw_name[0..colon];
@@ -11645,6 +11761,170 @@ test "captured RAW aliases remain a separate bounded transclusion domain" {
         try std.testing.expectError(error.InvalidMagicWordsSnapshot, Registry.init(std.testing.allocator, base ++ bad, "mlwiktionary", "20261001", "ml"));
 }
 
+const PageEffectsTest = struct {
+    const current: host_api.CurrentPage = .{ .namespace = 0, .metadata = .{
+        .page_id = 742, .revision_id = 4257826, .revision_timestamp = "2026-01-01T00:00:00Z",
+        .revision_user = "Fixture", .content_model = "wikitext",
+    } };
+
+    fn init(a: std.mem.Allocator, runtime: *rt.Context) !Expander {
+        _ = a;
+        try rt.bindGlobalTable(runtime, null, 0);
+        try stdlib.install(runtime);
+        try installTestHost(runtime, 18, 23);
+        return .{ .runtime = runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23,
+            .provider = .{ .get = TestProvider.get, .exists = TestProvider.exists } };
+    }
+
+    fn begin(expander: *Expander, generation: u64, source: []const u8) void {
+        expander.page_effect_generation = generation;
+        expander.beginPage("casa", source, 1_791_731_560);
+        expander.host.current_page = current;
+    }
+
+    fn parsed(a: std.mem.Allocator, expander: *Expander) !std.json.Parsed(std.json.Value) {
+        return std.json.parseFromSlice(std.json.Value, a,
+            expander.page_effect_metadata orelse return error.TestUnexpectedResult, .{});
+    }
+
+    fn hasStyle(record: std.json.Value, src: []const u8, origin: []const u8) bool {
+        for (record.object.get("template_styles").?.array.items) |item| {
+            if (std.mem.eql(u8, item.object.get("src").?.string, src) and
+                std.mem.eql(u8, item.object.get("origin").?.string, origin)) return true;
+        }
+        return false;
+    }
+};
+
+test "page effects opt-in binds identity generation and source hashes and never reuses absence" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var runtime = try rt.Context.init(a, 24);
+    defer runtime.deinit();
+    var expander = try PageEffectsTest.init(a, &runtime);
+    expander.attach();
+    const source = "<i>word</i>";
+    expander.page_effect_generation = 17;
+    const output = try expander.expandStoredFragment("casa", source, 1_791_731_560, PageEffectsTest.current);
+    try std.testing.expectEqualStrings(source, output);
+    const record = try PageEffectsTest.parsed(a, &expander);
+    defer record.deinit();
+    try std.testing.expectEqualStrings("wikidict.page-effects.v1", record.value.object.get("schema").?.string);
+    try std.testing.expectEqual(@as(i64, 17), record.value.object.get("generation").?.integer);
+    const identity = record.value.object.get("identity").?.object;
+    try std.testing.expectEqual(@as(i64, 742), identity.get("page_id").?.integer);
+    try std.testing.expectEqual(@as(i64, 4257826), identity.get("revision_id").?.integer);
+    try std.testing.expectEqualStrings("casa", identity.get("title").?.string);
+    var h: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(source, &h, .{});
+    const hex = std.fmt.bytesToHex(h, .lower);
+    try std.testing.expectEqualStrings(&hex, record.value.object.get("source_sha256").?.string);
+    try std.testing.expectEqualStrings(&hex, record.value.object.get("expanded_sha256").?.string);
+    try std.testing.expect(record.value.object.get("placement").? == .null);
+    try std.testing.expect(expander.page_effect_generation == null);
+    _ = try expander.expandStoredFragment("next", "other", 1_791_731_560, PageEffectsTest.current);
+    try std.testing.expect(expander.page_effect_metadata == null);
+    expander.page_effect_generation = 18;
+    _ = try expander.expandStoredFragment("casa", "other", 1_791_731_560, null);
+    try std.testing.expect(expander.page_effect_metadata == null);
+}
+
+test "page effects retain discarded extension operands in page storage without granting placement" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var runtime = try rt.Context.init(a, 24);
+    defer runtime.deinit();
+    var expander = try PageEffectsTest.init(a, &runtime);
+    expander.attach();
+    PageEffectsTest.begin(&expander, 19, "source");
+    const attrs = try runtime.newTable();
+    var src = "Mbox/common.css".*;
+    try attrs.rawSet(a, .{ .string = "src" }, .{ .string = &src });
+    var effect = false;
+    const prior = rt.beginLoadDataEffectProbe(&effect);
+    defer rt.endLoadDataEffectProbe(prior);
+    _ = try Expander.hostFrameExtensionTag(&expander, a, "templatestyles", .{ .string = "" }, attrs);
+    try std.testing.expect(effect);
+    src[0] = 'X';
+    expander.finishPageEffects("no visible style");
+    const record = try PageEffectsTest.parsed(a, &expander);
+    defer record.deinit();
+    try std.testing.expect(PageEffectsTest.hasStyle(record.value, "Mbox/common.css", "extension_call"));
+    try std.testing.expect(!PageEffectsTest.hasStyle(record.value, "Mbox/common.css", "expanded_output"));
+    try std.testing.expect(record.value.object.get("placement").? == .null);
+    _ = try Expander.hostFrameExtensionTag(&expander, a, "gallery", .{ .string = "" }, null);
+    try std.testing.expect(expander.page_effect_metadata == null);
+    expander.finishPageEffects("discarded gallery");
+    try std.testing.expect(expander.page_effect_metadata == null);
+    PageEffectsTest.begin(&expander, 20, "fresh");
+    expander.finishPageEffects("fresh");
+    try std.testing.expect(expander.page_effect_metadata != null);
+}
+
+test "page effects protected frame errors stay unknown and discarded preprocessing is observed" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var runtime = try rt.Context.init(a, 24);
+    defer runtime.deinit();
+    var expander = try PageEffectsTest.init(a, &runtime);
+    expander.attach();
+    PageEffectsTest.begin(&expander, 21, "source");
+    const Probe = struct {
+        fn call(raw: ?*anyopaque, ctx: *rt.Context, _: []const Value) ![]const Value {
+            _ = try Expander.hostFrameExtensionTag(raw, ctx.allocator, "bad name", .{ .string = "" }, null);
+            return error.TestUnexpectedResult;
+        }
+    };
+    const callback = try runtime.newNative(&expander, Probe.call);
+    const protected = try runtime.callValue(runtime.getGlobal(16), &.{callback});
+    defer rt.freeResults(protected);
+    try std.testing.expect(protected.len >= 1 and protected[0] == .boolean and !protected[0].boolean);
+    expander.finishPageEffects("Lua caught it");
+    try std.testing.expect(expander.page_effect_metadata == null);
+    PageEffectsTest.begin(&expander, 22, "source");
+    const args = try runtime.newTable();
+    _ = try Expander.hostFramePreprocess(&expander, a, "<templatestyles src=\"Mbox/common.css\" />", "casa", args);
+    expander.finishPageEffects("discarded preprocessing");
+    const record = try PageEffectsTest.parsed(a, &expander);
+    defer record.deinit();
+    try std.testing.expect(PageEffectsTest.hasStyle(record.value, "Mbox/common.css", "literal_input"));
+    try std.testing.expect(PageEffectsTest.hasStyle(record.value, "Mbox/common.css", "preprocess_result"));
+    PageEffectsTest.begin(&expander, 23, "source");
+    _ = try Expander.hostFramePreprocess(&expander, a, "<gallery></gallery>", "casa", args);
+    expander.finishPageEffects("discarded gallery preprocessing");
+    try std.testing.expect(expander.page_effect_metadata == null);
+}
+
+test "page effects parser tag and literal dispatch retain TS but reject unsupported operands" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var runtime = try rt.Context.init(a, 24);
+    defer runtime.deinit();
+    var expander = try PageEffectsTest.init(a, &runtime);
+    expander.attach();
+    expander.page_effect_generation = 24;
+    _ = try expander.expandStoredFragment("casa", "{{#tag:templatestyles||src=Mbox/common.css}}", 1_791_731_560, PageEffectsTest.current);
+    const record = try PageEffectsTest.parsed(a, &expander);
+    defer record.deinit();
+    try std.testing.expect(PageEffectsTest.hasStyle(record.value, "Mbox/common.css", "extension_call"));
+    try std.testing.expect(PageEffectsTest.hasStyle(record.value, "Mbox/common.css", "expanded_output"));
+    for ([_][]const u8{
+        "<templatestyles src=\"Mbox/common.css\" wrapper=\".x\" />",
+        "<templatestyles src=\"Mbox/common.css\" src=\"Ambox/styles.css\" />",
+        "<templatestyles src=\"Mbox&#47;common.css\" />",
+        "<gallery></gallery>",
+    }) |source| {
+        expander.page_effect_generation = 25;
+        _ = try expander.expandStoredFragment("casa", source, 1_791_731_560, PageEffectsTest.current);
+        try std.testing.expect(expander.page_effect_metadata == null);
+    }
+    _ = page_effects_lib;
+}
+
 
 test "frame extensionTag serializes a numeric-looking named attribute" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
@@ -11664,4 +11944,102 @@ test "frame extensionTag serializes a numeric-looking named attribute" {
     try attrs.rawSet(runtime.allocator, .{ .string = "class" }, .{ .string = "tag" });
     const result = try runtime.callValueFirst(tag, &.{ frame, .{ .string = "span" }, .{ .string = "body" }, .{ .table = attrs } });
     try std.testing.expectEqualStrings("<span 1=\"v&amp;x\" class=\"tag\">body</span>", result.string);
+}
+
+
+test "page effects discarded literal poem cannot claim absence and keeps branch and output semantics" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var runtime = try rt.Context.init(a, 24);
+    defer runtime.deinit();
+    var expander = try PageEffectsTest.init(a, &runtime);
+    expander.attach();
+    const source = "<poem>x</poem>";
+
+    // Exercise the actual frame API, then discard its opaque returned token.
+    PageEffectsTest.begin(&expander, 71, "source");
+    const frame = try frame_lib.makeFrame(&runtime, "Module:Probe", &.{}, null);
+    const preprocess_call = try runtime.getIndex(frame, .{ .string = "preprocess" });
+    const returned = try runtime.callValueFirst(preprocess_call, &.{ frame, .{ .string = source } });
+    try std.testing.expect(returned == .string and std.mem.startsWith(u8, returned.string, poem_prefix));
+    expander.finishPageEffects("ok");
+    std.debug.print("discarded-literal-poem: receipt_present={any} opaque_return=true\n", .{expander.page_effect_metadata != null});
+    try std.testing.expect(expander.page_effect_metadata == null);
+
+    // Observation does not alter visible output or native Poem metadata.
+    const legacy = try expander.expandStoredFragment("casa", source, 1_791_731_560, PageEffectsTest.current);
+    const legacy_poem = try a.dupe(u8, expander.poem_metadata orelse return error.TestUnexpectedResult);
+    expander.enablePageEffects(72);
+    const observed = try expander.expandStoredFragment("casa", source, 1_791_731_560, PageEffectsTest.current);
+    try std.testing.expectEqualStrings(legacy, observed);
+    try std.testing.expectEqualStrings(legacy_poem, expander.poem_metadata orelse return error.TestUnexpectedResult);
+    try std.testing.expect(expander.page_effect_metadata == null);
+
+    // Only an evaluated node is rejected; an unselected branch is not scanned.
+    expander.enablePageEffects(73);
+    const unselected = try expander.expandStoredFragment("casa", "{{#if:|<poem>x</poem>|ok}}", 1_791_731_560, PageEffectsTest.current);
+    try std.testing.expectEqualStrings("ok", unselected);
+    const absent = try PageEffectsTest.parsed(a, &expander);
+    defer absent.deinit();
+    try std.testing.expectEqual(@as(i64, 0), absent.value.object.get("operation_count").?.integer);
+    try std.testing.expectEqual(@as(usize, 0), absent.value.object.get("observed_extensions").?.array.items.len);
+    expander.enablePageEffects(74);
+    _ = try expander.expandStoredFragment("casa", "{{#if:1|<poem>x</poem>|ok}}", 1_791_731_560, PageEffectsTest.current);
+    try std.testing.expect(expander.page_effect_metadata == null);
+
+    // A fresh page may prove absence; protocol5 remains unopted-in afterward.
+    expander.enablePageEffects(75);
+    try std.testing.expectEqualStrings("ok", try expander.expandStoredFragment("casa", "ok", 1_791_731_560, PageEffectsTest.current));
+    const fresh = try PageEffectsTest.parsed(a, &expander);
+    defer fresh.deinit();
+    try std.testing.expectEqual(@as(i64, 75), fresh.value.object.get("generation").?.integer);
+    try std.testing.expectEqual(@as(i64, 0), fresh.value.object.get("operation_count").?.integer);
+    _ = try expander.expandStoredFragment("casa", "ok", 1_791_731_560, PageEffectsTest.current);
+    try std.testing.expect(expander.page_effect_metadata == null);
+    std.debug.print("literal-poem-regression: output_equal=true metadata_equal=true unselected_absent=true selected_refused=true reset=true legacy5=true\n", .{});
+}
+
+test "page effects parsing boundary real Expander preserves output optin and template semantics" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var runtime = try rt.Context.init(a, 24);
+    defer runtime.deinit();
+    var expander = try PageEffectsTest.init(a, &runtime);
+    expander.attach();
+    const cases = [_]struct { source: []const u8, output: []const u8 }{
+        .{ .source = "A<noinclude/>B", .output = "AB" },
+        .{ .source = "A<includeonly>hidden</includeonly>B", .output = "AB" },
+        .{ .source = "<onlyinclude>AB</onlyinclude>", .output = "AB" },
+        .{ .source = "{{Only}}", .output = "ABCD" },
+    };
+    for (cases, 0..) |case, index| {
+        expander.enablePageEffects(72 + @as(u64, @intCast(index)));
+        const output = try expander.expandStoredFragment("casa", case.source, 1_791_731_560, PageEffectsTest.current);
+        try std.testing.expectEqualStrings(case.output, output);
+        std.debug.print("boundary-expander: case={d} receipt_present={any} output_equal=true\n", .{ index, expander.page_effect_metadata != null });
+        const record = try PageEffectsTest.parsed(a, &expander);
+        defer record.deinit();
+        try std.testing.expectEqual(@as(i64, @intCast(72 + index)), record.value.object.get("generation").?.integer);
+        try std.testing.expectEqual(@as(i64, 0), record.value.object.get("operation_count").?.integer);
+        try std.testing.expectEqual(@as(usize, 0), record.value.object.get("observed_extensions").?.array.items.len);
+        // Legacy opt-out gets identical bytes, with no reused page receipt.
+        const legacy = try expander.expandStoredFragment("casa", case.source, 1_791_731_560, PageEffectsTest.current);
+        try std.testing.expectEqualStrings(output, legacy);
+        try std.testing.expect(expander.page_effect_metadata == null);
+    }
+    expander.enablePageEffects(80);
+    _ = try expander.expandStoredFragment("casa", "<nowiki><noinclude/></nowiki>", 1_791_731_560, PageEffectsTest.current);
+    try std.testing.expect(expander.page_effect_metadata != null);
+    for ([_][]const u8{ "<gallery>x</gallery>", "<poem>x</poem>" }) |unknown| {
+        expander.enablePageEffects(81);
+        _ = try expander.expandStoredFragment("casa", unknown, 1_791_731_560, PageEffectsTest.current);
+        try std.testing.expect(expander.page_effect_metadata == null);
+    }
+    expander.enablePageEffects(82);
+    const fresh = try expander.expandStoredFragment("casa", "A<noinclude/>B", 1_791_731_560, PageEffectsTest.current);
+    try std.testing.expectEqualStrings("AB", fresh);
+    try std.testing.expect(expander.page_effect_metadata != null);
+    std.debug.print("boundary-expander: inclusion-template-output-legacy-reset-opaque-poem-negatives=pass\n", .{});
 }
