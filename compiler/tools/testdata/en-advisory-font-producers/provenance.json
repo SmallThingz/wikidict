@@ -1,0 +1,160 @@
+{
+  "schema": "wikidict-retained-source-fixture-v1",
+  "purpose": "Complete retained EN GET and ordered CSS for the four advisory font producer diagnostic.",
+  "selector": "blob_build.test.EN retained full article diagnoses all four advisory font producers",
+  "partition": "tools_observations",
+  "identity": {
+    "wiki": "enwiktionary",
+    "page_id": 10500003,
+    "revision_id": 87816728,
+    "title": "แมวเสือ",
+    "skin": "vector-2022"
+  },
+  "capture_date": "2026-11-24",
+  "payload_policy": "Exact retained gzip bytes; no refetch, recompression, HTML/CSS edit or source substitution.",
+  "namespace_fixture": {
+    "path": "compiler/tools/testdata/en-empty-element271/namespace-registry.tsv",
+    "bytes": 3611,
+    "sha256": "55df778e3d40f6acf08e10b8246bd28fab792d48ac619936202db15c29db0f08"
+  },
+  "ordered_sources": [
+    "request-03.response.gz",
+    "request-04.response.gz",
+    "request-05.response.gz",
+    "request-02.response.gz decoded HTML byte range [40757,41661)"
+  ],
+  "captures": [
+    {
+      "file": "request-02.response.gz",
+      "compressed_bytes": 13263,
+      "compressed_sha256": "9b8e972197866d9e6bc41079f05911675435e3c33360a69ae1c19ffa9baff190",
+      "decoded_bytes": 62789,
+      "decoded_sha256": "827a6a5fa184151a6010acd37c0db86f59ad0a1140635060d378ff5e090255f9",
+      "request_sha256": "51db718c453e9f68c52b6cecc5799fc0f251bad1c2e173be90c46928268c2c5c",
+      "receipt_sha256": "c172f18b0b3232e583cbe54660af6e265c06659330129be0e31da931565c9be3",
+      "request": {
+        "accept": "text/html",
+        "method": "GET",
+        "retry": false,
+        "url": "https://en.wiktionary.org/w/index.php?title=%E0%B9%81%E0%B8%A1%E0%B8%A7%E0%B9%80%E0%B8%AA%E0%B8%B7%E0%B8%AD&oldid=87816728&useskin=vector-2022"
+      },
+      "receipt": {
+        "accepted": true,
+        "ended_utc": "2026-11-24T04:44:53.945678+00:00",
+        "final_url": "https://en.wiktionary.org/w/index.php?title=%E0%B9%81%E0%B8%A1%E0%B8%A7%E0%B9%80%E0%B8%AA%E0%B8%B7%E0%B8%AD&oldid=87816728&useskin=vector-2022",
+        "headers": {
+          "content-type": "text/html; charset=UTF-8",
+          "date": "Tue, 24 Nov 2026 04:44:52 GMT",
+          "last-modified": "Sun, 15 Nov 2026 21:46:53 GMT"
+        },
+        "request": "request-02.json",
+        "response": "request-02.response",
+        "response_bytes": 62789,
+        "response_sha256": "827a6a5fa184151a6010acd37c0db86f59ad0a1140635060d378ff5e090255f9",
+        "started_utc": "2026-11-24T04:44:52.415155+00:00",
+        "status": 200
+      }
+    },
+    {
+      "file": "request-03.response.gz",
+      "compressed_bytes": 26652,
+      "compressed_sha256": "1799a5c77c3ec78946292fb1ee99352456d1267d37ed944678a737dad31ad6aa",
+      "decoded_bytes": 221261,
+      "decoded_sha256": "80b47b515ceb7d7d4720bee72cce1917e738a353a5bb6eebca69a281b33a64c6",
+      "request_sha256": "85c6c533bcd44ce4c6143fc2e4d6ec8570c1fd9f5319567895e5365bf9928491",
+      "receipt_sha256": "bd795ec2725d7e23f70b48804c23abc7ae547a467b1a303d9378ea8b11f99551",
+      "request": {
+        "accept": "text/css",
+        "method": "GET",
+        "retry": false,
+        "url": "https://en.wiktionary.org/w/load.php?lang=en&modules=ext.uls.interlanguage%7Cext.visualEditor.desktopArticleTarget.noscript%7Cext.wikimediamessages.styles%7Cmediawiki.action.styles%7Cmediawiki.codex.messagebox.styles%7Cmediawiki.interface.helpers.linker.styles%7Cmediawiki.interface.helpers.styles%7Cmediawiki.skins.legacy%7Cskins.vector.icons%2Cstyles%7Cskins.vector.search.codex.styles&only=styles&skin=vector-2022"
+      },
+      "receipt": {
+        "accepted": true,
+        "ended_utc": "2026-11-24T04:45:45.085243+00:00",
+        "final_url": "https://en.wiktionary.org/w/load.php?lang=en&modules=ext.uls.interlanguage%7Cext.visualEditor.desktopArticleTarget.noscript%7Cext.wikimediamessages.styles%7Cmediawiki.action.styles%7Cmediawiki.codex.messagebox.styles%7Cmediawiki.interface.helpers.linker.styles%7Cmediawiki.interface.helpers.styles%7Cmediawiki.skins.legacy%7Cskins.vector.icons%2Cstyles%7Cskins.vector.search.codex.styles&only=styles&skin=vector-2022",
+        "headers": {
+          "content-type": "text/css; charset=utf-8",
+          "date": "Tue, 24 Nov 2026 04:45:44 GMT",
+          "etag": "W/\"1ukph\""
+        },
+        "request": "request-03.json",
+        "response": "request-03.response",
+        "response_bytes": 221261,
+        "response_sha256": "80b47b515ceb7d7d4720bee72cce1917e738a353a5bb6eebca69a281b33a64c6",
+        "started_utc": "2026-11-24T04:45:43.786909+00:00",
+        "status": 200
+      }
+    },
+    {
+      "file": "request-04.response.gz",
+      "compressed_bytes": 19133,
+      "compressed_sha256": "628285b8c99db38065791e467e39eeb330851e068ced5d0a07a4173ee8364338",
+      "decoded_bytes": 95128,
+      "decoded_sha256": "1427eef774f4b0a9feee6e4ea8664756047be77324d4867b66e06e2f7baf3137",
+      "request_sha256": "4259b871fc15f9d6dd912ecec7de06163d17354292508833487fc70d774d4b06",
+      "receipt_sha256": "62ff67e62485b85f0b686043007a048aae4a0c800e3309f92f3d92242361f15c",
+      "request": {
+        "accept": "text/css",
+        "method": "GET",
+        "retry": false,
+        "url": "https://en.wiktionary.org/w/load.php?lang=en&modules=ext.gadget.InflectionTable%2CLanguagesAndScripts%2CPalette%2CSite%2Creflist&only=styles&skin=vector-2022"
+      },
+      "receipt": {
+        "accepted": true,
+        "ended_utc": "2026-11-24T04:45:46.810253+00:00",
+        "final_url": "https://en.wiktionary.org/w/load.php?lang=en&modules=ext.gadget.InflectionTable%2CLanguagesAndScripts%2CPalette%2CSite%2Creflist&only=styles&skin=vector-2022",
+        "headers": {
+          "content-length": "95128",
+          "content-type": "text/css; charset=utf-8",
+          "date": "Tue, 24 Nov 2026 04:41:10 GMT",
+          "etag": "W/\"17ynu\""
+        },
+        "request": "request-04.json",
+        "response": "request-04.response",
+        "response_bytes": 95128,
+        "response_sha256": "1427eef774f4b0a9feee6e4ea8664756047be77324d4867b66e06e2f7baf3137",
+        "started_utc": "2026-11-24T04:45:46.095933+00:00",
+        "status": 200
+      }
+    },
+    {
+      "file": "request-05.response.gz",
+      "compressed_bytes": 289,
+      "compressed_sha256": "fe0ab338e2d1ebfd94c827ac0ddf5eaa0685a20ab01a1247541a5b2051d58b90",
+      "decoded_bytes": 438,
+      "decoded_sha256": "d9d64a19f8dafd11a07f8c925ab4543b2ac9ed32c7080b60c3c0f036f1ab060e",
+      "request_sha256": "aa87ec1ecfcb9db1111fb38c375634d7a680269d0c29538ed72f38593cc51b1e",
+      "receipt_sha256": "b0e36baebd692cabbe6438322fb4fc92ff158917fbf4c109960a93de805afff9",
+      "request": {
+        "accept": "text/css",
+        "method": "GET",
+        "retry": false,
+        "url": "https://en.wiktionary.org/w/load.php?lang=en&modules=site.styles&only=styles&skin=vector-2022"
+      },
+      "receipt": {
+        "accepted": true,
+        "ended_utc": "2026-11-24T04:45:48.373401+00:00",
+        "final_url": "https://en.wiktionary.org/w/load.php?lang=en&modules=site.styles&only=styles&skin=vector-2022",
+        "headers": {
+          "content-length": "438",
+          "content-type": "text/css; charset=utf-8",
+          "date": "Tue, 24 Nov 2026 04:40:54 GMT",
+          "etag": "W/\"1xi98\""
+        },
+        "request": "request-05.json",
+        "response": "request-05.response",
+        "response_bytes": 438,
+        "response_sha256": "d9d64a19f8dafd11a07f8c925ab4543b2ac9ed32c7080b60c3c0f036f1ab060e",
+        "started_utc": "2026-11-24T04:45:47.820560+00:00",
+        "status": 200
+      }
+    }
+  ],
+  "scope_limits": [
+    "The test exercises retained GET physical-owner font producers; it does not invoke ordinary Writer.",
+    "Four owners and sans_serif are assertions to qualify, not a method PASS granted by this fixture package.",
+    "No paired raw/expanded/Book proof, current-server behavior, whole-page fidelity or full-edition grant.",
+    "Source changes are path relocation and test partition registration only; all original checks remain."
+  ]
+}

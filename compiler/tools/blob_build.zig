@@ -74775,3 +74775,76 @@ test "IT capture input loader ordinary slot emits retained cediglia" {
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = retained ++ "/cediglia.json", .data = complete });
     std.debug.print("IT_CEDIGLIA_INPUT_LOADER_STORED bytes={d} sections={d} content_index={d} full_source_bytes={d}\n", .{bytes.len, entry.sections.len, policy.content_index, source.len});
 }
+
+// Exact dated GET/CSS producer diagnostic; no ordinary Writer or paired-source grant.
+test "EN retained full article diagnoses all four advisory font producers" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const P = encoder.table_style_profile;
+    const Read = struct {
+        fn bytes(allocator: std.mem.Allocator, path: []const u8, expected: []const u8) ![]const u8 {
+            const data = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, path, allocator, .limited(1024 * 1024));
+            try std.testing.expectEqualStrings(expected, try auditHash(allocator, data));
+            return data;
+        }
+        fn gzip(allocator: std.mem.Allocator, path: []const u8, compressed: []const u8, decoded: []const u8) ![]const u8 {
+            const data = try bytes(allocator, path, compressed);
+            var input: std.Io.Reader = .fixed(data);
+            var inflater: std.compress.flate.Decompress = .init(&input, .gzip, &.{});
+            const plain = try inflater.reader.allocRemaining(allocator, .limited(1024 * 1024));
+            try std.testing.expect(inflater.err == null and inflater.state == .end);
+            try std.testing.expectEqualStrings(decoded, try auditHash(allocator, plain));
+            return plain;
+        }
+        fn attribute(node: P.ObservedStyleNode, name: []const u8) ?[]const u8 {
+            for (node.attributes) |item| if (std.mem.eql(u8, item.name, name)) return item.value;
+            return null;
+        }
+    };
+    var checkpoint: []const u8 = "retained inputs";
+    errdefer std.debug.print("EN_PAGE_FONT checkpoint={s} ordinary_writer=false whole=false\n", .{checkpoint});
+    const html = try Read.gzip(a, "compiler/tools/testdata/en-advisory-font-producers/request-02.response.gz", "9b8e972197866d9e6bc41079f05911675435e3c33360a69ae1c19ffa9baff190", "827a6a5fa184151a6010acd37c0db86f59ad0a1140635060d378ff5e090255f9");
+    const registry = try Read.bytes(a, "compiler/tools/testdata/en-empty-element271/namespace-registry.tsv",
+        "55df778e3d40f6acf08e10b8246bd28fab792d48ac619936202db15c29db0f08");
+    var ns = try namespace_registry.Registry.init(a, registry);
+    defer ns.deinit();
+    const url = "https://en.wiktionary.org/w/index.php?title=%E0%B9%81%E0%B8%A1%E0%B8%A7%E0%B9%80%E0%B8%AA%E0%B8%B7%E0%B8%AD&oldid=87816728&useskin=vector-2022";
+    const css3 = try Read.gzip(a, "compiler/tools/testdata/en-advisory-font-producers/request-03.response.gz", "1799a5c77c3ec78946292fb1ee99352456d1267d37ed944678a737dad31ad6aa", "80b47b515ceb7d7d4720bee72cce1917e738a353a5bb6eebca69a281b33a64c6");
+    const css4 = try Read.gzip(a, "compiler/tools/testdata/en-advisory-font-producers/request-04.response.gz", "628285b8c99db38065791e467e39eeb330851e068ced5d0a07a4173ee8364338", "1427eef774f4b0a9feee6e4ea8664756047be77324d4867b66e06e2f7baf3137");
+    const css5 = try Read.gzip(a, "compiler/tools/testdata/en-advisory-font-producers/request-05.response.gz", "fe0ab338e2d1ebfd94c827ac0ddf5eaa0685a20ab01a1247541a5b2051d58b90", "d9d64a19f8dafd11a07f8c925ab4543b2ac9ed32c7080b60c3c0f036f1ab060e");
+    const sheets = [_]P.Source{
+        .{ .css = css3, .base_url = "https://en.wiktionary.org/w/load.php?lang=en&modules=ext.uls.interlanguage%7Cext.visualEditor.desktopArticleTarget.noscript%7Cext.wikimediamessages.styles%7Cmediawiki.action.styles%7Cmediawiki.codex.messagebox.styles%7Cmediawiki.interface.helpers.linker.styles%7Cmediawiki.interface.helpers.styles%7Cmediawiki.skins.legacy%7Cskins.vector.icons%2Cstyles%7Cskins.vector.search.codex.styles&only=styles&skin=vector-2022" },
+        .{ .css = css4, .base_url = "https://en.wiktionary.org/w/load.php?lang=en&modules=ext.gadget.InflectionTable%2CLanguagesAndScripts%2CPalette%2CSite%2Creflist&only=styles&skin=vector-2022" },
+        .{ .css = css5, .base_url = "https://en.wiktionary.org/w/load.php?lang=en&modules=site.styles&only=styles&skin=vector-2022" },
+        .{ .css = html[40757..41661], .base_url = url ++ "#inline-style-0" },
+    };
+    checkpoint = "selected full article ancestors and exact ordered CSS";
+    const ancestors = try figure_page_observations.selectedArticleFontAncestors(a, &ns, html, url,
+        &sheets, 10500003, 87816728, "แมวเสือ");
+    const physical = (try figure_page_observations.selectedArticleStyleNodes(a, &ns, html, ancestors)) orelse
+        return error.MissingRetainedPhysicalGraph;
+    const schemes = (try figure_page_observations.selectedArticleSchemeNodes(a, html, ns.wiki, physical)) orelse
+        return error.MissingRetainedThemeScript;
+    const nodes = schemes.day;
+    var profile = try P.parseSourcesForTargetAlloc(a, &sheets, .screen);
+    defer profile.deinit();
+    checkpoint = "four physical circle producer queries";
+    var count: usize = 0;
+    for (nodes, 0..) |node, index| {
+        if (!std.mem.eql(u8, node.tag, "span")) continue;
+        const title = Read.attribute(node, "title") orelse continue;
+        if (!std.mem.eql(u8, title, "Vowel sign appearing in front of the initial consonant.")) continue;
+        const css = Read.attribute(node, "style") orelse return error.MissingRetainedCircleCss;
+        try std.testing.expectEqualStrings("border:1px dotted var(--wikt-palette-grey-9,gray);border-radius:50%;cursor:help", css);
+        const value = try P.observedHelpCircleBox(a, &profile, nodes, @intCast(ancestors.len - 1),
+            @intCast(index), "--wikt-palette-grey-9", false);
+        std.debug.print("EN_PAGE_FONT occurrence={d} node={d} producer_present={} family={s} ordinary_writer=false\n",
+            .{count, index, value != null, if (value) |v| if (v.geometry.font_family) |f| @tagName(f) else "UNKNOWN" else "UNKNOWN"});
+        const box = value orelse return error.RetainedCircleProducerRefused;
+        try std.testing.expect(box.geometry.font_family != null and box.geometry.font_family.? == .sans_serif);
+        count += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 4), count);
+    std.debug.print("EN_PAGE_FONT complete owners={d} ordinary_writer=false paired_proof=false whole=false\n", .{count});
+}

@@ -2070,6 +2070,7 @@ const tools_partitions = [_]ToolsPartition{
         "blob_build.test.worker ",
     } },
     .{ .group = .tools_observations, .filters = &.{
+        "blob_build.test.EN retained full article diagnoses all four advisory font producers",
         "figure_page_observations.test",
     } },
     .{ .group = .tools_support, .filters = &.{
@@ -2198,6 +2199,7 @@ test "Tools partitions cover exact decoded names and retain unnamed controls" {
     try std.testing.expectEqual(@as(usize, 0), try toolsPartitionForName("blob_build.test.normal Writer check"));
     try std.testing.expectEqual(@as(usize, 0), try toolsPartitionForName("blob_build.test.normal Writer check extra"));
     try std.testing.expectEqual(@as(usize, 3), try toolsPartitionForName("blob_build.test_0"));
+    try std.testing.expectEqual(@as(usize, 2), try toolsPartitionForName("blob_build.test.EN retained full article diagnoses all four advisory font producers"));
     try std.testing.expectError(error.UnmappedToolsTestName, toolsPartitionForName("blob_build.test.new-family check"));
 }
 
