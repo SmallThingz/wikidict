@@ -89,6 +89,10 @@ const PoemInfo = struct {
 
 /// Offsets refer to the formatted buffer, never to padded replacements of link text.
 pub const PoemProjection = struct {
+    // Set only by the interactive TUI; null keeps existing CLI/export projection.
+    disclosures: ?*DisclosureState = null,
+    // Borrowed state survives scratch projections; never allocate it from their arena.
+    disclosure_allocator: ?std.mem.Allocator = null,
     viewport_columns: ?usize = null,
     dark_theme: ?bool = null,
     remaining_container_cells: usize = 4 * 1024 * 1024,
@@ -1213,6 +1217,8 @@ const TableRenderContext = struct {
     table_calls: ?*usize = null,
 };
 const BlockDisplayContext = struct {
+    // Only the selected interactive leaf overrides its body; the block shell remains shared.
+    disclosure_body: ?DisclosureBodyProjection = null,
     table_render: TableRenderContext = .{},
     container_child_flow: bool = false,
     container_projected: bool = false,
@@ -1976,7 +1982,9 @@ fn listTableText(w: *std.Io.Writer, block: model.Block, color: bool, projection:
     var rendered: std.Io.Writer.Allocating = .init(a);
     var metadata: std.ArrayList(terminal.PoemLine) = .empty;
     var local: PoemProjection = .{ .frame = &rendered, .allocator = a, .lines = &metadata, .table_columns = available,
-        .geometry_report = if (projection) |parent| parent.geometry_report orelse parent.float_flow else null };
+        .geometry_report = if (projection) |parent| parent.geometry_report orelse parent.float_flow else null,
+        .disclosures = if (context.disclosure_body != null) (if (projection) |parent| parent.disclosures else null) else null,
+        .disclosure_allocator = if (context.disclosure_body != null) (if (projection) |parent| parent.disclosure_allocator else null) else null };
     var inherited_style = context.cell_style;
     if (context.content_depth != 0 or context.container_budget != null) {
         if (inherited_style == null) inherited_style = .{};
@@ -1989,7 +1997,10 @@ fn listTableText(w: *std.Io.Writer, block: model.Block, color: bool, projection:
         inherited_style.?.container_line_height = context.container_line_height;
         inherited_style.?.container_alignment = context.container_alignment;
     }
-    try tableTextWidthInContextIndented(&rendered.writer, block.table.?, color, if (projection != null) &local else null, available, context.table_depth, inherited_style, 0, context.table_render);
+    var control_index = if (local.disclosures) |state| state.visible.items.len else 0;
+    if (context.disclosure_body) |body| {
+        try disclosureTableText(&local, body.captions, block.table.?, color, body.path);
+    } else try tableTextWidthInContextIndented(&rendered.writer, block.table.?, color, if (projection != null) &local else null, available, context.table_depth, inherited_style, 0, context.table_render);
     // The marker belongs to this item, not to every table continuation or row.
     // Prefix the finished grid so captions, stacked cells and wrapped rows keep
     // their geometry, while projection offsets still refer to the final buffer.
@@ -2001,6 +2012,13 @@ fn listTableText(w: *std.Io.Writer, block: model.Block, color: bool, projection:
         if (source_offset == rendered.written().len) break;
         const leading = if (first or line.len != 0) prefix_cells else 0;
         if (projection) |parent| {
+            if (local.disclosures) |state| {
+                const destination = parent.frame.written().len + (if (first) indent + marker.written().len else leading);
+                while (control_index < state.visible.items.len and state.visible.items[control_index].offset <= source_offset + line.len) : (control_index += 1) {
+                    if (state.visible.items[control_index].offset < source_offset) return error.InvalidPresentation;
+                    state.visible.items[control_index].offset = destination + state.visible.items[control_index].offset - source_offset;
+                }
+            }
             while (metadata_index < metadata.items.len and metadata.items[metadata_index].offset < source_offset) metadata_index += 1;
             const has_point = metadata_index < metadata.items.len and metadata.items[metadata_index].offset == source_offset;
             var point: terminal.PoemLine = if (has_point) metadata.items[metadata_index] else .{ .offset = 0 };
@@ -2707,6 +2725,10 @@ fn blocksTextInContext(w: *std.Io.Writer, blocks: []const model.Block, color: bo
                 try listTableText(w, block, color, projection, context);
                 continue;
             }
+            if (context.disclosure_body) |body| {
+                try disclosureTableText(projection orelse return error.InvalidPresentation, body.captions, table, color, body.path);
+                continue;
+            }
             if (colorSwatchRgb(block)) |rgb| {
                 try w.splatByteAll(' ', @as(usize, @min(block.depth, 12)) * 2);
                 if (color) try w.print("[\x1b[48;2;{d};{d};{d}m  \x1b[0m] ", .{ rgb[0], rgb[1], rgb[2] });
@@ -2772,7 +2794,15 @@ fn blocksTextInContext(w: *std.Io.Writer, blocks: []const model.Block, color: bo
                 break;
             }
         };
-        if (try blockFlowText(w, block, color, projection, context)) {
+        if (context.disclosure_body) |body| {
+            const interactive = projection orelse return error.InvalidPresentation;
+            if (block.flow) |parts| {
+                try disclosureFlowText(interactive, body.captions, parts, color, body.path);
+            } else if (block.figure) |figure| {
+                if (block.spans.len != 0) return error.InvalidPresentation;
+                try disclosureFigureText(interactive, body.captions, figure, color, body.path);
+            } else return error.InvalidPresentation;
+        } else if (try blockFlowText(w, block, color, projection, context)) {
         } else if (comptime @hasField(model.Block, "figure")) {
             if (block.figure) |figure| {
                 if (block.spans.len != 0) return error.InvalidPresentation;
@@ -4187,7 +4217,11 @@ pub fn entryTextFoldedProjected(frame: *std.Io.Writer.Allocating, entry: model.E
             try w.writeByte('\n');
         }
         const first: usize = if (sectionHeadingCompanion(section) != null) 1 else 0;
-        for (section.blocks[first..]) |block| if (!closed or (meaning and block.kind == .definition)) try captions.emitBlocks(w, &.{block}, color, projection);
+        for (section.blocks[first..], first..) |block, block_index| if (!closed or (meaning and block.kind == .definition)) {
+            if (projection != null and projection.?.disclosures != null) {
+                try disclosureBlockText(projection.?, &captions, block, color, .{ .section = index, .block = block_index });
+            } else try captions.emitBlocks(w, &.{block}, color, projection);
+        };
     }
     if (projection) |p| if (p.float_flow) |flow| try flow.stop();
     if (preferences.details) {
@@ -11726,4 +11760,456 @@ test "terminal source image needs a compiled occurrence with the exact filename"
         .number = 1, .group_number = 1, .spans = &.{.{ .image = .{ .file = "needle.jpg", .width_px = 30 } }},
     }};
     try std.testing.expectEqual(MediaOccurrence.authored, try imageMediaOccurrence(entry, image.file));
+}
+
+
+// Interactive terminal projection only. Stored/JSON and the ordinary CLI keep
+// the complete immutable Entry. Every address is a typed route from its section;
+// neither text, reflow order nor shared slice addresses identify a control.
+pub const DisclosureState = @import("disclosure_state.zig").State;
+const DisclosurePath = @import("disclosure_state.zig").Path;
+const DisclosureEdge = @import("disclosure_state.zig").Edge;
+const DisclosureBodyProjection = struct { captions: *VisibleMediaCaptions, path: DisclosurePath };
+
+fn disclosureBlocksContain(blocks: []const model.Block, depth: usize, work: *usize) anyerror!bool {
+    if (depth >= 64) return error.InvalidPresentation;
+    for (blocks) |block| {
+        if (work.* == 0) return error.InvalidPresentation;
+        work.* -= 1;
+        if (ContainerTypes.contentBox(block)) |box| {
+            if (box.disclosure != null or try disclosureBlocksContain(box.blocks, depth + 1, work)) return true;
+        }
+        if (block.table) |table| if (try disclosureTableContains(table, depth + 1, work)) return true;
+        if (block.figure) |figure| if (figure.caption_blocks) |caption|
+            if (try disclosureBlocksContain(caption, depth + 1, work)) return true;
+        if (block.flow) |parts| if (try disclosureFlowContains(parts, depth + 1, work)) return true;
+    }
+    return false;
+}
+fn disclosureTableContains(table: model.Table, depth: usize, work: *usize) anyerror!bool {
+    if (depth >= 64) return error.InvalidPresentation;
+    if (table.caption_blocks) |caption| if (try disclosureBlocksContain(caption, depth + 1, work)) return true;
+    for (table.rows) |row| for (row.cells) |cell| {
+        if (work.* == 0) return error.InvalidPresentation;
+        work.* -= 1;
+        if (cell.blocks) |blocks| {
+            if (try disclosureBlocksContain(blocks, depth + 1, work)) return true;
+        } else if (cell.nested_table) |nested| if (try disclosureTableContains(nested, depth + 1, work)) return true;
+    };
+    return false;
+}
+fn disclosureFlowContains(parts: anytype, depth: usize, work: *usize) anyerror!bool {
+    if (depth >= 64) return error.InvalidPresentation;
+    for (parts) |part| {
+        if (work.* == 0) return error.InvalidPresentation;
+        work.* -= 1;
+        if (part.figure) |figure| if (figure.caption_blocks) |caption|
+            if (try disclosureBlocksContain(caption, depth + 1, work)) return true;
+        if (part.scope) |scope| if (try disclosureFlowContains(scope.parts, depth + 1, work)) return true;
+    }
+    return false;
+}
+fn disclosureChildren(p: *PoemProjection, captions: *VisibleMediaCaptions, blocks: []const model.Block, color: bool, path: DisclosurePath, edge: DisclosureEdge) anyerror!void {
+    for (blocks, 0..) |block, i| try disclosureBlockText(p, captions, block, color, try path.child(edge, i, 0));
+}
+fn disclosureControl(p: *PoemProjection, policy: ContainerTypes.ContainerDisclosure, path: DisclosurePath) !bool {
+    const state = p.disclosures.?;
+    const closed = state.closed(path, policy.initially_collapsed);
+    try state.observe(p.disclosure_allocator orelse return error.InvalidPresentation, .{ .path = path, .initially_collapsed = policy.initially_collapsed, .offset = p.frame.written().len });
+    try p.frame.writer.writeAll(if (state.isFocused(path)) "[disclosure*] " else "[disclosure] ");
+    try terminalText(&p.frame.writer, if (closed) policy.expand_label else policy.collapse_label);
+    try p.frame.writer.writeAll(if (closed) " (collapsed)\n" else " (expanded)\n");
+    try p.frame.writer.writeAll("  n/p focus; Space toggle\n");
+    return closed;
+}
+fn disclosureBlockText(p: *PoemProjection, captions: *VisibleMediaCaptions, block: model.Block, color: bool, path: DisclosurePath) anyerror!void {
+    var work: usize = ContainerTypes.max_presentation_items;
+    if (!try disclosureBlocksContain(&.{block}, 0, &work)) return captions.emitBlocks(&p.frame.writer, &.{block}, color, p);
+    // Interactive bodies cannot inherit an unimplemented CSS button, float or
+    // pixel box solver. Use the existing explicit semantic fallback, preserving
+    // ordered caption/action spans. Unaffected children retain normal layout.
+    if (p.float_flow) |flow| try flow.stop();
+    const w = &p.frame.writer;
+    try terminalGeometryRefusal(w, p);
+    if (ContainerTypes.contentBox(block)) |box| {
+        const valid = if (block.description_body != null) ContainerTypes.validDescriptionOwner(block) else ContainerTypes.validContainerContext(block);
+        if (!valid or !ContainerTypes.validContainerHeader(box)) return error.InvalidPresentation;
+        const edge: DisclosureEdge = if (block.description_body != null) .description else .container;
+        for (box.blocks, 0..) |child, i| {
+            if (box.disclosure) |policy| if (i == policy.content_index) {
+                if (try disclosureControl(p, policy, path)) continue;
+            };
+            try disclosureBlockText(p, captions, child, color, try path.child(edge, i, 0));
+        }
+        return;
+    }
+    if (block.table == null and block.figure == null and block.flow == null) return error.InvalidPresentation;
+    // Keep the ordinary block-kind marker, indentation, language annotation and
+    // final separators. Only the body traversal differs for interactive leaves.
+    try blocksTextInContext(w, &.{block}, color, p, .{ .columns = p.table_columns,
+        .alignment_suppressed = true, .disclosure_body = .{ .captions = captions, .path = path } });
+}
+fn disclosureTableText(p: *PoemProjection, captions: *VisibleMediaCaptions, table: model.Table, color: bool, path: DisclosurePath) anyerror!void {
+    const w = &p.frame.writer;
+    // A table containing controls uses labelled logical cells, not invented
+    // interactive grid geometry. Tables with no controls use the old grid.
+    if (table.caption_blocks) |caption| {
+        try disclosureChildren(p, captions, caption, color, path, .table_caption);
+    } else {
+        try captions.emitSpans(w, table.caption, color, p);
+        if (table.caption.len != 0) try w.writeByte('\n');
+    }
+    for (table.rows, 0..) |row, r| for (row.cells, 0..) |cell, c| {
+        try w.print("row {d}, cell {d} (colspan {d}, rowspan {d})\n", .{ r + 1, c + 1, cell.colspan, cell.rowspan });
+        const cell_path = try path.child(.table_cell, r, c);
+        if (cell.blocks) |blocks| {
+            try disclosureChildren(p, captions, blocks, color, cell_path, .cell_block);
+        } else {
+            try captions.emitSpans(w, cell.spans, color, p);
+            try w.writeByte('\n');
+            if (cell.nested_table) |nested| try disclosureTableText(p, captions, nested, color, try cell_path.child(.nested_table, 0, 0));
+        }
+    };
+}
+fn disclosureFigureText(p: *PoemProjection, captions: *VisibleMediaCaptions, figure: ContainerTypes.Figure, color: bool, path: DisclosurePath) anyerror!void {
+    // Preserve the real image/action and authored caption blocks. The separate
+    // fallback above explicitly declines graphical caption placement.
+    try captions.emitSpans(&p.frame.writer, &.{figure.content.span()}, color, p);
+    try p.frame.writer.writeByte('\n');
+    if (figure.caption_blocks) |caption| try disclosureChildren(p, captions, caption, color, path, .figure_caption)
+    else try captions.emitSpans(&p.frame.writer, figure.caption, color, p);
+}
+fn disclosureFlowText(p: *PoemProjection, captions: *VisibleMediaCaptions, parts: []const ContainerTypes.FlowPart, color: bool, path: DisclosurePath) anyerror!void {
+    for (parts, 0..) |part, i| {
+        if (!ContainerTypes.validFlowPart(part)) return error.InvalidPresentation;
+        const part_path = try path.child(.flow, i, 0);
+        switch (part.kind) {
+            .@"inline" => try captions.emitSpans(&p.frame.writer, part.spans, color, p),
+            .figure => try disclosureFigureText(p, captions, part.figure.?, color, part_path),
+            .scope => {
+                // Retain compiled bidi direction, not a fresh language guess.
+                const scope = part.scope.?;
+                const prefix: []const u8 = if (scope.mode == .isolate_override)
+                    (if (scope.resolved_direction == .rtl) "\u{2067}\u{202e}" else "\u{2066}\u{202d}")
+                else if (scope.resolved_direction == .rtl) "\u{2067}" else "\u{2066}";
+                const suffix: []const u8 = if (scope.mode == .isolate_override) "\u{202c}\u{2069}" else "\u{2069}";
+                var frame: std.Io.Writer.Allocating = .init(p.allocator); defer frame.deinit();
+                var lines: std.ArrayList(terminal.PoemLine) = .empty; defer lines.deinit(p.allocator);
+                var local: PoemProjection = .{ .frame = &frame, .allocator = p.allocator, .lines = &lines,
+                    .table_columns = p.table_columns, .disclosures = p.disclosures, .disclosure_allocator = p.disclosure_allocator };
+                const first_control = p.disclosures.?.visible.items.len;
+                try disclosureFlowText(&local, captions, scope.parts, color, try part_path.child(.scope, 0, 0));
+                // Match the existing scopeText rule: each real LF is a UBA
+                // paragraph. Rebase typed control offsets with the exact copy,
+                // never search for label bytes (which may be duplicates).
+                var source_offset: usize = 0;
+                var control = first_control;
+                var point: usize = 0;
+                var first = true;
+                var split = std.mem.splitScalar(u8, frame.written(), '\n');
+                while (split.next()) |line| {
+                    const current = p.frame.written();
+                    const line_start = if (std.mem.lastIndexOfScalar(u8, current, '\n')) |at| at + 1 else 0;
+                    const earlier = if (first) current[line_start..] else "";
+                    // Control offsets name text bytes; poem offsets name the
+                    // physical line start, including the writer's UBA controls.
+                    const destination = current.len + prefix.len;
+                    while (control < p.disclosures.?.visible.items.len and
+                        p.disclosures.?.visible.items[control].offset <= source_offset + line.len) : (control += 1) {
+                        p.disclosures.?.visible.items[control].offset = destination + p.disclosures.?.visible.items[control].offset - source_offset;
+                    }
+                    while (point < lines.items.len and lines.items[point].offset == source_offset) : (point += 1) {
+                        var record = lines.items[point];
+                        record.offset = line_start;
+                        record.lead_bytes += earlier.len + prefix.len;
+                        record.lead_cells += terminal.cellWidth(earlier);
+                        record.continuation_left += terminal.cellWidth(earlier);
+                        if (p.lines.items.len != 0 and p.lines.items[p.lines.items.len - 1].offset == record.offset) {
+                            const previous = &p.lines.items[p.lines.items.len - 1];
+                            if (previous.left != record.left or previous.right != record.right) {
+                                previous.left = 0; previous.right = 0; previous.continuation_left = record.lead_cells;
+                            }
+                        } else try p.lines.append(p.allocator, record);
+                    }
+                    try p.frame.writer.writeAll(prefix);
+                    try p.frame.writer.writeAll(line);
+                    try p.frame.writer.writeAll(suffix);
+                    source_offset += line.len;
+                    if (source_offset < frame.written().len) { try p.frame.writer.writeByte('\n'); source_offset += 1; }
+                    first = false;
+                }
+                if (point != lines.items.len or control != p.disclosures.?.visible.items.len) return error.InvalidPresentation;
+            },
+        }
+    }
+}
+
+
+const DisclosureInteractionTest = struct {
+    const caption = [_]model.Block{.{ .kind = .paragraph, .spans = &.{.{ .kind = .link, .text = "caption-link", .target = "caption-target" }} }};
+    const words = [_]model.Block{.{ .kind = .paragraph, .spans = &.{
+        .{ .kind = .link, .text = "croato", .target = "croato" },
+        .{ .text = ": " }, .{ .kind = .link, .text = "obitelj", .target = "obitelj" },
+    } }};
+    const children = [_]model.Block{ caption[0], .{ .kind = .container, .container = .{ .blocks = &words } },
+        .{ .kind = .paragraph, .spans = &.{.{ .text = "outside-tail" }} } };
+    const owner: model.Block = .{ .kind = .container, .container = .{ .blocks = &children, .disclosure = .{
+        .content_index = 1, .initially_collapsed = true, .expand_label = "[Mostra]", .collapse_label = "[Nascondi]",
+    } } };
+    fn render(a: std.mem.Allocator, state: *DisclosureState, blocks: []const model.Block, width: usize) ![]u8 {
+        var frame: std.Io.Writer.Allocating = .init(a); defer frame.deinit();
+        var lines: std.ArrayList(terminal.PoemLine) = .empty; defer lines.deinit(a);
+        var p: PoemProjection = .{ .frame = &frame, .allocator = a, .lines = &lines, .table_columns = width, .disclosures = state, .disclosure_allocator = a };
+        var observer_arena = std.heap.ArenaAllocator.init(a); defer observer_arena.deinit();
+        var captions = try VisibleMediaCaptions.init(observer_arena.allocator(), &.{}, false);
+        state.begin();
+        for (blocks, 0..) |block, i| try disclosureBlockText(&p, &captions, block, false, .{ .section = 9, .block = i + 1 });
+        state.end();
+        return a.dupe(u8, frame.written());
+    }
+};
+
+test "TUI disclosure01 duplicate labels and aliased bodies retain full typed identity" {
+    const a = std.testing.allocator;
+    var state: DisclosureState = .{}; defer state.deinit(a);
+    // The two owners deliberately share the exact same blocks pointer/labels.
+    const both = [_]model.Block{ DisclosureInteractionTest.owner, DisclosureInteractionTest.owner };
+    const initial = try DisclosureInteractionTest.render(a, &state, &both, 100); defer a.free(initial);
+    try std.testing.expectEqual(@as(usize, 2), state.visible.items.len);
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, initial, "[Mostra]"));
+    try std.testing.expect(std.mem.indexOf(u8, initial, "obitelj") == null);
+    try std.testing.expect(state.move(true)); try std.testing.expect(state.move(true));
+    try std.testing.expect(try state.toggle(a));
+    const changed = try DisclosureInteractionTest.render(a, &state, &both, 40); defer a.free(changed);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, changed, "obitelj"));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, changed, "[Mostra]"));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, changed, "[disclosure*] [Nascondi]"));
+    try std.testing.expect(!DisclosurePath.equal(.{ .section = 8, .block = 2 }, state.focused.?));
+    try std.testing.expect(DisclosurePath.equal(.{ .section = 9, .block = 2 }, state.focused.?));
+    try std.testing.expect(ContainerTypes.validContainerHeader(both[1].container.?));
+    try std.testing.expectEqual(@as(u32, 1), both[1].container.?.disclosure.?.content_index);
+    try std.testing.expect(both[1].container.?.disclosure.?.initially_collapsed);
+}
+
+test "TUI disclosure01 nested parent hides only bound child and preserves caption link" {
+    const a = std.testing.allocator;
+    var state: DisclosureState = .{}; defer state.deinit(a);
+    const inner = [_]model.Block{DisclosureInteractionTest.owner};
+    const children = [_]model.Block{ DisclosureInteractionTest.caption[0], .{ .kind = .container, .container = .{ .blocks = &inner } }, DisclosureInteractionTest.children[2] };
+    var parent = DisclosureInteractionTest.owner; parent.container.?.blocks = &children;
+    const closed = try DisclosureInteractionTest.render(a, &state, &.{parent}, 100); defer a.free(closed);
+    try std.testing.expectEqual(@as(usize, 1), state.visible.items.len);
+    try std.testing.expect(std.mem.indexOf(u8, closed, "caption-link") != null);
+    try std.testing.expect(std.mem.indexOf(u8, closed, "outside-tail") != null);
+    try std.testing.expect(state.move(true)); try std.testing.expect(try state.toggle(a));
+    const parent_open = try DisclosureInteractionTest.render(a, &state, &.{parent}, 100); defer a.free(parent_open);
+    try std.testing.expectEqual(@as(usize, 2), state.visible.items.len);
+    try std.testing.expect(std.mem.indexOf(u8, parent_open, "obitelj") == null);
+    const nested = try (try (DisclosurePath{ .section = 9, .block = 1 }).child(.container, 1, 0)).child(.container, 0, 0);
+    try std.testing.expect(DisclosurePath.equal(nested, state.visible.items[1].path));
+    try std.testing.expect(state.move(true)); try std.testing.expect(try state.toggle(a));
+    const both_open = try DisclosureInteractionTest.render(a, &state, &.{parent}, 40); defer a.free(both_open);
+    try std.testing.expect(std.mem.indexOf(u8, both_open, "obitelj") != null);
+    try std.testing.expect(state.move(false)); try std.testing.expect(try state.toggle(a));
+    const reclosed = try DisclosureInteractionTest.render(a, &state, &.{parent}, 100); defer a.free(reclosed);
+    try std.testing.expectEqual(@as(usize, 1), state.visible.items.len);
+    try std.testing.expect(std.mem.indexOf(u8, reclosed, "obitelj") == null);
+    try std.testing.expectEqualStrings("caption-target", parent.container.?.blocks[0].spans[0].target);
+    try std.testing.expect(ContainerTypes.validContainerContext(parent));
+    try std.testing.expect(ContainerTypes.validContainerHeader(parent.container.?));
+}
+
+test "TUI disclosure01 table cell path and initial expanded policy are independent" {
+    const a = std.testing.allocator;
+    var state: DisclosureState = .{}; defer state.deinit(a);
+    var opened = DisclosureInteractionTest.owner; opened.container.?.disclosure.?.initially_collapsed = false;
+    const table: model.Block = .{ .kind = .table, .table = .{ .rows = &.{.{ .cells = &.{
+        .{ .blocks = &.{DisclosureInteractionTest.owner} }, .{ .blocks = &.{opened} },
+    } }} } };
+    const text = try DisclosureInteractionTest.render(a, &state, &.{table}, 40); defer a.free(text);
+    try std.testing.expectEqual(@as(usize, 2), state.visible.items.len);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, text, "obitelj"));
+    try std.testing.expect(!DisclosurePath.equal(state.visible.items[0].path, state.visible.items[1].path));
+    try std.testing.expectEqual(@as(usize, 1), state.visible.items[1].path.steps[0].second);
+    try std.testing.expectEqual(DisclosureEdge.table_cell, state.visible.items[1].path.steps[0].kind);
+}
+
+test "TUI disclosure01 focused control offsets survive 100 40 100 without changing source links" {
+    const a = std.testing.allocator;
+    var state: DisclosureState = .{}; defer state.deinit(a);
+    const blocks = [_]model.Block{DisclosureInteractionTest.owner};
+    const first = try DisclosureInteractionTest.render(a, &state, &blocks, 100); defer a.free(first);
+    try std.testing.expect(state.move(true)); try std.testing.expect(try state.toggle(a));
+    const path = state.focused.?;
+    for ([_]usize{100, 40, 100}) |width| {
+        const text = try DisclosureInteractionTest.render(a, &state, &blocks, width); defer a.free(text);
+        try std.testing.expect(DisclosurePath.equal(path, state.focused.?));
+        const offset = state.focusedOffset().?;
+        try std.testing.expect(std.mem.startsWith(u8, text[offset..], "[disclosure*] [Nascondi]"));
+        const rows = try terminal.wrapPaneProse(a, text, width, &.{}); defer a.free(rows);
+        var found = false;
+        for (rows) |row| if (@intFromPtr(row.bytes.ptr) - @intFromPtr(text.ptr) == offset) { found = true; };
+        try std.testing.expect(found);
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, text, "obitelj"));
+    }
+    try std.testing.expectEqualStrings("croato", blocks[0].container.?.blocks[1].container.?.blocks[0].spans[0].target);
+    try std.testing.expectEqualStrings("obitelj", blocks[0].container.?.blocks[1].container.?.blocks[0].spans[2].target);
+    // Null interactive state remains the established complete-text projection.
+    var legacy: std.Io.Writer.Allocating = .init(a); defer legacy.deinit();
+    try blocksText(&legacy.writer, &blocks, false);
+    try std.testing.expect(std.mem.indexOf(u8, legacy.written(), "obitelj") != null);
+    try std.testing.expect(std.mem.indexOf(u8, legacy.written(), "[disclosure") == null);
+}
+
+test "TUI disclosure01 malformed content index refuses before registering a control" {
+    const a = std.testing.allocator;
+    var state: DisclosureState = .{}; defer state.deinit(a);
+    var invalid = DisclosureInteractionTest.owner; invalid.container.?.disclosure.?.content_index = 99;
+    try std.testing.expectError(error.InvalidPresentation, DisclosureInteractionTest.render(a, &state, &.{invalid}, 40));
+    try std.testing.expectEqual(@as(usize, 0), state.visible.items.len);
+}
+
+test "TUI disclosure03 hidden media does not suppress catalogue caption and visible ownership stays exact" {
+    const a = std.testing.allocator;
+    const media = [_]model.Media{
+        .{ .file = "hidden.svg", .kind = .image, .caption = "same caption" },
+        .{ .file = "visible.svg", .kind = .image, .caption = "same caption" },
+    };
+    const hidden = [_]model.Block{.{ .kind = .paragraph, .spans = &.{
+        .{ .image = .{ .file = "hidden.svg", .alt = "same caption" } },
+    } }};
+    const children = [_]model.Block{
+        .{ .kind = .paragraph, .spans = &.{.{ .image = .{ .file = "visible.svg", .alt = "same caption" } }} },
+        .{ .kind = .container, .container = .{ .blocks = &hidden } },
+    };
+    var owner = DisclosureInteractionTest.owner; owner.container.?.blocks = &children;
+    var state: DisclosureState = .{}; defer state.deinit(a);
+    for ([_]bool{true, false}) |closed| {
+        var arena = std.heap.ArenaAllocator.init(a); defer arena.deinit();
+        var captions = try VisibleMediaCaptions.init(arena.allocator(), &media, true);
+        var frame: std.Io.Writer.Allocating = .init(a); defer frame.deinit();
+        var lines: std.ArrayList(terminal.PoemLine) = .empty; defer lines.deinit(a);
+        var p: PoemProjection = .{ .frame = &frame, .allocator = a, .lines = &lines, .table_columns = 40, .disclosures = &state, .disclosure_allocator = a };
+        state.begin();
+        try disclosureBlockText(&p, &captions, owner, false, .{ .section = 9, .block = 1 });
+        state.end();
+        try std.testing.expectEqual(!closed, captions.inline_seen[0]);
+        try std.testing.expectEqual(!closed, captions.seen[0]);
+        try std.testing.expect(captions.inline_seen[1] and captions.seen[1]);
+        // Identical caption strings cannot merge distinct Media.file owners.
+        try std.testing.expectEqual(@as(usize, if (closed) 1 else 2), std.mem.count(u8, frame.written(), "same caption"));
+        if (closed) { try std.testing.expect(state.move(true)); try std.testing.expect(try state.toggle(a)); }
+    }
+}
+
+
+test "TUI disclosure05 numbered list table preserves its shell and rebased control" {
+    const a = std.testing.allocator;
+    var state: DisclosureState = .{}; defer state.deinit(a);
+    const block: model.Block = .{ .kind = .list_item, .number = "3", .list_path = "#", .depth = 1,
+        .table = .{ .rows = &.{.{ .cells = &.{.{ .blocks = &.{DisclosureInteractionTest.owner} }} }} } };
+    {
+        var scratch = std.heap.ArenaAllocator.init(a); defer scratch.deinit();
+        const temporary = scratch.allocator();
+        var frame: std.Io.Writer.Allocating = .init(temporary);
+        var points: std.ArrayList(terminal.PoemLine) = .empty;
+        var projection: PoemProjection = .{ .frame = &frame, .allocator = temporary, .lines = &points,
+            .table_columns = 40, .disclosures = &state, .disclosure_allocator = a };
+        var captions = try VisibleMediaCaptions.init(temporary, &.{}, false);
+        state.begin();
+        try disclosureBlockText(&projection, &captions, block, false, .{ .section = 9, .block = 1 });
+        state.end();
+        try std.testing.expectEqual(@as(usize, 1), state.visible.items.len);
+    }
+    // The scratch frame is gone; persistent state remains readable/reusable.
+    try std.testing.expectEqual(DisclosureEdge.table_cell, state.visible.items[0].path.steps[0].kind);
+    for ([_]bool{ true, false }) |closed| {
+        for ([_]usize{ 100, 40, 100 }) |width| {
+            const text = try DisclosureInteractionTest.render(a, &state, &.{block}, width); defer a.free(text);
+            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, text, "  3. row 1, cell 1"));
+            try std.testing.expectEqual(@as(usize, 1), state.visible.items.len);
+            try std.testing.expect(std.mem.startsWith(u8, text[state.visible.items[0].offset..], "[disclosure"));
+            try std.testing.expectEqual(closed, std.mem.indexOf(u8, text, "obitelj") == null);
+            try std.testing.expectEqual(DisclosureEdge.table_cell, state.visible.items[0].path.steps[0].kind);
+        }
+        if (closed) { try std.testing.expect(state.move(true)); try std.testing.expect(try state.toggle(a)); }
+    }
+}
+
+test "TUI disclosure05 figure flow retains block prefixes and paragraph separators" {
+    const a = std.testing.allocator;
+    const T = @import("blob_encoder").presentation_types;
+    var figure = FigureOutputTest.block(.paragraph).figure.?;
+    figure.caption = &.{}; figure.caption_blocks = &.{DisclosureInteractionTest.owner};
+    const next: model.Block = .{ .kind = .paragraph, .spans = &.{.{ .text = "NEXT" }} };
+    for ([_]T.BlockKind{ .paragraph, .list_item, .definition, .example, .quotation, .term, .list_detail, .indent }) |kind| {
+        var state: DisclosureState = .{}; defer state.deinit(a);
+        const block: model.Block = .{ .kind = kind, .depth = if (kind == .paragraph) 0 else 1,
+            .number = if (kind == .paragraph) "" else "3", .list_path = if (kind == .paragraph) "" else "#:",
+            .flow = &.{.{ .kind = .figure, .figure = figure }, .{ .kind = .@"inline", .spans = &.{.{ .text = "TAIL" }} }} };
+        for ([_]bool{ true, false }) |closed| {
+            const text = try DisclosureInteractionTest.render(a, &state, &.{ block, next }, 40); defer a.free(text);
+            try std.testing.expect(std.mem.indexOf(u8, text, "TAILNEXT") == null);
+            const ending = if (kind == .paragraph or kind == .quotation) "TAIL\n\nNEXT\n\n" else "TAIL\nNEXT\n\n";
+            try std.testing.expect(std.mem.endsWith(u8, text, ending));
+            const prefix = switch (kind) {
+                .paragraph => "[image: Map]", .list_item, .definition => "  3. [image: Map]",
+                .example, .quotation => "  │ [image: Map]", else => "  [image: Map]",
+            };
+            try std.testing.expect(std.mem.indexOf(u8, text, prefix) != null);
+            try std.testing.expectEqual(@as(usize, 1), state.visible.items.len);
+            try std.testing.expect(std.mem.startsWith(u8, text[state.visible.items[0].offset..], "[disclosure"));
+            try std.testing.expectEqual(closed, std.mem.indexOf(u8, text, "obitelj") == null);
+            if (closed) { try std.testing.expect(state.move(true)); try std.testing.expect(try state.toggle(a)); }
+        }
+    }
+}
+
+test "TUI disclosure05 nested bidi scope keeps physical poem lines and separate control offsets" {
+    const a = std.testing.allocator;
+    const T = @import("blob_encoder").presentation_types;
+    var figure = FigureOutputTest.block(.paragraph).figure.?;
+    figure.caption = &.{}; figure.caption_blocks = &.{DisclosureInteractionTest.owner};
+    const poem = "wikidict-poem wikidict-poem-indent-3";
+    const inner: T.BidiScope = .{ .mode = .isolate, .resolved_direction = .rtl, .parts = &.{
+        .{ .kind = .@"inline", .spans = &.{
+            .{ .text = "first poem line with enough words to require several real narrow terminal continuations while keeping its authored indentation", .classes = poem },
+            .{ .kind = .line_break, .classes = poem }, .{ .text = "second poem line", .classes = poem },
+        } }, .{ .kind = .figure, .figure = figure },
+    } };
+    for ([_]bool{ false, true }) |nested| {
+        const scope: T.BidiScope = if (nested) .{ .mode = .isolate, .resolved_direction = .ltr, .parts = &.{
+            .{ .kind = .@"inline", .spans = &.{.{ .text = "inside " }} }, .{ .kind = .scope, .scope = inner },
+        } } else inner;
+        const block: model.Block = .{ .kind = .paragraph, .flow = &.{
+            .{ .kind = .@"inline", .spans = &.{.{ .text = "prefix " }} }, .{ .kind = .scope, .scope = scope },
+        } };
+        var state: DisclosureState = .{}; defer state.deinit(a);
+        for ([_]usize{ 100, 40, 100 }) |width| {
+            var frame: std.Io.Writer.Allocating = .init(a); defer frame.deinit();
+            var points: std.ArrayList(terminal.PoemLine) = .empty; defer points.deinit(a);
+            var projection: PoemProjection = .{ .frame = &frame, .allocator = a, .lines = &points,
+                .table_columns = width, .disclosures = &state, .disclosure_allocator = a };
+            var observer_arena = std.heap.ArenaAllocator.init(a); defer observer_arena.deinit();
+            var captions = try VisibleMediaCaptions.init(observer_arena.allocator(), &.{}, false);
+            state.begin();
+            try disclosureBlockText(&projection, &captions, block, false, .{ .section = 9, .block = 1 });
+            state.end();
+            const text = frame.written();
+            try std.testing.expect(points.items.len >= 2);
+            for (points.items) |point| try std.testing.expect(point.offset == 0 or text[point.offset - 1] == '\n');
+            const first = points.items[0];
+            try std.testing.expectEqual(@as(usize, 3), first.left);
+            try std.testing.expectEqual(@as(usize, if (nested) 20 else 10), first.lead_bytes);
+            try std.testing.expectEqual(@as(usize, if (nested) 14 else 7), first.lead_cells);
+            const rows = try terminal.wrapPaneProse(a, text, width, points.items); defer a.free(rows);
+            var matched = false;
+            for (rows) |row| if (@intFromPtr(row.bytes.ptr) - @intFromPtr(text.ptr) == first.offset) {
+                try std.testing.expectEqual(@as(usize, 3), row.left); matched = true;
+            };
+            try std.testing.expect(matched);
+            try std.testing.expectEqual(@as(usize, 1), state.visible.items.len);
+            try std.testing.expect(std.mem.startsWith(u8, text[state.visible.items[0].offset..], "[disclosure"));
+        }
+    }
 }

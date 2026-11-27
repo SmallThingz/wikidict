@@ -16,7 +16,7 @@ const library = @import("library.zig");
 const Page = enum { saved, history, search, learn, settings, library };
 const Focus = enum { search, matches, entry };
 
-const wideHelp = [_][]const u8{ "KEYBOARD", "Type in Search; ↑/↓ moves straight into results", "Enter reads the selected word; Esc steps back", "/ returns to Search from results or reading", "Tab cycles Search → Matches → Reading", "Arrows or j/k move; PgUp/PgDn and Home/End jump", "Ctrl-U clears the query; Ctrl-C/D quits", "[ ] selects a section; e toggles its fold", "d toggles all details; s saves the word", "r random word; 1 Saved 2 History 3 Search", "4 Learn: Tab game; Space reveal; y/n grade", "Quiz: 6-9 answer; Scramble: type then Enter", "v offline speech; m media in desktop player", "5 Settings: arrows adjust limits and appearance", "t cycles terminal/dark/light; q quits outside Search", "Any key closes this help" };
+const wideHelp = [_][]const u8{ "KEYBOARD", "Type in Search; ↑/↓ moves straight into results", "Enter reads the selected word; Esc steps back", "/ returns to Search from results or reading", "Tab cycles Search → Matches → Reading", "Arrows or j/k move; PgUp/PgDn and Home/End jump", "Ctrl-U clears the query; Ctrl-C/D quits", "[ ] selects a section; e toggles its fold", "d toggles all details; s saves the word", "r random word; 1 Saved 2 History 3 Search", "4 Learn: Tab game; Space reveal; y/n grade", "Quiz: 6-9 answer; Scramble: type then Enter", "v offline speech; m media in desktop player", "5 Settings: arrows adjust limits and appearance", "t cycles terminal/dark/light; q quits outside Search", "Reading: n/p disclosure focus; Space toggles focused body", "Any key closes this help" };
 const helpScrollHint = "↑↓ scroll PgUp/Dn Home/End Esc close";
 const helpCloseHint = "Any key closes help";
 fn helpLines(columns: usize) []const []const u8 {
@@ -40,6 +40,8 @@ fn helpLines(columns: usize) []const []const u8 {
         "and appearance",
         "t terminal/dark/light theme",
         "q quits outside Search",
+        "Reading: n/p disclosure focus",
+        "Space toggles focused body",
         "Any key closes this help",
     };
     return &wideHelp;
@@ -150,6 +152,8 @@ const State = struct {
     section_offset: usize = 0,
     jump_section: bool = false,
     fold_word: ?usize = null,
+    disclosures: output.DisclosureState = .{},
+    jump_disclosure: bool = false,
     game: enum { cards, quiz, scramble } = .cards,
     choices: [4]usize = @splat(0),
     choice_count: usize = 0,
@@ -185,6 +189,7 @@ const State = struct {
         self.search.deinit(self.a);
         self.filtered.deinit(self.a);
         self.expanded.deinit(self.a);
+        self.disclosures.deinit(self.a);
         self.section_indices.deinit(self.a);
         self.poem_lines.deinit(self.a);
         self.a.free(self.rows);
@@ -277,6 +282,8 @@ const State = struct {
         self.range = .{ .start = 0, .end = self.db.count() };
         self.loaded = null;
         self.fold_word = null;
+        self.disclosures.reset();
+        self.jump_disclosure = false;
         self.study_meaning_index = null;
         self.expanded.clearRetainingCapacity();
         self.a.free(self.text);
@@ -503,7 +510,23 @@ const State = struct {
             try r.save(self.io);
         };
     }
+    fn disclosureKey(self: *State, event: term.Event) !bool {
+        if (self.focus != .entry or self.nav == .learn or self.nav == .settings or self.nav == .library or
+            self.help or event.pasted or event.key != .text or event.len != 1) return false;
+        const disclosure_changed = switch (event.bytes[0]) {
+            'n' => self.disclosures.move(true),
+            'p' => self.disclosures.move(false),
+            ' ' => try self.disclosures.toggle(self.a),
+            else => false,
+        };
+        if (!disclosure_changed) return false;
+        self.loaded = null;
+        self.jump_disclosure = true;
+        return true;
+    }
+
     fn key(self: *State, event: term.Event) !bool {
+        if (try self.disclosureKey(event)) return true;
         if (event.key == .quit) return false;
         if (self.help) {
             const maximum = self.helpMaxOffset();
@@ -898,10 +921,14 @@ const State = struct {
             self.expanded.clearRetainingCapacity();
             self.section = 0;
             self.fold_word = index;
+            self.disclosures.reset();
+            self.jump_disclosure = false;
         }
         if (index == null or index != self.loaded or self.text.len == 0 or self.format_width != width or self.format_theme != self.theme) {
             const preserve_scroll = index != null and index == self.loaded and self.text.len != 0;
             const previous_scroll = self.scroll;
+            if (self.format_width != width and self.disclosures.focused != null) self.jump_disclosure = true;
+            self.disclosures.begin();
             var formatted: std.Io.Writer.Allocating = .init(self.a);
             defer formatted.deinit();
             var poem_lines: std.ArrayList(term.PoemLine) = .empty;
@@ -928,6 +955,10 @@ const State = struct {
                     break :entry;
                 };
                 defer doc.deinit();
+                if (self.nav != .learn) {
+                    projection.disclosures = &self.disclosures;
+                    projection.disclosure_allocator = self.a;
+                }
                 const meaning = try studyMeaning(doc.entry);
                 self.study_meaning_index = i;
                 self.study_has_meaning = meaning != null;
@@ -994,6 +1025,7 @@ const State = struct {
                 .learn => "No words in this study pool.\n\nChoose All in Settings, or add words to Saved or History.\nEsc returns to Search.",
                 else => "No matching words.\n\nPress / to edit the prefix; Ctrl-U clears it.",
             });
+            self.disclosures.end();
             const text = try self.a.dupe(u8, formatted.written());
             for (text) |*b| if (b.* == '\t') {
                 b.* = ' ';
@@ -1051,6 +1083,18 @@ const State = struct {
                 self.scroll = @min(i, self.rows.len -| self.bodyHeight());
             }
             self.jump_section = false;
+        }
+        if (self.jump_disclosure) {
+            if (self.disclosures.focusedOffset()) |offset| {
+                if (self.row_origins.len != 0) {
+                    self.scroll = @min(output.flowRowForOffset(self.row_origins, offset), self.rows.len -| self.bodyHeight());
+                } else for (self.rows, 0..) |row, i| {
+                    const row_offset = @intFromPtr(row.bytes.ptr) - @intFromPtr(self.text.ptr);
+                    if (row_offset > offset) break;
+                    self.scroll = @min(i, self.rows.len -| self.bodyHeight());
+                }
+            }
+            self.jump_disclosure = false;
         }
     }
     fn put(self: State, w: *std.Io.Writer, row: usize, col: usize, cells: usize, text: []const u8, style: []const u8) !void {
@@ -2992,4 +3036,31 @@ test "retained ordinary SD dictionary member proves exact compiled image ownersh
     try std.testing.expectEqual(output.MediaOccurrence.absent, try output.imageMediaOccurrence(doc.entry, "Antenna.jpg"));
     const catalogue_only: model.Entry = .{ .title = doc.entry.title, .kind = .language, .media = &.{image} };
     try std.testing.expectEqual(output.MediaOccurrence.absent, try output.imageMediaOccurrence(catalogue_only, image.file));
+}
+
+
+test "TUI disclosure01 actual State routes keys only in ordinary entry and preserves pane and section keys" {
+    const a = std.testing.allocator;
+    var state: State = .{ .a = a, .db = undefined, .label = "test", .theme = .terminal, .color = false, .focus = .entry };
+    defer state.disclosures.deinit(a);
+    try state.disclosures.observe(a, .{ .path = .{ .section = 9, .block = 3 }, .initially_collapsed = true, .offset = 41 });
+    const next: term.Event = .{ .key = .text, .bytes = .{ 'n', 0, 0, 0 }, .len = 1 };
+    const toggle: term.Event = .{ .key = .text, .bytes = .{ ' ', 0, 0, 0 }, .len = 1 };
+    try std.testing.expect(try state.key(next));
+    try std.testing.expect(state.jump_disclosure);
+    try std.testing.expect(try state.key(toggle));
+    try std.testing.expect(!state.disclosures.closed(.{ .section = 9, .block = 3 }, true));
+    // The real dispatch consumes new keys. Existing Tab still cycles panes.
+    try std.testing.expect(try state.key(.{ .key = .tab }));
+    try std.testing.expectEqual(Focus.search, state.focus);
+    try std.testing.expect(!try state.disclosureKey(next));
+    state.focus = .matches; try std.testing.expect(!try state.disclosureKey(next));
+    state.focus = .entry; state.nav = .learn;
+    try std.testing.expect(!try state.disclosureKey(next)); try std.testing.expect(!try state.disclosureKey(toggle));
+    state.nav = .search; state.help = true; try std.testing.expect(!try state.disclosureKey(next)); state.help = false;
+    var pasted = next; pasted.pasted = true; try std.testing.expect(!try state.disclosureKey(pasted));
+    try std.testing.expect(!try state.disclosureKey(.{ .key = .text, .bytes = .{ 'e', 0, 0, 0 }, .len = 1 }));
+    state.disclosures.reset();
+    try std.testing.expect(!try state.disclosureKey(toggle)); // Existing Space paging remains reachable.
+    try std.testing.expect(state.disclosures.focused == null and state.disclosures.visible.items.len == 0);
 }
