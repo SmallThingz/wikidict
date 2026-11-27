@@ -11644,3 +11644,24 @@ test "captured RAW aliases remain a separate bounded transclusion domain" {
     inline for (.{ "raw\t0\tRAW\n", "raw\t0\t:\n", "raw\t0\traw:extra:\n", "raw\t0\traw：extra:\n" }) |bad|
         try std.testing.expectError(error.InvalidMagicWordsSnapshot, Registry.init(std.testing.allocator, base ++ bad, "mlwiktionary", "20261001", "ml"));
 }
+
+
+test "frame extensionTag serializes a numeric-looking named attribute" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 24);
+    defer runtime.deinit();
+    try rt.bindGlobalTable(&runtime, null, 0);
+    try stdlib.install(&runtime);
+    try installTestHost(&runtime, 18, 23);
+    var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23,
+        .provider = .{ .get = TestProvider.get, .exists = TestProvider.exists } };
+    _ = try expander.expandFragment("Page", "seed", 1_791_731_560);
+    const frame = try frame_lib.makeFrame(&runtime, "Module:Probe", &.{}, null);
+    const tag = try runtime.getIndex(frame, .{ .string = "extensionTag" });
+    const attrs = try runtime.newTable();
+    try attrs.rawSet(runtime.allocator, .{ .string = "1" }, .{ .string = "v&x" });
+    try attrs.rawSet(runtime.allocator, .{ .string = "class" }, .{ .string = "tag" });
+    const result = try runtime.callValueFirst(tag, &.{ frame, .{ .string = "span" }, .{ .string = "body" }, .{ .table = attrs } });
+    try std.testing.expectEqualStrings("<span 1=\"v&amp;x\" class=\"tag\">body</span>", result.string);
+}

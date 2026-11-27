@@ -57,7 +57,7 @@ fn expandTemplateCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value)
     const raw_args = try runtime.getIndex(spec, .{ .string = "args" });
     const template_args = switch (raw_args) {
         .nil => try runtime.newTable(),
-        .table => |table| try checkedFrameArgs(runtime, table),
+        .table => |table| try checkedFrameArgs(runtime, table, false),
         else => return error.TemplateArgsExpected,
     };
     return one(.{ .string = try call(host.ctx, runtime.allocator, title, template_args) });
@@ -83,7 +83,7 @@ fn extensionTagCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) !
     };
     const attrs: ?*rt.Table = switch (raw_attrs) {
         .nil => null,
-        .table => |table| try checkedFrameArgs(runtime, table),
+        .table => |table| try checkedFrameArgs(runtime, table, false),
         else => return error.TableExpected,
     };
     const host = host_api.get(runtime) orelse return error.MissingScribuntoHost;
@@ -108,6 +108,10 @@ pub fn argumentKey(name: []const u8) Value {
     return .{ .number = @floatFromInt(number) };
 }
 
+fn frameArgumentStorageKey(key: Value) Value {
+    return if (key == .string) argumentKey(key.string) else key;
+}
+
 fn frameArgIndex(_: ?*anyopaque, _: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
     if (args.len < 2 or args[0] != .table or args[1] != .string) return &.{};
     const key = argumentKey(args[1].string);
@@ -125,10 +129,10 @@ fn setCheckedFrameArg(runtime: *rt.Context, out: *rt.Table, key: Value, value: V
         .string, .number => try valueToString(runtime, value),
         else => return error.InvalidFrameArgValue,
     };
-    try out.rawSet(runtime.allocator, if (key == .string) argumentKey(key.string) else key, .{ .string = text });
+    try out.rawSet(runtime.allocator, key, .{ .string = text });
 }
 
-fn checkedFrameArgs(runtime: *rt.Context, source: *rt.Table) !*rt.Table {
+fn checkedFrameArgs(runtime: *rt.Context, source: *rt.Table, comptime frame_keys: bool) !*rt.Table {
     const out = try runtime.newFrameArgsTable();
     const object = Value{ .table = source };
     if (source.metatable) |mt| if (mt.rawGet(.{ .string = "__pairs" })) |method| {
@@ -142,12 +146,12 @@ fn checkedFrameArgs(runtime: *rt.Context, source: *rt.Table) !*rt.Table {
             defer rt.freeResults(result);
             if (result.len == 0 or result[0] == .nil) break;
             key = result[0];
-            try setCheckedFrameArg(runtime, out, key, if (result.len > 1) result[1] else .nil);
+            try setCheckedFrameArg(runtime, out, if (frame_keys) frameArgumentStorageKey(key) else key, if (result.len > 1) result[1] else .nil);
         }
         return out;
     };
     var it = source.iterator();
-    while (it.next()) |entry| try setCheckedFrameArg(runtime, out, entry.key_ptr.*, entry.value_ptr.*);
+    while (it.next()) |entry| try setCheckedFrameArg(runtime, out, if (frame_keys) frameArgumentStorageKey(entry.key_ptr.*) else entry.key_ptr.*, entry.value_ptr.*);
     return out;
 }
 
@@ -165,7 +169,7 @@ fn decodeParserCall(runtime: *rt.Context, args: []const Value) !ParserCall {
     if (args[1] == .string or args[1] == .number) return .{
         .name = try valueToString(runtime, args[1]),
         .args = if (args.len > 2 and args[2] == .table)
-            try checkedFrameArgs(runtime, args[2].table)
+            try checkedFrameArgs(runtime, args[2].table, false)
         else
             try positionalParserArgs(runtime, args[2..]),
     };
@@ -176,7 +180,7 @@ fn decodeParserCall(runtime: *rt.Context, args: []const Value) !ParserCall {
     const raw_args = try runtime.getIndex(spec, .{ .string = "args" });
     return .{
         .name = try valueToString(runtime, name),
-        .args = if (raw_args == .table) try checkedFrameArgs(runtime, raw_args.table) else try positionalParserArgs(runtime, &.{raw_args}),
+        .args = if (raw_args == .table) try checkedFrameArgs(runtime, raw_args.table, false) else try positionalParserArgs(runtime, &.{raw_args}),
     };
 }
 
@@ -216,7 +220,7 @@ fn newChildCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]
     const raw_args = try runtime.getIndex(spec, .{ .string = "args" });
     const child_args = switch (raw_args) {
         .nil => try runtime.newFrameArgsTable(),
-        .table => |table| try checkedFrameArgs(runtime, table),
+        .table => |table| try checkedFrameArgs(runtime, table, true),
         else => return error.FrameChildArgsExpected,
     };
     return one(try makeFrameWithArgs(runtime, title, child_args, .{ .table = ctx.table }));
@@ -261,7 +265,7 @@ pub fn makeFrameFromTable(runtime: *rt.Context, title: []const u8, args: *rt.Tab
 
 pub fn makeFrame(runtime: *rt.Context, title: []const u8, args: []const FrameArg, parent: ?Value) !Value {
     const table = try runtime.newFrameArgsTable();
-    for (args) |arg| try table.rawSet(runtime.allocator, if (arg.key == .string) argumentKey(arg.key.string) else arg.key, arg.value);
+    for (args) |arg| try table.rawSet(runtime.allocator, frameArgumentStorageKey(arg.key), arg.value);
     return makeFrameWithArgs(runtime, title, table, parent);
 }
 
@@ -438,6 +442,9 @@ test "Scribunto frame args resolve decimal names without filling missing argumen
 
     const child_args = try runtime.newTable();
     try child_args.rawSet(runtime.allocator, .{ .string = "1" }, .{ .string = "child" });
+    const host_args = try checkedFrameArgs(&runtime, child_args, false);
+    try std.testing.expectEqualStrings("child", host_args.rawGet(.{ .string = "1" }).?.string);
+    try std.testing.expect(host_args.rawGet(.{ .number = 1 }) == null);
     const child_spec = try runtime.newTable();
     try child_spec.rawSet(runtime.allocator, .{ .string = "args" }, .{ .table = child_args });
     const child = try runtime.callValueFirst(try runtime.getIndex(frame, .{ .string = "newChild" }), &.{ frame, .{ .table = child_spec } });
