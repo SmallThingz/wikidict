@@ -1543,9 +1543,36 @@ pub const StandaloneFigureCaptionSource = struct {
     operation: []const u8,
     caption: []const u8,
 };
+pub const SelectedDefaultThumbnail = struct {
+    start: usize,
+    token: []const u8,
+    file: []const u8,
+    options: []const u8,
+    width_px: u32,
+};
+
+pub const SelectedDefaultThumbnails = struct {
+    source: []const u8,
+    title: []const u8,
+    occurrences: []const SelectedDefaultThumbnail,
+
+    pub fn width(self: SelectedDefaultThumbnails, title: []const u8, token: []const u8, file: []const u8, options: []const u8, base_width: u32) ?u32 {
+        if (!std.mem.eql(u8, self.title, title)) return null;
+        for (self.occurrences) |occurrence| {
+            if (occurrence.start >= self.source.len or occurrence.token.len > self.source.len - occurrence.start) continue;
+            if (token.ptr == self.source[occurrence.start..].ptr and std.mem.eql(u8, token, occurrence.token) and
+                std.mem.eql(u8, file, occurrence.file) and
+                std.mem.eql(u8, options, occurrence.options) and occurrence.width_px == base_width)
+                return occurrence.width_px;
+        }
+        return null;
+    }
+};
+
 pub const FigureSizingSource = struct {
     // An exact ordinary caption direction; no page style or sizing authority.
     standalone_figure_caption: ?StandaloneFigureCaptionSource = null,
+    selected_default_thumbnails: ?SelectedDefaultThumbnails = null,
     literal_region: ?ObservedLiteralRegion = null,
     ordinary_action_group_ctx: ?*const anyopaque = null,
     resolve_ordinary_action_group_fn: ?OrdinaryActionGroupResolver = null,
@@ -1766,6 +1793,25 @@ pub const ContainerDisclosureCapture = struct {
 pub const ContainerDisclosureSource = struct {
     source: []const u8,
     captures: []const ContainerDisclosureCapture,
+};
+
+// The ordinary page caller authenticates the revision, authored occurrence,
+// and observed transport. The slice borrows the live expansion until Writer
+// preparation projects it into the selected owner fragment.
+pub const SelectedTimedAudio = struct {
+    source: []const u8,
+    file: []const u8,
+    width_px: u32,
+    height_px: ?u32,
+    mode: enum { inline_player, thumbnail },
+    // Set only after the typed span survives final Entry assembly.
+    completed: ?*bool = null,
+
+    pub fn offsetIn(self: @This(), source: []const u8) ?usize {
+        const offset = std.math.sub(usize, @intFromPtr(self.source.ptr), @intFromPtr(source.ptr)) catch return null;
+        if (self.source.len == 0 or offset > source.len or self.source.len > source.len - offset) return null;
+        return offset;
+    }
 };
 
 pub const Context = struct {
@@ -2056,6 +2102,8 @@ pub const Span = struct {
     external_literal_parameter: ?ExternalLiteralParameterProof = null,
     image: ?presentation_types.InlineImage = null,
     audio_control: ?presentation_types.AudioControl = null,
+    // Build-time identity of the selected occurrence. Never serialized.
+    selected_timed_audio_completion: ?*bool = null,
     // Build-only proof from isolated attribute parsing; never serialized.
     image_fields_compiled: bool = false,
     // Build-only figure boundary from a recognized nonfloating image option.
@@ -7256,6 +7304,7 @@ pub const Renderer = struct {
 
     const LiteralWikiTableOperation = struct {
         tracked: MissingText,
+        nah_translation_children: ?[2][]const u8 = null,
         table_opening: []const u8,
         outer_parent: ?*const table_style_profile.TextElement,
         row_opening: ?[]const u8 = null,
@@ -9692,6 +9741,7 @@ pub const Renderer = struct {
     // Document binds this only to a builder-issued original page range. Unknown
     // fragments and new page jobs clear it; no content-root inference occurs.
     source_element_binding: ?SourceElementBinding = null,
+    selected_thumbnail_binding: ?TableDirectionRangeBinding = null,
     table_direction_binding: ?TableDirectionRangeBinding = null,
     // Source authentication keeps the entry profile while an admitted viewport
     // temporarily installs its independently validated captured paint cascade.
@@ -9736,6 +9786,8 @@ pub const Renderer = struct {
     literal_url_root: ?[]const u8 = null,
     selected_inline_fragment: ?struct { original: []const u8, projected: []const u8 } = null,
     selected_inline_quote_source: ?*const QuoteSourceMap = null,
+    selected_thumbnail_quote_source: ?*const QuoteSourceMap = null,
+    selected_timed_audio: ?SelectedTimedAudio = null,
     wrapped_heading_source: ?[]const u8=null,
     heading_source: ?[]const u8 = null,
     page_root_wiki_table_openings: ?*std.ArrayList(usize) = null,
@@ -17204,6 +17256,65 @@ pub const Renderer = struct {
             .tooltip_set = true, .flags = .{ .superscript = true } };
         return spans;
     }
+    fn emitSelectedTimedAudio(self: *Renderer, tracked: MissingText, start: usize, end: usize,
+        file_name: []const u8, options: []const u8, has_trail: bool, style: Style, media_style: Style) Error!bool
+    {
+        const selected = self.selected_timed_audio orelse return false;
+        if (self.context.observe_structure_only) return false;
+        const token = tracked.bytes[start..end];
+        const source = self.registeredOriginalInterval(token, selected.source) orelse return false;
+        if (source.ptr != selected.source.ptr or source.len != selected.source.len) return false;
+        if (self.content_root != .parser_output or self.in_reference or
+            self.parsed_pre or self.pre_block or self.poem_depth != 0 or self.figure_caption_depth != 0 or
+            style.provenance != .parsed or style.kind != .text or style.heading or style.code or
+            style.target.len != 0 or style.self_link_target != null or self.body_link_target.len != 0 or
+            has_trail or tracked.lost_missing_range or tracked.generated_source != null or
+            !ordinaryNormalizationRange(tracked, start, end)) return error.UncompiledPresentation;
+        // The ordinary input separately proved the exact source table and
+        // sibling link. Its occurrence must still render in a table cell.
+        if ((selected.mode == .inline_player) != (self.cell_line_context != null))
+            return error.UncompiledPresentation;
+        const file = (try self.resolvedMediaFile(file_name)) orelse return error.UncompiledPresentation;
+        if (media_types.kind(file) != .audio or !std.mem.eql(u8, file, selected.file))
+            return error.UncompiledPresentation;
+
+        var seen_format = false;
+        const caption = switch (selected.mode) {
+            .thumbnail => thumbnail: {
+                const option = self.mediaOption(options, .timed, &seen_format) orelse return error.UncompiledPresentation;
+                if (!std.mem.eql(u8, option.id, "img_thumbnail") or std.mem.indexOfScalar(u8, options, '|') != null)
+                    return error.UncompiledPresentation;
+                break :thumbnail "";
+            },
+            .inline_player => inline_player: {
+                const width = try std.fmt.allocPrint(self.a, "noicon|{d}px", .{selected.width_px});
+                if (!std.mem.eql(u8, options, width)) return error.UncompiledPresentation;
+                break :inline_player file;
+            },
+        };
+        const control: presentation_types.AudioControl = .{
+            .width = .{ .unit = .px, .value = @floatFromInt(selected.width_px) },
+            .height = if (selected.height_px) |height| .{ .unit = .px, .value = @floatFromInt(height) } else null,
+        };
+        if (!presentation_types.validAudioControl(control)) return error.UncompiledPresentation;
+
+        // The File action keeps its filename label. Only a source-observed
+        // thumbnail with an empty caption uses an empty catalogue caption.
+        _ = try self.mediaFileKindWithSpans(file_name, caption, null, .{ .mode = .literal, .style = .{} });
+        const index = self.media_indices.get(file) orelse return error.UncompiledPresentation;
+        if (self.media.items[index].kind != .audio or !std.mem.eql(u8, self.media.items[index].caption, caption))
+            return error.UncompiledPresentation;
+        var action_style = media_style;
+        action_style.classes = try self.mediaCaptionClasses(try self.mediaClasses(file_name), style.classes);
+        const before = self.spans.items.len;
+        try self.text(file, action_style);
+        if (self.spans.items.len != before + 1) return error.UncompiledPresentation;
+        const span = &self.spans.items[before];
+        span.audio_control = control;
+        span.selected_timed_audio_completion = selected.completed;
+        if (!presentation_types.validSpanAudioControl(span.*)) return error.UncompiledPresentation;
+        return true;
+    }
     fn mediaCaptionClasses(self: *Renderer, owner: []const u8, parsed: []const u8) Error![]const u8 {
         var out: std.ArrayList(u8) = .empty;
         // Caption parsing can occur before or after the generated owner is
@@ -17402,16 +17513,44 @@ pub const Renderer = struct {
         default_size: bool = false,
         observed_height_options: ?[]const u8 = null,
         default_anchor_token: ?[]const u8 = null,
+        selected_default_thumbnail: bool = false,
         authored_width_height: bool = false,
         page_style_token: ?[]const u8 = null,
         stage_options: []const u8 = "",
     };
+    fn selectedDefaultThumbnailWidth(self: *const Renderer, source: SelectedDefaultThumbnails, choice: FigureChoice, tracked: MissingText, base_width: u32) ?u32 {
+        if (self.content_root != .parser_output or self.context.observe_structure_only or self.in_reference or
+            self.pre_block or self.parsed_pre or self.typed_table_depth != 0 or self.figure_caption_depth != 0 or
+            self.html_list_item_flow or self.figure_implicit_list_context or self.body_link_target.len != 0 or
+            tracked.unknown or !noLiParentSourceRange(tracked, tracked.bytes)) return null;
+        if (choice.format != .thumbnail or choice.content != .image or !choice.default_size or choice.horizontal != null) return null;
+        const image = choice.content.image;
+        if (image.width_px != base_width or image.height_px != null or image.map != null or image.static_poster != null or
+            image.svg_language != null or image.border or (if (image.alt) |alt| alt.len != 0 else false)) return null;
+        const token = choice.default_anchor_token orelse return null;
+        if (!std.mem.eql(u8, token, tracked.bytes)) return null;
+        const live_token = if (self.selected_thumbnail_quote_source) |quotes|
+            quotes.copiedOriginal(token) orelse token else token;
+        const original = self.registeredOriginalInterval(live_token, source.source) orelse projected: {
+            // Citation preparation can copy the page while preserving this complete token.
+            // Resolve only a Writer-bound fragment and the unchanged projected interval.
+            const binding = self.selected_thumbnail_binding orelse return null;
+            const original_page = binding.projection.original.bytes;
+            if (original_page.ptr != source.source.ptr or original_page.len != source.source.len) return null;
+            const owner_token = self.registeredOriginalInterval(live_token, binding.owner.bytes) orelse return null;
+            const start = binding.originalRange(owner_token) orelse return null;
+            break :projected original_page[start..][0..owner_token.len];
+        };
+        return source.width(self.context.title, original, choice.file, choice.stage_options, base_width);
+    }
+
     fn observedFigureAnchorAttributes(self: *Renderer, choice: FigureChoice) A.Error!?table_style_profile.AttributePresenceSource {
         const provider = self.context.figure_sizing orelse return null;
         if (provider.page_observation_ctx) |page_context| {
             const resolve = provider.resolve_anchor_attributes_fn orelse return null;
             return resolve(page_context, self.a, choice.file, choice.format, choice.stage_options);
         }
+        if (choice.selected_default_thumbnail) return .{ .ctx = null, .get = defaultThumbnailAttribute };
         if (choice.format != .thumbnail or choice.content != .image) return null;
         const token = choice.default_anchor_token orelse return null;
         const page = provider.default_thumbnail_page orelse return null;
@@ -18798,10 +18937,18 @@ pub const Renderer = struct {
         }
         const defaults = try self.figureDefaults();
         const sizing_source = self.context.figure_sizing orelse return self.figureUnavailableAt("sizing_source", tracked.bytes, 0, 0);
+        const selected_default_width = if (sizing_source.selected_default_thumbnails) |source|
+            self.selectedDefaultThumbnailWidth(source, choice, tracked, defaults.default_thumbnail_width orelse 0)
+        else null;
         var observed_language: ?[]const u8 = null;
         const sizing: ?presentation_types.FigureSizingPolicy = switch (choice.content) {
             .missing => null,
             .image => |image| image_policy: {
+                if (selected_default_width != null) {
+                    if (!presentation_types.validFigureSizingContext(choice.format, .requested_fit, image.width_px, image.height_px))
+                        return self.figureUnavailableAt("sizing_context", tracked.bytes, 0, 0);
+                    break :image_policy .requested_fit;
+                }
                 if (image.svg_language) |language| {
                     const resolve = sizing_source.resolve_svg_language_fn orelse return self.figureUnavailableAt("svg_language_source", tracked.bytes, 0, 0);
                     const page = sizing_source.page_observation_ctx orelse return self.figureUnavailableAt("svg_language_page", tracked.bytes, 0, 0);
@@ -18874,6 +19021,7 @@ pub const Renderer = struct {
         const caption_tags: ?[]const []const u8 = if (no_list_nodes and !self.figure_implicit_list_context and !self.html_list_item_flow and figureCaptionInlineNodes(choice.caption))
             &.{ "span", "b", "i", "strong", "em", "a", "p", "br", "small", "sup" } else null;
         var resolved_choice = choice;
+        resolved_choice.selected_default_thumbnail = selected_default_width != null;
         if (observed_language) |language| resolved_choice.content.image.svg_language = language;
         const complete_caption_classes = self.figureRootCompleteClasses(tracked, choice.caption, parent);
         const own_style = try self.observedFigureStyle(tracked, resolved_choice);
@@ -40978,6 +41126,9 @@ pub const Renderer = struct {
                         var media_style = s;
                         media_style.classes = try self.mediaCaptionClasses("", s.classes);
                         media_style = try self.mediaActionStyle(media_style, file_name, link_target);
+                        if (selected_figure == null and token.link_has_pipe and
+                            try self.emitSelectedTimedAudio(prepared_missing, token_start, it.cursor - trail.len, file_name,
+                                token.text, trail.len != 0, s, media_style)) continue;
                         // Parsoid preserves an unframed timed-media caption as
                         // a wrapper title, not body text. Compile its display
                         // text into the existing reader annotation field.
@@ -41519,6 +41670,7 @@ pub const Renderer = struct {
         var table_link_quote_live = false;
         var selected_table_quote_source = false;
         var phonos_quote_input = false;
+        var thumbnail_quote_input = false;
         var local_target_quote_live = false;
         var list_quote_operation: ?*const OrdinaryBulletLink = null;
         var heading_quote_input = false;
@@ -41571,6 +41723,13 @@ pub const Renderer = struct {
                 (if (self.table_viewport_cell_source) |scope| scope.links.len != 0 and
                     (if (self.tableLinkOriginalIn(prepared.source.bytes, self.table_link_quote_source, 0)) |original|
                         wikiClassContains(scope.source, original) else false) else false);
+            // A selected Figure still requires its exact, unchanged token in
+            // the current owner. The quote parser may allocate its own copy.
+            if (ordinary and figure_quote_input_live and QuoteSourceMap.cleanLocal(prepared.source)) {
+                if (self.selected_thumbnail_binding) |binding| {
+                    thumbnail_quote_input = self.registeredOriginalInterval(prepared.source.bytes, binding.owner.bytes) != null;
+                }
+            }
             local_target_quote_live = ordinary and figure_quote_input_live and
                 self.context.local_link_targets != null and QuoteSourceMap.clean(prepared.source);
             if (ordinary and figure_quote_input_live and !self.context.observe_structure_only)
@@ -41608,9 +41767,9 @@ pub const Renderer = struct {
             };
             const output = try normalizeWikiQuotesPreparedMappedInDomain(self.a, prepared.source, 0, false, self.context,
                 if (table_tails.seed) |seed| prepared.forwardSeed(comparisons.forwardSeed(seed)) else null,
-                if (page_style_quote_owner != null or phonos_quote_input or heading_quote_input or paragraph_parent_input or list_quote_operation != null or quote_scope != null or table_link_quote_live or local_target_quote_live or native_quote_input_live or decorated_quote_root != null or box_quote_input_live or literal_paragraph_live or root_language_quote_proof != null or
+                if (page_style_quote_owner != null or phonos_quote_input or thumbnail_quote_input or heading_quote_input or paragraph_parent_input or list_quote_operation != null or quote_scope != null or table_link_quote_live or local_target_quote_live or native_quote_input_live or decorated_quote_root != null or box_quote_input_live or literal_paragraph_live or root_language_quote_proof != null or
                     (ordinary and figure_quote_input_live and (figure_source_domain != null or self.context.body_link_continuations != null))) &quote_map else null,
-                phonos_quote_input or heading_quote_input or paragraph_parent_input or list_quote_operation != null or selected_quote_source or selected_table_quote_source);
+                phonos_quote_input or thumbnail_quote_input or heading_quote_input or paragraph_parent_input or list_quote_operation != null or selected_quote_source or selected_table_quote_source);
             prepared.release(self.a, comparisons.source, output);
             comparisons.release(self.a, table_tails.source, output);
             table_tails.release(self.a, unmatched, output);
@@ -41630,6 +41789,11 @@ pub const Renderer = struct {
             inlineOverlaySameSourceSlice(quote_map.original, unmatched.bytes) and
             inlineOverlaySameSourceSlice(quote_map.output, quoted.bytes)) &quote_map else null;
         defer self.selected_inline_quote_source = previous_phonos_quotes;
+        const previous_thumbnail_quotes = self.selected_thumbnail_quote_source;
+        self.selected_thumbnail_quote_source = if (thumbnail_quote_input and QuoteSourceMap.cleanLocal(quoted) and
+            inlineOverlaySameSourceSlice(quote_map.original, unmatched.bytes) and
+            inlineOverlaySameSourceSlice(quote_map.output, quoted.bytes)) &quote_map else null;
+        defer self.selected_thumbnail_quote_source = previous_thumbnail_quotes;
         const previous_paragraph_parent = self.paragraph_span_quotes;
         var paragraph_parent: InlineBoxQuotedParagraph = undefined;
         self.paragraph_span_quotes = null;
@@ -44064,7 +44228,19 @@ pub const Renderer = struct {
             self.typed_table_depth != 0 and self.tableDirectionOriginal(original) != null;
         const local_target_source_observed = self.heading_source == null and !image_map_observed and
             !row_color_observed and !table_source_observed and self.localLinkOriginal(original) != null;
-        if ((self.heading_source == null and !image_map_observed and !row_color_observed and !table_source_observed and !local_target_source_observed) or original.len == 0) return;
+        // Keep the exact delimiter positions copied from the proved NAH
+        // grid. Other cell bytes do not borrow this copy owner's scope.
+        const nah_child_boundary = boundary: {
+            if (original.len != 2) break :boundary false;
+            const operation = self.literal_wiki_table_operation orelse break :boundary false;
+            const children = operation.nah_translation_children orelse break :boundary false;
+            for (children) |child| {
+                if (original.ptr == child.ptr or original.ptr == child[child.len - 2 ..].ptr) break :boundary true;
+            }
+            break :boundary false;
+        };
+        if ((self.heading_source == null and !image_map_observed and !row_color_observed and !table_source_observed and
+            !local_target_source_observed and !nah_child_boundary) or original.len == 0) return;
         if (copies.items.len != 0) {
             const previous = &copies.items[copies.items.len - 1];
             if (previous.start + previous.original.len == start and
@@ -46229,7 +46405,8 @@ pub const Renderer = struct {
                     try blocks.appendSlice(self.a, try self.indentTableBlocks(table.fostered, table_path));
                     try self.appendBlockBudgeted(&blocks, .{ .kind = .table, .table = table.table, .feature = table.feature, .depth = @intCast(@min(table_path.len, 255)), .list_path = table_path[0..@min(table_path.len, 255)] });
                 } else {
-                    self.fallbacks.malformed_table = true;
+                    const translation_child = self.witnessedNahTranslationChild(input, start, table.body_end);
+                    if (!translation_child) self.fallbacks.malformed_table = true;
                     // Rowless layout tables still contain ordinary lists/text.
                     const previous_recovery = self.wiki_heading_recovery;
                     defer self.wiki_heading_recovery = previous_recovery;
@@ -46250,6 +46427,11 @@ pub const Renderer = struct {
                         try self.renderBody(rowless_source);
                     for (try self.indentTableBlocks(rowless_blocks, table_path)) |block_value|
                         try self.appendBlockBudgeted(&blocks, block_value);
+                    if (translation_child and self.spend()) {
+                        const cells = try self.a.dupe(Cell, &.{.{ .spans = &.{} }});
+                        const rows = try self.a.dupe(Row, &.{.{ .cells = cells }});
+                        try self.appendBlockBudgeted(&blocks, .{ .kind = .table, .table = .{ .rows = rows } });
+                    }
                 }
                 continue;
             }
@@ -50769,6 +50951,60 @@ pub const Renderer = struct {
         return suffix;
     }
 
+    // The dated NAH translation helpers author this complete outer grid. Their
+    // bare child tables leave list/rule blocks to be fostered into the cell,
+    // followed by a parser-inserted empty row and data cell.
+    fn nahTranslationChildren(self: *const Renderer, tracked: MissingText, opening_start: usize) ?[2][]const u8 {
+        const namespaces = self.context.namespace_catalog orelse return null;
+        if (!std.mem.eql(u8, namespaces.wiki, "nahwiktionary") or
+            !std.mem.eql(u8, namespaces.dump_date, "20261001") or
+            !std.mem.eql(u8, namespaces.content_language, "nah")) return null;
+        var lines = std.mem.splitScalar(u8, tracked.bytes[opening_start..], '\n');
+        const opener = lines.next() orelse return null;
+        if (!std.mem.eql(u8, opener, "{| border=0  width=100%") or
+            !std.mem.eql(u8, lines.next() orelse return null, "|-")) return null;
+        var children: [2][]const u8 = undefined;
+        for (&children, 0..) |*child, index| {
+            if (index != 0 and !std.mem.eql(u8, lines.next() orelse return null, "| width=1% |")) return null;
+            if (!std.mem.eql(u8, lines.next() orelse return null, "|bgcolor=\"#FFFFE0\" valign=top width=48%|")) return null;
+            const open = lines.next() orelse return null;
+            if (!std.mem.eql(u8, open, "{|")) return null;
+            var items: usize = 0;
+            while (lines.next()) |line| {
+                if (std.mem.eql(u8, line, "|}")) {
+                    if (items == 0) return null;
+                    const at = @intFromPtr(open.ptr) - @intFromPtr(tracked.bytes.ptr);
+                    const end = @intFromPtr(line.ptr) - @intFromPtr(tracked.bytes.ptr) + line.len;
+                    child.* = tracked.bytes[at..end];
+                    break;
+                }
+                if (starts(line, "* ") or (items != 0 and starts(line, "** "))) {
+                    items += 1;
+                } else if (!std.mem.eql(u8, line, "----") or items == 0) return null;
+            } else return null;
+        }
+        const close = lines.next() orelse return null;
+        if (!std.mem.eql(u8, close, "|}")) return null;
+        const end = @intFromPtr(close.ptr) - @intFromPtr(tracked.bytes.ptr) + close.len;
+        if (!noLiParentSourceRange(tracked, tracked.bytes[opening_start..end])) return null;
+        return children;
+    }
+
+    fn witnessedNahTranslationChild(self: *const Renderer, input: []const u8, start: usize, close_start: usize) bool {
+        const parent = self.literal_wiki_table_operation orelse return false;
+        const children = parent.nah_translation_children orelse return false;
+        if (close_start >= input.len or ir.logicalEnd(input, close_start) != close_start + 2) return false;
+        const replay = input[start .. close_start + 2];
+        const tracked = self.body_missing orelse return false;
+        if (!noLiParentSourceRange(tracked, replay)) return false;
+        const open = self.registeredOriginalInterval(replay[0..2], parent.tracked.bytes) orelse return false;
+        const close = self.registeredOriginalInterval(input[close_start .. close_start + 2], parent.tracked.bytes) orelse return false;
+        for (children) |child| {
+            if (open.ptr == child.ptr and close.ptr == child[child.len - 2 ..].ptr and std.mem.eql(u8, replay, child)) return true;
+        }
+        return false;
+    }
+
     // start is the existing body position AFTER the opening line. Only the
     // separate physical opening_start may lend original root-table evidence.
     fn parseTable(self: *Renderer, source: []const u8, start: usize, opening_start: usize, swatch_background: ?[]const u8, table_background: ?[]const u8, table_style: Style, table_formatting: SpanFlags, opening: syntax.Tag, class_source_visible: bool, viewport: ?TableViewportCandidate) Error!TableResult {
@@ -50844,6 +51080,7 @@ pub const Renderer = struct {
         defer self.table_manual_markers = previous_manual_markers;
         const previous_literal_operation = self.literal_wiki_table_operation;
         var literal_operation: LiteralWikiTableOperation = .{ .tracked = tracked,
+            .nah_translation_children = if (viewport == null and class_source_visible) self.nahTranslationChildren(tracked, opening_start) else null,
             .table_opening = input[opening_start..direction_opening_end],
             .outer_parent = self.bodyFormattingStyle(.{}).text_element };
         if (table_style.text_element) |node| if (node.source_wiki_root_table != null and self.currentAncestorScope(node)) {
@@ -55010,6 +55247,38 @@ test "localized namespace aliases classify media and category membership" {
     try std.testing.expectEqualStrings("", try plainText(arena.allocator(), headings[2].spans));
     try std.testing.expectEqualStrings("Body.jpg", headings[2].spans[0].image.?.file);
     try std.testing.expectEqual(@as(u32, 20), headings[2].spans[0].image.?.width_px.?);
+}
+
+test "selected File audio thumb preserves empty caption and named transport" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const file = "Or-ପ୍ରସଙ୍ଗ.wav";
+    const token = "[[File:" ++ file ++ "|thumb]]";
+    const selected = try a.dupe(u8, token);
+    const detached = try a.dupe(u8, token);
+    for ([_][]const u8{ selected, detached }, 0..) |input, index| {
+        var renderer: Renderer = .{ .a = a, .context = .{ .external_links_prepared = true },
+            .content_root = .parser_output, .selected_timed_audio = .{
+                .source = selected, .file = file, .width_px = 250, .height_px = 30, .mode = .thumbnail,
+            } };
+        const spans = try renderer.parseSpans(input, .{});
+        try std.testing.expectEqual(@as(usize, 1), spans.len);
+        try std.testing.expectEqualStrings(file, spans[0].text);
+        try std.testing.expectEqualStrings("File:" ++ file, spans[0].target);
+        try std.testing.expectEqual(@as(usize, 1), renderer.media.items.len);
+        try std.testing.expectEqualStrings(file, renderer.media.items[0].file);
+        try std.testing.expectEqual(media_types.Kind.audio, renderer.media.items[0].kind);
+        if (index == 0) {
+            try std.testing.expectEqualStrings("", renderer.media.items[0].caption);
+            try std.testing.expectEqualDeep(presentation_types.AudioControl{
+                .width = .{ .unit = .px, .value = 250 }, .height = .{ .unit = .px, .value = 30 },
+            }, spans[0].audio_control.?);
+        } else {
+            try std.testing.expectEqualStrings(file, renderer.media.items[0].caption);
+            try std.testing.expect(spans[0].audio_control == null);
+        }
+    }
 }
 
 test "repeated source Phonos controls keep both localized body actions and one recording" {
@@ -138683,6 +138952,84 @@ test "observed fixed atom callback refuses line height mismatch stale ranges and
     held.context.figure_sizing.?.resolve_authored_fixed_inline_box_fn = null;
     try std.testing.expect((try held.observedFixedInlineBoxStyleForOperation(operation, fixture.parent)) == null);
     try std.testing.expectEqual(@as(usize, 0), fixture.renderer.spans.items.len);
+}
+
+test "NAH dated translation cells retain fostered lists followed by the two empty child grids" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const ns = @import("namespace_registry");
+    var registry = try ns.Registry.init(a, "# wikidict-namespace-registry-v1\n# wiki\tnahwiktionary\n# dump-date\t20261001\n# content-language\tnah\n-2\tMēdiatl\tMedia\tcase-sensitive\t0\t0\t0\t\tcompile_only\tvirtual_namespace\tMedia\n-1\tNōncuahquīzqui\tSpecial\tfirst-letter\t0\t0\t0\t\tcompile_only\tvirtual_namespace\tEspecial\n0\t\t\tcase-sensitive\t0\t1\t0\t\tmain\tdictionary_entries\n1\tTēixnāmiquiliztli\tTalk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tDiscusión\n2\tTlatequitiltilīlli\tUser\tfirst-letter\t1\t0\t0\t\tcompile_only\tstandard_build_input\tUsuario\n3\tTlatequitiltilīlli tēixnāmiquiliztli\tUser talk\tfirst-letter\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tUsuario Discusión\n4\tWiktionary\tProject\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\tWT\tWikipedia\n5\tWiktionary tēixnāmiquiliztli\tProject talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tWikipedia Discusión\tWiktionary talk\n6\tĪxiptli\tFile\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\tImage\tImagen\n7\tĪxiptli tēixnāmiquiliztli\tFile talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tImage talk\tImagen Discusión\tImagen discusión\n8\tHuiquimedia\tMediaWiki\tfirst-letter\t1\t0\t0\t\tcompile_only\tstandard_build_input\tMediaWiki\n9\tHuiquimedia tēixnāmiquiliztli\tMediaWiki talk\tfirst-letter\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tMediaWiki Discusión\n10\tNemachiyōtīlli\tTemplate\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\tPlantilla\n11\tNemachiyōtīlli tēixnāmiquiliztli\tTemplate talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tPlantilla Discusión\n12\tTēpalēhuiliztli\tHelp\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\tAyuda\n13\tTēpalēhuiliztli tēixnāmiquiliztli\tHelp talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tAyuda Discusión\n14\tNeneuhcāyōtl\tCategory\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\tCategoría\n15\tNeneuhcāyōtl tēixnāmiquiliztli\tCategory talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tCategoría Discusión\n710\tTimedText\tTimedText\tcase-sensitive\t0\t0\t0\t\tcompile_only\tancillary_site_input\n711\tTimedText talk\tTimedText talk\tcase-sensitive\t0\t0\t0\t\tcompile_only\tdiscussion_namespace\n828\tMódulo\tModule\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\n829\tMódulo discusión\tModule talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n1728\tEvento\tEvent\tcase-sensitive\t1\t0\t0\t\tcompile_only\tancillary_site_input\n1729\tEvento discusión\tEvent talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n");
+    defer registry.deinit();
+    const translation = "{| border=0  width=100%\n|-\n|bgcolor=\"#FFFFE0\" valign=top width=48%|\n{|\n* [[Ahuilizapan nahuatlahtolli]]: <span lang=\"nlv\" xml:lang=\"nlv\">[[witzikitl]]</span> <sup>[[:nlv:witzikitl|(nlv)]]</sup>\n* [[Coxolihyacac nahuatlahtolli]]: <span lang=\"nhk\" xml:lang=\"nhk\">[[tsitsilin]]</span> <sup>[[:nhk:tsitsilin|(nhk)]]</sup>\n* [[tlahco nahuatlahtolli]]: <span lang=\"nhn\" xml:lang=\"nhn\">[[witsilin]]</span> <sup>[[:nhn:witsilin|(nhn)]]</sup>\n* [[Tliltepehuahcan nahuatlahtolli]]: <span lang=\"nsu\" xml:lang=\"nsu\">[[witsiki]]</span> <sup>[[:nsu:witsiki|(nsu)]]</sup>\n* [[Zacatlan nahuatlahtolli]]: <span lang=\"nhi\" xml:lang=\"nhi\">[[witsiki]]</span> <sup>[[:nhi:witsiki|(nhi)]]</sup>\n----\n* [[alemaniatlahtolli]]: <span lang=\"de\" xml:lang=\"de\">[[Kolibri]]</span> <sup>[[:de:Kolibri|(de)]]</sup> ''oquichtic''\n* [[caxtillantlahtolli]]: <span lang=\"es\" xml:lang=\"es\">[[colibrí]]</span> <sup>[[:es:colibrí|(es)]]</sup> ''oquichtic'', <span lang=\"es\" xml:lang=\"es\">[[picaflor]]</span> <sup>[[:es:picaflor|(es)]]</sup> ''oquichtic'', <span lang=\"es\" xml:lang=\"es\">[[chupamirto]]</span> <sup>[[:es:chupamirto|(es)]]</sup> ''oquichtic'', <span lang=\"es\" xml:lang=\"es\">[[pájaro mosca]]</span> <sup>[[:es:pájaro mosca|(es)]]</sup> ''oquichtic'', <span lang=\"es\" xml:lang=\"es\">[[zunzún]]</span> <sup>[[:es:zunzún|(es)]]</sup> ''oquichtic'', <span lang=\"es\" xml:lang=\"es\">[[güichichi]]</span> <sup>[[:es:güichichi|(es)]]</sup> ''oquichtic'' <small>(Mexihco)</small>\n* [[cuextecatlahtolli]]: <span lang=\"hus\" xml:lang=\"hus\">[[chunún]]</span> <sup>[[:hus:chunún|(hus)]]</sup>\n* [[chinatlahtolli]]: <span lang=\"zh\" xml:lang=\"zh\">[[蜂鸟]]</span> <sup>[[:zh:蜂鸟|(zh)]]</sup> (fēng niǎo)\n* [[chollahtolli]]: <span lang=\"ctu\" xml:lang=\"ctu\">[[ts'uñuñ]]</span> <sup>[[:ctu:ts'uñuñ|(ctu)]]</sup>\n* [[franciatlahtolli]]: <span lang=\"fr\" xml:lang=\"fr\">[[colibri]]</span> <sup>[[:fr:colibri|(fr)]]</sup> ''oquichtic''\n|}\n| width=1% |\n|bgcolor=\"#FFFFE0\" valign=top width=48%|\n{|\n* [[finlandiatlahtolli]]: <span lang=\"fi\" xml:lang=\"fi\">[[kolibri]]</span> <sup>[[:fi:kolibri|(fi)]]</sup>\n* [[inglaterratlahtolli]]: <span lang=\"en\" xml:lang=\"en\">[[hummingbird]]</span> <sup>[[:en:hummingbird|(en)]]</sup>, <span lang=\"en\" xml:lang=\"en\">[[humming bird]]</span> <sup>[[:en:humming bird|(en)]]</sup>\n* [[italiatlahtolli]]: <span lang=\"it\" xml:lang=\"it\">[[colibri]]</span> <sup>[[:it:colibri|(it)]]</sup> ''oquichtic''\n* [[portugallahtolli]]: <span lang=\"pt\" xml:lang=\"pt\">[[colibri]]</span> <sup>[[:pt:colibri|(pt)]]</sup> ''oquichtic''\n* [[otontlahtolli]]:\n** [[Teotlalpan otontlahtolli]]: <span lang=\"ote\" xml:lang=\"ote\">[[gätu̱]]</span> <sup>[[:ote:gätu̱|(ote)]]</sup>\n* [[ocuiltecatlahtolli]]: <span lang=\"ocu\" xml:lang=\"ocu\">[[lindy]]</span> <sup>[[:ocu:lindy|(ocu)]]</sup>\n* [[quilihuatlahtolli]]: <span lang=\"klb\" xml:lang=\"klb\">[[t'msok]]</span> <sup>[[:klb:t'msok|(klb)]]</sup>\n* [[seritlahtolli]]: <span lang=\"sei\" xml:lang=\"sei\">[[xeenoj]]</span> <sup>[[:sei:xeenoj|(sei)]]</sup>\n* [[yaquitlahtolli]]: <span lang=\"yaq\" xml:lang=\"yaq\">[[semálulukut]]</span> <sup>[[:yaq:semálulukut|(yaq)]]</sup>\n* [[yucatecatlahtolli]]: <span lang=\"yua\" xml:lang=\"yua\">[[ts'unu'un]]</span> <sup>[[:yua:ts'unu'un|(yua)]]</sup>\n|}\n|}\n";
+    var r: Renderer = .{ .a = a, .context = .{ .title = "huitzilin", .namespace_catalog = &registry } };
+    const blocks = try r.renderBody(translation);
+    try std.testing.expect(!r.fallbacks.malformed_table);
+    try std.testing.expectEqual(@as(usize, 1), blocks.len);
+    const outer = blocks[0].table orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 1), outer.rows.len);
+    const cells = outer.rows[0].cells;
+    try std.testing.expectEqual(@as(usize, 3), cells.len);
+    try std.testing.expect(cells[1].spans.len == 0 and cells[1].blocks == null and cells[1].nested_table == null);
+    for ([_]usize{ 0, 2 }) |index| {
+        const children = cells[index].blocks orelse return error.TestUnexpectedResult;
+        try std.testing.expect(children.len > 2);
+        try std.testing.expectEqual(Kind.list_item, children[0].kind);
+        const child = children[children.len - 1].table orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(@as(usize, 1), child.rows.len);
+        try std.testing.expectEqual(@as(usize, 1), child.rows[0].cells.len);
+        const blank = child.rows[0].cells[0];
+        try std.testing.expect(blank.spans.len == 0 and blank.blocks == null and blank.nested_table == null and !blank.header);
+    }
+    try std.testing.expectEqual(Kind.rule, cells[0].blocks.?[5].kind);
+    try std.testing.expectEqualStrings("**", cells[2].blocks.?[5].list_path);
+    const wire = try FormattingScopeTest.encode(a, &r, blocks);
+    const codec = @import("blob_encoder").presentation_codec;
+    const bytes = try codec.encodeAlloc(a, wire);
+    const decoded = try codec.decodeAlloc(a, bytes, wire.entry.title, .language,
+        .{ .code = wire.entry.language_code, .heading = wire.entry.language.? });
+    try std.testing.expectEqualDeep(wire, decoded);
+
+    // Independent ordinary expansion with the same dated translation helpers.
+    var second: Renderer = .{ .a = a, .context = .{ .title = "oztohuah", .namespace_catalog = &registry } };
+    const comparison = try second.renderBody("{| border=0  width=100%\n|-\n|bgcolor=\"#FFFFE0\" valign=top width=48%|\n{|\n* [[albaniatlahtolli]]: [1]&nbsp;<span lang=\"sq\" xml:lang=\"sq\">[[dhelpër]]</span> <sup>[[:sq:dhelpër|(sq)]]</sup> ''cihuatic''\n* [[caxtillantlahtolli]]: [1]&nbsp;<span lang=\"es\" xml:lang=\"es\">[[zorro gris]]</span> <sup>[[:es:zorro gris|(es)]]</sup> ''oquichtic''\n* [[chinatlahtolli]]: [1]&nbsp;<span lang=\"zh\" xml:lang=\"zh\">[[狐狸]]</span> <sup>[[:zh:狐狸|(zh)]]</sup> (húli)\n|}\n| width=1% |\n|bgcolor=\"#FFFFE0\" valign=top width=48%|\n{|\n* [[franciatlahtolli]]: [1]&nbsp;<span lang=\"fr\" xml:lang=\"fr\">[[renard]]</span> <sup>[[:fr:renard|(fr)]]</sup> ''oquichtic''\n* [[inglaterratlahtolli]]: [1]&nbsp;<span lang=\"en\" xml:lang=\"en\">[[fox]]</span> <sup>[[:en:fox|(en)]]</sup>\n* [[alemaniatlahtolli]]: [1]&nbsp;<span lang=\"de\" xml:lang=\"de\">[[Fuchs]]</span> <sup>[[:de:Fuchs|(de)]]</sup> ''oquichtic''\n|}\n|}\n");
+    try std.testing.expect(!second.fallbacks.malformed_table);
+    const comparison_cells = comparison[0].table.?.rows[0].cells;
+    try std.testing.expectEqual(@as(usize, 3), comparison_cells.len);
+    for ([_]usize{ 0, 2 }) |index| {
+        const children = comparison_cells[index].blocks orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(@as(usize, 4), children.len);
+        try std.testing.expectEqual(Kind.list_item, children[0].kind);
+        const empty = children[children.len - 1].table.?.rows[0].cells;
+        try std.testing.expectEqual(@as(usize, 1), empty.len);
+        try std.testing.expectEqual(@as(usize, 0), empty[0].spans.len);
+    }
+
+    var second_inflection: Renderer = .{ .a = a, .context = .{ .title = "conejo", .namespace_catalog = &registry } };
+    const comparison_inflection = try second_inflection.renderBody("{| class=\"wikitable\"\n|\n| Oquichtic\n| Cihuatic\n|-\n|<span style=\"font-size:95%;\">[[cencayotl|Cencayotl]]</span>\n|El '''conejo'''\n|La '''[[coneja]]'''\n|-\n|<span style=\"font-size:95%;\">[[miaccayotl|Miaccayotl]]</span>\n|Los '''[[conejos]]'''\n|Las '''[[conejas]]'''\n|}\n");
+    try std.testing.expect(!second_inflection.fallbacks.malformed_table);
+    const rows = comparison_inflection[0].table.?.rows;
+    try std.testing.expectEqual(@as(usize, 3), rows.len);
+    for (rows) |row| try std.testing.expectEqual(@as(usize, 3), row.cells.len);
+
+    var ordinary: Renderer = .{ .a = a, .context = .{ .namespace_catalog = &registry } };
+    const inflection = try ordinary.renderBody("{| class=\"wikitable\"\n|\n|Achtocayotl\n|Pilcayotl\n|-\n|<span style=\"font-size:95%;\">[[cencayotl|Cencayotl]]</span>\n|'''huitzilin'''\n| '''huitzil-'''\n|-\n|<span style=\"font-size:95%;\">[[miaccayotl|Miaccayotl]]</span>\n|'''[[huitziltin]]'''\n| '''-huitzilhuan'''\n|}\n");
+    try std.testing.expect(!ordinary.fallbacks.malformed_table);
+    const grid = inflection[0].table orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 3), grid.rows.len);
+    for (grid.rows) |row| try std.testing.expectEqual(@as(usize, 3), row.cells.len);
+
+    var detached: Renderer = .{ .a = a, .context = .{ .namespace_catalog = &registry } };
+    const root = try detached.renderBody("{|\n* [[kept]]\n|}\n");
+    try std.testing.expect(detached.fallbacks.malformed_table);
+    try std.testing.expectEqual(@as(usize, 1), root.len);
+    try std.testing.expectEqual(Kind.list_item, root[0].kind);
+
+    var incomplete: Renderer = .{ .a = a, .context = .{ .namespace_catalog = &registry } };
+    const close = std.mem.lastIndexOf(u8, translation, "|}") orelse return error.TestUnexpectedResult;
+    const invalid = try incomplete.renderBody(translation[0..close]);
+    try std.testing.expect(incomplete.fallbacks.malformed_table);
+    for (invalid[0].table.?.rows[0].cells) |cell| for (cell.blocks orelse &.{}) |child| try std.testing.expect(child.table == null);
 }
 
 test "KU table query retains unknown exterior classes while excluding closed earlier spans" {

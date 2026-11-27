@@ -61,7 +61,9 @@ pub fn nahDefaultsortHeading(source: []const u8, ns: *const namespaces.Registry,
 {
     if (!std.mem.eql(u8, ns.wiki, "nahwiktionary") or !std.mem.eql(u8, ns.content_language, "nah") or
         source.len > 4096 or !registry.codes.contains(code)) return null;
-    const label = if (std.mem.eql(u8, code, "es")) "Caxtillantlahtolli" else if (std.mem.eql(u8, code, "de")) "Alemaniatlahtolli" else return null;
+    const label = if (std.mem.eql(u8, code, "es")) "Caxtillantlahtolli" else if (std.mem.eql(u8, code, "de")) "Alemaniatlahtolli"
+        else if (std.mem.eql(u8, code, "nci")) "Nahuatlahtolli" else return null;
+    const category_name = if (std.mem.eql(u8, code, "nci")) "Tecpiltic Nahuatlahtolli" else label;
     const open = "<includeonly>";
     const sort = "{{DEFAULTSORT:{{{1|{{PAGENAME}}}}}}}</includeonly>";
     const prelude = "__NOEDITSECTION__\n<br>";
@@ -75,16 +77,17 @@ pub fn nahDefaultsortHeading(source: []const u8, ns: *const namespaces.Registry,
         !std.mem.eql(u8, target, std.mem.trim(u8, target, " "))) return null;
     const category_title = ns.ofTitle(target);
     const name = category_title.text;
-    if (category_title.id != 14 or !std.mem.eql(u8, name, label) or
-        !registry.sourceBannerCategoryNameCompatible(code, name)) return null;
+    if (category_title.id != 14 or !std.mem.eql(u8, name, category_name) or
+        !registry.sourceBannerCategoryNameCompatible(code, name) or
+        !registry.sourceBannerLiteralCodeNameCompatible(code, label)) return null;
 
     const rest = source[category_end + sort.len..];
     if (!std.mem.startsWith(u8, rest, prelude ++ "\n") or
         (controlAt(behavior, rest, 0) catch return null) != "__NOEDITSECTION__".len) return null;
     const line = rest[prelude.len + 1 ..];
     if (line.len < 7 or !std.mem.startsWith(u8, line, "== ") or !std.mem.endsWith(u8, line, " ==") or
-        !std.mem.eql(u8, line[3 .. line.len - 3], name) or containsControl(behavior, name)) return null;
-    return .{ .heading = name, .level = 2, .target = name, .label = name,
+        !std.mem.eql(u8, line[3 .. line.len - 3], label) or containsControl(behavior, label)) return null;
+    return .{ .heading = label, .level = 2, .target = label, .label = label,
         .authority = .paired_first_category, .emitted_prefix = .{ .category = category, .suffix = rest[0..prelude.len] } };
 }
 
@@ -585,6 +588,45 @@ pub fn fjVosaProofAlloc(a: std.mem.Allocator, wrapper: []const u8, formatter: []
     return .{ .heading = heading, .level = 1, .target = target, .label = label,
         .authority = .category_declaration,
         .emitted_prefix = .{ .category = category, .suffix = "__NOEDITSECTION__\n<br>" } };
+}
+
+
+// A separate dependency-bound route; the existing literal route stays exact.
+pub fn fjVosaLanguageSourceMatches(wrapper: []const u8, formatter: []const u8,
+    ns: *const namespaces.Registry, registry: *const languages.Registry, code: []const u8) bool
+{
+    if (!std.mem.eql(u8, ns.wiki, "fjwiktionary") or !std.mem.eql(u8, ns.content_language, "fj") or
+        !registry.codes.contains(code) or ns.ofTitle("Category:proof").id != 14 or
+        !categoryRoleHash(formatter, "2de714af0d6663709b5490a79fbdf12429040c57ff2bb1a23f47e089c001509a")) return false;
+    if (code.len < 2 or code.len > 128) return false;
+    for (code) |byte| if (!std.ascii.isLower(byte) and !std.ascii.isDigit(byte) and byte != '-') return false;
+    const open = "{{vosa|{{#language:";
+    const close = "|fj}}}}";
+    return wrapper.len == open.len + code.len + close.len and
+        std.mem.startsWith(u8, wrapper, open) and std.mem.endsWith(u8, wrapper, close) and
+        std.mem.eql(u8, wrapper[open.len..wrapper.len - close.len], code);
+}
+
+// captured_names is the maintained native language_names.Registry, initialized
+// from the same root and edition identity as the captured magic-word registry.
+// Its single-profile name is borrowed until the caller retains the proof.
+pub fn fjVosaLanguageProofAlloc(a: std.mem.Allocator, wrapper: []const u8, formatter: []const u8,
+    ns: *const namespaces.Registry, registry: *languages.Registry, code: []const u8,
+    words: *const namespaces.magic_words.Registry, captured_names: anytype) !?languages.SourceLanguageBanner
+{
+    if (!fjVosaLanguageSourceMatches(wrapper, formatter, ns, registry, code) or !words.expanded_functions) return null;
+    const function = words.resolve("#language", .parser_function) orelse return null;
+    if (!std.mem.eql(u8, function, "language")) return null;
+    const label = try captured_names.name(code, "fj");
+    // Empty/missing names do not acquire a BCP47/default owner proof.
+    if (label.len == 0) return null;
+    const literal = try std.fmt.allocPrint(a, "{{{{vosa|{s}}}}}", .{label});
+    defer a.free(literal);
+    var proof = (try fjVosaProofAlloc(a, literal, formatter, ns, registry, code)) orelse return null;
+    // fjVosaProofAlloc borrows its argument. Keep the label in the live captured
+    // registry, not in the temporary literal adapter that is about to be freed.
+    proof.label = label;
+    return proof;
 }
 
 test "category H1 current registry binds bare and legacy source owners" {

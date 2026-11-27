@@ -50,6 +50,7 @@ pub const nativeSourceClassProofWithExteriorAlloc = compiler.nativeSourceClassPr
 pub const nativeSourceClassProofAlloc = compiler.nativeSourceClassProofAlloc;
 pub const nativeSourceClassRangeCurrent = compiler.nativeSourceClassRangeCurrent;
 pub const ParserOutputRange = struct {
+    timed_audio: ?compiler.SelectedTimedAudio = null,
     definition_original: ?[]const u8 = null,
     nav_head_run_start: ?usize = null,
     definition_run_start: ?usize = null,
@@ -1263,6 +1264,7 @@ const Builder = struct {
             const previous_tables = self.renderer.root_wiki_table_range;
             const previous_text_scope = self.renderer.bounded_text_class_scope;
             const previous_native_classes = self.renderer.native_source_class_range;
+            const previous_thumbnail_binding = self.renderer.selected_thumbnail_binding;
             const previous_text_source = self.renderer.bounded_text_class_source;
             if (fragmentContentRoot(fragment, tracked) == .parser_output) self.renderer.content_root = .parser_output;
             bindFragmentRootWikiTables(self.renderer, fragment, tracked);
@@ -1271,6 +1273,7 @@ const Builder = struct {
             defer self.renderer.root_wiki_table_range = previous_tables;
             defer self.renderer.bounded_text_class_scope = previous_text_scope;
             defer self.renderer.native_source_class_range = previous_native_classes;
+            defer self.renderer.selected_thumbnail_binding = previous_thumbnail_binding;
             defer self.renderer.bounded_text_class_source = previous_text_source;
             const native_scope = NativeArticleRenderScope.enter(native_host, tracked, fragment, false);
             defer native_scope.deinit();
@@ -1318,6 +1321,7 @@ fn bindWholeTextClassScope(renderer: *compiler.Renderer, source: MissingText) vo
     renderer.native_source_class_range = null;
     renderer.local_link_binding = null;
     renderer.figure_class_source_binding = null;
+    renderer.selected_thumbnail_binding = null;
     renderer.observed_image_map_source = null;
     renderer.source_element_binding = null;
     renderer.bounded_text_class_scope = null;
@@ -1432,6 +1436,19 @@ fn bindNavHeads(renderer: *compiler.Renderer, fragment: SourceFragment, tracked:
 fn bindFragmentTextClassScope(renderer: *compiler.Renderer, fragment: SourceFragment, tracked: MissingText) void {
     bindNavHeads(renderer, fragment, tracked);
     bindDefinitionLines(renderer, fragment, tracked);
+    renderer.selected_timed_audio = null;
+    if (fragmentContentRoot(fragment, tracked) == .parser_output and !tracked.lost_missing_range and tracked.generated_source == null) {
+        if (fragment.parser_output_range.?.timed_audio) |selected| {
+            if (selected.offsetIn(fragment.source)) |offset| {
+                const token = tracked.bytes[offset..][0..selected.source.len];
+                if (std.mem.eql(u8, token, selected.source)) {
+                    var bound = selected;
+                    bound.source = token;
+                    renderer.selected_timed_audio = bound;
+                }
+            }
+        }
+    }
     renderer.wrapped_heading_source = null;
     renderer.selected_inline_fragment = null;
     if (renderer.context.table_styles) |styles| {
@@ -1478,6 +1495,7 @@ fn bindFragmentFigureClassSource(renderer: *compiler.Renderer) void {
 fn bindFragmentSourceElements(renderer: *compiler.Renderer, fragment: SourceFragment, tracked: MissingText) void {
     renderer.local_link_binding = null;
     renderer.source_element_binding = null;
+    renderer.selected_thumbnail_binding = null;
     renderer.table_direction_binding = null;
     renderer.container_disclosure_binding = null;
     if (fragmentContentRoot(fragment, tracked) != .parser_output) return;
@@ -1493,6 +1511,15 @@ fn bindFragmentSourceElements(renderer: *compiler.Renderer, fragment: SourceFrag
             renderer.local_link_binding = .{ .projection = projection, .owner = tracked, .page_start = range.start };
     }
     const sizing = renderer.context.figure_sizing orelse return;
+    if (sizing.selected_default_thumbnails) |selected| {
+        const original = projection.original;
+        if (projection.prepared.ptr == range.page.ptr and projection.prepared.len == range.page.len and
+            original.bytes.ptr == selected.source.ptr and original.bytes.len == selected.source.len and
+            !original.unknown and !original.lost_missing_range and original.generated_source == null and
+            !tracked.unknown and !tracked.lost_missing_range and tracked.generated_source == null and
+            std.mem.eql(u8, tracked.bytes, fragment.source))
+            renderer.selected_thumbnail_binding = .{ .projection = projection, .owner = tracked, .page_start = range.start };
+    }
     for ([_]?compiler.TableContainingDirectionSource{ sizing.table_containing_direction, sizing.table_float_source }) |optional| if (optional) |direction| {
         const binding: compiler.TableDirectionRangeBinding = .{ .projection = projection, .owner = tracked, .page_start = range.start };
         if (projection.prepared.ptr == range.page.ptr and projection.prepared.len == range.page.len and
@@ -1610,6 +1637,27 @@ fn completeActionFocus(renderer: *compiler.Renderer, work: Work) !void {
     try walk.references(&context, work.references);
     for (work.media_caption_spans) |caption| try walk.spans(&context, caption);
     renderer.finishCompletedActionFocus();
+}
+
+const CompleteSelectedTimedAudio = struct {
+    fn block(_: *@This(), _: *compiler.Block) error{}!void {}
+    fn spans(_: *@This(), values: []const compiler.Span) anyerror!void {
+        for (values) |span| if (span.selected_timed_audio_completion) |completed| {
+            if (completed.*) return error.TimedAudioObservationDuplicated;
+            completed.* = true;
+        };
+    }
+};
+
+fn completeSelectedTimedAudio(work: Work, fragments: []const SourceFragment) !void {
+    for (fragments) |fragment| {
+        const range = fragment.parser_output_range orelse continue;
+        if (range.timed_audio == null) continue;
+        var context: CompleteSelectedTimedAudio = .{};
+        var walk: CompilerWalk = .{};
+        for (work.sections) |section| try walk.blocks(&context, section.blocks, 0);
+        return;
+    }
 }
 
 fn workAllocWithMissingFragments(a: A, title: []const u8, language: []const u8, tracked: MissingText, link_trail: ir.LinkTrail, namespace_catalog: ?*const NamespaceRegistry, behavior_switches: ?*const BehaviorRegistry, image_options: ?*const ImageRegistry, reference_context: compiler.ReferenceDefinitions, poem_phase: ?*const PoemPhase, fragments: []const SourceFragment, table_styles: ?*const TableStyleProfile, figure_sizing: ?FigureSizingSource, content_root: compiler.ContentRoot, final_document_body: bool) !Work {
@@ -1779,6 +1827,7 @@ fn workWithHeadingOffsetsAllocIn(a: A, title: []const u8, language: []const u8, 
             const previous_tables = renderer.root_wiki_table_range;
             const previous_text_scope = renderer.bounded_text_class_scope;
             const previous_native_classes = renderer.native_source_class_range;
+            const previous_thumbnail_binding = renderer.selected_thumbnail_binding;
             const previous_text_source = renderer.bounded_text_class_source;
             if (fragmentContentRoot(fragment, tracked) == .parser_output) renderer.content_root = .parser_output;
             bindFragmentRootWikiTables(&renderer, fragment, tracked);
@@ -1787,6 +1836,7 @@ fn workWithHeadingOffsetsAllocIn(a: A, title: []const u8, language: []const u8, 
             defer renderer.root_wiki_table_range = previous_tables;
             defer renderer.bounded_text_class_scope = previous_text_scope;
             defer renderer.native_source_class_range = previous_native_classes;
+            defer renderer.selected_thumbnail_binding = previous_thumbnail_binding;
             defer renderer.bounded_text_class_source = previous_text_source;
             const native_scope = NativeArticleRenderScope.enter(if (native_host) |*host_value| host_value else null,
                 tracked, fragment, false);
@@ -2316,6 +2366,7 @@ pub fn compileClassifiedWithHeadingAnchorsAndSourceMediaRootAlloc(
         try workWithHeadingOffsetsAllocIn(a, title, language orelse "", source, link_trail, namespace_catalog, behavior_switches, image_options, current_references, poem_phase, fragments, table_styles, false, false, figure_sizing, content_root, language_code, if (classified_owner) |owner| owner.code else null, true)
     else
         try workAllocWithMissingFragmentsIn(a, title, language orelse "", source, link_trail, namespace_catalog, behavior_switches, image_options, current_references, poem_phase, fragments, table_styles, figure_sizing, content_root, true, language_code, if (classified_owner) |owner| owner.code else null, true);
+    try completeSelectedTimedAudio(work, fragments);
     if (fallbacks) |report| {
         report.merge(work.fallbacks);
         report.template_presentation = report.template_presentation or work.rendered_templates != 0;

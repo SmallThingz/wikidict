@@ -1,0 +1,28 @@
+# wikidict-namespace-registry-v1
+# wiki	nahwiktionary
+# dump-date	20261001
+# content-language	nah
+-2	Mēdiatl	Media	case-sensitive	0	0	0		compile_only	virtual_namespace	Media
+-1	Nōncuahquīzqui	Special	first-letter	0	0	0		compile_only	virtual_namespace	Especial
+0			case-sensitive	0	1	0		main	dictionary_entries
+1	Tēixnāmiquiliztli	Talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Discusión
+2	Tlatequitiltilīlli	User	first-letter	1	0	0		compile_only	standard_build_input	Usuario
+3	Tlatequitiltilīlli tēixnāmiquiliztli	User talk	first-letter	1	0	0		compile_only	discussion_namespace	Usuario Discusión
+4	Wiktionary	Project	case-sensitive	1	0	0		compile_only	standard_build_input	WT	Wikipedia
+5	Wiktionary tēixnāmiquiliztli	Project talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Wikipedia Discusión	Wiktionary talk
+6	Īxiptli	File	case-sensitive	0	0	0		compile_only	standard_build_input	Image	Imagen
+7	Īxiptli tēixnāmiquiliztli	File talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Image talk	Imagen Discusión	Imagen discusión
+8	Huiquimedia	MediaWiki	first-letter	1	0	0		compile_only	standard_build_input	MediaWiki
+9	Huiquimedia tēixnāmiquiliztli	MediaWiki talk	first-letter	1	0	0		compile_only	discussion_namespace	MediaWiki Discusión
+10	Nemachiyōtīlli	Template	case-sensitive	1	0	0		compile_only	standard_build_input	Plantilla
+11	Nemachiyōtīlli tēixnāmiquiliztli	Template talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Plantilla Discusión
+12	Tēpalēhuiliztli	Help	case-sensitive	1	0	0		compile_only	standard_build_input	Ayuda
+13	Tēpalēhuiliztli tēixnāmiquiliztli	Help talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Ayuda Discusión
+14	Neneuhcāyōtl	Category	case-sensitive	0	0	0		compile_only	standard_build_input	Categoría
+15	Neneuhcāyōtl tēixnāmiquiliztli	Category talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Categoría Discusión
+710	TimedText	TimedText	case-sensitive	0	0	0		compile_only	ancillary_site_input
+711	TimedText talk	TimedText talk	case-sensitive	0	0	0		compile_only	discussion_namespace
+828	Módulo	Module	case-sensitive	1	0	0		compile_only	standard_build_input
+829	Módulo discusión	Module talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+1728	Evento	Event	case-sensitive	1	0	0		compile_only	ancillary_site_input
+1729	Evento discusión	Event talk	case-sensitive	1	0	0		compile_only	discussion_namespace

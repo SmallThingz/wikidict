@@ -1764,7 +1764,7 @@ const YiObservedThumbnail = struct {
     const default_svg_response = "90c9d757671241535e167666026059c9aef67f098d20ccaa0714abd541e5eabf";
 };
 
-fn yiExactThumbnailResource(info: Value, original_width: u32, original_height: u32, width: u32, default_svg: bool) !void {
+fn exactObservedThumbnailResource(info: Value, original_width: u32, original_height: u32, width: u32, default_svg: bool) !void {
     const mime = try string(info, "mime");
     const mediatype = try string(info, "mediatype");
     const svg = equal(mime, "image/svg+xml") and equal(mediatype, "DRAWING");
@@ -1789,6 +1789,81 @@ fn yiExactThumbnailResource(info: Value, original_width: u32, original_height: u
         if ((width > original_width and !(svg and default_svg)) or (!std.mem.startsWith(u8, thumb, "https://thumb.wikimedia.org/wikipedia/") and
             !std.mem.startsWith(u8, thumb, "https://upload.wikimedia.org/wikipedia/"))) return invalid;
     }
+}
+
+const nah_thumbnail_observation_core = "2cc57e980dd9a87e4317e8bc149645123deaaed3";
+const nah_thumbnail_observation_kind = "wikidict.nah-default-thumbnail-observations.v1";
+
+fn validateNahDefaultThumbnails(a: A, doc: Document, raw: []const u8, site: []const u8, ns: *const namespaces.Registry,
+    source_core: ?[]const u8) !void
+{
+    const site_digest = "15824f8d380b72c5497bbdb8f6d60126bc56efa39de8213c82d0cb8083ede52c";
+    const evidence = [_]struct { sha: []const u8, files: usize }{
+        .{ .sha = "e91a6e952b42fd8fa52444f389466e122f6833fe55e78c8fb5b4183bb75c16a2", .files = 3 },
+        .{ .sha = "49ccb8bf6263554ff4abccf842565f4641d247151a11cdea4051a4adb12561ac", .files = 2 },
+    };
+    if (!equal(doc.schema, "wikidict.figure-sizing-source.v1") or !equal(doc.wiki, "nahwiktionary") or
+        !equal(doc.wiki, ns.wiki) or !equal(doc.content_language, "nah") or !equal(doc.content_language, ns.content_language) or
+        !equal(ns.dump_date, "20261001") or !equal(doc.namespace_registry_sha256, "ade511e7ea0b48d76c09aec23c7979caee8045db83ac1125c9077982eeb5fcb5") or
+        !equal(doc.namespace_registry_sha256, &std.fmt.bytesToHex(ns.source_sha256, .lower)) or
+        !equal(source_core orelse return invalid, selected_jpeg_core) or !equal(doc.generator_sha256, "f675235feb53da63d49d26f9669cfa18d81bc2cfef4cdf329c892c7408e92346") or
+        !digestMatches(site, site_digest) or !digestMatches(raw, doc.raw_sha256)) return invalid;
+    const kind = doc.source_profile;
+    if (kind != .object or kind.object.count() != 2 or !equal(try string(kind, "site_raw_sha256"), site_digest) or
+        !equal(try string(kind, "kind"), nah_thumbnail_observation_kind)) return invalid;
+    const source_site = try std.json.parseFromSliceLeaky(Value, a, site, .{ .allocate = .alloc_always });
+    const site_query = try field(source_site, "query");
+    const key = try field(try field(site_query, "defaultoptions"), "thumbsize");
+    if (key != .integer or key.integer < 0 or key.integer > 64) return invalid;
+    var width_key: [4]u8 = undefined;
+    const width = try positive(try field(try field(site_query, "general"), "thumblimits"),
+        std.fmt.bufPrint(&width_key, "{d}", .{key.integer}) catch return invalid);
+
+    const root = try std.json.parseFromSliceLeaky(Value, a, raw, .{ .allocate = .alloc_always });
+    if (root != .object or root.object.count() != 2 or !equal(try string(root, "schema"), nah_thumbnail_observation_kind)) return invalid;
+    const responses = try field(root, "responses");
+    if (responses != .array or responses.array.items.len != evidence.len or doc.records.len != 5) return invalid;
+    var matched = [5]bool{ false, false, false, false, false };
+    var latest: []const u8 = "";
+    for (doc.records, 0..) |record, index| {
+        if (index != 0 and std.mem.order(u8, doc.records[index - 1].canonical_file, record.canonical_file) != .lt) return invalid;
+        if (!equal(record.canonical_file, try canonicalFile(a, ns, record.canonical_file)) or
+            !equal(record.proof_kind, "observed-exact-thumbnail-width") or record.format != .thumbnail or
+            record.sizing != .requested_fit or record.height_px != null or record.width_px != width) return invalid;
+    }
+    for (responses.array.items, evidence) |encoded, expected| {
+        if (encoded != .string or !digestMatches(encoded.string, expected.sha)) return invalid;
+        const response = try std.json.parseFromSliceLeaky(Value, a, encoded.string, .{ .allocate = .alloc_always });
+        const query = try field(response, "query");
+        const identity = try field(query, "general");
+        if (!equal(try string(identity, "wikiid"), ns.wiki) or !equal(try string(identity, "lang"), ns.content_language) or
+            !equal(try string(identity, "git-hash"), nah_thumbnail_observation_core) or !equal(try string(identity, "server"), "//nah.wiktionary.org")) return invalid;
+        const instant = try string(response, "curtimestamp");
+        if ((try timestamp(instant)).fraction.len != 0) return invalid;
+        if (std.mem.order(u8, latest, instant) == .lt) latest = instant;
+        const pages = try field(query, "pages");
+        if (pages != .array or pages.array.items.len != expected.files) return invalid;
+        for (pages.array.items) |page| {
+            const file = try string(page, "title");
+            const repository = try string(page, "imagerepository");
+            if (try positive(page, "ns") != 6 or hasHidden(page) or (!equal(repository, "local") and !equal(repository, "shared"))) return invalid;
+            const items = try field(page, "imageinfo");
+            if (items != .array or items.array.items.len != 1) return invalid;
+            const info = items.array.items[0];
+            if (!equal(try string(info, "canonicaltitle"), file)) return invalid;
+            const index = for (doc.records, 0..) |record, i| {
+                if (equal(record.canonical_file, file)) break i;
+            } else return invalid;
+            const record = doc.records[index];
+            if (matched[index] or !lowerHex(record.file_sha1, 40) or !equal(try string(info, "sha1"), record.file_sha1) or
+                !equal(try string(info, "timestamp"), record.file_timestamp) or !notAfter(try timestamp(record.file_timestamp), try timestamp(instant)) or
+                try positive(info, "width") != record.original_width or try positive(info, "height") != record.original_height or
+                width > record.original_width) return invalid;
+            try exactObservedThumbnailResource(info, record.original_width, record.original_height, width, false);
+            matched[index] = true;
+        }
+    }
+    if (!equal(doc.observation_utc, latest) or std.mem.indexOfScalar(bool, &matched, false) != null) return invalid;
 }
 
 fn validateYiExactThumbnails(a: A, doc: Document, raw: []const u8, site: []const u8, ns: *const namespaces.Registry,
@@ -1914,7 +1989,7 @@ fn validateYiExactThumbnails(a: A, doc: Document, raw: []const u8, site: []const
                     !equal(try string(info, "timestamp"), record.file_timestamp) or
                     !notAfter(try timestamp(record.file_timestamp), try timestamp(instant)) or
                     try positive(info, "width") != record.original_width or try positive(info, "height") != record.original_height) return invalid;
-                try yiExactThumbnailResource(info, record.original_width, record.original_height, record.width_px, default_svg);
+                try exactObservedThumbnailResource(info, record.original_width, record.original_height, record.width_px, default_svg);
                 count += 1;
             }
         }
@@ -2054,6 +2129,7 @@ pub const Registry = struct {
     // Build-only parallel proof, derived from validated file facts. It is not
     // accepted from either legacy or streamed serialized records.
     height_bound_records: []const HeightBound = &.{},
+    intrinsic_only_jpeg_index: ?usize = null,
     // Exact f458 SVG logical model only, NOT evidence of rasterization.
     // A selected language-qualified transform observation is required separately.
     // Never accepted from serialized records.
@@ -2105,6 +2181,10 @@ pub const Registry = struct {
             if (try field(record_value, "height_px") != .null) return invalid;
         }
         const doc = try std.json.parseFromValueLeaky(Document, a, projection_value, .{});
+        if (equal(doc.wiki, "nahwiktionary") and equal(doc.core_revision, nah_thumbnail_observation_core)) {
+            try validateNahDefaultThumbnails(a, doc, raw, site, ns, source_core_revision);
+            return .{ .arena = arena, .namespace_catalog = ns, .records = doc.records, .measured_thumbnail_only = true };
+        }
         if (equal(doc.core_revision, namespaces.Registry.yi_current_figure_core)) {
             var rename = false;
             var missing: std.StringHashMapUnmanaged(void) = .empty;
@@ -2781,9 +2861,17 @@ pub const Registry = struct {
         const resolved_files = try a.alloc([]const u8, records.items.len);
         const height_bounds = try a.alloc(HeightBound, records.items.len);
         const svg_languages = try a.alloc(bool, records.items.len);
-        for (records.items, resolved_files, height_bounds, svg_languages) |record, *resolved, *bound, *svg_language| {
+        const nah_exact_original = jpeg_file != null and equal(ns.wiki, "nahwiktionary") and
+            digestMatches(site, "4b6c093bbc67754eef25200429e394ffceda7abcc2a222fd936799f9e25eb448");
+        var intrinsic_only_jpeg_index: ?usize = null;
+        for (records.items, resolved_files, height_bounds, svg_languages, 0..) |record, *resolved, *bound, *svg_language, index| {
             const fact = if (facts.get(record.canonical_file)) |entry| entry.fact else canonical_facts.get(record.canonical_file) orelse return invalid;
             resolved.* = fact.canonical_file;
+            // The selected replay already validated unrotated metadata and
+            // original axes. The exact Commons original confirms only
+            // intrinsic size, leaving width and framed proofs separate.
+            if (nah_exact_original and equal(record.canonical_file, fact.canonical_file) and
+                equal(fact.file_sha1, "66a41324e5716562516050505ce4b279e335380a")) intrinsic_only_jpeg_index = index;
             svg_language.* = svg_language_model_proofs.get(fact.canonical_file) orelse false;
             // GIFHandler inherits bitmap dimensions. Animation frame selection
             // does not change this box; no animation or pixel authority is stored.
@@ -2805,6 +2893,7 @@ pub const Registry = struct {
         return .{ .arena = arena.*, .namespace_catalog = ns, .records = records.items,
             .file_authority = true, .resolved_files = resolved_files, .missing_files = missing_files, .height_bound_records = height_bounds, .height_occurrences = height_occurrences,
             .static_poster_files = static_poster_files, .svg_language_file_models = svg_languages,
+            .intrinsic_only_jpeg_index = intrinsic_only_jpeg_index,
             .reviewed_thumbnail_site = equal(doc.core_revision, current_core) and equal(ns.wiki, "viwiktionary") and
                 equal(ns.dump_date, "20261001") and digestMatches(site, "57cd978150654f7298d9343d8cf6c69d3c1f03b160cbb042589774b17c02b83c"),
             .image_map_no_link_policy = image_map_no_link_policy };
@@ -2904,7 +2993,7 @@ pub const Registry = struct {
             equal(self.records[lo].canonical_file, canonical)) return self.records[lo].original_width;
         return null;
     }
-    fn rasterGeometryIndex(self: *const Registry, a: A, file: []const u8) A.Error!?usize {
+    fn rasterGeometryIndex(self: *const Registry, a: A, file: []const u8, allow_intrinsic_only: bool) A.Error!?usize {
         if (!self.file_authority) return null;
         const canonical = canonicalFile(a, self.namespace_catalog, file) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory, else => return null,
@@ -2915,7 +3004,8 @@ pub const Registry = struct {
             const mid = lo + (hi - lo) / 2;
             if (std.mem.order(u8, self.records[mid].canonical_file, canonical) == .lt) lo = mid + 1 else hi = mid;
         }
-        if (lo < self.records.len and lo < self.height_bound_records.len and (self.height_bound_records[lo] == .png or self.height_bound_records[lo] == .gif or self.height_bound_records[lo] == .webp or self.height_bound_records[lo] == .jpeg_unrotated) and
+        if (lo < self.records.len and lo < self.height_bound_records.len and (self.height_bound_records[lo] == .png or self.height_bound_records[lo] == .gif or self.height_bound_records[lo] == .webp or self.height_bound_records[lo] == .jpeg_unrotated or
+            (allow_intrinsic_only and self.intrinsic_only_jpeg_index == lo)) and
             equal(self.records[lo].canonical_file, canonical)) return lo;
         return null;
     }
@@ -2923,7 +3013,7 @@ pub const Registry = struct {
     pub fn resolveWidthLimit(raw: ?*const anyopaque, a: A, file: []const u8, format_value: types.FigureFormat) A.Error!?u32 {
         const self: *const Registry = @ptrCast(@alignCast(raw orelse return null));
         if (format_value != .thumbnail) return null;
-        const i = try self.rasterGeometryIndex(a, file) orelse return null;
+        const i = try self.rasterGeometryIndex(a, file, false) orelse return null;
         return self.records[i].original_width;
     }
 
@@ -2931,9 +3021,10 @@ pub const Registry = struct {
         const self: *const Registry = @ptrCast(@alignCast(raw orelse return null));
         if (self.height_bound_records.len != self.records.len) return null;
         const format = types.figureRasterFormat(file) orelse return null;
-        const i = try self.rasterGeometryIndex(a, file) orelse return null;
+        const i = try self.rasterGeometryIndex(a, file, format == .jpeg) orelse return null;
         const evidence: HeightBound = switch (format) { .jpeg => .jpeg_unrotated, .png => .png, .gif => .gif, .webp => .webp };
-        if (self.height_bound_records[i] != evidence) return null;
+        if (self.height_bound_records[i] != evidence and
+            !(format == .jpeg and self.intrinsic_only_jpeg_index == i)) return null;
         const record = self.records[i];
         const size: types.FigureIntrinsicSize = .{ .width_px = record.original_width, .height_px = record.original_height };
         return if (size.valid()) size else null;
@@ -9283,4 +9374,29 @@ test "selected Mon Figure tuple authenticates same-epoch defaults and first File
     raw = raw_source.input();
     try std.testing.expectError(error.InvalidFigureSizingSource, Registry.checkStreamCompatibilityWithDefaults(a, &projection, &raw, site, &ns,
         .{ .core = namespaces.Registry.mon_current_figure_core, .sha256 = digest }));
+}
+
+test "NAH exact selected JPEG certifies intrinsic axes without width authority" {
+    const a = std.testing.allocator;
+    var ns = try namespaces.Registry.init(a, @embedFile("testdata/nah-huitzilin-intrinsic/namespace.tsv"));
+    defer ns.deinit();
+    var default_sha: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(@embedFile("testdata/nah-huitzilin-intrinsic/defaults.json"), &default_sha, .{});
+    const core = ns.currentFigureDefaultsCore(default_sha, true) orelse return error.MissingNahCore;
+    const site = @embedFile("testdata/nah-huitzilin-intrinsic/site.json");
+    var p: StreamTestSource.Slice = .{ .bytes = @embedFile("testdata/nah-huitzilin-intrinsic/projection.json") };
+    var r: StreamTestSource.Slice = .{ .bytes = @embedFile("testdata/nah-huitzilin-intrinsic/raw.json") };
+    var projection = p.input();
+    var raw = r.input();
+    var registry = try Registry.initStreamWithDefaults(a, &projection, &raw, site, &ns,
+        .{ .core = core, .sha256 = default_sha });
+    defer registry.deinit();
+    const authored = "File:Rubythroathummer65.jpg";
+    const axes = (try Registry.resolveIntrinsicSize(&registry, a, authored)) orelse return error.MissingNahIntrinsic;
+    try std.testing.expectEqual(@as(u32, 250), axes.width_px);
+    try std.testing.expectEqual(@as(u32, 230), axes.height_px);
+    try std.testing.expectEqual(@as(?u32, null), try Registry.resolveWidthLimit(&registry, a, authored, .thumbnail));
+    try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null), try Registry.resolve(&registry, a, authored, .framed, null, null));
+    try std.testing.expect((try Registry.resolveIntrinsicSize(&registry, a, "File:WhereRainbowRises.jpg")) == null);
+    try std.testing.expect((try Registry.resolveIntrinsicSize(&registry, a, "File:Star-Vega.png")) == null);
 }

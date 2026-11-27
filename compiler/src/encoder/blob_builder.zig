@@ -47,6 +47,7 @@ pub const ScreenStyleArticle = struct {
 };
 
 pub const LanguageCodes = struct {
+    timed_audio: ?@import("presentation_compile.zig").SelectedTimedAudio = null,
     container_disclosures: ?*const @import("presentation_compile.zig").ContainerDisclosureSource = null,
     local_link_targets: ?@import("presentation_compile.zig").LocalLinkTargetSource = null,
     revision_exterior: ?struct { namespace_sha256: [32]u8, title: []const u8, raw: []const u8, expanded: []const u8, tags: []const []const u8 } = null,
@@ -5480,6 +5481,8 @@ fn unchangedTableSourceProjection(sizing: ?presentation_document.FigureSizingSou
 
 fn observeSourceElements(sizing: ?presentation_document.FigureSizingSource, source: []const u8) bool {
     const selected = sizing orelse return false;
+    if (selected.selected_default_thumbnails) |thumbnails|
+        if (thumbnails.source.ptr == source.ptr and thumbnails.source.len == source.len) return true;
     if (selected.table_containing_direction) |direction|
         if (direction.source.ptr == source.ptr and direction.source.len == source.len) return true;
     if (selected.table_float_source) |floating|
@@ -6189,7 +6192,7 @@ fn processMain(
     const numbered = try checkedWriterNumbering(page_allocator, try presentation_document.preparePageExternalLinksWithMissingAlloc(page_allocator, raw_missing, .{
         .title = title,
         .observe_source_elements = observeSourceElements(codes.figure_sizing, raw_missing.bytes) or
-            local_targets_selected or disclosure_selected,
+            local_targets_selected or disclosure_selected or codes.timed_audio != null,
         .container_disclosures = codes.container_disclosures,
         .local_link_targets = codes.local_link_targets,
         .display_title_precedence = title_precedence,
@@ -6223,6 +6226,28 @@ fn processMain(
     const source_missing = try presentation_document.preparePageTocSourceWithMissingAlloc(page_allocator, body_source.missing orelse MissingText.transformedFrom(numbered.missing, body_source.source), codes.behavior_switches);
     const source = source_missing.bytes;
     defer if (source.ptr != body_source.source.ptr) page_allocator.free(source);
+    const timed_audio = if (codes.timed_audio) |selected| bound: {
+        const start = selected.offsetIn(source_raw) orelse return error.InvalidTimedAudioSource;
+        const offset = if (std.mem.eql(u8, source_raw, source)) start else projected: {
+            const proof = if (numbered.source_element_projection) |*value| value else return error.InvalidTimedAudioSource;
+            if (proof.original.bytes.ptr != source_raw.ptr or proof.original.bytes.len != source_raw.len or
+                proof.prepared.ptr != source.ptr or proof.prepared.len != source.len) return error.InvalidTimedAudioSource;
+            break :projected proof.preparedRange(start, selected.source.len) orelse return error.InvalidTimedAudioSource;
+        };
+        const prepared_token = source[offset..][0..selected.source.len];
+        if (!std.mem.eql(u8, prepared_token, selected.source)) return error.InvalidTimedAudioSource;
+        var occurrence = selected;
+        occurrence.source = prepared_token;
+        break :bound occurrence;
+    } else null;
+    // Unpartitioned and unresolved whole-page paths retain the same complete
+    // ordinary body range as the source-checked input.
+    const whole_audio_fragment: [1]presentation_document.SourceFragment = .{.{
+        .source = source, .original_start = 0, .missing = source_missing, .whole_body = true,
+        .parser_output_range = .{ .page = source, .start = 0, .prepared = source, .timed_audio = timed_audio },
+    }};
+    const whole_audio_fragments: []const presentation_document.SourceFragment =
+        if (timed_audio == null) &.{} else &whole_audio_fragment;
     // Only this complete final native page may issue a source class inventory.
     // Language-owner concatenation and Renderer fragment APIs cannot do so.
     // The Registry selected exact revision and both full-source digests.
@@ -6472,7 +6497,7 @@ fn processMain(
         // expansion changed the boundaries, retain the whole page without
         // guessing which rendered bytes belong to the unknown language.
         fallbacks.unresolved_language_heading = true;
-        const payload = try presentation_document.compileClassifiedWithHeadingAnchorsAndSourceMediaAlloc(
+        const payload = try presentation_document.compileClassifiedWithHeadingAnchorsAndSourceMediaRootAlloc(
             page_allocator,
             title,
             .language,
@@ -6487,12 +6512,13 @@ fn processMain(
             reference_context,
             fallbacks,
             poem_phase,
-            &.{},
+            whole_audio_fragments,
             null,
             &.{},
             null,
             codes.table_styles,
             codes.figure_sizing,
+            if (timed_audio == null) .unknown else .parser_output,
         );
         try spools.appendLanguage(page_allocator, .{ .heading = "Unclassified", .code = "" }, title, payload);
         stats.language_records += 1;
@@ -7004,7 +7030,7 @@ fn processMain(
             reference_context,
             fallbacks,
             poem_phase,
-            &.{},
+            whole_audio_fragments,
             if (support_numbered_lexemes.len != 0) &heading_observation else null,
             if (support_numbered_lexemes.len != 0)
                 &.{.{ .owner_start = 0, .page_start = 0, .len = source.len }}
@@ -7071,7 +7097,7 @@ fn processMain(
         const region = sizing.literal_region orelse break :start null;
         break :start region.navHeadRunStart(raw_missing, source_missing);
     } else null;
-    const needs_source_fragments = definition_run_start != null or nav_head_run_start != null or literal_prefix != null or selected_wrapped_heading or selected_inline or native_source_class_proof != null or final_source_projection != null or pre_observation.scopes.len != 0 or
+    const needs_source_fragments = timed_audio != null or definition_run_start != null or nav_head_run_start != null or literal_prefix != null or selected_wrapped_heading or selected_inline or native_source_class_proof != null or final_source_projection != null or pre_observation.scopes.len != 0 or
         (if (codes.figure_sizing) |sizing| sizing.text_class_scope != null or sizing.resolve_image_map_no_link_fn != null else false) or
         (codes.table_styles != null and (heading_observation.page_root_wiki_table_openings.len != 0 or heading_observation.page_top_level_wiki_table_openings.len != 0 or heading_observation.page_static_paragraph_openings.len != 0 or heading_observation.page_static_example_openings.len != 0));
     const quote_cuts: PageQuoteCuts = if (needs_source_fragments)
@@ -7183,9 +7209,10 @@ fn processMain(
             }
             if (fragments.len != 0) page_allocator.free(fragments);
         }
-        if (codes.figure_sizing != null or codes.table_styles != null or local_targets_selected) for (fragments) |*fragment| {
+        if (codes.figure_sizing != null or codes.table_styles != null or local_targets_selected or timed_audio != null) for (fragments) |*fragment| {
             bindOwnerRootTableSource(source, source_raw, heading_observation, fragment);
             if (fragment.parser_output_range) |*range| {
+                range.timed_audio = timed_audio;
                 range.nav_head_run_start = nav_head_run_start;
                 range.definition_run_start = definition_run_start;
                 range.static_paragraph_original_prefix = paragraph_prefix;

@@ -1,0 +1,135 @@
+{
+  "page": {
+    "title": "копно",
+    "page_id": 25745,
+    "revision_id": 178224,
+    "revision_timestamp": "2022-10-15T18:40:03Z",
+    "namespace": 0
+  },
+  "templates": [
+    {
+      "title": "Template:-sh-",
+      "page_id": 34165,
+      "revision_id": 136739,
+      "revision_timestamp": "2015-06-05T10:10:03Z",
+      "namespace": 10,
+      "redirect": false,
+      "fixture_ordinal": 0
+    },
+    {
+      "title": "Template:vosa",
+      "page_id": 6720,
+      "revision_id": 106027,
+      "revision_timestamp": "2013-04-25T00:25:32Z",
+      "namespace": 10,
+      "redirect": false,
+      "fixture_ordinal": 1
+    }
+  ],
+  "profile": {
+    "wiki": "fjwiktionary",
+    "dump_date": "20261001",
+    "content_language": "fj",
+    "temporal_scope": "current-at-retrieval",
+    "name_lookup": [
+      "sh",
+      "fj"
+    ],
+    "siteinfo_git_hash": "901a9d48bec3e17bdde40049604019ff62aa4491"
+  },
+  "fixture_index_scope": "Ordinals and offsets belong to the two-template fixture.",
+  "projections": {
+    "language-registry.tsv": "Exact header and MediaWiki fj/sh rows from the pinned owner TSV. The two proof keys were checked against all original TSV fields, including directives.",
+    "language-names.tsv": "Exact identity header and sh/fj single-name row. The declared row count is reduced from 1526 to 1 for this projection."
+  },
+  "scope": {
+    "ordinary_writer": false,
+    "original_generated_output": false,
+    "historical_provider_parity": false,
+    "page_credit": 0
+  },
+  "retained_inputs": {
+    ".tmp/completion-council/CSB-fj-language-owner-fix01/dynamic-provider901a01/magic-source01/language04/magic-words.tsv": {
+      "bytes": 1510,
+      "sha256": "f89f22dd8aa49f43147af0a52f23ebee5e95969c80fe786df18068a935e5252f"
+    },
+    ".tmp/completion-council/CSB-fj-language-owner-fix01/dynamic-provider901a01/magic-source01/language04/magic-words.manifest.json": {
+      "bytes": 2198,
+      "sha256": "e577eed19883049111d8a7aff41387618665a99b65b40fc07d9913e95b3d61cb"
+    },
+    ".tmp/completion-council/CSB-fj-language-owner-fix01/dynamic-provider901a01/magic-source01/language04/magic-words.raw.json": {
+      "bytes": 23940,
+      "sha256": "ae91927f585c86a5e4d716005a53a37ae32938b277e0b56ee88c7a8906dd5140"
+    },
+    ".tmp/completion-council/CSB-fj-language-owner-fix01/dynamic-provider901a01/magic-source01/offline-derivation02.json": {
+      "bytes": 2826,
+      "sha256": "852933e13da2738e2ced7eee02514097fefa4dbce7c71d016968b74b5fb299fa"
+    },
+    ".tmp/completion-council/CSB-fj-language-owner-fix01/normal-provider-current01/language-registry.tsv": {
+      "bytes": 165233,
+      "sha256": "5aebe6924306aa8a543c275b87ac62e55af5fc1d627b439110439b784501e28d"
+    },
+    ".tmp/completion-council/CSB-fj-language-owner-fix01/dynamic-provider901a01/revalidated02/language-names.tsv": {
+      "bytes": 119589,
+      "sha256": "fee85f790b281850d4c98c88cb59ff75854519e7e9cfaefbd293b52d836d4247"
+    },
+    ".tmp/completion-council/CSB-fj-language-owner-fix01/static-banner01/dynamic_provider-page.wikitext": {
+      "bytes": 41,
+      "sha256": "4807546f5662a1f642e6dd86246b93d8ba5990e9165839f220aeada064e69de2"
+    },
+    ".tmp/completion-council/CSB-fj-language-owner-fix01/inventory/template-vosa.wikitext": {
+      "bytes": 163,
+      "sha256": "2de714af0d6663709b5490a79fbdf12429040c57ff2bb1a23f47e089c001509a"
+    },
+    ".tmp/completion-council/CSB-fj-language-owner-fix01/normal-provider-current01/namespace-registry.tsv": {
+      "bytes": 1946,
+      "sha256": "754e3527169b7eeb2cbb7a55df940938da00130ab8a8dc9c0584e009e03104a5"
+    },
+    ".tmp/completion-council/CSB-fj-language-owner-fix01/whole-page02/kopno-native03/kopno_control03.zig": {
+      "bytes": 12849,
+      "sha256": "f346421c72875ad9fc5690e507f2986acee906f461d85b48bdfb905be448d698"
+    },
+    ".tmp/completion-council/CSB-fj-language-owner-fix01/whole-page02/kopno-native03/actual-expansion01.wikitext": {
+      "bytes": 210,
+      "sha256": "7e90a42d3e08fcfad11b90240bec8028cb3f69ff43e2277cb31261c6014ebe98"
+    }
+  },
+  "fixtures": {
+    "page.wikitext": {
+      "bytes": 41,
+      "sha256": "4807546f5662a1f642e6dd86246b93d8ba5990e9165839f220aeada064e69de2"
+    },
+    "wrapper.wikitext": {
+      "bytes": 28,
+      "sha256": "c36bde0f00865259b110ae0aef8b3bf87091629b3cf26bdb264fc680cb369a1b"
+    },
+    "formatter.wikitext": {
+      "bytes": 163,
+      "sha256": "2de714af0d6663709b5490a79fbdf12429040c57ff2bb1a23f47e089c001509a"
+    },
+    "expanded.wikitext": {
+      "bytes": 210,
+      "sha256": "7e90a42d3e08fcfad11b90240bec8028cb3f69ff43e2277cb31261c6014ebe98"
+    },
+    "namespace-registry.tsv": {
+      "bytes": 1946,
+      "sha256": "754e3527169b7eeb2cbb7a55df940938da00130ab8a8dc9c0584e009e03104a5"
+    },
+    "language-registry.tsv": {
+      "bytes": 247,
+      "sha256": "4b254a794f5085e430f70ec218f5c581fe93a925103c04c24a12dcaddabce3c8"
+    },
+    "language-names.tsv": {
+      "bytes": 136,
+      "sha256": "b6cc8178433e4a0247cdfb614743e2e96a64f223c28f7e2728792468172e1b48"
+    },
+    "magic-words.tsv": {
+      "bytes": 1510,
+      "sha256": "f89f22dd8aa49f43147af0a52f23ebee5e95969c80fe786df18068a935e5252f"
+    },
+    "magic-words.manifest.json": {
+      "bytes": 2198,
+      "sha256": "e577eed19883049111d8a7aff41387618665a99b65b40fc07d9913e95b3d61cb"
+    }
+  }
+}

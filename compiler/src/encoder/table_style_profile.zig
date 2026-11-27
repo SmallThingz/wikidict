@@ -8617,6 +8617,8 @@ fn containerAxisOverflow(value: []const u8) ?ContainerAxisOverflow {
 const ColumnAliasPolicy = enum { standard, webkit, moz, all };
 const ContainerCascade = struct {
     root_per_owner: ?f32 = null,
+    ordinary_div: bool = false,
+    possible_block_display: ?Priority = null,
     borders: BorderCascade = .{},
     column_alias_policy: ColumnAliasPolicy = .standard,
     custom_environment: ?CustomEnvironment = null,
@@ -8819,6 +8821,15 @@ const ContainerCascade = struct {
             if (std.ascii.eqlIgnoreCase(name, "display")) {
                 const selected: ContainerValue = if (std.ascii.eqlIgnoreCase(value, "block")) .{ .layout = .flow }
                     else if (std.ascii.eqlIgnoreCase(value, "flex")) .{ .layout = .flex_row } else .unknown;
+                // An optional block declaration only changes an ordinary DIV
+                // if it can replace a different authored display winner.
+                if (self.ordinary_div and selected == .layout and selected.layout == .flow and
+                    (uncertain_value or self.responsive))
+                {
+                    if (self.possible_block_display == null or priority.wins(self.possible_block_display.?))
+                        self.possible_block_display = priority;
+                    continue;
+                }
                 self.consider(.layout, selected, priority, uncertain_value); continue;
             }
             if (std.ascii.eqlIgnoreCase(name, "align-items")) {
@@ -8906,6 +8917,14 @@ const ContainerCascade = struct {
     fn result(self: *const @This()) ContainerResolution {
         var resolution: ContainerResolution = .{ .specified = self.specified, .unresolved = self.unsafe, .positioning_specified = self.slots[@intFromEnum(ContainerSlot.positioning)] != null };
         if (self.unsafe) return resolution;
+        if (self.possible_block_display) |possible| {
+            if (self.slots[@intFromEnum(ContainerSlot.layout)]) |winner| {
+                if ((winner.value != .layout or winner.value.layout != .flow) and possible.wins(winner.priority)) {
+                    resolution.unresolved = true;
+                    return resolution;
+                }
+            }
+        }
         const borders = self.borders.result();
         if (borders.unresolved) { resolution.unresolved = true; return resolution; }
         resolution.style.border = borders.value;
@@ -9340,10 +9359,10 @@ fn containerStyleEqual(left: types.ContainerStyle, right: types.ContainerStyle) 
     return true;
 }
 fn containerCascadeAt(a: std.mem.Allocator, rules: []const ContainerRuleMatch, css: []const u8, screen_width: ?u32, environment: ?CustomEnvironment, border_collapse_consumed: bool) std.mem.Allocator.Error!ContainerResolution {
-    return containerCascadeAtRoot(a, rules, css, screen_width, environment, border_collapse_consumed, null);
+    return containerCascadeAtRoot(a, rules, css, screen_width, environment, border_collapse_consumed, null, false);
 }
-fn containerCascadeAtRoot(a: std.mem.Allocator, rules: []const ContainerRuleMatch, css: []const u8, screen_width: ?u32, environment: ?CustomEnvironment, border_collapse_consumed: bool, root_per_owner: ?f32) std.mem.Allocator.Error!ContainerResolution {
-    var result = try containerCascadeAtAliases(a, rules, css, screen_width, .standard, environment, border_collapse_consumed, root_per_owner);
+fn containerCascadeAtRoot(a: std.mem.Allocator, rules: []const ContainerRuleMatch, css: []const u8, screen_width: ?u32, environment: ?CustomEnvironment, border_collapse_consumed: bool, root_per_owner: ?f32, ordinary_div: bool) std.mem.Allocator.Error!ContainerResolution {
+    var result = try containerCascadeAtAliases(a, rules, css, screen_width, .standard, environment, border_collapse_consumed, root_per_owner, ordinary_div);
     if (result.unresolved) return result;
     var aliases = hasColumnAlias(css);
     for (rules) |rule| aliases = aliases or hasColumnAlias(rule.css);
@@ -9351,7 +9370,7 @@ fn containerCascadeAtRoot(a: std.mem.Allocator, rules: []const ContainerRuleMatc
     // No engine family is implicit in a data-only native record. Admit only
     // an invariant result with neither, either, or both alias families active.
     inline for (.{ ColumnAliasPolicy.webkit, .moz, .all }) |policy| {
-        const alternative = try containerCascadeAtAliases(a, rules, css, screen_width, policy, environment, border_collapse_consumed, root_per_owner);
+        const alternative = try containerCascadeAtAliases(a, rules, css, screen_width, policy, environment, border_collapse_consumed, root_per_owner, ordinary_div);
         result.specified = result.specified or alternative.specified;
         if (alternative.unresolved or !containerStyleEqual(result.style, alternative.style)) {
             result.unresolved = true;
@@ -9360,8 +9379,8 @@ fn containerCascadeAtRoot(a: std.mem.Allocator, rules: []const ContainerRuleMatc
     }
     return result;
 }
-fn containerCascadeAtAliases(a: std.mem.Allocator, rules: []const ContainerRuleMatch, css: []const u8, screen_width: ?u32, policy: ColumnAliasPolicy, environment: ?CustomEnvironment, border_collapse_consumed: bool, root_per_owner: ?f32) std.mem.Allocator.Error!ContainerResolution {
-    var cascade_value: ContainerCascade = .{ .column_alias_policy = policy, .root_per_owner = root_per_owner, .custom_environment = environment, .border_collapse_consumed = border_collapse_consumed };
+fn containerCascadeAtAliases(a: std.mem.Allocator, rules: []const ContainerRuleMatch, css: []const u8, screen_width: ?u32, policy: ColumnAliasPolicy, environment: ?CustomEnvironment, border_collapse_consumed: bool, root_per_owner: ?f32, ordinary_div: bool) std.mem.Allocator.Error!ContainerResolution {
+    var cascade_value: ContainerCascade = .{ .column_alias_policy = policy, .root_per_owner = root_per_owner, .custom_environment = environment, .border_collapse_consumed = border_collapse_consumed, .ordinary_div = ordinary_div };
     for (rules) |rule| {
         if (rule.rank_unknown) return .{ .unresolved = true };
         if (rule.viewport == .screen_max_width_px) {
@@ -10212,7 +10231,8 @@ pub const Profile = struct {
         const matched = try self.containerRuleMatchesIn(a, element);
         defer a.free(matched.rules);
         if (matched.unresolved) return .{ .unresolved = true };
-        var base = try containerCascadeAtRoot(a, matched.rules, css, null, environment, border_collapse_consumed, element.container_root_per_owner);
+        const ordinary_div = std.ascii.eqlIgnoreCase(element.tag, "div");
+        var base = try containerCascadeAtRoot(a, matched.rules, css, null, environment, border_collapse_consumed, element.container_root_per_owner, ordinary_div);
         if (base.unresolved) return base;
         // Preserve the existing bounded selector/cascade work. Semantic changes
         // become the already represented descending viewport bands below.
@@ -10233,7 +10253,7 @@ pub const Profile = struct {
         defer bands.deinit(a);
         var previous = base.style;
         for (thresholds[0..count]) |limit| {
-            const selected = try containerCascadeAtRoot(a, matched.rules, css, limit, environment, border_collapse_consumed, element.container_root_per_owner);
+            const selected = try containerCascadeAtRoot(a, matched.rules, css, limit, environment, border_collapse_consumed, element.container_root_per_owner, ordinary_div);
             base.specified = base.specified or selected.specified;
             if (selected.unresolved) { base.unresolved = true; return base; }
             if (containerStyleEqual(previous, selected.style)) continue;
@@ -18738,6 +18758,34 @@ test "recursive container cascade retains authored edges float and intrinsic wid
     try std.testing.expectEqualDeep(types.ContainerStyle{}, ordinary.style);
     const fit = try resolveInlineContainerAlloc(a, "width:fit-content");
     try std.testing.expect(fit.style.width.? == .fit_content and fit.style.float_side == null);
+}
+
+test "ordinary div default block display preserves cascade refusals" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const div: TextElement = .{ .tag = "div" };
+    const span: TextElement = .{ .tag = "span" };
+
+    var possible_block = try parseAlloc(a, ".character-sample > :only-child { display: block; }");
+    defer possible_block.deinit();
+    try std.testing.expect(!(try possible_block.resolveContainerIn(a, &div, "padding:4px")).unresolved);
+    try std.testing.expect((try possible_block.resolveContainerIn(a, &span, "padding:4px")).unresolved);
+
+    const inline_flex = try possible_block.resolveContainerIn(a, &div, "display:flex");
+    try std.testing.expect(!inline_flex.unresolved and inline_flex.style.layout == .flex_row);
+
+    var competing_flex = try parseAlloc(a, "div{display:flex}.character-sample > :only-child{display:block}");
+    defer competing_flex.deinit();
+    try std.testing.expect((try competing_flex.resolveContainerIn(a, &div, "")).unresolved);
+
+    var possible_min_width = try parseAlloc(a, ".character-sample > :only-child{display:block;min-width:50px}");
+    defer possible_min_width.deinit();
+    try std.testing.expect((try possible_min_width.resolveContainerIn(a, &div, "padding:4px")).unresolved);
+
+    var possible_grid = try parseAlloc(a, ".character-sample > :only-child{display:grid}");
+    defer possible_grid.deinit();
+    try std.testing.expect((try possible_grid.resolveContainerIn(a, &div, "padding:4px")).unresolved);
 }
 
 test "recursive container CSS keeps matching uncertain geometry and unsupported formatting contexts unresolved" {

@@ -8,6 +8,7 @@ const page_language = @import("page_language.zig");
 const page_source_context = @import("page_source_context.zig");
 const source_internal_link = @import("source_internal_link.zig");
 const encoder = @import("encoder");
+const timed_audio_observation = @import("timed_audio_observation.zig");
 const xml_decode = @import("xml_decode");
 const dump_source = @import("wikimedia_dump");
 const language_registry = @import("language_registry.zig");
@@ -24,6 +25,7 @@ comptime {
         _ = SourceTitles;
         _ = figure_sizing;
         _ = figure_page_observations;
+        _ = timed_audio_observation;
         _ = @import("source_stylesheet_imports.zig");
         _ = expansion_deadline;
         _ = bundle_expander;
@@ -34,6 +36,7 @@ comptime {
     }
 }
 const source_language_banner = @import("source_language_banner.zig");
+const captured_language_names = @import("captured_language_names");
 const source_category_language = @import("source_category_language.zig");
 const source_table_styles = @import("source_table_styles.zig");
 const bundle_expander = @import("bundle_expander.zig");
@@ -53,6 +56,7 @@ const Options = struct {
     expander_root: []const u8 = "",
     figure_input_root: ?[]const u8 = null,
     figure_page_observations_snapshot: ?[]const u8 = null,
+    timed_audio: ?struct { path: []const u8, sha256: [32]u8 } = null,
     workers: usize = 1,
     expansion_timeout_ms: ?u32 = null,
     now_unix: ?i64 = null,
@@ -888,8 +892,52 @@ fn loadFigureSizing(io: std.Io, a: std.mem.Allocator, root: []const u8, namespac
     return loadFigureSizingWithMessages(io, a, root, root, namespaces, source_site);
 }
 
+fn isNahMeasuredOnly(registry: *const figure_sizing.Registry) bool {
+    return registry.measured_thumbnail_only and !registry.file_authority and
+        std.mem.eql(u8, registry.namespace_catalog.wiki, "nahwiktionary");
+}
+
+// Only the dedicated loader can put this role on the ordinary Writer's slots.
+// The Registry never becomes a FigureSizingSource.ctx or a Book input.
+const NahMeasuredFigureRegistry = struct {
+    registry: *const figure_sizing.Registry,
+};
+
+fn loadNahMeasuredFigureSizing(io: std.Io, a: std.mem.Allocator, root: []const u8,
+    guards: *CapturedWriterInputs, namespaces: *const namespace_registry.Registry, site: ?FigureSite) !?figure_sizing.Registry
+{
+    if (!std.mem.eql(u8, namespaces.wiki, "nahwiktionary")) return null;
+    const names = [_][]const u8{ "figure-sizing.json", "figure-sizing.raw.json", "figure-sizing.site.json" };
+    var mapped: [names.len]?Mapped = @splat(null);
+    defer for (&mapped) |*slot| if (slot.*) |*value| value.deinit();
+    for (names, 0..) |name, i| {
+        const path = try std.fs.path.join(a, &.{ root, "nah-measured-thumbnails", name });
+        defer a.free(path);
+        const index = try guards.hold(path, "nah-exact-measured-thumbnail-input");
+        mapped[i] = mmapPathLimitWithInputs(io, path, 1024 * 1024, guards) catch |err| switch (err) {
+            error.FileNotFound => absent: {
+                try guards.checkRecord(index);
+                break :absent null;
+            },
+            else => return err,
+        };
+        if (mapped[i]) |value| try guards.acceptBytes(index, value.bytes);
+    }
+    if (mapped[0] == null and mapped[1] == null and mapped[2] == null) return null;
+    if (mapped[0] == null or mapped[1] == null or mapped[2] == null) return error.InvalidWriterFigureInputs;
+    const defaults = site orelse return error.InvalidWriterFigureInputs;
+    var validated = try figure_sizing.Registry.init(a, mapped[0].?.bytes, mapped[1].?.bytes, mapped[2].?.bytes,
+        namespaces, defaults.core_revision, figure_sizing.generator_sha256);
+    errdefer validated.deinit();
+    if (!isNahMeasuredOnly(&validated) or validated.records.len != 5) return error.InvalidWriterFigureInputs;
+    return validated;
+}
+
 fn loadWriterFigureSizing(io: std.Io, a: std.mem.Allocator, worker_root: []const u8, figure_root: ?[]const u8, namespaces: *const namespace_registry.Registry, source_site: ?FigureSite) !?figure_sizing.Registry {
-    return loadFigureSizingWithMessages(io, a, figure_root orelse worker_root, worker_root, namespaces, source_site);
+    var loaded = (try loadFigureSizingWithMessages(io, a, figure_root orelse worker_root, worker_root, namespaces, source_site)) orelse return null;
+    errdefer loaded.deinit();
+    if (isNahMeasuredOnly(&loaded)) return error.InvalidWriterFigureInputs;
+    return loaded;
 }
 
 fn loadFigureSizingWithMessages(io: std.Io, a: std.mem.Allocator, root: []const u8, message_root: []const u8, namespaces: *const namespace_registry.Registry, source_site: ?FigureSite) !?figure_sizing.Registry {
@@ -1069,6 +1117,13 @@ fn screenStyleMatches(article: encoder.blob_builder.ScreenStyleArticle, namespac
 fn attachFigurePageObservation(a: std.mem.Allocator, codes: *encoder.blob_builder.LanguageCodes, book: ?*const figure_page_observations.Book,
     defaults_sha256: ?[32]u8, namespace_id: i32, page_id: u64, revision_id: u64, title: []const u8, raw: []const u8, expanded: []const u8) !void
 {
+    return attachFigurePageObservationWithNah(a, codes, book, null, defaults_sha256, namespace_id, page_id, revision_id, title, raw, expanded);
+}
+
+fn attachFigurePageObservationWithNah(a: std.mem.Allocator, codes: *encoder.blob_builder.LanguageCodes,
+    book: ?*const figure_page_observations.Book, nah_measured: ?NahMeasuredFigureRegistry, defaults_sha256: ?[32]u8,
+    namespace_id: i32, page_id: u64, revision_id: u64, title: []const u8, raw: []const u8, expanded: []const u8) !void
+{
     // Restore the stable global pointer before touching a prior page-arena view,
     // including absent inputs and errors on the following page.
     if (codes.page_style_parent) |parent| codes.table_styles = parent;
@@ -1118,6 +1173,7 @@ fn attachFigurePageObservation(a: std.mem.Allocator, codes: *encoder.blob_builde
         }
     };
     const sizing_source = if (codes.figure_sizing) |*value| value else return;
+    sizing_source.selected_default_thumbnails = null;
     sizing_source.default_thumbnail_page = if (namespace_id == 0 and sizing_source.default_thumbnail_file_fn != null) expanded else null;
     sizing_source.standalone_figure_caption = null;
     if (sizing_source.table_containing_direction) |direction| {
@@ -1148,8 +1204,12 @@ fn attachFigurePageObservation(a: std.mem.Allocator, codes: *encoder.blob_builde
     sizing_source.resolve_svg_language_fn = null;
     sizing_source.resolve_observed_svg_language_fn = null;
     sizing_source.resolve_image_map_no_link_fn = null;
-    const observations = book orelse return;
     const namespaces = codes.namespace_catalog orelse return;
+    if (nah_measured) |measured| {
+        _ = try figure_page_observations.bindNahSelectedDefaultThumbnails(a, sizing_source, namespaces,
+            measured.registry, namespace_id, page_id, revision_id, title, raw, expanded);
+    }
+    const observations = book orelse return;
     const defaults = sizing_source.source_context orelse return;
     const selected_defaults = defaults_sha256 orelse return;
     sizing_source.standalone_figure_caption = observations.standaloneFigureCaption(namespaces,
@@ -1358,7 +1418,7 @@ fn loadLanguageRegistry(io: std.Io, a: std.mem.Allocator, expander_root: []const
     try template_rows.check();
     try loadSourceCategoryH1BannersWithRows(io, a, expander_root, namespaces, &out, &template_rows);
     try template_rows.check();
-    try loadFjVosaBannersWithRows(a, expander_root, namespaces, &out, &template_rows);
+    try loadFjVosaBannersWithRows(io, a, expander_root, namespaces, &out, &template_rows);
     try template_rows.check();
     const names_path = try std.fs.path.join(a, &.{ expander_root, "language-names.tsv" });
     defer a.free(names_path);
@@ -2426,7 +2486,8 @@ fn loadSourceLanguageBannersWithRows(io: std.Io, a: std.mem.Allocator, root: []c
                     try registry.addSourceTemplateLabel(label, code);
             }
             const reviewed_nah_provider = (std.mem.eql(u8, code, "es") and row.page_id == 1696 and row.revision_id == 76846) or
-                (std.mem.eql(u8, code, "de") and row.page_id == 1726 and row.revision_id == 76799);
+                (std.mem.eql(u8, code, "de") and row.page_id == 1726 and row.revision_id == 76799) or
+                (std.mem.eql(u8, code, "nci") and row.page_id == 4392 and row.revision_id == 74855);
             const declared_banner = source_language_banner.parse(decoded orelse raw, namespaces, if (behavior) |*value| value else null, registry, code) orelse
                 if (reviewed_nah_provider and std.mem.eql(u8, row.content_model, "wikitext"))
                     source_language_banner.nahDefaultsortHeading(decoded orelse raw, namespaces, if (behavior) |*value| value else null, registry, code)
@@ -2505,7 +2566,7 @@ fn loadSourceCategoryH1BannersWithRows(io: std.Io, a: std.mem.Allocator, root: [
 
 // Reuse the normal checksum-verified template index and source sidecar. The
 // selected provider and every code leaf must be unique, nonredirect NS10 rows.
-fn loadFjVosaBannersWithRows(a: std.mem.Allocator, root: []const u8, ns: *const namespace_registry.Registry,
+fn loadFjVosaBannersWithRows(io: std.Io, a: std.mem.Allocator, root: []const u8, ns: *const namespace_registry.Registry,
     registry: *language_registry.Registry, view: *LanguageTemplateRows) !void
 {
     if (!std.mem.eql(u8, ns.wiki, "fjwiktionary") or !std.mem.eql(u8, ns.content_language, "fj")) return;
@@ -2540,11 +2601,52 @@ fn loadFjVosaBannersWithRows(a: std.mem.Allocator, root: []const u8, ns: *const 
         }
     };
     const formatter_source = (try Read.source(a, templates, selected)) orelse return; defer a.free(formatter_source);
+    const Captured = struct {
+        names: captured_language_names.Registry,
+        words: namespace_registry.magic_words.Registry,
+
+        fn load(io_: std.Io, alloc: std.mem.Allocator, root_: []const u8, catalog: *const namespace_registry.Registry) !?@This() {
+            const names_path = try std.fs.path.join(alloc, &.{ root_, "language-names.tsv" });
+            defer alloc.free(names_path);
+            const names_bytes = std.Io.Dir.cwd().readFileAlloc(io_, names_path, alloc, .limited(32 * 1024 * 1024)) catch |err| switch (err) {
+                error.FileNotFound => return null,
+                else => return err,
+            };
+            defer alloc.free(names_bytes);
+            const words_path = try std.fs.path.join(alloc, &.{ root_, "magic-words.tsv" });
+            defer alloc.free(words_path);
+            const words_bytes = std.Io.Dir.cwd().readFileAlloc(io_, words_path, alloc, .limited(32 * 1024 * 1024)) catch |err| switch (err) {
+                error.FileNotFound => return null,
+                else => return err,
+            };
+            defer alloc.free(words_bytes);
+            var names = try captured_language_names.Registry.init(alloc, names_bytes, catalog.wiki, catalog.dump_date, catalog.content_language);
+            errdefer names.deinit();
+            const words = try namespace_registry.magic_words.Registry.init(alloc, words_bytes, catalog.wiki, catalog.dump_date, catalog.content_language);
+            return .{ .names = names, .words = words };
+        }
+        fn deinit(self: *@This()) void {
+            self.words.deinit();
+            self.names.deinit();
+        }
+    };
+    var dynamic_checked = false;
+    var dynamic_profile: ?Captured = null;
+    defer if (dynamic_profile) |*profile| profile.deinit();
     for (wrappers.items) |role| {
         const wrapper = (try Read.source(a, templates, role)) orelse continue; defer a.free(wrapper);
         const title = ns.ofTitle(role.row.title);
         const code = title.text[1 .. title.text.len - 1];
-        if (try source_language_banner.fjVosaProofAlloc(a, wrapper, formatter_source, ns, registry, code)) |proof| {
+        var resolved = try source_language_banner.fjVosaProofAlloc(a, wrapper, formatter_source, ns, registry, code);
+        if (resolved == null and source_language_banner.fjVosaLanguageSourceMatches(wrapper, formatter_source, ns, registry, code)) {
+            if (!dynamic_checked) {
+                dynamic_profile = try Captured.load(io, a, root, ns);
+                dynamic_checked = true;
+            }
+            if (dynamic_profile) |*profile|
+                resolved = try source_language_banner.fjVosaLanguageProofAlloc(a, wrapper, formatter_source, ns, registry, code, &profile.words, &profile.names);
+        }
+        if (resolved) |proof| {
             defer a.free(proof.heading);
             defer a.free(proof.target);
             defer a.free(proof.emitted_prefix.?.category);
@@ -3431,7 +3533,10 @@ const ExpansionSlot = struct {
     page_language_core: ?[]const u8 = null,
     page_observations: ?*const figure_page_observations.Book = null,
     disclosure_inputs: ?*const container_disclosure_inputs.Book = null,
+    nah_measured_figures: ?NahMeasuredFigureRegistry = null,
     figure_defaults_sha256: ?[32]u8 = null,
+    timed_audio: ?*const timed_audio_observation.Observation = null,
+    timed_audio_emitted: bool = false,
     prepared: ?encoder.blob_builder.PreparedPage = null,
     compile_failure: ?anyerror = null,
     rejection: encoder.presentation_document.RejectedFieldCapture = .{},
@@ -3489,6 +3594,20 @@ const ExpansionSlot = struct {
         // This value is local to this exact job. The shared Writer/site context
         // never acquires another page's language or a default from the edition.
         var codes = self.language_codes;
+        if (self.timed_audio) |observation| {
+            codes.timed_audio = observation.bind(.{
+                .ordinal = self.job.ordinal,
+                .index_offset = self.job.index_offset,
+                .namespace = self.job.ns.id,
+                .page_id = self.job.page_id,
+                .revision_id = self.job.revision_id,
+                .title = self.job.title,
+            }, self.job.source, expanded.source, &self.timed_audio_emitted, self.job.ns.kind == .language and
+                self.job.alias_record == null and !expanded.unsupported_parser_function) catch |err| {
+                self.compile_failure = err;
+                return;
+            };
+        }
         codes.local_link_targets = null;
         if (self.source_anchor_provider) |provider| {
             codes.local_link_targets = provider.bindTargets(self.arena.allocator(), expanded.source) catch |err| {
@@ -3514,8 +3633,8 @@ const ExpansionSlot = struct {
             self.compile_failure = error.InvalidNamespace;
             return;
         };
-        attachFigurePageObservation(self.arena.allocator(), &codes, self.page_observations, self.figure_defaults_sha256,
-            observation_namespace, self.job.page_id, self.job.revision_id,
+        attachFigurePageObservationWithNah(self.arena.allocator(), &codes, self.page_observations,
+            self.nah_measured_figures, self.figure_defaults_sha256, observation_namespace, self.job.page_id, self.job.revision_id,
             self.job.title, self.job.source, expanded.source) catch |err| {
             self.compile_failure = err;
             return;
@@ -3576,7 +3695,10 @@ const ExpansionSlot = struct {
         self.prepared.?.compileWithPhasesAndRoot(self.arena.allocator(), codes, expanded.source, self.job.source,
             expanded.display_title, expanded.poem_metadata, expanded.missing_dependency_metadata, self.job.alias_record, .parser_output) catch |err| {
             self.compile_failure = err;
+            return;
         };
+        if (codes.timed_audio != null and !self.timed_audio_emitted)
+            self.compile_failure = error.TimedAudioObservationUnconsumed;
     }
 
     fn commitExpanded(self: *ExpansionSlot, writer: *encoder.blob_builder.Writer, expanded: bundle_expander.Expansion, audit: ?*PresentationAudit, a: std.mem.Allocator) !bool {
@@ -3614,6 +3736,7 @@ const ExpansionSlot = struct {
         self.failure = null;
         self.prepared = null;
         self.compile_failure = null;
+        self.timed_audio_emitted = false;
         self.rejection = .{};
         self.busy = true;
         self.job_event.set(self.io);
@@ -3639,6 +3762,10 @@ const ExpansionSlot = struct {
                     try value.recordExpansionInputFailure(err, self.job, self.worker.last_failure);
                     return true;
                 }
+            }
+            if (self.timed_audio) |observation| {
+                if (observation.claims(self.job.ordinal, self.job.page_id))
+                    return recordExpansionFailure(err, self.job, self.worker.last_failure);
             }
             const fallback_reason = (try expansionFallbackReasonAlloc(self.arena.allocator(), err, self.worker.last_failure)) orelse
                 return recordExpansionFailure(err, self.job, self.worker.last_failure);
@@ -3901,7 +4028,9 @@ const ExpansionPool = struct {
     page_language_core: ?[]const u8 = null,
     page_observations: ?*const figure_page_observations.Book = null,
     disclosure_inputs: ?*const container_disclosure_inputs.Book = null,
+    nah_measured_figures: ?NahMeasuredFigureRegistry = null,
     figure_defaults_sha256: ?[32]u8 = null,
+    timed_audio: ?*const timed_audio_observation.Observation = null,
     site_mainpage: ?SiteMainPage = null,
     reviewed_nonlexical: ?*reviewed_nonlexical.Review = null,
     reviewed_dump_identity: ?PageIndexIdentity = null,
@@ -4016,7 +4145,9 @@ const ExpansionPool = struct {
                 slot.page_language_core = self.page_language_core;
                 slot.page_observations = self.page_observations;
                 slot.disclosure_inputs = self.disclosure_inputs;
+                slot.nah_measured_figures = self.nah_measured_figures;
                 slot.figure_defaults_sha256 = self.figure_defaults_sha256;
+                slot.timed_audio = self.timed_audio;
                 return slot;
             };
             if (try self.consumeReady(writer) != 0) continue;
@@ -4109,6 +4240,14 @@ fn parseOptions(args: []const []const u8) !Options {
             index += 1;
             if (index >= args.len or out.figure_page_observations_snapshot != null or !std.fs.path.isAbsolute(args[index])) return error.Usage;
             out.figure_page_observations_snapshot = args[index];
+        } else if (std.mem.eql(u8, arg, "--timed-audio-observation")) {
+            if (args.len - index < 3 or out.timed_audio != null or !std.fs.path.isAbsolute(args[index + 1]))
+                return error.Usage;
+            out.timed_audio = .{
+                .path = args[index + 1],
+                .sha256 = timed_audio_observation.parseDigest(args[index + 2]) catch return error.Usage,
+            };
+            index += 2;
         } else if (std.mem.eql(u8, arg, "--expander-root")) {
             index += 1;
             if (index >= args.len or out.expander_root.len != 0) return error.Usage;
@@ -4145,6 +4284,9 @@ fn parseOptions(args: []const []const u8) !Options {
         out.limit_pages != null or out.shard_pages != null or out.audit_presentation_errors or out.failure_receipt != null or
         out.indexed_output_args.len != 0 or out.now_unix == null or !std.fs.path.isAbsolute(args[2]))) return error.Usage;
     try validateIndexedOutputArguments(out);
+    if (out.timed_audio != null and (out.indexed_output_args.len != 0 or out.workers != 1 or
+        out.limit_pages != 1 or out.index_byte_offset == null or out.shard_pages != null or
+        out.audit_presentation_errors or out.reviewed_nonlexical != null)) return error.Usage;
     if (out.indexed_output_args.len != 0 and (!std.fs.path.isAbsolute(args[1]) or
         !std.fs.path.isAbsolute(args[2]) or !std.fs.path.isAbsolute(out.expander_root))) return error.Usage;
     return out;
@@ -5452,11 +5594,11 @@ pub fn main(init: std.process.Init) !void {
     if (args.len > 1 and std.mem.eql(u8, args[1], "--captured-pages"))
         return runCapturedWriterTransactionCli(init, args);
     if (args.len < 3) {
-        diagnostics.printLine("usage: dict-blob-build <wiktionary.xml|multistream.xml.bz2|multistream.xml.zst> <output-root> --expander-root ROOT [--figure-input-root ROOT] [--figure-page-observations-snapshot FILE] [--start-page N] [--index-byte-offset N] [--limit-pages N] [--workers N] [--expansion-timeout-ms N] [--now-unix UNIX] [--shard-pages N | --acknowledged-shards FAILURE_ROOT] [--audit-presentation-errors [--audit-expanded-bytes N]] [--shared-inputs FILE... --indexed-page-outputs ORD OFFSET ROW_SHA256 NAME ...]\n", .{});
+        diagnostics.printLine("usage: dict-blob-build <wiktionary.xml|multistream.xml.bz2|multistream.xml.zst> <output-root> --expander-root ROOT [--figure-input-root ROOT] [--figure-page-observations-snapshot FILE] [--timed-audio-observation FILE SHA256] [--start-page N] [--index-byte-offset N] [--limit-pages N] [--workers N] [--expansion-timeout-ms N] [--now-unix UNIX] [--shard-pages N | --acknowledged-shards FAILURE_ROOT] [--audit-presentation-errors [--audit-expanded-bytes N]] [--shared-inputs FILE... --indexed-page-outputs ORD OFFSET ROW_SHA256 NAME ...]\n", .{});
         return error.Usage;
     }
     const options = parseOptions(args) catch {
-        diagnostics.printLine("usage: dict-blob-build <wiktionary.xml|multistream.xml.bz2|multistream.xml.zst> <output-root> --expander-root ROOT [--figure-input-root ROOT] [--figure-page-observations-snapshot FILE] [--start-page N] [--index-byte-offset N] [--limit-pages N] [--workers N] [--expansion-timeout-ms N] [--now-unix UNIX] [--shard-pages N | --acknowledged-shards FAILURE_ROOT] [--audit-presentation-errors [--audit-expanded-bytes N]] [--shared-inputs FILE... --indexed-page-outputs ORD OFFSET ROW_SHA256 NAME ...]\n", .{});
+        diagnostics.printLine("usage: dict-blob-build <wiktionary.xml|multistream.xml.bz2|multistream.xml.zst> <output-root> --expander-root ROOT [--figure-input-root ROOT] [--figure-page-observations-snapshot FILE] [--timed-audio-observation FILE SHA256] [--start-page N] [--index-byte-offset N] [--limit-pages N] [--workers N] [--expansion-timeout-ms N] [--now-unix UNIX] [--shard-pages N | --acknowledged-shards FAILURE_ROOT] [--audit-presentation-errors [--audit-expanded-bytes N]] [--shared-inputs FILE... --indexed-page-outputs ORD OFFSET ROW_SHA256 NAME ...]\n", .{});
         return error.Usage;
     };
     var figure_inputs: ?WriterFigureInputs = if (options.figure_input_root) |root|
@@ -5516,6 +5658,12 @@ fn runBlobBuild(io: std.Io, a: std.mem.Allocator, args: []const []const u8, opti
     const profile_enabled = try diagnostics.profileEnabledFromEnv(if (profile_env) |value| std.mem.span(value) else null);
     var namespaces = try namespace_registry.Registry.load(io, a, options.expander_root);
     defer namespaces.deinit();
+    // Loaded once. The pool is joined before this immutable observation dies.
+    var timed_audio: ?timed_audio_observation.Observation = if (options.timed_audio) |input|
+        try timed_audio_observation.Observation.load(io, a, input.path, input.sha256, &namespaces)
+    else null;
+    defer if (timed_audio) |*observation| observation.deinit();
+    if (timed_audio) |*observation| try observation.requireSelection(options.start_page, options.index_byte_offset.?);
     const interwiki_path = try std.fs.path.join(a, &.{ options.expander_root, "interwiki-map.tsv" });
     defer a.free(interwiki_path);
     const interwiki_bytes = std.Io.Dir.cwd().readFileAlloc(io, interwiki_path, a, .limited(4 * 1024 * 1024)) catch |err| switch (err) {
@@ -5571,6 +5719,8 @@ fn runBlobBuild(io: std.Io, a: std.mem.Allocator, args: []const []const u8, opti
     defer if (disclosure_inputs) |*value| value.deinit();
     var sizing_authority: ?figure_sizing.Registry = null;
     defer if (sizing_authority) |*value| value.deinit();
+    var nah_measured_sizing: ?figure_sizing.Registry = null;
+    defer if (nah_measured_sizing) |*value| value.deinit();
     var codes = languageCodes(&registry, &namespaces);
     codes.behavior_switches = if (behavior) |*value| value else null;
     codes.image_options = if (images) |*value| value else null;
@@ -5671,6 +5821,7 @@ fn runBlobBuild(io: std.Io, a: std.mem.Allocator, args: []const []const u8, opti
     defer a.free(worker_path);
     var pool = try ExpansionPool.init(io, a, options.expander_root, worker_path, args[1], options.workers, if (audit) |value| value.context.now_unix else options.now_unix, options.expansion_timeout_ms orelse expansion_deadline.default_ms);
     defer pool.deinit();
+    pool.timed_audio = if (timed_audio) |*observation| observation else null;
     pool.profile_enabled = profile_enabled;
     for (pool.slots) |*slot| slot.profile_enabled = profile_enabled;
     pool.audit = audit;
@@ -5689,6 +5840,16 @@ fn runBlobBuild(io: std.Io, a: std.mem.Allocator, args: []const []const u8, opti
     };
     const figure_site = try loadWriterFigureSite(io, a, options.expander_root, options.figure_input_root, &namespaces);
     sizing_authority = try loadWriterFigureSizing(io, a, options.expander_root, options.figure_input_root, &namespaces, figure_site);
+    if (options.figure_input_root) |root| {
+        const inputs = figure_inputs orelse return error.InvalidWriterFigureInputs;
+        nah_measured_sizing = try loadNahMeasuredFigureSizing(io, a, root, &inputs.guards, &namespaces, figure_site);
+        if (nah_measured_sizing) |*measured| {
+            // Keep the dated default/style and independent file roles on their
+            // original source. The five tuples cannot replace either role.
+            if (sizing_authority == null) return error.InvalidWriterFigureInputs;
+            pool.nah_measured_figures = .{ .registry = measured };
+        }
+    }
     if (setup_sizing_started) |started| {
         var total: ParentPhaseTotals = .{};
         total.record(started, ParentProfileStamp.now(io));
@@ -5902,6 +6063,8 @@ fn runOrdinaryOutput(
         }
     }
     try pool.drain(&writer);
+    if (options.timed_audio != null and !pool.slots[0].timed_audio_emitted)
+        return error.TimedAudioObservationUnconsumed;
     try checkReviewedDump(pool, dump);
     try book_inputs.verify();
     if (audit) |value| {
@@ -72694,6 +72857,77 @@ test "NAH indexed DEFAULTSORT banners require exact source revisions and emitted
     }
 }
 
+test "NAH Classical Nahuatl banner requires its dated provider and distinct first category" {
+    const provider_xml = "&lt;includeonly&gt;[[Category:Tecpiltic Nahuatlahtolli]]{{DEFAULTSORT:{{{1|{{PAGENAME}}}}}}}&lt;/includeonly&gt;__NOEDITSECTION__\n&lt;br&gt;\n== Nahuatlahtolli ==";
+    const cemp_raw = "{{-nci-}}\n\n{{-num-nci-}}\n;1: [[30]].\n\n{{-ref-}}\n<references />";
+    const cemp_expanded = "[[Category:Tecpiltic Nahuatlahtolli]]__NOEDITSECTION__\n<br>\n== Nahuatlahtolli ==\n\n=== Tlapohualiztli ===\n[[Category:NCI:Tlapohualiztli]]\n\n;1: [[30]].\n\n=== Toquiliztequitl ===\n\n<references />";
+    const wimmer_raw = "{{-nci-Wimmer-}}\n\n{{-meaning-}}\nHuehuehcauh tlahcuiloliztli itech '''[[tototl]]'''.\n\n{{-ref-}}\n<references />";
+    const wimmer_expanded = "[[Category:Alexis Wimmer]]__NOEDITSECTION__\n<br>\n== Nahuatlahtolli ==\n\n=== Nezcayotiliztli ===\n\nHuehuehcauh tlahcuiloliztli itech '''[[tototl]]'''.\n\n=== Toquiliztequitl ===\n\n<references />";
+    const namespace_bytes = "# wikidict-namespace-registry-v1\n# wiki\tnahwiktionary\n# dump-date\t20261001\n# content-language\tnah\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\t\tmain\tdictionary_entries\n" ++
+        "10\tNemachiyōtīlli\tTemplate\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\tPlantilla\n" ++
+        "14\tNeneuhcāyōtl\tCategory\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\tCategoría\n";
+    const io = std.testing.io;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var ns = try namespace_registry.Registry.init(a, namespace_bytes);
+    defer ns.deinit();
+    const prefix = "[[Category:Tecpiltic Nahuatlahtolli]]__NOEDITSECTION__\n<br>";
+    const heading = "Nahuatlahtolli";
+
+    for ([_]enum { exact, wrong_revision, wrong_code }{ .exact, .wrong_revision, .wrong_code }) |identity| {
+        var tmp = std.testing.tmpDir(.{});
+        defer tmp.cleanup();
+        const root = try tmp.dir.realPathFileAlloc(io, ".", a);
+        const index = try std.fs.path.join(a, &.{ root, "page-index.tsv" });
+        const revision: u32 = if (identity == .wrong_revision) 74856 else 74855;
+        const code = if (identity == .wrong_code) "nah" else "nci";
+        const row = try std.fmt.allocPrint(a, "0\t0\tNemachiyōtīlli:-{s}-\t\t4392\t{d}\t2026-02-13T05:34:07Z\tXochimilkatl\twikitext\t10\t1\t1\n",
+            .{ code, revision });
+        var store = try dump_source.TemplateSourceWriter.init(io, a, root);
+        defer store.deinit();
+        try store.append(0, 4392, revision, provider_xml);
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = index, .data = row });
+        try store.finish(index);
+
+        var registry = language_registry.Registry.empty(a);
+        defer registry.deinit();
+        try registry.addTsv("# content-language\tnah\n# mediawiki\nnah\tNāhuatl\tnah\n# iso-639-3\nnci\tClassical Nahuatl\tnci\n");
+        try loadSourceLanguageBanners(io, a, root, &ns, &registry);
+        try std.testing.expectEqual(identity == .exact, registry.matchesSourceLanguageBannerPrefix("nci", heading, 2, prefix));
+        try std.testing.expect(!registry.matchesSourceLanguageBannerPrefix("nci", heading, 2, "[[Category:Tecpiltic Nahuatlahtolli]]"));
+        try std.testing.expect(!registry.matchesSourceLanguageBannerPrefix("nci", heading, 2, "[[Category:Alexis Wimmer]]__NOEDITSECTION__\n<br>"));
+        try std.testing.expect(!registry.matchesSourceLanguageBannerPrefix("nah", heading, 2, prefix));
+        try std.testing.expect(registry.resolveTrusted(heading) == null);
+        if (identity != .exact) continue;
+
+        const output = try std.fs.path.join(a, &.{ root, "blobs" });
+        const codes = languageCodes(&registry, &ns);
+        var writer = try encoder.blob_builder.Writer.init(io, a, output);
+        defer writer.deinit();
+        writer.language_codes = codes;
+        const article: encoder.blob_builder.PageNamespace = .{ .id = 0, .kind = .language };
+        try writer.addExpandedPage(a, article, "cempohualmahtlactli", cemp_expanded, cemp_raw, null);
+        try writer.addExpandedPage(a, article, "tōtōtl", wimmer_expanded, wimmer_raw, null);
+        const stats = try writer.finish(codes);
+        try std.testing.expectEqual(@as(usize, 2), stats.language_records);
+        const positive = try MgEqualsPrefixTest.entry(a, output, "Classical Nahuatl", "cempohualmahtlactli");
+        const negative = try MgEqualsPrefixTest.entry(a, output, "Unclassified", "tōtōtl");
+        try std.testing.expectEqualStrings("nci", positive.language_code);
+        try std.testing.expectEqualStrings("", negative.language_code);
+        var preserved_heading = false;
+        var preserved_sense = false;
+        for (positive.sections) |section| {
+            preserved_heading = preserved_heading or std.mem.eql(u8, section.title, heading);
+            for (section.blocks) |block| for (block.spans) |span| {
+                preserved_sense = preserved_sense or (span.kind == .link and std.mem.eql(u8, span.target, "30"));
+            };
+        }
+        try std.testing.expect(preserved_heading and preserved_sense);
+    }
+}
+
 test "normal Figure loader accepts exact SH and SA current57 dated File authority" {
     const io = std.testing.io;
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
@@ -73477,6 +73711,183 @@ test "FJ dated literal vosa proof rejects unbound and conflicting providers" {
     try registry.addLocalAlias("Dautia", "en");
     try std.testing.expect(!registry.matchesSourceLanguageBanner("nl", proof.heading, 1));
     try std.testing.expect((try source_language_banner.fjVosaProofAlloc(a, FjVosaTest.wrapper, FjVosaTest.formatter, &ns, &registry, "nl")) == null);
+}
+
+// Dated source p25745/r178224 under the captured current sh/fj profile.
+// See testdata/fj-kopno/provenance.json for the source and fixture coordinates.
+test "FJ kopno current capture joins maintained expansion to indexed owner proof" {
+    const rt = @import("zig_runtime");
+    const stdlib = @import("zig_stdlib");
+    const wikitext = @import("fj_wikitext");
+    const raw = @embedFile("testdata/fj-kopno/page.wikitext");
+    const wrapper = @embedFile("testdata/fj-kopno/wrapper.wikitext");
+    const formatter = @embedFile("testdata/fj-kopno/formatter.wikitext");
+    const namespace_tsv = @embedFile("testdata/fj-kopno/namespace-registry.tsv");
+    const owner_tsv = @embedFile("testdata/fj-kopno/language-registry.tsv");
+    const names_tsv = @embedFile("testdata/fj-kopno/language-names.tsv");
+    const magic_tsv = @embedFile("testdata/fj-kopno/magic-words.tsv");
+    const golden = @embedFile("testdata/fj-kopno/expanded.wikitext");
+    const label = "Serbo-Croatian";
+    const target = "Vosa Vaka-Serbo-Croatian";
+
+    const backing = std.testing.allocator;
+    const io = std.testing.io;
+    var arena = std.heap.ArenaAllocator.init(backing);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var ns = try namespace_registry.Registry.init(backing, namespace_tsv);
+    defer ns.deinit();
+    try std.testing.expectEqualStrings("fjwiktionary", ns.wiki);
+    try std.testing.expectEqualStrings("20261001", ns.dump_date);
+    try std.testing.expectEqualStrings("fj", ns.content_language);
+    const Capture = struct { temporal_scope: []const u8, output_sha256: []const u8 };
+    const capture = try std.json.parseFromSlice(Capture, a,
+        @embedFile("testdata/fj-kopno/magic-words.manifest.json"), .{ .ignore_unknown_fields = true });
+    defer capture.deinit();
+    try std.testing.expectEqualStrings("current-at-retrieval", capture.value.temporal_scope);
+    var magic_sha: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(magic_tsv, &magic_sha, .{});
+    try std.testing.expectEqualStrings(capture.value.output_sha256, &std.fmt.bytesToHex(magic_sha, .lower));
+
+    var registry = language_registry.Registry.empty(backing);
+    defer registry.deinit();
+    try registry.addTsv(owner_tsv);
+    try std.testing.expectEqual(@as(usize, 0), registry.source_banners.count());
+    const before_target = registry.resolveTrusted(target);
+    const before_label = registry.resolveTrusted(label);
+    try std.testing.expect(before_target == null);
+    try std.testing.expectEqualStrings("sh", (before_label orelse return error.FjCapturedOwnerMissing).code);
+    const names_before = registry.names.count();
+    const trusted_before = registry.trusted_names.count();
+    const local_before = registry.local_aliases.count();
+    const reviewed_before = registry.reviewed_aliases.count();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    try tmp.dir.writeFile(io, .{ .sub_path = "namespace-registry.tsv", .data = namespace_tsv });
+    try tmp.dir.writeFile(io, .{ .sub_path = "language-registry.tsv", .data = owner_tsv });
+    try tmp.dir.writeFile(io, .{ .sub_path = "language-names.tsv", .data = names_tsv });
+    try tmp.dir.writeFile(io, .{ .sub_path = "magic-words.tsv", .data = magic_tsv });
+    // Preserve the dated NS10 source identities with fixture-local ordinals.
+    const index = "0\t0\tTemplate:-sh-\t\t34165\t136739\t2015-06-05T10:10:03Z\t\twikitext\t10\t1\t0\n" ++
+        "0\t0\tTemplate:vosa\t\t6720\t106027\t2013-04-25T00:25:32Z\t\twikitext\t10\t1\t0\n";
+    try tmp.dir.writeFile(io, .{ .sub_path = "page-index.tsv", .data = index });
+    const index_path = try std.fs.path.join(a, &.{ root, "page-index.tsv" });
+    {
+        var store = try dump_source.TemplateSourceWriter.init(io, a, root);
+        defer store.deinit();
+        try store.append(0, 34165, 136739, wrapper);
+        try store.append(1, 6720, 106027, formatter);
+        try store.finish(index_path);
+    }
+    {
+        var rows: LanguageTemplateRows = .{ .io = io, .a = backing, .root = root, .namespaces = &ns };
+        defer rows.deinit();
+        try loadFjVosaBannersWithRows(io, backing, root, &ns, &registry, &rows);
+        try rows.check();
+        try std.testing.expectEqual(@as(u64, 2), rows.parsed_rows);
+        try std.testing.expectEqual(@as(u64, 1), rows.completed_scans);
+        try std.testing.expectEqual(@as(u64, 1), rows.template_opens);
+    }
+    // The loader's name and magic registries and row view have closed.
+    // Their arenas were backed by the testing allocator directly.
+    const proof = (registry.source_banners.get("sh") orelse return error.FjOwnerProofMissing) orelse
+        return error.FjOwnerProofConflicting;
+    try std.testing.expectEqual(@as(usize, 1), registry.source_banners.count());
+    try std.testing.expectEqualStrings(label, proof.label);
+    try std.testing.expectEqualStrings(target, proof.target);
+    try std.testing.expectEqualStrings("[[Category:Na Vosa Vaka-Serbo-Croatian]]",
+        (proof.emitted_prefix orelse return error.FjPrefixMissing).category);
+    try std.testing.expectEqualDeep(before_target, registry.resolveTrusted(target));
+    try std.testing.expectEqualDeep(before_label, registry.resolveTrusted(label));
+    try std.testing.expectEqual(names_before, registry.names.count());
+    try std.testing.expectEqual(trusted_before, registry.trusted_names.count());
+    try std.testing.expectEqual(local_before, registry.local_aliases.count());
+    try std.testing.expectEqual(reviewed_before, registry.reviewed_aliases.count());
+
+    var names = try captured_language_names.Registry.init(a, names_tsv, ns.wiki, ns.dump_date, ns.content_language);
+    defer names.deinit();
+    var words = try namespace_registry.magic_words.Registry.init(a, magic_tsv, ns.wiki, ns.dump_date, ns.content_language);
+    defer words.deinit();
+    try std.testing.expect(words.expanded_functions);
+    const Source = struct {
+        names: *const captured_language_names.Registry,
+        words: *const namespace_registry.magic_words.Registry,
+        name_calls: usize = 0,
+        parser_calls: usize = 0,
+        wrapper_calls: usize = 0,
+        formatter_calls: usize = 0,
+
+        fn get(ctx: ?*anyopaque, _: std.mem.Allocator, title: []const u8) anyerror!?[]const u8 {
+            const self: *@This() = @ptrCast(@alignCast(ctx orelse return error.FjProviderContextMissing));
+            if (std.mem.eql(u8, title, "Template:-sh-")) {
+                self.wrapper_calls += 1;
+                return wrapper;
+            }
+            if (std.mem.eql(u8, title, "Template:vosa")) {
+                self.formatter_calls += 1;
+                return formatter;
+            }
+            return null;
+        }
+
+        fn exists(ctx: ?*anyopaque, title: []const u8) anyerror!bool {
+            return (try get(ctx, std.heap.page_allocator, title)) != null;
+        }
+
+        fn languageName(ctx: ?*anyopaque, code: []const u8, display: ?[]const u8) anyerror![]const u8 {
+            const self: *@This() = @ptrCast(@alignCast(ctx orelse return error.FjProviderContextMissing));
+            try std.testing.expectEqualStrings("sh", code);
+            try std.testing.expectEqualStrings("fj", display orelse return error.FjDisplayRequired);
+            self.name_calls += 1;
+            return self.names.name(code, display);
+        }
+
+        fn parser(ctx: ?*anyopaque, alias: []const u8) anyerror!?[]const u8 {
+            const self: *@This() = @ptrCast(@alignCast(ctx orelse return error.FjProviderContextMissing));
+            const resolved = self.words.resolve(alias, .parser_function);
+            if (std.mem.eql(u8, alias, "#language")) {
+                self.parser_calls += 1;
+                try std.testing.expectEqualStrings("language", resolved orelse return error.FjLanguageAliasMissing);
+            }
+            return resolved;
+        }
+
+        fn titleMagic(ctx: ?*anyopaque, alias: []const u8, form: namespace_registry.magic_words.Form) anyerror!?[]const u8 {
+            const self: *@This() = @ptrCast(@alignCast(ctx orelse return error.FjProviderContextMissing));
+            return self.words.resolve(alias, form);
+        }
+    };
+    var source: Source = .{ .names = &names, .words = &words };
+    var runtime = try rt.Context.init(a, 24);
+    defer runtime.deinit();
+    runtime.namespace_catalog = &ns;
+    try rt.bindGlobalTable(&runtime, null, 0);
+    try stdlib.install(&runtime);
+    var expander: wikitext.Expander = .{
+        .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23,
+        .provider = .{
+            .ctx = &source, .get = Source.get, .exists = Source.exists,
+            .language_name = Source.languageName, .resolve_parser_function = Source.parser,
+            .resolve_title_magic = Source.titleMagic,
+        },
+    };
+    // Use the page revision timestamp 2022-10-15T18:40:03Z.
+    const expanded = try expander.expandFragment("копно", raw, 1665859203);
+    try std.testing.expect(!expander.unsupported_parser_function);
+    try std.testing.expectEqual(@as(usize, 1), source.name_calls);
+    try std.testing.expectEqual(@as(usize, 2), source.parser_calls);
+    try std.testing.expectEqual(@as(usize, 1), source.wrapper_calls);
+    try std.testing.expectEqual(@as(usize, 1), source.formatter_calls);
+    try std.testing.expectEqualStrings(golden, expanded);
+    const opening = std.mem.indexOf(u8, expanded, "\n=") orelse return error.FjHeadingMissing;
+    const start = opening + 2;
+    const close = std.mem.indexOf(u8, expanded[start..], "=\n") orelse return error.FjHeadingMissing;
+    const heading = expanded[start .. start + close];
+    try std.testing.expectEqualStrings(heading, proof.heading);
+    try std.testing.expect(registry.matchesSourceLanguageBanner("sh", heading, 1));
+    try std.testing.expect(registry.matchesSourceLanguageBannerPrefix("sh", heading, 1, expanded[0..opening]));
 }
 
 test "FJ indexed source banner binds actual expanded root and preserves typed body" {

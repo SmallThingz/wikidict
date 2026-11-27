@@ -10,6 +10,940 @@ const profile = encoder.table_style_profile;
 const syntax = encoder.wikitext_syntax;
 const A = std.mem.Allocator;
 const Value = std.json.Value;
+
+const NahSelectedThumbnailFile = struct {
+    file: []const u8,
+    caption: []const u8,
+    start: usize,
+    sha1: []const u8,
+    timestamp: []const u8,
+    original_width: u32,
+    original_height: u32,
+
+    fn token(comptime self: NahSelectedThumbnailFile) []const u8 {
+        return "[[File:" ++ self.file ++ "|thumb|" ++ self.caption ++ "]]";
+    }
+};
+const nah_selected_thumbnail_pages = [_]struct {
+    title: []const u8,
+    page_id: u64,
+    revision_id: u64,
+    raw_sha256: []const u8,
+    expanded_sha256: []const u8,
+    files: []const NahSelectedThumbnailFile,
+}{
+    .{ .title = "cozamalotl", .page_id = 1782, .revision_id = 94642,
+        .raw_sha256 = "1224cc098bfd20c42ed0e760a77e302cf51fd4d960609edd663e16819a27beb4",
+        .expanded_sha256 = "ec9c013608cf4380f23dd6b0a99c305eb2957a2c747ce4d1360381996ab8f5f3", .files = &.{
+            .{ .file = "WhereRainbowRises.jpg", .caption = "[1] Cozamalotl", .start = 10, .sha1 = "2329ad837b549195a7f2c967463fe194c6136df0", .timestamp = "2006-08-08T04:38:56Z", .original_width = 1360, .original_height = 2048 },
+        } },
+    .{ .title = "citlalli", .page_id = 1829, .revision_id = 93092,
+        .raw_sha256 = "0578feec7e4ccd8292016c965aabee0813f5aca33b3dec49ac4bcef14613d2a5",
+        .expanded_sha256 = "2b2b82112d0d1241488611098ecda5df474886eaaaf06178f8451fbe6ba5a51f", .files = &.{
+            .{ .file = "Star-Vega.png", .caption = "[1] Citlalli", .start = 10, .sha1 = "7ec2f436800fbd7e364eb515554cc27b0e97779b", .timestamp = "2025-03-21T03:09:15Z", .original_width = 2477, .original_height = 2689 },
+        } },
+    .{ .title = "atl", .page_id = 2010, .revision_id = 95127,
+        .raw_sha256 = "84d545c9e5cf5b27a744903e99ba6510f10a960d1cc11446aaf3a1ecb129aa13",
+        .expanded_sha256 = "2100591c49cc530ca8ace18c93a79cc5f66557a059e3021c8b2883abcf1ab0bc", .files = &.{
+            .{ .file = "2006-02-13 Drop-impact.jpg", .caption = "[1] Atl", .start = 10, .sha1 = "15265d585dab1bbb6dfd42aef67c1dde91646b8d", .timestamp = "2006-02-13T22:09:10Z", .original_width = 1556, .original_height = 1504 },
+            .{ .file = "Human anterior fontanelle 1 month dscn1449.jpg", .caption = "[2] Atl", .start = 60, .sha1 = "ca2851f4d02014ad7c9cf8d0748c06120bb4fbf3", .timestamp = "2005-07-15T18:18:07Z", .original_width = 1600, .original_height = 1200 },
+            .{ .file = "Atl.svg", .caption = "[3] Atl", .start = 130, .sha1 = "e9dac9953d875ba786c0b00a1f794832e75ff7f8", .timestamp = "2009-11-11T17:40:57Z", .original_width = 250, .original_height = 200 },
+        } },
+};
+const nah_selected_thumbnail_namespace = "ade511e7ea0b48d76c09aec23c7979caee8045db83ac1125c9077982eeb5fcb5";
+const nah_selected_thumbnail_prelude = "[[Category:Tecpiltic Nahuatlahtolli]]__NOEDITSECTION__\n<br>\n== Nahuatlahtolli ==\n";
+
+fn exactStandaloneToken(source: []const u8, at: usize, token: []const u8) bool {
+    if (at >= source.len or (at != 0 and source[at - 1] != '\n') or
+        !std.mem.startsWith(u8, source[at..], token)) return false;
+    const end = at + token.len;
+    if (end != source.len and source[end] != '\n') return false;
+    return std.mem.indexOf(u8, source, token) == at and std.mem.indexOfPos(u8, source, at + 1, token) == null;
+}
+
+// Explicit compiler-only attachment. The caller loads the independently
+// validated measured Registry; this gate seals the complete worker expansion.
+// Keep the ordinary resolver and intrinsic provider on their original context.
+pub fn bindNahSelectedDefaultThumbnails(a: A, source: *compiler.FigureSizingSource, ns: *const namespaces.Registry,
+    measured: *const sizing.Registry, namespace_id: i32, page_id: u64, revision_id: u64, title: []const u8,
+    raw: []const u8, expanded: []const u8) !bool
+{
+    source.selected_default_thumbnails = null;
+    const defaults = source.source_context orelse return false;
+    const tuple_context: *const anyopaque = measured;
+    if (namespace_id != 0 or !equal(ns.wiki, "nahwiktionary") or !equal(ns.content_language, "nah") or
+        !equal(ns.dump_date, "20261001") or
+        !hashEqual(ns.source_sha256, nah_selected_thumbnail_namespace) or
+        !std.mem.eql(u8, &ns.source_sha256, &defaults.namespace_sha256) or
+        !std.mem.eql(u8, &ns.source_sha256, &measured.namespace_catalog.source_sha256) or
+        defaults.defaults.rtl or defaults.defaults.default_thumbnail_width != 250 or source.ctx == tuple_context or
+        !measured.measured_thumbnail_only or measured.file_authority or measured.records.len != 5)
+        return false;
+
+    inline for (nah_selected_thumbnail_pages) |page| {
+        if (page_id == page.page_id and revision_id == page.revision_id and equal(title, page.title)) {
+            if (!digestMatches(raw, page.raw_sha256) or !std.mem.startsWith(u8, raw, "{{-nci-}}\n") or
+                !std.mem.startsWith(u8, expanded, nah_selected_thumbnail_prelude) or
+                !digestMatches(expanded, page.expanded_sha256)) return false;
+
+            var next = nah_selected_thumbnail_prelude.len;
+            var matches: [page.files.len]compiler.SelectedDefaultThumbnail = undefined;
+            inline for (page.files, 0..) |file, i| {
+                const token = comptime file.token();
+                if (!exactStandaloneToken(raw, file.start, token) or !exactStandaloneToken(expanded, next, token)) return false;
+                const canonical = "Īxiptli:" ++ file.file;
+                var match: ?sizing.Record = null;
+                for (measured.records) |record| {
+                    if (!equal(record.canonical_file, canonical)) continue;
+                    if (match != null or !equal(record.file_sha1, file.sha1) or !equal(record.file_timestamp, file.timestamp) or
+                        record.original_width != file.original_width or record.original_height != file.original_height or
+                        record.format != .thumbnail or record.width_px != 250 or record.height_px != null or
+                        record.sizing != .requested_fit or !equal(record.proof_kind, "observed-exact-thumbnail-width"))
+                        return false;
+                    match = record;
+                }
+                const tuple = match orelse return false;
+                matches[i] = .{ .start = next, .token = token, .file = file.file,
+                    .options = "thumb|" ++ file.caption, .width_px = tuple.width_px };
+                next += token.len + 1;
+            }
+            source.selected_default_thumbnails = .{
+                .source = expanded, .title = page.title, .occurrences = try a.dupe(compiler.SelectedDefaultThumbnail, &matches),
+            };
+            return true;
+        }
+    }
+    return false;
+}
+
+test "NAH measured default thumbnails require the exact expanded occurrence and source page" {
+    try nahSelectedThumbnailRegression(false);
+}
+
+test "NAH citlalli stores the exact selected Figure through citation projection" {
+    try nahSelectedThumbnailRegression(true);
+}
+
+fn nahSelectedThumbnailRegression(comptime citation_projection_only: bool) !void {
+    const F = struct {
+        fn noFit(_: ?*const anyopaque, _: A, _: []const u8, _: encoder.presentation_types.FigureFormat, _: ?u32, _: ?u32) A.Error!?encoder.presentation_types.FigureSizingPolicy {
+            return null;
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, "# wikidict-namespace-registry-v1\n" ++
+        "# wiki\tnahwiktionary\n" ++
+        "# dump-date\t20261001\n" ++
+        "# content-language\tnah\n" ++
+        "-2\tMēdiatl\tMedia\tcase-sensitive\t0\t0\t0\t\tcompile_only\tvirtual_namespace\tMedia\n" ++
+        "-1\tNōncuahquīzqui\tSpecial\tfirst-letter\t0\t0\t0\t\tcompile_only\tvirtual_namespace\tEspecial\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\t\tmain\tdictionary_entries\n" ++
+        "1\tTēixnāmiquiliztli\tTalk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tDiscusión\n" ++
+        "2\tTlatequitiltilīlli\tUser\tfirst-letter\t1\t0\t0\t\tcompile_only\tstandard_build_input\tUsuario\n" ++
+        "3\tTlatequitiltilīlli tēixnāmiquiliztli\tUser talk\tfirst-letter\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tUsuario Discusión\n" ++
+        "4\tWiktionary\tProject\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\tWT\tWikipedia\n" ++
+        "5\tWiktionary tēixnāmiquiliztli\tProject talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tWikipedia Discusión\tWiktionary talk\n" ++
+        "6\tĪxiptli\tFile\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\tImage\tImagen\n" ++
+        "7\tĪxiptli tēixnāmiquiliztli\tFile talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tImage talk\tImagen Discusión\tImagen discusión\n" ++
+        "8\tHuiquimedia\tMediaWiki\tfirst-letter\t1\t0\t0\t\tcompile_only\tstandard_build_input\tMediaWiki\n" ++
+        "9\tHuiquimedia tēixnāmiquiliztli\tMediaWiki talk\tfirst-letter\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tMediaWiki Discusión\n" ++
+        "10\tNemachiyōtīlli\tTemplate\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\tPlantilla\n" ++
+        "11\tNemachiyōtīlli tēixnāmiquiliztli\tTemplate talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tPlantilla Discusión\n" ++
+        "12\tTēpalēhuiliztli\tHelp\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\tAyuda\n" ++
+        "13\tTēpalēhuiliztli tēixnāmiquiliztli\tHelp talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tAyuda Discusión\n" ++
+        "14\tNeneuhcāyōtl\tCategory\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\tCategoría\n" ++
+        "15\tNeneuhcāyōtl tēixnāmiquiliztli\tCategory talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tCategoría Discusión\n" ++
+        "710\tTimedText\tTimedText\tcase-sensitive\t0\t0\t0\t\tcompile_only\tancillary_site_input\n" ++
+        "711\tTimedText talk\tTimedText talk\tcase-sensitive\t0\t0\t0\t\tcompile_only\tdiscussion_namespace\n" ++
+        "828\tMódulo\tModule\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\n" ++
+        "829\tMódulo discusión\tModule talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n" ++
+        "1728\tEvento\tEvent\tcase-sensitive\t1\t0\t0\t\tcompile_only\tancillary_site_input\n" ++
+        "1729\tEvento discusión\tEvent talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n");
+    defer ns.deinit();
+    const coza_raw = "{{-nci-}}\n" ++
+        "[[File:WhereRainbowRises.jpg|thumb|[1] Cozamalotl]]\n" ++
+        "\n" ++
+        "{{-pron-}}\n" ++
+        ":{{IPA|/ ko.saˈma.lot͡ɬ /}}\n" ++
+        "\n" ++
+        "{{-noun-nci-}}\n" ++
+        "{| class=\"wikitable\"\n" ++
+        "|\n" ++
+        "|Achtocayotl\n" ++
+        "|Pilcayotl\n" ++
+        "|-\n" ++
+        "|{{singular}}\n" ++
+        "|'''{{PAGENAME}}'''\n" ++
+        "| '''cozamalo-'''\n" ++
+        "|-\n" ++
+        "|{{plural}}\n" ++
+        "|'''{{PAGENAME}}'''\n" ++
+        "| '''-cozamalohuan'''\n" ++
+        "|}\n" ++
+        "\n" ++
+        "{{-meaning-}}\n" ++
+        ";1: \n" ++
+        "\n" ++
+        "{{-rel-}}\n" ++
+        "* [[Cozamaloapan]]\n" ++
+        "\n" ++
+        "{{-trad-}}\n" ++
+        "{{cozamalotl}}\n" ++
+        "\n" ++
+        "[[Neneuhcāyōtl:NCI:Tlalticpactli]]\n" ++
+        "\n" ++
+        "{{-ref-}}\n" ++
+        "{{GDN-UNAM}}\n" ++
+        "<references />\n" ++
+        "\n" ++
+        "{{-nhn-Amaquemecan/Calpan/Canoa/Cholollan/Milpa Alta-}}\n" ++
+        "\n" ++
+        "{{-meaning-}}\n" ++
+        "Huehuehcauh tlahcuiloliztli itech '''[[kosamalotl]]'''. (''Amaquemecan, Calpan, Canoa, Cholollan ihuan Milpa Alta'')\n" ++
+        "\n" ++
+        "{{-ref-}}\n" ++
+        "{{SEP-HMS}}\n" ++
+        "{{UDLA-GMR}}\n" ++
+        "<references />";
+    const citlalli_raw = "{{-nci-}}\n" ++
+        "[[File:Star-Vega.png|thumb|[1] Citlalli]]\n" ++
+        "\n" ++
+        "{{-pron-}}\n" ++
+        "IPA: {{IPA|/ siˈt͡ɬa.lːi /}} \n" ++
+        "\n" ++
+        "{{-ety-}}\n" ++
+        "Ce tlayacaticac [[nahuatlahtolli]].\n" ++
+        "\n" ++
+        "{{-noun-nci-}}\n" ++
+        "{| class=\"wikitable\"\n" ++
+        "|\n" ++
+        "|Achtocayotl\n" ++
+        "|Pilcayotl\n" ++
+        "|-\n" ++
+        "|{{singular}}\n" ++
+        "|'''{{PAGENAME}}'''\n" ++
+        "| '''citlal-'''\n" ++
+        "|-\n" ++
+        "|{{plural}}\n" ++
+        "|'''{{PAGENAME}}'''\n" ++
+        "| '''-citlalhuan'''\n" ++
+        "|}\n" ++
+        "\n" ++
+        "{{-meaning-}}\n" ++
+        ";1: Ce tonatiuh ompa cemanahuatl.\n" ++
+        "\n" ++
+        "{{-trad-}}\n" ++
+        "{{citlalli}}\n" ++
+        "\n" ++
+        "[[Neneuhcāyōtl:NCI:Cemanahuatl]]\n" ++
+        "\n" ++
+        "{{-ref-}}\n" ++
+        "{{GDN-UNAM}}\n" ++
+        "<references />";
+    const atl_raw = "{{-nci-}}\n" ++
+        "[[File:2006-02-13 Drop-impact.jpg|thumb|[1] Atl]]\n" ++
+        "[[File:Human anterior fontanelle 1 month dscn1449.jpg|thumb|[2] Atl]]\n" ++
+        "[[File:Atl.svg|thumb|[3] Atl]]\n" ++
+        "\n" ++
+        "{{-pron-}}\n" ++
+        ":{{IPA|/ aːt͡ɬ /}} \n" ++
+        "\n" ++
+        "{{-ety-}}\n" ++
+        "Ce tlayacaticac [[nahuatlahtolli]].\n" ++
+        "\n" ++
+        "{{-noun-nci-}}\n" ++
+        "{| class=\"wikitable\"\n" ++
+        "|\n" ++
+        "|Achtocayotl\n" ++
+        "|Pilcayotl\n" ++
+        "|-\n" ++
+        "|{{singular}}\n" ++
+        "|'''{{PAGENAME}}'''\n" ++
+        "| '''a-'''\n" ++
+        "|-\n" ++
+        "|{{plural}}\n" ++
+        "|'''{{PAGENAME}}'''\n" ++
+        "| '''-ahuan'''\n" ++
+        "|}\n" ++
+        "\n" ++
+        "{{-meaning-}}\n" ++
+        ";1: Ce chipahuac [[atlamantli]] tlein mitzatli, temoa tepemeh ce ohtli ipampa tlachihua atoyatl, atezcatl, atzacualco canahpa in hueyatl, amaitl ahnozo ailhuicatl. In atzintli itechpahuicpa [[quiyahuitl]], ihcuac ca cecec [[cepayahuitl]] nozo cetl huan ihcuac ca huel totonqui [[apoctli]] ahnozo atotonilli.\n" ++
+        "\n" ++
+        ": Quimicacopa imachiyo (H<sub>2</sub>O), ome achichitzin [[ayohuactli]] ihuan ce achichitzin [[ehecayoh]].\n" ++
+        "\n" ++
+        "{{-example-nci-}}\n" ++
+        ": [1] ''In '''atl''', in yoliztli.''\n" ++
+        "\n" ++
+        "{{-syn-}}\n" ++
+        "* [1] [[atzintli]]\n" ++
+        "\n" ++
+        "{{-deriv-}}\n" ++
+        "* [[atzin]], [[atzintli]], [[apol]], [[acapol]]\n" ++
+        "\n" ++
+        "{{-rel-}}\n" ++
+        "* [1] [[aacatl]], [[acacalotl]], [[acalli]], [[acalaqui]], [[acatl]], [[acecec]], [[acuauhtli]], [[ameyalatl]], [[atlamantli]], [[atotonilli]], [[axochitl]], [[ayolcatl]], [[ayoliztli]].\n" ++
+        "\n" ++
+        "{{-others-}}\n" ++
+        "* [[ayohuactli]]\n" ++
+        "\n" ++
+        "{{-trad-}}\n" ++
+        "{{atl}}\n" ++
+        "\n" ++
+        "{{-meaning-}}\n" ++
+        ";2: In [[atlamantli]] ahcopa ipan itzontecoma ihcuac tlacati ce conetzintli.\n" ++
+        "\n" ++
+        "{{-example-nci-}}\n" ++
+        ": [2] ''In conetzintli quipia ce '''atl'''.''\n" ++
+        "\n" ++
+        "{{-others-}}\n" ++
+        "* [[nacayotl]]\n" ++
+        "\n" ++
+        "{{-trad-}}\n" ++
+        "{{atl 2}}\n" ++
+        "\n" ++
+        "{{-meaning-}}\n" ++
+        ";3: Inic chicnahui [[tonalli]] itech cempohualtonalhuan itech huey tonalpohualli, noihqui quihtoznequi mexihcamachiyotonalcopa.\n" ++
+        "\n" ++
+        "{{-example-nci-}}\n" ++
+        ": [3] ''Axcapan '''atl''' tonalli, cuacualtzin huel itonal.''\n" ++
+        "\n" ++
+        "{{-others-}}\n" ++
+        "* [[tonalpohualli]]\n" ++
+        "\n" ++
+        "{{-obsol-}}\n" ++
+        "* '''[[athl]]'''\n" ++
+        "* '''[[atl]]''' ''(xiuhpan 1571, Alonso de Molina)''\n" ++
+        "* '''[[ätl]]''' ''(xiuhpan 1645, Horacio Carochi)''\n" ++
+        "* '''[[atl]]''' ''(xiuhpan 1780, Francisco Xavier Clavijero)''\n" ++
+        "* '''aatl''' ''(xiuhpan 2003, Paul P. de Wolf)''\n" ++
+        "* '''[[ātl]]''' ''(xiuhpan 2004, Alexis Wimmer)''                             \n" ++
+        "\n" ++
+        "[[Category:NCI:Atl| ]]\n" ++
+        "[[Category:NCI:Tlaitl]]\n" ++
+        "[[Category:NCI:Tlalticpactli]]\n" ++
+        "[[Category:NCI:Tonalpohualli]]\n" ++
+        "[[Category:NCI:Yelizmatiliztli]]\n" ++
+        "\n" ++
+        "{{-ref-}}\n" ++
+        "* P. de Wolf, Paul, (2003). ''Diccionario Español-Náhuatl'', Universidad Nacional Autónoma de México y Universidad Autónoma de Baja California Sur, Instituto de Investigaciones Históricas; ipan Mexihco. Centlaixtli 27.\n" ++
+        "{{DLN-FREELANG}}\n" ++
+        "{{GDN-UNAM}}\n" ++
+        "{{ND-IDIEZ}}\n" ++
+        "<references />\n" ++
+        "\n" ++
+        "{{-nlv-}}\n" ++
+        "\n" ++
+        "{{-pron-}}\n" ++
+        "IPA: {{IPA|/ aːt͡ɬ /}} \n" ++
+        "\n" ++
+        "{{-ety-}}\n" ++
+        "Ce [[nahuatlahtolli]] quihtoznequi ''[[atl]]''. Quipia ce tlahtolli → ''[[atl]]''.\n" ++
+        "\n" ++
+        "{{-noun-nlv-}}\n" ++
+        "{| class=\"wikitable\"\n" ++
+        "|\n" ++
+        "|Achtocayotl\n" ++
+        "|Pilcayotl\n" ++
+        "|-\n" ++
+        "|{{singular}}\n" ++
+        "|'''{{PAGENAME}}'''\n" ++
+        "| '''a-'''\n" ++
+        "|-\n" ++
+        "|{{plural}}\n" ++
+        "|'''{{PAGENAME}}'''\n" ++
+        "| '''-awan'''\n" ++
+        "|}\n" ++
+        "\n" ++
+        "{{-meaning-}}\n" ++
+        ";1: [[atl]].\n" ++
+        "\n" ++
+        "{{-ref-}}\n" ++
+        "{{VCN-DNSZ}}\n" ++
+        "<references />\n" ++
+        "\n" ++
+        "{{-ngu-}}\n" ++
+        "\n" ++
+        "{{-pron-}}\n" ++
+        "IPA: {{IPA|/ aːt͡ɬ /}}\n" ++
+        "\n" ++
+        "{{-ety-}}\n" ++
+        "Ce [[nahuatlahtolli]] quihtoznequi ''[[atl]]''. Quipia ce tlahtolli → ''[[atl]]''.\n" ++
+        "\n" ++
+        "{{-noun-ngu-}}\n" ++
+        "{| class=\"wikitable\"\n" ++
+        "|\n" ++
+        "|Achtocayotl\n" ++
+        "|Pilcayotl\n" ++
+        "|-\n" ++
+        "|{{singular}}\n" ++
+        "|'''{{PAGENAME}}'''\n" ++
+        "| '''a-'''\n" ++
+        "|-\n" ++
+        "|{{plural}}\n" ++
+        "|'''{{PAGENAME}}'''\n" ++
+        "| '''-auan'''\n" ++
+        "|}\n" ++
+        "\n" ++
+        ";1: [[atl]].\n" ++
+        "\n" ++
+        "{{-ref-}}\n" ++
+        "<references />\n" ++
+        "\n" ++
+        "{{-nch-}}\n" ++
+        "\n" ++
+        "{{-pron-}}\n" ++
+        "IPA: {{IPA|/ aːt͡ɬ /}}\n" ++
+        "\n" ++
+        "{{-ety-}}\n" ++
+        "Ce [[nahuatlahtolli]] quihtoznequi ''[[atl]]''. Quipia ce tlahtolli → ''[[atl]]''.\n" ++
+        "\n" ++
+        "{{-noun-nch-}}\n" ++
+        "{| class=\"wikitable\"\n" ++
+        "|\n" ++
+        "|Achtocayotl\n" ++
+        "|Pilcayotl\n" ++
+        "|-\n" ++
+        "|{{singular}}\n" ++
+        "|'''{{PAGENAME}}'''\n" ++
+        "| '''a-'''\n" ++
+        "|-\n" ++
+        "|{{plural}}\n" ++
+        "|'''{{PAGENAME}}'''\n" ++
+        "| '''-auan'''\n" ++
+        "|}\n" ++
+        "\n" ++
+        ";1: [[atl]].\n" ++
+        "\n" ++
+        "{{-trad-}}\n" ++
+        "* [[achachapali]], [[achakalij]], [[achikiuitl]], [[achikichijketl]]\n" ++
+        "\n" ++
+        "{{-ref-}}\n" ++
+        "* Isidro Reyes, Valentín. Vocabulario nauatl-español, material de apoyo para la enseñanza de la lengua nauatl, variante de Axochiapan, Hidalgo. Editorial: Universidad Pedagógica Nacional, Área de diversidad intercultural. Altepetl Mexihco, Mexihco, xiuhpan 2012.\n" ++
+        "<references />\n" ++
+        "\n" ++
+        "{{-nhy-}}\n" ++
+        "\n" ++
+        "{{-pron-}}\n" ++
+        "IPA: {{IPA|/ aːt͡ɬ /}}\n" ++
+        "\n" ++
+        "{{-ety-}}\n" ++
+        "Ce [[nahuatlahtolli]] quihtoznequi ''[[atl]]''. Quipia ce tlahtolli → ''[[atl]]''.\n" ++
+        "\n" ++
+        "{{-noun-nhy-}}\n" ++
+        "{| class=\"wikitable\"\n" ++
+        "|\n" ++
+        "|Achtocayotl\n" ++
+        "|Pilcayotl\n" ++
+        "|-\n" ++
+        "|{{singular}}\n" ++
+        "|'''{{PAGENAME}}'''\n" ++
+        "| '''a-'''\n" ++
+        "|-\n" ++
+        "|{{plural}}\n" ++
+        "|'''{{PAGENAME}}'''\n" ++
+        "| '''-awah'''\n" ++
+        "|}\n" ++
+        "\n" ++
+        ";1: [[atl]].\n" ++
+        "\n" ++
+        "{{-ref-}}\n" ++
+        "<references />\n" ++
+        "\n" ++
+        "{{-nhm-}}\n" ++
+        "\n" ++
+        "{{-pron-}}\n" ++
+        "IPA: {{IPA|/ aːt͡ɬ /}}\n" ++
+        "\n" ++
+        "{{-ety-}}\n" ++
+        "Ce [[nahuatlahtolli]] quihtoznequi ''[[atl]]''. Quipia ce tlahtolli → ''[[atl]]''.\n" ++
+        "\n" ++
+        "{{-noun-nhm-}}\n" ++
+        "{| class=\"wikitable\"\n" ++
+        "|\n" ++
+        "|Achtocayotl\n" ++
+        "|Pilcayotl\n" ++
+        "|-\n" ++
+        "|{{singular}}\n" ++
+        "|'''{{PAGENAME}}'''\n" ++
+        "| '''a-'''\n" ++
+        "|-\n" ++
+        "|{{plural}}\n" ++
+        "|'''{{PAGENAME}}'''\n" ++
+        "| '''-ahuan'''\n" ++
+        "|}\n" ++
+        "\n" ++
+        ";1: [[atl]].\n" ++
+        "\n" ++
+        "{{-ref-}}\n" ++
+        "<references />\n" ++
+        "\n" ++
+        "{{-nhw-}}\n" ++
+        "\n" ++
+        "{{-pron-}}\n" ++
+        "IPA: {{IPA|/ aːt͡ɬ /}}\n" ++
+        "\n" ++
+        "{{-ety-}}\n" ++
+        "Ce [[nahuatlahtolli]] quihtoznequi ''[[atl]]''. Quipia ce tlahtolli → ''[[atl]]''.\n" ++
+        "\n" ++
+        "{{-noun-nhw-}}\n" ++
+        "{| class=\"wikitable\"\n" ++
+        "|\n" ++
+        "|Achtocayotl\n" ++
+        "|Pilcayotl\n" ++
+        "|-\n" ++
+        "|{{singular}}\n" ++
+        "|'''{{PAGENAME}}'''\n" ++
+        "| '''a-'''\n" ++
+        "|-\n" ++
+        "|{{plural}}\n" ++
+        "|'''{{PAGENAME}}'''\n" ++
+        "| '''-awan'''\n" ++
+        "|}\n" ++
+        "\n" ++
+        ";1: [[atl]].\n" ++
+        "\n" ++
+        "{{-ref-}}\n" ++
+        "<references />\n" ++
+        "\n" ++
+        "{{-nhv-}}\n" ++
+        "\n" ++
+        "{{-pron-}}\n" ++
+        "IPA: {{IPA|/ aːt͡ɬ /}}\n" ++
+        "\n" ++
+        "{{-ety-}}\n" ++
+        "Ce [[nahuatlahtolli]] quihtoznequi ''[[atl]]''. Quipia ce tlahtolli → ''[[atl]]''.\n" ++
+        "\n" ++
+        "{{-noun-nhv-}}\n" ++
+        "{| class=\"wikitable\"\n" ++
+        "|\n" ++
+        "|Achtocayotl\n" ++
+        "|Pilcayotl\n" ++
+        "|-\n" ++
+        "|{{singular}}\n" ++
+        "|'''{{PAGENAME}}'''\n" ++
+        "| '''a-'''\n" ++
+        "|-\n" ++
+        "|{{plural}}\n" ++
+        "|'''{{PAGENAME}}'''\n" ++
+        "| '''-auan'''\n" ++
+        "|}\n" ++
+        "\n" ++
+        ";1: [[atl]].\n" ++
+        "\n" ++
+        "{{-ref-}}\n" ++
+        "{{IMC-CAR}}\n" ++
+        "<references />\n" ++
+        "\n" ++
+        "{{-nhn-}}\n" ++
+        "\n" ++
+        "{{-pron-}}\n" ++
+        "IPA: {{IPA|/ aːt͡ɬ /}}\n" ++
+        "\n" ++
+        "{{-ety-}}\n" ++
+        "Ce [[nahuatlahtolli]] quihtoznequi ''[[atl]]''. Quipia ce tlahtolli → ''[[atl]]''.\n" ++
+        "\n" ++
+        "{{-noun-nhn-}}\n" ++
+        "{| class=\"wikitable\"\n" ++
+        "|\n" ++
+        "|Achtocayotl\n" ++
+        "|Pilcayotl\n" ++
+        "|-\n" ++
+        "|{{singular}}\n" ++
+        "|'''{{PAGENAME}}'''\n" ++
+        "| '''a-'''\n" ++
+        "|-\n" ++
+        "|{{plural}}\n" ++
+        "|'''{{PAGENAME}}'''\n" ++
+        "| '''-awan'''\n" ++
+        "|}\n" ++
+        "\n" ++
+        ";1: '''[[atl]]'''\n" ++
+        "\n" ++
+        "{{-example-nhn-}}\n" ++
+        ": [1] ''Man atli in '''atl''' ipal pahtiliztli.''\n" ++
+        "\n" ++
+        "{{-others-}}\n" ++
+        "* [[atsintli]] (''Milpa Alta'')\n" ++
+        "\n" ++
+        "[[Category:NHN:Atlamantli]]\n" ++
+        "[[Category:NHN:Tlacualiztli]]\n" ++
+        "[[Category:NHN:Tlalticpactli]]\n" ++
+        "[[Category:NHN:Yelizmatiliztli]]\n" ++
+        "\n" ++
+        "{{-ref-}}\n" ++
+        "{{SEP-HMS}}\n" ++
+        "{{UDLA-GMR}}\n" ++
+        "{{IVELI-MRV}}\n" ++
+        "<references />\n" ++
+        "\n" ++
+        "{{-nuz-}}\n" ++
+        "\n" ++
+        "{{-noun-nuz-}}\n" ++
+        "{| class=\"wikitable\"\n" ++
+        "|\n" ++
+        "|Achtocayotl\n" ++
+        "|Pilcayotl\n" ++
+        "|-\n" ++
+        "|{{singular}}\n" ++
+        "|'''{{PAGENAME}}'''\n" ++
+        "| '''a-'''\n" ++
+        "|-\n" ++
+        "|{{plural}}\n" ++
+        "|'''{{PAGENAME}}'''\n" ++
+        "| '''-awan'''\n" ++
+        "|}\n" ++
+        "\n" ++
+        ";1: [[atl]]\n" ++
+        "\n" ++
+        "[[Neneuhcāyōtl:NUZ:Atlamantli]]\n" ++
+        "\n" ++
+        "{{-ref-}}\n" ++
+        "<references />\n" ++
+        "\n" ++
+        "{{-ncx-}}\n" ++
+        "\n" ++
+        "{{-noun-ncx-}}\n" ++
+        ";1: '''[[atl]]'''\n" ++
+        "\n" ++
+        "{{-ref-}}\n" ++
+        "<references />\n" ++
+        "\n" ++
+        "{{-nah-tlx-}}\n" ++
+        "\n" ++
+        "{{-pron-}}\n" ++
+        "IPA: {{IPA|/ aːt͡ɬ /}}\n" ++
+        "\n" ++
+        "{{-ety-}}\n" ++
+        "Ce [[nahuatlahtolli]] quihtoznequi ''[[atl]]''. Quipia ce tlahtolli → ''[[atl]]''.\n" ++
+        "\n" ++
+        "{{-noun-nah-tlx-}}\n" ++
+        "{| class=\"wikitable\"\n" ++
+        "|\n" ++
+        "|Achtocayotl\n" ++
+        "|Pilcayotl\n" ++
+        "|-\n" ++
+        "|{{singular}}\n" ++
+        "|'''{{PAGENAME}}'''\n" ++
+        "| '''a-'''\n" ++
+        "|-\n" ++
+        "|{{plural}}\n" ++
+        "|'''{{PAGENAME}}'''\n" ++
+        "| '''-awan'''\n" ++
+        "|}\n" ++
+        "\n" ++
+        ";1: [[atl]].\n" ++
+        "\n" ++
+        "{{-ref-}}\n" ++
+        "<references />\n" ++
+        "\n" ++
+        "{{-nsu-}}\n" ++
+        "\n" ++
+        "{{-pron-}}\n" ++
+        "IPA: {{IPA|/ aːt͡ɬ /}}\n" ++
+        "\n" ++
+        "{{-ety-}}\n" ++
+        "Ce [[nahuatlahtolli]] quihtoznequi ''[[atl]]''. Quipia ce tlahtolli → ''[[atl]]''.\n" ++
+        "\n" ++
+        "{{-noun-nsu-}}\n" ++
+        "{| class=\"wikitable\"\n" ++
+        "|\n" ++
+        "|Achtocayotl\n" ++
+        "|Pilcayotl\n" ++
+        "|-\n" ++
+        "|{{singular}}\n" ++
+        "|'''{{PAGENAME}}'''\n" ++
+        "| '''a-'''\n" ++
+        "|-\n" ++
+        "|{{plural}}\n" ++
+        "|'''{{PAGENAME}}'''\n" ++
+        "| '''-awa'''\n" ++
+        "|}\n" ++
+        "\n" ++
+        ";1: [[atl]].\n" ++
+        "\n" ++
+        "{{-ref-}}\n" ++
+        "<references />\n" ++
+        "\n" ++
+        "{{-nhe-}}\n" ++
+        "\n" ++
+        "{{-pron-}}\n" ++
+        "IPA: {{IPA|/ aːt͡ɬ /}}\n" ++
+        "\n" ++
+        "{{-ety-}}\n" ++
+        "Ce [[nahuatlahtolli]] quihtoznequi ''[[atl]]''. Quipia ce tlahtolli → ''[[atl]]''.\n" ++
+        "\n" ++
+        "{{-noun-nhe-}}\n" ++
+        "{| class=\"wikitable\"\n" ++
+        "|\n" ++
+        "|Achtocayotl\n" ++
+        "|Pilcayotl\n" ++
+        "|-\n" ++
+        "|{{singular}}\n" ++
+        "|'''{{PAGENAME}}'''\n" ++
+        "| '''a-'''\n" ++
+        "|-\n" ++
+        "|{{plural}}\n" ++
+        "|'''{{PAGENAME}}'''\n" ++
+        "| '''-awan'''\n" ++
+        "|}\n" ++
+        "\n" ++
+        ";1: [[atl]].\n" ++
+        "\n" ++
+        "{{-ref-}}\n" ++
+        "{{UV-IDIEZ}}\n" ++
+        "<references />\n" ++
+        "\n" ++
+        "{{-nhi-}}\n" ++
+        "\n" ++
+        "{{-pron-}}\n" ++
+        "IPA: {{IPA|/ aːt͡ɬ /}}\n" ++
+        "\n" ++
+        "{{-ety-}}\n" ++
+        "Ce [[nahuatlahtolli]] quihtoznequi ''[[atl]]''. Quipia ce tlahtolli → ''[[atl]]''.\n" ++
+        "\n" ++
+        "{{-noun-nhi-}}\n" ++
+        "{| class=\"wikitable\"\n" ++
+        "|\n" ++
+        "|Achtocayotl\n" ++
+        "|Pilcayotl\n" ++
+        "|-\n" ++
+        "|{{singular}}\n" ++
+        "|'''{{PAGENAME}}'''\n" ++
+        "| '''a-'''\n" ++
+        "|-\n" ++
+        "|{{plural}}\n" ++
+        "|'''{{PAGENAME}}'''\n" ++
+        "| '''-awan'''\n" ++
+        "|}\n" ++
+        "\n" ++
+        ";1: [[atl]].\n" ++
+        "\n" ++
+        "{{-ref-}}\n" ++
+        "<references />\n" ++
+        "\n" ++
+        "{{-SeeAlso-}}\n" ++
+        "{{Wikipedia|atl}}";
+    const cross_raw = "{{-ncj-}}\n" ++
+        "[[File:2006-02-13 Drop-impact.jpg|thumb|[1] Atl]]\n" ++
+        "\n" ++
+        "{{-pron-}}\n" ++
+        "IPA: {{IPA|/ aːt͡ɬ /}} \n" ++
+        "\n" ++
+        "{{-ety-}}\n" ++
+        "Ce [[nahuatlahtolli]] quihtoznequi ''[[atl]]''. Quipia ce tlahtolli → ''[[atl]]''.\n" ++
+        "\n" ++
+        "{{-noun-ncj-}}\n" ++
+        "{| class=\"wikitable\"\n" ++
+        "|{{singular}} '''{{PAGENAME}}'''\n" ++
+        "| '''â-'''\n" ++
+        "|-\n" ++
+        "|{{plural}} '''{{PAGENAME}}'''\n" ++
+        "| '''-âwan'''\n" ++
+        "|}\n" ++
+        "\n" ++
+        ";1: [[atl]], [[atzintli]].\n" ++
+        "\n" ++
+        ";2: [[atl]], [[cuatl]].\n" ++
+        "\n" ++
+        "[[Neneuhcāyōtl:NCJ:Atlamantli]]\n" ++
+        "\n" ++
+        "{{-ref-}}\n" ++
+        "<references />";
+
+    var records: [5]sizing.Record = undefined;
+    var at: usize = 0;
+    inline for (nah_selected_thumbnail_pages) |page| {
+        inline for (page.files) |file| {
+            records[at] = .{ .canonical_file = "Īxiptli:" ++ file.file, .file_sha1 = file.sha1,
+                .file_timestamp = file.timestamp, .original_width = file.original_width, .original_height = file.original_height,
+                .format = .thumbnail, .width_px = 250, .height_px = null, .sizing = .requested_fit,
+                .proof_kind = "observed-exact-thumbnail-width" };
+            at += 1;
+        }
+    }
+    var measured: sizing.Registry = .{ .arena = std.heap.ArenaAllocator.init(a), .namespace_catalog = &ns,
+        .records = &records, .measured_thumbnail_only = true };
+    defer measured.deinit();
+    var source: compiler.FigureSizingSource = .{ .resolve_fn = F.noFit,
+        .source_context = .{ .namespace_sha256 = ns.source_sha256, .defaults = .{ .rtl = false, .default_thumbnail_width = 250 } } };
+
+    const worker = @import("testdata/nah-selected-default-thumbnails/expanded.zig");
+    if (citation_projection_only) {
+        return expectNahCitationProjectedFigure(a, &ns, &measured, source,
+            citlalli_raw, worker.citlalli, atl_raw, worker.atl, cross_raw, worker.cross);
+    }
+    inline for (nah_selected_thumbnail_pages, .{ coza_raw, citlalli_raw, atl_raw },
+        .{ worker.coza, worker.citlalli, worker.atl },
+        .{ &[_]usize{81}, &[_]usize{81}, &[_]usize{ 81, 131, 201 } }) |page, raw, captured, starts|
+    {
+        const expanded = try a.dupe(u8, captured);
+        try std.testing.expect(try bindNahSelectedDefaultThumbnails(a, &source, &ns, &measured, 0,
+            page.page_id, page.revision_id, page.title, raw, expanded));
+        const selected = source.selected_default_thumbnails orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(page.files.len, selected.occurrences.len);
+        for (selected.occurrences, 0..) |grant, i| {
+            try std.testing.expectEqual(starts[i], grant.start);
+            const live = expanded[grant.start..][0..grant.token.len];
+            try std.testing.expectEqual(@as(?u32, 250), selected.width(page.title, live, grant.file, grant.options, 250));
+            try std.testing.expect(selected.width("âtl", live, grant.file, grant.options, 250) == null);
+            try std.testing.expect(selected.width(page.title, try a.dupe(u8, live), grant.file, grant.options, 250) == null);
+            try std.testing.expect(selected.width(page.title, live, grant.file, grant.options, 249) == null);
+            try std.testing.expect(selected.width(page.title, live, "Wikipedia-logo-v2.svg", grant.options, 250) == null);
+            try std.testing.expect(selected.width(page.title, live, grant.file, "thumb|250px|[1] Atl", 250) == null);
+            try std.testing.expect(selected.width(page.title, live, grant.file, "thumb|alt=other|[1] Atl", 250) == null);
+            try std.testing.expect(selected.width(page.title, live, grant.file, "thumb|link=other|[1] Atl", 250) == null);
+            try std.testing.expect(selected.width(page.title, live, grant.file, "thumb|lang=en|[3] Atl", 250) == null);
+            if (i != 0) {
+                const previous = selected.occurrences[i - 1];
+                try std.testing.expect(selected.width(page.title, expanded[previous.start..][0..previous.token.len], grant.file, grant.options, 250) == null);
+            }
+        }
+        const start = selected.occurrences[0].start;
+        expanded[start] = '!';
+        try std.testing.expect(selected.width(page.title, expanded[start..][0..selected.occurrences[0].token.len],
+            selected.occurrences[0].file, selected.occurrences[0].options, 250) == null);
+        expanded[start] = '[';
+        const changed = try std.mem.concat(a, u8, &.{ expanded, "different tail" });
+        try std.testing.expect(!try bindNahSelectedDefaultThumbnails(a, &source, &ns, &measured, 0,
+            page.page_id, page.revision_id, page.title, raw, changed));
+        try std.testing.expect(source.selected_default_thumbnails == null);
+        try std.testing.expect(!try bindNahSelectedDefaultThumbnails(a, &source, &ns, &measured, 0,
+            page.page_id, page.revision_id + 1, page.title, raw, expanded));
+        try std.testing.expect(!try bindNahSelectedDefaultThumbnails(a, &source, &ns, &measured, 0,
+            page.page_id, page.revision_id, page.title, raw[1..], expanded));
+    }
+
+    const atl_page = nah_selected_thumbnail_pages[2];
+    const identical_token = comptime atl_page.files[0].token();
+    try std.testing.expect(exactStandaloneToken(worker.atl, 81, identical_token));
+    try std.testing.expect(exactStandaloneToken(worker.cross, 105, identical_token));
+    try std.testing.expect(std.mem.indexOf(u8, cross_raw, identical_token) != null);
+    try std.testing.expect(try bindNahSelectedDefaultThumbnails(a, &source, &ns, &measured, 0,
+        2010, 95127, "atl", atl_raw, worker.atl));
+    const atl_selected = source.selected_default_thumbnails orelse return error.TestUnexpectedResult;
+    try std.testing.expect(atl_selected.width("atl", worker.cross[105..][0..identical_token.len],
+        atl_selected.occurrences[0].file, atl_selected.occurrences[0].options, 250) == null);
+    try std.testing.expect(!try bindNahSelectedDefaultThumbnails(a, &source, &ns, &measured, 0,
+        3123, 82426, "âtl", cross_raw, worker.cross));
+    try std.testing.expect(source.selected_default_thumbnails == null);
+    try std.testing.expect(!try bindNahSelectedDefaultThumbnails(a, &source, &ns, &measured, 0,
+        2010, 95127, "atl", atl_raw, worker.cross));
+
+    source.ctx = &measured;
+    try std.testing.expect(!try bindNahSelectedDefaultThumbnails(a, &source, &ns, &measured, 0,
+        2010, 95127, "atl", atl_raw, worker.atl));
+    source.ctx = null;
+    records[2].file_sha1 = "another origin";
+    try std.testing.expect(!try bindNahSelectedDefaultThumbnails(a, &source, &ns, &measured, 0,
+        2010, 95127, "atl", atl_raw, worker.atl));
+    try std.testing.expect(source.selected_default_thumbnails == null);
+}
+
+fn compileNahCitationFigureFragment(a: A, ns: *const namespaces.Registry, figure: compiler.FigureSizingSource,
+    styles: *const profile.Profile, title: []const u8, heading: []const u8, prepared: compiler.PreparedExternalLinks,
+    start: usize, len: usize, projection: ?*const compiler.SourceElementProjection,
+    report: ?*encoder.presentation_document.Fallbacks) ![]u8
+{
+    const doc = encoder.presentation_document;
+    try std.testing.expect(!prepared.missing.unknown and !prepared.missing.lost_missing_range and
+        prepared.missing.ranges.len == 0 and prepared.missing.literal_curly_ranges.len == 0 and
+        prepared.missing.generated_links.len == 0 and prepared.missing.generated_source == null);
+    const token = prepared.source[start..][0..len];
+    // Exercise the normal Document join from an owner copy and the actual
+    // prepared page. Its pointer is deliberately different from both pages.
+    const owner = compiler.MissingText.untracked(try a.dupe(u8, token));
+    const fragment: doc.SourceFragment = .{ .source = token, .original_start = start, .missing = owner,
+        .parser_output_range = .{ .page = prepared.source, .start = start, .prepared = owner.bytes,
+            .source_element_projection = projection } };
+    return doc.compileClassifiedWithHeadingAnchorsAndSourceMediaRootAlloc(a, title, .language, heading, "nah",
+        owner, null, .{}, ns, null, null,
+        .{ .citations = prepared.citations, .content_conversion = prepared.content_conversion },
+        report, prepared.poem_phase, &.{fragment}, null, &.{}, null, styles, figure, .unknown);
+}
+
+fn expectNahCitationProjectedFigure(a: A, ns: *const namespaces.Registry, measured: *const sizing.Registry,
+    baseline: compiler.FigureSizingSource, citlalli_raw: []const u8, citlalli_expanded: []const u8,
+    atl_raw: []const u8, atl_expanded: []const u8, cross_raw: []const u8, cross_expanded: []const u8) !void
+{
+    const doc = encoder.presentation_document;
+    const types = encoder.presentation_types;
+    const codec = encoder.presentation_codec;
+    const token = "[[File:Star-Vega.png|thumb|[1] Citlalli]]";
+    var figure = baseline;
+    try std.testing.expect(try bindNahSelectedDefaultThumbnails(a, &figure, ns, measured, 0,
+        1829, 93092, "citlalli", citlalli_raw, citlalli_expanded));
+    const selected = figure.selected_default_thumbnails orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 1), selected.occurrences.len);
+    try std.testing.expectEqual(@as(usize, 81), selected.occurrences[0].start);
+
+    // The Writer requests this flag for the selected expansion. Use the real
+    // preparer on the complete actual page, including its references footer.
+    const prepared = try compiler.preparePageExternalLinksWithMissingAlloc(a, .untracked(citlalli_expanded),
+        .{ .title = "citlalli", .namespace_catalog = ns, .figure_sizing = figure, .observe_source_elements = true });
+    const citations = prepared.citations orelse return error.TestUnexpectedResult;
+    try std.testing.expect(prepared.source.ptr != citlalli_expanded.ptr);
+    try std.testing.expect(std.mem.indexOf(u8, prepared.source, citations.attribute) != null);
+    try std.testing.expect(std.mem.indexOf(u8, citlalli_expanded, citations.attribute) == null);
+    const projection = prepared.source_element_projection orelse return error.TestUnexpectedResult;
+    try std.testing.expect(projection.original.bytes.ptr == citlalli_expanded.ptr and projection.prepared.ptr == prepared.source.ptr);
+    const at = projection.preparedRange(81, token.len) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(?usize, 81), projection.originalRange(at, token.len));
+    try std.testing.expectEqualStrings(token, prepared.source[at..][0..token.len]);
+
+    var styles = try profile.parseForTargetAlloc(a, "", .screen);
+    defer styles.deinit();
+    var report: doc.Fallbacks = .{};
+    const bytes = try compileNahCitationFigureFragment(a, ns, figure, &styles, "citlalli", "Nahuatlahtolli",
+        prepared, at, token.len, &projection, &report);
+    try std.testing.expectEqualDeep(doc.Fallbacks{}, report);
+    const language: encoder.blob_format.LanguageMetadata = .{ .code = "nah", .heading = "Nahuatlahtolli" };
+    const stored = try codec.decodeAlloc(a, bytes, "citlalli", .language, language);
+    try types.validateStored(a, stored, "citlalli", .language, language);
+    try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, stored));
+    try std.testing.expectEqual(@as(usize, 1), stored.entry.sections.len);
+    const blocks = stored.entry.sections[0].blocks;
+    try std.testing.expectEqual(@as(usize, 1), blocks.len);
+    const emitted = blocks[0].figure orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(types.FigureFormat.thumbnail, emitted.format);
+    try std.testing.expect(emitted.content == .image);
+    const ready = emitted.content.image;
+    try std.testing.expectEqual(types.FigureSizingPolicy.requested_fit, ready.sizing);
+    try std.testing.expectEqualStrings("File:Star-Vega.png", ready.span.target);
+    const image = ready.span.image orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("Star-Vega.png", image.file);
+    try std.testing.expectEqual(@as(?u32, 250), image.width_px);
+    try std.testing.expect(image.height_px == null);
+    var caption: std.ArrayList(u8) = .empty;
+    for (emitted.caption) |span| try caption.appendSlice(a, span.text);
+    try std.testing.expectEqualStrings("[1] Citlalli", caption.items);
+
+    // Keep the same parser-owned fragment and remove only the projection.
+    try std.testing.expectError(error.UncompiledPresentation, compileNahCitationFigureFragment(a, ns, figure, &styles,
+        "citlalli", "Nahuatlahtolli", prepared, at, token.len, null, null));
+    var detached = projection;
+    detached.original.bytes = try a.dupe(u8, projection.original.bytes);
+    try std.testing.expectEqual(@as(?usize, 81), detached.originalRange(at, token.len));
+    try std.testing.expectError(error.UncompiledPresentation, compileNahCitationFigureFragment(a, ns, figure, &styles,
+        "citlalli", "Nahuatlahtolli", prepared, at, token.len, &detached, null));
+
+    const drop = "[[File:2006-02-13 Drop-impact.jpg|thumb|[1] Atl]]";
+    try std.testing.expectEqualStrings(drop, atl_expanded[81..][0..drop.len]);
+    try std.testing.expectEqualStrings(drop, cross_expanded[105..][0..drop.len]);
+    try std.testing.expect(!try bindNahSelectedDefaultThumbnails(a, &figure, ns, measured, 0,
+        3123, 82426, "âtl", cross_raw, cross_expanded));
+    try std.testing.expect(try bindNahSelectedDefaultThumbnails(a, &figure, ns, measured, 0,
+        2010, 95127, "atl", atl_raw, atl_expanded));
+    const cross = try compiler.preparePageExternalLinksWithMissingAlloc(a, .untracked(cross_expanded),
+        .{ .title = "âtl", .namespace_catalog = ns, .observe_source_elements = true });
+    const crossed = cross.source_element_projection orelse return error.TestUnexpectedResult;
+    const cross_at = crossed.preparedRange(105, drop.len) orelse return error.TestUnexpectedResult;
+    // Keep the selected title to isolate the wrong original-page identity.
+    try std.testing.expectError(error.UncompiledPresentation, compileNahCitationFigureFragment(a, ns, figure, &styles,
+        "atl", "Nahuatlahtolli", cross, cross_at, drop.len, &crossed, null));
+}
+
 pub const RawMissingHeadContext = struct {
     request: []const u8,
     form_body: []const u8,

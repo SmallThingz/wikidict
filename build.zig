@@ -184,6 +184,7 @@ pub fn build(b: *std.Build) void {
     const captured_source_fingerprint = b.option([]const u8, "captured-source-fingerprint", "Exact immutable source binding for retained-page diagnostics") orelse "";
     captured_writer_options.addOption([]const u8, "source_fingerprint", captured_source_fingerprint);
     blob_build_exe.root_module.addOptions("captured_writer_options", captured_writer_options);
+    blob_build_exe.root_module.addImport("captured_language_names", capturedLanguageNamesModule(b, target, optimize));
     blob_build_exe.root_module.link_libc = true;
     blob_build_exe.root_module.linkSystemLibrary("bz2", .{});
     blob_build_exe.root_module.linkSystemLibrary("zstd", .{});
@@ -580,6 +581,7 @@ pub fn build(b: *std.Build) void {
     zig_runtime_test_mod.addImport("namespace_registry", namespace_registry_test_mod);
     zig_runtime_test_mod.addImport("missing_dependency", missing_dependency_test_mod);
     zig_runtime_test_mod.addImport("lua_static_fields", lua_static_fields_test_mod);
+    zig_runtime_test_mod.addImport("build_diagnostics", build_diagnostics_test_mod);
     const value_leaf_test_mod = b.createModule(.{
         .root_source_file = b.path("compiler/src/lua/value_leaf_build.zig"),
         .target = target,
@@ -682,6 +684,8 @@ pub fn build(b: *std.Build) void {
         .test_runner = .{ .path = test_runner, .mode = .simple },
     };
     const lua_stdlib_tests = b.addTest(lua_stdlib_test_options);
+    blob_build_tests.root_module.addImport("zig_runtime", zig_runtime_test_mod);
+    blob_build_tests.root_module.addImport("zig_stdlib", lua_stdlib_tests.root_module);
     const lua_ustring_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("compiler/src/lua/runtime/ustring.zig"),
@@ -728,6 +732,12 @@ pub fn build(b: *std.Build) void {
     };
     const lua_wikitext_tests = b.addTest(lua_wikitext_test_options);
     lua_wikitext_tests.root_module.addImport("missing_dependency", missing_dependency_test_mod);
+    // The ordinary regression and captured registry share the same provider
+    // module; do not introduce host.zig as a second module owner in this graph.
+    blob_build_tests.root_module.addImport("fj_wikitext", lua_wikitext_tests.root_module);
+    blob_build_tests.root_module.addImport("captured_language_names", capturedLanguageNamesTestModule(
+        b, b.graph.host, test_optimize, lua_wikitext_tests.root_module,
+    ));
     const blob_wasm_smoke = b.addObject(.{
         .name = "dict-blob-wasm-smoke",
         .root_module = b.createModule(.{
@@ -1115,6 +1125,51 @@ fn reportDependencyStep(b: *std.Build, report: *std.Build.Step.Run, step: *std.B
     for (step.dependencies.items) |dependency| reportDependencyStep(b, report, dependency, root, seen);
 }
 
+// Tools must alias the provider already used by its real Expander.
+fn capturedLanguageNamesTestModule(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.Optimize,
+    provider: *std.Build.Module,
+) *std.Build.Module {
+    const types = b.createModule(.{
+        .root_source_file = b.path("compiler/tools/captured_language_names_test_bridge.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "fj_wikitext", .module = provider }},
+    });
+    return b.createModule(.{
+        .root_source_file = b.path("compiler/src/lua/language_names.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "lua_program", .module = types }},
+    });
+}
+
+// The ordinary Writer consumes immutable captured language-name profiles.
+// Forward the exact maintained host data types without a generated Lua program.
+fn capturedLanguageNamesModule(b: *std.Build, target: std.Build.ResolvedTarget,
+    optimize: std.builtin.Optimize) *std.Build.Module
+{
+    const host = b.createModule(.{
+        .root_source_file = b.path("compiler/src/lua/runtime/host.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const types = b.createModule(.{
+        .root_source_file = b.path("compiler/tools/captured_language_names_bridge.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "language_name_host", .module = host }},
+    });
+    return b.createModule(.{
+        .root_source_file = b.path("compiler/src/lua/language_names.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "lua_program", .module = types }},
+    });
+}
+
 fn bundleValueLeafObject(b: *std.Build) *std.Build.Step.Compile {
     // Match build-obj -Ofast -mcpu=baseline -fllvm -fstrip -lc. This graph is
     // separate from the native-CPU worker graph so its imports also retain
@@ -1136,6 +1191,11 @@ fn bundleValueLeafObject(b: *std.Build) *std.Build.Step.Compile {
         },
     });
     runtime.addImport("missing_dependency", b.createModule(.{ .root_source_file = b.path("compiler/src/shared/missing_dependency.zig"), .target = target, .optimize = .fast }));
+    runtime.addImport("build_diagnostics", b.createModule(.{
+        .root_source_file = b.path("compiler/src/lua/runtime/work_stats.zig"),
+        .target = target,
+        .optimize = .fast,
+    }));
     return b.addObject(.{
         .name = "value_leaf_build",
         .root_module = b.createModule(.{
@@ -1169,6 +1229,7 @@ fn bundleWorkerObject(b: *std.Build) *std.Build.Step.Compile {
     runtime.addImport("lua_static_fields", fields);
     runtime.addImport("namespace_registry", namespace);
     runtime.addImport("missing_dependency", missing_dependency);
+    runtime.addImport("build_diagnostics", workerModule(b, "compiler/src/lua/runtime/work_stats.zig"));
     const static_decode = workerModule(b, "compiler/src/lua/runtime/static_literal_decode.zig");
     static_decode.addImport("zig_runtime", runtime);
     static_decode.addImport("lua_static_literal_format", static_format);
@@ -1916,6 +1977,7 @@ const tools_partitions = [_]ToolsPartition{
         "blob_build.test.Aromanian ",
         "blob_build.test.DV ",
         "blob_build.test.Estonian ",
+        "blob_build.test.FJ ",
         "blob_build.test.Figure ",
         "blob_build.test.Finnish ",
         "blob_build.test.GN ",

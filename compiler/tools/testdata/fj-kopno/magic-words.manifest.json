@@ -1,0 +1,37 @@
+{
+  "artifacts": {
+    "magic-words.int-source.manifest.json": "96d970b0c0cb1351b5e645207e6064c98a64668e27cf50d33955a4f60c11dac1",
+    "magic-words.int-source.tsv": "815bca9ee43fa31077c242ddd65704812f3ff563e9df66ede8b411895eeab0ad",
+    "magic-words.raw.json": "ae91927f585c86a5e4d716005a53a37ae32938b277e0b56ee88c7a8906dd5140",
+    "magic-words.request.json": "ded37b0f8934729096d6a17bfab673a68099ff5ef9ea7d542783d8b26a12d8c5",
+    "magic-words.source.manifest.json": "13c1ef77cc2713bd3fd90d8484104125b106119a313496dc100f63b9ef58d170",
+    "magic-words.source.tsv": "173ebe15fc6806d539e647b6355f6f2ab1d86ee8c38a3431f79d616fda71107f",
+    "magic-words.tsv": "f89f22dd8aa49f43147af0a52f23ebee5e95969c80fe786df18068a935e5252f",
+    "namespace-capture.complete.json": "405b4c8ad6cb241678a893021e8c9f78dd2f60e5968f2ccac48c4941d0f6f673",
+    "namespace-siteinfo.raw.json": "c9f4126f7ddd691d209d7b26e4af04e7865bf5e5f579f55b3d1cfe50be097da2"
+  },
+  "canonical_words": 56,
+  "content_language": "fj",
+  "date": "20261001",
+  "dependency_sha256": {
+    "prepare_magic_words.py": "9ba059831575307b2b9cd51f1fea3094808de9b46d8172cd8304b9cd780496a0",
+    "prepare_magic_words_int.py": "c95883dfcc0d9a796f80ad721255da46903d5137ff90d40eb33463a925e71ea0"
+  },
+  "derived_utc": "2026-11-26T13:35:06.335367+00:00",
+  "generator_sha256": "da7b83092268130b4ff733ff6e6ea4b18aac9f3a3be24fb6c55b056db7be8127",
+  "output_bytes": 1510,
+  "output_sha256": "f89f22dd8aa49f43147af0a52f23ebee5e95969c80fe786df18068a935e5252f",
+  "profile": "title-and-parser-functions-language-v1",
+  "raw_sha256": "ae91927f585c86a5e4d716005a53a37ae32938b277e0b56ee88c7a8906dd5140",
+  "retrieved_utc": "2026-11-26T13:33:54.554572+00:00",
+  "rows": 63,
+  "source_capture": {
+    "manifest_sha256": "96d970b0c0cb1351b5e645207e6064c98a64668e27cf50d33955a4f60c11dac1",
+    "output_sha256": "815bca9ee43fa31077c242ddd65704812f3ff563e9df66ede8b411895eeab0ad",
+    "profile": "title-and-parser-functions-int-v1"
+  },
+  "source_url": "https://fj.wiktionary.org/w/api.php?action=query&meta=siteinfo&siprop=general%7Cmagicwords&format=json&formatversion=2&maxlag=5",
+  "temporal_scope": "current-at-retrieval",
+  "version": 4,
+  "wiki": "fjwiktionary"
+}
