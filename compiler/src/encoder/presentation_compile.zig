@@ -12897,7 +12897,7 @@ pub const Renderer = struct {
             element.alternative_ancestry == null and std.ascii.eqlIgnoreCase(element.tag, "span"))
             self.ordinaryBulletBoxClasses(style.native_inline_motion) else null;
         const static_list = profile != null and static_decoration and self.static_list_item != null;
-        const local_classes = if (bullet_classes) |classes|
+        const established_classes = if (bullet_classes) |classes|
             try self.staticInlineAncestorClasses(element, style.native_inline_motion, &authored_query, classes)
         else if (static_list)
             try self.staticInlineAncestorClasses(element, style.native_inline_motion, &authored_query, null)
@@ -12916,11 +12916,16 @@ pub const Renderer = struct {
             if (static_decoration and self.inline_box_quoted_paragraph != null) break :local try self.inlineBoxQuotedParagraphClasses(element, style.native_inline_motion);
             break :local null;
         } else null;
+        const prior_span_classes = if (established_classes == null and profile != null and
+            authored_query.source_inline_box_ancestor_classes == null and self.literal_wiki_table_operation != null)
+            try self.inlineBoxPriorSpanClasses(element, style.native_inline_motion) else null;
+        const local_classes = established_classes orelse prior_span_classes;
         defer if (local_classes) |classes| self.a.free(classes);
         if (local_classes) |classes| {
             if (bullet_classes != null)
                 authored_query.source_bullet_li_ancestor_classes = classes
-            else if (authored_query.complete_ancestor_classes == null and authored_query.source_inline_box_ancestor_classes == null)
+            else if ((prior_span_classes != null or authored_query.complete_ancestor_classes == null) and
+                authored_query.source_inline_box_ancestor_classes == null)
                 authored_query.source_inline_box_ancestor_classes = classes;
             if (self.inline_box_root_list != null and authored_query.source_direct_parent_classes == null)
                 authored_query.source_direct_parent_classes = self.inlineBoxListLiteralParent(element, style.native_inline_motion);
@@ -30069,6 +30074,188 @@ pub const Renderer = struct {
             error.InvalidSourceClassInventory => return null,
         };
         return try classes.toOwnedSlice(self.a);
+    }
+
+    // Keep the entire page inventory except the opener of a strictly closed
+    // earlier SPAN with plain inline contents. Unknown exterior wrappers and
+    // every later class remain. This is not a complete live-ancestry issuer.
+    fn priorClosedSpanQueryClasses(a: A, page: []const u8, before: usize) Error!?[]const u8 {
+        if (before > page.len or page.len == 0 or page.len > 2 * 1024 * 1024) return null;
+        var classes: std.ArrayList(u8) = .empty;
+        defer classes.deinit(a);
+        try classes.appendSlice(a, native_source_root_class_tokens);
+        var retained: usize = 0;
+        var cursor: usize = 0;
+        var omitted: usize = 0;
+        while (std.mem.indexOfScalarPos(u8, page[0..before], cursor, '<')) |at| {
+            cursor = at + 1;
+            if (syntax.protectedEnd(page, at)) |end| {
+                if (end <= at or end > before) break;
+                cursor = end;
+                continue;
+            }
+            const tag = syntax.tagAt(page, at) orelse continue;
+            if (tag.end <= at or tag.end > before) break;
+            cursor = tag.end;
+            if (!tag.is("span") or tag.closing or tag.self_closing or tag.html_pre or tag.end > before or
+                !formattingAngleAttributesBalanced(tag.attrs) or std.mem.indexOfAny(u8, tag.attrs, "<>{}\r\n") != null or
+                htmlOwnAttributePresence(&tag, "class") != .present) continue;
+            const pair = syntax.matchingTag(page, tag) orelse continue;
+            if (pair.inner_end < tag.end or pair.end > before or !tableNestedSourceClose(page, tag.name, pair, false)) continue;
+            const body = trim(page[tag.end..pair.inner_end]);
+            // A source-side literal conversion wrapper may surround one plain
+            // local link; no converted output or target semantics is inferred.
+            const content = if (starts(body, "-{") and std.mem.endsWith(u8, body, "}-")) body[2 .. body.len - 2] else body;
+            if (std.mem.indexOfAny(u8, content, "<>{}\r\n\x7f") != null or std.mem.indexOf(u8, content, "''") != null) continue;
+            if (std.mem.indexOfAny(u8, content, "[]") != null) {
+                if (!starts(content, "[[:") or !std.mem.endsWith(u8, content, "]]")) continue;
+                var links: ir.InlineIterator = .{ .input = content, .renderer_boundaries = true };
+                const token = links.next() orelse continue;
+                if (token.kind != .link or links.cursor != content.len or !token.link_has_pipe or token.link_empty_label or
+                    token.link_label_restored_close or token.trail.len != 0 or token.text.len == 0 or
+                    std.mem.indexOfAny(u8, content[2 .. content.len - 2], "[]") != null) continue;
+            }
+            // Exclude the opener only. The body, closing tag and every unknown
+            // surrounding byte still pass the same complete attribute scanner.
+            if (at > retained) appendNativeAuthoredSourceClasses(a, &classes, page[retained..at]) catch |failure| switch (failure) {
+                error.OutOfMemory => return error.OutOfMemory, error.InvalidSourceClassInventory => return null,
+            };
+            retained = tag.end;
+            cursor = pair.end;
+            omitted += 1;
+        }
+        if (omitted == 0) return null;
+        if (retained < page.len) appendNativeAuthoredSourceClasses(a, &classes, page[retained..]) catch |failure| switch (failure) {
+            error.OutOfMemory => return error.OutOfMemory, error.InvalidSourceClassInventory => return null,
+        };
+        return try classes.toOwnedSlice(a);
+    }
+
+    // Wiki-cell declarations retain the entire delimiter/attrs/body range.
+    // Authenticate each HTML opener and its paired close inside that body's
+    // maintained bounds, walking from the outer SPAN toward the query leaf.
+    fn inlineBoxCellHtmlRanges(root: MissingText, cell: []const u8,
+        current_first: []const []const u8) bool
+    {
+        if (cell.len < 2 or current_first.len == 0 or current_first.len > max_depth + 1 or
+            (cell[0] != '!' and cell[0] != '|') or std.mem.indexOfAny(u8, cell, "\r\n") != null or
+            !wikiClassContains(root.bytes, cell) or !noLiParentSourceRange(root, cell)) return false;
+        const cell_at = @intFromPtr(cell.ptr) - @intFromPtr(root.bytes.ptr);
+        const raw_cell = cell[1..];
+        const content_at = if (cellAttributePipe(raw_cell)) |pipe| pipe + 1 else 0;
+        var begin = cell_at + 1 + content_at;
+        var end = cell_at + cell.len;
+        var remaining = current_first.len;
+        while (remaining != 0) {
+            remaining -= 1;
+            const original = current_first[remaining];
+            if (!wikiClassContains(root.bytes, original)) return false;
+            const at = @intFromPtr(original.ptr) - @intFromPtr(root.bytes.ptr);
+            if (at < begin or at >= end or original.len > end - at or
+                !inlineOverlayCellPrefix(root, begin, at)) return false;
+            const opening = syntax.tagAt(root.bytes, at) orelse return false;
+            if (!opening.is("span") or opening.closing or opening.self_closing or opening.html_pre or
+                opening.end != at + original.len) return false;
+            const pair = syntax.matchingTag(root.bytes, opening) orelse return false;
+            if (pair.inner_end < opening.end or pair.end > end) return false;
+            const closing = syntax.tagAt(root.bytes, pair.inner_end) orelse return false;
+            if (!closing.closing or !closing.is(opening.name) or closing.end != pair.end or
+                trim(closing.attrs).len != 0 or
+                !noLiParentSourceRange(root, root.bytes[pair.inner_end..pair.end])) return false;
+            begin = opening.end;
+            end = pair.inner_end;
+        }
+        return true;
+    }
+
+    // One-to-one live table/declaration custody selects the current occurrence.
+    // The returned inventory still contains all uncertain exterior classes;
+    // no physical edge, direct-parent fact or positive overlay is granted.
+    fn inlineBoxPriorSpanClasses(self: *Renderer, element: *const table_style_profile.TextElement,
+        state: NativeInlineMotionState) Error!?[]const u8
+    {
+        const held = switch (state) { .proved => |value| value, else => return null };
+        const host = self.native_article_host orelse return null;
+        const profile = self.textPaintProfile() orelse return null;
+        const range = self.native_source_class_range orelse return null;
+        if (!host.native_paragraph_css_subjects or self.context.observe_structure_only or self.content_root != .parser_output or
+            self.native_inline_motion_root != held.root or self.native_inline_motion_epoch != held.epoch or held.epoch == 0 or
+            held.root.reference != null or !host.matchesActive(self, held.root.source) or
+            !nativeSourceClassRangeCurrent(range, held.root.source, profile) or self.typed_table_depth != 1 or
+            self.table_viewport_cell_source != null or self.in_reference or self.in_template_literal_scope or
+            self.media_depth != 0 or self.poem_depth != 0 or self.ruby_depth != 0 or self.pre_block or self.parsed_pre or
+            self.figure_caption_depth != 0 or self.figure_implicit_list_context or self.html_list_item_flow or
+            self.html_blockquote_flow or self.body_link_target.len != 0 or self.explicit_wiki_label != null) return null;
+        const operation = self.literal_wiki_table_operation orelse return null;
+        const outer = operation.outer_parent orelse return null;
+        const row = operation.row_opening orelse return null;
+        const attrs = operation.cell_attrs orelse return null;
+        const declarations = (try self.nativeInlineMotionDeclarations(state)) orelse return null;
+        defer self.a.free(declarations);
+        if (declarations.len < 5 or declarations.len > 8) return null;
+        const html_count = declarations.len - 4;
+        var cursor = held.last;
+        var current: ?*const table_style_profile.TextElement = element;
+        var nodes: [8]*const table_style_profile.TextElement = undefined;
+        var entries: [8]*const NativeInlineMotionDeclaration = undefined;
+        var originals: [8][]const u8 = undefined;
+        for (declarations, 0..) |css, index| {
+            const entry = cursor orelse return null;
+            const node = current orelse return null;
+            if (node.alternative_ancestry != null or node.observed_custom_environment != null) return null;
+            for (nodes[0..index]) |prior| if (prior == node) return null;
+            for (entries[0..index]) |prior| if (prior == entry) return null;
+            if (index < html_count or index == declarations.len - 1) {
+                if (entry.origin != .html) return null;
+            } else if (index == html_count) {
+                if (entry.origin != .wiki_td and entry.origin != .wiki_th) return null;
+                if (entry.opening.len == 0 or entry.opening[0] != (if (entry.origin == .wiki_th) @as(u8, '!') else '|')) return null;
+            } else if (entry.origin != (if (index == html_count + 1) NativeInlineMotionOrigin.wiki_row else .wiki_table)) return null;
+            const tag = if (entry.origin == .html) syntax.tagAt(entry.opening, 0) orelse return null
+                else (try self.nativeInlineMotionWikiTag(entry.origin, entry.opening)) orelse return null;
+            if (entry.origin == .html and (tag.closing or tag.self_closing or tag.html_pre or tag.end != entry.opening.len or
+                !tag.is(if (index < html_count) "span" else "div") or node.source_key != @intFromPtr(tag.name.ptr))) return null;
+            if (!tag.is(node.tag) or !std.mem.eql(u8, css, entry.css) or
+                htmlOwnAttributePresence(&tag, "class") == .unknown or htmlOwnAttributePresence(&tag, "dir") != .absent or
+                !std.mem.eql(u8, node.classes, (try self.semanticAttribute(tag, "class")) orelse "") or
+                !std.mem.eql(u8, node.id, (try self.semanticAttribute(tag, "id")) orelse "")) return null;
+            const original = self.nativeOriginalCopiedRange(held.root.source, entry.opening) orelse return null;
+            if (!std.mem.eql(u8, original, entry.opening)) return null;
+            nodes[index] = node; entries[index] = entry; originals[index] = original;
+            cursor = entry.previous; current = node.parent;
+            if (index == html_count and !inlineOverlaySameSourceSlice(tag.attrs, attrs)) return null;
+        }
+        if (cursor != null or current != null or nodes[declarations.len - 1] != outer or
+            !inlineOverlaySameSourceSlice(entries[html_count + 1].opening, row) or
+            !noLiParentSourceRange(operation.tracked, entries[html_count].opening)) return null;
+        const table = self.nativeOriginalCopiedRange(held.root.source, operation.table_opening) orelse return null;
+        // The dispatcher retains trim(line) in the declaration, while the
+        // live operation retains the full physical opener. Authenticate both
+        // domains without shortening either retained snapshot: only the same
+        // leading pointer plus the maintained trailing trim may differ.
+        if (!starts(table, "{|") or std.mem.indexOfAny(u8, table, "\r\n") != null or
+            !noLiParentSourceRange(held.root.source, table) or
+            trim(table).ptr != table.ptr or
+            !inlineOverlaySameSourceSlice(trim(table), originals[html_count + 2])) return null;
+        for (originals[0 .. declarations.len - 1], originals[1..declarations.len], 0..) |child, parent, index| {
+            // The SPAN belongs inside its complete wiki-cell declaration, not
+            // after that declaration's end. All other opener edges keep their
+            // original ordering check; the complete HTML nesting is joined below.
+            if (index + 1 == html_count) continue;
+            if (@intFromPtr(child.ptr) < @intFromPtr(parent.ptr) + parent.len) return null;
+        }
+        if (!inlineBoxCellHtmlRanges(held.root.source, originals[html_count], originals[0..html_count])) return null;
+        const before = range.start + @intFromPtr(originals[declarations.len - 1].ptr) - @intFromPtr(held.root.source.bytes.ptr);
+        const inventory = (try priorClosedSpanQueryClasses(self.a, range.proof.source.bytes, before)) orelse return null;
+        // Never subtract an actually live class, even if malformed source and
+        // the logical parser disagree on an earlier closing tag.
+        for (nodes[0..declarations.len]) |node| {
+            var tokens = std.mem.tokenizeAny(u8, node.classes, " \t\r\n\x0c");
+            while (tokens.next()) |token| if (!table_style_profile.Profile.hasClass(inventory, token)) {
+                self.a.free(inventory); return null;
+            };
+        }
+        return inventory;
     }
 
     // This is a property-query-only inventory for a directly dispatched native table.
@@ -50899,7 +51086,13 @@ pub const Renderer = struct {
                                 cell_weight_consumed = selected.weight_consumed;
                                 break :own selected.style;
                             }
-                            break :own row_style;
+                            // Style-proof refusal must not erase the actual parsed
+                            // TD/TH from its children's logical element chain.
+                            // textElement keeps its existing authority checks;
+                            // this adds no class inventory or physical ancestry.
+                            var fallback = row_style;
+                            fallback.text_element = try self.textElement(cell_tag, row_style.text_element, row_style.language);
+                            break :own fallback;
                         };
                         cell_style.native_inline_motion = cell_motion;
                         swatch_foreground = content.swatch_color;
@@ -138490,4 +138683,155 @@ test "observed fixed atom callback refuses line height mismatch stale ranges and
     held.context.figure_sizing.?.resolve_authored_fixed_inline_box_fn = null;
     try std.testing.expect((try held.observedFixedInlineBoxStyleForOperation(operation, fixture.parent)) == null);
     try std.testing.expectEqual(@as(usize, 0), fixture.renderer.spans.items.len);
+}
+
+test "KU table query retains unknown exterior classes while excluding closed earlier spans" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = "<span class='ku-Arab'>-{[[:x|x]]}-</span>\n<span class='plainlinks'>\n<div class='wrapper'>here</div><span class='future'>later</span>";
+    const before = std.mem.indexOf(u8, source, "<div").?;
+    const classes = (try Renderer.priorClosedSpanQueryClasses(a, source, before)) orelse return error.TestUnexpectedResult;
+    for ([_][]const u8{ "plainlinks", "wrapper", "future", "mw-parser-output", "mw-content-ltr", "mw-content-rtl" }) |name|
+        try std.testing.expect(table_style_profile.Profile.hasClass(classes, name));
+    try std.testing.expect(!table_style_profile.Profile.hasClass(classes, "ku-Arab"));
+    // A closing-looking delimiter does not certify malformed or conversion-
+    // dependent inline content. Current and later occurrences stay retained.
+    for ([_][]const u8{
+        "<span class='ku-Arab'><i>unclosed</span>",
+        "<span class='ku-Arab'>-{xx:<b>x;yy:y}-</span>",
+        "<span class='ku-Arab'>[[x|<i>x]]</span>",
+        "<span class='ku-Arab'>[[x|x]</span>",
+    }) |bad| try std.testing.expect(try Renderer.priorClosedSpanQueryClasses(a, bad, bad.len) == null);
+    try std.testing.expect(try Renderer.priorClosedSpanQueryClasses(a, source, 20) == null);
+    // A bounded prefix can stop inside an opener; scanning must not overrun it.
+    try std.testing.expect(try Renderer.priorClosedSpanQueryClasses(a, "<span class='x'>x</span>", 7) == null);
+    const repeated = source ++ "<span class='ku-Arab'>future</span>";
+    const retained = (try Renderer.priorClosedSpanQueryClasses(a, repeated, before)) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(table_style_profile.Profile.hasClass(retained, "ku-Arab"));
+    // An independently retained authentic buffer is a source-only inventory
+    // control. It is not an execution/ancestry/ordinary-provider certificate.
+    const genuine = @embedFile("testdata/ku-leker-display188/failure-00000001-expanded.wikitext");
+    try std.testing.expectEqual(@as(usize, 63138), genuine.len);
+    var genuine_hash: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(genuine, &genuine_hash, .{});
+    try std.testing.expectEqualStrings("17bb4950b4668e809523de89ee496da7e541b5b784370fbf68cc68f0775e0e2c", &std.fmt.bytesToHex(genuine_hash, .lower));
+    const local = (try Renderer.priorClosedSpanQueryClasses(a, genuine, 59714)) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(table_style_profile.Profile.hasClass(local, "plainlinks"));
+    try std.testing.expect(table_style_profile.Profile.hasClass(local, "inflection-table-wrapper"));
+    for ([_][]const u8{ "Arab", "ku-Arab", "fa-Arab", "ks-Arab", "ug-Arab", "ps-Arab", "ur-Arab" }) |name|
+        try std.testing.expect(!table_style_profile.Profile.hasClass(local, name));
+}
+
+test "KU table local absence binds current TH SPAN declarations and preserves ancestor uncertainty" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var profile = try table_style_profile.parseForTargetAlloc(a, ".ku-Arab{direction:rtl;unicode-bidi:isolate}", .screen);
+    defer profile.deinit();
+    const source = try a.dupe(u8, "<span class='ku-Arab'>[[:x|x]]</span>\n<span class='plainlinks'>\n<div class='wrapper'>\n{| class='inflection'  \n|-\n! <span title='one'><span style='border-bottom:1px dotted #555555'>yj.</span></span>\n|}\n</div>\n");
+    const tracked = MissingText.untracked(source);
+    const proof = (try nativeSourceClassProofAlloc(a, tracked, &profile)) orelse return error.TestUnexpectedResult;
+    defer proof.deinit(a);
+    var renderer: Renderer = .{ .a = a, .context = .{ .title = "KU mapped query control", .table_styles = &profile },
+        .content_root = .parser_output, .body_depth = 1, .typed_table_depth = 1,
+        .native_body_language = "ku", .body_missing = tracked, .inline_missing = tracked,
+        .native_source_class_range = .{ .proof = proof, .start = 0, .prepared = tracked } };
+    var root: NativeInlineMotionRoot = .{ .source = tracked };
+    var host: NativeArticleHost = .{ .renderer = &renderer, .source = tracked, .title = renderer.context.title,
+        .language_code = "ku", .active_source = tracked, .active_snapshot = NativeArticleHost.snapshot(tracked),
+        .active_whole_page = true, .native_paragraph_css_subjects = true };
+    renderer.native_article_host = &host;
+    const scope = renderer.nativeInlineMotionBegin(&root, false);
+    defer scope.deinit();
+    var motion = renderer.body_formatting_attributes.native_inline_motion;
+    const div_at = std.mem.indexOf(u8, source, "<div").?;
+    const div = syntax.tagAt(source, div_at).?;
+    motion = try renderer.nativeInlineMotionEntry(div, motion);
+    const outer = try renderer.textElement(div, null, "ku");
+    var node = outer;
+    const table_at = std.mem.indexOf(u8, source, "{|").?;
+    const table_end = std.mem.indexOfScalarPos(u8, source, table_at, '\n').?;
+    const row_end = std.mem.indexOfScalarPos(u8, source, table_end + 1, '\n').?;
+    const cell_end = std.mem.indexOfScalarPos(u8, source, row_end + 1, '\n').?;
+    const table = source[table_at..table_end];
+    const row = source[table_end + 1..row_end];
+    const cell = source[row_end + 1..cell_end];
+    for ([_][]const u8{ table, row, cell }, [_]NativeInlineMotionOrigin{ .wiki_table, .wiki_row, .wiki_th }) |opening, origin| {
+        // Match the ordinary dispatcher's trimmed table declaration; the
+        // live operation below retains its two authored trailing spaces.
+        const declared = if (origin == .wiki_table) trim(opening) else opening;
+        const tag = (try renderer.nativeInlineMotionWikiTag(origin, declared)) orelse return error.TestUnexpectedResult;
+        motion = try renderer.nativeInlineMotionWikiEntry(origin, declared, tag, motion);
+        node = try renderer.textElement(tag, node, "ku");
+    }
+    const cell_tag = (try renderer.nativeInlineMotionWikiTag(.wiki_th, cell)).?;
+    var operation: Renderer.LiteralWikiTableOperation = .{ .tracked = tracked, .table_opening = table,
+        .row_opening = row, .cell_attrs = cell_tag.attrs, .outer_parent = outer };
+    renderer.literal_wiki_table_operation = &operation;
+    for ([_][]const u8{ "<span title=", "<span style=" }) |needle| {
+        const at = std.mem.indexOf(u8, source, needle).?;
+        const tag = syntax.tagAt(source, at).?;
+        motion = try renderer.nativeInlineMotionEntry(tag, motion);
+        node = try renderer.textElement(tag, node, "ku");
+    }
+    const inner_open = motion.proved.last.?.opening;
+    const outer_open = motion.proved.last.?.previous.?.opening;
+    const cell_entry = motion.proved.last.?.previous.?.previous.?;
+    // Keep the producer's full TH snapshot, including both nested SPANs.
+    try std.testing.expect(Renderer.inlineOverlaySameSourceSlice(cell_entry.opening, cell));
+    try std.testing.expectEqualSlices(u8, cell, cell_entry.opening_snapshot);
+    try std.testing.expect(@intFromPtr(outer_open.ptr) < @intFromPtr(cell.ptr) + cell.len);
+    try std.testing.expect(Renderer.inlineBoxCellHtmlRanges(tracked, cell, &.{ inner_open, outer_open }));
+    try std.testing.expect(!Renderer.inlineBoxCellHtmlRanges(tracked, cell[0..2], &.{ inner_open, outer_open }));
+    try std.testing.expect(!Renderer.inlineBoxCellHtmlRanges(tracked, cell, &.{ outer_open, inner_open }));
+    const sibling_source = "! <span>left</span><span>right</span>";
+    const left = syntax.tagAt(sibling_source, 2).?;
+    const right_at = std.mem.lastIndexOf(u8, sibling_source, "<span>").?;
+    const right = syntax.tagAt(sibling_source, right_at).?;
+    try std.testing.expect(!Renderer.inlineBoxCellHtmlRanges(MissingText.untracked(sibling_source), sibling_source,
+        &.{ sibling_source[right_at..right.end], sibling_source[2..left.end] }));
+    const table_entry = cell_entry.previous.?.previous.?;
+    try std.testing.expectEqual(table.len - 2, table_entry.opening.len);
+    try std.testing.expect(Renderer.inlineOverlaySameSourceSlice(table_entry.opening, trim(table)));
+    try std.testing.expectEqualSlices(u8, trim(table), table_entry.opening_snapshot);
+    try std.testing.expect(Renderer.inlineOverlaySameSourceSlice(operation.table_opening, table));
+    operation.table_opening = source[table_at..table_end + 1]; // newline is not trailing opener whitespace
+    try std.testing.expect(try renderer.inlineBoxPriorSpanClasses(node, motion) == null);
+    operation.table_opening = table[0 .. trim(table).len - 1]; // missing authored attribute delimiter
+    try std.testing.expect(try renderer.inlineBoxPriorSpanClasses(node, motion) == null);
+    operation.table_opening = table[1..]; // same bytes elsewhere cannot change the opening pointer
+    try std.testing.expect(try renderer.inlineBoxPriorSpanClasses(node, motion) == null);
+    operation.table_opening = try a.dupe(u8, table); // no registered source mapping for a detached copy
+    try std.testing.expect(try renderer.inlineBoxPriorSpanClasses(node, motion) == null);
+    operation.table_opening = table;
+    const inventory = (try renderer.inlineBoxPriorSpanClasses(node, motion)) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(!table_style_profile.Profile.hasClass(inventory, "ku-Arab"));
+    try std.testing.expect(table_style_profile.Profile.hasClass(inventory, "plainlinks"));
+    try std.testing.expect(table_style_profile.Profile.hasClass(proof.classes, "ku-Arab"));
+    try std.testing.expect(node.complete_ancestor_classes == null and node.source_inline_box_ancestor_classes == null and
+        !node.ancestry_complete and !node.physical_ancestry_complete and renderer.inline_box_root_table_opening == null);
+    const epoch = renderer.native_inline_motion_epoch;
+    renderer.native_inline_motion_epoch += 1;
+    try std.testing.expect(try renderer.inlineBoxPriorSpanClasses(node, motion) == null);
+    renderer.native_inline_motion_epoch = epoch;
+    operation.row_opening = try a.dupe(u8, row);
+    try std.testing.expect(try renderer.inlineBoxPriorSpanClasses(node, motion) == null);
+    operation.row_opening = row;
+    operation.outer_parent = node;
+    try std.testing.expect(try renderer.inlineBoxPriorSpanClasses(node, motion) == null);
+    operation.outer_parent = outer;
+    var foreign = node.*;
+    foreign.source_key += 1;
+    try std.testing.expect(try renderer.inlineBoxPriorSpanClasses(&foreign, motion) == null);
+    foreign = node.*;
+    foreign.parent = node.parent.?.parent;
+    try std.testing.expect(try renderer.inlineBoxPriorSpanClasses(&foreign, motion) == null);
+    const held = motion.proved.last.?;
+    var changed = held.*;
+    changed.opening_snapshot = "changed";
+    var changed_motion = motion;
+    changed_motion.proved.last = &changed;
+    try std.testing.expect(try renderer.inlineBoxPriorSpanClasses(node, changed_motion) == null);
+    try std.testing.expect(try renderer.inlineBoxPriorSpanClasses(node, .unknown) == null);
 }
