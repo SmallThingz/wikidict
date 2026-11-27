@@ -3174,7 +3174,71 @@ def materialize_snapshot_selection(workspace, view, selection, capture_root, jou
     return roles, destination(capture) if capture else None
 
 
-def resolve_edition_snapshot_options(manifest, groups, downloads, overrides=None, *, workspace=None, metadata_network='offline', figure_reuse_batches=(), _figure_raw_storage=None, _staged_capture=None):
+def resolve_language_message_snapshot_options(root, edition, date, namespace, snapshots, overrides, *,
+                                              metadata_network='offline', api_sources=None):
+    """Provision one complete current pair before building, never after a key failure."""
+    names=('interface-messages','language-fallbacks')
+    if metadata_network not in ('offline','allow'):
+        raise ValueError('Invalid metadata network policy')
+    # Explicit selections retain their exact scope and the normal validation
+    # below. Do not replace one half of a caller-selected pair with fresh HTTP.
+    if set(names) & set(overrides or {}):return {}
+    generation=Path(root)/'language-messages-complete-v1'
+    present=generation.exists() or generation.is_symlink()
+    import prepare_language_messages_v2 as messages
+    namespace=Path(namespace)
+    def identity():
+        namespace_raw=messages.evidence.small(namespace)
+        return (messages.namespace_identity(namespace_raw,edition,date),
+                hashlib.sha256(namespace_raw).hexdigest())
+    def verified(folder):
+        language,namespace_sha=identity()
+        records=messages.verify_complete(folder)
+        record=records['interface-messages']
+        if (record['wiki']!=edition or record['date']!=date or record['content_language']!=language
+                or record['namespace_registry_sha256']!=namespace_sha
+                or not {'en',language}<=set(record['languages'])):
+            raise ValueError('Complete message pair differs from selected edition/namespace/languages')
+        needed={(code,messages.normalize_key(key)) for code in {'en',language}
+                for key in messages.planned_capture_messages(['show','hide'])}
+        # Enumeration can omit a key. An explicit missing row is usable; an
+        # unobserved lookup is not. The complete verifier authenticates all rows.
+        raw=messages.evidence.small(folder/'interface-messages.tsv',messages.COMPLETE_TSV_BYTES)
+        for line in raw.decode('utf-8').splitlines():
+            if line.startswith('#'):continue
+            fields=line.split('\t',3)
+            if len(fields)>=3:needed.discard((fields[0],fields[1]))
+        if needed:
+            raise ValueError('Complete message pair lacks required observations: '+
+                             ', '.join(code+'/'+key for code,key in sorted(needed)))
+        return {name:folder/(name+'.tsv') for name in names}
+    # A present generation must validate; a corrupt/partial one is never an
+    # excuse for a new capture or a silent fallback to an older limited pair.
+    if present:return verified(generation)
+    if all(name in snapshots for name in names):
+        paths=[Path(snapshots[name]) for name in names]
+        if paths[0].parent==paths[1].parent and all(path.name==name+'.tsv' for name,path in zip(names,paths)):
+            sidecar=paths[0].with_name('interface-messages.manifest.json')
+            if sidecar.is_file() and read_small_json(sidecar,messages.MAX_MANIFEST).get('schema')==messages.COMPLETE_SCHEMA:
+                return verified(paths[0].parent)
+    if metadata_network=='offline':return {}
+    language,_=identity()
+    # The complete collector binds the current API revision to two reviewed
+    # primary-source files. Never bypass that contract or invent a dump date.
+    if api_sources is None:
+        raise ValueError('Online complete message provisioning requires --language-message-api-sources '
+                         '(reviewed API sources), or explicit interface-message/fallback snapshots')
+    messages.complete_source_contract(Path(api_sources))  # before creating a generation
+    with acquire_build_resource_lock(Path(root)/'.language-messages.lock'):
+        if generation.exists() or generation.is_symlink():return verified(generation)
+        args=argparse.Namespace(wiki=edition,date=date,namespace_registry=namespace,output=generation,
+            languages=sorted({'en',language}),messages=messages.planned_capture_messages(['show','hide']),
+            complete_messages=True,api_sources=Path(api_sources),delay=1.0,wall_seconds=600)
+        messages.capture_complete(args)
+        return verified(generation)
+
+
+def resolve_edition_snapshot_options(manifest, groups, downloads, overrides=None, *, workspace=None, metadata_network='offline', figure_reuse_batches=(), language_message_api_sources=None, exact_snapshot_selection=False, _figure_raw_storage=None, _staged_capture=None):
     """Resolve each edition independently; never reuse another edition's captures."""
     workspace=PROJECT if workspace is None else workspace
     if metadata_network not in ('offline', 'allow'):
@@ -3220,8 +3284,11 @@ def resolve_edition_snapshot_options(manifest, groups, downloads, overrides=None
                     if (root/marker).exists():validate_capture_artifacts(root,read_small_json(root/marker))
                 preferred=discover(root,'wikibase-entities',
                     ('wikibase-entities','wikibase-entity-terms'),edition,date)
-                message_snapshots=discover(root,'language-messages-loop-v1',
+                message_snapshots=discover(root,'language-messages-complete-v1',
                     ('language-fallbacks','interface-messages'),edition,date)
+                if not message_snapshots:
+                    message_snapshots=discover(root,'language-messages-loop-v1',
+                        ('language-fallbacks','interface-messages'),edition,date)
                 if not message_snapshots:
                     message_snapshots=discover(root,'language-messages',
                         ('language-fallbacks','interface-messages'),edition,date)
@@ -3286,6 +3353,14 @@ def resolve_edition_snapshot_options(manifest, groups, downloads, overrides=None
             language_record=languages.get((edition,date))
             language=Path(snapshots['language-registry'])
             if not language_record or language_record.get('name')!='language-registry.tsv' or language.stat().st_size!=language_record.get('size') or sha256_file(language)!=language_record.get('sha256'):raise ValueError('Language registry differs from pinned inventory')
+            if not exact_snapshot_selection:
+                # Stored capture roots are temporary materializations. Keep any
+                # new acquisition in the persistent edition downloads directory.
+                message_root=(root if captured is not None and _staged_capture is None
+                              else downloads/edition/date)
+                snapshots.update(resolve_language_message_snapshot_options(
+                    message_root,edition,date,snapshots['namespace-registry'],snapshots,overrides,
+                    metadata_network=metadata_network,api_sources=language_message_api_sources))
             selection = (capture, selected, root) if captured is not None else None
             if _figure_raw_storage:
                 _, captures = _validated_auxiliary_state(snapshots, edition, date, captured_selection=selection)
@@ -11157,7 +11232,9 @@ def main():
     p.add_argument('--input-manifest',type=Path,help='Explicit immutable input manifest; downloads remain in --downloads')
     p.add_argument('--input-manifest-sha256',help='Required SHA256 for --input-manifest')
     p.add_argument('--metadata-network',choices=('offline','allow'),default='offline',
-                   help='Reuse verified metadata by default; allow explicitly prepares missing shared Figure inputs from selected official sources')
+                   help='Reuse verified metadata by default; allow prepares shared Figure inputs and complete current EN/edition messages with strict fallbacks')
+    p.add_argument('--language-message-api-sources',type=Path,
+                   help='Reviewed immutable ApiQueryAllMessages.php, MessageCache.php and source-receipts01.json for online complete-message capture; unused offline')
     p.add_argument('--snapshot-selection', type=Path, help='Stage one edition from its stored snapshot path, codec, decoded size and SHA-256 records')
     p.add_argument('--snapshot-storage-journal', type=Path, help='Optional JSONL of additional compressed sibling paths and decoded identities')
     p.add_argument('--exact-snapshot-selection',action='store_true',
@@ -11354,6 +11431,10 @@ def run_main(p, a, resources):
         snapshot_options['_figure_raw_storage'] = figure_raw_storage
     if staged_capture is not None:
         snapshot_options['_staged_capture'] = staged_capture
+    if a.language_message_api_sources is not None:
+        snapshot_options['language_message_api_sources'] = a.language_message_api_sources
+    if a.exact_snapshot_selection:
+        snapshot_options['exact_snapshot_selection'] = True
     try:
         options['edition_options'] = resolve_edition_snapshot_options(
             manifest, groups, a.downloads.resolve(), auxiliary, workspace=workspace,
