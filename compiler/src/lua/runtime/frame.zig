@@ -96,6 +96,28 @@ const ParserCall = struct {
     args: *rt.Table,
 };
 
+/// MediaWiki addresses numbered frame arguments by their canonical decimal name.
+pub fn argumentKey(name: []const u8) Value {
+    const string = Value{ .string = name };
+    const number = std.fmt.parseInt(i64, name, 10) catch return string;
+    const max_exact = 1 << 53;
+    if (number < -max_exact or number > max_exact) return string;
+    var storage: [21]u8 = undefined;
+    const decimal = std.fmt.bufPrint(&storage, "{d}", .{number}) catch unreachable;
+    if (!std.mem.eql(u8, name, decimal)) return string;
+    return .{ .number = @floatFromInt(number) };
+}
+
+fn frameArgIndex(_: ?*anyopaque, _: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
+    if (args.len < 2 or args[0] != .table or args[1] != .string) return &.{};
+    const key = argumentKey(args[1].string);
+    if (key != .number) return &.{};
+    const value = args[0].table.rawGetNumber(key.number) orelse return &.{};
+    const out = try rt.returnBuffer(result_buffer, 1);
+    rt.storeReturn(out, 0, value);
+    return out;
+}
+
 fn setCheckedFrameArg(runtime: *rt.Context, out: *rt.Table, key: Value, value: Value) !void {
     if (key != .string and key != .number) return error.InvalidFrameArgKey;
     const text = switch (value) {
@@ -103,7 +125,7 @@ fn setCheckedFrameArg(runtime: *rt.Context, out: *rt.Table, key: Value, value: V
         .string, .number => try valueToString(runtime, value),
         else => return error.InvalidFrameArgValue,
     };
-    try out.rawSet(runtime.allocator, key, .{ .string = text });
+    try out.rawSet(runtime.allocator, if (key == .string) argumentKey(key.string) else key, .{ .string = text });
 }
 
 fn checkedFrameArgs(runtime: *rt.Context, source: *rt.Table) !*rt.Table {
@@ -216,6 +238,12 @@ fn makeFrameWithArgs(runtime: *rt.Context, title: []const u8, arg_table: *rt.Tab
     } else null;
     const ctx = try runtime.allocator.create(FrameCtx);
     ctx.* = .{ .table = frame, .parent = parent_table, .title = try runtime.allocator.dupe(u8, title) };
+    if (arg_table.metatable == null) {
+        // Alias only on lookup so the argument still has a single storage and iteration key.
+        const metatable = try runtime.newTable();
+        try metatable.rawSet(runtime.allocator, .{ .string = "__index" }, try runtime.newNativeBuffered(null, frameArgIndex));
+        try arg_table.setMetatable(metatable);
+    }
     try frame.rawSetNativeField(.frame, "args", .{ .table = arg_table });
     try frame.rawSetNativeField(.frame, "getParent", try runtime.newNative(ctx, getParentCall));
     try frame.rawSetNativeField(.frame, "getTitle", try runtime.newNative(ctx, getTitleCall));
@@ -233,7 +261,7 @@ pub fn makeFrameFromTable(runtime: *rt.Context, title: []const u8, args: *rt.Tab
 
 pub fn makeFrame(runtime: *rt.Context, title: []const u8, args: []const FrameArg, parent: ?Value) !Value {
     const table = try runtime.newFrameArgsTable();
-    for (args) |arg| try table.rawSet(runtime.allocator, arg.key, arg.value);
+    for (args) |arg| try table.rawSet(runtime.allocator, if (arg.key == .string) argumentKey(arg.key.string) else arg.key, arg.value);
     return makeFrameWithArgs(runtime, title, table, parent);
 }
 
@@ -382,6 +410,40 @@ pub fn invoke(runtime: *rt.Context, module_name: []const u8, function_name: []co
 fn callField(runtime: *rt.Context, object: Value, name: []const u8, args: []const Value) ![]const Value {
     const callable = try runtime.getIndex(object, .{ .string = name });
     return runtime.callValue(callable, args);
+}
+
+test "Scribunto frame args resolve decimal names without filling missing arguments" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 0);
+    defer runtime.deinit();
+
+    const table = try runtime.newTable();
+    try table.rawSet(runtime.allocator, .{ .number = 1 }, .{ .string = "conmemorans" });
+    try table.rawSet(runtime.allocator, .{ .string = "01" }, .{ .string = "named" });
+    const object = Value{ .table = table };
+    try std.testing.expect((try runtime.getIndex(object, .{ .string = "1" })) == .nil);
+
+    const frame = try makeFrameFromTable(&runtime, "Modulo:La-decl-part", table, null);
+    const args = try runtime.getIndex(frame, .{ .string = "args" });
+    const positional = try runtime.getIndex(args, .{ .number = 1 });
+    const decimal_name = try runtime.getHashedField(args, "1", rt.stringValueHash("1"));
+    try std.testing.expectEqualStrings("conmemorans", positional.string);
+    try std.testing.expect(decimal_name == .string);
+    try std.testing.expectEqualStrings("conmemorans", decimal_name.string);
+    try std.testing.expectEqualStrings("named", (try runtime.getIndex(args, .{ .string = "01" })).string);
+    try std.testing.expect((try runtime.getIndex(args, .{ .string = "2" })) == .nil);
+    try std.testing.expect((try runtime.getIndex(args, .{ .string = "+1" })) == .nil);
+    try std.testing.expect(table.rawGet(.{ .string = "1" }) == null);
+
+    const child_args = try runtime.newTable();
+    try child_args.rawSet(runtime.allocator, .{ .string = "1" }, .{ .string = "child" });
+    const child_spec = try runtime.newTable();
+    try child_spec.rawSet(runtime.allocator, .{ .string = "args" }, .{ .table = child_args });
+    const child = try runtime.callValueFirst(try runtime.getIndex(frame, .{ .string = "newChild" }), &.{ frame, .{ .table = child_spec } });
+    const args_from_child = try runtime.getIndex(child, .{ .string = "args" });
+    try std.testing.expectEqualStrings("child", (try runtime.getIndex(args_from_child, .{ .number = 1 })).string);
+    try std.testing.expectEqualStrings("child", (try runtime.getIndex(args_from_child, .{ .string = "1" })).string);
 }
 
 const Probe = struct {

@@ -18283,7 +18283,7 @@ pub const Renderer = struct {
                 // that style to this exact source operation and refuses a missing
                 // Figure without it. The legacy palette remains epoch-bound.
                 if ((source_context.missing_media_profile != .f45897 and !yi_current_left and !observed_style) or
-                    (missing.link_paint == null and !observed_center and !observed_left and !observed_right and !observed_default) or
+                    (missing.link_paint == null and !observed_center and !observed_left and !observed_right and !observed_default and !observed_style) or
                     !std.mem.eql(u8, &source_context.namespace_sha256, &namespaces.source_sha256) or
                     chosen != .thumbnail or (horizontal != null and !std.mem.eql(u8, horizontal.?, "img_right") and !observed_center and !observed_left) or image.height_px != null or
                     ((observed_center or observed_left or (observed_right and missing.link_paint == null)) and image.width_px == null and !observed_style) or
@@ -103821,6 +103821,57 @@ test "ordinary missing Figure requires a negative file and the exact observed st
     try std.testing.expectEqualStrings("figure_sizing", evidence.operation);
     try std.testing.expectEqualStrings("authenticated_missing_without_observation", evidence.reason);
     try std.testing.expectEqual(@as(usize, 0), proof.sizing_calls);
+}
+
+test "ordinary missing Figure explicit width keeps default placement and exact style authority" {
+    const F = struct {
+        fn missing(_: ?*const anyopaque, _: A, file: []const u8) A.Error!bool {
+            return std.mem.eql(u8, file, "Missing.png");
+        }
+        fn noStyle(_: ?*const anyopaque, _: A, _: FigureStyleOperation) A.Error!?FigureStyleObservation {
+            return null;
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // The dated SD page 1831 uses thumb|230px with no horizontal option.
+    // Its exact observed width must not be confused with the site default.
+    const options = "thumb|230px|ٻِلو";
+    var proof: MissingFigureProducerTest = .{ .observed_width = 230, .observed_options = options, .link_paint = null };
+    var context = try proof.context(a);
+    context.figure_sizing.?.source_context.?.missing_media_profile = null;
+    context.figure_sizing.?.source_context.?.defaults.default_thumbnail_width = 250;
+    context.figure_sizing.?.is_missing_file_fn = F.missing;
+    context.figure_sizing.?.figure_style_ctx = &proof;
+    context.figure_sizing.?.resolve_figure_style_fn = F.noStyle;
+    var hints: SemanticHints = .{ .figure_blocks = true };
+    var renderer: Renderer = .{ .a = a, .context = context, .semantic_capture = &hints };
+    const choice = (try renderer.figureChoice(options, "Missing.png", .{})) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(choice.content == .missing);
+    try std.testing.expectEqual(@as(u32, 230), choice.content.missing.data_width);
+    try std.testing.expect(choice.horizontal == null and !choice.default_size);
+    try std.testing.expectEqualStrings("ٻِلو", choice.caption);
+    for (0..4) |mutation| {
+        var altered = context;
+        const previous = proof;
+        defer proof = previous;
+        switch (mutation) {
+            0 => altered.figure_sizing.?.is_missing_file_fn = null,
+            1 => altered.figure_sizing.?.resolve_figure_style_fn = null,
+            2 => proof.observed_width = 250,
+            3 => proof.observed_options = "thumb|231px|ٻِلو",
+            else => unreachable,
+        }
+        var refused: Renderer = .{ .a = a, .context = altered, .semantic_capture = &hints };
+        try std.testing.expectError(error.UncompiledPresentation, refused.figureChoice(options, "Missing.png", .{}));
+    }
+    // Choice is not emission: a missing exact style still rejects the Figure.
+    var unbound_style: Renderer = .{ .a = a, .context = context };
+    try std.testing.expectError(error.UncompiledPresentation,
+        unbound_style.renderBody("[[File:Missing.png|" ++ options ++ "]]"));
+    try std.testing.expectEqual(@as(usize, 0), proof.sizing_calls);
+    try std.testing.expectEqual(@as(usize, 0), unbound_style.media.items.len);
 }
 
 test "missing Figure refuses unmatched observation source profile altered width and unsupported CSS" {

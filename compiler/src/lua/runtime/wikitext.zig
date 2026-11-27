@@ -1971,10 +1971,7 @@ pub const Expander = struct {
                 try self.rememberStringOrigin(try originResult(self.trimDependency(key_origin, " \t\r\n")));
                 const key_text = std.mem.trim(u8, key_expanded, " \t\r\n");
                 if (key_text.len == 0) continue;
-                const key: Value = if (std.fmt.parseInt(i64, key_text, 10)) |number|
-                    .{ .number = @floatFromInt(number) }
-                else |_|
-                    .{ .string = key_text };
+                const key = frame_lib.argumentKey(key_text);
                 // PPTemplateFrame_Hash trims named arguments after expansion.
                 const origin = try originResult(self.trimDependency(try self.expandWikitextTracked(raw[eq + 1 ..], caller_params, host_title, depth + 1), " \t\r\n\x00\x0b"));
                 try self.rememberStringOrigin(origin);
@@ -6733,6 +6730,9 @@ test "argument post-expansion trim preserves unnamed values and last assignment 
     try caller.rawSet(a, .{ .number = 2 }, .{ .string = "\xc2\xa0inner\xc2\xa0" });
     const named_wins = [_][]const u8{ "{{{1}}}", "1={{{1}}}", "wikidata={{{1}}}", "unicode={{{2}}}" };
     const unnamed_wins = [_][]const u8{ "1={{{1}}}", "{{{1}}}", "wikidata={{{1}}}" };
+    const invoke = try expander.buildExpandedArgs(&.{ "position", "01=named" }, caller, "Page", 0);
+    try std.testing.expectEqualStrings("position", invoke.rawGet(.{ .number = 1 }).?.string);
+    try std.testing.expectEqualStrings("named", invoke.rawGet(.{ .string = "01" }).?.string);
     inline for (.{ false, true }) |lazy| {
         const named = if (lazy)
             try expander.buildTemplateArgs(&named_wins, caller, "Page", 0)
