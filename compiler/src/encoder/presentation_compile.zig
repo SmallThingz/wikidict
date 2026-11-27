@@ -14623,7 +14623,6 @@ pub const Renderer = struct {
         };
         if (!std.mem.eql(u8, source_opening, opening)) return false;
         const element = try self.textElement(tag, inherited.text_element, inherited.language);
-        if (element.page_style_root != null) return false;
         const classes = (try self.negativePaintQueryClasses(domain.scope.complete_ancestor_class_superset, element)) orelse return false;
         defer self.a.free(classes);
         const ids = try self.negativePaintQueryTokens(domain.scope.complete_ancestor_id_superset, element, true);
@@ -14700,9 +14699,11 @@ pub const Renderer = struct {
             return failure;
         };
         if (box.unresolved) {
-            // The selected page can disprove a positioning obligation even
-            // when this cell/list parser has no physical source-parent proof.
-            if (!static_candidate and self.inline_box_owner == null and profile_reason == .matched_rules_unresolved and
+            // Outside an active box or decoration, the geometry query ends
+            // at a static position. A copied opener's current page inventory
+            // can rule out positioning even when its cascade did not converge.
+            if (!static_candidate and self.inline_box_owner == null and
+                (profile_reason == .matched_rules_unresolved or profile_reason == .own_geometry_unresolved) and
                 try self.observedInlineBoxPositionAbsent(tracked, tag, inherited, own_css)) return false;
             if (!static_candidate and try self.positionedInlineImage(tracked, at, tag, pair, effective, inherited, depth, own_css)) return true;
             if (try self.observedFixedInlineBox(tracked, at, tag, pair, effective, inherited)) return true;
@@ -142344,5 +142345,115 @@ test "wiki table bullet position absence authenticates the copied fragment opene
             }
         }
         try std.testing.expect(found);
+    }
+}
+
+test "wiki table quoted tooltip spans retain ordinary text after position absence" {
+    // Genuine p1831/r26031 table opener, Bambara and Bavarian bullets and
+    // closer. The parser sees the authored apostrophes in a copied cell.
+    const source =
+        "{| width=100% cellpadding=10\n" ++
+        "|-\n" ++
+        "| bgcolor=#f9f9f9 valign=top style=\"border:1px solid #aaaaaa\" |\n" ++
+        "*Bambara: [[jakuma]]\n" ++
+        "*Bavarian: [[Katz]] <span title=\"مونث، مادي جنس\">''م''</span>, [[Koda]] <span title=\"نر جنسَ، مذڪر\">''ن''</span>\n" ++
+        "|}";
+    try MilyonLinkedBr210Test.hash(source, "92140b0034c00bea8ce4d90160200ac59cee19500de5dcce4698dcb7b78c6e62");
+    const observed_fragment = "Bavarian: [[Katz]] <span title=\"مونث، مادي جنس\"><i>م</i></span>, [[Koda]] <span title=\"نر جنسَ، مذڪر\"><i>ن</i></span>";
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var parent = try table_style_profile.parseForTargetAlloc(a, "", .screen);
+    defer parent.deinit();
+    // Exact retained Vector rule. An unknown sibling position alone cannot
+    // exclude it. The positive case supplies the required class-absence facts.
+    const css = ".cdx-button.cdx-button--icon-only span + span{position:absolute !important}";
+    const parser_root: table_style_profile.TextElement = .{ .tag = "div", .classes = "mw-parser-output" };
+    const F = struct {
+        fn sizing(_: ?*const anyopaque, _: A, _: []const u8, _: presentation_types.FigureFormat, _: ?u32, _: ?u32) A.Error!?presentation_types.FigureSizingPolicy {
+            return null;
+        }
+    };
+    const original = MissingText.untracked(source);
+    const owner = try missing_dependency.slice(a, original, 0, source.len);
+    try std.testing.expect(owner.bytes.ptr != source.ptr);
+    try std.testing.expectEqualStrings(source, owner.bytes);
+    const opener = std.mem.indexOfScalar(u8, source, '<').?;
+    const Case = enum { selected, projection_cut, possible_position, possible_reset, ambiguous_declaration };
+    for ([_]Case{ .selected, .projection_cut, .possible_position, .possible_reset, .ambiguous_declaration }) |case| {
+        const added_rule = switch (case) {
+            .possible_reset => "span[title]{all:inherit}",
+            .ambiguous_declaration => "span[title]{color:red !unknown}",
+            else => "",
+        };
+        const joined_css = try std.mem.concat(a, u8, &.{ css, added_rule });
+        var styles = try table_style_profile.joinPageSourcesAlloc(a, &parent, &.{.{ .css = joined_css, .base_url = "" }}, &.{});
+        defer styles.deinit();
+        const scope: table_style_profile.BoundedTextClassScope = .{
+            .root_tag = "div", .root_classes = "mw-parser-output", .subtree_classes = "",
+            .complete_ancestor_class_superset = if (case == .possible_position)
+                "mw-parser-output cdx-button cdx-button--icon-only" else "mw-parser-output",
+            .page_styles = &styles, .page_style_root = &parser_root,
+        };
+        const copies = [_]SourceElementProjection.Copy{.{
+            .original_start = 0, .prepared_start = 0,
+            .len = if (case == .projection_cut) opener + 10 else source.len,
+        }};
+        const projection: SourceElementProjection = .{ .original = original, .prepared = source, .copies = &copies,
+            .observed_source = .{ .source = source, .scope = &scope } };
+        var renderer: Renderer = .{
+            .a = a, .content_root = .parser_output, .heading_source = owner.bytes,
+            .bounded_text_class_source = owner.bytes, .bounded_text_class_scope = &scope,
+            .source_element_binding = .{ .scope = &scope, .projection = &projection,
+                .owner = owner, .page_start = 0 },
+            .context = .{ .title = "ٻِلو", .language = "Sindhi", .table_styles = &styles, .figure_sizing = .{
+                .resolve_fn = F.sizing, .text_class_scope = .{ .source = source, .scope = &scope },
+            } },
+        };
+        renderer.figure_class_source_binding = renderer.source_element_binding;
+        var rejection: RejectedCompilerCapture = .{};
+        const capture_scope = rejection.begin();
+        defer capture_scope.deinit();
+        const result = renderer.renderBodyWithFragmentPreAndMissing(owner, .{});
+        if (case != .selected) {
+            try std.testing.expectError(error.UncompiledPresentation, result);
+            const first = rejection.snapshot(error.UncompiledPresentation) orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqualStrings("inline_box", first.operation);
+            try std.testing.expectEqualStrings("unresolved_geometry", first.reason);
+            try std.testing.expectEqual(observed_fragment.len, first.fragment_bytes);
+            try std.testing.expectEqual(@as(usize, 19), first.local_offset);
+            var expected_hex: [observed_fragment.len * 2]u8 = undefined;
+            try std.testing.expectEqualStrings(boundedTraceHex(&expected_hex, observed_fragment), first.window_hex);
+            continue;
+        }
+        const blocks = try result;
+        try std.testing.expect(rejection.failure == null);
+        const table = blocks[0].table orelse return error.TestUnexpectedResult;
+        const items = table.rows[0].cells[0].blocks orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(@as(usize, 2), items.len);
+        try std.testing.expectEqualStrings("*", items[1].list_path);
+        try std.testing.expectEqualStrings("Bavarian: Katz م, Koda ن", try flattened(a, items[1].spans));
+        const expected_links = [_][]const u8{ "Katz", "Koda" };
+        const expected_texts = [_][]const u8{ "م", "ن" };
+        const expected_titles = [_][]const u8{ "مونث، مادي جنس", "نر جنسَ، مذڪر" };
+        var targets: usize = 0;
+        var labels: usize = 0;
+        for (items[1].spans) |span| {
+            try std.testing.expect(span.inline_box_group == null);
+            if (span.kind == .link) {
+                try std.testing.expect(targets < expected_links.len);
+                try std.testing.expectEqualStrings(expected_links[targets], span.target);
+                targets += 1;
+            }
+            if (span.tooltip) |tooltip| {
+                try std.testing.expect(labels < expected_titles.len);
+                try std.testing.expectEqualStrings(expected_texts[labels], span.text);
+                try std.testing.expectEqualStrings(expected_titles[labels], tooltip);
+                try std.testing.expect(span.flags.italic);
+                labels += 1;
+            }
+        }
+        try std.testing.expectEqual(expected_links.len, targets);
+        try std.testing.expectEqual(expected_titles.len, labels);
     }
 }

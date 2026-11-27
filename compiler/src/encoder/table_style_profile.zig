@@ -11607,12 +11607,12 @@ pub const Profile = struct {
         element: *const TextElement, css: []const u8, classes: []const u8, ids: ?[]const u8) !bool
     {
         if (self.page_style_parent == null or self.globally_unresolved) return false;
-        const own = try inlineBoxSelectionAlloc(a, css);
+        const own = try inlineBoxSelectionModeAlloc(a, css, true);
         if (own.position or own.reset) return false;
         const absence: InlineImageSourceAbsence = .{ .classes = classes, .ids = ids };
         for (self.container_rules) |rule| {
             if (rule.selector.matchIn(element, true) == .no or inlineImageContainerRuleAbsent(rule.selector, absence)) continue;
-            const possible = try inlineBoxSelectionAlloc(a, rule.css);
+            const possible = try inlineBoxSelectionModeAlloc(a, rule.css, true);
             if (possible.position or possible.reset) return false;
         }
         return true;
@@ -39938,13 +39938,25 @@ pub fn decodeCssLiteral(value: []const u8, buffer: *[256]u8) ?[]const u8 {
 const InlineBoxSelection = struct { position: bool = false, reset: bool = false };
 
 fn inlineBoxSelectionAlloc(a: std.mem.Allocator, css: []const u8) !InlineBoxSelection {
+    return inlineBoxSelectionModeAlloc(a, css, false);
+}
+
+fn inlineBoxSelectionModeAlloc(a: std.mem.Allocator, css: []const u8, comptime absence_proof: bool) !InlineBoxSelection {
     var selected: InlineBoxSelection = .{};
     var cursor: usize = 0;
     while (try nextDeclarationAlloc(a, css, &cursor)) |raw| {
         defer a.free(raw);
         const colon = std.mem.indexOfScalar(u8, raw, ':') orelse continue;
+        const authored_name = trim(raw[0..colon]);
+        // The cascade treats uncertain declaration syntax as capable of
+        // affecting position. An absence proof must preserve that possibility.
+        if (absence_proof and (std.mem.indexOfScalar(u8, authored_name, '\\') != null or
+            customPriority(raw[colon + 1 ..]).unknown)) {
+            selected.position = true;
+            continue;
+        }
         var name_buffer: [256]u8 = undefined;
-        const name = decodeCssLiteral(trim(raw[0..colon]), &name_buffer) orelse {
+        const name = decodeCssLiteral(authored_name, &name_buffer) orelse {
             selected.position = true;
             continue;
         };
