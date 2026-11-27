@@ -82,6 +82,10 @@ fn validEditionScope(scope: []const u8) bool {
     const leap: u8 = if (month == 2 and year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)) 1 else 0;
     return day <= lengths[month - 1] + leap;
 }
+/// Borrow the wiki ID from a validated acquisition scope.
+pub fn editionWiki(scope: []const u8) ?[]const u8 {
+    return if (validEditionScope(scope)) scope[0 .. scope.len - 9] else null;
+}
 fn inputBasename(input: []const u8) []const u8 {
     const end = if (std.mem.startsWith(u8, input, "https://")) (std.mem.indexOfAny(u8, input, "?#") orelse input.len) else input.len;
     return std.fs.path.basename(input[0..end]);
@@ -116,7 +120,8 @@ fn acquisitionScope(input: []const u8) !?[]const u8 {
     if (!validEditionScope(scope)) return error.InvalidEditionScope;
     return scope;
 }
-fn installedEditionScope(io: std.Io, a: A, root: []const u8) !?[]u8 {
+/// Returns the owned acquisition scope for this dictionary root, if recorded.
+pub fn installedEditionScope(io: std.Io, a: A, root: []const u8) !?[]u8 {
     const marker = try std.fs.path.join(a, &.{ root, edition_marker });
     defer a.free(marker);
     const marker_bytes = std.Io.Dir.cwd().readFileAlloc(io, marker, a, .limited(256)) catch |err| switch (err) {

@@ -11,6 +11,8 @@ pub const Theme = @import("args.zig").Theme;
 const ReadingState = @import("reading_state.zig").State;
 const Search = @import("search.zig").Task;
 const MediaJob = @import("media_job.zig");
+const reader_media = @import("reader_media.zig");
+const library = @import("library.zig");
 const Page = enum { saved, history, search, learn, settings, library };
 const Focus = enum { search, matches, entry };
 
@@ -348,6 +350,10 @@ const State = struct {
         self.loaded = null;
     }
     fn mediaAction(self: *State, speech: bool) !void {
+        return self.mediaActionWith(speech, MediaJob.Job.start);
+    }
+
+    fn mediaActionWith(self: *State, speech: bool, comptime start: anytype) !void {
         const kind: MediaJob.Kind = if (speech) .speech else .media;
         if (self.media_job.kind() == kind) {
             self.media_job.cancel(self.io);
@@ -363,7 +369,7 @@ const State = struct {
         };
         defer doc.deinit();
         if (speech) {
-            try self.media_job.start(self.io, self.a, .{ .speech = .{ .word = doc.entry.title, .language = doc.entry.language_code } });
+            try start(&self.media_job, self.io, self.a, .{ .speech = .{ .word = doc.entry.title, .language = doc.entry.language_code } });
             self.notice = "Speaking offline; v stops.";
             return;
         }
@@ -374,15 +380,41 @@ const State = struct {
         }
         const item = doc.entry.media[self.media_index % doc.entry.media.len];
         self.media_index += 1;
-        if (item.kind == .image and try output.mediaRequiresPoster(doc.entry, item.file)) {
+        const image = item.kind == .image;
+        const occurrence = if (image) try output.imageMediaOccurrence(doc.entry, item.file) else .absent;
+        if (occurrence == .static_poster) {
             self.notice = "3D preview unavailable here; its text label and File action are retained.";
             return;
         }
-        if (!(if (item.kind == .image) preferences.allow_images else preferences.allow_audio)) {
+        if (!(if (image) preferences.allow_images else preferences.allow_audio)) {
             self.notice = "Enable online images/audio in Settings first.";
             return;
         }
-        try self.media_job.start(self.io, self.a, .{ .media = .{ .root = self.db.root, .file = item.file, .image = item.kind == .image, .cache_mb = preferences.media_cache_mb } });
+        const scope = if (image) installed_scope: {
+            if (occurrence == .absent) {
+                self.notice = "This file has no compiled image occurrence; m tries the next item.";
+                return;
+            }
+            const installed = library.installedEditionScope(self.io, self.a, self.db.root) catch |err| switch (err) {
+                error.InvalidEditionScope, error.StreamTooLong => {
+                    self.notice = "Installed edition metadata is invalid or conflicting.";
+                    return;
+                },
+                else => return err,
+            } orelse {
+                self.notice = "Online images need an installed source edition.";
+                return;
+            };
+            break :installed_scope installed;
+        } else null;
+        defer if (scope) |installed| self.a.free(installed);
+        try start(&self.media_job, self.io, self.a, .{ .media = .{
+            .root = self.db.root,
+            .edition_scope = scope,
+            .file = item.file,
+            .image = image,
+            .cache_mb = preferences.media_cache_mb,
+        } });
         self.notice = "Opening media; m cancels.";
     }
     fn mediaPoll(self: *State) bool {
@@ -390,6 +422,7 @@ const State = struct {
         self.notice = if (result.err) |err| switch (err) {
             error.Canceled => "Media request canceled.",
             error.FileNotFound => if (result.kind == .speech) "Install espeak-ng or espeak with an offline voice." else "Media needs curl and a desktop viewer (xdg-open).",
+            error.InvalidEditionScope => "Installed edition has no supported source wiki.",
             error.UnsupportedMedia => "This media format cannot be opened here; m tries the next item.",
             error.MediaNotFound => "This file is unavailable; m tries the next item.",
             else => if (result.kind == .speech) "Speech failed; check the installed offline voice." else "Media failed; check your connection or try the next item with m.",
@@ -1215,12 +1248,7 @@ pub fn run(io: std.Io, a: std.mem.Allocator, db: *store.Store, label: []const u8
     var reading = ReadingState.init(a);
     defer reading.deinit();
     try reading.load(io, db.root, label);
-    defer {
-        if (std.fs.path.join(a, &.{ db.root, ".dict-media" })) |cache| {
-            defer a.free(cache);
-            @import("reader_media.zig").trim(io, a, cache, reading.data.media_cache_mb) catch {};
-        } else |_| {}
-    }
+    defer reader_media.trimCache(io, a, db.root, reading.data.media_cache_mb) catch {};
     var state: State = .{ .reading = &reading, .a = a, .io = io, .db = db, .label = label, .theme = theme, .color = color, .details = initial_details };
     state.case_sensitive = case_sensitive;
     defer state.deinit();
@@ -2700,4 +2728,268 @@ test "terminal Library paging clamps empty singleton partial pages and large cat
     try std.testing.expectEqual(@as(usize, 1398), state.library_selected);
     try std.testing.expect(try state.key(.{ .key = .home }));
     try std.testing.expectEqual(@as(usize, 0), state.library_selected);
+}
+
+test "terminal English record in SD uses the installed image source and English speech voice" {
+    const io = std.testing.io;
+    const a = std.testing.allocator;
+    var arena: std.heap.ArenaAllocator = .init(a);
+    defer arena.deinit();
+    const f = arena.allocator();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const temp_root = try std.fmt.allocPrint(f, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    const original_name = "relocatable-dictionary";
+    const renamed_name = "enwiktionary-20261001";
+    const original_root = try std.fs.path.join(f, &.{ temp_root, original_name });
+    const root = try std.fs.path.join(f, &.{ temp_root, renamed_name });
+    const entry: model.Entry = .{
+        .title = "fixture", .kind = .language, .language = "English", .language_code = "en",
+        .sections = &.{.{ .level = 2, .title = "English", .blocks = &.{.{
+            .kind = .paragraph, .spans = &.{.{ .image = .{ .file = "needle.jpg", .width_px = 32 } }},
+        }} }},
+        .media = &.{.{ .file = "needle.jpg", .kind = .image, .caption = "" }},
+    };
+    const payload = try enc.presentation_codec.encodeAlloc(f, .{ .entry = entry });
+    const metadata = try enc.blob_format.buildLanguageMetadataAlloc(f, "en", "English");
+    const bytes = try enc.blob_format.buildAlloc(f, .language, metadata, &.{.{ .title = "fixture", .payload = payload }});
+    const path = try store.pathAlloc(f, original_root, .language, "English");
+    try std.Io.Dir.cwd().createDirPath(io, std.fs.path.dirname(path).?);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = bytes });
+    // The installed dictionary can be moved to a directory with a misleading edition-like name.
+    try tmp.dir.rename(original_name, tmp.dir, renamed_name, io);
+    const renamed_dir = try tmp.dir.openDir(io, renamed_name, .{});
+    defer renamed_dir.close(io);
+    var db = try store.Store.open(io, a, root, .language, "English");
+    defer db.deinit();
+    try std.testing.expectEqualStrings(root, db.root);
+    const Capture = struct {
+        var images: usize = 0;
+        var speech: usize = 0;
+
+        fn start(_: *MediaJob.Job, _: std.Io, _: std.mem.Allocator, request: MediaJob.Request) !void {
+            switch (request) {
+                .media => |item| {
+                    try std.testing.expect(item.image);
+                    try std.testing.expectEqualStrings("sdwiktionary-20261001", item.edition_scope.?);
+                    try std.testing.expectEqualStrings("needle.jpg", item.file);
+                    images += 1;
+                },
+                .speech => |item| {
+                    try std.testing.expectEqualStrings("en", item.language);
+                    try std.testing.expectEqualStrings("fixture", item.word);
+                    speech += 1;
+                },
+            }
+        }
+    };
+    Capture.images = 0;
+    Capture.speech = 0;
+    var reading = ReadingState.init(a);
+    defer reading.deinit();
+    var state: State = .{
+        .io = io, .a = a, .db = &db, .label = "English", .theme = .terminal, .color = false,
+        .reading = &reading, .range = .{ .start = 0, .end = 1 },
+    };
+    defer state.deinit();
+
+    // With permission disabled, even invalid marker contents cannot affect the action.
+    reading.data.allow_images = false;
+    try renamed_dir.writeFile(io, .{ .sub_path = ".desktop-edition", .data = "invalid" });
+    try state.mediaActionWith(false, Capture.start);
+    try std.testing.expectEqualStrings("Enable online images/audio in Settings first.", state.notice);
+    try std.testing.expect(state.media_job.kind() == null);
+    reading.data.allow_images = true;
+    try state.mediaActionWith(false, Capture.start);
+    try std.testing.expectEqualStrings("Installed edition metadata is invalid or conflicting.", state.notice);
+    try std.testing.expect(state.media_job.kind() == null);
+    try renamed_dir.deleteFile(io, ".desktop-edition");
+
+    // Neither the renamed root nor the English entry can supply a source edition.
+    try state.mediaActionWith(false, Capture.start);
+    try std.testing.expectEqualStrings("Online images need an installed source edition.", state.notice);
+    try std.testing.expect(state.media_job.kind() == null);
+    try renamed_dir.writeFile(io, .{ .sub_path = "complete.json", .data = "{\"edition\":null,\"date\":\"20261001\"}" });
+    try state.mediaActionWith(false, Capture.start);
+    try std.testing.expectEqualStrings("Installed edition metadata is invalid or conflicting.", state.notice);
+    try std.testing.expect(state.media_job.kind() == null);
+    try std.testing.expectEqual(@as(usize, 0), Capture.images);
+    try renamed_dir.writeFile(io, .{ .sub_path = "complete.json", .data = "{\"edition\":\"sdwiktionary\",\"date\":\"20261001\"}" });
+    const scope = (try library.installedEditionScope(io, f, db.root)).?;
+    try std.testing.expectEqualStrings("sdwiktionary-20261001", scope);
+    try renamed_dir.writeFile(io, .{ .sub_path = ".desktop-edition", .data = "enwiktionary-20261001\n" });
+    try state.mediaActionWith(false, Capture.start);
+    try std.testing.expectEqualStrings("Installed edition metadata is invalid or conflicting.", state.notice);
+    try std.testing.expect(state.media_job.kind() == null);
+    try std.testing.expectEqual(@as(usize, 0), Capture.images);
+
+    try renamed_dir.writeFile(io, .{ .sub_path = ".desktop-edition", .data = "sdwiktionary-20261001\n" });
+    try state.mediaActionWith(false, Capture.start);
+    try std.testing.expectEqual(@as(usize, 1), Capture.images);
+    try std.testing.expectEqualStrings("Opening media; m cancels.", state.notice);
+    try state.mediaActionWith(true, Capture.start);
+    try std.testing.expectEqual(@as(usize, 1), Capture.speech);
+    try std.testing.expectEqualStrings("Speaking offline; v stops.", state.notice);
+    try std.testing.expectError(error.FileNotFound, renamed_dir.access(io, ".dict-media", .{}));
+}
+
+// Exact retained WIKBLB08 member in base64. The decoded bytes are pinned below.
+const retained_sd_ordinary_member_base64 =
+    "V0lLQkxCMDgBc2QAU2luZGhpANqP2Y/ZiNixINix2Y7YqNi32ZDZitin2KrZkACuRERQUk0AAAAABgAAAAIGAAAAU2luZGhp" ++
+    "AAAAAAAAAAAEAAAAAAAAAQAAAAEAAAAAAAAXAAAARmlsZTpXaWtpcGVkaWEtbG9nby5zdmcAAAAAAAAAAE8AAAB3aWtpZGlj" ++
+    "dC1tZWRpYSB3aWtpZGljdC1tZWRpYS1maWxlLTU3Njk2YjY5NzA2NTY0Njk2MTJkNmM2ZjY3NmYyZTczNzY2NyBub3ByaW50" ++
+    "AAAAAAAAAAAAAAEAAIA/AQESAAAAV2lraXBlZGlhLWxvZ28uc3ZnATIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAA" ++
+    "AgAAAAEAABAAAADZiNqq2YrZvtmK2orZitinEAAAANmI2qrZitm+2YraitmK2KcAAAAAAAAAAAcAAABub3ByaW50AAAAAAAA" ++
+    "AAAAAAEAAIA/AQAAAAAAABMAAAAg2KrZiiDZvtqZ2r7Zhtiv2Kc6AAAAAAAAAAAAAAAABwAAAG5vcHJpbnQAAAAAAAAAAAAA" ++
+    "AQAAgD8BAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAABAAAAAQADGwAAANqP2Y/ZiNixINix2Y7YqNi32ZDZitin2KrZ" ++
+    "kB0AAAB3OtqP2Y/ZiNixINix2Y7YqNi32ZDZitin2KrZkAAAAAAAAAAABwAAAG5vcHJpbnQAAAAAAAAAAAAAAQAAgD8BAAAA" ++
+    "AAAAAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIAAIBAQAAAD8BMzOzPwFmZqY/AAAA" ++
+    "AAAAAABAQAAAAEBAAAAAQEAAAABAQAAAAAAAAAAAwEAAAADAQAAAAMBA001iPwGtaZ4/AAEAAACAPwAAAQAAAIA/AAAAAQAA" ++
+    "AAAAABAAAABGaWxlOmFudGVubmEuanBnAAAAAAAAAAA5AAAAd2lraWRpY3QtbWVkaWEgd2lraWRpY3QtbWVkaWEtZmlsZS02" ++
+    "MTZlNzQ2NTZlNmU2MTJlNmE3MDY3AAAAAAAAAAAAAAABCwAAAGFudGVubmEuanBnBZYAAAAAAAAAAAABAAAAAAAARwAAANin" ++
+    "2YrZhtm92ZDZitmG2KcgLS0g2o/ZiNixINix2KjYt9mK2KfYqiDYs9ix2LTYqtmKINis2Ygg2KfZh9mFINis2Y/YstmIAAAA" ++
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB001iPwEAAAAAAQICAJYAAABrAAAAAAIIAAAA2LPZhtqM2YoIAAAA2LPZhtqM2YoY" ++
+    "AAAALkQ4LkIzLkQ5Ljg2LkRBLjhDLkQ5LjhBAQAAAAUBAAEAAAAAAAApAAAA2o/Zj9mIICsg2LEgKyDYsdmO2KggKyDYqtmQ" ++
+    "ICsg2YrYpyArINiq2ZAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAACoAAAAAAAAAAAAAAAAAAAAAAAMQAAAA" ++
+    "2KjZj9q72oDZitin2LPZjxAAAADYqNmP2rvagNmK2KfYs9mPMAAAAC5EOC5BOC5EOS44Ri5EQS5CQi5EQS44MC5EOS44QS5E" ++
+    "OC5BNy5EOC5CMy5EOS44RgMAAAAJAAMCAAAAAQAAAAAAAB0AAABGaWxlOk51dm9sYSBhcHBzIGJvb2tjYXNlLnBuZwAAAAAA" ++
+    "AAAAUwAAAHdpa2lkaWN0LW1lZGlhIHdpa2lkaWN0LW1lZGlhLWZpbGUtNGU3NTc2NmY2YzYxMjA2MTcwNzA3MzIwNjI2ZjZm" ++
+    "NmI2MzYxNzM2NTJlNzA2ZTY3AAAAAAAAAAAAAAABGAAAAE51dm9sYSBhcHBzIGJvb2tjYXNlLnBuZwEeAAAAAAETAAAAT3Jp" ++
+    "Z2luZSBldCBoaXN0b2lyZQAAABEAAAAg2KjZj9q72oDZitin2LPZjwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAARMA" ++
+    "AABPcmlnaW5lIGV0IGhpc3RvaXJlAAAAAAAAAAAAABAAAADYqNmP2rvagNmK2KfYs9mPMAAAAC5EOC5BOC5EOS44Ri5EQS5C" ++
+    "Qi5EQS44MC5EOS44QS5EOC5BNy5EOC5CMy5EOS44RgAAAAAFAQAEAAAAAQAABgAAANqP2YjYsQYAAADaj9mI2LEAAAAAAAAA" ++
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMAAAAgKyAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAAGAAAA2LHYqNi3" ++
+    "BgAAANix2KjYtwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFgAAACArINmK2KfYqiAo2b7ah9in2pnZiikAAAAAAAAA" ++
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAACoAAAAAAAAAAAAAAAAAAAAAAAcBAAMAAAAAAAAIAAAA2YbZiNm9OiAAAAAA" ++
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAAgAAAA2KfYrdiz2KfZhiDYp9it2YXYryDYudix2LPYp9q72YoMAAAAdXNl" ++
+    "cjphdXJzYW5pAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAhAAAA2KHZjiDYrNmIINis2YjamdmK2YQg2KfYtdi32YTY" ++
+    "p9itAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEAAAA6AAAAAAAAAAAAAAAAAAAAAAADEQAAANin2LPZhSAo2YXZ" ++
+    "iNmG2KspEQAAANin2LPZhV8o2YXZiNmG2KspMQAAAC5EOC5BNy5EOC5CMy5EOS44NV8uMjguRDkuODUuRDkuODguRDkuODYu" ++
+    "RDguQUIuMjkBAAAAAgEABAAAAAEAAA4AAADYqNix2YLZitin2KrZig4AAADYqNix2YLZitin2KrZigAAAAAAAAAAAAAAAAAA" ++
+    "AAAAAAAAAAAAAAAAAAAArwAAACDYsNix2YrYudinINin2LPYqti52YXYp9mEINqq2YbYr9mKINqP2YjYsdin2YbavtmGINmK" ++
+    "2Kcg2b7Ysdin2YbavtmGINq+2YbajNmGINiq2Yog2LHYp9io2LfZiCDaqtix2rsg2KzZiCDYudmF2YQg270g2KfZhiDYs9in" ++
+    "2YYg2YjYp9qz2YrZhCDYs9mF2YjYsdmKINiz2KfYptmG2LMg270g2LPZhdmI2LHZiCAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" ++
+    "AAAAAAAAAAABAAASAAAA2b3Zitqq2YbZitqA2YrYp9izEgAAANm92YraqtmG2YragNmK2KfYswAAAAAAAAAAAAAAAAAAAAAA" ++
+    "AAAAAAAAAAAAAAAAAQAAAC4AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAACMBAAAAMQAAAAAAAAAAAAAAAAAD" ++
+    "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" ++
+    "p9im2ZDZijog4LmC4LiX4Lij4LiE4Lih4LiZ4Liy4LiE4LihICjYqtmI2LHYpyDar9mO2YXZjtmG2Kfar9mI2YUpAAAAAAAA" ++
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABgQEAAACAPwcAAAAjYWFhYWFhAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAMAAAEA" ++
+    "AAAKAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMPAAAA2b7auyDaj9iz2YbY" ++
+    "r9inDwAAANm+2rtf2o/Ys9mG2K/YpysAAAAuRDkuQkUuREEuQkJfLkRBLjhGLkQ4LkIzLkQ5Ljg2LkQ4LkFGLkQ4LkE3AgAA" ++
+    "AAkAAwIAAAABAAAAAAAAGwAAAEZpbGU6Tm9pYSA2NCBhcHBzIHhleWVzLnBuZwAAAAAAAAAATwAAAHdpa2lkaWN0LW1lZGlh" ++
+    "IHdpa2lkaWN0LW1lZGlhLWZpbGUtNGU2ZjY5NjEyMDM2MzQyMDYxNzA3MDczMjA3ODY1Nzk2NTczMmU3MDZlNjcAAAAAAAAA" ++
+    "AAAAAAEWAAAATm9pYSA2NCBhcHBzIHhleWVzLnBuZwEeAAAAAAAAAAAQAAAAINm+2rsg2o/Ys9mG2K/YpwAAAAAAAAAAAAAA" ++
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAPAAAA2b7au1/aj9iz2YbYr9inKwAAAC5EOS5CRS5EQS5CQl8uREEuOEYu" ++
+    "RDguQjMuRDkuODYuRDguQUYuRDguQTcAAAAABQEAAQAAAAEAABIAAADZvdmK2qrZhtmK2oDZitin2LMSAAAA2b3Zitqq2YbZ" ++
+    "itqA2YrYp9izAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAACoAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABgAAAAAA" ++
+    "AAABAAAAAgAAAAMAAAAEAAAABQAAAAAAAAAFAAAAEgAAAFdpa2lwZWRpYS1sb2dvLnN2ZwASAAAAV2lraXBlZGlhLWxvZ28u" ++
+    "c3ZnCwAAAGFudGVubmEuanBnAEcAAADYp9mK2YbZvdmQ2YrZhtinIC0tINqP2YjYsSDYsdio2LfZitin2Kog2LPYsdi02KrZ" ++
+    "iiDYrNmIINin2YfZhSDYrNmP2LLZiBgAAABOdXZvbGEgYXBwcyBib29rY2FzZS5wbmcAGAAAAE51dm9sYSBhcHBzIGJvb2tj" ++
+    "YXNlLnBuZwkAAAB0cmFucy5wbmcACQAAAHRyYW5zLnBuZxYAAABOb2lhIDY0IGFwcHMgeGV5ZXMucG5nABYAAABOb2lhIDY0" ++
+    "IGFwcHMgeGV5ZXMucG5n";
+
+test "retained ordinary SD dictionary member proves exact compiled image ownership" {
+    const a = std.testing.allocator;
+    const decoder = std.base64.standard.Decoder;
+    const member = try a.alloc(u8, try decoder.calcSizeForSlice(retained_sd_ordinary_member_base64));
+    defer a.free(member);
+    try decoder.decode(member, retained_sd_ordinary_member_base64);
+    try std.testing.expectEqual(@as(usize, 8799), member.len);
+    var digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(member, &digest, .{});
+    const hex = std.fmt.bytesToHex(digest, .lower);
+    try std.testing.expectEqualStrings("80801c43dfab081b0bd5a08a9ad215b65a46d94f9f510303c12414d659fb1c6e", &hex);
+
+    const view = try enc.blob_format.inspect(member);
+    try std.testing.expectEqual(store.Kind.language, view.kind);
+    var iterator = view.iterator();
+    const record = (try iterator.next()) orelse return error.TestExpectedRecord;
+    try std.testing.expect((try iterator.next()) == null);
+    var doc = try model.fromRecord(a, .{ .language = .{
+        .title = record.title, .payload = record.payload, .metadata = try view.languageMetadata(),
+    } });
+    defer doc.deinit();
+    var selected: ?model.Media = null;
+    for (doc.entry.media) |media| {
+        if (!std.mem.eql(u8, media.file, "antenna.jpg")) continue;
+        try std.testing.expect(selected == null);
+        selected = media;
+    }
+    const image = selected orelse return error.TestExpectedMedia;
+    try std.testing.expect(image.kind == .image);
+    try std.testing.expectEqual(output.MediaOccurrence.authored, try output.imageMediaOccurrence(doc.entry, image.file));
+    try std.testing.expectEqual(output.MediaOccurrence.absent, try output.imageMediaOccurrence(doc.entry, "Antenna.jpg"));
+    const catalogue_only: model.Entry = .{ .title = doc.entry.title, .kind = .language, .media = &.{image} };
+    try std.testing.expectEqual(output.MediaOccurrence.absent, try output.imageMediaOccurrence(catalogue_only, image.file));
 }

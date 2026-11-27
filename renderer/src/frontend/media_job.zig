@@ -7,7 +7,7 @@ const A = std.mem.Allocator;
 
 pub const Request = union(enum) {
     speech: struct { word: []const u8, language: []const u8 },
-    media: struct { root: []const u8, file: []const u8, image: bool, cache_mb: usize },
+    media: struct { root: []const u8, edition_scope: ?[]const u8, file: []const u8, image: bool, cache_mb: usize },
 };
 pub const Kind = std.meta.Tag(Request);
 pub const Result = struct { kind: Kind, err: ?anyerror = null };
@@ -82,6 +82,7 @@ fn JobFor(comptime media: type) type {
                 } },
                 .media => |m| .{ .media = .{
                     .root = try a.dupe(u8, m.root),
+                    .edition_scope = if (m.edition_scope) |scope| try a.dupe(u8, scope) else null,
                     .file = try a.dupe(u8, m.file),
                     .image = m.image,
                     .cache_mb = m.cache_mb,
@@ -104,7 +105,7 @@ fn JobFor(comptime media: type) type {
             try io.checkCancel();
             switch (request) {
                 .speech => |s| try media.speak(io, a, s.word, s.language),
-                .media => |m| try media.open(io, a, m.root, m.file, m.image, m.cache_mb),
+                .media => |m| try media.open(io, a, m.root, m.edition_scope, m.file, m.image, m.cache_mb),
             }
         }
     };
@@ -114,11 +115,13 @@ const Probe = struct {
     var entered: std.atomic.Value(bool) = .init(false);
     var released: std.atomic.Value(bool) = .init(false);
     var active: std.atomic.Value(bool) = .init(false);
+    var media_canceled: std.atomic.Value(bool) = .init(false);
 
     fn reset() void {
         entered.store(false, .release);
         released.store(false, .release);
         active.store(false, .release);
+        media_canceled.store(false, .release);
     }
 
     fn wait(io: std.Io) !void {
@@ -134,9 +137,13 @@ const Probe = struct {
         if (!std.mem.eql(u8, word, "word") or !std.mem.eql(u8, language, "lang")) return error.BadSnapshot;
     }
 
-    fn open(io: std.Io, _: A, root: []const u8, file: []const u8, image: bool, cache_mb: usize) !void {
-        try wait(io);
-        if (!std.mem.eql(u8, root, "root") or !std.mem.eql(u8, file, "file") or !image or cache_mb != 42) return error.BadSnapshot;
+    fn open(io: std.Io, _: A, root: []const u8, edition_scope: ?[]const u8, file: []const u8, image: bool, cache_mb: usize) !void {
+        wait(io) catch |err| {
+            if (err == error.Canceled and std.mem.eql(u8, edition_scope orelse "", "cswiktionary-20261001")) media_canceled.store(true, .release);
+            return err;
+        };
+        if (!std.mem.eql(u8, root, "root") or !std.mem.eql(u8, edition_scope orelse "", "cswiktionary-20261001") or
+            !std.mem.eql(u8, file, "file") or !image or cache_mb != 42) return error.BadSnapshot;
     }
 };
 
@@ -184,9 +191,13 @@ test "media arguments are owned" {
     var job: ProbeJob = .{};
     defer job.deinit(io);
     var root = "root".*;
+    var edition_scope = "cswiktionary-20261001".*;
     var file = "file".*;
-    try job.start(io, std.testing.allocator, .{ .media = .{ .root = &root, .file = &file, .image = true, .cache_mb = 42 } });
+    try job.start(io, std.testing.allocator, .{ .media = .{
+        .root = &root, .edition_scope = &edition_scope, .file = &file, .image = true, .cache_mb = 42,
+    } });
     @memset(&root, 'x');
+    @memset(&edition_scope, 'x');
     @memset(&file, 'x');
     try waitForProbe(io);
     Probe.released.store(true, .release);
@@ -238,4 +249,40 @@ test "unavailable concurrency and allocation failure leave no active job" {
     try std.testing.expect(job.kind() == null);
     try std.testing.expectError(error.OutOfMemory, job.start(io, std.testing.failing_allocator, request));
     try std.testing.expect(job.kind() == null);
+}
+
+
+test "edition-bound media job owns copies through successful completion and cancellation" {
+    Probe.reset();
+    const io = std.testing.io;
+    var job: ProbeJob = .{};
+    defer job.deinit(io);
+    var root = "root".*;
+    var edition = "cswiktionary-20261001".*;
+    var file = "file".*;
+    const request: Request = .{ .media = .{
+        .root = &root, .edition_scope = &edition, .file = &file, .image = true, .cache_mb = 42,
+    } };
+    try job.start(io, std.testing.allocator, request);
+    @memset(&root, 'x');
+    @memset(&edition, 'x');
+    @memset(&file, 'x');
+    try waitForProbe(io);
+    // Release the worker so it checks the copied arguments before succeeding.
+    Probe.released.store(true, .release);
+    const completed = try waitForResult(&job, io);
+    try std.testing.expectEqual(Kind.media, completed.kind);
+    try std.testing.expect(completed.err == null);
+    try std.testing.expect(job.kind() == null);
+
+    Probe.reset();
+    root = "root".*;
+    edition = "cswiktionary-20261001".*;
+    file = "file".*;
+    try job.start(io, std.testing.allocator, request);
+    try waitForProbe(io);
+    @memset(&edition, 'x');
+    job.cancel(io);
+    try std.testing.expect(Probe.media_canceled.load(.acquire));
+    try std.testing.expect(!Probe.active.load(.acquire) and job.kind() == null);
 }

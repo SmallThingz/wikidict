@@ -3551,23 +3551,38 @@ fn visitEntrySpanListsIn(entry: model.Entry, visitor: anytype) !bool {
     return false;
 }
 
-/// Data-only resource preflight. The ordinary media helper has no verified
-/// static-poster PNG policy, so preserve text and refuse before starting a job.
-pub fn mediaRequiresPoster(entry: model.Entry, file: []const u8) !bool {
+pub const MediaOccurrence = enum { absent, authored, static_poster };
+
+/// A compiled image occurrence supplies the source lookup authority for the
+/// exact filename selected from the media catalogue.
+pub fn imageMediaOccurrence(entry: model.Entry, file: []const u8) !MediaOccurrence {
+    const T = @import("blob_encoder").presentation_types;
     const Visitor = struct {
         file: []const u8,
+        occurrence: MediaOccurrence = .absent,
+
         fn spans(self: *@This(), values: []const model.Span) !bool {
             for (values) |span| if (span.image) |image| {
-                if (image.static_poster != null and std.mem.eql(u8, image.file, self.file)) {
-                    if (!@import("blob_encoder").presentation_types.validInlineImage(image)) return error.InvalidPresentation;
+                if (!std.mem.eql(u8, image.file, self.file)) continue;
+                if (!T.validInlineImage(image)) return error.InvalidPresentation;
+                if (image.static_poster != null) {
+                    self.occurrence = .static_poster;
                     return true;
                 }
+                self.occurrence = .authored;
             };
             return false;
         }
     };
     var visitor: Visitor = .{ .file = file };
-    return visitEntrySpanLists(entry, &visitor);
+    _ = try visitEntrySpanLists(entry, &visitor);
+    return visitor.occurrence;
+}
+
+/// Data-only resource preflight. The ordinary media helper has no verified
+/// static-poster PNG policy, so preserve text and refuse before starting a job.
+pub fn mediaRequiresPoster(entry: model.Entry, file: []const u8) !bool {
+    return (try imageMediaOccurrence(entry, file)) == .static_poster;
 }
 
 const Abbreviation = struct { label: []const u8, explanation: []const u8 };
@@ -11696,4 +11711,19 @@ test "terminal wrapped heading projects its own frame and keeps folding and foll
     defer refused.deinit();
     try std.testing.expectError(error.UnsupportedSectionHeadingStyle, entryText(&refused.writer, entry, false));
     try std.testing.expectEqual(@as(usize, 0), refused.written().len);
+}
+
+test "terminal source image needs a compiled occurrence with the exact filename" {
+    const image: model.Media = .{ .file = "needle.jpg", .kind = .image, .caption = "caption" };
+    var entry: model.Entry = .{ .title = "fixture", .kind = .citations, .media = &.{image} };
+    try std.testing.expectEqual(MediaOccurrence.absent, try imageMediaOccurrence(entry, image.file));
+    entry.preamble_spans = &.{
+        .{ .image = .{ .file = "Needle.jpg", .width_px = 30 } },
+        .{ .kind = .link, .target = "File:needle.jpg", .text = "bare link" },
+    };
+    try std.testing.expectEqual(MediaOccurrence.absent, try imageMediaOccurrence(entry, image.file));
+    entry.references = &.{.{
+        .number = 1, .group_number = 1, .spans = &.{.{ .image = .{ .file = "needle.jpg", .width_px = 30 } }},
+    }};
+    try std.testing.expectEqual(MediaOccurrence.authored, try imageMediaOccurrence(entry, image.file));
 }
