@@ -45,7 +45,13 @@ private object AndroidNamedFontProbe : NativeNamedFontProbe {
     }
 }
 
-internal val LocalNativeNamedFontProbe = staticCompositionLocalOf<NativeNamedFontProbe> { AndroidNamedFontProbe }
+private object AndroidPackagedNamedFontProbe : NativeNamedFontProbe {
+    override fun load(context: Context, name: String, weight: FontWeight, style: FontStyle): Typeface? =
+        if (name == NativePackagedFont.family) NativePackagedFont.load(weight, style)
+        else AndroidNamedFontProbe.load(context, name, weight, style)
+}
+
+internal val LocalNativeNamedFontProbe = staticCompositionLocalOf<NativeNamedFontProbe> { AndroidPackagedNamedFontProbe }
 
 /** Only a terminal generic is executable until an ordered native named fallback chain exists. */
 internal fun nativeTerminalFontFamily(family: ContainerFontFamily): FontFamily = when (family) {
@@ -73,7 +79,9 @@ internal fun nativeContainerFontAdmission(family: ContainerFontFamily?, weight: 
     style: FontStyle): Result<FontFamily?> {
     val context = LocalContext.current
     val configuration = LocalConfiguration.current
-    val probe = LocalNativeNamedFontProbe.current
+    val inheritedProbe = LocalNativeNamedFontProbe.current
+    // Body stacks keep the device presence test until they have a native named fallback chain.
+    val probe = if (inheritedProbe === AndroidPackagedNamedFontProbe) AndroidNamedFontProbe else inheritedProbe
     return remember(family, weight, style, context, configuration, probe) {
         nativeContainerFontAdmission(family, weight, style) { name, requestedWeight, requestedStyle ->
             probe.load(context, name, requestedWeight, requestedStyle) != null

@@ -1,6 +1,7 @@
 package app.smallthingz.dict
 
 import android.content.Context
+import android.content.res.AssetManager
 import android.graphics.Typeface
 import android.graphics.fonts.Font as PlatformFont
 import android.graphics.fonts.FontFamily as PlatformFontFamily
@@ -8,11 +9,15 @@ import android.graphics.fonts.FontStyle as PlatformFontStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import java.io.DataInputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.charset.CodingErrorAction
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /** Session-owned, static upright TrueType only. These are exact identities, not aliases. */
 internal data class NativeUserFontRequest(val family: String, val weight: FontWeight,
@@ -106,6 +111,51 @@ internal class NativeRegisteredFonts private constructor(private val entries: Ma
             }
             return NativeRegisteredFonts(entries.toMap())
         }
+    }
+}
+
+/** One immutable application asset, prepared before reader content is published. */
+internal object NativePackagedFont {
+    const val family = "Liberation Sans"
+    private const val asset = "fonts/LiberationSans-Regular.ttf"
+    private const val length = 410_820
+    private const val sha256 = "bade59d822652f76e6941aa87b40a87c13d1cc70db98ededb5011127efafd1d3"
+
+    @Volatile private var prepared: Result<NativeRegisteredFont>? = null
+
+    suspend fun prepare(context: Context) {
+        if (prepared != null) return
+        withContext(Dispatchers.IO) {
+            synchronized(this@NativePackagedFont) {
+                if (prepared == null) {
+                    prepared = try {
+                        val bytes = DataInputStream(context.applicationContext.assets.open(asset, AssetManager.ACCESS_STREAMING))
+                            .use { input ->
+                                ByteArray(length).also {
+                                    input.readFully(it)
+                                    require(input.read() == -1) { "Packaged font length mismatch" }
+                                }
+                            }
+                        Result.success(registerNativeUserFont(bytes,
+                            NativeUserFontRequest(family, FontWeight.Normal, FontStyle.Normal, sha256)))
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (failure: Exception) {
+                        Result.failure(failure)
+                    }
+                }
+            }
+        }
+    }
+
+    /** The synchronous Compose probe only reads the already prepared result. */
+    fun load(weight: FontWeight, style: FontStyle): Typeface {
+        if (weight != FontWeight.Normal || style != FontStyle.Normal)
+            throw UnsupportedFloatLayout("Packaged Liberation Sans requires weight 400 upright.")
+        val result = prepared ?: throw UnsupportedFloatLayout("Packaged Liberation Sans was not initialized.")
+        return result.getOrElse { failure ->
+            throw UnsupportedFloatLayout("Packaged Liberation Sans is unavailable.").apply { initCause(failure) }
+        }.typeface
     }
 }
 

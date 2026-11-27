@@ -50,6 +50,7 @@ class ReaderStartup internal constructor(
         failed = false
         opening = viewModelScope.launch {
             try {
+                NativePackagedFont.prepare(getApplication<Application>())
                 stores = withContext(Dispatchers.IO) { openStores() }
                 drainImports()
             } catch (cancelled: CancellationException) { throw cancelled }
