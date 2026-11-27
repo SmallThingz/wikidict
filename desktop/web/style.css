@@ -37,6 +37,10 @@
 .phonos-control [data-focus="authored_none"]:focus-visible,.inline-audio-control [data-focus="authored_none"]:focus-visible {outline:none}
 .phonos-control [data-focus="ua_auto"]:focus-visible,.inline-audio-control [data-focus="ua_auto"]:focus-visible {outline:auto var(--audio-outline,Highlight)}
 .audio-control-status {position:absolute;width:1px;height:1px;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+.inline-audio-control {display:inline-grid;max-width:100%;vertical-align:top}
+.inline-audio-control>audio,.inline-audio-activate {grid-area:1/1}
+.inline-audio-control>audio[aria-hidden="true"] {pointer-events:none}
+.inline-audio-activate {min-width:0;min-height:0;margin:10px 0;padding:0 12px;border-radius:27px;background:var(--surface);overflow:hidden;white-space:nowrap;text-align:start}
 
 .compiled-description-body::before {content:"";position:absolute;top:var(--description-top);bottom:var(--description-bottom);left:var(--description-left);width:var(--description-width);background-color:var(--description-fill);pointer-events:none}
 

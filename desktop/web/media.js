@@ -165,6 +165,7 @@ export function audioControlView(span,label,settings,edition) {
   const root=document.createElement('span'),audio=document.createElement('audio');
   const compact=span.audio_control.presentation==='phonos_button',enabled=!!settings.allowAudio;
   const control=compact?document.createElement('button'):audio;
+  const activation=compact?null:document.createElement('button');
   const status=document.createElement('span');
   status.className='audio-control-status';
   status.setAttribute('role','status');
@@ -186,6 +187,8 @@ export function audioControlView(span,label,settings,edition) {
     audio.controls=true;
     audio.setAttribute('aria-label',span.tooltip||span.text||span.target.slice(5));
     audio.setAttribute('aria-disabled',String(!enabled));
+    activation.type='button';
+    activation.className='inline-audio-activate';
     for(const axis of ['width','height']){
       const size=span.audio_control[axis];
       if(size)audio.style[axis]=size.unit==='em'?'calc(var(--wikidict-normal-body-size) * '+size.value+')':size.value+(size.unit==='percent'?'%':'px');
@@ -193,11 +196,31 @@ export function audioControlView(span,label,settings,edition) {
   }
   const focus=span.audio_control.focus;
   if(focus){
-    control.dataset.focus=focus.mode;
-    if(focus.color)control.style.setProperty('--audio-outline',focus.color.kind==='rgb'?focus.color.value:'transparent');
+    for(const target of activation?[control,activation]:[control]){
+      target.dataset.focus=focus.mode;
+      if(focus.color)target.style.setProperty('--audio-outline',focus.color.kind==='rgb'?focus.color.value:'transparent');
+    }
   }
-  root.append(control,status);
+  root.append(control);
+  if(activation)root.append(activation);
+  root.append(status);
   let object=null,loading=false,observer=null,removed=false;
+  function syncActivation(){
+    if(!activation)return;
+    const focused=root.isConnected?document.activeElement:null;
+    activation.hidden=!!object;
+    activation.disabled=!enabled;
+    // Keep focus while loading; activate() already refuses duplicate gestures.
+    activation.setAttribute('aria-disabled',String(!enabled||loading));
+    activation.setAttribute('aria-busy',String(loading));
+    const name=root.dataset.mediaState==='error'?'Retry audio':'Play audio';
+    activation.textContent=loading?'Loading audio…':name;
+    activation.setAttribute('aria-label',name+': '+audio.getAttribute('aria-label'));
+    if(object){audio.removeAttribute('aria-hidden');audio.removeAttribute('tabindex');}
+    else{audio.setAttribute('aria-hidden','true');audio.tabIndex=-1;}
+    if(object&&focused===activation)audio.focus({preventScroll:true});
+    else if(!object&&focused===audio&&enabled)activation.focus({preventScroll:true});
+  }
   function state(name,message=''){
     root.dataset.mediaState=name;
     status.textContent=message;
@@ -205,6 +228,7 @@ export function audioControlView(span,label,settings,edition) {
       control.setAttribute('aria-pressed',String(name==='playing'));
       control.setAttribute('aria-busy',String(name==='loading'));
     }
+    syncActivation();
   }
   function release(){
     if(!object)return;
@@ -237,10 +261,11 @@ export function audioControlView(span,label,settings,edition) {
         if(!stillNeeded())return;
         object=URL.createObjectURL(blob);
         audio.src=object;
+        syncActivation();
       }
       await audio.play();
     }catch{failed();}
-    finally{loading=false;}
+    finally{loading=false;syncActivation();}
   }
   audio.addEventListener('playing',()=>{if(object)state('playing');});
   audio.addEventListener('pause',()=>{if(object)state('paused');});
@@ -248,6 +273,7 @@ export function audioControlView(span,label,settings,edition) {
   audio.addEventListener('error',()=>{if(object)failed();});
   if(compact)control.addEventListener('click',activate);
   else{
+    activation.addEventListener('click',activate);
     // The browser owns transport after the first user-initiated acquisition.
     control.addEventListener('click',()=>{if(!object)activate();});
     control.addEventListener('keydown',event=>{
