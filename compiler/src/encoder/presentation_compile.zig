@@ -53340,18 +53340,24 @@ pub const Renderer = struct {
     }
     fn tableSpanAttr(self: *Renderer, tag: syntax.Tag, name: []const u8) Error!u16 {
         const raw = (try self.semanticAttribute(tag, name)) orelse return 1;
-        const parsed: u16 = std.fmt.parseInt(u16, raw, 10) catch |err| overflow: {
-            if (err != error.Overflow or raw.len == 0) break :overflow 1;
-            // Validate the entire positive decimal: overflow may precede junk.
-            // Keep parseInt's optional plus and internal underscore grammar.
-            const digits = if (raw[0] == '+') raw[1..] else raw;
-            if (digits.len == 0 or digits[0] == '_' or digits[digits.len - 1] == '_') break :overflow 1;
-            for (digits) |ch| if (ch != '_' and !std.ascii.isDigit(ch)) break :overflow 1;
-            break :overflow 100;
-        };
+        // HTML integer parsing consumes a decimal prefix, not Zig's complete
+        // integer syntax. Dated Latin tables contain colspan="4;". Underscores
+        // terminate the prefix; leading ASCII whitespace and a sign are allowed.
+        const value = std.mem.trimStart(u8, raw, " \t\n\r\x0c");
+        if (value.len == 0) return 1;
+        const negative = value[0] == '-';
+        var at: usize = if (negative or value[0] == '+') 1 else 0;
+        if (at == value.len or !std.ascii.isDigit(value[at])) return 1;
+        var parsed: u16 = 0;
+        while (at < value.len and std.ascii.isDigit(value[at])) : (at += 1) {
+            // Preserve the format's existing bounded geometry without overflow,
+            // even when the source has an arbitrarily long decimal prefix.
+            parsed = @min(100, parsed * 10 + @as(u16, value[at] - '0'));
+        }
+        if (negative and parsed != 0) return 1;
         // Zero is build-only: the completed row group resolves it before encoding.
         if (parsed == 0 and std.mem.eql(u8, name, "rowspan")) return 0;
-        return @max(1, @min(100, parsed));
+        return @max(1, parsed);
     }
 
     // Root/view includeonly regions are excluded by the preprocessor before
@@ -54230,6 +54236,22 @@ test "HTML table structure ignores protected row and cell delimiters" {
     try std.testing.expectEqualStrings("third", try flattened(a, table.rows[1].cells[0].spans));
 }
 
+
+test "HTML table spans use browser integer prefixes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    for ([_][]const u8{
+        "<table><tr><td colspan='4;'>singolare</td></tr></table>",
+        "{|\n|-\n|colspan=4;|'''singolare'''\n|}\n",
+    }) |source| {
+        var renderer: Renderer = .{ .a = arena.allocator(), .context = .{} };
+        const blocks = try renderer.renderBody(source);
+        const cell = blocks[0].table.?.rows[0].cells[0];
+        try std.testing.expectEqual(@as(u16, 4), cell.colspan);
+        try std.testing.expectEqualStrings("singolare", try flattened(arena.allocator(), cell.spans));
+    }
+}
+
 test "table span attributes decode entities and stay bounded" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -54268,10 +54290,17 @@ test "table span overflow preserves positive signs and malformed zero negative c
     const cases = [_]struct { raw: []const u8, colspan: u16, rowspan: u16 }{
         .{ .raw = "+999", .colspan = 100, .rowspan = 100 },
         .{ .raw = "+65536", .colspan = 100, .rowspan = 100 },
-        .{ .raw = "+65_536", .colspan = 100, .rowspan = 100 },
-        .{ .raw = "655360000000000000000bad", .colspan = 1, .rowspan = 1 },
-        .{ .raw = "+655360000000000000000bad", .colspan = 1, .rowspan = 1 },
-        .{ .raw = "65536_", .colspan = 1, .rowspan = 1 },
+        .{ .raw = "+65_536", .colspan = 65, .rowspan = 65 },
+        .{ .raw = "655360000000000000000bad", .colspan = 100, .rowspan = 100 },
+        .{ .raw = "+655360000000000000000bad", .colspan = 100, .rowspan = 100 },
+        .{ .raw = "65536_", .colspan = 100, .rowspan = 100 },
+        .{ .raw = "  +4;", .colspan = 4, .rowspan = 4 },
+        .{ .raw = "4.5", .colspan = 4, .rowspan = 4 },
+        .{ .raw = "4_5", .colspan = 4, .rowspan = 4 },
+        .{ .raw = "-0;", .colspan = 1, .rowspan = 0 },
+        .{ .raw = "", .colspan = 1, .rowspan = 1 },
+        .{ .raw = "+", .colspan = 1, .rowspan = 1 },
+        .{ .raw = "word4", .colspan = 1, .rowspan = 1 },
         .{ .raw = "-65536", .colspan = 1, .rowspan = 1 },
         .{ .raw = "-1", .colspan = 1, .rowspan = 1 },
         .{ .raw = "0", .colspan = 1, .rowspan = 0 },
