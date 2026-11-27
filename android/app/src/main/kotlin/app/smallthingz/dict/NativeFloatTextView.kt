@@ -1416,6 +1416,7 @@ internal class NativeFloatTextView(context: Context, private var scrollClip: Nat
     }
 
     private fun sendNodeEvent(id: Int, type: Int) {
+        if (context.getSystemService(AccessibilityManager::class.java)?.isEnabled != true) return
         val node = geometry?.nodes?.find { it.id == id } ?: return
         val event = AccessibilityEvent.obtain(type)
         event.setSource(this, id)
