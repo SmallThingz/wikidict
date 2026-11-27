@@ -7351,6 +7351,7 @@ pub const Renderer = struct {
             .root = caption_domain.scope.page_style_root orelse return self.figureUnavailable(), .style = caption_style,
             .captured_input = if (missing.yi_missing_style) choice.caption else null };
         return .{ .value = value, .caption_style = caption_style, .missing_style = label_style,
+            .observed_plain_caption = if (source_shape) |shape| shape.has_text and shape.nodes.len == 0 else false,
             .normal_font_caption = if (font) |authored| .{ .value = authored.text, .style = session.nodes[0].style } else null,
             .observed_caption = session };
     }
@@ -12435,6 +12436,7 @@ pub const Renderer = struct {
         tracked: ?MissingText = null,
         figure_blocks: ?*?[]const Block = null,
         no_li_parent: bool = false,
+        observed_literal_text: bool = false,
     };
     fn captureMediaCaption(self: *Renderer, input: []const u8, capture: MediaCaptionCapture) Error![]const Span {
         // A rich occurrence caption is parsed once; its catalog projection is
@@ -12592,6 +12594,11 @@ pub const Renderer = struct {
             self.inline_source_domain = previous.domain;
             self.inline_table_boundaries = previous.table;
         }
+        // A complete observed plain caption has already passed the actual
+        // caption/leaf cascade. Emit it with that style and the same caption
+        // scope, without querying page CSS for a second, synthetic body owner.
+        if (capture.observed_literal_text)
+            return self.captureMediaCaption(input, .{ .mode = .literal, .style = capture.style });
         // A Figure owns its caption's computed style. Keep earlier page
         // fallbacks, but do not let one hide a fresh unresolved caption effect.
         const previous_unresolved_style = self.fallbacks.unresolved_table_style;
@@ -18544,7 +18551,7 @@ pub const Renderer = struct {
             .caption_source = caption_source, .root_rtl = root_rtl, .scope = scope, .source = source,
             .ancestors = try ancestors.toOwnedSlice(self.a) };
     }
-    const PreparedFigureGeometry = struct { normal_font_caption: ?struct { value: []const u8, style: Style } = null, value: Figure, caption_style: Style, missing_style: ?Style = null, caption_parent: ?PreparedCaptionParent = null, resolutions: ?[4]table_style_profile.FigureStyle = null, fonts: ?[3]f32 = null, image_style: ?Style = null, observed_caption: ?ObservedFigureCaptionSession = null };
+    const PreparedFigureGeometry = struct { observed_plain_caption: bool = false, normal_font_caption: ?struct { value: []const u8, style: Style } = null, value: Figure, caption_style: Style, missing_style: ?Style = null, caption_parent: ?PreparedCaptionParent = null, resolutions: ?[4]table_style_profile.FigureStyle = null, fonts: ?[3]f32 = null, image_style: ?Style = null, observed_caption: ?ObservedFigureCaptionSession = null };
     // Compare the complete pure preparation, including byte-valued colors.
     // Non-string borrowed slices/pointers retain identity; neither arm parses
     // captions or creates references/media/actions.
@@ -19715,6 +19722,8 @@ pub const Renderer = struct {
             .no_li_parent = no_list_nodes,
             .style = caption_style,
             .tracked = if (filename_caption) null else try missingSlice(self.a, caption_missing, metadata_caption),
+            .observed_literal_text = !filename_caption and (prepared.observed_plain_caption or prepared.normal_font_caption != null) and
+                QuoteSourceMap.cleanLocal(caption_missing) and observedReadyCaptionPlainText(metadata_caption),
         };
         const previous_observed_caption = self.observed_figure_caption;
         self.observed_figure_caption = prepared.observed_caption;
@@ -141892,4 +141901,94 @@ test "Italian Latin conjugation CSS exact dated appendix round trips" {
     try std.testing.expectEqualDeep(presentation_types.StyleWidth{ .unit = .percent, .value = 60 }, conjugation.style.?.width.?);
     try std.testing.expectEqualStrings("#f0f0f0", conjugation.style.?.background.?);
     try std.testing.expect(conjugation.rows.len > 20);
+}
+
+test "SD caption regression keeps the observed plain text style through Figure construction" {
+    const Caption = struct {
+        const text = "جُز اوقاتي سگنل جو گراف";
+        const prefix = "[[File:Missing.png|thumb|100px|";
+        const source: []const u8 = prefix ++ text ++ "]]";
+        fn resolve(raw: ?*const anyopaque, _: A, operation: FigureStyleOperation) A.Error!?FigureStyleObservation {
+            if (operation.source.ptr != source.ptr or operation.token.ptr != source.ptr or
+                !std.mem.eql(u8, operation.caption, text) or !std.mem.eql(u8, operation.file, "Missing.png")) return null;
+            const held: *const FigureStyleObservation = @ptrCast(@alignCast(raw orelse return null));
+            return held.*;
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var ns = try ObservedMixedReadyCaptionTest.registry(a);
+    defer ns.deinit();
+    try FigureProducerTest.attachThumbnailDefaults(a, &ns, false);
+    const css = "html{font-family:sans-serif;color:#202122}" ++
+        "figure{display:table;text-align:center;border-collapse:collapse;line-height:0;margin:0 auto 0.5em;border:1px solid #c8ccd1;border-bottom:0;background:#f8f9fa}" ++
+        "figcaption{display:table-caption;caption-side:bottom;background-color:inherit;line-height:1.4em;word-break:break-word;text-align:start;padding:0 6px 6px;border:1px solid #c8ccd1;border-top:0;font-size:88.4%;font-weight:bold;color:#313244}" ++
+        "a{color:#3366cc;text-decoration:none}a.new{color:#bf3c2c}" ++
+        "span.mw-broken-media{display:inline-block;line-height:1.6em;word-break:break-word}";
+    var base = try table_style_profile.parseForTargetAlloc(a, "", .screen);
+    defer base.deinit();
+    var styles = try table_style_profile.joinPageSourcesAlloc(a, &base, &.{.{ .css = css, .base_url = "" }}, &.{});
+    defer styles.deinit();
+    const root: table_style_profile.TextElement = .{ .tag = "div", .classes = "mw-parser-output" };
+    const scope: table_style_profile.BoundedTextClassScope = .{ .root_tag = "div", .root_classes = "mw-parser-output",
+        .subtree_classes = "new mw-broken-media mw-file-element", .complete_ancestor_class_superset = "mw-parser-output new mw-broken-media mw-file-element",
+        .page_styles = &styles, .page_style_root = &root };
+    const nodes: []const table_style_profile.FigureObservedNode = &.{
+        .{ .tag = "html", .parent = null, .attributes = &.{ .{ .name = "lang", .value = "vi" }, .{ .name = "dir", .value = "ltr" } } },
+        .{ .tag = "body", .parent = 0, .attributes = &.{} },
+        .{ .tag = "div", .parent = 1, .attributes = &.{.{ .name = "class", .value = "mw-parser-output" }} },
+        .{ .tag = "figure", .parent = 2, .attributes = &.{.{ .name = "typeof", .value = "mw:Error mw:File/Thumb" }}, .has_text = false },
+        .{ .tag = "a", .parent = 3, .attributes = &.{ .{ .name = "class", .value = "new" }, .{ .name = "href", .value = MissingFigureProducerTest.href } }, .has_text = false },
+        .{ .tag = "span", .parent = 4, .attributes = &.{ .{ .name = "class", .value = "mw-file-element mw-broken-media" }, .{ .name = "data-width", .value = "100" } }, .has_text = true },
+        .{ .tag = "figcaption", .parent = 3, .attributes = &.{}, .has_text = true },
+    };
+    const graph: table_style_profile.FigureObservedContext = .{ .styles = &styles, .nodes = nodes,
+        .root = 2, .frame = 3, .anchor = 4, .media = 5, .caption = 6, .media_kind = .missing };
+    const observation: FigureStyleObservation = .{ .profile = &styles, .contexts = &.{ graph, graph } };
+    var sizing = FigureProducerTest.sizing_source;
+    sizing.text_class_scope = .{ .source = Caption.source, .scope = &scope };
+    sizing.figure_style_ctx = &observation;
+    sizing.resolve_figure_style_fn = Caption.resolve;
+    var actual: Renderer = .{ .a = a, .context = .{ .namespace_catalog = &ns, .language = "", .table_styles = &styles, .figure_sizing = sizing, .table_viewport_trace = true },
+        .content_root = .parser_output, .body_depth = 1, .bounded_text_class_scope = &scope, .bounded_text_class_source = Caption.source };
+    const choice: Renderer.FigureChoice = .{ .file = "Missing.png", .format = .thumbnail, .horizontal = null, .caption = Caption.source[Caption.prefix.len..][0..Caption.text.len],
+        .content = .{ .missing = .{ .label = "File:Missing.png", .href = MissingFigureProducerTest.href, .data_width = 100,
+            .anchor_attributes = .{ .ctx = null, .get = MissingFigureProducerTest.anchor },
+            .element_attributes = .{ .ctx = null, .get = MissingFigureProducerTest.element } } } };
+    const parent: Style = .{ .font_scale = 1, .font_scale_basis = .normal_body, .font_scale_set = true };
+    const tracked = MissingText.untracked(Caption.source);
+    const prepared = try actual.prepareObservedMissingFigure(choice, parent, tracked, false, observation);
+    try std.testing.expect(prepared.caption_style.bold);
+    try std.testing.expect(!actual.fallbacks.unresolved_table_style);
+    try std.testing.expect((try actual.figureDefaults()).default_thumbnail_width != null);
+    var rejection: @import("presentation_document.zig").RejectedFieldCapture = .{};
+    const rejection_scope = rejection.begin();
+    defer rejection_scope.deinit();
+    const figure = actual.makeFigure(choice, parent, tracked) catch |err| {
+        if (rejectedCompilerSnapshot(err)) |detail|
+            std.debug.print("focused plain caption rejection operation={s} reason={s}\n", .{ detail.operation, detail.reason });
+        return err;
+    };
+    try std.testing.expect(figure.caption_blocks == null);
+    try std.testing.expectEqual(@as(usize, 1), figure.caption.len);
+    const span = figure.caption[0];
+    try std.testing.expectEqualStrings(Caption.text, span.text);
+    try std.testing.expectEqualStrings("#313244", span.foreground.?);
+    try std.testing.expectEqual(@as(f32, 0.884), span.font_scale.?);
+    try std.testing.expect(span.flags.bold and span.kind == .text);
+    try std.testing.expectEqualStrings("vi", span.language);
+    try std.testing.expectEqualStrings("ltr", span.direction);
+    try std.testing.expect(!actual.fallbacks.unresolved_table_style);
+    try std.testing.expect(actual.figure_caption_depth == 0 and actual.observed_figure_caption == null and actual.body_missing == null and
+        actual.bounded_text_class_scope == &scope and actual.bounded_text_class_source.?.ptr == Caption.source.ptr);
+    try FigureProducerTest.roundtrip(a, &actual, &.{.{ .kind = .paragraph, .figure = figure.* }});
+
+    var detached = actual;
+    detached.context.figure_sizing.?.resolve_figure_style_fn = null;
+    try std.testing.expectError(error.UncompiledPresentation, detached.makeFigure(choice, parent, tracked));
+    const copy = try a.dupe(u8, Caption.source);
+    var copied = choice;
+    copied.caption = copy[Caption.prefix.len..][0..Caption.text.len];
+    try std.testing.expectError(error.UncompiledPresentation, actual.makeFigure(copied, parent, MissingText.untracked(copy)));
 }

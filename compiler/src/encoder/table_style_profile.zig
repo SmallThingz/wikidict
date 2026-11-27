@@ -5473,7 +5473,9 @@ fn observedFigureFrameCaptionGeometryWithWitness(a: std.mem.Allocator, context: 
     colors: []const ObservedFigureComputedColor, backgrounds: []const ObservedFigureComputedColor, witness: ?*ObservedReadyFigureWitness) !?ObservedFigureFrameCaptionGeometry
 {
     observedReadySubject(witness, context.frame);
-    if (!figureObservedContextValid(context) or (context.nodes[context.caption].has_text != true and !observedMissingCaptionEmpty(context))) return observedReadyNull(ObservedFigureFrameCaptionGeometry, witness, "observed_ready.observedFigureFrameCaptionGeometry.1");
+    if (!figureObservedContextValid(context) or (context.nodes[context.caption].has_text != true and
+        !observedMissingCaptionFontLeaf(context) and !observedMissingCaptionEmpty(context)))
+        return observedReadyNull(ObservedFigureFrameCaptionGeometry, witness, "observed_ready.observedFigureFrameCaptionGeometry.1");
     const frame = observedFigureComputedNode(computed, context.frame) orelse return observedReadyNull(ObservedFigureFrameCaptionGeometry, witness, "observed_ready.observedFigureFrameCaptionGeometry.2");
     const caption = observedFigureComputedNode(computed, context.caption) orelse return observedReadyNull(ObservedFigureFrameCaptionGeometry, witness, "observed_ready.observedFigureFrameCaptionGeometry.3");
     const frame_font = observedFigureFontAt(fonts, context.frame) orelse return observedReadyNull(ObservedFigureFrameCaptionGeometry, witness, "observed_ready.observedFigureFrameCaptionGeometry.4");
@@ -12007,6 +12009,21 @@ fn observedMissingCaptionEmpty(context: FigureObservedContext) bool {
         context.nodes[context.caption].has_text != false or context.nodes[context.caption].empty != true) return false;
     for (context.nodes) |node| if (node.parent == context.caption) return false;
     return true;
+}
+
+// The normal source/DOM join can prove a single text-bearing FONT child.
+// Keep the FIGCAPTION's direct-text bit intact for selectors and inventory.
+fn observedMissingCaptionFontLeaf(context: FigureObservedContext) bool {
+    if (context.normal_missing_font_size == null or context.media_kind != .missing or
+        context.nodes[context.caption].has_text != false or context.nodes[context.caption].empty != false) return false;
+    var font: ?u32 = null;
+    for (context.nodes[context.caption + 1..], context.caption + 1..) |node, index| {
+        if (node.parent == context.caption) {
+            if (font != null or normalMissingFontKeyword(context, @intCast(index)) == null) return false;
+            font = @intCast(index);
+        } else if (font != null and node.parent == font) return false;
+    }
+    return font != null;
 }
 
 fn observedMissingCaptionKindValid(context: FigureObservedContext, index: u32) bool {
@@ -45098,4 +45115,54 @@ test "Italian Latin conjugation CSS refuses unbound spacing inheritance" {
     const collapsed = try profile.resolveTable(a, 0, "", null, "border-spacing:2px;border-collapse:collapse");
     try std.testing.expect(!collapsed.unresolved);
     try std.testing.expectEqual(@as(?u16, 0), collapsed.cell_spacing);
+}
+
+test "SD caption regression admits only the matched single Missing FONT leaf" {
+    var scratch = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer scratch.deinit();
+    const a = scratch.allocator();
+    const css = FigureOperationReuseTest.missing_css;
+    var styles = try parseForTargetAlloc(a, css, .screen);
+    defer styles.deinit();
+    var nodes = [_]FigureObservedNode{
+        FigureOperationReuseTest.missing_nodes[0], FigureOperationReuseTest.missing_nodes[1],
+        FigureOperationReuseTest.missing_nodes[2], FigureOperationReuseTest.missing_nodes[3],
+        FigureOperationReuseTest.missing_nodes[4], FigureOperationReuseTest.missing_nodes[5],
+        .{ .tag = "figcaption", .parent = 3, .attributes = &.{}, .has_text = false, .empty = false },
+        .{ .tag = "font", .parent = 6, .attributes = &.{.{ .name = "size", .value = "4" }}, .has_text = true },
+        .{ .tag = "b", .parent = 7, .attributes = &.{}, .has_text = true },
+    };
+    const graph: FigureObservedContext = .{ .styles = &styles, .nodes = nodes[0..8],
+        .root = 2, .frame = 3, .anchor = 4, .media = 5, .caption = 6, .media_kind = .missing,
+        .normal_missing_font_size = "4" };
+    const viewport = (try observedFigureMissingViewport(a, graph, 100, null)) orelse return error.TestUnexpectedResult;
+    const resolved = (try resolveObservedMissingFigure(a, &.{ graph, graph }, 100, viewport.base.parent_font)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 1), resolved.geometry.caption_inline.nodes.len);
+    try std.testing.expectEqual(@import("font_scale.zig").absoluteKeyword("large").?, resolved.geometry.caption_inline.nodes[0].font.font_scale);
+    try std.testing.expectEqual(@as(?bool, false), nodes[6].has_text);
+
+    for (0..5) |case| {
+        const before = nodes;
+        defer nodes = before;
+        var changed = graph;
+        switch (case) {
+            0 => changed.normal_missing_font_size = null,
+            1 => nodes[7].attributes = &.{.{ .name = "size", .value = "5" }},
+            2 => changed.nodes = &nodes,
+            3 => {
+                nodes[8].parent = 6;
+                changed.nodes = &nodes;
+            },
+            4 => nodes[7].has_text = false,
+            else => unreachable,
+        }
+        try std.testing.expect((try observedFigureMissingViewport(a, changed, 100, null)) == null);
+    }
+    for ([_][]const u8{ "figcaption font{padding:1px}", "figcaption font::before{content:'extra'}" }) |extra| {
+        var altered = try parseForTargetAlloc(a, try std.mem.concat(a, u8, &.{ css, extra }), .screen);
+        defer altered.deinit();
+        var changed = graph;
+        changed.styles = &altered;
+        try std.testing.expect((try observedFigureMissingViewport(a, changed, 100, null)) == null);
+    }
 }
