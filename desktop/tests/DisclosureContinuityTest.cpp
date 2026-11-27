@@ -7,12 +7,14 @@
 #include "AudioPlaybackStartup.hpp"
 #include <QAction>
 #include <QApplication>
+#include <QByteArray>
 #include <QCryptographicHash>
 #include <QDir>
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QFile>
 #include <QFileInfo>
+#include <QFocusEvent>
 #include <QGlyphRun>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -25,6 +27,7 @@
 #include <QTextBlock>
 #include <QTextDocument>
 #include <QTextFrame>
+#include <QTextTable>
 #include <QUrl>
 #include <QRawFont>
 #include <QSettings>
@@ -60,6 +63,18 @@ QByteArray pinned(const QJsonObject &ref, qint64 cap) {
     check(sha(value) == ref.value("sha256").toString(), "pinned " + ref.value("path").toString());
     if (ref.contains("bytes")) check(value.size() == ref.value("bytes").toInteger(), "pinned size");
     return value;
+}
+QJsonObject fixtureReference(QJsonObject ref, const QString &directory) {
+    const auto relative = ref.value("path").toString();
+    check(!relative.isEmpty() && QDir::isRelativePath(relative) && QDir::cleanPath(relative) == relative
+          && relative != QStringLiteral("..") && !relative.startsWith(QStringLiteral("../")),
+          "fixture path relative to contract directory");
+    const QFileInfo file(QDir(directory).filePath(relative));
+    const auto absolute = file.absoluteFilePath();
+    check(file.isFile() && !file.isSymLink() && file.canonicalFilePath() == absolute
+          && absolute.startsWith(directory + '/'), "checked-in fixture file inside contract directory");
+    ref.insert("path", absolute);
+    return ref;
 }
 QJsonObject object(const QByteArray &value) {
     QJsonParseError e; const auto d = QJsonDocument::fromJson(value, &e);
@@ -109,6 +124,24 @@ void writeNew(const QString &path, const QByteArray &data) {
     QFile output(path);
     check(output.open(QIODevice::WriteOnly | QIODevice::NewOnly), "fresh output " + path);
     check(output.write(data) == data.size() && output.flush(), "complete output " + path);
+}
+void writeAllerLibrary(const QString &library, const QString &fixture) {
+    const auto payload = bytes(fixture, 38814);
+    check(payload.size() == 38814 && sha(payload) == "5a9c68c51bf556afa18a69e677a0def0c2875d70eae0ebbfa780e9b464b820b0",
+          "exact native Writer aller payload");
+    const auto heading = QStringLiteral("Француски").toUtf8();
+    check(QDir().mkpath(library + "/languages"), "private aller library");
+    writeNew(library + "/languages.tsv", QByteArrayLiteral("heading\n") + heading + '\n');
+    QByteArray blob = QByteArrayLiteral("WIKBLB08") + char(1) + QByteArrayLiteral("fr\0")
+        + heading + '\0' + QByteArrayLiteral("aller\0");
+    auto length = quint64(payload.size());
+    while (length >= 128) {
+        blob.append(char((length & 127) | 128));
+        length >>= 7;
+    }
+    blob.append(char(length));
+    blob.append(payload);
+    writeNew(library + "/languages/" + sha(heading) + ".wikblb", blob);
 }
 QJsonArray storedTargets(const QJsonValue &value) {
     QJsonArray targets;
@@ -165,6 +198,210 @@ QRectF borderInViewport(CompiledDisclosure::Button *button, QWidget *viewport) {
 
 class MainWindowTest {
 public:
+#include "BewPisanyCaption01.inc"
+    static void tableCaption(const QString &library, const QString &fixtureDirectory, QJsonObject &report) {
+        QTimer modal;
+        QObject::connect(&modal, &QTimer::timeout, [&] {
+            auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+            if (!box) return;
+            report.insert("product_refusal", box->text());
+            box->reject();
+        });
+        modal.start(20);
+        MainWindow window(library, "aller");
+        window.resize(480, 700);
+        window.show();
+        window.activateWindow();
+        waitFor([&] { return !window.loading_; }, "ordinary aller lookup settled");
+        check(!report.contains("product_refusal") && !window.readingUncommitted_
+              && window.currentEntry_.value("title") == "aller", "ordinary FFI lookup and Reading commit");
+        const auto source = window.currentEntry_;
+        {
+            // Authenticate the compact fixture before inflating its exact Entry bytes.
+            const QJsonObject compressedPin{
+                {"path", "mk-aller-caption.expected.qz"},
+                {"sha256", "1ff368babb026e0eac86a0cf6151e800f74fb0be18505ea3e7c841f3f508fd3f"},
+                {"bytes", 10893}};
+            const auto expected = qUncompress(pinned(fixtureReference(compressedPin, fixtureDirectory), 10893));
+            const auto expectedSha = QStringLiteral("deac77542e07accf7f7fe600357348a054d013648b980996b60f9039e665079d");
+            check(expected.size() == 426058 && sha(expected) == expectedSha, "exact decoded aller Entry fixture");
+            check(source == object(expected), "complete ordinary aller Entry equals retained FFI result");
+            report.insert("ordinary_entry_sha256", expectedSha);
+            QTextStream(stdout) << "MK complete Entry equality: PASS\n";
+        }
+        const auto sections = source.value("sections").toArray();
+        const auto blocks = sections.at(4).toObject().value("blocks").toArray();
+        const auto table = blocks.at(32).toObject().value("table").toObject();
+        const auto openLabel = QStringLiteral("прикажи");
+        const auto closeLabel = QStringLiteral("собери");
+        check(source.value("language_code") == "fr" && table.value("rows").toArray().size() == 27
+              && table.value("caption_disclosure").toObject() == QJsonObject{
+                  {"initially_collapsed", true}, {"expand_label", openLabel}, {"collapse_label", closeLabel}},
+              "ordinary decoder retained exact caption policy and rows");
+
+        auto *reader = window.reading_;
+        const auto caption = QStringLiteral("Коњугација на глаголот aller");
+        const auto finalPerson = [&] { return reader->document()->find(QStringLiteral("vont"), 0, QTextDocument::FindWholeWords); };
+        const auto button = [&]() -> CompiledDisclosure::Button * {
+            const auto *host = window.readingDisclosures_.data();
+            if (!host || !host->current() || host->occurrences.size() != 1) return nullptr;
+            const auto &row = host->occurrences.front();
+            return row.block == table ? host->button(row.path, table) : nullptr;
+        };
+        const auto state = [&](bool expanded) {
+            const auto label = expanded ? closeLabel : openLabel;
+            auto *control = button();
+            if (!control || !control->isEnabled() || control->isChecked() != expanded || control->text() != label
+                || control->accessibleName() != label || window.currentEntry_ != source) return false;
+            const auto &row = window.readingDisclosures_->occurrences.front();
+            if (!row.caption.isValid() || !row.caption.text().contains(caption) || row.expanded != expanded) return false;
+            const auto person = finalPerson();
+            if (!expanded) return person.isNull();
+            auto *grid = person.currentTable();
+            return grid && grid->rows() == 27;
+        };
+        check(state(false), "caption and show button retained with no visible conjugation cells");
+        const auto &row = window.readingDisclosures_->occurrences.front();
+        reader->verticalScrollBar()->setValue(qRound(window.readingDisclosures_->rectangle(row).top()) - 40);
+        const auto captionReachable = [&] {
+            auto *control = button();
+            return control && control->isVisible()
+                && reader->viewport()->rect().contains(borderInViewport(control, reader->viewport()).center().toPoint());
+        };
+        waitFor(captionReachable,
+                "collapsed caption toggle reachable by scrolling");
+
+        {
+            // Record only this direct focus request. The original wait and key actions remain the oracle.
+            struct FocusWitness final : QObject {
+                struct Transition {
+                    const char *kind;
+                    quintptr first;
+                    quintptr second;
+                    int reason;
+                    bool duringRequest;
+                };
+                static QString token(quintptr identity) {
+                    return identity ? QString::number(qulonglong(identity), 16) : QString{};
+                }
+                Transition transitions[12]{};
+                int count = 0;
+                bool truncated = false;
+                bool duringRequest = false;
+
+                void record(const char *kind, QObject *first, QObject *second, int reason) {
+                    if (count == 12) {
+                        truncated = true;
+                        return;
+                    }
+                    transitions[count++] = {kind, reinterpret_cast<quintptr>(first),
+                                            reinterpret_cast<quintptr>(second), reason, duringRequest};
+                }
+
+                bool eventFilter(QObject *target, QEvent *event) override {
+                    if (event->type() == QEvent::FocusIn || event->type() == QEvent::FocusOut) {
+                        record(event->type() == QEvent::FocusIn ? "target_focus_in" : "target_focus_out",
+                               target, nullptr, int(static_cast<QFocusEvent *>(event)->reason()));
+                    }
+                    return false;
+                }
+            } focus;
+            const QPointer<CompiledDisclosure::Button> requested(button());
+            const auto identity = [](const void *object) {
+                return FocusWitness::token(reinterpret_cast<quintptr>(object));
+            };
+            const auto snapshot = [&](QWidget *target) {
+                auto *top = target ? target->window() : nullptr;
+                return QJsonObject{
+                    {"target", identity(target)},
+                    {"visible", target ? QJsonValue(target->isVisible()) : QJsonValue(QJsonValue::Null)},
+                    {"enabled", target ? QJsonValue(target->isEnabled()) : QJsonValue(QJsonValue::Null)},
+                    {"has_focus", target ? QJsonValue(target->hasFocus()) : QJsonValue(QJsonValue::Null)},
+                    {"policy", target ? QJsonValue(int(target->focusPolicy())) : QJsonValue(QJsonValue::Null)},
+                    {"proxy", identity(target ? target->focusProxy() : nullptr)},
+                    {"target_window", identity(top)},
+                    {"target_window_handle", identity(top ? top->windowHandle() : nullptr)},
+                    {"active_window", identity(QApplication::activeWindow())},
+                    {"focus_window", identity(QGuiApplication::focusWindow())},
+                    {"focus_widget", identity(QApplication::focusWidget())}};
+            };
+            requested->installEventFilter(&focus);
+            QObject::connect(qApp, &QApplication::focusChanged, &focus,
+                             [&](QWidget *from, QWidget *to) { focus.record("app_focus_changed", from, to, -1); });
+            const auto before = snapshot(requested.data());
+            focus.duringRequest = true;
+            requested->setFocus(Qt::TabFocusReason);
+            focus.duringRequest = false;
+            const auto after = snapshot(requested.data());
+            struct FocusPoll {
+                quintptr firstLookup = 0;
+                quintptr secondLookup = 0;
+                int hasFocus = -1;
+            } lastPoll;
+            try {
+                waitFor([&] {
+                    auto *first = button();
+                    lastPoll = {reinterpret_cast<quintptr>(first), 0, -1};
+                    if (!first) return false;
+                    auto *second = button();
+                    lastPoll.secondLookup = reinterpret_cast<quintptr>(second);
+                    const bool hasFocus = second->hasFocus();
+                    lastPoll.hasFocus = hasFocus;
+                    return hasFocus;
+                }, "caption toggle takes keyboard focus");
+            } catch (...) {
+                try {
+                    const auto *host = window.readingDisclosures_.data();
+                    QJsonArray transitions;
+                    for (int index = 0; index < focus.count; ++index) {
+                        const auto &row = focus.transitions[index];
+                        transitions.append(QJsonObject{
+                            {"kind", QString::fromLatin1(row.kind)},
+                            {"first", FocusWitness::token(row.first)}, {"second", FocusWitness::token(row.second)},
+                            {"reason", row.reason < 0 ? QJsonValue(QJsonValue::Null) : QJsonValue(row.reason)},
+                            {"during_request", row.duringRequest}});
+                    }
+                    const QJsonObject witness{
+                        {"before", before}, {"after", after}, {"resolved_at_failure", snapshot(button())},
+                        {"original_at_failure", identity(requested.data())},
+                        {"last_wait_poll", QJsonObject{
+                            {"first_lookup", FocusWitness::token(lastPoll.firstLookup)},
+                            {"second_lookup", FocusWitness::token(lastPoll.secondLookup)},
+                            {"has_focus", lastPoll.hasFocus < 0 ? QJsonValue(QJsonValue::Null)
+                                                               : QJsonValue(bool(lastPoll.hasFocus))}}},
+                        {"window", identity(&window)}, {"reader", identity(reader)},
+                        {"host", identity(host)},
+                        {"host_current", host ? QJsonValue(bool(host->current())) : QJsonValue(QJsonValue::Null)},
+                        {"host_occurrences", host ? QJsonValue(int(host->occurrences.size())) : QJsonValue(QJsonValue::Null)},
+                        {"transitions", transitions}, {"transitions_truncated", focus.truncated}};
+                    if (QJsonDocument(witness).toJson(QJsonDocument::Indented).size() <= 5120)
+                        report.insert("caption_focus_witness", witness);
+                } catch (...) {
+                    // Keep the original exception if the diagnostic cannot be serialized.
+                }
+                throw;
+            }
+        }
+        QTest::keyClick(button(), Qt::Key_Return);
+        waitFor([&] { return state(true) && button()->hasFocus(); }, "Enter reveals all rows and restores caption focus");
+
+        auto *horizontal = reader->horizontalScrollBar();
+        waitFor([&] { return horizontal->maximum() > horizontal->minimum(); }, "expanded grid retains horizontal scroll range");
+        horizontal->setValue(horizontal->minimum());
+        const int before = reader->cursorRect(finalPerson()).x();
+        horizontal->setValue(horizontal->maximum());
+        check(reader->cursorRect(finalPerson()).x() < before, "horizontal scrolling moves the final-person cell in the viewport");
+        horizontal->setValue(horizontal->minimum());
+
+        QTest::keyClick(button(), Qt::Key_Space);
+        waitFor([&] { return state(false) && button()->hasFocus(); }, "Space hides rows and retains caption focus");
+        waitFor(captionReachable, "collapsed caption toggle remains reachable after keyboard activation");
+        auto *control = button();
+        QTest::mouseClick(control, Qt::LeftButton, Qt::NoModifier,
+                          borderInViewport(control, control).center().toPoint());
+        waitFor([&] { return state(true); }, "mouse reopens the identical conjugation grid");
+    }
+
 static void formatContinuityChecks(MainWindow &window, QJsonObject entry, QJsonObject owner, QJsonObject &report) {
     using CompiledDisclosure::Host;
     using CompiledDisclosure::Button;
@@ -547,17 +784,23 @@ static void formatContinuityChecks(MainWindow &window, QJsonObject entry, QJsonO
 };
 
 int main(int argc, char **argv) {
+    const bool bewOnly = argc == 3 && QByteArray(argv[1]) == "--bew-pisany";
+    const bool captionOnly = argc == 3 && QByteArray(argv[1]) == "--table-caption";
     const bool startupOnly = argc == 4 && QByteArray(argv[3]) == "--startup-only";
     if (argc != 3 && !startupOnly) return 64;
-    const QString fixture = QFileInfo(QString::fromLocal8Bit(argv[1])).canonicalFilePath();
-    const QString policyPath = QFileInfo(QString::fromLocal8Bit(argv[2])).canonicalFilePath();
-    if (fixture.isEmpty() || policyPath.isEmpty() || !QDir().mkpath(".tmp")) return 64;
-    QTemporaryDir temporary(QDir::current().filePath(".tmp/disclosure-continuity-XXXXXX"));
+    const bool standaloneFixture = captionOnly || bewOnly;
+    const QString fixture = QFileInfo(QString::fromLocal8Bit(argv[standaloneFixture ? 2 : 1])).canonicalFilePath();
+    const QString policyPath = standaloneFixture ? QString() : QFileInfo(QString::fromLocal8Bit(argv[2])).canonicalFilePath();
+    if (fixture.isEmpty() || (!standaloneFixture && policyPath.isEmpty()) || !QDir().mkpath(".tmp")) return 64;
+    QTemporaryDir temporary(QDir::current().filePath(bewOnly ? ".tmp/bew-pisany-XXXXXX"
+                                                              : ".tmp/disclosure-continuity-XXXXXX"));
     if (!temporary.isValid()) return 73;
     const QString out = temporary.path();
     QJsonObject report{{"stage", "fixture_setup"}, {"whole_grant", false},
         {"native_entry_cycle", QJsonObject{{"status", "UNRUN"}}}};
-    report.insert("runtime_scope", startupOnly ? "STARTUP_ONLY_NOT_CONTROLS" : "GENUINE_ENTRY_AND_SIX_CONTROLS");
+    report.insert("runtime_scope", bewOnly ? "BEW_PISANY_CAPTION_OPEN_TOGGLE_REOPEN" :
+        captionOnly ? "ALLER_TABLE_CAPTION" :
+        startupOnly ? "STARTUP_ONLY_NOT_CONTROLS" : "GENUINE_ENTRY_AND_SIX_CONTROLS");
     report.insert("portable_glue", QJsonObject{{"status", "RUNNING"}});
     QJsonArray caseResults;
     for (const auto id : {"FC02-owned-noop", "FC02-owned-reflow", "FC02-no-consume-during-hold",
@@ -565,24 +808,49 @@ int main(int argc, char **argv) {
         caseResults.append(QJsonObject{{"id", QLatin1String(id)}, {"status", "UNRUN"}});
     report.insert("format_continuity_cases", caseResults);
     int result = 1;
+    QJsonObject bewFixture;
+    bool bewCopiesReady = false;
+    const QString library = out + "/library";
     try {
-        const auto manifest = object(bytes(fixture + "/manifest.json", 16384));
-        check(manifest.value("schema") == "wikidict.desktop.cediglia-disclosure-fixture.v1", "durable fixture schema");
-        const auto readFixture = [&](const QString &name) {
-            auto ref = manifest.value("files").toObject().value(name).toObject();
-            check(ref.contains("bytes") && ref.contains("sha256"), "fixture pin " + name);
-            ref.insert("path", fixture + '/' + name);
-            return pinned(ref, 1024 * 1024);
-        };
-        const auto entry = object(readFixture("entry.json"));
-        const auto authored = object(readFixture("authored.json"));
-        auto policyRef = manifest.value("source_policy").toObject(); policyRef.insert("path", policyPath);
-        const auto source = object(pinned(policyRef, 16384));
-        check(manifest.value("font_tables").toObject().size() == 7, "retained Arial table pins");
-        const QString library = out + "/library";
-        check(QDir().mkpath(library + "/languages"), "private copied library");
-        for (const auto &name : {QString("languages.tsv"), member})
-            writeNew(library + '/' + name, readFixture(name));
+        QJsonObject manifest, entry, authored, source;
+        if (bewOnly) {
+            report.insert("bew_pisany", QJsonObject{{"status", "RUNNING"}});
+            const QJsonObject fixtureRef{{"path", fixture}, {"bytes", 1654},
+                {"sha256", "b855c79a627148cf715686b057b3540c2996fbf118dcdc4adb835521fc2cd0de"}};
+            bewFixture = object(pinned(fixtureRef, 16384));
+            check(bewFixture.value("schema") == "wikidict.qt.bew-pisany-fixture.v1"
+                  && bewFixture.value("selector") == "bew-pisany-caption-open-toggle-reopen",
+                  "exact BEW fixture contract");
+            const auto fixtureDirectory = QFileInfo(fixture).absolutePath();
+            for (const auto *name : {"catalogue", "member", "reference_response"})
+                bewFixture.insert(name, fixtureReference(bewFixture.value(name).toObject(), fixtureDirectory));
+            check(QDir().mkpath(library + "/languages"), "fresh private BEW library");
+            writeNew(library + "/languages.tsv", pinned(bewFixture.value("catalogue").toObject(), 4096));
+            const auto relative = bewFixture.value("member_relative").toString();
+            check(relative == "languages/8370565179f520e7911be82a20f5e9817c307a83d330332c53b040f077991f94.wikblb",
+                  "exact BEW catalogue-selected member path");
+            writeNew(library + '/' + relative, pinned(bewFixture.value("member").toObject(), 65536));
+            bewCopiesReady = true;
+        } else if (captionOnly) {
+            writeAllerLibrary(library, fixture);
+        } else {
+            manifest = object(bytes(fixture + "/manifest.json", 16384));
+            check(manifest.value("schema") == "wikidict.desktop.cediglia-disclosure-fixture.v1", "durable fixture schema");
+            const auto readFixture = [&](const QString &name) {
+                auto ref = manifest.value("files").toObject().value(name).toObject();
+                check(ref.contains("bytes") && ref.contains("sha256"), "fixture pin " + name);
+                ref.insert("path", fixture + '/' + name);
+                return pinned(ref, 1024 * 1024);
+            };
+            entry = object(readFixture("entry.json"));
+            authored = object(readFixture("authored.json"));
+            auto policyRef = manifest.value("source_policy").toObject(); policyRef.insert("path", policyPath);
+            source = object(pinned(policyRef, 16384));
+            check(manifest.value("font_tables").toObject().size() == 7, "retained Arial table pins");
+            check(QDir().mkpath(library + "/languages"), "private copied library");
+            for (const auto &name : {QString("languages.tsv"), member})
+                writeNew(library + '/' + name, readFixture(name));
+        }
 
         // Configure every settings path before QApplication or any product object.
         for (const auto &pair : {qMakePair("HOME", "home"), qMakePair("XDG_CONFIG_HOME", "config"),
@@ -620,11 +888,19 @@ int main(int argc, char **argv) {
         QApplication app(argc, argv);
         checkSettings();
         QSettings().setValue("library/catalogSources", QStringList{});
-        QSettings().setValue("reader/language", "italiano");
+        QSettings().setValue("reader/language", bewOnly ? QStringLiteral("Pol")
+            : captionOnly ? QStringLiteral("Француски") : QStringLiteral("italiano"));
         report.insert("portable_glue", QJsonObject{{"status", "PASS"}});
         if (startupOnly) {
             // All portable setup ran; do not construct a Reader or replay controls.
             report.insert("stage", "STARTUP_ONLY_NOT_CONTROLS");
+            result = 0;
+        } else if (bewOnly) {
+            MainWindowTest::bewPisany(library, out, bewFixture, report);
+            result = 0;
+        } else if (captionOnly) {
+            report.insert("stage", "table_caption_activation");
+            MainWindowTest::tableCaption(library, QFileInfo(fixture).absolutePath(), report);
             result = 0;
         } else {
             MainWindowTest::run(library, out, manifest, entry, authored, source, report);
@@ -646,6 +922,24 @@ int main(int argc, char **argv) {
         if (report.value("native_entry_cycle").toObject().value("status") == "RUNNING")
             report.insert("native_entry_cycle", QJsonObject{{"status", "FAIL"}, {"error", QString::fromUtf8(error.what())}});
     }
+    if (bewOnly) {
+        if (bewCopiesReady) {
+            try {
+                auto catalog = bewFixture.value("catalogue").toObject();
+                auto memberRef = bewFixture.value("member").toObject();
+                catalog.insert("path", library + "/languages.tsv");
+                memberRef.insert("path", library + '/' + bewFixture.value("member_relative").toString());
+                pinned(catalog, 4096);
+                pinned(memberRef, 65536);
+                report.insert("bew_private_fixture_post", "PASS");
+            } catch (const std::exception &error) {
+                report.insert("bew_private_fixture_post", "FAIL");
+                report.insert("bew_private_fixture_error", QString::fromUtf8(error.what()));
+                result = 1;
+            }
+        }
+        if (result != 0) report.insert("bew_pisany", QJsonObject{{"status", "FAIL"}});
+    }
     // Preserve setup/control evidence before any fallible report transport.
     temporary.setAutoRemove(false);
     const QString reportPath = out + "/result.json";
@@ -666,10 +960,12 @@ int main(int argc, char **argv) {
     if (output.write(data) != data.size()) return transportFailure("write");
     if (!output.flush()) return transportFailure("flush");
     output.close();
-    QTextStream(stderr) << (startupOnly ? "STARTUP_ONLY_NOT_CONTROLS: " : "Disclosure continuity: ")
+    QTextStream(stderr) << (bewOnly ? "BEW Pisany caption: " :
+                           captionOnly ? "Table caption activation: " :
+                           startupOnly ? "STARTUP_ONLY_NOT_CONTROLS: " : "Disclosure continuity: ")
                         << (result == 0 ? "PASS" : "FAIL") << '\n';
     if (startupOnly) QTextStream(stdout) << QString::fromUtf8(data);
-    if (startupOnly || result != 0) {
+    if (bewOnly || captionOnly || startupOnly || result != 0) {
         QTextStream(stderr) << report.value("error").toString() << "\nDetails: " << reportPath << '\n';
     } else {
         // Only an ordinary successful run with a completely flushed report may clean up.

@@ -5049,8 +5049,8 @@ void MainWindow::queueDisclosureToggle(const QString &path, const QJsonObject &s
             && controls->button(path, source) == button && self->disclosureSources_.value(path) == source
             && !self->readingUncommitted_ && !self->loading_ && !self->readingCompositionActive_;
         if (!same) { controls->cancelToggle(path, button, ticket); return; }
-        const auto model = CompiledDisclosure::parse(source.value("container").toObject());
-        if (!model.button || model.contentIndex != button->model().contentIndex || !controls->consumeToggle(ticket)) {
+        const auto model = CompiledDisclosure::Host::sourceModel(source);
+        if (model.contentIndex != button->model().contentIndex || !controls->consumeToggle(ticket)) {
             controls->cancelToggle(path, button, ticket); return;
         }
         self->disclosureStates_.insert(path, QJsonObject{{"source", source}, {"expanded", expanded}});
@@ -5555,9 +5555,6 @@ bool MainWindow::refreshReading() {
         const QPointer<MainWindow> window(this);
         const QPointer<ReadingBrowser> host(static_cast<ReadingBrowser *>(browser.data()));
         readingDisclosures_->requestSync = [host] { if (host) host->requestLocalScrollSync(); };
-        readingDisclosures_->enterKeyboardFocus = [host](bool next) {
-            if (host && !host->inlineNavigationMoving) host->navigateInlineActions(next, true);
-        };
         readingDisclosures_->reveal = [host](int position) {
             if (!host) return;
             QTextCursor cursor(host->document()); cursor.setPosition(position); host->setTextCursor(cursor);
@@ -6820,19 +6817,43 @@ QString MainWindow::tableHtml(const QJsonObject &table, int depth, int tableDept
         ? SemanticHtml::styleColor(tableStyle.value(QStringLiteral("background"))).name() : inheritedBackground;
     const QJsonArray caption = CompiledContent::array(table.value(QStringLiteral("caption")));
     const QJsonValue captionBlocks = table.value(QStringLiteral("caption_blocks"));
+    const auto disclosure = CompiledContent::tableCaptionDisclosure(table);
+    const auto listMarkerHtml = [&] {
+        return QStringLiteral("<p style='margin:0;margin-left:%1px'>%2</p>")
+            .arg(qMax(0, indent - 12)).arg(listMarker.toHtmlEscaped());
+    };
     QString captionHtml;
     if (CompiledContent::present(captionBlocks)) {
         CompiledContent::require(captionBlocks.isArray() && caption.isEmpty());
         auto captionContext = context;
         captionContext.ordinaryCellContainers = false;
         captionContext.contentDepth = CompiledContent::Depth{context.contentDepth, tableDepth}.nestedContent().content;
-        for (const QJsonValue &value : captionBlocks.toArray())
+        qsizetype index = 0;
+        for (const QJsonValue &value : captionBlocks.toArray()) {
+            const auto childLocation = disclosure && !location.isEmpty()
+                ? location + QStringLiteral("/caption/%1").arg(index) : QString();
             captionHtml += blockHtml(CompiledContent::object(value), tableBackground, tableDepth + 1,
-                {}, inheritedAlignment, captionContext);
+                childLocation, inheritedAlignment, captionContext);
+            ++index;
+        }
     } else captionHtml = spansHtml(caption, 0, {}, tableBackground, context.pointSize,
         context.inheritedInk, -1, context.zeroFontContext, context.typedScopeOwnsIsolation, context.captionLinkPaint, (context.computedCellTraits || !context.containerOwnerFont.isEmpty()), context.fontFamily);
+    bool collapsed = false;
+    if (disclosure) {
+        CompiledContent::require(!location.isEmpty());
+        const auto path = location + QStringLiteral("/caption-toggle");
+        CompiledContent::require(!disclosureSources_.contains(path));
+        disclosureSources_.insert(path, table);
+        collapsed = !CompiledDisclosure::Host::expanded(disclosureStates_, path, table);
+        const auto marker = CompiledDisclosure::Host::marker(path);
+        captionHtml += CompiledContent::present(captionBlocks)
+            ? QStringLiteral("<p style='margin:0'>%1</p>").arg(marker) : QStringLiteral(" ") + marker;
+    }
     if (!captionHtml.isEmpty()) out += QStringLiteral("<caption%1>%2</caption>")
         .arg(inheritedAlignment.isEmpty() ? QString() : QStringLiteral(" align='%1'").arg(inheritedAlignment), captionHtml);
+    // Qt imports the caption before its grid. With no cells it retains only
+    // the caption block, so hidden rows contribute no layout, links or text.
+    if (collapsed) return (listMarker.isEmpty() ? QString() : listMarkerHtml()) + out + QStringLiteral("</table>");
     const bool rendererDefaultBorder = tableDepth == 1 && ownerPolicy.isEmpty() &&
         geometryValue.isUndefined() && table.value(QStringLiteral("style")).isUndefined();
     const auto covered = TableCellLayers::finalCellCover(table, border, rendererDefaultBorder);
@@ -6939,9 +6960,7 @@ QString MainWindow::tableHtml(const QJsonObject &table, int depth, int tableDept
         if (!hasCell) {
             // Keep the list marker as ordinary text. A styled empty table gets
             // its own caption/grid wrapper without manufacturing a list cell.
-            const QString marker = QStringLiteral("<p style='margin:0;margin-left:%1px'>%2</p>")
-                .arg(qMax(0, indent - 12)).arg(listMarker.toHtmlEscaped());
-            return marker + SemanticHtml::tableStyleMarker(table, readingPointSize_, indent, !inheritedAlignment.isEmpty(), {}, tableDepth, context.pointSize, tableOwnerInk, cellOwnerInks, covered) + out;
+            return listMarkerHtml() + SemanticHtml::tableStyleMarker(table, readingPointSize_, indent, !inheritedAlignment.isEmpty(), {}, tableDepth, context.pointSize, tableOwnerInk, cellOwnerInks, covered) + out;
         }
     }
     return SemanticHtml::tableStyleMarker(table, readingPointSize_, indent, !inheritedAlignment.isEmpty(), listMarker, tableDepth, context.pointSize, tableOwnerInk, cellOwnerInks, covered) + out;

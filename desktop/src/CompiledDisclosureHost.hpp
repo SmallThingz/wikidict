@@ -13,6 +13,7 @@
 #include <QScopeGuard>
 #include <QSignalBlocker>
 #include <QSet>
+#include <QTextBlock>
 #include <QTextDocument>
 #include <QTextFrame>
 #include <QTextImageFormat>
@@ -53,6 +54,7 @@ public:
         QPointer<Button> widget;
         QPointer<QTextFrame> owner;
         QByteArray ownerBytes;
+        QTextBlock caption;
         QTextCursor cursor;
         QSizeF size;
         int basePosition = -1;
@@ -62,7 +64,6 @@ public:
     QList<Occurrence> occurrences;
     std::function<void()> requestSync;
     std::function<void(int)> reveal;
-    std::function<void(bool)> enterKeyboardFocus;
     std::function<void(const QString &, const QJsonObject &, bool)> requestToggle;
     std::function<bool(const std::function<void()> &)> editFormats;
 
@@ -74,8 +75,12 @@ public:
         connect(document, &QTextDocument::documentLayoutChanged, this, [this] { retire(); });
     }
     ~Host() override { retire(); }
+    static Model sourceModel(const QJsonObject &source) {
+        if (const auto caption = CompiledContent::tableCaptionDisclosure(source)) return *caption;
+        return parse(source.value("container").toObject());
+    }
     static bool expanded(const States &states, const QString &path, const QJsonObject &block) {
-        const auto model = parse(block.value("container").toObject());
+        const auto model = sourceModel(block);
         const auto state = states.value(path);
         return state.value("source") == block && state.value("expanded").isBool()
             ? state.value("expanded").toBool() : !model.initiallyCollapsed;
@@ -199,13 +204,23 @@ public:
         for (const auto &marker : markers) {
             require(same());
             Occurrence row; row.path = marker.path; row.block = sources.value(marker.path);
-            const auto owned = CompiledContent::containerBlock(row.block);
-            auto model = parse(owned); require(model.button.has_value());
-            for (auto *frame = marker.cursor.currentFrame(); frame && frame != document_->rootFrame(); frame = frame->parentFrame())
-                if (frame->frameFormat().hasProperty(FlowConstruction::containerSourceProperty)) {
-                    row.owner = frame; row.ownerBytes = frame->frameFormat().property(FlowConstruction::containerSourceProperty).toByteArray(); break;
-                }
-            require(row.owner && QJsonDocument::fromJson(row.ownerBytes).object() == row.block);
+            auto model = sourceModel(row.block);
+            if (model.button) {
+                CompiledContent::containerBlock(row.block);
+                for (auto *frame = marker.cursor.currentFrame(); frame && frame != document_->rootFrame(); frame = frame->parentFrame())
+                    if (frame->frameFormat().hasProperty(FlowConstruction::containerSourceProperty)) {
+                        row.owner = frame; row.ownerBytes = frame->frameFormat().property(FlowConstruction::containerSourceProperty).toByteArray(); break;
+                    }
+                require(row.owner && QJsonDocument::fromJson(row.ownerBytes).object() == row.block);
+            } else {
+                // The unique table path marker was emitted inside this caption.
+                // Qt keeps that block even when there is no grid frame.
+                require(present(row.block.value("caption_disclosure")));
+                const int position = marker.cursor.selectionStart();
+                row.caption = document_->findBlock(position);
+                row.owner = document_->frameAt(position);
+                require(row.caption.isValid() && row.owner);
+            }
             const auto inherited = marker.cursor.charFormat();
             auto direction = inherited.layoutDirection();
             if (direction == Qt::LayoutDirectionAuto) direction = marker.cursor.blockFormat().layoutDirection();
@@ -237,6 +252,19 @@ public:
             format.setAnchor(false); format.setName(row.resource); format.setWidth(row.size.width()); format.setHeight(row.size.height());
             format.setProperty(PathProperty, row.path); format.setProperty(GenerationProperty, QVariant::fromValue(generation));
             const auto placement = row.widget->model().placement;
+            if (!row.widget->model().button) {
+                require(same() && row.widget && row.caption.isValid() && placement == QStringLiteral("inline_flow"));
+                const auto capability = layout_->property("_wikidictInlineImageAlignmentCapability");
+                require(same() && row.widget && capability.metaType().id() == QMetaType::QString
+                    && capability.toString() == QStringLiteral("wikidict.inline-image-alignment/1"));
+                // The caption control replaces an unstyled inline marker. Its existing
+                // baseline allocation needs the paired native image rectangle owner.
+                require(format.verticalAlignment() == QTextCharFormat::AlignNormal && format.baselineOffset() == 0
+                    && !format.hasProperty(SemanticHtml::inlineStyleProperty)
+                    && !format.hasProperty(SemanticHtml::figureImageProperty)
+                    && !format.hasProperty(SemanticHtml::inlineImageAlignmentProperty));
+                format.setProperty(SemanticHtml::inlineImageAlignmentProperty, QStringLiteral("baseline"));
+            }
             auto cursor = marker.cursor;
             cursor.insertImage(format, placement == "float_left" ? QTextFrameFormat::FloatLeft
                 : placement == "float_right" ? QTextFrameFormat::FloatRight : QTextFrameFormat::InFlow);
@@ -296,17 +324,20 @@ public:
         int previous = -1;
         for (auto &row : occurrences) {
             if (!row.widget || !row.owner || row.owner->document() != document_
-                || document_->object(row.owner->objectIndex()) != row.owner
-                || row.owner->frameFormat().property(FlowConstruction::containerSourceProperty).toByteArray() != row.ownerBytes) return false;
+                || document_->object(row.owner->objectIndex()) != row.owner) return false;
             QTextCursor cursor(document_); cursor.setPosition(row.cursor.position()); cursor.setPosition(row.cursor.position() + 1, QTextCursor::KeepAnchor);
             const auto format = cursor.charFormat().toImageFormat();
             if (cursor.selectedText() != QString(QChar::ObjectReplacementCharacter) || !cursor.charFormat().isImageFormat()
                 || format.name() != row.resource || format.stringProperty(PathProperty) != row.path
                 || format.property(GenerationProperty).toULongLong() != generation_
                 || QSizeF(format.width(), format.height()) != row.size) return false;
-            bool inside = false;
-            for (auto *frame = cursor.currentFrame(); frame; frame = frame->parentFrame()) inside |= frame == row.owner;
-            if (!inside) return false;
+            if (row.widget->model().button) {
+                if (row.owner->frameFormat().property(FlowConstruction::containerSourceProperty).toByteArray() != row.ownerBytes) return false;
+                bool inside = false;
+                for (auto *frame = cursor.currentFrame(); frame; frame = frame->parentFrame()) inside |= frame == row.owner;
+                if (!inside) return false;
+            } else if (!row.caption.isValid() || document_->findBlock(row.cursor.position()) != row.caption
+                || document_->frameAt(row.cursor.position()) != row.owner) return false;
             row.basePosition = baseOffset(row.cursor.position());
             if (row.basePosition <= previous || baseOffset(row.cursor.position() + 1) != row.basePosition + 1) return false;
             previous = row.basePosition;
@@ -459,11 +490,7 @@ protected:
             for (const auto &row : rows) if (row.widget == watched) {
                 const QPointer<Button> widget(row.widget); const auto show = reveal;
                 if (show) show(row.cursor.position());
-                if (!self || !widget || generation_ != generation || !current()) return true;
-                const auto reason = static_cast<QFocusEvent *>(event)->reason();
-                const auto enter = enterKeyboardFocus;
-                if (enter && (reason == Qt::TabFocusReason || reason == Qt::BacktabFocusReason)) enter(reason == Qt::TabFocusReason);
-                return !self || !widget;
+                return !self || !widget || generation_ != generation || !current();
             }
         }
         return QObject::eventFilter(watched, event);

@@ -201,6 +201,14 @@ if(BUILD_TESTING)
         "${CMAKE_SOURCE_DIR}/tests/fixtures/it_public_disclosure_button_source01.json")
     set_tests_properties(native-disclosure-continuity PROPERTIES
         WORKING_DIRECTORY "${CMAKE_BINARY_DIR}" TIMEOUT 180 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+    add_test(NAME native-table-caption-activation COMMAND dict-disclosure-tests --table-caption
+        "${CMAKE_CURRENT_SOURCE_DIR}/../tests/fixtures/mk-aller-caption.payload")
+    set_tests_properties(native-table-caption-activation PROPERTIES
+        WORKING_DIRECTORY "${CMAKE_BINARY_DIR}" TIMEOUT 120 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+    add_test(NAME bew-pisany-caption-open-toggle-reopen COMMAND dict-disclosure-tests --bew-pisany
+        "${CMAKE_CURRENT_SOURCE_DIR}/../tests/fixtures/bew-pisany-contract01.json")
+    set_tests_properties(bew-pisany-caption-open-toggle-reopen PROPERTIES
+        WORKING_DIRECTORY "${CMAKE_BINARY_DIR}" TIMEOUT 120 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
     add_executable(dict-fake-voice ../tests/FakeVoice.cpp)
     target_compile_features(dict-fake-voice PRIVATE cxx_std_20)
     set_target_properties(dict-fake-voice PROPERTIES AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)

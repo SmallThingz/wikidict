@@ -9,6 +9,7 @@
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QStyleOptionButton>
 #include <QTextLayout>
 #include <QtMath>
 #include <QtGui/private/qcssutil_p.h>
@@ -26,18 +27,20 @@ class Button final : public QAbstractButton {
 public:
     Button(Model model, const QColor &inheritedForeground, Qt::LayoutDirection inheritedDirection, QWidget *parent = nullptr)
         : QAbstractButton(parent), model_(std::move(model)), inheritedForeground_(inheritedForeground) {
-        require(model_.button.has_value() && inheritedForeground.isValid());
+        require(inheritedForeground.isValid());
         setCheckable(true); setAutoRepeat(false); setFocusPolicy(Qt::StrongFocus); setMouseTracking(true);
         setLayoutDirection(model_.direction.value_or(inheritedDirection));
         setChecked(!model_.initiallyCollapsed);
-        const auto &button = *model_.button;
-        QFont declared(button.fontFamily);
-        declared.setPointSizeF(button.fontSize * 72 / 96);
-        declared.setWeight(QFont::Normal); declared.setItalic(false);
-        require(QFontInfo(declared).family().compare(button.fontFamily, Qt::CaseInsensitive) == 0);
-        require(QFontInfo(declared).weight() == QFont::Normal && !QFontInfo(declared).italic());
-        setFont(declared);
-        verifyLabel(model_.expandLabel); verifyLabel(model_.collapseLabel);
+        if (model_.button) {
+            const auto &button = *model_.button;
+            QFont declared(button.fontFamily);
+            declared.setPointSizeF(button.fontSize * 72 / 96);
+            declared.setWeight(QFont::Normal); declared.setItalic(false);
+            require(QFontInfo(declared).family().compare(button.fontFamily, Qt::CaseInsensitive) == 0);
+            require(QFontInfo(declared).weight() == QFont::Normal && !QFontInfo(declared).italic());
+            setFont(declared);
+            verifyLabel(model_.expandLabel); verifyLabel(model_.collapseLabel);
+        }
         for (const auto &label : {model_.expandLabel, model_.collapseLabel}) for (int state = 0; state < 4; ++state) {
             const auto size = borderBoxSizeFor(label, state);
             require(size.width() + 2 * outlineOverhang() <= QWIDGETSIZE_MAX
@@ -58,12 +61,21 @@ public:
     QPointF borderOrigin() const { return borderOrigin_.value_or(QPointF(outlineOverhang(), outlineOverhang())); }
     const Model &model() const { return model_; }
     bool focusVisible() const { return hasFocus() && focusVisible_; }
-    std::optional<QColor> currentOutlineColor() const { return outlineColor(*model_.button, hasFocus(), focusVisible()); }
+    std::optional<QColor> currentOutlineColor() const {
+        return model_.button ? outlineColor(*model_.button, hasFocus(), focusVisible()) : std::nullopt;
+    }
     QSizeF borderBoxSize() const { return borderBoxSizeFor(text(), stateIndex(hovered_, isDown())); }
     QSizeF borderBoxSizeFor(const QString &label, int stateIndexValue) const {
         require(stateIndexValue >= 0 && stateIndexValue < 4);
         QTextLayout layout(label, font(), const_cast<Button *>(this));
         const auto textSize = configureLayout(layout);
+        if (!model_.button) {
+            const auto option = nativeOption(label);
+            const auto size = style()->sizeFromContents(QStyle::CT_PushButton, &option,
+                QSize(qCeil(textSize.width()), qCeil(textSize.height())), this);
+            require(size.width() > 0 && size.height() > 0 && size.width() <= QWIDGETSIZE_MAX && size.height() <= QWIDGETSIZE_MAX);
+            return size;
+        }
         const auto &button = *model_.button;
         const auto &state = button.states[stateIndexValue];
         const qreal scale = logicalDpiY() / qreal(96);
@@ -73,7 +85,7 @@ public:
         return size;
     }
     qreal outlineOverhang() const {
-        const auto outline = model_.button->focusVisible;
+        const auto outline = model_.button ? model_.button->focusVisible : std::nullopt;
         return outline ? qMax(qreal(0), outline->width + outline->offset) * logicalDpiY() / 96 : 0;
     }
     QSize sizeHint() const override {
@@ -127,6 +139,13 @@ protected:
     void leaveEvent(QEvent *event) override { hovered_ = false; QAbstractButton::leaveEvent(event); notifyMetrics(); update(); }
     void paintEvent(QPaintEvent *) override {
         QPainter painter(this);
+        if (!model_.button) {
+            auto option = nativeOption(text());
+            option.rect = QRect(QPoint(), borderBoxSize().toSize());
+            painter.translate(borderOrigin());
+            style()->drawControl(QStyle::CE_PushButton, &option, &painter, this);
+            return;
+        }
         painter.setRenderHint(QPainter::Antialiasing);
         const auto &button = *model_.button;
         const int index = stateIndex(hovered_, isDown());
@@ -170,6 +189,18 @@ protected:
         }
     }
 private:
+    QStyleOptionButton nativeOption(QString label) const {
+        QStyleOptionButton option;
+        option.initFrom(this);
+        // Localized labels are literal text in the native style API.
+        option.text = label.replace(QChar('&'), QStringLiteral("&&"));
+        option.state.setFlag(QStyle::State_MouseOver, hovered_);
+        option.state.setFlag(QStyle::State_Sunken, isDown());
+        option.state.setFlag(QStyle::State_Raised, !isDown());
+        option.state.setFlag(QStyle::State_HasFocus, focusVisible());
+        option.state.setFlag(QStyle::State_KeyboardFocusChange, focusVisible());
+        return option;
+    }
     void notifyMetrics() { updateGeometry(); if (metricsChanged) metricsChanged(); }
     void updateLabel() {
         setText(isChecked() ? model_.collapseLabel : model_.expandLabel);
@@ -187,7 +218,7 @@ private:
             auto line = layout.createLine();
             if (!line.isValid()) break;
             line.setLineWidth(QWIDGETSIZE_MAX);
-            const qreal lineHeight = model_.button->lineHeight
+            const qreal lineHeight = model_.button && model_.button->lineHeight
                 ? *model_.button->lineHeight * logicalDpiY() / 96 : line.height();
             line.setPosition(QPointF(0, height + (lineHeight - line.height()) / 2));
             width = qMax(width, line.naturalTextWidth()); height += lineHeight;

@@ -1088,6 +1088,32 @@ struct Depth {
 
 enum class TableSpans { Stored, VisibleBody };
 
+inline std::optional<CompiledDisclosure::Model> tableCaptionDisclosure(const QJsonObject &table) {
+    const auto value = table.value("caption_disclosure");
+    if (!present(value)) return {};
+    const QStringList fields{"initially_collapsed", "expand_label", "collapse_label"};
+    const auto policy = CompiledDisclosure::containerObject(value, fields, fields);
+    require(policy.value("initially_collapsed").isBool());
+    for (const auto *key : {"disclosure", "caption_viewport", "rows_hidden_max_width_px", "block_viewport", "float_viewport"})
+        require(!present(table.value(QLatin1StringView(key))));
+    const auto display = table.value("style").toObject().value("display");
+    require(!present(display) || display == QStringLiteral("table"));
+    const auto caption = array(table.value("caption"));
+    const auto blocks = table.value("caption_blocks");
+    require(present(blocks) ? caption.isEmpty() && !array(blocks).isEmpty() : !caption.isEmpty());
+    bool hasGrid = false;
+    for (const auto &row : array(table.value("rows")))
+        hasGrid |= !array(object(row).value("cells")).isEmpty();
+    require(hasGrid);
+
+    CompiledDisclosure::Model model;
+    model.initiallyCollapsed = policy.value("initially_collapsed").toBool();
+    model.expandLabel = CompiledDisclosure::label(policy.value("expand_label"));
+    model.collapseLabel = CompiledDisclosure::label(policy.value("collapse_label"));
+    model.placement = QStringLiteral("inline_flow");
+    return model;
+}
+
 struct Context {
     QString language;
     // Value-owned because some metadata visitors retain Context after walking.
@@ -1269,6 +1295,7 @@ public:
         caption(value, depth, content);
     }
     void table(const QJsonObject &value, Depth depth, Context context = {}) {
+        tableCaptionDisclosure(value);
         caption(value, depth, context);
         for (const QJsonValue &row : array(value.value(QStringLiteral("rows")))) {
             for (const QJsonValue &cellValue : array(object(row).value(QStringLiteral("cells")))) {

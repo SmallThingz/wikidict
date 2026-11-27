@@ -1,0 +1,51 @@
+{
+  "schema": "wikidict.qt.bew-pisany-fixture.v1",
+  "selector": "bew-pisany-caption-open-toggle-reopen",
+  "catalogue": {
+    "path": "bew-pisany/languages.tsv",
+    "bytes": 12,
+    "sha256": "f37cb21ccdba77fe1a681c2ac0adf299d05d4268842e3b5ee368f969652ec6bc"
+  },
+  "member": {
+    "path": "bew-pisany/languages/8370565179f520e7911be82a20f5e9817c307a83d330332c53b040f077991f94.wikblb",
+    "bytes": 5616,
+    "sha256": "f837afb12a46307490464f8604acd56b68f8c81b6bb35c9e67c18de7a517f2e7"
+  },
+  "reference_response": {
+    "path": "bew-pisany/lookup.expected.json",
+    "bytes": 26236,
+    "sha256": "61dddeca2cd127ef498096682bd9f8f286a4c9e186ca3b932fc2d882a970b554"
+  },
+  "member_relative": "languages/8370565179f520e7911be82a20f5e9817c307a83d330332c53b040f077991f94.wikblb",
+  "page_id": 5351,
+  "revision": 57725,
+  "ordinal": 5282,
+  "metadata": {
+    "heading": "Pol",
+    "language_code": "pl",
+    "kind": "language"
+  },
+  "title": "pisany",
+  "table_pointer": "/entries/0/sections/1/blocks/5/table",
+  "native_table_path": "block-1-5/caption-toggle",
+  "endpoint_pointer": "/entries/0/sections/1/blocks/5/table/rows/7/cells/5",
+  "endpoint": {
+    "kind": "text",
+    "text": "pisanych",
+    "target": "",
+    "colspan": 2,
+    "rowspan": 1
+  },
+  "expected": {
+    "caption_text": "Pemblèngkokan pisany",
+    "caption_spans": 2,
+    "caption_disclosure": {
+      "initially_collapsed": true,
+      "expand_label": "Tèmprakin",
+      "collapse_label": "Gulung"
+    },
+    "authored_rows": 8,
+    "authored_cells": 48,
+    "native_slot_count": "Must derive exact spans from typedtable; 48 is authored-cell count, not native slot count."
+  }
+}
