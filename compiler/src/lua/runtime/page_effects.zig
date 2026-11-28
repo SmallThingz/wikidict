@@ -11,8 +11,15 @@ pub const max_operand_bytes = 16 * 1024;
 pub const max_scan_bytes = 64 * 1024 * 1024;
 pub const Origin = enum { extension_call, literal_input, preprocess_result, expanded_output, display_title };
 pub const StyleOperand = struct { src: []const u8, origin: Origin };
+pub const LiteralAngleCandidate = struct { token: []const u8, origin: Origin };
 pub const Identity = struct { title: []const u8, namespace: i32, page_id: u64, revision_id: u64 };
 pub const LiteralState = struct { ordinary_open: bool = false, quote: u8 = 0 };
+
+const extension_names = [_][]const u8{ "nowiki", "pre", "poem", "templatestyles", "ref", "references" };
+
+fn isCiteExtension(name: []const u8) bool {
+    return std.ascii.eqlIgnoreCase(name, "ref") or std.ascii.eqlIgnoreCase(name, "references");
+}
 
 fn ordinaryTag(name: []const u8) bool {
     inline for (&.{ "a", "abbr", "b", "bdi", "bdo", "big", "blockquote", "br", "caption", "center", "cite", "code", "dd", "del", "div", "dl", "dt", "em", "font", "h1", "h2", "h3", "h4", "h5", "h6", "hr", "i", "ins", "kbd", "li", "mark", "ol", "p", "q", "rb", "rp", "rt", "rtc", "ruby", "s", "samp", "small", "span", "strike", "strong", "sub", "sup", "table", "tbody", "td", "tfoot", "th", "thead", "tr", "tt", "u", "ul", "var", "wbr" }) |tag|
@@ -31,10 +38,35 @@ pub const Collector = struct {
     unknown: bool = false,
     operations: usize = 0,
     scan_bytes: usize = 0,
-    seen: [4]bool = @splat(false),
+    seen: [extension_names.len]bool = @splat(false),
     styles: std.ArrayList(StyleOperand) = .empty,
     operand_bytes: usize = 0,
     scan_depth: usize = 0,
+    cite_depth: usize = 0,
+    gallery_literal: ?[32]u8 = null,
+    gallery_span: ?struct { start: usize, end: usize } = null,
+    literal_angle_candidates: std.ArrayList(LiteralAngleCandidate) = .empty,
+    literal_angle_bytes: usize = 0,
+
+    fn sawCite(self: *const @This()) bool {
+        for (extension_names, self.seen) |name, observed| {
+            if (observed and isCiteExtension(name)) return true;
+        }
+        return false;
+    }
+
+    fn observeLiteralAngle(self: *@This(), a: std.mem.Allocator, token: []const u8, origin: Origin) void {
+        if (self.sawCite()) { self.reject(); return; }
+        for (self.literal_angle_candidates.items) |held| {
+            if (held.origin == origin and std.mem.eql(u8, held.token, token)) return;
+        }
+        if (self.literal_angle_candidates.items.len == 128 or token.len > 16 * 1024 - self.literal_angle_bytes) {
+            self.reject(); return;
+        }
+        const held = a.dupe(u8, token) catch { self.reject(); return; };
+        self.literal_angle_candidates.append(a, .{ .token = held, .origin = origin }) catch { self.reject(); return; };
+        self.literal_angle_bytes += token.len;
+    }
 
     // Storage is page-arena owned. A new page discards all previous observations.
     pub fn begin(self: *@This(), generation: ?u64) void {
@@ -57,13 +89,22 @@ pub const Collector = struct {
         if (!self.active()) return;
         if (self.operations == max_operations) { self.reject(); return; }
         self.operations += 1;
-        const names = [_][]const u8{ "nowiki", "pre", "poem", "templatestyles" };
-        const index = for (names, 0..) |tag, i| {
+        const index = for (extension_names, 0..) |tag, i| {
             if (std.ascii.eqlIgnoreCase(name, tag)) break i;
         } else { self.reject(); return; };
+        // Cite is observed explicitly, never classified as an inactive hook.
+        // Only the bounded no-attribute final forms below are accepted. Nested
+        // Cite needs a separate ownership model; do not grant it by recursion.
+        if (isCiteExtension(name) and
+            (origin == .extension_call or self.cite_depth != 0 or self.gallery_literal != null or
+                self.literal_angle_candidates.items.len != 0))
+        {
+            self.reject();
+            return;
+        }
         self.seen[index] = true;
         if (!attrs_supported) { self.reject(); return; }
-        if (index != 3) return;
+        if (!std.ascii.eqlIgnoreCase(name, "templatestyles")) return;
         const value = src orelse { self.reject(); return; };
         if (!attrs_supported or !safeOperand(value)) { self.reject(); return; }
         // This is a set of observed operands/origins, NOT emission/dedup order.
@@ -98,6 +139,46 @@ pub const Collector = struct {
         self.extension(a, "templatestyles", src, true, origin);
     }
 
+    // Carry the exact syntax to a module-aware producer. This path supplies
+    // operands only, never a complete module list or a successful media fact.
+    fn observeLiteralGallery(self: *@This(), text: []const u8, at: usize, origin: Origin) ?usize {
+        if (self.sawCite()) return null;
+        const opening = "<gallery>\n";
+        const closing = "\n</gallery>";
+        if (!std.mem.startsWith(u8, text[at..], opening)) return null;
+        const d = preprocess.opaqueParserRegionEnd(text, at) orelse return null;
+        const region = text[at..d];
+        if (region.len > 16384 or region.len <= opening.len + closing.len or
+            !std.mem.endsWith(u8, region, closing)) return null;
+        const body = region[opening.len .. region.len - closing.len];
+        if (!std.unicode.utf8ValidateSlice(body) or std.mem.indexOfAny(u8, body, "<>{}\r\x00") != null) return null;
+        var lines = std.mem.splitScalar(u8, body, '\n');
+        var count: usize = 0;
+        while (lines.next()) |line| {
+            const pipe = std.mem.indexOfScalar(u8, line, '|') orelse return null;
+            if (pipe == 0 or line.len > 4096 or count == 128) return null;
+            count += 1;
+        }
+        var digest: [32]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash(region, &digest, .{});
+        if (self.operations == max_operations) return null;
+        switch (origin) {
+            .literal_input => {
+                if (self.scan_depth != 0 or self.gallery_literal != null) return null;
+                self.gallery_literal = digest;
+            },
+            .expanded_output => {
+                const observed = self.gallery_literal orelse return null;
+                if (self.scan_depth != 1 or self.gallery_span != null or
+                    !std.mem.eql(u8, &digest, &observed)) return null;
+                self.gallery_span = .{ .start = at, .end = d };
+            },
+            else => return null,
+        }
+        self.operations += 1;
+        return d;
+    }
+
     // Called on actual literal dispatch slices; branches not evaluated are not
     // scanned. Ordinary opening attributes may straddle child substitutions.
     // Extension attributes/regions must be complete in the authoritative slice.
@@ -129,6 +210,13 @@ pub const Collector = struct {
                     continue;
                 }
             }
+            if (origin != .display_title and origin != .extension_call) {
+                if (preprocess.literalDoubleAngleProseEnd(text, at)) |end| {
+                    self.observeLiteralAngle(a, text[at..end], origin);
+                    i = end;
+                    continue;
+                }
+            }
             var p = at + 1;
             const closing = p < text.len and text[p] == '/';
             if (closing) p += 1;
@@ -144,6 +232,10 @@ pub const Collector = struct {
                 i = p;
                 continue;
             }
+            if (std.ascii.eqlIgnoreCase(name, "gallery")) {
+                i = self.observeLiteralGallery(text, at, origin) orelse { self.reject(); return; };
+                continue;
+            }
             const end = preprocess.rawTagEnd(text, at) orelse { self.reject(); return; };
             // Do not grant opaque-body authority if the native decoded parser
             // would terminate this opener earlier than this quote-aware reader.
@@ -151,16 +243,30 @@ pub const Collector = struct {
             const trimmed = std.mem.trimEnd(u8, text[p .. end - 1], " \t\r\n");
             const self_close = trimmed.len != 0 and trimmed[trimmed.len - 1] == '/';
             const attrs = if (self_close) trimmed[0 .. trimmed.len - 1] else trimmed;
+            const cite_ref = std.ascii.eqlIgnoreCase(name, "ref");
+            const cite_references = std.ascii.eqlIgnoreCase(name, "references");
+            // Bounded literal Cite: a closed nonempty note, and an empty
+            // self-closing references sink. Named/grouped/list-defined forms
+            // remain unsupported; extension() also rejects any attributes.
+            if ((cite_ref and self_close) or (cite_references and !self_close)) { self.reject(); return; }
             if (std.ascii.eqlIgnoreCase(name, "templatestyles")) self.literalStyle(a, attrs, origin)
             else self.extension(a, name, null, std.mem.trim(u8, attrs, " \t\r\n").len == 0, origin);
             if (!self.active()) return;
             if (self_close) { i = end; continue; }
             const region_end = preprocess.opaqueParserRegionEnd(text, at) orelse { self.reject(); return; };
             if (region_end <= end) { self.reject(); return; }
-            if (std.ascii.eqlIgnoreCase(name, "poem")) {
+            if (std.ascii.eqlIgnoreCase(name, "poem") or cite_ref) {
                 const close = std.mem.lastIndexOfScalar(u8, text[0..region_end], '<') orelse { self.reject(); return; };
                 if (close < end) { self.reject(); return; }
-                self.scanComplete(a, text[end..close], origin);
+                const body = text[end..close];
+                if (cite_ref and std.mem.trim(u8, body, " \t\r\n").len == 0) { self.reject(); return; }
+                // Native Cite keeps note contents active. Scan them with the
+                // same budgets/opaque rules; never hide gallery/unknown hooks.
+                if (cite_ref) self.cite_depth += 1;
+                defer {
+                    if (cite_ref) self.cite_depth -= 1;
+                }
+                self.scanComplete(a, body, origin);
             }
             // nowiki/pre bodies are not extension inputs. Poem contents above
             // remain conservative even for a generated, unprocessed return.
@@ -184,9 +290,14 @@ pub const Collector = struct {
         self.scanComplete(a, expanded, .expanded_output);
         self.scanComplete(a, display_title, .display_title);
         if (!self.active()) return null;
+        if (self.gallery_literal != null and self.literal_angle_candidates.items.len != 0) { self.reject(); return null; }
         var bound: usize = 2048 + 6 * identity.title.len;
         for (self.styles.items) |item| {
             bound += 128 + 6 * item.src.len;
+            if (bound > max_metadata_bytes) { self.reject(); return null; }
+        }
+        for (self.literal_angle_candidates.items) |item| {
+            bound += 128 + 6 * item.token.len;
             if (bound > max_metadata_bytes) { self.reject(); return null; }
         }
         if (bound > max_metadata_bytes) { self.reject(); return null; }
@@ -197,13 +308,12 @@ pub const Collector = struct {
         const raw_hex = std.fmt.bytesToHex(hashes[0], .lower);
         const expanded_hex = std.fmt.bytesToHex(hashes[1], .lower);
         const display_hex = std.fmt.bytesToHex(hashes[2], .lower);
-        const names = [_][]const u8{ "nowiki", "pre", "poem", "templatestyles" };
-        var seen: [4][]const u8 = undefined;
+        var seen: [extension_names.len][]const u8 = undefined;
         var count: usize = 0;
-        for (names, self.seen) |name, yes| if (yes) { seen[count] = name; count += 1; };
+        for (extension_names, self.seen) |name, yes| if (yes) { seen[count] = name; count += 1; };
         const record = .{
             .schema = schema,
-            .status = "complete",
+            .status = if (self.gallery_literal != null) @as([]const u8, "operands_only") else "complete",
             .collector = "native-executed-extensions.v1",
             .generation = self.generation.?,
             .identity = identity,
@@ -215,7 +325,39 @@ pub const Collector = struct {
             .template_styles = self.styles.items,
             .placement = @as(?bool, null),
         };
-        const bytes = std.json.Stringify.valueAlloc(a, record, .{}) catch { self.reject(); return null; };
+        const bytes = if (self.gallery_literal) |digest| gallery: {
+            const span = self.gallery_span orelse return null;
+            const operand = expanded[span.start..span.end];
+            const raw_start = std.mem.indexOf(u8, source, operand) orelse return null;
+            if (std.mem.indexOfPos(u8, source, raw_start + 1, operand) != null) return null;
+            // Old consumers require complete v1 records; keep this envelope
+            // distinguishable even if a JSON reader ignores unknown fields.
+            break :gallery std.json.Stringify.valueAlloc(a, .{
+                .schema = "wikidict.page-effects.literal-gallery.v1",
+                .status = "operands_only",
+                .phase = record,
+                .gallery = .{
+                    .raw_start = raw_start, .expanded_start = span.start,
+                    .bytes = operand.len, .sha256 = &std.fmt.bytesToHex(digest, .lower),
+                },
+            }, .{}) catch { self.reject(); return null; };
+        } else if (self.literal_angle_candidates.items.len == 0)
+            std.json.Stringify.valueAlloc(a, record, .{}) catch { self.reject(); return null; }
+        else std.json.Stringify.valueAlloc(a, .{
+            .schema = record.schema,
+            .status = "literal-angle-authority-required",
+            .collector = record.collector,
+            .generation = record.generation,
+            .identity = record.identity,
+            .source_sha256 = record.source_sha256,
+            .expanded_sha256 = record.expanded_sha256,
+            .display_title_sha256 = record.display_title_sha256,
+            .operation_count = record.operation_count,
+            .observed_extensions = record.observed_extensions,
+            .template_styles = record.template_styles,
+            .placement = record.placement,
+            .literal_angle_candidates = self.literal_angle_candidates.items,
+        }, .{}) catch { self.reject(); return null; };
         if (bytes.len > max_metadata_bytes) { a.free(bytes); self.reject(); return null; }
         return bytes;
     }

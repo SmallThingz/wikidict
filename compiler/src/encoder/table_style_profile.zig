@@ -46036,6 +46036,21 @@ test "disclosure link prefix keeps empty inline pairs and numeric notes closed" 
     try std.testing.expect(!disclosureOrdinaryPrefix("[[File:A.svg|caption<small></small>]]<div>\n\n"));
 }
 
+fn disclosureTranslationGlossEnd(line: []const u8, at: usize, last_link_end: ?usize) ?usize {
+    const prior = last_link_end orelse return null;
+    if (!std.mem.startsWith(u8, line, ":*") or prior + 1 != at or line[prior] != ' ') return null;
+    const close = std.mem.indexOfScalarPos(u8, line, at + 1, ']') orelse return null;
+    if (close - at > 49 or !std.mem.startsWith(u8, line[close..], "]] ")) return null;
+    const gloss = line[at + 1 .. close];
+    if (gloss.len == 0) return null;
+    const utf8 = std.unicode.Utf8View.init(gloss) catch return null;
+    var chars = utf8.iterator();
+    while (chars.nextCodepoint()) |cp| {
+        if (!(cp >= 0x3400 and cp <= 0x4dbf) and !(cp >= 0x4e00 and cp <= 0x9fff)) return null;
+    }
+    return close + 2;
+}
+
 fn disclosureOrdinaryPrefix(prefix: []const u8) bool {
     const syntax = @import("blob_encoder").wikitext_syntax;
     if (prefix.len == 0) return true;
@@ -46051,6 +46066,7 @@ fn disclosureOrdinaryPrefix(prefix: []const u8) bool {
         const line = std.mem.trimEnd(u8, physical, "\r");
         if (line.len > 65536 or std.mem.indexOfAny(u8, line, "\x00\r\x7f") != null) return false;
         var pos: usize = 0;
+        var last_link_end: ?usize = null;
         var closed_disclosure = false;
         if (std.mem.startsWith(u8, line, "{|")) {
             if (table_depth != null) return false;
@@ -46072,6 +46088,12 @@ fn disclosureOrdinaryPrefix(prefix: []const u8) bool {
             const next = std.mem.indexOfAnyPos(u8, line, pos, "<>[]{}") orelse break;
             switch (line[next]) {
                 '<' => {
+                    if (depth == 0 and table_depth == null) {
+                        if (syntax.literalDoubleAngleProseEnd(line, next)) |end| {
+                            pos = end;
+                            continue;
+                        }
+                    }
                     const tag = syntax.tagAt(line, next) orelse return false;
                     if (tag.html_pre or std.mem.indexOfAny(u8, tag.attrs, "<>{}[]&") != null) return false;
                     if (tag.is("br")) {
@@ -46090,15 +46112,25 @@ fn disclosureOrdinaryPrefix(prefix: []const u8) bool {
                             if (tag.is(name)) { admitted = true; break; };
                         if (!admitted or tag.self_closing) return false;
                         if (tag.closing) {
-                            if (depth == 0 or !tag.is(tags[depth - 1]) or trim(tag.attrs).len != 0) return false;
-                            depth -= 1;
+                            if (depth == 0 or trim(tag.attrs).len != 0) return false;
+                            var closing_depth = depth;
+                            if (tag.is("table")) {
+                                // A closing TABLE also ends its own cell and row.
+                                // Never pop a formatting frame, DIV or outer table.
+                                if (std.ascii.eqlIgnoreCase(tags[closing_depth - 1], "td") or
+                                    std.ascii.eqlIgnoreCase(tags[closing_depth - 1], "th")) closing_depth -= 1;
+                                if (closing_depth > 0 and std.ascii.eqlIgnoreCase(tags[closing_depth - 1], "tr"))
+                                    closing_depth -= 1;
+                            }
+                            if (closing_depth == 0 or !tag.is(tags[closing_depth - 1])) return false;
+                            depth = closing_depth - 1;
                         } else {
                             if (!disclosureQuotedAttrs(tag.attrs) or line[tag.end - 2] == '/' or depth == tags.len or
                                 std.mem.indexOf(u8, tag.attrs, "mw-content-rtl") != null or
                                 std.mem.indexOf(u8, tag.attrs, "mw-content-ltr") != null) return false;
                             // Validate each opening, including frames closed
-                            // again before EOL. An implied cell close or fostered
-                            // DIV cannot stand in for this exact table chain.
+                            // again before EOL. Openings retain this exact table
+                            // chain; only closing TABLE may finish its cell and row.
                             const parent = if (depth == 0) "" else tags[depth - 1];
                             const eq = std.ascii.eqlIgnoreCase;
                             if (tag.is("table") and (table_depth != null or
@@ -46124,11 +46156,24 @@ fn disclosureOrdinaryPrefix(prefix: []const u8) bool {
                 },
                 '[' => {
                     const double = std.mem.startsWith(u8, line[next..], "[[");
+                    // A literal Han gloss can follow a link in a translation
+                    // row of an already established disclosure table.
+                    if (!double and disclosure_owner and disclosure_content and table_depth == depth) {
+                        if (disclosureTranslationGlossEnd(line, next, last_link_end)) |end| {
+                            pos = end;
+                            last_link_end = null;
+                            continue;
+                        }
+                    }
                     const end = if (double) disclosureLineLink(line, next) orelse return false else
                         (std.mem.indexOfScalarPos(u8, line, next + 1, ']') orelse return false) + 1;
                     if (!double and std.mem.indexOfAny(u8, line[next + 1 .. end - 1], "<>{}[]") != null) return false;
+                    last_link_end = if (double) end else null;
                     pos = end;
                 },
+                // A closing angle in ordinary HTML text cannot open or close an ancestor.
+                // The '<' branch already consumes and validates every admitted tag.
+                '>' => pos = next + 1,
                 else => return false,
             }
         }
@@ -47169,4 +47214,12 @@ test "disclosure partial sibling ancestor projection retains omitted owner IDs" 
     nodes[0].attributes = &.{.{ .name = "id", .value = "contentSub" }};
     try std.testing.expectEqual(ContainerSelectorMatch.unknown,
         observedStyleRuleMatch(rule, &nodes, null, 1, null, ev));
+}
+
+test "IT Arancio188 literal closing angle preserves a disclosure root prefix" {
+    const before = "dall'[[arabo]]  نارنج, nāranğ (letteralmente \"[[frutto]] favorito dagli [[elefanti]]\"). In italiano la parola ha subito la caduta della N ritenuta parte dell'articolo ( un narancio ";
+    const after = " un arancio ); la forma narancio è attestata nell'Ariosto e in alcuni dialetti, ad es. a Venezia troviamo naranza";
+    try std.testing.expect(disclosureOrdinaryPrefix(before ++ ">" ++ after ++ "\n\n"));
+    try std.testing.expect(!disclosureOrdinaryPrefix(before ++ "<" ++ after ++ "\n\n"));
+    try std.testing.expect(!disclosureOrdinaryPrefix("<div>\n" ++ before ++ ">" ++ after ++ "\n\n"));
 }

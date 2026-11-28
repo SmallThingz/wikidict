@@ -201,6 +201,27 @@ pub const Catalog = struct {
         }
         return null;
     }
+    // A gallery line has a default File namespace and percent-decoded title.
+    // The normal observation still supplies the row/caption and exact redirect
+    // outcome. Check that outcome against our independently verified provider.
+    pub fn matchesGalleryBitmap(self: Catalog, a: std.mem.Allocator, ns: *const NS.Registry,
+        operand: []const u8, requested: []const u8, canonical: []const u8) !bool
+    {
+        const storage = try a.dupe(u8, operand);
+        defer a.free(storage);
+        const decoded = std.Uri.percentDecodeInPlace(storage);
+        if (!std.unicode.utf8ValidateSlice(decoded) or std.mem.indexOfAny(u8, decoded, "<>[]{}|\t\r\n\x00") != null)
+            return false;
+        const title = ns.normalizeTitle(a, decoded, 6, .any) catch |err| switch (err) {
+            error.InvalidPageTitle => return false,
+            else => return err,
+        };
+        defer a.free(title);
+        if (!std.mem.eql(u8, title, requested)) return false;
+        const entry = self.entries[self.index(title) orelse return false];
+        return entry.media == .bitmap and std.mem.eql(u8, entry.canonical, canonical);
+    }
+
     fn checkProvider(self: Catalog, a: std.mem.Allocator, ns: *const NS.Registry, raw: []const u8) !void {
         const provider_header = "# wikidict-file-metadata-v2\n";
         if (!std.mem.startsWith(u8, raw, provider_header)) return invalid();

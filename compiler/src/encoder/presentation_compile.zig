@@ -1903,7 +1903,13 @@ pub const ContainerDisclosureCapture = struct {
 // conditional applicability, runtime modules, base URLs and local styles in
 // physical cascade order. A list reconstructed from the shared profile itself
 // is not a page selection. The returned proof borrows this exact source record.
+pub const LiteralGalleryAuthority = struct {
+    body: []const u8,
+    files: []const ?[]const u8,
+};
+
 pub const ContainerDisclosureStyleScope = struct {
+    literal_gallery: ?LiteralGalleryAuthority = null,
     source: []const u8,
     shared: *const table_style_profile.DisclosureSharedProfile,
     selected_font: ?*const table_style_profile.DisclosureFontTransfer = null,
@@ -1942,7 +1948,38 @@ pub const ContainerDisclosureStyleScope = struct {
     }
 };
 
+/// Build-time ownership proof for one terminal, still-open translation
+/// disclosure. Its EOF actions are zero-width. They are not authored tags
+/// and do not replace the expanded bytes in a receipt or presentation input.
+pub const TranslationEofProof = struct {
+    const CloseKind = enum { cell, row, row_group, table, content, owner };
+    const Close = struct { kind: CloseKind, opener: ?usize, at: usize, bytes: usize = 0 };
+    pub const Child = struct {
+        owner: usize,
+        content: usize,
+        table: usize,
+        table_close: usize,
+        end: usize,
+        parent_cell: usize,
+    };
+
+    expanded: []const u8,
+    closes: [6]Close,
+    children: [8]Child = undefined,
+    child_count: usize = 0,
+
+    pub fn childAt(self: *const @This(), start: usize) ?Child {
+        for (self.children[0..self.child_count]) |child| if (child.owner == start) return child;
+        return null;
+    }
+
+    pub fn binds(self: *const TranslationEofProof, expanded: []const u8) bool {
+        return self.expanded.ptr == expanded.ptr and self.expanded.len == expanded.len;
+    }
+};
+
 pub const ContainerDisclosureSource = struct {
+    translation_eof: ?*const TranslationEofProof = null,
     page_style_scope: ?*const ContainerDisclosureStyleScope = null,
     source: []const u8,
     captures: []const ContainerDisclosureCapture,
@@ -5378,6 +5415,15 @@ pub const TableDirectionRangeBinding = struct {
             !std.mem.eql(u8, part, self.projection.prepared[self.page_start + offset..][0..part.len])) return null;
         return self.projection.originalRange(self.page_start + offset, part.len);
     }
+
+    fn ownerSliceForOriginal(self: @This(), start: usize, len: usize) ?[]const u8 {
+        const prepared = self.projection.preparedRange(start, len) orelse return null;
+        if (prepared < self.page_start) return null;
+        const offset = prepared - self.page_start;
+        if (offset > self.owner.bytes.len or len > self.owner.bytes.len - offset) return null;
+        const part = self.owner.bytes[offset..][0..len];
+        return if (self.originalRange(part) == start) part else null;
+    }
 };
 
 pub const SourceElementBinding = struct {
@@ -6069,16 +6115,28 @@ const PageExternalNumbering = struct {
         try self.replace(raw, 0, raw.len, try escaped.toOwnedSlice(self.a));
     }
     fn gallery(self: *@This(), input: []const u8, tag: syntax.Tag, depth: usize) Error!void {
+        const selected = try self.renderer.literalGalleryAuthority(input, tag);
+        var row: usize = 0;
         try self.attribute(tag, "caption", depth + 1);
         var lines = std.mem.splitScalar(u8, input, '\n');
         while (lines.next()) |raw_line| {
             const line = trim(raw_line);
+            if (line.len == 0) continue;
+            const captured = if (selected) |authority| blk: {
+                if (row >= authority.files.len) return error.UncompiledPresentation;
+                break :blk authority.files[row];
+            } else null;
+            row += 1;
+            if (selected != null and captured == null) continue;
             const pipe = syntax.delimiter(line, "|", 0) orelse continue;
             const raw_file = trim(line[0..pipe]);
             const colon = std.mem.indexOfScalar(u8, raw_file, ':');
-            const file = if (colon != null and self.renderer.namespaceOfTarget(raw_file) == 6) raw_file[colon.? + 1 ..] else raw_file;
+            const file = captured orelse if (colon != null and self.renderer.namespaceOfTarget(raw_file) == 6) raw_file[colon.? + 1 ..] else raw_file;
             if (media_types.referencedKind(file) == null) continue;
-            const choice = self.renderer.mediaCaptionChoice(trim(line[pipe + 1 ..]), file, Renderer.mediaOptionMode(file, true));
+            const operand_options = trim(line[pipe + 1 ..]);
+            const options = if (selected != null) traditionalLiteralGalleryOptions(operand_options) orelse
+                return error.UncompiledPresentation else operand_options;
+            const choice = self.renderer.mediaCaptionChoice(options, file, Renderer.mediaOptionMode(file, true));
             if (choice.authored_caption) try self.domain(choice.text, false, depth + 1);
         }
     }
@@ -7281,6 +7339,29 @@ test "inline slice validates the complete directional paragraph including siblin
     }
     try std.testing.expect(inlineBoxHasAudioControl(.{ .audio_control = @as(?bool, true) }));
     try std.testing.expect(!inlineBoxHasAudioControl(.{}));
+}
+
+// Simple literal gallery lines are rendered through the upstream media-link
+// grammar. A literal trailing ]] is stripped only without a wikilink opener.
+// With an opener, an unmatched close or unterminated simple link can prevent
+// the synthetic media link from producing a figure at all.
+pub fn traditionalLiteralGalleryOptions(options: []const u8) ?[]const u8 {
+    if (options.len > 4096 or
+        std.mem.indexOfAny(u8, options, "<>{}\r\x00") != null) return options;
+    if (std.mem.indexOf(u8, options, "[[") == null)
+        return if (std.mem.endsWith(u8, options, "]]")) options[0 .. options.len - 2] else options;
+    var cursor: usize = 0;
+    while (std.mem.indexOfAnyPos(u8, options, cursor, "[]")) |at| {
+        if (!std.mem.startsWith(u8, options[at..], "[[")) {
+            // Single brackets and nonterminal unmatched closers can participate
+            // in other caption structures outside this literal form.
+            return if (std.mem.eql(u8, options[at..], "]]")) null else options;
+        }
+        const first = std.mem.indexOfAnyPos(u8, options, at + 2, "[]") orelse return null;
+        if (!std.mem.startsWith(u8, options[first..], "]]")) return options;
+        cursor = first + 2;
+    }
+    return options;
 }
 
 pub const Renderer = struct {
@@ -10193,6 +10274,8 @@ pub const Renderer = struct {
     container_child_positions: ?ContainerChildPositions = null,
     generic_disclosure_child_binding: ?*GenericDisclosureChildBinding = null,
     container_disclosure_binding: ?TableDirectionRangeBinding = null,
+    translation_eof_table: ?*const TranslationEofProof = null,
+    translation_eof_cell: ?struct { body: []const u8, table_depth: usize } = null,
     container_parent_flex: bool = false,
     // Exact original DIV -> single physical list edge, never inferred from
     // inherited style ancestry or generated block owners.
@@ -10218,6 +10301,7 @@ pub const Renderer = struct {
     html_list_item_flow: bool = false,
     // Only a retained cell body may promote its own mixed text/table flow.
     retained_cell_body_source: ?[]const u8 = null,
+    linked_han_cell_depth: usize = 0,
     terminal_grid_child: ?[]const u8 = null,
     // Exact borrowed opener admitted as the sole visible inline box on its line.
     isolated_inline_table_opening: ?[]const u8 = null,
@@ -17070,7 +17154,18 @@ pub const Renderer = struct {
         }
         return self.citationFooterOrder();
     }
+    fn literalGalleryAuthority(self: *Renderer, input: []const u8, tag: syntax.Tag) Error!?LiteralGalleryAuthority {
+        const held = self.context.container_disclosures orelse return null;
+        const scope = held.page_style_scope orelse return null;
+        const selected = scope.literal_gallery orelse return null;
+        if (!scope.current(held) or !std.mem.eql(u8, selected.body, input) or tag.attrs.len != 0)
+            return error.UncompiledPresentation;
+        return selected;
+    }
+
     fn gallery(self: *Renderer, input: []const u8, tag: syntax.Tag, style: Style, _: usize) Error!void {
+        const selected = try self.literalGalleryAuthority(input, tag);
+        var row: usize = 0;
         var lines = std.mem.splitScalar(u8, input, '\n');
         var emitted = false;
         // Gallery-wide captions are separately parsed extension attributes, not
@@ -17093,12 +17188,22 @@ pub const Renderer = struct {
         while (lines.next()) |raw_line| {
             const line = trim(raw_line);
             if (line.len == 0) continue;
+            const captured = if (selected) |authority| blk: {
+                if (row >= authority.files.len) return error.UncompiledPresentation;
+                break :blk authority.files[row];
+            } else null;
+            row += 1;
+            if (selected != null and captured == null) continue;
             const pipe = syntax.delimiter(line, "|", 0);
             const raw_file = trim(line[0 .. pipe orelse line.len]);
             const colon = std.mem.indexOfScalar(u8, raw_file, ':');
-            const file = if (colon != null and self.namespaceOfTarget(raw_file) == 6) raw_file[colon.? + 1 ..] else raw_file;
+            const file = captured orelse if (colon != null and self.namespaceOfTarget(raw_file) == 6) raw_file[colon.? + 1 ..] else raw_file;
             if (media_types.referencedKind(file) == null) continue;
-            const options = if (pipe) |at_pipe| trim(line[at_pipe + 1 ..]) else "";
+            if (captured != null and !std.mem.eql(u8, (try self.resolvedMediaFile(file)) orelse "", file))
+                return error.UncompiledPresentation;
+            const authored_options = if (pipe) |at_pipe| trim(line[at_pipe + 1 ..]) else "";
+            const options = if (selected != null) traditionalLiteralGalleryOptions(authored_options) orelse
+                return error.UncompiledPresentation else authored_options;
             const selected_label = self.mediaCaptionChoice(options, file, mediaOptionMode(file, true));
             const caption = selected_label.text;
             var media_style = style;
@@ -32820,6 +32925,7 @@ pub const Renderer = struct {
     // A matched doubled quotation has two literal angle pairs. Prove its
     // inner unknown atomic name separately; do not relax the single-token guard.
     fn pairedUnknownHtmlAnglesEnd(input: []const u8, at: usize) ?usize {
+        if (syntax.literalDoubleAngleProseEnd(input, at)) |end| return end;
         if (at + 2 >= input.len or !starts(input[at..], "<<") or
             !std.ascii.isAlphabetic(input[at + 2])) return null;
         var preceding = at;
@@ -37143,7 +37249,55 @@ pub const Renderer = struct {
         return null;
     }
 
-    fn malformedPlain(self: *Renderer, tracked: MissingText, raw: []const u8, style: Style, entity_tail: []const u8, depth: usize) Error!?usize {
+    // A linked reading in a table can be followed by a literal Han gloss
+    // with an extra closing bracket. Preserve that complete source-owned gloss;
+    // it is neither another navigation action nor a malformed-link diagnostic.
+    fn linkedHanGlossLiteral(self: *const Renderer, tracked: MissingText, raw: []const u8,
+        start: usize, close: usize, style: Style, preceding_action_end: ?usize) bool
+    {
+        if (self.typed_table_depth == 0 or self.figure_caption_depth != 0 or self.inline_image_attribute or
+            self.navigation_target_probe != null or self.body_link_target.len != 0 or self.in_template_literal_scope or
+            style.provenance != .parsed or style.kind != .text or style.target.len != 0 or
+            style.self_link_target != null or style.code or style.preserve_whitespace or style.missing_nonaction or
+            self.in_reference or tracked.unknown or tracked.lost_missing_range or tracked.generated_source != null)
+            return false;
+        const cell = self.retained_cell_body_source orelse return false;
+        if (self.linked_han_cell_depth != self.typed_table_depth) return false;
+        var owned = tracked.bytes;
+        if (self.plain_body_source_copy) |copy| if (wikiClassContains(copy.copied, owned)) {
+            if (copy.original.len != copy.copied.len) return false;
+            const offset = @intFromPtr(owned.ptr) - @intFromPtr(copy.copied.ptr);
+            owned = copy.original[offset..][0..owned.len];
+        };
+        if (!wikiClassContains(cell, owned)) return false;
+        if (start != 1 or raw[0] != ' ' or close <= start + 1 or close - start > 49 or
+            !starts(raw[close..], "]] (")) return false;
+        const reading_start = close + 4;
+        const lookahead = raw[reading_start..][0..@min(raw.len - reading_start, 129)];
+        const reading_end = std.mem.indexOfScalar(u8, lookahead, ')') orelse return false;
+        const reading = lookahead[0..reading_end];
+        if (trim(reading).len == 0 or std.mem.indexOfAny(u8, reading, "([]{}<>&'\"|\r\n") != null or
+            !std.unicode.utf8ValidateSlice(reading)) return false;
+        const base = @intFromPtr(tracked.bytes.ptr);
+        const ptr = @intFromPtr(raw.ptr);
+        if (ptr < base or ptr - base > tracked.bytes.len or raw.len > tracked.bytes.len - (ptr - base)) return false;
+        const first = ptr - base + start;
+        const last = ptr - base + close + 2;
+        const action_end = preceding_action_end orelse return false;
+        if (first < 3 or first - 1 != action_end or
+            !std.mem.endsWith(u8, tracked.bytes[0..first], "]] ")) return false;
+        for (tracked.ranges) |range| if (range.start < last and range.end > first) return false;
+        for (tracked.generated_links) |range| if (range.start < last and range.end > first) return false;
+        for (tracked.literal_curly_ranges) |range| if (range.start < last and range.end > first) return false;
+        const utf8 = std.unicode.Utf8View.init(raw[start + 1 .. close]) catch return false;
+        var chars = utf8.iterator();
+        while (chars.nextCodepoint()) |cp| {
+            if (!(cp >= 0x3400 and cp <= 0x4dbf) and !(cp >= 0x4e00 and cp <= 0x9fff)) return false;
+        }
+        return true;
+    }
+
+    fn malformedPlain(self: *Renderer, tracked: MissingText, raw: []const u8, style: Style, entity_tail: []const u8, depth: usize, preceding_action_end: ?usize) Error!?usize {
         if (style.provenance != .parsed) return null;
         const Candidate = struct { start: usize, template: bool, pipe: bool = false, name: bool = false };
         var candidate: ?Candidate = null;
@@ -37156,6 +37310,16 @@ pub const Renderer = struct {
                 if (starts(raw[at..], close)) {
                     const body = raw[current.start + 1 .. at];
                     if (trim(body).len != 0 and (!current.template or (current.pipe and current.name))) {
+                        if (!current.template and self.linkedHanGlossLiteral(tracked, raw, current.start, at, style, preceding_action_end)) {
+                            _ = try self.plainWithMagicLinks(raw[emitted..current.start], style, "");
+                            try self.protectedLiteral(raw[current.start .. at + close.len], style);
+                            self.fallbacks.literal_markup = true;
+                            at += close.len;
+                            emitted = at;
+                            recovered = true;
+                            candidate = null;
+                            continue;
+                        }
                         // Earlier text ends at a real malformed-token boundary;
                         // only the final untouched suffix can cross an entity.
                         _ = try self.plainWithMagicLinks(raw[emitted..current.start], style, "");
@@ -41305,7 +41469,10 @@ pub const Renderer = struct {
         var no_more_nowiki_close = false;
         var opaque_scan: syntax.OpaqueScan = .{};
         const last_internal_close = std.mem.lastIndexOf(u8, input, "]]");
+        var preceding_action_end: ?usize = null;
         while (it.cursor < input.len) {
+            const prior_action_end = preceding_action_end;
+            preceding_action_end = null;
             if (self.truncated and self.span_limit_marker) return;
             var s = inherited;
             s.bold = it.bold;
@@ -41669,6 +41836,26 @@ pub const Renderer = struct {
             }
             const token_start = it.cursor;
             var token = it.next() orelse break;
+            const action_token_end = it.cursor;
+            const action_span_start = self.spans.items.len;
+            defer {
+                // Only this iterator's actually emitted ordinary action can
+                // own adjacency. Hidden categories and every other consumed
+                // token leave the next iteration without such an owner.
+                if (self.linked_han_cell_depth != 0 and self.linked_han_cell_depth == self.typed_table_depth and
+                    token.kind == .link and !token.link_has_pipe and token.trail.len == 0 and it.cursor == action_token_end and
+                    action_token_end - token_start == token.target.len + 4 and
+                    starts(input[token_start..action_token_end], "[[") and
+                    std.mem.endsWith(u8, input[token_start..action_token_end], "]]") and
+                    std.mem.eql(u8, input[token_start + 2 .. action_token_end - 2], token.target) and
+                    self.spans.items.len == action_span_start + 1)
+                {
+                    const action = self.spans.items[action_span_start];
+                    if (action.kind == .link and action.provenance == .parsed and action.generated_link == null and
+                        !action.generated_diagnostic and action.target.len != 0 and std.mem.eql(u8, action.target, token.target))
+                        preceding_action_end = action_token_end;
+                }
+            }
             if (token.kind == .text) if (std.mem.indexOf(u8, token.text, generated_link.prefix)) |relative| {
                 const base = @intFromPtr(input.ptr);
                 const at = @intFromPtr(token.text.ptr);
@@ -41758,7 +41945,7 @@ pub const Renderer = struct {
                     it.cursor += consumed;
                 } else if (try self.literalPlainTableTails(input, token.text, s, input[it.cursor..])) |consumed| {
                     it.cursor += consumed;
-                } else if (try self.malformedPlain(prepared_missing, token.text, s, input[it.cursor..], depth)) |consumed| {
+                } else if (try self.malformedPlain(prepared_missing, token.text, s, input[it.cursor..], depth, prior_action_end)) |consumed| {
                     it.cursor += consumed;
                 } else {
                     it.cursor += try self.plainWithMagicLinks(token.text, s, input[it.cursor..]);
@@ -45185,6 +45372,10 @@ pub const Renderer = struct {
         };
         if ((self.heading_source == null and !image_map_observed and !row_color_observed and !table_source_observed and
             !local_target_source_observed and !nah_child_boundary) or original.len == 0) return;
+        return self.registerSourceCopyExtent(copies, start, original);
+    }
+
+    fn registerSourceCopyExtent(self: *Renderer, copies: *std.ArrayList(HeadingSourceCopy), start: usize, original: []const u8) Error!void {
         if (copies.items.len != 0) {
             const previous = &copies.items[copies.items.len - 1];
             if (previous.start + previous.original.len == start and
@@ -46652,7 +46843,8 @@ pub const Renderer = struct {
                 self.finalListGridTail(input[@intFromPtr(html_source.ptr) - @intFromPtr(input.ptr) ..], tag, anchored_inline) else null else null;
             const html_tag = if (html_wrapper_candidate) |tag| (if (!tag.closing and
                 (bodyWrapperTag(tag, hidden_include_root) or self.tableConstructedFloatingSpan(tag)) and
-                (grid_tail != null or blockWrapperPair(if (tag.is("p") or tag.is("includeonly")) input[@intFromPtr(html_source.ptr) - @intFromPtr(input.ptr) ..] else html_source, tag, self.behaviorControlMatcher()) != null)) tag else null) else null;
+                (grid_tail != null or blockWrapperPair(if (tag.is("p") or tag.is("includeonly")) input[@intFromPtr(html_source.ptr) - @intFromPtr(input.ptr) ..] else html_source, tag, self.behaviorControlMatcher()) != null or
+                    self.translationEofDivPair(input[@intFromPtr(html_source.ptr) - @intFromPtr(input.ptr)..], tag) != null)) tag else null) else null;
             const protected_tag = if (try self.semanticTagAt(clean, 0)) |tag| (if (!tag.closing and
                 (tag.is("pre") or tag.is("source") or tag.is("syntaxhighlight"))) tag else null) else null;
             // Horizontal rules precede behavior-control removal and require an
@@ -46902,7 +47094,9 @@ pub const Renderer = struct {
             }
             if (html_tag) |tag| {
                 const wrapper_source = if (grid_tail != null or tag.is("div") or tag.is("p") or tag.is("includeonly")) input[@intFromPtr(html_source.ptr) - @intFromPtr(input.ptr) ..] else html_source;
-                const pair = if (grid_tail) |tail| tail.pair else blockWrapperPair(wrapper_source, tag, self.behaviorControlMatcher()).?;
+                const ordinary_pair: ?syntax.Pair = if (grid_tail) |tail| tail.pair else
+                    blockWrapperPair(wrapper_source, tag, self.behaviorControlMatcher());
+                const pair = ordinary_pair orelse self.translationEofDivPair(wrapper_source, tag).?;
                 const previous_parent_operation = self.table_parent_container_operation;
                 const previous_parent_table_styles = self.context.table_styles;
                 const previous_parent_paint_styles = self.context.text_paint_styles;
@@ -47096,10 +47290,15 @@ pub const Renderer = struct {
                     // proved CSS policy before the ordinary bare-DIV boundary.
                     const css_scope = tag.is("div") and (trim((try self.semanticAttribute(tag, "class")) orelse "").len != 0 or (try self.alignmentResolution(tag)).value != null or (scoped_style.table_inheritance_scoped and scoped_style.table_collapse != null and try table_style_profile.hasBorderCollapseDeclarationsAlloc(self.a, (try self.semanticAttribute(tag, "style")) orelse "")) or scoped_style.relative_context_own or (scoped_style.column_fragmentation_policy_present and try table_style_profile.hasColumnFragmentationDeclarationsAlloc(self.a, (try self.semanticAttribute(tag, "style")) orelse "")) or hasAuthoredTooltipTitle(tag));
                     const observed_kind: ?FragmentPreContext.Kind = if (css_scope) .css_block else if (tag.is("div") and trim(tag.attrs).len == 0) .layout_div else null;
-                    if (observed_kind) |kind| if (self.pre_scope_observer) |observer| {
-                        const offset = @intFromPtr(wrapper_source.ptr) - @intFromPtr(input.ptr);
-                        try observer.enter(observer.ctx, input, origin, offset, offset + tag.end, offset + pair.inner_end, offset + pair.end, true, kind, self.block_formatting, "", self.observerFormattingAttributes());
-                    };
+                    // A proved translation EOF wrapper must be parsed with its
+                    // complete suffix. Fragment pre-context replays physical
+                    // scopes, so do not advertise its zero-width end as a match.
+                    if (ordinary_pair != null) {
+                        if (observed_kind) |kind| if (self.pre_scope_observer) |observer| {
+                            const offset = @intFromPtr(wrapper_source.ptr) - @intFromPtr(input.ptr);
+                            try observer.enter(observer.ctx, input, origin, offset, offset + tag.end, offset + pair.inner_end, offset + pair.end, true, kind, self.block_formatting, "", self.observerFormattingAttributes());
+                        };
+                    }
                     var container_resolution = try self.containerResolutionForDispatch(tag, parent_language_direction orelse .{}, scoped_style, literal_dispatch);
                     const force_container_owner = self.container_parent_flex or self.genericDisclosureTargetChild(input, wrapper_source[0..pair.end]);
                     const previous_parent_flex = self.container_parent_flex;
@@ -47131,11 +47330,11 @@ pub const Renderer = struct {
                     // and traversing its children. Shared paint authority belongs
                     // to the final pass, after the page context has been bound.
                     // Finite captures retain their existing observation path.
-                    const observe_shared_disclosure = self.context.observe_structure_only and
+                    const observe_disclosure = self.context.observe_structure_only and
                         if (self.context.container_disclosures) |held|
-                            held.captures.len == 0 and held.shared_profile != null
+                            (held.captures.len == 0 and held.shared_profile != null) or self.heldTranslationEof() != null
                         else false;
-                    const disclosure_paint_source = if (observe_shared_disclosure) null else disclosure_source;
+                    const disclosure_paint_source = if (observe_disclosure) null else disclosure_source;
                     const disclosure_authority = if (disclosure_paint_source) |query| try self.genericDisclosureAuthority(query, scoped_style.text_element) else null;
                     var disclosure_binding: ?GenericDisclosureChildBinding = if (disclosure_paint_source) |query|
                         .{ .parent_inner = query.parent_inner, .content_source = query.content_source } else null;
@@ -49365,6 +49564,76 @@ pub const Renderer = struct {
         }
         return items != 0;
     }
+
+    fn heldTranslationEof(self: *const Renderer) ?*const TranslationEofProof {
+        const held = self.context.container_disclosures orelse return null;
+        const proof = held.translation_eof orelse return null;
+        if (!proof.binds(held.source) or
+            (self.content_root != .parser_output and !self.context.observe_structure_only) or self.in_reference or
+            self.pre_block or self.parsed_pre or self.in_template_literal_scope or self.figure_caption_depth != 0 or
+            self.body_link_target.len != 0 or self.explicit_wiki_label != null) return null;
+        return proof;
+    }
+
+    fn translationEofDivPair(self: *const Renderer, source: []const u8, opening: syntax.Tag) ?syntax.Pair {
+        const proof = self.heldTranslationEof() orelse return null;
+        if (!opening.is("div") or opening.closing or opening.self_closing or self.retained_cell_body_source != null)
+            return null;
+        const at = self.genericDisclosureInputOffset(proof.expanded, source) orelse return null;
+        if (source.len != proof.expanded.len - at or
+            (proof.closes[5].opener != at and proof.closes[4].opener != at)) return null;
+        return .{ .inner_end = source.len, .end = source.len };
+    }
+
+    fn translationEofTable(self: *const Renderer, source: []const u8, opening: usize) ?*const TranslationEofProof {
+        const proof = self.heldTranslationEof() orelse return null;
+        if (opening >= source.len or self.retained_cell_body_source != null or self.translation_eof_cell != null)
+            return null;
+        const at = self.genericDisclosureInputOffset(proof.expanded, source[opening..]) orelse return null;
+        if (proof.closes[3].opener != at or source.len - opening != proof.expanded.len - at) return null;
+        return proof;
+    }
+
+    fn translationEofCellReplay(self: *const Renderer, proof: *const TranslationEofProof,
+        replay: MissingText, copies: []const HeadingSourceCopy) ?MissingText
+    {
+        if (replay.unknown or replay.lost_missing_range or replay.generated_source != null or
+            replay.ranges.len != 0 or replay.literal_curly_ranges.len != 0 or replay.generated_links.len != 0 or
+            copies.len == 0 or replay.bytes.len == 0) return null;
+        const cell = proof.closes[0].opener orelse return null;
+        const lf = std.mem.indexOfScalarPos(u8, proof.expanded, cell, '\n') orelse return null;
+        // The recorded cell has no body text on its opener line. parseTable
+        // may retain the leading LF or skip it, depending on its first item.
+        const raw = proof.expanded[cell + 1 .. lf];
+        const pipe = syntax.cellAttributePipe(raw) orelse return null;
+        if (trim(raw[pipe + 1 ..]).len != 0) return null;
+        const first = self.genericDisclosureInputOffset(proof.expanded, copies[0].original) orelse return null;
+        const start = std.math.sub(usize, first, copies[0].start) catch return null;
+        if ((start != lf and start != lf + 1) or !std.mem.eql(u8, proof.expanded[start..], replay.bytes))
+            return null;
+        for (copies) |copy| {
+            if (copy.start > replay.bytes.len or copy.original.len > replay.bytes.len - copy.start or
+                self.genericDisclosureInputOffset(proof.expanded, copy.original) != start + copy.start) return null;
+        }
+        // A Writer fragment owns its own copy. Keep this cell's headings in
+        // that fragment's source domain after proving the complete EOF suffix.
+        var live = replay;
+        live.bytes = if (self.container_disclosure_binding) |binding|
+            binding.ownerSliceForOriginal(start, replay.bytes.len) orelse return null
+        else
+            proof.expanded[start..];
+        return live;
+    }
+
+    fn translationEofCaptureSite(self: *const Renderer, proof: *const TranslationEofProof, start: usize) bool {
+        const child = proof.childAt(start) orelse return self.translation_eof_cell == null and
+            self.retained_cell_body_source == null and self.typed_table_depth == 0;
+        const active = self.translation_eof_cell orelse return false;
+        const current = self.retained_cell_body_source orelse return false;
+        return active.table_depth == self.typed_table_depth and current.ptr == active.body.ptr and
+            current.len == active.body.len and child.parent_cell == proof.closes[0].opener;
+    }
+
     fn genericDisclosureSourceQuery(self: *Renderer, tag: syntax.Tag, whole: []const u8) Error!?GenericDisclosureSource {
         if (!tag.is("div")) return null;
         const classes = (try self.semanticAttribute(tag, "class")) orelse return null;
@@ -49374,12 +49643,17 @@ pub const Renderer = struct {
             !formattingAngleAttributesBalanced(tag.attrs) or !genericDisclosureAttributes(tag.attrs, true))
             return self.containerUnavailableAt("generic_disclosure_owner_shape", whole);
         const opening = syntax.tagAt(whole, 0) orelse return self.containerUnavailableAt("generic_disclosure_owner_shape", whole);
-        const pair = syntax.matchingTag(whole, opening) orelse return self.containerUnavailableAt("generic_disclosure_owner_shape", whole);
+        const recovered = self.translationEofDivPair(whole, opening);
+        const pair = recovered orelse syntax.matchingTag(whole, opening) orelse
+            return self.containerUnavailableAt("generic_disclosure_owner_shape", whole);
         if (opening.name.ptr != tag.name.ptr or opening.end != tag.end or pair.end != whole.len)
             return self.containerUnavailableAt("generic_disclosure_source_identity", whole);
-        const closing = syntax.tagAt(whole, pair.inner_end) orelse return self.containerUnavailableAt("generic_disclosure_owner_shape", whole);
-        if (!closing.closing or !closing.is("div") or trim(closing.attrs).len != 0)
-            return self.containerUnavailableAt("generic_disclosure_owner_shape", whole);
+        if (recovered == null) {
+            const closing = syntax.tagAt(whole, pair.inner_end) orelse
+                return self.containerUnavailableAt("generic_disclosure_owner_shape", whole);
+            if (!closing.closing or !closing.is("div") or trim(closing.attrs).len != 0)
+                return self.containerUnavailableAt("generic_disclosure_owner_shape", whole);
+        }
         if (try self.semanticAttribute(tag, "id")) |id| if (std.mem.startsWith(u8, id, "mw-customcollapsible-"))
             return self.containerUnavailableAt("generic_disclosure_custom_toggle", whole);
         const expand = (try self.semanticAttribute(tag, "data-expandtext")) orelse
@@ -49400,11 +49674,23 @@ pub const Renderer = struct {
         const child_classes = (try self.semanticAttribute(child, "class")) orelse "";
         if (!genericDisclosureClass(child_classes, "mw-collapsible-content") or genericDisclosureClass(child_classes, "mw-collapsible"))
             return self.containerUnavailableAt("generic_disclosure_direct_child", whole);
-        const child_pair = syntax.matchingTag(inner, child) orelse return self.containerUnavailableAt("generic_disclosure_direct_child", whole);
-        const child_close = syntax.tagAt(inner, child_pair.inner_end) orelse return self.containerUnavailableAt("generic_disclosure_direct_child", whole);
-        if (!child_close.closing or !child_close.is("div") or trim(child_close.attrs).len != 0 or trim(inner[child_pair.end..]).len != 0)
-            return self.containerUnavailableAt("generic_disclosure_direct_child", whole);
-        return .{ .owner_source = whole, .parent_inner = inner, .content_source = inner[at..child_pair.end],
+        const child_end = if (recovered != null) blk: {
+            const rebased = syntax.tagAt(inner[at..], 0) orelse
+                return self.containerUnavailableAt("generic_disclosure_direct_child", whole);
+            if (self.translationEofDivPair(inner[at..], rebased) == null)
+                return self.containerUnavailableAt("generic_disclosure_direct_child", whole);
+            break :blk inner.len;
+        } else blk: {
+            const child_pair = syntax.matchingTag(inner, child) orelse
+                return self.containerUnavailableAt("generic_disclosure_direct_child", whole);
+            const child_close = syntax.tagAt(inner, child_pair.inner_end) orelse
+                return self.containerUnavailableAt("generic_disclosure_direct_child", whole);
+            if (!child_close.closing or !child_close.is("div") or trim(child_close.attrs).len != 0 or
+                trim(inner[child_pair.end..]).len != 0)
+                return self.containerUnavailableAt("generic_disclosure_direct_child", whole);
+            break :blk child_pair.end;
+        };
+        return .{ .owner_source = whole, .parent_inner = inner, .content_source = inner[at..child_end],
             .expand_label = expand, .collapse_label = collapse,
             .initially_collapsed = genericDisclosureClass(classes, "mw-collapsed") };
     }
@@ -49452,12 +49738,8 @@ pub const Renderer = struct {
             // A fragment may retain an original slice. Prove its reverse range
             // is still within this exact admitted owner, not a matching string.
             const original = genericDisclosureOffset(root, part) orelse return null;
-            const prepared = binding.projection.preparedRange(original, part.len) orelse return null;
-            if (prepared < binding.page_start) return null;
-            const offset = prepared - binding.page_start;
-            if (offset > binding.owner.bytes.len or part.len > binding.owner.bytes.len - offset) return null;
-            const mapped = binding.originalRange(binding.owner.bytes[offset..][0..part.len]) orelse return null;
-            return if (mapped == original) original else null;
+            _ = binding.ownerSliceForOriginal(original, part.len) orelse return null;
+            return original;
         }
         return genericDisclosureOffset(root, part);
     }
@@ -49734,6 +50016,10 @@ pub const Renderer = struct {
             return self.containerUnavailableAt("generic_disclosure_capture_source", query.owner_source);
         const owner_end = owner_start + query.owner_source.len;
         const content_end = content_start + query.content_source.len;
+        if (held.translation_eof) |proof| {
+            if (self.heldTranslationEof() != proof or !self.translationEofCaptureSite(proof, owner_start))
+                return self.containerUnavailableAt("generic_disclosure_capture_cell_ancestry", query.owner_source);
+        }
         var found: ?*const ContainerDisclosureCapture = null;
         for (held.captures) |*capture| {
             if (capture.owner_start >= capture.owner_end or capture.owner_end > held.source.len or
@@ -51647,6 +51933,9 @@ pub const Renderer = struct {
                         break :scoped &.{};
                     }
                 }
+                const previous_han_cell_depth = self.linked_han_cell_depth;
+                self.linked_han_cell_depth = self.typed_table_depth;
+                defer self.linked_han_cell_depth = previous_han_cell_depth;
                 break :scoped try self.cellSpansWithLanguageDirection(body, cell_style, &cell_blocks, self.body_formatting_attributes.text_align);
             },
             .background = resolved_cell.background,
@@ -51751,6 +52040,9 @@ pub const Renderer = struct {
         defer self.literal_html_table = previous_literal_html_table;
         const nested_table_owner = if (opening) |tag| self.tableNestedFontForTag(tag) else null;
         const style = if (nested_table_owner) |owner| tableNestedOwnerStyle(original_style, owner) else original_style;
+        const previous_han_cell_depth = self.linked_han_cell_depth;
+        self.linked_han_cell_depth = 0;
+        defer self.linked_han_cell_depth = previous_han_cell_depth;
         self.typed_table_depth += 1;
         defer self.typed_table_depth -= 1;
         const table_alignment = if (opening) |tag| try self.htmlTextAlignment(tag, inherited_alignment) else inherited_alignment;
@@ -52154,6 +52446,14 @@ pub const Renderer = struct {
     fn appendWikiTableCopiedPart(self: *Renderer, output: *MissingBuffer, copies: *std.ArrayList(HeadingSourceCopy), tracked: MissingText, bytes: []const u8) Error!void {
         const start = output.items.len;
         try output.appendCopied(self.a, tracked, bytes);
+        // Structure observation has no heading collector. Register only a
+        // copied extent the active EOF table can reverse to its original cell.
+        if (bytes.len != 0) if (self.translation_eof_table) |proof| {
+            if (self.genericDisclosureInputOffset(proof.expanded, bytes)) |at| {
+                if (at > (proof.closes[0].opener orelse return error.UncompiledPresentation))
+                    return self.registerSourceCopyExtent(copies, start, bytes);
+            }
+        };
         try self.recordHeadingSourceCopy(copies, start, bytes);
     }
     fn flushWikiTableFostered(self: *Renderer, blocks: *std.ArrayList(Block), source: *MissingBuffer, copies: *std.ArrayList(HeadingSourceCopy)) Error!void {
@@ -52530,6 +52830,9 @@ pub const Renderer = struct {
     fn parseTable(self: *Renderer, source: []const u8, start: usize, opening_start: usize, swatch_background: ?[]const u8, table_background: ?[]const u8, table_style: Style, table_formatting: SpanFlags, opening: syntax.Tag, class_source_visible: bool, viewport: ?TableViewportCandidate) Error!TableResult {
         if (self.root_table_eligibility_trace) |trace| trace.observeParserEntry(source, opening_start);
         const parent_cell_context = self.cellNativeFlowContext(self.block_formatting);
+        const previous_eof_table = self.translation_eof_table;
+        self.translation_eof_table = self.translationEofTable(source, opening_start);
+        defer self.translation_eof_table = previous_eof_table;
         const parent_figure_font: FigureWikiNativeFont = .{ .style = self.bodyFormattingStyle(.{}), .formatting = self.block_formatting };
         const previous_table_profile = self.context.table_styles;
         const previous_paint_profile = self.context.text_paint_styles;
@@ -52556,6 +52859,9 @@ pub const Renderer = struct {
         self.wiki_cell_class_source = null;
         defer self.wiki_cell_class_source = previous_cell_class_source;
         const class_source = if (viewport != null) null else self.issueWikiTableClassSource(source, opening_start, opening, class_source_visible);
+        const previous_han_cell_depth = self.linked_han_cell_depth;
+        self.linked_han_cell_depth = 0;
+        defer self.linked_han_cell_depth = previous_han_cell_depth;
         self.typed_table_depth += 1;
         defer self.typed_table_depth -= 1;
         // Alignment belongs to cells; fostered text keeps its outer body scope.
@@ -52989,8 +53295,13 @@ pub const Renderer = struct {
         // outside text twice (including reference-registration side effects).
         if (has_caption or rows.items.len != 0 or cells.items.len != 0 or hidden_rows)
             try self.flushWikiTableFostered(&fostered, &outside_source, &outside_copies);
-        if (body_end == input.len) self.fallbacks.malformed_table = true;
         if (cells.items.len != 0) try rows.append(self.a, .{ .cells = try cells.toOwnedSlice(self.a) });
+        if (self.translation_eof_table != null) {
+            if (completed_close != null or body_end != input.len or pos != input.len or self.truncated or
+                nested_tables != 0 or fostered.items.len != 0 or hidden_rows or has_caption or
+                rows.items.len != 1 or rows.items[0].cells.len != 1 or rows.items[0].cells[0].blocks == null)
+                return self.containerUnavailableAt("generic_disclosure_eof_table_shape", source[opening_start..]);
+        } else if (body_end == input.len) self.fallbacks.malformed_table = true;
         try self.resolveZeroRowspans(rows.items, 0);
         var geometry = legacyTableGeometry(opening) orelse TableGeometry{};
         if (resolved.width_specified) geometry.width = null;
@@ -53279,7 +53590,18 @@ pub const Renderer = struct {
                 if (self.table_viewport_cell_source) |*owned| if (owned.closed_focus and owned.source_constructed and !owned.captured_intrinsic_content) {
                     owned.structural_source = .{ .cell_source = owned.source, .tracked = source.view(), .copies = copies.items };
                 };
-                break :scoped try self.cellContentSpansWithMissing(source.view(), &cell.blocks);
+                const previous_eof_cell = self.translation_eof_cell;
+                defer self.translation_eof_cell = previous_eof_cell;
+                const live_body = if (self.translation_eof_table) |proof| blk: {
+                    const original = self.translationEofCellReplay(proof, source.view(), copies.items) orelse
+                        return self.containerUnavailableAt("generic_disclosure_eof_cell_replay", source.view().bytes);
+                    self.translation_eof_cell = .{ .body = original.bytes, .table_depth = self.typed_table_depth };
+                    break :blk original;
+                } else source.view();
+                const previous_han_cell_depth = self.linked_han_cell_depth;
+                self.linked_han_cell_depth = self.typed_table_depth;
+                defer self.linked_han_cell_depth = previous_han_cell_depth;
+                break :scoped try self.cellContentSpansWithMissing(live_body, &cell.blocks);
             };
             if (cell.table_viewport_source) |owned| {
                 if (owned.closed_focus and (!tableSourceFocusActionsMatch(cell, owned) or
@@ -142669,4 +142991,171 @@ test "disclosure indented list prefix refuses broken inline or owner structure" 
         "label\n:*#mixed marker\n", "label\n;term:definition\n",
         "label\n:*[[target]]",
     }) |prefix| try std.testing.expect(!renderer.genericDisclosurePrefix(prefix));
+}
+
+test "IT Inglese160 preserves the literal Han reading only after a linked table reading" {
+    const Control = struct {
+        const row = ":*[[coreano]]:  [[영어]] [英語]] (yeong-eo)";
+        const earlier = ":*[[coreano]]:  [[영국의]] [英國-] (yeongguk-eui, yeonggugi)";
+        const wiki_open = "{| class=\"translations\"\n|-\n|\n";
+        const wiki_close = "\n|}\n";
+        const html_open = "<table><tr><td>\n";
+        const html_close = "\n</td></tr></table>\n";
+
+        const Readback = struct {
+            text: std.ArrayList(u8) = .empty,
+            targets: std.ArrayList([]const u8) = .empty,
+            cells: usize = 0,
+            nested_tables: usize = 0,
+            protected_han_pairs: usize = 0,
+
+            fn actions(self: *@This(), a: std.mem.Allocator, values: []const Span) anyerror!void {
+                for (values) |span| {
+                    if (span.kind == .link) try self.targets.append(a, span.target);
+                    if (span.kind == .text and span.provenance == .protected_literal and
+                        std.mem.eql(u8, span.text, "[英語]]")) self.protected_han_pairs += 1;
+                    if (span.inline_action_group) |group| try self.actions(a, group.spans);
+                    if (span.inline_padding_group) |group| try self.actions(a, group.spans);
+                    if (span.inline_box_group) |group| try self.actions(a, group.spans);
+                }
+            }
+
+            fn spans(self: *@This(), a: std.mem.Allocator, values: []const Span) !void {
+                try self.text.appendSlice(a, try plainText(a, values));
+                try self.actions(a, values);
+            }
+
+            fn flow(self: *@This(), a: std.mem.Allocator, parts: []const FlowPart) anyerror!void {
+                for (parts) |part| {
+                    try self.spans(a, part.spans);
+                    if (part.scope) |scope| try self.flow(a, scope.parts);
+                }
+            }
+
+            fn blocks(self: *@This(), a: std.mem.Allocator, values: []const Block) anyerror!void {
+                for (values) |block| {
+                    try self.spans(a, block.spans);
+                    if (block.container) |container| try self.blocks(a, container.blocks);
+                    if (block.description_body) |description| {
+                        try self.blocks(a, description.box.blocks);
+                    }
+                    if (block.flow) |parts| try self.flow(a, parts);
+                    if (block.table) |grid| try self.table(a, grid);
+                }
+            }
+
+            fn table(self: *@This(), a: std.mem.Allocator, grid: Table) anyerror!void {
+                try self.spans(a, grid.caption);
+                if (grid.caption_blocks) |caption| try self.blocks(a, caption);
+                for (grid.rows) |r| for (r.cells) |c| {
+                    self.cells += 1;
+                    try self.spans(a, c.spans);
+                    if (c.blocks) |children| try self.blocks(a, children);
+                    if (c.nested_table) |nested| {
+                        self.nested_tables += 1;
+                        try self.table(a, nested);
+                    }
+                };
+            }
+
+            fn has(self: @This(), expected: []const u8) bool {
+                return std.mem.indexOf(u8, self.text.items, expected) != null;
+            }
+
+            fn hasTarget(self: @This(), target: []const u8) bool {
+                for (self.targets.items) |value| if (std.mem.eql(u8, value, target)) return true;
+                return false;
+            }
+        };
+
+        const Snapshot = struct {
+            complete: Readback = .{},
+            literal_markup: bool = false,
+            truncated: bool = false,
+        };
+
+        fn render(a: std.mem.Allocator, source: []const u8, unknown: bool) !Snapshot {
+            var renderer: Renderer = .{ .a = a, .context = .{}, .content_root = .parser_output };
+            const original = MissingText.untracked(source);
+            const tracked = if (unknown) MissingText.transformedFrom(original, source) else original;
+            const blocks = try renderer.renderBodyWithMissing(tracked);
+            var result: Snapshot = .{ .literal_markup = renderer.fallbacks.literal_markup, .truncated = renderer.truncated };
+            try result.complete.blocks(a, blocks);
+            return result;
+        }
+
+        fn expectTargets(actual: Readback, expected: []const []const u8) !void {
+            try std.testing.expectEqual(expected.len, actual.targets.items.len);
+            for (expected, actual.targets.items) |want, got| try std.testing.expectEqualStrings(want, got);
+        }
+
+        fn run(a: A) !void {
+            const suffix = " [[croato]]";
+            for ([_]struct { label: []const u8, source: []const u8, mode: enum { reading, earlier, link } }{
+                .{ .label = "wiki-cell-same-line-suffix", .source = wiki_open ++ row ++ suffix ++ wiki_close, .mode = .reading },
+                .{ .label = "html-cell-same-line-suffix", .source = html_open ++ row ++ suffix ++ html_close, .mode = .reading },
+                .{ .label = "earlier-korean-row", .source = wiki_open ++ earlier ++ wiki_close, .mode = .earlier },
+                .{ .label = "ordinary-han-wikilink", .source = wiki_open ++ "[[영어]] [[英語]]" ++ wiki_close, .mode = .link },
+            }) |case| {
+                errdefer std.debug.print("Inglese Han reading: {s}\n", .{case.label});
+                const result = try render(a, case.source, false);
+                const got = result.complete;
+                try std.testing.expect(!result.truncated);
+                switch (case.mode) {
+                    .reading => {
+                        try std.testing.expectEqual(@as(usize, 1), got.cells);
+                        try std.testing.expectEqual(@as(usize, 1), got.protected_han_pairs);
+                        try std.testing.expect(got.has("영어 [英語]] (yeong-eo) croato"));
+                        try std.testing.expect(!got.has("[malformed link]"));
+                        try std.testing.expect(result.literal_markup);
+                        try expectTargets(got, &.{ "coreano", "영어", "croato" });
+                    },
+                    .earlier => {
+                        try std.testing.expect(got.has("영국의 [英國-] (yeongguk-eui, yeonggugi)"));
+                        try expectTargets(got, &.{ "coreano", "영국의" });
+                    },
+                    .link => try expectTargets(got, &.{ "영어", "英語" }),
+                }
+            }
+
+            const oversized = "英語英語英語英語英語英語英語英語英語";
+            for ([_]struct { label: []const u8, source: []const u8, unknown: bool = false }{
+                .{ .label = "outside-cell", .source = row },
+                .{ .label = "unknown-copy", .source = wiki_open ++ row ++ wiki_close, .unknown = true },
+                .{ .label = "no-prior-link", .source = wiki_open ++ "plain [英語]] (yeong-eo)" ++ wiki_close },
+                .{ .label = "two-spaces", .source = wiki_open ++ "[[영어]]  [英語]] (yeong-eo)" ++ wiki_close },
+                .{ .label = "intervening-category", .source = wiki_open ++ "[[영어]][[Category:Review]] [英語]] (yeong-eo)" ++ wiki_close },
+                .{ .label = "nested-same-target-label", .source = wiki_open ++ "[[영어|[[영어]]]] [英語]] (yeong-eo)" ++ wiki_close },
+                .{ .label = "double-outer-link", .source = wiki_open ++ "[[[[영어]]]] [英語]] (yeong-eo)" ++ wiki_close },
+                .{ .label = "ascii-gloss", .source = wiki_open ++ "[[영어]] [abc]] (yeong-eo)" ++ wiki_close },
+                .{ .label = "third-bracket", .source = wiki_open ++ "[[영어]] [英語]]] (yeong-eo)" ++ wiki_close },
+                .{ .label = "nested-reading", .source = wiki_open ++ "[[영어]] [英語]] ((yeong-eo)" ++ wiki_close },
+                .{ .label = "blank-reading", .source = wiki_open ++ "[[영어]] [英語]] ( )" ++ wiki_close },
+                .{ .label = "unclosed-reading", .source = wiki_open ++ "[[영어]] [英語]] (yeong-eo" ++ wiki_close },
+                .{ .label = "oversized-han", .source = wiki_open ++ "[[영어]] [" ++ oversized ++ "]] (yeong-eo)" ++ wiki_close },
+                .{ .label = "wiki-caption", .source = "{|\n|+ [[영어]] [英語]] (yeong-eo)\n|-\n| guard\n|}\n" },
+                .{ .label = "nested-wiki-caption", .source = wiki_open ++ "{|\n|+ [[영어]] [英語]] (yeong-eo)\n|-\n| guard\n|}\n" ++ wiki_close },
+                .{ .label = "html-caption", .source = "<table><caption>[[영어]] [英語]] (yeong-eo)</caption><tr><td>guard</td></tr></table>\n" },
+                .{ .label = "nested-html-caption", .source = html_open ++ "<table><caption>[[영어]] [英語]] (yeong-eo)</caption><tr><td>guard</td></tr></table>" ++ html_close },
+                .{ .label = "html-fostered", .source = "<table>\n[[영어]] [英語]] (yeong-eo)\n<tr><td>guard</td></tr></table>\n" },
+            }) |case| {
+                errdefer std.debug.print("Inglese Han guard: {s}\n", .{case.label});
+                const result = render(a, case.source, case.unknown) catch |err| {
+                    if (err == error.UncompiledPresentation) continue;
+                    return err;
+                };
+                const got = result.complete;
+                try std.testing.expect(!result.truncated);
+                try std.testing.expectEqual(@as(usize, 0), got.protected_han_pairs);
+                try std.testing.expect(!got.has("[英語]]"));
+                try std.testing.expect(got.has("[malformed link]"));
+                try std.testing.expect(!got.hasTarget("英語"));
+                if (std.mem.eql(u8, case.label, "nested-html-caption"))
+                    try std.testing.expectEqual(@as(usize, 1), got.nested_tables);
+            }
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    try Control.run(arena.allocator());
 }

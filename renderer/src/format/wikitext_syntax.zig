@@ -1519,3 +1519,67 @@ test "includeonly logical containers retain the first raw view closer and monoto
     const short = "# before<includeonly/>\n# [[After]]";
     try std.testing.expectEqual(std.mem.indexOfScalar(u8, short, '\n').?, logicalEnd(short, 0));
 }
+
+
+pub fn literalDoubleAngleProseEnd(text: []const u8, at: usize) ?usize {
+    if (at > text.len or text.len - at < 5 or !std.mem.startsWith(u8, text[at..], "<<") or
+        (at != 0 and text[at - 1] == '<')) return null;
+    var prior = at;
+    while (prior != 0) {
+        if (at - prior == 4096) return null;
+        prior -= 1;
+        if (text[prior] == '<') return null;
+        if (text[prior] == '>') break;
+    }
+    var cursor = at + 2;
+    var words: usize = 0;
+    while (words < 8) : (words += 1) {
+        if (cursor == text.len or !std.ascii.isAlphabetic(text[cursor])) return null;
+        const word_start = cursor;
+        cursor += 1;
+        while (cursor < text.len and cursor - at <= 258) {
+            if (std.ascii.isAlphabetic(text[cursor])) { cursor += 1; continue; }
+            if (text[cursor] == 0xc3 and cursor + 1 < text.len) {
+                const tail = text[cursor + 1];
+                if ((tail >= 0x80 and tail <= 0x96) or
+                    (tail >= 0x98 and tail <= 0xb6) or (tail >= 0xb8 and tail <= 0xbf)) {
+                    cursor += 2; continue;
+                }
+            }
+            break;
+        }
+        if (cursor - at > 258) return null;
+        const word = text[word_start..cursor];
+        inline for (&.{
+            "a", "abbr", "address", "area", "article", "aside", "audio", "b", "base",
+            "bdi", "bdo", "big", "blockquote", "body", "br", "button", "canvas",
+            "caption", "center", "cite", "code", "col", "colgroup", "data", "datalist",
+            "dd", "del", "details", "dfn", "dialog", "div", "dl", "dt", "em", "embed",
+            "fieldset", "figcaption", "figure", "font", "footer", "form", "frame",
+            "frameset", "h1", "h2", "h3", "h4", "h5", "h6", "head", "header",
+            "hgroup", "hr", "html", "i", "iframe", "img", "input", "ins", "kbd",
+            "label", "legend", "li", "link", "main", "map", "mark", "menu", "meta",
+            "meter", "nav", "noembed", "noframes", "noscript", "object", "ol",
+            "optgroup", "option", "output", "p", "param", "picture", "plaintext",
+            "progress", "q", "rb", "rp", "rt", "rtc", "ruby", "s", "samp", "script",
+            "search", "select", "slot", "small", "span", "strike", "strong", "style",
+            "sub", "summary", "sup", "svg", "table", "tbody", "td", "template",
+            "textarea", "tfoot", "th", "thead", "time", "title", "tr", "track", "tt",
+            "u", "ul", "var", "video", "wbr", "xmp", "nowiki", "pre", "gallery",
+            "indicator", "ref", "references", "templatestyles", "math", "ce", "chem",
+            "score", "syntaxhighlight", "source", "timeline", "hiero", "poem",
+            "categorytree", "charinsert", "graph", "mapframe", "maplink", "section",
+            "inputbox", "imagemap", "dynamicpagelist", "phonos", "onlyinclude",
+            "noinclude", "includeonly",
+        }) |name| if (std.ascii.eqlIgnoreCase(word, name)) return null;
+        if (cursor + 1 < text.len and text[cursor] == '>' and text[cursor + 1] == '>') {
+            const end = cursor + 2;
+            if (end < text.len and text[end] == '>') return null;
+            return end;
+        }
+        if (cursor == text.len or text[cursor] != ',') return null;
+        cursor += 1;
+        while (cursor < text.len and text[cursor] == ' ' and cursor - at <= 258) : (cursor += 1) {}
+    }
+    return null;
+}
