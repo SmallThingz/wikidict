@@ -45977,11 +45977,65 @@ fn disclosureLineLink(line: []const u8, start: usize) ?usize {
         if (std.mem.startsWith(u8, line[pos..], "[[")) {
             if (depth == 16) return null;
             depth += 1;
-        } else if (std.mem.startsWith(u8, line[pos..], "]]")) depth -= 1 else return null;
+        } else if (std.mem.startsWith(u8, line[pos..], "]]")) {
+            depth -= 1;
+        } else if (line.len - pos >= 15 and std.ascii.eqlIgnoreCase(line[pos .. pos + 15], "<small></small>")) {
+            // This exact empty, attribute-free inline pair cannot leave an
+            // ancestor around the following disclosure. Caption admission
+            // and image authority remain separate consumer checks.
+            pos += 15;
+            continue;
+        } else if (line[pos] == '[') {
+            // Authored caption notes are closed ASCII numeric text, not a
+            // second link or an unbounded bracket expression.
+            var end = pos + 1;
+            while (end < line.len and std.ascii.isDigit(line[end])) end += 1;
+            if (end == pos + 1 or end == line.len or line[end] != ']') return null;
+            pos = end + 1;
+            continue;
+        } else return null;
         pos += 2;
     }
     return pos;
 }
+
+test "genuine image captions preserve the following root disclosure placement prefix" {
+    for ([_][]const u8{
+        @import("testdata/it-disclosure-caption-prefix/marrone.zig").source,
+        @import("testdata/it-disclosure-caption-prefix/lilla.zig").source,
+        @import("testdata/it-disclosure-caption-prefix/gatto.zig").source,
+    }) |prefix| try std.testing.expect(disclosureOrdinaryPrefix(prefix));
+}
+
+test "disclosure link prefix keeps empty inline pairs and numeric notes closed" {
+    for ([_][]const u8{
+        "[[File:A.svg|caption<small></small>]]",
+        "[[File:A.svg|caption<SMALL></SMALL>]]",
+        "[[File:A.svg|[[nested]]<small></small>]]",
+        "[[File:A.svg|caption [1]]]",
+        "[[File:A.svg|caption [123]<small></small>]]",
+    }) |link| try std.testing.expectEqual(@as(?usize, link.len), disclosureLineLink(link, 0));
+    for ([_][]const u8{
+        "[[File:A.svg|caption<small>]]",
+        "[[File:A.svg|caption</small>]]",
+        "[[File:A.svg|caption<small>x</small>]]",
+        "[[File:A.svg|caption<small class=\"x\"></small>]]",
+        "[[File:A.svg|caption<small ></small>]]",
+        "[[File:A.svg|caption<small/></small>]]",
+        "[[File:A.svg|caption<small></div>]]",
+        "[[File:A.svg|caption<div></div>]]",
+        "[[File:A.svg|caption []]]",
+        "[[File:A.svg|caption [a]]]",
+        "[[File:A.svg|caption [1x]]]",
+        "[[File:A.svg|caption [1]]",
+        "[[File:A.svg|caption {x}]]",
+        "[[File:A.svg|caption [12<small></small>]]]",
+    }) |link| {
+        try std.testing.expectEqual(@as(?usize, null), disclosureLineLink(link, 0));
+    }
+    try std.testing.expect(!disclosureOrdinaryPrefix("[[File:A.svg|caption<small></small>]]<div>\n\n"));
+}
+
 fn disclosureOrdinaryPrefix(prefix: []const u8) bool {
     const syntax = @import("blob_encoder").wikitext_syntax;
     if (prefix.len == 0) return true;
