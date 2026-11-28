@@ -273,7 +273,7 @@ class EntryBodyAdjoiningDeviceTest {
             assertEquals(listOf("prefix", "prefix", "suffix", "float"), actions.map { it.target })
         }
 
-    @Test fun firstHeadingKeepsFoldAnchorAndListActionsThroughExplicitGapRefusalAndRecovery() =
+    @Test fun firstHeadingKeepsFoldAnchorAndListActionsWithReaderSpacing() =
         control("entry-body-heading-recovery.png") {
             val supported = mutableStateOf(false)
             val request = mutableStateOf<EntryAnchorRequest?>(null)
@@ -291,9 +291,9 @@ class EntryBodyAdjoiningDeviceTest {
                 }
             } } }
             compose.waitForIdle()
-            compose.onAllNodesWithText("Unable to display this layout.").onFirst().assertIsDisplayed()
-            assertTrue(failures.any { it.contains("Implicit paragraph gaps") })
-            tapRetained("list-action")
+            compose.onAllNodesWithText("Unable to display this layout.").assertCountEquals(0)
+            assertTrue(failures.isEmpty())
+            tap(owner("list-action"), "list-action")
             compose.onNodeWithText("Collapse Usage").performClick()
             compose.waitForIdle()
             compose.onNodeWithText("Expand Usage").assertIsDisplayed()
@@ -303,14 +303,14 @@ class EntryBodyAdjoiningDeviceTest {
             compose.onNode(hasText("Usage") and hasAnyAncestor(isPopup())).performClick()
             compose.waitForIdle()
             compose.onNodeWithText("Collapse Usage").assertIsDisplayed()
-            tapRetained("list-action")
+            tap(owner("list-action"), "list-action")
             compose.onNodeWithText("Collapse Usage").performClick()
             compose.waitForIdle()
             compose.runOnIdle { request.value = EntryAnchorRequest(selected().key, "#usage") }
             compose.waitForIdle()
             assertNull(request.value)
             compose.onNodeWithText("Collapse Usage").assertIsDisplayed()
-            tapRetained("list-action")
+            tap(owner("list-action"), "list-action")
             compose.runOnIdle { supported.value = true }
             compose.waitForIdle()
             compose.onAllNodesWithText("Unable to display this layout.").assertCountEquals(0)

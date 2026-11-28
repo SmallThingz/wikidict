@@ -45,11 +45,13 @@ internal sealed interface NativeFloatContextPart {
         val columnBreakInside: ColumnBreakInside? = null,
         val headingFramePaddingAbove: Float? = null,
         val columnAvoidGroup: Int = 0,
+        val readerGapAfter: Float = 0f,
     ) : NativeFloatContextPart
     data class Rule(val id: Int, val metrics: NativeRuleMetrics,
         val containingWidth: Float? = null) : NativeFloatContextPart
     data class Flow(val id: Int, val build: (Int, List<NativeFloatExclusion>) -> NativeAnonymousFlowGeometry,
-        val gapAfter: Float = 0f, val box: ParagraphBox? = null, val empty: Boolean = false) : NativeFloatContextPart
+        val gapAfter: Float = 0f, val box: ParagraphBox? = null, val empty: Boolean = false,
+        val readerGapAfter: Float = 0f) : NativeFloatContextPart
     /** Normal flow shares exclusions. Float and flex formatting contexts isolate descendants. */
     data class Container(val id: Int, val contentWidth: Int,
         val build: (Int, List<NativeFloatExclusion>) -> NativeFloatContextGeometry,
@@ -107,6 +109,8 @@ internal sealed interface NativeFloatContextPart {
         val ordinaryDirection: TableContainingDirection? = null,
         val exactContainingWidth: Float? = null,
         val inkBounds: NativeFloatBounds? = null,
+        // Reader-owned spacing is allocated after the child and outside its margin strut.
+        val flowExtentAfter: Float = 0f,
     ) : NativeFloatContextPart
 }
 
@@ -507,7 +511,7 @@ internal class NativeFloatContextGeometry private constructor(
                     if (geometry == null) return@forEachIndexed
                     val part = parts[index] as NativeFloatContextPart.Text
                     for (line in 0 until geometry.shapedLineCount) add(NativeColumnLine(index, line,
-                        geometry.usedLineHeight(line), if (line == 0) previousText?.let { it.box?.after ?: it.gapAfter } ?: 0f else 0f,
+                        geometry.usedLineHeight(line), if (line == 0) previousText?.let { it.box?.after ?: it.gapAfter + it.readerGapAfter } ?: 0f else 0f,
                         part.columnBreakInside == ColumnBreakInside.Avoid, part.columnAvoidGroup))
                     previousText = part
                 }
@@ -693,8 +697,8 @@ internal class NativeFloatContextGeometry private constructor(
 
         internal fun adjoiningProfile(part: NativeFloatContextPart, preparation: NativeOrdinaryPreparation? = null): NativeAdjoiningMargins? = when (part) {
             is NativeFloatContextPart.Text -> paragraphMargins(part.box, part.emptyInlineOwner ||
-                part.box != null && part.text.isEmpty() && !hasNativeInlineLayoutOwner(part.text), part.gapAfter)
-            is NativeFloatContextPart.Flow -> paragraphMargins(part.box, part.empty, part.gapAfter)
+                part.box != null && part.text.isEmpty() && !hasNativeInlineLayoutOwner(part.text), part.gapAfter, part.readerGapAfter)
+            is NativeFloatContextPart.Flow -> paragraphMargins(part.box, part.empty, part.gapAfter, part.readerGapAfter)
             is NativeFloatContextPart.Rule -> part.metrics.adjoining
             is NativeFloatContextPart.Child -> {
                 if (part.gapBefore != 0f || part.gapAfter != 0f)
@@ -718,10 +722,10 @@ internal class NativeFloatContextGeometry private constructor(
         }?.let { profile -> if (preparation?.hasClearance(part) == true)
             profile.copy(beforeAdjoins = false, afterAdjoins = !profile.through) else profile }
 
-        private fun paragraphMargins(box: ParagraphBox?, empty: Boolean, gap: Float): NativeAdjoiningMargins {
+        private fun paragraphMargins(box: ParagraphBox?, empty: Boolean, gap: Float, readerGap: Float): NativeAdjoiningMargins {
             if (box == null && gap != 0f) throw UnsupportedFloatLayout("Implicit paragraph gaps have no container margin authority")
             return NativeAdjoiningMargins(box?.margins?.top ?: 0f, box?.margins?.bottom ?: 0f,
-                empty && (box?.padding?.top ?: 0f) == 0f && (box?.padding?.bottom ?: 0f) == 0f)
+                empty && readerGap == 0f && (box?.padding?.top ?: 0f) == 0f && (box?.padding?.bottom ?: 0f) == 0f)
         }
 
         private fun onlyRules(part: NativeFloatContextPart): Boolean = part is NativeFloatContextPart.Rule ||
@@ -874,12 +878,13 @@ internal class NativeFloatContextGeometry private constructor(
                 when (part) {
                     is NativeFloatContextPart.Text -> {
                         require(part.gapAfter.isFinite() && part.gapAfter >= 0)
+                        require(part.readerGapAfter.isFinite() && part.readerGapAfter >= 0)
                         val box = part.box
                         y += (if (adjoining) 0f else box?.before ?: 0f) + (box?.padding?.top ?: 0f)
                         val x = box?.contentLeft ?: 0f
                         val available = kotlin.math.floor(width - x - (box?.contentRight ?: 0f)).toInt().coerceAtLeast(0)
                         if (emptyBox) {
-                            y += (box?.padding?.bottom ?: 0f) + if (adjoining) 0f else part.gapAfter
+                            y += (box?.padding?.bottom ?: 0f) + part.readerGapAfter + if (adjoining) 0f else part.gapAfter
                             if (marginPlacement != null) cursor!!.end(marginPlacement, y - borderTop, profile!!)
                             return@forEachIndexed
                         }
@@ -895,7 +900,7 @@ internal class NativeFloatContextGeometry private constructor(
                         text.append(part.text)
                         geometry.floats.forEach { placed -> exclusions += NativeFloatExclusion(placed.occurrence.side,
                             NativeFloatBounds(placed.outer.left + x, placed.outer.top + y, placed.outer.right + x, placed.outer.bottom + y)) }
-                        y += geometry.textBottom + (box?.padding?.bottom ?: 0f) + if (adjoining) 0f else part.gapAfter
+                        y += geometry.textBottom + (box?.padding?.bottom ?: 0f) + part.readerGapAfter + if (adjoining) 0f else part.gapAfter
                     }
                     is NativeFloatContextPart.Rule -> {
                         if (!adjoining) throw UnsupportedFloatLayout("Authored rule requires adjoining margin ownership")
@@ -917,12 +922,13 @@ internal class NativeFloatContextGeometry private constructor(
                     }
                     is NativeFloatContextPart.Flow -> {
                         require(part.gapAfter.isFinite() && part.gapAfter >= 0)
+                        require(part.readerGapAfter.isFinite() && part.readerGapAfter >= 0)
                         val box = part.box
                         y += (if (adjoining) 0f else box?.before ?: 0f) + (box?.padding?.top ?: 0f)
                         val x = box?.contentLeft ?: 0f
                         val available = kotlin.math.floor(width - x - (box?.contentRight ?: 0f)).toInt().coerceAtLeast(0)
                         if (part.empty) {
-                            y += (box?.padding?.bottom ?: 0f) + if (adjoining) 0f else part.gapAfter
+                            y += (box?.padding?.bottom ?: 0f) + part.readerGapAfter + if (adjoining) 0f else part.gapAfter
                             if (marginPlacement != null) cursor!!.end(marginPlacement, y - borderTop, profile!!)
                             return@forEachIndexed
                         }
@@ -936,7 +942,7 @@ internal class NativeFloatContextGeometry private constructor(
                         text.append(geometry.text)
                         geometry.ownExclusions.forEach { exclusion -> exclusions += exclusion.copy(
                             outer = exclusion.outer.translated(x, y)) }
-                        y += geometry.textBottom + (box?.padding?.bottom ?: 0f) + if (adjoining) 0f else part.gapAfter
+                        y += geometry.textBottom + (box?.padding?.bottom ?: 0f) + part.readerGapAfter + if (adjoining) 0f else part.gapAfter
                     }
                     is NativeFloatContextPart.Container -> {
                         require(part.contentWidth >= 0)
@@ -1327,6 +1333,8 @@ internal class NativeFloatContextGeometry private constructor(
                             val placed = children.last().also { check(it.id == part.id) }
                             childInk += ink.translated(placed.bounds.left, placed.bounds.top)
                         }
+                        require(part.flowExtentAfter.isFinite() && part.flowExtentAfter >= 0f)
+                        if (side == null) y += part.flowExtentAfter
                         // App-owned media controls have their own input/AX tree, not authored copy text.
                         if (part.logicalObject) text.append('\ufffc')
                     }

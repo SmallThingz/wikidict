@@ -2888,7 +2888,8 @@ internal fun NativeFloatBlockContext(blocks: List<Block>, onLink: (EntryLink) ->
     val originalChildren = mutableMapOf<Int, NativeContainerLeaf>()
     val leafBoxes = mutableMapOf<Int, ParagraphBox?>()
     val gaps = blocks.indices.map { index ->
-        if (blocks[index].ruleStyle == null && (trailingGap || index + 1 < blocks.size))
+        if (bodyAdjoining != BodyAdjoiningPolicy.Ordinary && blocks[index].ruleStyle == null &&
+            (trailingGap || index + 1 < blocks.size))
             (gapsDp?.get(index) ?: gapDp) * density.density else 0f
     }
     val ruleDarkTheme = LocalReaderDarkTheme.current
@@ -3050,15 +3051,18 @@ internal fun NativeFloatBlockContext(blocks: List<Block>, onLink: (EntryLink) ->
                     sourceIndex to audioLayoutInputs.getOrPut(inputKey) { NativeLayoutInput(0f) }
                 }
                 mediaAudioInputs[id] = controlInputs
+                val trailingPadding = box?.padding?.bottom ?: 0f
+                val hasAuthoredMargins = block.style?.margins != null
                 listOf(text, NativeFloatContextSpec.Child(id, { original ->
                     if (authoredAudio) {
                         val basis = (original.toDouble() - left - right).coerceAtLeast(0.0).toFloat()
                         controlInputs.values.forEach { it.update(basis) }
                         embeddedMediaSlotWidth(embedded, original, left, right, density.density, normalBodyPixels, documentSurface)
                     } else original
-                }, (box?.padding?.bottom ?: 0f) + (box?.after ?: gap), logicalObject = false,
+                }, if (hasAuthoredMargins) box?.after ?: 0f else 0f, logicalObject = false,
                     documentScrollable = authoredAudio,
-                    ordinaryDirection = containingDirection.takeIf { authoredAudio }))
+                    ordinaryDirection = containingDirection.takeIf { authoredAudio },
+                    flowExtentAfter = trailingPadding + if (hasAuthoredMargins) 0f else box?.after ?: gap))
             }
         } else {
             originalChildren[index] = leaf
@@ -3098,7 +3102,7 @@ internal fun NativeFloatBlockContext(blocks: List<Block>, onLink: (EntryLink) ->
                     marginsConsumed = floatViewport != null || cornerFocusTable || intrinsicTable != null,
                     rootViewportCssWidth = documentViewport)
             }
-            listOf(nativeTableBodyAdjoiningSpec(block, bodyAdjoining,
+            val child = nativeTableBodyAdjoiningSpec(block, bodyAdjoining,
                 leaf.rootIndex != null && !leaf.inContainer, NativeFloatContextSpec.Child(index, { originalWidth ->
                 if (!nativeTableAdmitted || table == null || tableFeature != null || table.style?.isInline == true) originalWidth else {
                     val metrics = natural(originalWidth)?.let { tableMetricsInWidth(table, it, nativeTableRowProjection(table, documentViewport).grid.columns, originalWidth) }
@@ -3170,7 +3174,9 @@ internal fun NativeFloatBlockContext(blocks: List<Block>, onLink: (EntryLink) ->
                         block.kind == "list_item" && blockPrefix(block).isNotEmpty() || tableFeature != null)
                         throw UnsupportedFloatLayout("Table block viewport needs its own unshifted source box")
                     resolveTableBlockBox(policy, containingWidth.toFloat(), density.density, normalBodyPixels)
-                } }, intrinsicMarginTable = intrinsicTable)))
+                } }, intrinsicMarginTable = intrinsicTable))
+            listOf(if (block.style?.margins == null && child.gapAfter != 0f)
+                child.copy(gapAfter = 0f, flowExtentAfter = child.gapAfter) else child)
         }
         if (paragraphFailure == null) rendered else listOf(NativeFloatContextSpec.Container(
             sourceId(leaf.path + "/unavailable"), contentWidth = { width, _ -> width },

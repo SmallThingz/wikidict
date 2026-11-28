@@ -154,6 +154,7 @@ internal sealed interface NativeFloatContextSpec {
         val ordinaryDirection: TableContainingDirection? = null,
         val exactWidth: ((Float) -> Float)? = null,
         val exactMeasure: ((Float) -> NativeExactChildMeasure)? = null,
+        val flowExtentAfter: Float = 0f,
         val content: (@Composable (NativeLayoutInput<Float>) -> Unit)? = null) : NativeFloatContextSpec
 }
 
@@ -626,9 +627,10 @@ internal fun NativeFloatContextLayout(
                                     part.prepared.native?.source?.invoke(0) ?: part.prepared.text else part.prepared.text
                                 NativeFloatContextPart.Text(source,
                                     { available, carried -> part.prepared.geometry!!(available, carried, false) },
-                                    part.gapAfter, part.box, part.prepared.emptyInlineOwner,
+                                    if (part.box?.hasAuthoredMargins == true) part.gapAfter else 0f, part.box, part.prepared.emptyInlineOwner,
                                     part.prepared.geometryAtWidth?.let { exact -> { available, carried -> exact(available, carried, false) } },
-                                    part.prepared.geometryForColumns, part.columnBreakInside, part.headingFramePaddingAbove, part.columnAvoidGroup)
+                                    part.prepared.geometryForColumns, part.columnBreakInside, part.headingFramePaddingAbove,
+                                    part.columnAvoidGroup, readerGapAfter = if (part.box?.hasAuthoredMargins == true) 0f else part.gapAfter)
                             }
                             is NativeFloatContextSpec.Rule -> NativeFloatContextPart.Rule(part.id, part.metrics, available)
                             is NativeFloatContextSpec.Flow -> NativeFloatContextPart.Flow(part.id, { available, carried ->
@@ -645,7 +647,8 @@ internal fun NativeFloatContextLayout(
                                 if (geometry.width != placeable.width || geometry.height != placeable.height)
                                     throw UnsupportedFloatLayout("Anonymous child measurement differs from its geometry")
                                 geometry
-                            }, part.gapAfter, part.box, part.empty)
+                            }, if (part.box?.hasAuthoredMargins == true) part.gapAfter else 0f, part.box, part.empty,
+                                readerGapAfter = if (part.box?.hasAuthoredMargins == true) 0f else part.gapAfter)
                             is NativeFloatContextSpec.Container -> {
                                 part.unavailableReason?.let { throw UnsupportedFloatLayout(it) }
                                 val nested = part.preparedParts
@@ -816,7 +819,7 @@ internal fun NativeFloatContextLayout(
                                         }
                                     }, part.gapAfter, margins = margins, gapBefore = part.gapBefore,
                                         clear = part.clear, logicalObject = part.logicalObject,
-                                        pairedViewportDirection = owner.containingDirection)
+                                        pairedViewportDirection = owner.containingDirection, flowExtentAfter = part.flowExtentAfter)
                                 } else {
                                 if (part.pairedBlockBox != null)
                                     throw UnsupportedFloatLayout("Paired table box has no source owner")
@@ -914,7 +917,7 @@ internal fun NativeFloatContextLayout(
                                         autoMarginBox = box.takeIf { autoTable != null }, autoMargins = autoMargins,
                                         containingDirection = containingDirection,
                                         fixedMarginBox = box.takeIf { fixedTable != null },
-                                        fixedMarginDirection = fixedTable?.containingDirection)
+                                        fixedMarginDirection = fixedTable?.containingDirection, flowExtentAfter = part.flowExtentAfter)
                                 } else if (exactAllocation != null) {
                                     val measured = checkNotNull(part.exactMeasure).invoke(exactAllocation)
                                     if (measured.block.usedWidth != exactAllocation)
@@ -927,13 +930,15 @@ internal fun NativeFloatContextLayout(
                                             throw UnsupportedFloatLayout("Disclosure placement changed its measured width")
                                         measured.block
                                     }, part.gapAfter, part.floatSide, part.margins(containingWidth), part.requiresUnobstructedText,
-                                        part.gapBefore, part.clear, false, exactContainingWidth = available, inkBounds = measured.ink)
+                                        part.gapBefore, part.clear, false, exactContainingWidth = available,
+                                        inkBounds = measured.ink, flowExtentAfter = part.flowExtentAfter)
                                 } else NativeFloatContextPart.Child(part.id, NativeBlockWidth.FixedPx(allocated.toFloat()), { request ->
                                     val childWidth = ceil(request.requestedWidth ?: allocated.toFloat()).toInt()
                                     val placeable = atomic ?: measurePart(index, Constraints(minWidth = childWidth, maxWidth = childWidth))
                                     NativeBlockMeasure(placeable.width.toFloat(), placeable.width.toFloat(), placeable.height.toFloat())
                                 }, part.gapAfter, part.floatSide, part.margins(containingWidth), part.requiresUnobstructedText,
-                                    part.gapBefore, part.clear, part.logicalObject, ordinaryDirection = part.ordinaryDirection)
+                                    part.gapBefore, part.clear, part.logicalObject, ordinaryDirection = part.ordinaryDirection,
+                                    flowExtentAfter = part.flowExtentAfter)
                                 }
                             }
                         } } }

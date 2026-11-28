@@ -248,25 +248,26 @@ internal class NativeContainerDisclosureToggle internal constructor(
     @Composable
     fun Content(exactWidth: NativeLayoutInput<Float>) {
         failureReason?.let { ReaderLayoutUnavailable(it); return }
-        key(identity) {
-            val physical = remember(identity) { NativeLayoutInput<NativeDisclosureViewMeasure?>(null) }
-            Layout(modifier = exactWidth.modifier.nativeWidthIntrinsics {
-                NativeWidthRange(ceil(intrinsic.minimum).toInt(), ceil(intrinsic.maximum).toInt())
-            }, content = {
+        val physical = remember(identity) { NativeLayoutInput<NativeDisclosureViewMeasure?>(null) }
+        Layout(modifier = exactWidth.modifier.nativeWidthIntrinsics {
+            NativeWidthRange(ceil(intrinsic.minimum).toInt(), ceil(intrinsic.maximum).toInt())
+        }, content = {
+            // The layout owns the slot's width across control replacement.
+            key(identity) {
                 AndroidView(factory = { NativeContainerDisclosureView(it) }, modifier = physical.modifier,
                     update = { it.bind(this, physical) }, onRelease = { it.release() })
-            }) { measurables, constraints ->
-                val width = exactWidth.value
-                val measured = measureBox(width)
-                val usedWidth = ceil(width).toInt()
-                val usedHeight = ceil(measured.logicalHeight).toInt()
-                val surface = measured.geometry
-                physical.update(measured)
-                val child = measurables.single().measure(androidx.compose.ui.unit.Constraints.fixed(surface.width, surface.height))
-                if (constraints.constrainWidth(usedWidth) != usedWidth || constraints.constrainHeight(usedHeight) != usedHeight)
-                    throw UnsupportedFloatLayout("Disclosure allocation does not contain its native used box")
-                layout(usedWidth, usedHeight) { child.place(surface.surface.left, surface.surface.top) }
             }
+        }) { measurables, constraints ->
+            val width = exactWidth.value
+            val measured = measureBox(width)
+            val usedWidth = ceil(width).toInt()
+            val usedHeight = ceil(measured.logicalHeight).toInt()
+            val surface = measured.geometry
+            physical.update(measured)
+            val child = measurables.single().measure(androidx.compose.ui.unit.Constraints.fixed(surface.width, surface.height))
+            if (constraints.constrainWidth(usedWidth) != usedWidth || constraints.constrainHeight(usedHeight) != usedHeight)
+                throw UnsupportedFloatLayout("Disclosure allocation does not contain its native used box")
+            layout(usedWidth, usedHeight) { child.place(surface.surface.left, surface.surface.top) }
         }
     }
 }

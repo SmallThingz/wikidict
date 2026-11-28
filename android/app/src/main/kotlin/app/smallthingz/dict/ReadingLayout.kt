@@ -447,7 +447,8 @@ internal data class ParagraphEdges(val top: Float = 0f, val right: Float = 0f,
 }
 
 internal data class ParagraphBox(val margins: ParagraphEdges, val padding: ParagraphEdges,
-    val before: Float, val after: Float) {
+    val before: Float, val after: Float,
+    val hasAuthoredMargins: Boolean = true) {
     init { require(before.isFinite() && before >= 0f && after.isFinite() && after >= 0f) }
     val contentLeft: Float get() = margins.left + padding.left
     val contentRight: Float get() = margins.right + padding.right
@@ -480,7 +481,8 @@ internal fun paragraphBox(block: Block, previous: Block?, defaultGap: Float,
     val before = if (style.margins != null) (margins.top - previousBottom).coerceAtLeast(0f) else 0f
     val after = if (style.margins != null) margins.bottom
         else if (!paragraphHasContent(block, preserveCompiledText)) 0f else defaultGap
-    return ParagraphBox(margins, edges(style.padding), before, after)
+    return ParagraphBox(margins, edges(style.padding), before, after,
+        hasAuthoredMargins = style.margins != null)
 }
 
 /** Labels come from compiled structure; ordered lists do not become dictionary senses. */
