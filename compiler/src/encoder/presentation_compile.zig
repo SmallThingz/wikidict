@@ -49283,6 +49283,31 @@ pub const Renderer = struct {
         }
         return visible and depth == 0;
     }
+    // An indented wiki bullet preceding the direct content child stays visible
+    // when that child collapses. Validate its inline body independently; the
+    // ordinary body renderer retains the paragraph/list structure and links.
+    fn genericDisclosurePrefix(self: *const Renderer, prefix: []const u8) bool {
+        if (self.genericDisclosureCaption(prefix)) return true;
+        if (!std.mem.endsWith(u8, prefix, "\n")) return false;
+        const newline = std.mem.indexOfScalar(u8, prefix, '\n') orelse return false;
+        if (!self.genericDisclosureCaption(std.mem.trimEnd(u8, prefix[0..newline], "\r"))) return false;
+        var lines = std.mem.splitScalar(u8, prefix[newline + 1 ..], '\n');
+        var items: usize = 0;
+        while (lines.next()) |raw| {
+            const line = std.mem.trimEnd(u8, raw, "\r");
+            if (line.len == 0) return items != 0 and lines.next() == null;
+            var marker: usize = 0;
+            while (marker < line.len and line[marker] == ':') : (marker += 1) {}
+            if (marker == 0) return false;
+            const indent = marker;
+            while (marker < line.len and line[marker] == '*') : (marker += 1) {}
+            if (marker == indent or marker > max_depth) return false;
+            const body = std.mem.trimStart(u8, line[marker..], " \t");
+            if (!self.genericDisclosureCaption(body)) return false;
+            items += 1;
+        }
+        return items != 0;
+    }
     fn genericDisclosureSourceQuery(self: *Renderer, tag: syntax.Tag, whole: []const u8) Error!?GenericDisclosureSource {
         if (!tag.is("div")) return null;
         const classes = (try self.semanticAttribute(tag, "class")) orelse return null;
@@ -49309,7 +49334,7 @@ pub const Renderer = struct {
         const inner = whole[opening.end..pair.inner_end];
         const at = std.ascii.findIgnoreCase(inner, "<div") orelse
             return self.containerUnavailableAt("generic_disclosure_direct_child", whole);
-        if (!self.genericDisclosureCaption(inner[0..at]))
+        if (!self.genericDisclosurePrefix(inner[0..at]))
             return self.containerUnavailableAt("generic_disclosure_caption_shape", whole);
         const child = syntax.tagAt(inner, at) orelse return self.containerUnavailableAt("generic_disclosure_direct_child", whole);
         if (!child.is("div") or child.closing or child.self_closing or child.html_pre or
@@ -142467,4 +142492,89 @@ test "wiki table quoted tooltip spans retain ordinary text after position absenc
         try std.testing.expectEqual(expected_links.len, targets);
         try std.testing.expectEqual(expected_titles.len, labels);
     }
+}
+
+
+test "genuine moro disclosure keeps preceding translation list outside collapsed content" {
+    // Exact 478-byte owner from ordinal190/page1331/revision3934157.
+    // The list was authored before mw-collapsible-content, not inside it.
+    const source = "<div class=\"mw-collapsible mw-collapsed\" data-expandtext=\"Mostra\" data-collapsetext=\"Nascondi\" style=\"padding:0.2em 0.6em 0.2em 0.6em; border-right:1px solid #BEBEBE; border-bottom:1px dotted black; background:#EDEDED; color:#000;\">di capelli scuri\n:*[[inglese]]: [[dark]], [[dark-haired]]\n<div class=\"z-index:-1; toccolours mw-collapsible-content\" style=\"border:0;\">\n{| border=\"0\" width=\"100%\" class=\"translations\"\n|-\n| bgcolor=\"beige\" valign=\"top\" width=\"48%\" |\n|}</div></div>";
+    try MilyonLinkedBr210Test.hash(source, "1f6d4208660916f687a9b9edec780264ec0fef2a4e7a78d5f543e827bc44cb91");
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var probe: Renderer = .{ .a = a, .context = .{} };
+    const query = (try probe.genericDisclosureSourceQuery(syntax.tagAt(source, 0).?, source)).?;
+    const child_start = Renderer.genericDisclosureOffset(source, query.content_source).?;
+    // Typed button paint is a fixture for this structural regression only.
+    // The ordinary full-page path still requires its own style authority.
+    var button = try std.json.parseFromSliceLeaky(presentation_types.ContainerDisclosure, a,
+        @embedFile("a1_it_disclosure_button05.json"), .{});
+    // source_labels uses the ordinary initializer's bracketed display policy
+    // with an unbound index; the emitted child determines the final index.
+    button.content_index = 0;
+    button.expand_label = "[Mostra]";
+    button.collapse_label = "[Nascondi]";
+    button.expand_run.?.start = 1; button.expand_run.?.end = 7;
+    button.collapse_run.?.start = 1; button.collapse_run.?.end = 9;
+    try std.testing.expect((ContainerDisclosureSourceLabels{ .expand = "Mostra", .collapse = "Nascondi" }).matchesPolicy(button));
+    const captures = [_]ContainerDisclosureCapture{.{
+        .owner_start = 0, .owner_end = source.len,
+        .content_start = child_start, .content_end = child_start + query.content_source.len,
+        .policy = button, .source_labels = .{ .expand = "Mostra", .collapse = "Nascondi" },
+    }};
+    const held: ContainerDisclosureSource = .{ .source = source, .captures = &captures };
+    var renderer: Renderer = .{ .a = a, .context = .{ .container_disclosures = &held } };
+    const blocks = try renderer.renderBody(source);
+    try std.testing.expectEqual(@as(usize, 1), blocks.len);
+    const owner = blocks[0].container.?;
+    try std.testing.expectEqual(@as(u32, 2), owner.disclosure.?.content_index);
+    try std.testing.expect(owner.disclosure.?.initially_collapsed);
+    try std.testing.expect(presentation_types.validContainerDisclosureOwner(owner));
+    try std.testing.expectEqualStrings("di capelli scuri", try flattened(a, owner.blocks[0].spans));
+    const item = owner.blocks[1];
+    try std.testing.expect(item.kind == .list_item);
+    try std.testing.expectEqualStrings(":*", item.list_path);
+    try std.testing.expectEqualStrings("inglese: dark, dark-haired", try flattened(a, item.spans));
+    const targets = [_][]const u8{ "inglese", "dark", "dark-haired" };
+    var links: usize = 0;
+    for (item.spans) |span| if (span.kind == .link) {
+        try std.testing.expect(links < targets.len);
+        try std.testing.expectEqualStrings(targets[links], span.target);
+        links += 1;
+    };
+    try std.testing.expectEqual(targets.len, links);
+    try std.testing.expect(!renderer.fallbacks.unsupported_element);
+    const stored = try FormattingScopeTest.encode(a, &renderer, blocks);
+    const codec = @import("blob_encoder").presentation_codec;
+    const bytes = try codec.encodeAlloc(a, stored);
+    const decoded = try codec.decodeAlloc(a, bytes, "formatting scope", .language,
+        .{ .heading = "English", .code = "en" });
+    try std.testing.expectEqualDeep(stored, decoded);
+    try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, decoded));
+    const public_owner = decoded.entry.sections[0].blocks[0].container.?;
+    try std.testing.expectEqual(@as(u32, 2), public_owner.disclosure.?.content_index);
+    try std.testing.expectEqualStrings(":*", public_owner.blocks[1].list_path);
+}
+
+test "disclosure indented list prefix refuses broken inline or owner structure" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    for ([_][]const u8{
+        "label\n:*[[target|visible]]\n",
+        "<small>label</small>\n::**[[one]], [[two]]\n:*next item\n",
+    }) |prefix| try std.testing.expect(renderer.genericDisclosurePrefix(prefix));
+    for ([_][]const u8{
+        "\n:*[[target]]\n", "label\n:*\n", "label\n:* \n",
+        "label\n:*[[target]]\n\n", "label\n:*[[target]]\ntrailing paragraph\n",
+        "label\n:*''unclosed\n", "<small>label\n:*body</small>\n",
+        "label\n:*<small>body\n", "label\n:*{{unknown}}\n",
+        "label\n:*[[File:unobserved.svg]]\n", "label\n:*[broken]\n",
+        "label\n:*<div class='mw-collapsible-content'>other</div>\n",
+        "label\n:*<span class='mw-collapsible-toggle-placeholder'>other</span>\n",
+        "label\n:*#mixed marker\n", "label\n;term:definition\n",
+        "label\n:*[[target]]",
+    }) |prefix| try std.testing.expect(!renderer.genericDisclosurePrefix(prefix));
 }
