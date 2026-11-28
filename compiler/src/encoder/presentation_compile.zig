@@ -74,12 +74,22 @@ pub const RejectedCompilerCapture = struct {
     }
     pub const Scope = struct {
         previous: ?*RejectedCompilerCapture,
-        pub fn deinit(self: @This()) void { rejected_compiler_capture = self.previous; }
+        restore_reporting: bool = false,
+        pub fn deinit(self: @This()) void {
+            rejected_compiler_capture = self.previous;
+            if (self.restore_reporting) probe_rejection_reporting_suspended = false;
+        }
     };
     pub fn suspendCapture() Scope {
         const previous = rejected_compiler_capture;
         rejected_compiler_capture = null;
         return .{ .previous = previous };
+    }
+    pub fn suspendProbeReporting() Scope {
+        var scope = suspendCapture();
+        scope.restore_reporting = !probe_rejection_reporting_suspended;
+        probe_rejection_reporting_suspended = true;
+        return scope;
     }
     pub fn resumeCapture(self: *@This()) Scope {
         const previous = rejected_compiler_capture;
@@ -92,6 +102,7 @@ pub const RejectedCompilerCapture = struct {
     }
 };
 threadlocal var rejected_compiler_capture: ?*RejectedCompilerCapture = null;
+threadlocal var probe_rejection_reporting_suspended = false;
 pub fn rejectedCompilerSnapshot(failure: anyerror) ?RejectedCompilerCapture.Snapshot {
     return if (rejected_compiler_capture) |capture| capture.snapshot(failure) else null;
 }
@@ -10797,7 +10808,7 @@ pub const Renderer = struct {
     }
 
     fn tracePresentationRejection(self: *Renderer, phase: []const u8, reject_reason: []const u8, fragment: []const u8, local_offset: usize, reason_bits: u64, failure: Error) void {
-        if (self.rejection_probe_scope or self.rejection_trace_events != 0) return;
+        if (probe_rejection_reporting_suspended or self.rejection_probe_scope or self.rejection_trace_events != 0) return;
         self.rejection_trace_events += 1;
         if (rejected_compiler_capture) |capture| capture.record(phase, reject_reason, fragment, local_offset, reason_bits, failure);
         if (self.inline_box_profile_diagnostic != .none) {

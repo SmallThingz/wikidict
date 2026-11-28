@@ -652,6 +652,11 @@ pub const RejectedFieldCapture = struct {
         rejected_field_capture = null;
         return .{ .previous = previous, .compiler_scope = compiler.RejectedCompilerCapture.suspendCapture() };
     }
+    fn suspendProbeReporting() Scope {
+        const previous = rejected_field_capture;
+        rejected_field_capture = null;
+        return .{ .previous = previous, .compiler_scope = compiler.RejectedCompilerCapture.suspendProbeReporting() };
+    }
     /// Borrow a completed page capture only after its preceding output writes
     /// succeeded. Never attach a later compiler rejection to a spool error.
     pub fn resumeCapture(self: *@This()) Scope {
@@ -2190,9 +2195,9 @@ pub fn hasBodyContentWithReferencesAndPoemFragmentsAlloc(
     poem_phase: ?*const PoemPhase,
     fragments: []const SourceFragment,
 ) !bool {
-    // This presence probe deliberately lacks final Figure/style authority.
-    // Handled probe refusals must not shadow the actual page failure capture.
-    const diagnostic_scope = RejectedFieldCapture.suspendCapture();
+    // A presence check omits final Figure and style authority. Its handled
+    // refusals would give false page errors in stderr and the failure capture.
+    const diagnostic_scope = RejectedFieldCapture.suspendProbeReporting();
     defer diagnostic_scope.deinit();
     // Failure to certify a standalone prefix cannot prove it is empty.
     // Retain it for the ordinary final Writer with its complete source context;
@@ -17380,4 +17385,75 @@ test "prefix presence probe keeps handled Figure refusal out of page diagnostics
     try std.testing.expect(try hasBodyContentWithReferencesAndPoemFragmentsAlloc(a,
         "prefix", "Unclassified", prefix, .{}, namespaces, null, null, .{}, null, &.{}));
     try std.testing.expectEqualDeep(first, rejectedCompilerSnapshot(error.UncompiledPresentation).?);
+}
+
+test "Italia default map thumbnail keeps prefix probing separate from final sizing" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const registry_module = @import("namespace_registry");
+    const title = "Italia";
+    const file = "Italian provinces no regions.svg";
+    const source = "[[File:" ++ file ++ "|thumb|[[cartina]] [[politica]] dell''''Italia''' con la [[suddivisione]] delle [[sue]] [[regioni]] e delle sue [[province]]]]";
+    const namespace = @embedFile("testdata/it-uccidere/namespace-registry.tsv");
+    var ns = try NamespaceRegistry.init(a, namespace);
+    defer ns.deinit();
+    const behavior_bytes = @embedFile("testdata/it-uccidere/behavior-switches.tsv");
+    var behavior_hash: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(behavior_bytes, &behavior_hash, .{});
+    var behavior = try registry_module.behavior_switches.Registry.init(a, behavior_bytes,
+        ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256);
+    defer behavior.deinit();
+    var images = try ImageRegistry.init(a, @embedFile("testdata/it-uccidere/image-options.tsv"),
+        ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256, behavior_hash);
+    defer images.deinit();
+    const site = try std.Io.Dir.cwd().readFileAlloc(std.testing.io,
+        "compiler/tools/testdata/it-basco238/figure-siteinfo.raw.json", a, .limited(1024 * 1024));
+    const namespace_site = try std.Io.Dir.cwd().readFileAlloc(std.testing.io,
+        "compiler/tools/testdata/it-consistente/namespace-siteinfo.raw.json", a, .limited(1024 * 1024));
+    try ns.attachLanguageConversion(namespace_site);
+    try std.testing.expectEqual(@as(?u32, null), ns.figure_source_defaults.?.default_thumbnail_width);
+
+    var capture: RejectedFieldCapture = .{};
+    const scope = capture.begin();
+    defer scope.deinit();
+    // The unowned prefix stays in the final Writer even when the presence
+    // check lacks the separately selected Figure role.
+    try std.testing.expect(try hasBodyContentWithReferencesAndPoemFragmentsAlloc(a,
+        "Italia prefix probe", "Unclassified", source, .{}, &ns, &behavior, &images, .{}, null, &.{}));
+    try std.testing.expect(rejectedCompilerSnapshot(error.UncompiledPresentation) == null);
+
+    // The final path must still reject the same token without sizing defaults.
+    const context: compiler.Context = .{ .title = title, .namespace_catalog = &ns,
+        .behavior_switches = &behavior, .image_options = &images };
+    var unproved: compiler.Renderer = .{ .a = a, .context = context };
+    try std.testing.expectError(error.UncompiledPresentation, unproved.renderBody(source));
+    try std.testing.expectEqualStrings("default_thumbnail_width_missing",
+        (rejectedCompilerSnapshot(error.UncompiledPresentation) orelse return error.TestUnexpectedResult).reason);
+
+    var isolated = try NamespaceRegistry.init(a, namespace);
+    defer isolated.deinit();
+    try isolated.attachLanguageConversion(site);
+    const defaults = isolated.figure_source_defaults orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(?u32, 250), defaults.default_thumbnail_width);
+    // Isolate the site-default handoff from the production file inventory and
+    // stylesheet. This callback asserts the exact tuple received by the handler.
+    const FilePolicy = struct {
+        fn resolve(_: ?*const anyopaque, _: A, name: []const u8, format_value: types.FigureFormat, width: ?u32, height: ?u32) A.Error!?types.FigureSizingPolicy {
+            if (!std.mem.eql(u8, name, file) or format_value != .thumbnail or width != 250 or height != null) return null;
+            return .requested_fit;
+        }
+    };
+    var styles = try @import("table_style_profile.zig").parseAlloc(a, "");
+    defer styles.deinit();
+    var proved: compiler.Renderer = .{ .a = a, .context = context };
+    proved.context.table_styles = &styles;
+    proved.context.figure_sizing = .{ .resolve_fn = FilePolicy.resolve,
+        .source_context = .{ .namespace_sha256 = ns.source_sha256, .defaults = defaults } };
+    const blocks = try proved.renderBody(source);
+    try std.testing.expectEqual(@as(usize, 1), blocks.len);
+    const figure = blocks[0].figure orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(types.FigureFormat.thumbnail, figure.format);
+    try std.testing.expectEqual(@as(?u32, 250), figure.content.image.span.image.?.width_px);
+    try std.testing.expectEqualStrings(file, figure.content.image.span.image.?.file);
 }

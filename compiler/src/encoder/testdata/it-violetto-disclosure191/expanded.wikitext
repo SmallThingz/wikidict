@@ -1,0 +1,131 @@
+<templatestyles src="Mbox/common.css" />
+ <table class="plainlinks ombox ombox-notice" role="presentation" style="background-color: #D8E8FF; border:1px solid #A0CCA0; color:#000;"><tr><td class="mbox-image">[[File:Blue_Glass_Arrow.svg|30px]]</td><td class="mbox-text">Vedi anche: [[Violetto]]</td></tr></table>
+== [[File:Flag of Italy.svg|40px|border|bandiera italiana]] [[Appendice:Italiano|Italiano]] ==
+===[[Image:Open_book_01.svg|30px|]]''[[aggettivo|Aggettivo]]''===
+[[Categoria:Aggettivi in italiano]] 
+
+'''violetto'''<small></small> ''m sing''
+
+{| style="float:right; margin-left:0.5em; margin-bottom:0.5em;border: 1px solid #AAAAAA; border-collapse:collapse;" cellpadding="3" rules="all"
+|- align="center"
+!&nbsp;
+! bgcolor="#FFFFE0" |&nbsp;''[[singolare]]''&nbsp;
+! bgcolor="#FFFFE0" |&nbsp;''[[plurale]]''&nbsp;
+|- align="center"
+! bgcolor="#FFFFE0" |&nbsp;''[[maschile]]''&nbsp;
+| &nbsp; [[violetto]]&nbsp;
+| &nbsp; [[violetti]]&nbsp;
+|- align="center"
+! bgcolor="#FFFFE0" |&nbsp;''[[femminile]]''&nbsp;
+| &nbsp; [[violetta]]&nbsp;
+| &nbsp; [[violette]]&nbsp;
+|}
+[[Categoria:Lemmi con forma maschile plurale da scrivere]]
+#di colore simile al [[viola]]
+
+===[[Image:Open_book_01.svg|30px|]]''[[sostantivo|Sostantivo]]''===
+[[Categoria:Sostantivi in italiano]] 
+
+'''violetto'''<small>&nbsp;([[File:Wikipedia-logo.svg|20px|Wikipedia]] '''[[w:violetto|approfondimento]]''')</small> ''m inv'' 
+# <small>(<i>[[colore]]</i>)</small>[[Categoria:Colori-IT]] [[viola]] [[rossastro]]
+
+=== [[File:Hyph abc.svg|45px]] [[sillabazione|Sillabazione]] ===
+
+; vio | lét | to 
+
+===[[Image:Nuvola apps edu languages.svg|30px]] [[pronuncia|Pronuncia]]===
+
+[[Aiuto:IPA|AFI]]: <span class="IPA" style="font-family:'Segoe UI', 'Calibri', 'DejaVu Sans', 'Charis SIL', 'Doulos SIL', 'Gentium Plus', Gentium, GentiumAlt, 'Lucida Grande', 'Arial Unicode MS', sans-serif; font-size: 110%;">/vjoˈletto/</span>
+
+===[[Image:Nuvola kdict glass.svg|30px|]][[etimologia|Etimologia]] / [[derivazione|Derivazione]]===
+
+da [[viola]]
+
+===[[File:Icona_sinonimi.png|35px]] [[sinonimi|Sinonimi]]===
+
+*(di colore) [[violaceo]], [[lilla]]
+
+===[[File:Nuvola apps tree.svg|30px]]  [[parole|Parole]] [[derivate]]===
+
+* [[ultravioletto]]
+
+=== [[Image:Gnome-globe.svg|30px]] [[traduzione|Traduzione]] ===
+<div class="mw-collapsible mw-collapsed" data-expandtext="Mostra" data-collapsetext="Nascondi" style="padding:0.2em 0.6em 0.2em 0.6em; border-right:1px solid #BEBEBE; border-bottom:1px dotted black; background:#EDEDED; color:#000;">di colore simile al viola
+<div class="z-index:-1; toccolours mw-collapsible-content" style="border:0;">
+{| border="0" width="100%" class="translations"
+|-
+| bgcolor="beige" valign="top" width="48%" |
+:*[[inglese]]: [[violet]]
+:*[[tedesco]]: [[violett]]
+|}</div></div>
+<div class="mw-collapsible mw-collapsed" data-expandtext="Mostra" data-collapsetext="Nascondi" style="padding:0.2em 0.6em 0.2em 0.6em; border-right:1px solid #BEBEBE; border-bottom:1px dotted black; background:#EDEDED; color:#000;">colore
+<div class="z-index:-1; toccolours mw-collapsible-content" style="border:0;">
+{| border="0" width="100%" class="translations"
+|-
+| bgcolor="beige" valign="top" width="48%" |
+:*[[afrikaans]]: [[violet]]
+:*[[arabo]] : [[بنفسجي]]
+:*[[basco]]: [[bioleta]]
+:*[[bosniaco]]: [[ljubičasta]]
+:*[[bretone]]: [[mouk]]
+:*[[bulgaro]]: [[виолетово]] (violetovo)
+:*[[khmer]]: [[ស្វាយ]]
+:*[[catalano]]: [[violeta]] ''f''
+:*[[cinese]]: [[紫色]], [[紫罗兰色]]
+:*[[danese]]: [[violet]]
+:*[[estone]]: [[violetne]]
+:*[[finlandese]]: [[violetti]]
+:*[[francese]]: [[violet]]
+:*[[galiziano]]: [[violeta]] ''f''
+:*[[gallese]]: [[fioled]]
+:*[[georgiano]]: [[იისფერი]] (iisṗeri)
+:*[[giapponese]]: [[すみれ色]]
+:*[[hindi]]: [[बैंगनी]] (bɛṅgarī)
+:*[[inglese]]: [[violet]]
+:*[[irlandese]]: [[corcairghorm]]
+:*[[islandese]]: [[fjólublár]]
+:*[[kazako]]: [[күлгін]] (külgīn)
+:*[[macedone]]: [[виолетово]] (violetovo)
+| width=1% |
+|bgcolor="beige" valign=top width=48%|
+
+:*[[mongolo]]: [[нилцэцэг]] (nilceceg)
+:*[[norvegese]]: [[fiolett]]
+:*[[norvegese]] ([[nynorsk]]): [[fiolett]]
+:*[[olandese]]: [[violet]]
+:*[[portoghese]]: [[violeta]] ''f''
+:*[[punjabi]]: [[ਵੈਂਗਣੀ]] (bɛṅgarī)
+:*[[romeno]]: [[violet]]
+:*[[ruandese]]: [[idoma]] [[ryijimye]]
+:*[[russo]]: [[фиолетовый]] (fiolětovyĭ)
+:*[[serbo]]: [[љубичаста]] (ǉubičasta)
+:*[[slovacco]]: [[fialová]]
+:*[[sloveno]]: [[vijolična]]
+:*[[spagnolo]]: [[violeta]] ''f''
+:*[[svedese]]: [[violett]]
+:*[[tagico]]: [[бунафш]] (bunafš)
+:*[[tamil]]: [[கருநீலம்]]
+:*[[tataro]]: [[şämäxä]]
+:*[[tedesco]]: [[Violett]], [[Veilchenblau]]
+:*[[telugu]]: [[వైలెట్]]
+:*[[turco]]: [[menekşe]]
+:*[[ucraino]]: [[фіолетовий]] (fîoletoviĭ)
+:*[[ungherese]]: [[violaszín]]
+:*[[vietnamita]]: [[tím xanh]]
+|}</div></div>
+
+<div class="NonModificabile">
+== [[Image:Nuvola apps bookcase.svg|30px|]] [[note|Note]] / [[riferimenti|Riferimenti]] ==
+</div>
+* Aldo Gabrielli, [https://grandidizionari.hoepli.it/Dizionario_Italiano/parola/V/violetto.aspx?query=violetto ''Grande Grande Libreria Online''] edizione online su ''[https://www.hoepli.it/ hoepli.it]'', Hoepli
+* AA.VV., [https://dizionari.corriere.it/dizionario_sinonimi_contrari/V/violetto.shtml ''Dizionario dei Sinonimi e dei Contrari''] edizione on line su ''[https://dizionari.corriere.it corriere.it]'', RCS Mediagroup
+* AA.VV., [https://www.treccani.it/vocabolario/ricerca/violetto/ ''Vocabolario Treccani''] edizione online su ''[https://www.treccani.it treccani.it]'', Istituto dell'Enciclopedia Italiana
+* Enrico Olivetti, [https://www.dizionario-italiano.it/dizionario-italiano.php?lemma=VIOLETTO100 ''Dizionario Italiano Olivetti''] edizione on line su ''[https://www.dizionario-italiano.it www.dizionario-italiano.it]'', Olivetti Media Communication
+
+== Altri progetti ==
+<div id="interProject" style="display: none; clear: both; border-top: 2px dotted #AAAAAA; margin-top: 2em"><div title="Collegamenti verso gli altri progetti Wikimedia">
+* [[q:violetto|Wikiquote]]
+* [[w:violetto|Wikipedia]]
+</div></div>
+* [[File:Wikiquote-logo.svg|link=q:|18px|Collabora a Wikiquote]] '''[[q:|Wikiquote]]''' contiene citazioni  di o su '''[[q:violetto|violetto]]'''
+* [[File:Wikipedia-logo-v2.svg|link=w:|18px|Collabora a Wikipedia]] '''[[w:|Wikipedia]]''' contiene una voce  riguardante '''[[w:violetto|violetto]]'''

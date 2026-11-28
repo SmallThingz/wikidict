@@ -45985,12 +45985,15 @@ fn disclosureOrdinaryPrefix(prefix: []const u8) bool {
     var tags: [32][]const u8 = undefined;
     var depth: usize = 0;
     var table_depth: ?usize = null;
-    var boundary = false;
+    var boundary = true;
+    var disclosure_owner = false;
+    var disclosure_content = false;
     var lines = std.mem.splitScalar(u8, prefix[0 .. prefix.len - 1], '\n');
     while (lines.next()) |physical| {
         const line = std.mem.trimEnd(u8, physical, "\r");
         if (line.len > 65536 or std.mem.indexOfAny(u8, line, "\x00\r\x7f") != null) return false;
         var pos: usize = 0;
+        var closed_disclosure = false;
         if (std.mem.startsWith(u8, line, "{|")) {
             if (table_depth != null) return false;
             for (tags[0..depth]) |name| if (std.ascii.eqlIgnoreCase(name, "table")) return false;
@@ -45998,6 +46001,10 @@ fn disclosureOrdinaryPrefix(prefix: []const u8) bool {
             pos = 2;
         } else if (std.mem.startsWith(u8, line, "|}")) {
             if (table_depth == null or table_depth.? != depth) return false;
+            // A closed wiki table can end the preceding disclosure sibling
+            // only when the two matching DIV frames close on this line.
+            closed_disclosure = disclosure_owner and disclosure_content and depth == 2 and
+                std.mem.eql(u8, line, "|}</div></div>");
             table_depth = null;
             pos = 2;
             const tail = trim(line[pos..]);
@@ -46042,6 +46049,15 @@ fn disclosureOrdinaryPrefix(prefix: []const u8) bool {
                             if ((tag.is("td") or tag.is("th")) and !eq(parent, "tr")) return false;
                             if (eq(parent, "table") and !tag.is("tr")) return false;
                             if (eq(parent, "tr") and !tag.is("td") and !tag.is("th")) return false;
+                            const classes = tag.attr("class") orelse "";
+                            if (depth == 0) {
+                                disclosure_owner = next == 0 and boundary and tag.is("div") and
+                                    Profile.hasClass(classes, "mw-collapsible");
+                                disclosure_content = false;
+                            } else if (depth == 1) {
+                                disclosure_content = disclosure_owner and next == 0 and tag.is("div") and
+                                    Profile.hasClass(classes, "mw-collapsible-content");
+                            }
                             tags[depth] = tag.name;
                             depth += 1;
                         }
@@ -46071,9 +46087,42 @@ fn disclosureOrdinaryPrefix(prefix: []const u8) bool {
         }
 
         boundary = depth == 0 and table_depth == null and
-            (line.len == 0 or (line[0] == '=' and syntax.controlHeading(line, null) != null));
+            (closed_disclosure or line.len == 0 or (line[0] == '=' and syntax.controlHeading(line, null) != null));
     }
     return boundary;
+}
+
+
+test "genuine violetto closes the first translation disclosure before the second root owner" {
+    const source = @embedFile("testdata/it-violetto-disclosure191/expanded.wikitext");
+    const opener = "<div class=\"mw-collapsible mw-collapsed\"";
+    const first = std.mem.indexOf(u8, source, opener) orelse return error.TestUnexpectedResult;
+    const second = std.mem.indexOfPos(u8, source, first + opener.len, opener) orelse return error.TestUnexpectedResult;
+    const syntax = @import("blob_encoder").wikitext_syntax;
+    const tag = syntax.tagAt(source, second) orelse return error.TestUnexpectedResult;
+    const close = syntax.matchingTag(source, tag) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 2137), close.end - second);
+    try std.testing.expect(std.mem.endsWith(u8, source[0..second], "|}</div></div>\n"));
+    try std.testing.expect(disclosureOrdinaryPrefix(source[0..first]));
+    try std.testing.expect(disclosureOrdinaryPrefix(source[0..second]));
+}
+
+test "adjacent disclosure root requires a closed table and two proven sibling frames" {
+    const owner = "<div class=\"mw-collapsible\">label\n";
+    const content = "<div class=\"mw-collapsible-content\">\n";
+    const table = "{|\n|-\n| body\n";
+    try std.testing.expect(disclosureOrdinaryPrefix(owner ++ content ++ table ++ "|}</div></div>\n"));
+    for ([_][]const u8{
+        owner ++ content ++ table ++ "|}</div>\n",
+        owner ++ content ++ table ++ "</div></div>\n",
+        owner ++ content ++ table ++ "|}</div></div>",
+        owner ++ content ++ table ++ "|}</div></div>trailing text\n",
+        owner ++ "<div>\n" ++ table ++ "|}</div></div>\n",
+        "<div>label\n" ++ content ++ table ++ "|}</div></div>\n",
+        "# open list context\n" ++ owner ++ content ++ table ++ "|}</div></div>\n",
+        "<div>\n" ++ owner ++ content ++ table ++ "|}</div></div>\n",
+        owner ++ content ++ table ++ "|}</span></div>\n",
+    }) |negative| try std.testing.expect(!disclosureOrdinaryPrefix(negative));
 }
 
 // PC supplies the actual whole expanded record and the original offset from

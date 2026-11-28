@@ -647,3 +647,6 @@ compiler/tools/testdata/it-shared-disclosure11/numerale-expanded.wikitext whites
 # Preserve the authenticated Libero regression source byte for byte.
 compiler/tools/testdata/it-libero-disclosure13/libero-raw.wikitext -text whitespace=-blank-at-eol
 compiler/tools/testdata/it-libero-disclosure13/libero-expanded.wikitext -text whitespace=-blank-at-eol
+
+# Preserve the exact dated violetto regression capture.
+compiler/src/encoder/testdata/it-violetto-disclosure191/expanded.wikitext -whitespace
