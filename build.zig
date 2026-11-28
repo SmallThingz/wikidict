@@ -2076,6 +2076,7 @@ const tools_partitions = [_]ToolsPartition{
     .{ .group = .tools_support, .filters = &.{
         "expansion_deadline.test",
         "bundle_expander.test",
+        "container_disclosure_inputs.test.",
         "page_source_context.test",
         "source_internal_link.test",
         "page_language.test",
@@ -2099,6 +2100,7 @@ const tools_test_files = [_][]const u8{
     "compiler/tools/figure_page_observations.zig",
     "compiler/tools/expansion_deadline.zig",
     "compiler/tools/bundle_expander.zig",
+    "compiler/tools/container_disclosure_inputs.zig",
     "compiler/tools/page_source_context.zig",
     "compiler/tools/source_internal_link.zig",
     "compiler/tools/page_language.zig",

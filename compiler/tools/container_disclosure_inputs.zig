@@ -639,19 +639,23 @@ fn ordinaryClosedNestedLinkEnd(line: []const u8, start: usize) ?usize {
 // A translation item can contain a literal single-bracket CJK gloss
 // immediately after a closed wiki link. It is neither an external-link
 // target nor an open internal-link frame. Keep both closing characters.
+fn ordinaryHanGloss(gloss: []const u8) bool {
+    if (gloss.len == 0) return false;
+    const utf8 = std.unicode.Utf8View.init(gloss) catch return false;
+    var it = utf8.iterator();
+    while (it.nextCodepoint()) |cp| {
+        if (!(cp >= 0x3400 and cp <= 0x4dbf) and !(cp >= 0x4e00 and cp <= 0x9fff)) return false;
+    }
+    return true;
+}
+
 fn ordinaryTranslationGlossEnd(line: []const u8, start: usize) ?usize {
     if (!std.mem.startsWith(u8, line, ":*") or start < 3 or
         !std.mem.eql(u8, line[start - 3 .. start], "]] ")) return null;
     const close = std.mem.indexOfScalarPos(u8, line, start + 1, ']') orelse return null;
     if (close - start > 49 or close + 2 >= line.len or !std.mem.startsWith(u8, line[close..], "]] ")) return null;
     const gloss = line[start + 1 .. close];
-    if (gloss.len == 0) return null;
-    const utf8 = std.unicode.Utf8View.init(gloss) catch return null;
-    var it = utf8.iterator();
-    while (it.nextCodepoint()) |cp| {
-        if (!(cp >= 0x3400 and cp <= 0x4dbf) and !(cp >= 0x4e00 and cp <= 0x9fff)) return null;
-    }
-    return close + 2;
+    return if (ordinaryHanGloss(gloss)) close + 2 else null;
 }
 
 fn ordinaryLineOperands(line: []const u8) bool {
@@ -772,6 +776,41 @@ fn ordinaryPinFlatLinkList(line: []const u8) ?bool {
     return if (links >= 2) !marker_found else null;
 }
 
+// A closed literal span in a parsed list item owns its quoted style value.
+// Its bytes cannot become part of a class on this or another element. Check
+// the value for a contiguous marker and keep the old scan for all other bytes.
+fn ordinaryPinStyledListLine(line: []const u8) ?bool {
+    if (!std.mem.startsWith(u8, line, "* ") or line.len > 4096 or
+        std.mem.indexOfAny(u8, line, "&{}\r") != null or !ordinaryLineOperands(line)) return null;
+
+    var search: usize = 0;
+    var outside: usize = 0;
+    var matched: usize = 0;
+    var found = false;
+    while (std.mem.indexOfScalarPos(u8, line, search, '<')) |start| {
+        const class_open = "<span class=\"";
+        const style_open = "\" style=\"";
+        const close = "</span>";
+        if (!std.mem.startsWith(u8, line[start..], class_open)) return null;
+        const tag = encoder.wikitext_syntax.tagAt(line, start) orelse return null;
+        if (!ordinaryTagAttributes(tag.attrs, tag)) return null;
+        const class_end = std.mem.indexOfScalarPos(u8, line[0..tag.end], start + class_open.len, '"') orelse return null;
+        if (!std.mem.startsWith(u8, line[class_end..tag.end], style_open)) return null;
+        const style_start = class_end + style_open.len;
+        const style_end = std.mem.indexOfScalarPos(u8, line[0..tag.end], style_start, '"') orelse return null;
+        if (!std.mem.eql(u8, line[style_end..tag.end], "\">")) return null;
+        const end = std.mem.indexOfAnyPos(u8, line, tag.end, "<>[]") orelse return null;
+        if (!std.mem.startsWith(u8, line[end..], close)) return null;
+
+        if (!found) found = ordinaryPinMatch(line[outside..style_start], &matched) or
+            std.ascii.findIgnoreCase(line[style_start..style_end], "vector-pinnable-header") != null;
+        outside = style_end;
+        search = end + close.len;
+    }
+    if (search == 0) return null;
+    return !found and !ordinaryPinMatch(line[outside..], &matched);
+}
+
 fn ordinaryPinHeaderAbsent(expanded: []const u8) bool {
     if (std.mem.indexOf(u8, expanded, "-{") != null) return false;
     var lines = std.mem.splitScalar(u8, expanded, '\n');
@@ -780,6 +819,10 @@ fn ordinaryPinHeaderAbsent(expanded: []const u8) bool {
     while (lines.next()) |line| {
         if (!joined_suffix) {
             matched = 0;
+            if (ordinaryPinStyledListLine(line)) |absent| {
+                if (!absent) return false;
+                continue;
+            }
             if (ordinaryPinFlatLinkList(line)) |absent| {
                 if (!absent) return false;
                 continue;
@@ -1295,6 +1338,23 @@ fn workerStandaloneNonModificabileHeading(expanded: []const u8, start: usize, en
     return std.mem.eql(u8, tail, "\n</div>") or std.mem.startsWith(u8, tail, "\n</div>\n");
 }
 
+// The expanded translation list contains plain reading glosses. Recognize
+// only the local parenthesized ASCII reading or a Han gloss after a closed
+// link. Neither spelling can open an external URL or a wiki-link frame.
+fn workerTranslationBracket(line: []const u8, start: usize, end: usize) bool {
+    if (!std.mem.startsWith(u8, line, ":*") or start == 0 or line[start - 1] != ' ') return false;
+    const gloss = line[start + 1 .. end];
+    const after = line[end + 1 ..];
+    if (start >= 3 and std.mem.eql(u8, line[start - 3 .. start], "]] ") and
+        std.mem.startsWith(u8, after, " (") and std.mem.endsWith(u8, gloss, "-"))
+        return gloss.len <= 49 and ordinaryHanGloss(gloss[0 .. gloss.len - 1]);
+    if (!std.mem.startsWith(u8, after, ")") or gloss.len == 0 or gloss.len > 8) return false;
+    for (gloss) |c| if (!std.ascii.isLower(c)) return false;
+    const open = std.mem.lastIndexOfScalar(u8, line[0 .. start - 1], '(') orelse return false;
+    const reading = line[open + 1 .. start - 1];
+    return reading.len != 0 and std.mem.indexOfAny(u8, reading, " []()<>:/{&\t\r") == null;
+}
+
 fn workerFeaturesWithTimed(a: std.mem.Allocator, expanded: []const u8, ns: *const namespace_registry.Registry,
     recipe: WorkerProjection, catalog: ?*const image_catalog.Catalog, timed: ?timed_media_inputs.Page) !?WorkerFeatures
 {
@@ -1389,10 +1449,14 @@ fn workerFeaturesWithTimed(a: std.mem.Allocator, expanded: []const u8, ns: *cons
             }
             if (line[start] == ']') return null;
             if (!std.mem.startsWith(u8, line[start..], "[[")) {
+                if (ordinaryTranslationGlossEnd(line, start)) |end| {
+                    pos = end;
+                    continue;
+                }
                 const end = std.mem.indexOfAnyPos(u8, line, start + 1, "[]<>") orelse return null;
                 if (line[end] != ']') return null;
                 const content = line[start + 1 .. end];
-                if (ordinaryLiteralBracket(content)) {
+                if (ordinaryLiteralBracket(content) or workerTranslationBracket(line, start, end)) {
                     pos = end + 1;
                     continue;
                 }
@@ -1982,4 +2046,150 @@ test "IT qualified optional table refuses an indented wiki-table close through H
     try std.testing.expect(ordinaryLiteralHtml(source, &.{}));
     if ((try workerFeatures(a, source, &ns, recipe, null)) != null)
         return error.IndentedWikiTableCloseCrossesHtml;
+}
+
+test "IT family09 authentic image captions and explicit-width bare upright stay bounded" {
+    const C = image_catalog;
+    const backing = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(backing);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var ns = try namespace_registry.Registry.init(a, @embedFile("testdata/it-per/namespace-registry.tsv"));
+    defer ns.deinit();
+    const map = @embedFile("testdata/it-consistente/interwiki-map.tsv");
+    try ns.attachInterwikiMap(map);
+
+    // Exact provider rows for the retained lilla146, gatto171 and marrone139 operands.
+    const catalog =
+        "# wikidict-image-effect-catalog-v1\n" ++
+        "File:600px Lilla.png\tFile:600px Lilla.png\t0903da311cb5794cdcc4800438102b7e8edb88a5\t2007-07-20T00:19:15Z\tBITMAP\timage/png\n" ++
+        "File:Color icon brown v2.svg\tFile:Color icon brown v2.svg\t8b55ce1175733335ceae700bb86a5d40b1cd7941\t2011-12-14T10:46:42Z\tDRAWING\timage/svg+xml\n" ++
+        "File:Felis catus-cat on snow.jpg\tFile:Felis catus-cat on snow.jpg\t0a40637f60dc79f0c3aa67bcbd2ee28cdb3b08b9\t2019-09-20T09:32:16Z\tBITMAP\timage/jpeg\n";
+    const metadata =
+        "# wikidict-file-metadata-v2\n" ++
+        "File:600px Lilla.png\t1\t600\t400\tBITMAP\tFile:600px Lilla.png\n" ++
+        "File:Color icon brown v2.svg\t1\t300\t300\tDRAWING\tFile:Color icon brown v2.svg\n" ++
+        "File:Felis catus-cat on snow.jpg\t1\t3000\t2000\tBITMAP\tFile:Felis catus-cat on snow.jpg\n";
+    const images = try C.Catalog.prepare(a, backing, .{
+        .schema = "normal-it-image-effect-catalog.v1",
+        .grammar = "normal-image-options-interwiki-caption.v3",
+        .sha256 = "6451a345aafd5f629d6c2ec578533c467cd05a9003d11dac7a5e01159ca62dce",
+        .bytes = 444,
+        .count = 3,
+        .namespace_sha256 = "8fc73407a5f932ba725c3339034fc0aa9894078272b08a5ae62566a834496996",
+        .image_options_sha256 = "0aec7cd928857fe992b82159729d831fb5331f881d315938c681d1447f4392d3",
+        .behavior_switches_sha256 = "56b1d23731c2cde8818d283358112b315bf890c759f0b55913b812622880ab91",
+        .file_metadata_sha256 = "6db64ca0a82ea6d489c87f23bb4014153f862b860a0a8915f9a050da9178029d",
+        .source_manifest_sha256 = "11519fc9b67f02d9ade57af9d2bd8ed14aa835320a88d21ba2d3b10d274dff30",
+        .raw_sha256 = "ba4ec09d3d6cd12bde955bf8045ff39f762358f9eac5daef3a1b77aee010583b",
+        .projection_sha256 = "64e99fe780b50a0ba5c747f6207da6c68a466d8d9745cc2e16f1d7fad9710dc4",
+        .source_proof_sha256 = "23e072723f3dcedd2cbd4eb5293424da728ef4ab39566ef8bdbc9c5bd096471b",
+        .feature_source_sha256 = "377b07f6dfa2a01e0724e12b243ad35b7c1891d0611d3191743be6cafb8bdb98",
+        .module_selection_sha256 = "cdbdd6437688c1a305af6d41ce960f15c6ff587435beda9538851b62c046324a",
+        .interwiki_sha256 = "f265f5cbc69400a9cf489eb5a3fb1fa62758c981801916911e4f20dbb85ecfdd",
+    }, .{
+        .catalog = catalog,
+        .file_metadata = metadata,
+        .image_options = @embedFile("testdata/it-per/image-options.tsv"),
+        .behavior_switches = @embedFile("testdata/it-per/behavior-switches.tsv"),
+        .interwiki_map = map,
+    }, &ns);
+
+    for ([_][]const u8{
+        "[[File:600px Lilla.png|thumb| il colore '''lilla'''<small></small>]]",
+        "[[File:Felis catus-cat on snow.jpg|180px|thumb|[1] un gatto [[domestico]] ([[w:Felis silvestris catus|Felis silvestris catus]]) sulla [[neve]]]]",
+        "[[File:Color icon brown v2.svg|thumb|200px|upright|un [[quadrato]] [[suddiviso]] in [[nove]] parti [[raffigurante]] varie  gradazioni di '''marrone'''<small></small>]]",
+        "[[File:Color icon brown v2.svg|verticale|thumb|200px|colore]]",
+    }) |operand| {
+        const extent = try std.mem.concat(a, u8, &.{ operand, " seguito" });
+        try std.testing.expectEqual(@as(?usize, operand.len), C.captionOperandEnd(extent));
+        const effect = (try images.classify(a, &ns, operand)) orelse return error.AuthenticThumbnailRefused;
+        try std.testing.expect(effect.thumbnail);
+    }
+
+    const cat = "[[File:Felis catus-cat on snow.jpg|180px|thumb|";
+    for ([_][]const u8{
+        cat ++ "[1234] un gatto]]",
+        cat ++ "[1]un gatto]]",
+        cat ++ "un gatto [1] sulla neve]]",
+        cat ++ "[[gatto|[1] un animale]]]]",
+        "[[File:600px Lilla.png|thumb|il colore '''lilla'''<small class=\"x\"></small>]]",
+        "[[File:600px Lilla.png|thumb|il colore '''lilla'''<small>testo</small>]]",
+    }) |bad| try std.testing.expectEqual(@as(?usize, null), C.captionOperandEnd(bad));
+    const dot = cat ++ "[1] un gatto [[w:..|dot]]]]";
+    try std.testing.expectEqual(@as(?usize, dot.len), C.captionOperandEnd(dot));
+    try std.testing.expect((try images.classify(a, &ns, dot)) == null);
+
+    const brown = "[[File:Color icon brown v2.svg|";
+    for ([_][]const u8{
+        brown ++ "thumb|upright|colore]]",
+        brown ++ "200px|upright|colore]]",
+        brown ++ "frame|200px|upright|colore]]",
+        brown ++ "thumb|200x100px|upright|colore]]",
+        brown ++ "thumb|x200px|upright|colore]]",
+        brown ++ "thumb|200px|upright=0.75|colore]]",
+        brown ++ "thumb|200px|upright|verticale|colore]]",
+        brown ++ "thumb|200px|180px|upright|colore]]",
+    }) |bad| try std.testing.expect((try images.classify(a, &ns, bad)) == null);
+}
+
+test "IT family09 inglese readings keep closed bracket boundaries" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var ns = try namespace_registry.Registry.init(a, @embedFile("testdata/it-per/namespace-registry.tsv"));
+    defer ns.deinit();
+    const recipe: WorkerProjection = .{
+        .schema = "test-direct-feature-observation",
+        .catalog_sha256 = "",
+        .feature_source_sha256 = "",
+        .toc_on = &.{},
+    };
+    // Three complete expansion lines from inglese160, revision 4251752.
+    for ([_][]const u8{
+        ":*[[cinese]]:  [[英國]]([[的]]) <small>([[cinese tradizionale|t.]])</small> / [[英国]]([[的]]) <small>([[cinese semplificato|s.]])</small> (Yīngguó [de])",
+        ":*[[coreano]]:  [[영국의]] [英國-] (yeongguk-eui, yeonggugi)",
+        ":*[[coreano]]:  [[영어]] [英語]] (yeong-eo)",
+    }) |line| {
+        const features = (try workerFeatures(a, line, &ns, recipe, null)) orelse return error.AuthenticReadingRefused;
+        try std.testing.expect(!features.toc and !features.tmh);
+    }
+    for ([_][]const u8{
+        ":*[[cinese]]: (Yīngguó [DE])",
+        ":*[[cinese]]: (Yīngguó [de] extra)",
+        "[[coreano]]: [[영국의]] [英國-] (yeongguk-eui)",
+        ":*[[coreano]]: [[영어]] [ABC]] (yeong-eo)",
+    }) |line| try std.testing.expect((try workerFeatures(a, line, &ns, recipe, null)) == null);
+}
+
+test "IT family09 viola IPA styles keep marker detection on its valid boundaries" {
+    // Two complete pronunciation lines from viola145, revision 4064877.
+    const source = @embedFile("testdata/it-per/family09-viola-pronunciation.wikitext");
+    var lines = std.mem.splitScalar(u8, std.mem.trimEnd(u8, source, "\n"), '\n');
+    var count: usize = 0;
+    while (lines.next()) |line| : (count += 1) {
+        var legacy_state: usize = 0;
+        try std.testing.expect(ordinaryPinMatch(line, &legacy_state));
+        try std.testing.expectEqual(@as(?bool, true), ordinaryPinStyledListLine(line));
+        try std.testing.expect(ordinaryPinHeaderAbsent(line));
+    }
+    try std.testing.expectEqual(@as(usize, 2), count);
+    try std.testing.expect(ordinaryPinHeaderAbsent(source));
+
+    const contiguous = "* <span class=\"IPA\" style=\"font-family:VECTOR-PINNABLE-HEADER;\">/a/</span>";
+    const literal_class = "* <span class=\"VeCtOr-pinnable-header\" style=\"font-family:Arial;\">/a/</span>";
+    const split_class = "* <span class=\"vector-pin\" style=\"font-family:Arial;\">/a/</span>" ++
+        " <span class=\"nable-header\" style=\"font-family:Arial;\">/b/</span>";
+    for ([_][]const u8{ contiguous, literal_class, split_class }) |line| {
+        try std.testing.expectEqual(@as(?bool, false), ordinaryPinStyledListLine(line));
+        try std.testing.expect(!ordinaryPinHeaderAbsent(line));
+    }
+
+    const joined = "* <span class=\"vector-pin<!-- gap -->nable-header\" style=\"font-family:Arial;\">/a/</span>";
+    const encoded = "* <span class=\"vector&#45;pinnable-header\" style=\"font-family:Arial;\">/a/</span>";
+    const unclosed = "* <span class=\"IPA\" style=\"font-family:Arial;\">/a/";
+    for ([_][]const u8{ joined, encoded, unclosed }) |line|
+        try std.testing.expectEqual(@as(?bool, null), ordinaryPinStyledListLine(line));
+    try std.testing.expect(!ordinaryPinHeaderAbsent(joined));
+    try std.testing.expect(!ordinaryPinHeaderAbsent(encoded));
 }

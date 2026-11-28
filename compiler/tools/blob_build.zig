@@ -16,6 +16,7 @@ const language_registry = @import("language_registry.zig");
 // Keep registry and stylesheet controls discoverable under filtered test roots.
 comptime {
     if (@import("builtin").is_test) {
+        _ = container_disclosure_inputs;
         _ = language_registry;
         _ = source_language_banner;
         _ = source_table_styles;

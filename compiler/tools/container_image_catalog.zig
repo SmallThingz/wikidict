@@ -265,6 +265,8 @@ pub const Catalog = struct {
         if (self.index(title) == null) return null;
         var used: u32 = 0;
         var thumbnail = false;
+        var width_only = false;
+        var bare_upright = false;
         var caption = false;
         var options_count: usize = 0;
         while (tokens.next()) |raw| {
@@ -278,8 +280,15 @@ pub const Catalog = struct {
                 if (used & mask != 0) return null;
                 used |= mask;
                 if (std.mem.eql(u8, match.id, "img_width")) {
-                    if (!widthValid(match.value orelse return null)) return null;
-                } else if (std.mem.eql(u8, match.id, "img_thumbnail")) thumbnail = true;
+                    const dimensions = match.value orelse return null;
+                    if (!widthValid(dimensions)) return null;
+                    width_only = std.mem.indexOfScalar(u8, dimensions, 'x') == null;
+                } else if (std.mem.eql(u8, match.id, "img_thumbnail")) {
+                    thumbnail = true;
+                } else if (std.mem.eql(u8, match.id, "img_upright")) {
+                    if (!self.ordinary_captions or match.value != null) return null;
+                    bare_upright = true;
+                }
                 if (match.value) |value| {
                     if (self.ordinary_captions and std.mem.eql(u8, match.id, "img_link")) {
                         if (!plain(value) and !ordinaryLinkDestination(value)) return null;
@@ -294,20 +303,58 @@ pub const Catalog = struct {
                 caption = true;
             }
         }
+        // A width-only explicit thumbnail uses its authored width;
+        // the bare option adds no thumbnail or media effect.
+        if (bare_upright and (!thumbnail or !width_only)) return null;
         return .{ .thumbnail = thumbnail };
     }
 };
 
+// A bracket followed only by one to three digits and a space is literal
+// caption text. Only the leading caption position can use this boundary.
+fn captionLiteralNoteEnd(text: []const u8, start: usize) ?usize {
+    if (start >= text.len or text[start] != '[') return null;
+    var end = start + 1;
+    while (end < text.len and end - start <= 3 and std.ascii.isDigit(text[end])) : (end += 1) {}
+    if (end == start + 1 or end + 2 >= text.len or text[end] != ']' or text[end + 1] != ' ') return null;
+    return end + 1;
+}
+
+const empty_caption_small = "<small></small>";
+
+// The retained plain captions have an attribute-free empty SMALL after
+// their bold text, followed by a space or the end of the caption.
+fn emptyCaptionSmallEnd(text: []const u8, start: usize) ?usize {
+    if (start < 3 or !std.mem.eql(u8, text[start - 3 .. start], "'''") or
+        !std.mem.startsWith(u8, text[start..], empty_caption_small)) return null;
+    const end = start + empty_caption_small.len;
+    if (end != text.len and text[end] != ' ' and !std.mem.startsWith(u8, text[end..], "]]")) return null;
+    return end;
+}
+
 // Extent only: one outer file link and at most one ordinary-link level.
 // Classification below still authenticates the file and each caption target.
-// Delimiters in protected/expanded syntax are refused, never skipped.
+// Only the exact empty SMALL token is allowed in an outer field.
+// Classification still restricts it to plain caption text.
 pub fn captionOperandEnd(text: []const u8) ?usize {
     if (!std.mem.startsWith(u8, text, "[[")) return null;
     var depth: u2 = 1;
+    var outer_field: ?usize = null;
+    var seen_literal_note = false;
+    var seen_empty_small = false;
     var i: usize = 2;
     while (i < text.len and i < 4096) {
         switch (text[i]) {
             '[' => {
+                if (depth == 1 and !seen_literal_note) if (outer_field) |start| {
+                    if (std.mem.trim(u8, text[start..i], " \t").len == 0) {
+                        if (captionLiteralNoteEnd(text, i)) |end| {
+                            seen_literal_note = true;
+                            i = end;
+                            continue;
+                        }
+                    }
+                };
                 if (depth != 1 or !std.mem.startsWith(u8, text[i..], "[[")) return null;
                 depth = 2;
                 i += 2;
@@ -318,7 +365,16 @@ pub fn captionOperandEnd(text: []const u8) ?usize {
                 depth -= 1;
                 if (depth == 0) return if (i <= 4096) i else null;
             },
-            '<', '>', '{', '}', '\r', '\n', 0 => return null,
+            '|' => {
+                if (depth == 1) outer_field = i + 1;
+                i += 1;
+            },
+            '<' => {
+                if (depth != 1 or outer_field == null or seen_empty_small) return null;
+                i = emptyCaptionSmallEnd(text, i) orelse return null;
+                seen_empty_small = true;
+            },
+            '>', '{', '}', '\r', '\n', 0 => return null,
             else => i += 1,
         }
     }
@@ -371,11 +427,23 @@ fn captionText(value: []const u8) bool {
     return triggerFree(value) and triggerFree(storage[0..n]);
 }
 
+fn captionPlainSegment(value: []const u8, seen_empty_small: *bool) bool {
+    const start = std.mem.indexOfScalar(u8, value, '<') orelse return captionText(value);
+    if (seen_empty_small.*) return false;
+    const end = emptyCaptionSmallEnd(value, start) orelse return false;
+    // Check both plain ranges on their original bytes. In particular, the
+    // required space prevents the empty token from joining trigger words.
+    if (!captionText(value[0..start]) or !captionText(value[end..])) return false;
+    seen_empty_small.* = true;
+    return true;
+}
+
 fn captionValid(a: std.mem.Allocator, ns: *const NS.Registry, value: []const u8, interwiki: ?[]const InterwikiAnchor) !bool {
-    var pos: usize = 0;
+    var pos = captionLiteralNoteEnd(value, 0) orelse 0;
     var links: usize = 0;
+    var seen_empty_small = false;
     while (std.mem.indexOfAnyPos(u8, value, pos, "[]")) |start| {
-        if (!captionText(value[pos..start]) or !std.mem.startsWith(u8, value[start..], "[[")) return false;
+        if (!captionPlainSegment(value[pos..start], &seen_empty_small) or !std.mem.startsWith(u8, value[start..], "[[")) return false;
         const close = std.mem.indexOfAnyPos(u8, value, start + 2, "[]") orelse return false;
         if (!std.mem.startsWith(u8, value[close..], "]]")) return false;
         const body = value[start + 2 .. close];
@@ -406,7 +474,7 @@ fn captionValid(a: std.mem.Allocator, ns: *const NS.Registry, value: []const u8,
         if (links > 32) return false;
         pos = close + 2;
     }
-    return captionText(value[pos..]);
+    return captionPlainSegment(value[pos..], &seen_empty_small);
 }
 
 // A separate arena lets the existing authoritative map parser validate the
@@ -506,6 +574,7 @@ fn optionGroup(id: []const u8) ?u5 {
     if (std.mem.eql(u8, id, "img_width")) return 4;
     if (std.mem.eql(u8, id, "img_alt")) return 5;
     if (std.mem.eql(u8, id, "img_link")) return 6;
+    if (std.mem.eql(u8, id, "img_upright")) return 7;
     return null;
 }
 
