@@ -88,7 +88,11 @@ const PoemInfo = struct {
 };
 
 /// Offsets refer to the formatted buffer, never to padded replacements of link text.
+pub const BodyLinkState = @import("body_links.zig").State;
+
 pub const PoemProjection = struct {
+    // Borrowed semantic collector; no body bytes or geometry are changed.
+    body_links: ?*BodyLinkState = null,
     // Set only by the interactive TUI; null keeps existing CLI/export projection.
     disclosures: ?*DisclosureState = null,
     // Borrowed state survives scratch projections; never allocate it from their arena.
@@ -4218,6 +4222,8 @@ pub fn entryTextFoldedProjected(frame: *std.Io.Writer.Allocating, entry: model.E
         }
         const first: usize = if (sectionHeadingCompanion(section) != null) 1 else 0;
         for (section.blocks[first..], first..) |block, block_index| if (!closed or (meaning and block.kind == .definition)) {
+            if (projection) |p| if (p.body_links) |links| try links.collectBlock(block,
+                .{ .section = index, .block = block_index }, p.disclosures orelse return error.InvalidPresentation);
             if (projection != null and projection.?.disclosures != null) {
                 try disclosureBlockText(projection.?, &captions, block, color, .{ .section = index, .block = block_index });
             } else try captions.emitBlocks(w, &.{block}, color, projection);
@@ -12212,4 +12218,42 @@ test "TUI disclosure05 nested bidi scope keeps physical poem lines and separate 
             try std.testing.expect(std.mem.startsWith(u8, text[state.visible.items[0].offset..], "[disclosure"));
         }
     }
+}
+
+
+test "TUI body links01 folded body reflow preserves typed focus and original bytes" {
+    const a = std.testing.allocator;
+    const linked = [_]model.Span{.{ .kind = .link, .text = "same", .target = "target" }};
+    const entry: model.Entry = .{ .title = "source", .kind = .citations, .sections = &.{.{ .level = 2, .title = "Links", .blocks = &.{
+        .{ .kind = .table, .table = .{ .rows = &.{.{ .cells = &.{ .{ .spans = &linked }, .{ .spans = &linked } } }} } },
+    } }} };
+    var links: BodyLinkState = .{}; defer links.deinit();
+    var controls: DisclosureState = .{}; defer controls.deinit(a);
+    var id: ?@import("body_links.zig").Identity = null;
+    for ([_]usize{ 100, 40, 100 }) |width| {
+        var frame: std.Io.Writer.Allocating = .init(a); defer frame.deinit();
+        var legacy: std.Io.Writer.Allocating = .init(a); defer legacy.deinit();
+        var points: std.ArrayList(terminal.PoemLine) = .empty; defer points.deinit(a);
+        var legacy_points: std.ArrayList(terminal.PoemLine) = .empty; defer legacy_points.deinit(a);
+        var p: PoemProjection = .{ .frame = &frame, .allocator = a, .lines = &points, .table_columns = width,
+            .disclosures = &controls, .disclosure_allocator = a, .body_links = &links };
+        var old: PoemProjection = .{ .frame = &legacy, .allocator = a, .lines = &legacy_points, .table_columns = width,
+            .disclosures = &controls, .disclosure_allocator = a };
+        links.begin(a); links.section = 0;
+        _ = try entryTextFoldedProjected(&frame, entry, false, .{ .details = true }, &.{}, 0, &p);
+        links.end();
+        _ = try entryTextFoldedProjected(&legacy, entry, false, .{ .details = true }, &.{}, 0, &old);
+        try std.testing.expectEqualStrings(legacy.written(), frame.written());
+        try std.testing.expectEqual(@as(usize, 2), links.items.items.len);
+        if (id) |expected| try std.testing.expect(@import("body_links.zig").Identity.equal(expected, links.focused.?))
+        else { try std.testing.expect(links.move(false)); id = links.focused.?; }
+    }
+    // The renderer's actual folded-section gate suppresses body occurrences.
+    var frame: std.Io.Writer.Allocating = .init(a); defer frame.deinit();
+    var points: std.ArrayList(terminal.PoemLine) = .empty; defer points.deinit(a);
+    var p: PoemProjection = .{ .frame = &frame, .allocator = a, .lines = &points, .disclosures = &controls, .disclosure_allocator = a, .body_links = &links };
+    links.begin(a); links.section = 0;
+    _ = try entryTextFoldedProjected(&frame, entry, false, .{ .details = false, .collapse_other = true }, &.{}, 0, &p);
+    links.end();
+    try std.testing.expect(links.items.items.len == 0 and links.focused == null);
 }

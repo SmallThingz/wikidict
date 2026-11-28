@@ -16,7 +16,7 @@ const library = @import("library.zig");
 const Page = enum { saved, history, search, learn, settings, library };
 const Focus = enum { search, matches, entry };
 
-const wideHelp = [_][]const u8{ "KEYBOARD", "Type in Search; ↑/↓ moves straight into results", "Enter reads the selected word; Esc steps back", "/ returns to Search from results or reading", "Tab cycles Search → Matches → Reading", "Arrows or j/k move; PgUp/PgDn and Home/End jump", "Ctrl-U clears the query; Ctrl-C/D quits", "[ ] selects a section; e toggles its fold", "d toggles all details; s saves the word", "r random word; 1 Saved 2 History 3 Search", "4 Learn: Tab game; Space reveal; y/n grade", "Quiz: 6-9 answer; Scramble: type then Enter", "v offline speech; m media in desktop player", "5 Settings: arrows adjust limits and appearance", "t cycles terminal/dark/light; q quits outside Search", "Reading: n/p disclosure focus; Space toggles focused body", "Any key closes this help" };
+const wideHelp = [_][]const u8{ "KEYBOARD", "Type in Search; ↑/↓ moves straight into results", "Enter reads the selected word; Esc steps back", "/ returns to Search from results or reading", "Tab cycles Search → Matches → Reading", "Arrows or j/k move; PgUp/PgDn and Home/End jump", "Ctrl-U clears the query; Ctrl-C/D quits", "[ ] selects a section; e toggles its fold", "d toggles all details; s saves the word", "r random word; 1 Saved 2 History 3 Search", "4 Learn: Tab game; Space reveal; y/n grade", "Quiz: 6-9 answer; Scramble: type then Enter", "v offline speech; m media in desktop player", "5 Settings: arrows adjust limits and appearance", "t cycles terminal/dark/light; q quits outside Search", "Reading: n/p disclosure focus; Space toggles focused body", "Reading: l opens links; Enter follows internal targets", "Any key closes this help" };
 const helpScrollHint = "↑↓ scroll PgUp/Dn Home/End Esc close";
 const helpCloseHint = "Any key closes help";
 fn helpLines(columns: usize) []const []const u8 {
@@ -42,6 +42,8 @@ fn helpLines(columns: usize) []const []const u8 {
         "q quits outside Search",
         "Reading: n/p disclosure focus",
         "Space toggles focused body",
+        "l opens links; Enter follows",
+        "Esc returns from link list",
         "Any key closes this help",
     };
     return &wideHelp;
@@ -153,6 +155,8 @@ const State = struct {
     jump_section: bool = false,
     fold_word: ?usize = null,
     disclosures: output.DisclosureState = .{},
+    body_links: output.BodyLinkState = .{},
+    body_links_open: bool = false,
     jump_disclosure: bool = false,
     game: enum { cards, quiz, scramble } = .cards,
     choices: [4]usize = @splat(0),
@@ -190,6 +194,7 @@ const State = struct {
         self.filtered.deinit(self.a);
         self.expanded.deinit(self.a);
         self.disclosures.deinit(self.a);
+        self.body_links.deinit();
         self.section_indices.deinit(self.a);
         self.poem_lines.deinit(self.a);
         self.a.free(self.rows);
@@ -209,6 +214,7 @@ const State = struct {
             (self.nav == .learn and self.reading != null and self.reading.?.data.study_pool != .all);
     }
     fn navigate(self: *State, page_name: Page) !void {
+        self.body_links_open = false;
         if (page_name == .library) try self.loadLibrary() else self.startup_library = false;
         self.notice = "";
         self.confirm_clear_history = false;
@@ -283,6 +289,8 @@ const State = struct {
         self.loaded = null;
         self.fold_word = null;
         self.disclosures.reset();
+        self.body_links.reset();
+        self.body_links_open = false;
         self.jump_disclosure = false;
         self.study_meaning_index = null;
         self.expanded.clearRetainingCapacity();
@@ -510,6 +518,119 @@ const State = struct {
             try r.save(self.io);
         };
     }
+    fn openBodyLink(self: *State) !void {
+        const link = self.body_links.current() orelse return;
+        switch (link.action) {
+            .external => { self.notice = "External links are unavailable in this terminal"; return; },
+            .media => { self.notice = "Media links cannot be opened from this list."; return; },
+            .internal => {},
+        }
+        if (link.language.len != 0) {
+            const metadata = self.db.metadata() orelse {
+                self.notice = "Open the target language in Library (L)."; return;
+            };
+            if (!std.mem.eql(u8, link.language, metadata.code)) {
+                self.notice = "Open the target language in Library (L)."; return;
+            }
+        }
+        if (link.target.len == 0) { self.notice = "Anchor scrolling is unavailable"; return; }
+        if (link.target.len > self.query.len) { self.notice = "This link is too long for search."; return; }
+        // No new URL/namespace/# parsing: the exact target uses the maintained store lookup.
+        const index = (try self.db.find(link.target)) orelse {
+            self.notice = "Linked entry is not installed in this dictionary."; return;
+        };
+        const has_fragment = link.fragment != null;
+        @memcpy(self.query[0..link.target.len], link.target);
+        self.len = link.target.len;
+        self.cursor = self.len;
+        try self.changed();
+        if (self.folded_search) {
+            // changed() normalizes a typed query. A link is an exact source target:
+            // preserve that record through the maintained folded-search promotion.
+            self.exact_title_index = index;
+            self.filtered.clearRetainingCapacity();
+            try self.filtered.append(self.a, index);
+            self.selected = 0;
+        } else {
+            // Store.find and prefix share exact byte ordering, including aliases.
+            // Use the literal prefix even when changed() treated whitespace as empty.
+            self.range = try self.db.prefix(self.query[0..self.len]);
+            self.selected = index - self.range.start;
+        }
+        self.body_links.reset();
+        self.body_links_open = false;
+        self.disclosures.reset();
+        self.jump_disclosure = false;
+        self.fold_word = null;
+        self.loaded = null;
+        try self.openSelected();
+        if (has_fragment) self.notice = "Entry opened. Anchor scrolling is unavailable";
+    }
+    fn bodyLinkKey(self: *State, event: term.Event) !bool {
+        if (self.focus != .entry or self.nav == .learn or self.nav == .settings or self.nav == .library or self.help or event.pasted) return false;
+        if (event.key == .text and event.len == 1 and event.bytes[0] == 'l') {
+            self.body_links_open = !self.body_links_open;
+            self.notice = "";
+            if (self.body_links_open and self.body_links.current() == null) _ = self.body_links.move(true);
+            return true;
+        }
+        if (!self.body_links_open) return false;
+        switch (event.key) {
+            .up, .down => { _ = self.body_links.move(event.key == .down); self.notice = ""; },
+            .home, .end => {
+                _ = self.body_links.clearFocus();
+                _ = self.body_links.move(event.key == .home);
+                self.notice = "";
+            },
+            .page_up, .page_down => {
+                for (0..@max(1, self.screen.rows -| 12)) |_| _ = self.body_links.move(event.key == .page_down);
+                self.notice = "";
+            },
+            .enter => try self.openBodyLink(),
+            .escape => { self.body_links_open = false; self.notice = ""; },
+            .tab => { self.body_links_open = false; return false; }, // Existing pane action remains authoritative.
+            else => return false,
+        }
+        return true;
+    }
+    fn drawBodyLinks(self: *State, w: *std.Io.Writer) !void {
+        const sz = self.screen;
+        const p = palette(self.theme, self.color);
+        const split_at = self.split();
+        const content_col = if (split_at == 0) 3 else split_at + 3;
+        try self.prepare(sz.cols - content_col - 1); // Same body width; the panel never rewrites its projection.
+        if (self.body_links.current() == null) _ = self.body_links.move(true);
+        var line: std.Io.Writer.Allocating = .init(self.a);
+        defer line.deinit();
+        try line.writer.print("Reading links / {d} / section {d}", .{ self.body_links.items.items.len, self.body_links.section + 1 });
+        try self.putLine(w, 2, 3, sz.cols - 4, line.written(), p.accent, .ellipsis);
+        try self.putLine(w, 3, 3, sz.cols - 4, if (self.notice.len != 0) self.notice else self.label, p.muted, .ellipsis);
+        if (self.body_links.unavailable) {
+            try self.put(w, 5, 3, sz.cols - 4, "Links are unavailable for this section.", p.base);
+        } else if (self.body_links.current()) |link| {
+            try self.putLine(w, 4, 3, sz.cols - 4, link.label, p.selected, .ellipsis);
+            line.clearRetainingCapacity();
+            try line.writer.print("target: {s}", .{link.target});
+            try self.putLine(w, 5, 3, sz.cols - 4, line.written(), p.base, .ellipsis);
+            line.clearRetainingCapacity();
+            try line.writer.print("{s}; language: {s}; anchor: {s}", .{ @tagName(link.action), if (link.language.len == 0) "current" else link.language, link.fragment orelse "none" });
+            try self.putLine(w, 6, 3, sz.cols - 4, line.written(), p.base, .ellipsis);
+            line.clearRetainingCapacity();
+            try line.writer.print("Link {d} of {d}", .{ self.body_links.focusedIndex().? + 1, self.body_links.items.items.len });
+            try self.putLine(w, 7, 3, sz.cols - 4, line.written(), p.muted, .ellipsis);
+            const capacity = @max(1, sz.rows -| 12);
+            const focused = self.body_links.focusedIndex().?;
+            const begin = focused / capacity * capacity;
+            for (self.body_links.items.items[begin..@min(self.body_links.items.items.len, begin + capacity)], begin..) |item, i| {
+                line.clearRetainingCapacity();
+                try line.writer.print("{s}{d}. {s}", .{ if (i == focused) "> " else "  ", i + 1, item.label });
+                try self.putLine(w, 9 + i - begin, 3, sz.cols - 4, line.written(), if (i == focused) p.selected else p.base, .ellipsis);
+            }
+        } else try self.put(w, 5, 3, sz.cols - 4, "No visible links in this section.", p.base);
+        try self.put(w, sz.rows - 1, 3, sz.cols - 4, "Up/Down link Enter open Esc reading", p.muted);
+        try self.dock(w);
+    }
+
     fn disclosureKey(self: *State, event: term.Event) !bool {
         if (self.focus != .entry or self.nav == .learn or self.nav == .settings or self.nav == .library or
             self.help or event.pasted or event.key != .text or event.len != 1) return false;
@@ -526,6 +647,7 @@ const State = struct {
     }
 
     fn key(self: *State, event: term.Event) !bool {
+        if (try self.bodyLinkKey(event)) return true;
         if (try self.disclosureKey(event)) return true;
         if (event.key == .quit) return false;
         if (self.help) {
@@ -922,6 +1044,8 @@ const State = struct {
             self.section = 0;
             self.fold_word = index;
             self.disclosures.reset();
+            self.body_links.reset();
+            self.body_links_open = false;
             self.jump_disclosure = false;
         }
         if (index == null or index != self.loaded or self.text.len == 0 or self.format_width != width or self.format_theme != self.theme) {
@@ -929,6 +1053,7 @@ const State = struct {
             const previous_scroll = self.scroll;
             if (self.format_width != width and self.disclosures.focused != null) self.jump_disclosure = true;
             self.disclosures.begin();
+            self.body_links.begin(self.a);
             var formatted: std.Io.Writer.Allocating = .init(self.a);
             defer formatted.deinit();
             var poem_lines: std.ArrayList(term.PoemLine) = .empty;
@@ -958,6 +1083,7 @@ const State = struct {
                 if (self.nav != .learn) {
                     projection.disclosures = &self.disclosures;
                     projection.disclosure_allocator = self.a;
+                    projection.body_links = &self.body_links;
                 }
                 const meaning = try studyMeaning(doc.entry);
                 self.study_meaning_index = i;
@@ -1015,6 +1141,7 @@ const State = struct {
                         var preferences = r.data;
                         preferences.details = self.details;
                         const selected = if (self.section_indices.items.len == 0) 0 else self.section_indices.items[self.section];
+                        self.body_links.section = selected;
                         self.section_offset = try output.entryTextFoldedProjected(&formatted, doc.entry, self.color, preferences, self.expanded.items, selected, &projection);
                     } else try output.entryTextWithDetailsProjected(&formatted.writer, doc.entry, self.color, self.details, &projection);
                     if (self.nav != .learn) try output.writeEmptyLanguageNotice(&formatted.writer, doc.entry);
@@ -1026,6 +1153,7 @@ const State = struct {
                 else => "No matching words.\n\nPress / to edit the prefix; Ctrl-U clears it.",
             });
             self.disclosures.end();
+            self.body_links.end();
             const text = try self.a.dupe(u8, formatted.written());
             for (text) |*b| if (b.* == '\t') {
                 b.* = ' ';
@@ -1203,6 +1331,8 @@ const State = struct {
             try self.put(w, sz.rows - 1, 3, sz.cols - 4, "↑↓ choose  ←→ adjust  Esc search", p.muted);
             if (self.notice.len != 0) try self.put(w, 3, 3, sz.cols - 4, self.notice, p.accent);
             try self.dock(w);
+        } else if (self.body_links_open and self.focus == .entry and self.nav != .learn) {
+            try self.drawBodyLinks(w);
         } else {
             const empty_personal_list = (self.nav == .saved or self.nav == .history) and self.count() == 0;
             const split_at = if (self.nav == .learn or empty_personal_list) 0 else self.split();
@@ -3063,4 +3193,137 @@ test "TUI disclosure01 actual State routes keys only in ordinary entry and prese
     state.disclosures.reset();
     try std.testing.expect(!try state.disclosureKey(toggle)); // Existing Space paging remains reachable.
     try std.testing.expect(state.disclosures.focused == null and state.disclosures.visible.items.len == 0);
+}
+
+
+test "TUI body links01 real State panel routes exact internal hits misses and reserved keys" {
+    const a = std.testing.allocator;
+    const body = [_]model.Block{.{ .kind = .paragraph, .spans = &.{
+        .{ .kind = .link, .text = "hit", .target = "Beta" },
+        .{ .kind = .link, .text = "miss", .target = "Missing" },
+        .{ .kind = .external_link, .text = "external", .target = "https://example.invalid" },
+        .{ .kind = .link, .text = "literal", .target = "Beta#literal" },
+        .{ .kind = .link, .text = "foreign", .target = "Beta", .language = "it" },
+        .{ .kind = .link, .text = "fragment", .target = "Beta", .target_fragment = "part" },
+    } }};
+    const alpha = try enc.presentation_codec.encodeAlloc(a, .{ .entry = .{ .title = "Alpha", .kind = .citations,
+        .sections = &.{.{ .level = 2, .title = "Links", .blocks = &body }} } });
+    defer a.free(alpha);
+    const beta = try enc.presentation_codec.encodeAlloc(a, .{ .entry = .{ .title = "Beta", .kind = .citations,
+        .sections = &.{.{ .level = 2, .title = "Target", .blocks = &.{.{ .kind = .paragraph, .spans = &.{.{ .text = "target body" }} }} }} } });
+    defer a.free(beta);
+    const bytes = try enc.blob_format.buildAlloc(a, .citations, "", &.{ .{ .title = "Alpha", .payload = alpha }, .{ .title = "Beta", .payload = beta } });
+    defer a.free(bytes);
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path}); defer a.free(root);
+    const path = try std.fmt.allocPrint(a, "{s}/sample", .{root}); defer a.free(path);
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = path, .data = bytes });
+    var db: store.Store = .{ .file = try @import("blob_storage").File.open(std.testing.io, a, path), .allocator = a }; defer db.file.deinit();
+    var reading = ReadingState.init(a); defer reading.deinit();
+    try reading.load(std.testing.io, root, "test");
+    var state: State = .{ .io = std.testing.io, .a = a, .db = &db, .reading = &reading, .label = "test", .theme = .terminal,
+        .color = false, .details = true, .screen = .{ .cols = 100, .rows = 40 } };
+    defer state.deinit();
+    try state.insert("Alpha"); try state.openSelected(); try state.prepare(63);
+    try std.testing.expectEqual(@as(usize, 6), state.body_links.items.items.len);
+    const panel: term.Event = .{ .key = .text, .bytes = .{ 'l', 0, 0, 0 }, .len = 1 };
+    try std.testing.expect(try state.key(panel));
+    try std.testing.expect(state.body_links_open and state.body_links.focusedIndex().? == 0);
+    var panel_text: std.Io.Writer.Allocating = .init(a); defer panel_text.deinit();
+    try state.drawBodyLinks(&panel_text.writer);
+    try std.testing.expect(std.mem.indexOf(u8, panel_text.written(), "Link 1 of 6") != null);
+    try std.testing.expect(std.mem.indexOf(u8, panel_text.written(), "/leaf:") == null);
+    try std.testing.expect(std.mem.indexOf(u8, panel_text.written(), "s0/b0") == null);
+    _ = try state.key(.{ .key = .down }); _ = try state.key(.{ .key = .enter });
+    try std.testing.expectEqualStrings("Alpha", state.query[0..state.len]);
+    try std.testing.expectEqualStrings("Linked entry is not installed in this dictionary.", state.notice);
+    _ = try state.key(.{ .key = .down }); _ = try state.key(.{ .key = .enter });
+    try std.testing.expectEqualStrings("External links are unavailable in this terminal", state.notice);
+    _ = try state.key(.{ .key = .down }); _ = try state.key(.{ .key = .enter });
+    try std.testing.expectEqualStrings("Alpha", state.query[0..state.len]); // literal # target was not split
+    _ = try state.key(.{ .key = .down }); _ = try state.key(.{ .key = .enter });
+    try std.testing.expectEqualStrings("Alpha", state.query[0..state.len]); // explicit language not silently dropped
+    _ = try state.key(.{ .key = .escape });
+    try std.testing.expect(!state.body_links_open and state.focus == .entry);
+    state.nav = .learn; try std.testing.expect(!try state.bodyLinkKey(panel)); state.nav = .search;
+    var pasted = panel; pasted.pasted = true; try std.testing.expect(!try state.bodyLinkKey(pasted));
+    _ = try state.key(panel); _ = try state.key(.{ .key = .home });
+    _ = try state.key(.{ .key = .tab });
+    try std.testing.expect(state.focus == .search and !state.body_links_open);
+    state.focus = .entry; _ = try state.key(panel); _ = try state.key(.{ .key = .end });
+    _ = try state.key(.{ .key = .enter });
+    try std.testing.expectEqualStrings("Beta", state.query[0..state.len]);
+    try std.testing.expect(state.focus == .entry and !state.body_links_open and state.body_links.focused == null);
+    try state.prepare(36);
+    try std.testing.expect(std.mem.indexOf(u8, state.text, "target body") != null);
+    try std.testing.expect(state.body_links.items.items.len == 0);
+}
+
+
+test "TUI body links01 exact literal selection survives folded search and alias routing" {
+    const a = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(a); defer arena.deinit();
+    const fixture = arena.allocator();
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(fixture, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    const targets = [_][]const u8{ " Beta ", "Beta", "Alias" };
+    var source_spans: [targets.len]model.Span = undefined;
+    for (&source_spans, targets) |*span, target| span.* = .{ .kind = .link, .text = target, .target = target, .language = "test" };
+    const titles = [_][]const u8{ " Beta ", "BETA", "Beta", "Source", "beta" };
+    var records: [titles.len]enc.blob_format.RecordInput = undefined;
+    for (&records, titles) |*record, title| record.* = .{ .title = title, .payload = try enc.presentation_codec.encodeAlloc(fixture, .{ .entry = .{
+        .title = title, .kind = .language, .language = "English", .language_code = "test",
+        .sections = &.{.{ .level = 2, .title = "Links", .blocks = &.{.{ .kind = .paragraph,
+            .spans = if (std.mem.eql(u8, title, "Source")) &source_spans else &.{.{ .text = "target body" }},
+        }} }},
+    } }) };
+    const metadata = try enc.blob_format.buildLanguageMetadataAlloc(fixture, "test", "English");
+    const member = try enc.blob_format.buildAlloc(fixture, .language, metadata, &records);
+    const member_path = try store.pathAlloc(fixture, root, .language, "English");
+    try std.Io.Dir.cwd().createDirPath(std.testing.io, std.fs.path.dirname(member_path).?);
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = member_path, .data = member });
+    const alias_presentation = try enc.presentation_codec.encodeAlloc(fixture, .{ .entry = .{
+        .title = "Alias", .kind = .alias, .preamble_spans = &.{.{ .kind = .link, .text = "Beta", .target = "Beta" }},
+    } });
+    const alias_payload = try enc.alias_codec.encodeAlloc(fixture, .{
+        .source_namespace = 0, .source_kind = .language, .source_title = "Alias", .source_key = "Alias",
+        .xml_target = "Beta", .target_title = "Beta", .target_namespace = 0, .target_kind = .language,
+        .target_key = "Beta", .fragment = "", .presentation = alias_presentation,
+    });
+    const alias_key = try enc.alias_codec.keyAlloc(fixture, .language, "Alias");
+    const alias_member = try enc.blob_format.buildAlloc(fixture, .alias, "", &.{.{ .title = alias_key, .payload = alias_payload }});
+    const alias_path = try store.pathAlloc(fixture, root, .alias, "");
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = alias_path, .data = alias_member });
+    var db = try store.Store.open(std.testing.io, a, root, .language, "English"); defer db.deinit();
+    var reading = ReadingState.init(a); defer reading.deinit();
+    try reading.load(std.testing.io, root, "English");
+    for ([_]bool{ false, true }) |sensitive| for (targets, 0..) |target, occurrence| {
+        var state: State = .{ .io = std.testing.io, .a = a, .db = &db, .reading = &reading,
+            .label = "English", .theme = .terminal, .color = false, .details = true,
+            .case_sensitive = sensitive, .screen = .{ .cols = 100, .rows = 40 } };
+        defer state.deinit();
+        try state.insert("Source"); try state.openSelected(); try state.prepare(63);
+        _ = try state.key(.{ .key = .text, .bytes = .{ 'l', 0, 0, 0 }, .len = 1 });
+        for (0..occurrence) |_| _ = try state.key(.{ .key = .down });
+        _ = try state.key(.{ .key = .enter });
+        const exact = (try db.find(target)).?;
+        try std.testing.expectEqualStrings(target, state.query[0..state.len]);
+        try std.testing.expectEqual(exact, state.recordIndex(state.selected));
+        try std.testing.expectEqualStrings(target, try db.titleAt(state.recordIndex(state.selected)));
+        if (!sensitive) {
+            _ = try state.searchStep(db.count());
+            try std.testing.expectEqual(exact, state.recordIndex(state.selected));
+            try std.testing.expectEqual(exact, state.exact_title_index.?);
+        }
+        try state.prepare(36);
+        try std.testing.expect(std.mem.indexOf(u8, state.text, "target body") != null);
+        try std.testing.expect(!state.body_links_open and state.body_links.focused == null);
+        if (std.mem.eql(u8, target, "Alias")) {
+            var raw = try db.recordAlloc(a, exact); defer raw.deinit();
+            var doc = try model.fromRecord(a, raw.record); defer doc.deinit();
+            try std.testing.expectEqualStrings("Beta", doc.entry.title);
+            try std.testing.expectEqualStrings("Alias", doc.entry.redirect.?.source_title);
+            try std.testing.expect(doc.entry.redirect.?.followed);
+        }
+    };
 }
