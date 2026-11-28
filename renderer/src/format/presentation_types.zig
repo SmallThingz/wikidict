@@ -4344,8 +4344,15 @@ fn inlineTableClass(classes: []const u8, name: []const u8) bool {
     while (tokens.next()) |token| if (std.mem.eql(u8, token, name)) return true;
     return false;
 }
+fn inlineTableSpanClasses(span: anytype) []const u8 {
+    const SpanType = switch (@typeInfo(@TypeOf(span))) {
+        .pointer => |pointer| if (pointer.size == .one) pointer.child else @TypeOf(span),
+        else => @TypeOf(span),
+    };
+    return if (comptime @hasField(SpanType, "classes")) span.classes else "";
+}
 pub fn inlineTableEmbeddedMedia(span: anytype) bool {
-    return inlineTableClass(span.classes, "wikidict-media");
+    return inlineTableClass(inlineTableSpanClasses(span), "wikidict-media");
 }
 /// This is the existing native text branch boundary, not a language heuristic.
 pub fn inlineTableSpanSupported(span: anytype) bool {
@@ -4415,7 +4422,7 @@ fn inlineTableMediaOwner(span: anytype) ?InlineTableMediaOwner {
     if (!inlineTableEmbeddedMedia(span)) return null;
     const prefix = "wikidict-media-file-";
     var owner: ?[]const u8 = null;
-    var tokens = std.mem.tokenizeAny(u8, span.classes, " \t\r\n\x0b\x0c");
+    var tokens = std.mem.tokenizeAny(u8, inlineTableSpanClasses(span), " \t\r\n\x0b\x0c");
     while (tokens.next()) |token| if (std.mem.startsWith(u8, token, prefix)) {
         if (owner != null) return null;
         owner = token[prefix.len..];
@@ -4431,6 +4438,19 @@ fn inlineTableMediaOwner(span: anytype) ?InlineTableMediaOwner {
 pub fn inlineTableMediaOwnerMatches(span: anytype, file: []const u8) bool {
     const owner = inlineTableMediaOwner(span) orelse return false;
     return owner.adaptation.eql(owner.key, file);
+}
+test "inline media classes preserve span pointers and absent-class children" {
+    const span: Span = .{ .classes = "wikidict-media", .target = "File:A" };
+    try std.testing.expect(inlineTableEmbeddedMedia(span));
+    try std.testing.expect(inlineTableEmbeddedMedia(&span));
+    try std.testing.expect(inlineTableMediaOwnerMatches(span, "A"));
+    try std.testing.expect(inlineTableMediaOwnerMatches(&span, "A"));
+    const Child = struct { target: []const u8 };
+    const child: Child = .{ .target = "File:A" };
+    try std.testing.expect(!inlineTableEmbeddedMedia(child));
+    try std.testing.expect(!inlineTableEmbeddedMedia(&child));
+    try std.testing.expect(!inlineTableMediaOwnerMatches(child, "A"));
+    try std.testing.expect(!inlineTableMediaOwnerMatches(&child, "A"));
 }
 pub fn inlineTableMediaValue(index: anytype, span: anytype) @TypeOf(index.get(@as([]const u8, ""))) {
     const owner = inlineTableMediaOwner(span) orelse return null;

@@ -3115,7 +3115,7 @@ const Reader = struct {
     }
     fn flow(self: *Reader) error{OutOfMemory, InvalidPresentation}!?[]const types.FlowPart {
         if (!try self.presence()) return null;
-        return self.presentFlow();
+        return try self.presentFlow();
     }
     fn presentFlow(self: *Reader) error{OutOfMemory, InvalidPresentation}![]const types.FlowPart {
         if (self.content_depth >= types.max_content_depth) return error.InvalidPresentation;

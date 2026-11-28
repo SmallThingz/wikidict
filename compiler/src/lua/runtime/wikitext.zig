@@ -6959,6 +6959,7 @@ test "implicit block newlines retain Belarusian legacy translation terms" {
             if (std.mem.eql(u8, title, "Template:Mid"))
                 return "|}\n| width=\"1%\" |\n| valign=\"top\" width=\"48%\" |\n{|";
             if (std.mem.eql(u8, title, "Template:Bot")) return "|}\n|}";
+            if (std.mem.eql(u8, title, "Template:InlineTableText")) return " {| not a leading table";
             if (std.mem.eql(u8, title, "Template:T")) return "[[{{{2}}}]]";
             if (std.mem.eql(u8, title, "Template:Legacy"))
                 return "<div class=\"NavFrame\"><div class=\"NavContent\">\n" ++
@@ -7002,7 +7003,11 @@ test "implicit block newlines retain Belarusian legacy translation terms" {
     try std.testing.expectEqualStrings("x\n* item", try expander.expandFragment("Page", "x\n{{#if:1|* item}}", 1_670_803_200));
     try std.testing.expectEqualStrings("\n* item", try expander.expandFragment("Page", "{{#if:1|* item}}", 1_670_803_200));
     try std.testing.expectEqualStrings("x* item", try expander.expandFragment("Page", "x{{{missing|* item}}}", 1_670_803_200));
-    try std.testing.expectEqualStrings("x {| not a leading table", try expander.expandFragment("Page", "x{{{missing| {| not a leading table}}}", 1_670_803_200));
+    // A raw second pipe ends the default; generated template output is not
+    // reparsed as a parameter separator. Keep the non-leading-table control
+    // by supplying its pipe through the nested template instead.
+    try std.testing.expectEqualStrings("x {", try expander.expandFragment("Page", "x{{{missing| {| not a leading table}}}", 1_670_803_200));
+    try std.testing.expectEqualStrings("x {| not a leading table", try expander.expandFragment("Page", "x{{{missing|{{InlineTableText}}}}}", 1_670_803_200));
     const table_result = try expander.expandFragment("Page", "x{{Top}}", 1_670_803_200);
     try std.testing.expect(std.mem.startsWith(u8, table_result, "x\n{| border="));
     try std.testing.expectEqualStrings("x\n; term", try expander.expandFragment("Page", "x{{#if:1|; term}}", 1_670_803_200));
