@@ -103,7 +103,7 @@ function graphFor(version){
   keys(value,['organization','alias','redirect','presentation_version','title','kind','language','language_code','display_title','preamble_spans','sections','references','media']);
   // These blobs have no aliases/redirects; silently discarding a populated one is invalid.
   assert.equal(value.alias??null,null);assert.equal(value.redirect??null,null);
-  return {title:value.title,kind:value.kind,language:value.language,language_code:value.language_code,display_title:spans(value.display_title),preamble_spans:spans(value.preamble_spans),sections:value.sections.map(section=>{
+  return {organization:value.organization,title:value.title,kind:value.kind,language:value.language,language_code:value.language_code,display_title:spans(value.display_title),preamble_spans:spans(value.preamble_spans),sections:value.sections.map(section=>{
    keys(section,['level','title','anchor','anchor_fallback','blocks']);return {level:section.level,title:section.title,anchor:section.anchor,anchor_fallback:section.anchor_fallback,blocks:section.blocks.map(block)};
   }),references:value.references.map(ref=>{
    keys(ref,['kind','number','group_number','name','group','spans','blocks']);return {kind:ref.kind??'note',number:ref.number,group_number:ref.group_number,name:ref.name,group:ref.group,spans:spans(ref.spans),blocks:ref.blocks==null?null:ref.blocks.map(block)};

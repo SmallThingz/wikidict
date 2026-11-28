@@ -23,12 +23,12 @@ const canonical=value=>{
 test('genuine original DPRS decodes all six ruby payloads exactly as the native Reader',()=>{
  const entry=decode(payload,witness.metadata),runs=rubySpansIn(entry);assert.equal(entry.presentation_version,'DPRS');assert.equal(runs.length,6);
  assert.deepEqual(canonical(runs.map(x=>x.ruby)),rubyRuns.map(x=>x.ruby));
- // The established web model differs only in query-side organization/aliases,
+ // The established web model differs only in query-side aliases,
  // list_path naming, and nullable defaults. Preserve the complete modeled graph.
  const project=(value,root=false)=>{
   if(Array.isArray(value))return value.map(x=>project(x));
   if(!value||typeof value!=='object')return value;
-  const result=Object.fromEntries(Object.entries(value).filter(([k])=>!root||!['organization','redirect','alias','presentation_version'].includes(k)).map(([k,v])=>[k==='list_path'?'path':k,project(v)]));
+  const result=Object.fromEntries(Object.entries(value).filter(([k])=>!root||!['redirect','alias','presentation_version'].includes(k)).map(([k,v])=>[k==='list_path'?'path':k,project(v)]));
   if(Object.hasOwn(result,'text')&&Object.hasOwn(result,'trail')&&Object.hasOwn(result,'target')){result.background??=null;result.tooltip??=null;if(result.font_scale!==undefined)result.font_scale=Math.fround(result.font_scale);}
   if(Object.hasOwn(result,'depth')&&Object.hasOwn(result,'level')&&Object.hasOwn(result,'spans')){result.feature??=null;result.table??=null;}
   return result;

@@ -114,14 +114,33 @@ test('L container content shares rich depth while table depth and catalogue trav
  grid=table('L',{cells:[cell('L',[block('L',{table:grid})])]});
  assert.throws(()=>decode(wire('L',[block('L',{table:grid})]),{}),/table depth/i);
 });
-test('L validates lexical child paths against container children, not flat block indices',()=>{
+test('L retains lexical child paths and validates container owners, not flat block indices',()=>{
  const body=[lContainer([lContainer([block('L',{kind:2,values:[textSpan('L',{text:'definition'})]}),block('L',{kind:3})])])];
  const lexeme=(path,examplePaths=list([list([u(0),u(1)])]))=>cat(s('noun'),s(''),u(0),u(0xffffffff),list([
   cat(u(0),u(0xffffffff),list([u(0)]),u(0),u(0),[0],list(path.map(u)),examplePaths,u(0),u(0))
  ]),u(0),u(0),u(0),u(0),u(0));
- assert.doesNotThrow(()=>decode(wire('L',body,{lexemes:[lexeme([0,0])]}),{}));
+ assert.deepEqual(decode(wire('L',body,{lexemes:[lexeme([0,0])]}),{}).organization,{
+  lexemes:[{language:'noun',kind:'',section:0,etymology:null,definitions:[{
+   block:0,parent:null,examples:[0],quotations:[],notes:[],form:null,block_path:[0,0],example_paths:[[0,1]]
+  }],introduction:[],other_blocks:[],related_sections:[]}],other_sections:[]
+ });
  for(const path of [[1],[0,2],[0,0,0],Array(17).fill(0)])assert.throws(()=>decode(wire('L',body,{lexemes:[lexeme(path)]}),{}));
  assert.throws(()=>decode(wire('L',body,{lexemes:[lexeme([0,0],list([u(0)]))]}),{}),'noncanonical all-empty parallel paths');
+});
+test('organization preserves forms, parent senses and independent lexical indices',()=>{
+ const body=[block('K',{kind:2}),block('K',{kind:3}),block('K',{kind:4})];
+ const sense=(root,parent,form)=>cat(u(root),u(parent),list([u(1)]),list([u(2)]),list([u(0)]),form);
+ const form=cat([1],s('plural'),s('lemma'),s('it'));
+ const lexeme=(section=0,parent=0)=>cat(s('Italian'),s('Noun'),u(section),u(0),list([
+  sense(0,0xffffffff,[0]),sense(1,parent,form)
+ ]),list([u(2)]),list([u(1)]),list([u(0)]));
+ const value=decode(wire('K',body,{lexemes:[lexeme()]}),{}).organization;
+ assert.deepEqual(value,{lexemes:[{language:'Italian',kind:'Noun',section:0,etymology:0,definitions:[
+  {block:0,parent:null,examples:[1],quotations:[2],notes:[0],form:null},
+  {block:1,parent:0,examples:[1],quotations:[2],notes:[0],form:{relation:'plural',target:'lemma',language:'it'}}
+ ],introduction:[2],other_blocks:[1],related_sections:[0]}],other_sections:[]});
+ assert.throws(()=>decode(wire('K',body,{lexemes:[lexeme(1)]}),{}));
+ assert.throws(()=>decode(wire('K',body,{lexemes:[lexeme(0,1)]}),{}),'forward/self sense parent remains invalid');
 });
 test('L refuses malformed container ownership styles rules and later capabilities',()=>{
  for(const style of [cat(short(4),[3]),cat(short(4),[1,2],f(NaN)),cat(short(512),[1]),cat(short(1024),[1],s('#ABCDEF')),cat(short(2048),[2]),cat(short(4096),[1],f(-1)),cat(short(256),[2]),cat(short(1),cat(length(1),length(),length(),length())),cat(short(16384),screen(700,1,[0],[screen(700,1,[0])]))])
@@ -194,11 +213,11 @@ test('selected genuine Writer payload and Reader modeled graph agree',{skip:!pro
    payload=await source.read(row.offset,row.length);
   }else payload=new Uint8Array(await readFile(item.payload));
   const actual=decode(payload,{title:expected.title,kind:expected.kind,language:expected.language,language_code:expected.language_code});
-  // Existing web schema names list_path as path and omits query-side organization/alias fields.
+  // Existing web schema names list_path as path and keeps organization, with query-side alias fields represented separately.
   const project=(value,root=false)=>{
    if(Array.isArray(value))return value.map(x=>project(x));
    if(!value||typeof value!=='object')return value;
-   const result=Object.fromEntries(Object.entries(value).filter(([k])=>!root||!['organization','redirect','alias','presentation_version'].includes(k)).map(([k,v])=>[k==='list_path'?'path':k,project(v)]));
+   const result=Object.fromEntries(Object.entries(value).filter(([k])=>!root||!['redirect','alias','presentation_version'].includes(k)).map(([k,v])=>[k==='list_path'?'path':k,project(v)]));
    if(Object.hasOwn(result,'text')&&Object.hasOwn(result,'trail')&&Object.hasOwn(result,'target')){
     result.background??=null;result.tooltip??=null;if(result.font_scale!==undefined)result.font_scale=Math.fround(result.font_scale);
     if(result.inline_style?.wrap===null)delete result.inline_style.wrap;
@@ -371,7 +390,7 @@ test('current Lao container height member matches complete retained native graph
   const entry=decode(bytes,{...index.metadata,title:row.title});if(inspect(entry))heightEntries++;
  }
  const project=(v,top=false)=>{if(Array.isArray(v))return v.map(x=>project(x));if(!v||typeof v!=='object')return v;
-  const out=Object.fromEntries(Object.entries(v).filter(([k])=>!top||!['organization','redirect','alias','presentation_version'].includes(k)).map(([k,x])=>[k==='list_path'?'path':k,project(x)]));
+  const out=Object.fromEntries(Object.entries(v).filter(([k])=>!top||!['redirect','alias','presentation_version'].includes(k)).map(([k,x])=>[k==='list_path'?'path':k,project(x)]));
   if(Object.hasOwn(out,'text')&&Object.hasOwn(out,'trail')&&Object.hasOwn(out,'target')){out.background??=null;out.tooltip??=null;if(out.font_scale!==undefined)out.font_scale=Math.fround(out.font_scale);}
   if(Object.hasOwn(out,'depth')&&Object.hasOwn(out,'level')&&Object.hasOwn(out,'spans')){out.feature??=null;out.table??=null;}return out;};
  let nativeHeightCompared=0;
@@ -435,7 +454,7 @@ test('genuine TPI Thesaurus talk columns match complete native graphs',{skip:!pr
  const source=await openSource(await openAsBlob(c.root+'/'+c.member)),index=await buildIndex(source);assert.equal(index.rows.length,c.expected_records);const map=new Map();let failures=0;
  for(const row of index.rows){const bytes=await source.read(row.offset,row.length);try{before(bytes,{...index.metadata,title:row.title});}catch(error){assert.equal(row.title,c.title);assert.equal(error.message,'Unsupported container layout policy');failures++;}map.set(row.title,decode(bytes,{...index.metadata,title:row.title}));}
  assert.equal(failures,1);const archive=await readFile(c.reader_archive);assert.equal(sha(archive),c.reader_archive_sha256);
- const project=(v,top=false)=>{if(Array.isArray(v))return v.map(x=>project(x));if(!v||typeof v!=='object')return v;const o=Object.fromEntries(Object.entries(v).filter(([k])=>!top||!['organization','redirect','alias','presentation_version'].includes(k)).map(([k,x])=>[k==='list_path'?'path':k,project(x)]));if(Object.hasOwn(o,'text')&&Object.hasOwn(o,'trail')&&Object.hasOwn(o,'target')){o.background??=null;o.tooltip??=null;if(o.font_scale!==undefined)o.font_scale=Math.fround(o.font_scale);}if(Object.hasOwn(o,'depth')&&Object.hasOwn(o,'level')&&Object.hasOwn(o,'spans')){o.feature??=null;o.table??=null;}return o;};
+ const project=(v,top=false)=>{if(Array.isArray(v))return v.map(x=>project(x));if(!v||typeof v!=='object')return v;const o=Object.fromEntries(Object.entries(v).filter(([k])=>!top||!['redirect','alias','presentation_version'].includes(k)).map(([k,x])=>[k==='list_path'?'path':k,project(x)]));if(Object.hasOwn(o,'text')&&Object.hasOwn(o,'trail')&&Object.hasOwn(o,'target')){o.background??=null;o.tooltip??=null;if(o.font_scale!==undefined)o.font_scale=Math.fround(o.font_scale);}if(Object.hasOwn(o,'depth')&&Object.hasOwn(o,'level')&&Object.hasOwn(o,'spans')){o.feature??=null;o.table??=null;}return o;};
  let compared=0;const comparedTitles=new Set();for(const line of gunzipSync(archive,{maxOutputLength:64*1024*1024}).toString().trim().split('\n')){const row=JSON.parse(line);if(row.request?.[4]!==index.metadata.language)continue;const expected=row.response?.entries?.[0];if(!expected||!map.has(expected.title))continue;assert.deepEqual(project(map.get(expected.title),true),project(expected,true),expected.title);compared++;comparedTitles.add(expected.title);}
  assert.equal(compared,c.expected_native_exports);assert.equal(comparedTitles.size,c.expected_native_unique);const actual=map.get(c.title),columns=[];const walk=x=>{if(x&&typeof x==='object'){if(x.style?.columns)columns.push(x.style.columns);for(const y of Object.values(x))walk(y);}};walk(actual);assert.deepEqual(columns,[{count:3,gap:{unit:'em',value:1}},{count:3,gap:{unit:'em',value:1}}]);
  for(const [name,count] of [['Synonyms',8],['Hyponyms',2]])assert.equal(actual.sections.find(s=>s.title===name).blocks[0].container.blocks.length,count);

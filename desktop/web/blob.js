@@ -99,7 +99,7 @@ export function decode(bytes, metadata) {
   const tag=values=>{const n=byte();require(n<values.length);return values[n];};
   const presence=()=>{const n=byte();require(n<2);return n===1;};
   const index=limit=>{const n=u32();require(n<limit);return n;};
-  const optional=limit=>{const n=u32();require(n===0xffffffff||n<limit);};
+  const optional=limit=>{const n=u32();require(n===0xffffffff||n<limit);return n===0xffffffff?null:n;};
   const indices=limit=>list(4,()=>index(limit));
   const rgb=()=>{if(!presence())return null;const value=string();require(value.length===7&&/^#[0-9a-f]{6}$/.test(value));return value;};
   const audioSpans=[], authoredPhonosChildren=new WeakSet();
@@ -720,21 +720,37 @@ export function decode(bytes, metadata) {
   actionGroupsEnabled=['DPRV','DPRY','DPRZ','DPRa','DPRc'].includes(magic);rubyEnabled=magic==='DPRS'||actionGroupsEnabled;containerFonts=magic==='DPRM'||namedSpanFontsEnabled||rubyEnabled;containers=magic==='DPRL'||containerFonts;inlineTableStyles=magic==='DPRK'||containers;rich=magic==='DPRJ'||inlineTableStyles;blockGeometry=magic==='DPRI'||rich;tooltips=magic==='DPRH'||blockGeometry;dynamicCatalogue=magic==='DPRG'||tooltips;componentTargets=magic==='DPRF'||dynamicCatalogue;aligned=magic==='DPRE'||componentTargets;imageBorder=magic==='DPRD'||aligned;referenceBlocks=magic==='DPRC'||imageBorder;based=magic==='DPRB'||referenceBlocks;scaled=magic==='DPRA'||based;referenceItems=magic==='DPR9'||scaled;ordered=magic==='DPR8'||referenceItems;nested=magic==='DPR7'||ordered;if(nested)budget=1<<20;painted=magic==='DPR6'||nested;anchored=magic==='DPR5'||painted;colored=magic==='DPR4'||anchored;explained=magic!=='DPR2';
   const entry={...metadata,presentation_version:magic,display_title:spans(),sections:list(anchored?17:9,()=>({level:byte(),title:string(),anchor:anchored?string():'',anchor_fallback:anchored?string():'',blocks:list(blockMinimum(),()=>block(0,null,true))})),preamble_spans:spans()};
   const childPath=(values,root)=>{
-    const n=count(4);require(n<=16);let value=values[root];
-    for(let i=0;i<n;i++){const box=value.description_body?.box??value.container;require(box);value=box.blocks[index(box.blocks.length)];}
-    return n;
+    const n=count(4);require(n<=16);let value=values[root];const path=[];
+    for(let i=0;i<n;i++){const box=value.description_body?.box??value.container;require(box);const child=index(box.blocks.length);path.push(child);value=box.blocks[child];}
+    return path;
   };
   const childPaths=(values,roots)=>{
-    const n=count(4);require(n===0||n===roots.length);let nonempty=false;
-    for(let i=0;i<n;i++)nonempty=childPath(values,roots[i])>0||nonempty;
-    require(n===0||nonempty);
+    const n=count(4);require(n===0||n===roots.length);const paths=[];
+    for(let i=0;i<n;i++)paths.push(childPath(values,roots[i]));
+    require(n===0||paths.some(path=>path.length>0));return paths;
   };
-  list(29,()=>{string();string();const s=index(entry.sections.length);optional(entry.sections.length);const values=entry.sections[s].blocks,n=values.length;
-    list(18,(_,sense)=>{const root=index(n);optional(sense);const examples=indices(n),quotations=indices(n),notes=indices(n);if(presence()){string();string();string();}if(containers){childPath(values,root);for(const roots of [examples,quotations,notes])childPaths(values,roots);}});
-    const introduction=indices(n),other=indices(n);indices(entry.sections.length);
-    if(containers){childPaths(values,introduction);childPaths(values,other);}
-  });
-  indices(entry.sections.length);
+  // Organization is compiled semantic data, not a renderer-derived index.
+  // Retain every wire field after the same owner/index/path validation.
+  entry.organization={lexemes:list(containers?37:29,()=>{
+    const language=string(),kind=string(),section=index(entry.sections.length),etymology=optional(entry.sections.length);
+    const values=entry.sections[section].blocks,n=values.length;
+    const definitions=list(containers?34:18,(_,sense)=>{
+      const block=index(n),parent=optional(sense),examples=indices(n),quotations=indices(n),notes=indices(n);
+      const form=presence()?{relation:string(),target:string(),language:string()}:null;
+      const block_path=containers?childPath(values,block):[];
+      const example_paths=containers?childPaths(values,examples):[],quotation_paths=containers?childPaths(values,quotations):[],note_paths=containers?childPaths(values,notes):[];
+      const value={block,parent,examples,quotations,notes,form};
+      // Native writeLexicalFields omits empty optional path arrays.
+      for(const [key,path] of Object.entries({block_path,example_paths,quotation_paths,note_paths}))if(path.length)value[key]=path;
+      return value;
+    });
+    const introduction=indices(n),other_blocks=indices(n),related_sections=indices(entry.sections.length);
+    const introduction_paths=containers?childPaths(values,introduction):[],other_block_paths=containers?childPaths(values,other_blocks):[];
+    const value={language,kind,section,etymology,definitions,introduction,other_blocks,related_sections};
+    if(introduction_paths.length)value.introduction_paths=introduction_paths;
+    if(other_block_paths.length)value.other_block_paths=other_block_paths;
+    return value;
+  }),other_sections:indices(entry.sections.length)};
   entry.references=list(referenceBlocks?14:referenceItems?13:20,()=>{
     const kind=referenceItems?tag(['note','fragment']):'note',number=u32();
     require(number>0&&number<0xffffffff);
