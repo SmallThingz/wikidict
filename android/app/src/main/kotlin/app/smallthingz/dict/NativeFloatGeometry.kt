@@ -1156,13 +1156,22 @@ private class NativeStaticFloatGeometry private constructor(
             val measured = PrecomputedText.create(native, PrecomputedText.Params.Builder(TextPaint(paint))
                 .setTextDirection(textDirection).setBreakStrategy(android.graphics.text.LineBreaker.BREAK_STRATEGY_SIMPLE)
                 .setHyphenationFrequency(Layout.HYPHENATION_FREQUENCY_NONE).build())
+            val inlineImages = if (ordered.isEmpty() && carriedExclusions.isEmpty()) emptySet()
+                else original.getSpans(0, original.length, NativeFloatInlineImage::class.java).mapNotNull { image ->
+                    val start = original.getSpanStart(image)
+                    start.takeIf { it >= 0 && original.getSpanEnd(image) == it + 1 && original[it] == '\uFFFC' }
+                }.toSet()
+            val imageLineTops = mutableMapOf<Int, Float>()
             val rubyLinePlan = original.getSpans(0, original.length, NativeRubyLinePlan::class.java).singleOrNull()
             val rubyFragments = NativeRubyFragmentLines(original)
             val rubyIndents = rubyLinePlan?.indents(width, textDirection.isRtl(measured, 0, measured.length))
             var left = rubyIndents?.first ?: intArrayOf(0)
             var right = rubyIndents?.second ?: intArrayOf(0)
             val seen = mutableSetOf<List<Int>>()
-            repeat(64) {
+            // A leading image can cross each float boundary before the final rebreak.
+            // Bound that forward progress separately from convergence at a fixed set of line tops.
+            var clearancesRemaining = inlineImages.size.toLong() * (ordered.size.toLong() + carriedExclusions.size)
+            settle@ while (seen.size < 64) {
                 val signature = left.toList() + listOf(-1) + right.toList()
                 if (!seen.add(signature)) throw UnsupportedFloatLayout("Float line exclusions cycle")
                 val nativeLayout = StaticLayout.Builder.obtain(measured, 0, measured.length, TextPaint(paint), width)
@@ -1173,7 +1182,7 @@ private class NativeStaticFloatGeometry private constructor(
                     .setHyphenationFrequency(Layout.HYPHENATION_FREQUENCY_NONE)
                     .setIndents(left, right).build()
                 val flow = position(nativeLayout, width, ordered, carriedExclusions, insets, usedLineMetrics,
-                    wrapPlan?.noWrap?.let { plan -> { start -> plan.hasLineAt(start) } })
+                    wrapPlan?.noWrap?.let { plan -> { start -> plan.hasLineAt(start) } }, imageLineTops)
                 val fit = if (rubyLinePlan == null) rubyFragments.fit(nativeLayout, measured, flow.left, flow.right,
                     wrapPlan?.fit(nativeLayout, measured, flow.left, flow.right,
                         if (rubyProbe) BooleanArray(flow.constrainedByFloat.size) else flow.constrainedByFloat)) else rubyIndents
@@ -1184,8 +1193,30 @@ private class NativeStaticFloatGeometry private constructor(
                     else wrapPlan?.validateResult(nativeLayout)
                     rubyFragments.validate(nativeLayout)
                     for (line in 0 until nativeLayout.lineCount) {
-                        if (!rubyProbe && flow.constrainedByFloat[line] &&
-                            nativeLayout.getLineMax(line) > width - flow.left[line] - flow.right[line] + 1f) {
+                        if (!flow.constrainedByFloat[line]) continue
+                        val start = nativeLayout.getLineStart(line)
+                        if (start in inlineImages) {
+                            val advance = measured.getWidth(start, start + 1)
+                            val paragraphWidth = nativeLayout.getParagraphRight(line).toDouble() -
+                                nativeLayout.getParagraphLeft(line)
+                            val lane = paragraphWidth - flow.left[line] - flow.right[line]
+                            val unobstructed = paragraphWidth - nativeLineIndent(insets.left + insets.extraLeft) -
+                                nativeLineIndent(insets.right + insets.extraRight)
+                            if (advance > lane && advance <= unobstructed) {
+                                // The native break has settled at this height. Try just the next
+                                // boundary so a shorter rebroken line can still fit beside a float.
+                                val nextTop = flow.exclusions.asSequence()
+                                    .filter { it.overlapsLine(flow.tops[line], flow.bottoms[line]) }
+                                    .minOf { it.outer.bottom }
+                                if (clearancesRemaining == 0L)
+                                    throw UnsupportedFloatLayout("Inline image clearance exceeded the available float boundaries")
+                                clearancesRemaining--
+                                imageLineTops[start] = nextTop
+                                seen.clear()
+                                continue@settle
+                            }
+                        }
+                        if (!rubyProbe && nativeLayout.getLineMax(line) > width - flow.left[line] - flow.right[line] + 1f) {
                             throw UnsupportedFloatLayout("Native text exceeds the remaining float lane")
                         }
                     }
@@ -1220,20 +1251,22 @@ private typealias Flow = NativeFloatFlow
 
 private fun position(layout: StaticLayout, width: Int, occurrences: List<NativeFloatOccurrence>,
     carriedExclusions: List<NativeFloatExclusion>, insets: NativeTextInsets,
-    usedLineMetrics: ((Int, Int) -> NativeUsedLineMetrics)?, sourceLinePresent: ((Int) -> Boolean)? = null): Flow = nativePositionFloatRows(layout.text as Spanned, width,
+    usedLineMetrics: ((Int, Int) -> NativeUsedLineMetrics)?, sourceLinePresent: ((Int) -> Boolean)?,
+    minimumLineTops: Map<Int, Float>): Flow = nativePositionFloatRows(layout.text as Spanned, width,
     IntArray(layout.lineCount) { layout.getLineStart(it) },
     IntArray(layout.lineCount) { layout.getLineEnd(it) },
     List(layout.lineCount) { line ->
         val baseline = layout.getLineBaseline(line)
         NativeUsedLineMetrics((layout.getLineTop(line) - baseline).toFloat(),
             (layout.getLineBottom(line) - baseline).toFloat())
-    }, occurrences, carriedExclusions, insets, usedLineMetrics, sourceLinePresent)
+    }, occurrences, carriedExclusions, insets, usedLineMetrics, sourceLinePresent, minimumLineTops = minimumLineTops)
 
 internal fun nativePositionFloatRows(source: Spanned, width: Int, starts: IntArray, ends: IntArray,
     naturalMetrics: List<NativeUsedLineMetrics>, occurrences: List<NativeFloatOccurrence>,
     carriedExclusions: List<NativeFloatExclusion>, insets: NativeTextInsets,
     usedLineMetrics: ((Int, Int) -> NativeUsedLineMetrics)?, sourceLinePresent: ((Int) -> Boolean)? = null,
-    exactAvailableWidth: Float? = null, requiredLineWidths: FloatArray? = null): NativeFloatFlow {
+    exactAvailableWidth: Float? = null, requiredLineWidths: FloatArray? = null,
+    minimumLineTops: Map<Int, Float> = emptyMap()): NativeFloatFlow {
     require(starts.size == ends.size && naturalMetrics.size == starts.size)
     val availableWidth = exactAvailableWidth ?: width.toFloat()
     if (exactAvailableWidth != null && (!availableWidth.isFinite() || availableWidth < 0f ||
@@ -1307,10 +1340,9 @@ internal fun nativePositionFloatRows(source: Spanned, width: Int, starts: IntArr
             placed += PlacedNativeFloat(occurrence, outer, content)
             exclusions += NativeFloatExclusion(occurrence.side, NativeFloatBounds(outer.left, outer.top, outer.right, outer.bottom))
         }
+        minimumLineTops[starts[line]]?.let { y = max(y, it) }
         while (true) {
-            val overlap = exclusions.filter {
-                (if (lineHeight == 0f) it.outer.top <= y else it.outer.top < y + lineHeight) && it.outer.bottom > y
-            }
+            val overlap = exclusions.filter { it.overlapsLine(y, y + lineHeight) }
             val l = nativeLineIndent(max(insets.left, overlap.filter { it.side == TableFloatSide.Left }.maxOfOrNull { it.outer.right } ?: 0f) + insets.extraLeft)
             val r = nativeLineIndent(max(insets.right, availableWidth - (overlap.filter { it.side == TableFloatSide.Right }.minOfOrNull { it.outer.left } ?: availableWidth)) + insets.extraRight)
             // Native line breaking clamps the signed remaining width to zero, while drawing keeps
@@ -1341,6 +1373,9 @@ internal fun nativePositionFloatRows(source: Spanned, width: Int, starts: IntArr
     }
     return Flow(tops, bottoms, baselines, left, right, placed, exclusions, y, constrainedByFloat, present)
 }
+
+private fun NativeFloatExclusion.overlapsLine(top: Float, bottom: Float): Boolean =
+    outer.bottom > top && if (top == bottom) outer.top <= top else outer.top < bottom
 
 private fun nativeLineIndent(value: Float): Int {
     if (!value.isFinite() || value < 0f || value > Int.MAX_VALUE / 4f)
