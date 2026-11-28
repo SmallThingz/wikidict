@@ -1629,6 +1629,23 @@ pub const Registry = struct {
         try self.addLocalAlias(name, code_value);
     }
 
+    /// Called only after the indexed Italian formatter and both Romanica
+    /// templates have authenticated the edition-local code and spelling.
+    pub fn addSourceItalianRomanica(self: *Registry) !void {
+        if (!std.mem.eql(u8, self.content_code orelse "", "it") or self.codes.contains("ra")) return;
+        // Reserve the local code only if neither it nor the name could shadow
+        // an existing registered, local, reviewed, or ambiguous identity.
+        inline for (.{ self.names, self.ambiguous, self.local_aliases, self.reviewed_aliases, self.language_boundaries }) |map| {
+            var keys = map.keyIterator();
+            while (keys.next()) |key| {
+                if (std.ascii.eqlIgnoreCase(key.*, "ra") or std.ascii.eqlIgnoreCase(key.*, "romanica")) return;
+            }
+        }
+        try self.addCanonical("Romanica", "ra");
+        try self.trustAlias("Romanica");
+        try self.addSourceTemplateLabel("romanica", "ra");
+    }
+
     /// Import an explicit dump-local label without changing canonical headings
     /// or promoting the trust of an existing exact alias.
     pub fn addLocalAlias(self: *Registry, name: []const u8, registered_code: []const u8) !void {

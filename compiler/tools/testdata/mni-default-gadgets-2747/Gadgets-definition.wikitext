@@ -1,0 +1,39 @@
+==interface-gadgets==
+* Edittop|edittop.js
+
+==browsing==
+* modrollback[rights=rollback]|modrollback.js
+* confirmationRollback-mobile[default|rights=rollback|dependencies=mediawiki.util|targets=desktop,mobile]|confirmationRollback-mobile.js
+
+==Editing==
+* refToolbar[dependencies=user.options,mediawiki.util]|refToolbar.js
+* citations[dependencies=mediawiki.util]|citations.js
+* HotCat[rights=edit]|HotCat.js
+
+==Watchlist==
+* geonotice[default|rights=viewmywatchlist]|geonotice.js
+
+== Navigation ==
+* Gallerypreview[dependencies=mediawiki.util]|Gallerypreview.js
+
+== Maintenance ==
+* purgetab[dependencies=mediawiki.util, mediawiki.api]|purgetab.js
+
+==advance==
+* DebugMode[dependencies=mediawiki.util]|DebugMode.js
+* BugStatusUpdate|BugStatusUpdate.js
+* RTRC|RTRC.js
+* script-installer[dependencies=mediawiki.ui.button]|script-installer.js
+
+==appearance==
+* Blackskin[skins=monobook,vector,vector-2022]|Blackskin.css
+* dark-mode-toggle[targets=desktop,mobile|dependencies=mediawiki.util,mediawiki.api,mediawiki.Uri,mediawiki.storage|peers=dark-mode-toggle-pagestyles]|dark-mode-toggle.js
+* dark-mode-toggle-pagestyles[hidden|skins=vector,monobook]|dark-mode-toggle-pagestyles.css
+* XTools-ArticleInfo|XTools-ArticleInfo.js
+* responsiveContentTimeless[type=general|skins=timeless|default|peers=responsiveContentBaseTimeless]|responsiveContentTimeless.js
+
+== Categories ==
+* HotCat[rights=upload|default]|HotCat.js|Hotcatcheck.js
+
+==deprecated==
+* HideFundraisingNotice|HideFundraisingNotice.css

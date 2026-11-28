@@ -6,9 +6,27 @@ const encoder = @import("encoder");
 const namespace_registry = @import("namespace_registry");
 const T = encoder.presentation_types;
 const PC = encoder.presentation_compile;
+pub const image_catalog = @import("container_image_catalog.zig");
+pub const timed_media_inputs = @import("container_timed_media_inputs.zig");
+pub const MediaSources = image_catalog.Sources;
 
 pub const filename = "container-disclosure-captures.json";
 pub const max_input = 1024 * 1024;
+// File-demand discovery only. Book still authenticates the full manifest.
+pub fn requiresInterwikiMap(a: std.mem.Allocator, bytes: []const u8) !bool {
+    if (bytes.len == 0 or bytes.len > max_input) return error.InvalidContainerDisclosureInput;
+    const input = try std.json.parseFromSlice(Input, a, bytes, .{});
+    defer input.deinit();
+    const shared = input.value.shared orelse return false;
+    const text = shared.ordinary_manifest orelse return false;
+    const manifest = try std.json.parseFromSlice(OrdinaryManifest, a, text, .{});
+    defer manifest.deinit();
+    const worker = manifest.value.worker_projection orelse return false;
+    const ref = worker.image_catalog orelse return false;
+    try image_catalog.validReference(ref);
+    return std.mem.eql(u8, ref.grammar, image_catalog.interwiki_caption_grammar);
+}
+
 pub const Reference = struct {
     scope: []const u8,
     full_page_cascade_qualified: bool,
@@ -155,6 +173,8 @@ pub const OrdinarySheet = struct {
 // Optional on the v4 manifest. The authenticated producer qualifies this
 // bounded source projection over the entire admitted constructor family.
 const WorkerProjection = struct {
+    timed_media: ?timed_media_inputs.Reference = null,
+    image_catalog: ?image_catalog.Reference = null,
     schema: []const u8,
     catalog_sha256: []const u8,
     feature_source_sha256: []const u8,
@@ -217,7 +237,14 @@ fn classToken(classes: []const u8, name: []const u8) bool {
 
 fn validOrdinaryCall(name: []const u8) bool {
     if (name.len == 0 or name.len > 128 or !std.mem.eql(u8, name, std.mem.trim(u8, name, " "))) return false;
-    for (name) |c| if (!std.ascii.isAlphanumeric(c) and c != '-' and c != ' ' and c != '_') return false;
+    // Literal template subpages are static names, not relative transclusion.
+    // Keep each segment nonempty and canonical; colons, braces, parser
+    // functions and leading/trailing/adjacent slashes remain unsupported.
+    var segments = std.mem.splitScalar(u8, name, '/');
+    while (segments.next()) |segment| {
+        if (segment.len == 0 or !std.mem.eql(u8, segment, std.mem.trim(u8, segment, " "))) return false;
+        for (segment) |c| if (!std.ascii.isAlphanumeric(c) and c != '-' and c != ' ' and c != '_') return false;
+    }
     return true;
 }
 
@@ -314,8 +341,16 @@ fn ordinaryPresentationAttribute(tag: encoder.wikitext_syntax.Tag, name: []const
         return false;
     }
     if (eq(name, "bgcolor") and (tag.is("table") or tag.is("tr") or cell)) {
-        if ((value.len != 4 and value.len != 7) or value[0] != '#') return false;
-        for (value[1..]) |c| if (!std.ascii.isHex(c)) return false;
+        const digits = if (value.len != 0 and value[0] == '#') blk: {
+            if (value.len != 4 and value.len != 7) return false;
+            break :blk value[1..];
+        } else blk: {
+            // Bare six-digit legacy color on table cells, retained by the
+            // normal sanitizer and interpreted as the same RGB triplet.
+            if (!cell or value.len != 6) return false;
+            break :blk value;
+        };
+        for (digits) |c| if (!std.ascii.isHex(c)) return false;
         return true;
     }
     const width = eq(name, "width") and (tag.is("table") or cell);
@@ -451,12 +486,59 @@ pub const OrdinaryLocalPlan = struct {
     }
 };
 
+// The direct preprocessor recognizes the first closed comment extent and
+// preserves a parsing boundary. Admit only comments without tag-like content,
+// and scan the original bytes on either side without joining their syntax.
+// The maintained presentation compiler's optionalTableEndFrom ends an
+// authored cell and row at the surrounding TABLE close. Recognize only that
+// exact stack suffix; unrelated descendants still require their own close.
+fn ordinaryHtmlClosingDepth(open: []const []const u8, tag: encoder.wikitext_syntax.Tag) ?usize {
+    if (!tag.closing or tag.attrs.len != 0 or open.len == 0) return null;
+    if (tag.is(open[open.len - 1])) return open.len - 1;
+    if (!tag.is("table")) return null;
+    const eq = std.ascii.eqlIgnoreCase;
+    var at = open.len;
+    if (eq(open[at - 1], "td") or eq(open[at - 1], "th")) at -= 1;
+    if (at == 0 or !eq(open[at - 1], "tr")) return null;
+    at -= 1;
+    if (at == 0 or !eq(open[at - 1], "table")) return null;
+    return at - 1;
+}
+
+fn ordinaryRawCommentEnd(source: []const u8, start: usize) ?usize {
+    const end = encoder.wikitext_syntax.protectedEnd(source, start) orelse return null;
+    if (end < start + "<!---->".len or !std.mem.endsWith(u8, source[start..end], "-->")) return null;
+    if (std.mem.indexOfScalar(u8, source[start + 4 .. end - 3], '<') != null) return null;
+    return end;
+}
+
+// In ordinary text, a greater-than between ASCII spaces cannot open a
+// tag. Existing tag handling still consumes and validates whole tokens.
+fn ordinarySpacedGreaterThan(source: []const u8, at: usize) bool {
+    return at != 0 and at + 1 < source.len and source[at] == '>' and
+        source[at - 1] == ' ' and source[at + 1] == ' ';
+}
+
 fn ordinaryLiteralHtml(source: []const u8, imports: []const OrdinaryStyleImport) bool {
+    return ordinaryHtml(source, imports, .expanded);
+}
+
+fn ordinaryHtml(source: []const u8, imports: []const OrdinaryStyleImport, comptime origin: enum { raw, expanded }) bool {
     var consumed: usize = 0;
     var open: [64][]const u8 = undefined;
     var depth: usize = 0;
     var pos: usize = 0;
     while (std.mem.indexOfAnyPos(u8, source, pos, "<>")) |start| {
+        if (origin == .raw) {
+            if (std.mem.startsWith(u8, source[start..], "<!--")) {
+                pos = ordinaryRawCommentEnd(source, start) orelse return false;
+                continue;
+            }
+        }
+        if (ordinarySpacedGreaterThan(source, start)) {
+            pos = start + 1;
+            continue;
+        }
         const tag = encoder.wikitext_syntax.tagAt(source, start) orelse return false;
         if (tag.is("templatestyles")) {
             if (consumed == imports.len or !ordinaryStyleOccurrence(source, start, tag, imports[consumed])) return false;
@@ -476,8 +558,8 @@ fn ordinaryLiteralHtml(source: []const u8, imports: []const OrdinaryStyleImport)
             continue;
         }
         if (tag.closing) {
-            if (depth == 0 or !tag.is(open[depth - 1]) or tag.attrs.len != 0 or source[tag.end - 2] == '/') return false;
-            depth -= 1;
+            if (source[tag.end - 2] == '/') return false;
+            depth = ordinaryHtmlClosingDepth(open[0..depth], tag) orelse return false;
         } else {
             if (!ordinaryTagAttributes(tag.attrs, tag)) return false;
             if (!tag.is("br")) {
@@ -493,6 +575,85 @@ fn ordinaryLiteralHtml(source: []const u8, imports: []const OrdinaryStyleImport)
 
 // Check where LF can separate independent literal class writers. On an
 // ambiguous delimiter the caller keeps the rest of the source in one span.
+// A narrow syntactic boundary proof, not link/media classification. The pinned
+// wikilink_preproc/link_text grammar recursively consumes an inner [[...]] in
+// an outer pipe-delimited label before the outer ]]. Exclude templates, HTML,
+// single brackets and a second nesting level. All source bytes still enter the
+// marker scan; only the following physical LF may separate class writers.
+fn ordinaryClosedNestedLinkEnd(line: []const u8, start: usize) ?usize {
+    if (!std.mem.startsWith(u8, line[start..], "[[")) return null;
+    var pos = start + 2;
+    var depth: usize = 0;
+    var target_start: [2]usize = .{ pos, 0 };
+    var in_label: [2]bool = .{ false, false };
+    var structured_label = false;
+    while (pos < line.len and pos - start <= 4096) {
+        const c = line[pos];
+        // Empty attribute-free formatting and numeric notes are literal
+        // label contents. Neither can leave a frame open across the LF.
+        const empty_small = "<small></small>";
+        if (depth == 0 and in_label[0] and std.mem.startsWith(u8, line[pos..], empty_small)) {
+            structured_label = true;
+            pos += empty_small.len;
+            continue;
+        }
+        if (c == '\r' or c == '\n' or c == 0 or c == '<' or c == '>' or c == '{' or c == '}') return null;
+        if (c == '[') {
+            if (depth == 0 and in_label[0]) {
+                var end = pos + 1;
+                while (end < line.len and end - pos <= 3 and std.ascii.isDigit(line[end])) : (end += 1) {}
+                if (end > pos + 1 and end + 1 < line.len and line[end] == ']' and line[end + 1] == ' ') {
+                    structured_label = true;
+                    pos = end + 1;
+                    continue;
+                }
+            }
+            if (depth != 0 or !in_label[0] or !std.mem.startsWith(u8, line[pos..], "[[")) return null;
+            depth = 1;
+            target_start[1] = pos + 2;
+            in_label[1] = false;
+            structured_label = true;
+            pos += 2;
+            continue;
+        }
+        if (c == '|' or c == ']') {
+            if (!in_label[depth] and std.mem.trim(u8, line[target_start[depth]..pos], " \t").len == 0) return null;
+            if (c == '|') {
+                if (depth == 1 and in_label[1]) return null;
+                in_label[depth] = true;
+                pos += 1;
+                continue;
+            }
+            if (!std.mem.startsWith(u8, line[pos..], "]]")) return null;
+            pos += 2;
+            if (pos - start > 4096) return null;
+            if (depth == 0) return if (structured_label) pos else null;
+            depth = 0;
+            continue;
+        }
+        pos += 1;
+    }
+    return null;
+}
+
+// A translation item can contain a literal single-bracket CJK gloss
+// immediately after a closed wiki link. It is neither an external-link
+// target nor an open internal-link frame. Keep both closing characters.
+fn ordinaryTranslationGlossEnd(line: []const u8, start: usize) ?usize {
+    if (!std.mem.startsWith(u8, line, ":*") or start < 3 or
+        !std.mem.eql(u8, line[start - 3 .. start], "]] ")) return null;
+    const close = std.mem.indexOfScalarPos(u8, line, start + 1, ']') orelse return null;
+    if (close - start > 49 or close + 2 >= line.len or !std.mem.startsWith(u8, line[close..], "]] ")) return null;
+    const gloss = line[start + 1 .. close];
+    if (gloss.len == 0) return null;
+    const utf8 = std.unicode.Utf8View.init(gloss) catch return null;
+    var it = utf8.iterator();
+    while (it.nextCodepoint()) |cp| {
+        if (!(cp >= 0x3400 and cp <= 0x4dbf) and !(cp >= 0x4e00 and cp <= 0x9fff)) return null;
+    }
+    return close + 2;
+}
+
 fn ordinaryLineOperands(line: []const u8) bool {
     var cursor: usize = 0;
     while (std.mem.indexOfAnyPos(u8, line, cursor, "[]<>")) |i| {
@@ -502,11 +663,25 @@ fn ordinaryLineOperands(line: []const u8) bool {
                 if (std.mem.indexOfAny(u8, tag.attrs, "[]") != null) return false;
                 cursor = tag.end;
             },
+            '>' => {
+                if (!ordinarySpacedGreaterThan(line, i)) return false;
+                cursor = i + 1;
+            },
             '[' => {
                 const double = std.mem.startsWith(u8, line[i..], "[[");
+                if (!double) {
+                    if (ordinaryTranslationGlossEnd(line, i)) |end| {
+                        cursor = end;
+                        continue;
+                    }
+                }
                 const start = i + @as(usize, if (double) 2 else 1);
                 const close = std.mem.indexOfAnyPos(u8, line, start, "[]<>") orelse return false;
-                if (line[close] != ']' or (double and !std.mem.startsWith(u8, line[close..], "]]"))) return false;
+                if (line[close] != ']' or (double and !std.mem.startsWith(u8, line[close..], "]]"))) {
+                    if (!double) return false;
+                    cursor = ordinaryClosedNestedLinkEnd(line, i) orelse return false;
+                    continue;
+                }
                 cursor = close + @as(usize, if (double) 2 else 1);
             },
             else => return false,
@@ -526,6 +701,77 @@ fn ordinaryPinMatch(bytes: []const u8, matched: *usize) bool {
     return false;
 }
 
+// The single-pass decoder accepts only alphanumeric names or numeric
+// references ending in ';'. An ASCII query key ending in '=' cannot be a
+// reference. Keep its complete spelling in the pin-header marker scan.
+fn ordinaryLiteralQueryKeyEnd(line: []const u8, amp: usize) ?usize {
+    var end = amp + 1;
+    if (end == line.len or !std.ascii.isAlphanumeric(line[end])) return null;
+    while (end < line.len and (std.ascii.isAlphanumeric(line[end]) or line[end] == '_')) : (end += 1) {}
+    return if (end < line.len and line[end] == '=') end + 1 else null;
+}
+
+// A bare terminal query field is literal only in a complete bracketed HTTP(S)
+// target. Keep the raw bytes in the marker scan, as with an assigned key.
+fn ordinaryTerminalQueryFlagEnd(line: []const u8, amp: usize) ?usize {
+    var end = amp + 1;
+    if (end == line.len or !std.ascii.isAlphabetic(line[end])) return null;
+    while (end < line.len and (std.ascii.isAlphanumeric(line[end]) or line[end] == '_')) : (end += 1) {}
+    if (end == line.len or std.mem.indexOfScalar(u8, " \t]", line[end]) == null or line.len > 4096)
+        return null;
+    if (@import("xml_decode").html_entities.lookupNamedEntity(line[amp + 1 .. end]) != null) return null;
+
+    const open = std.mem.lastIndexOfScalar(u8, line[0..amp], '[') orelse return null;
+    if (open != 0 and line[open - 1] == '[') return null;
+    const target = line[open + 1 .. end];
+    if (!std.mem.startsWith(u8, target, "http://") and !std.mem.startsWith(u8, target, "https://")) return null;
+    const query = std.mem.indexOfScalar(u8, target, '?') orelse return null;
+    const amp_in_target = amp - open - 1;
+    if (query >= amp_in_target or std.mem.indexOfScalar(u8, target, '#') != null or
+        std.mem.indexOfScalar(u8, target[query + 1 .. amp_in_target], '=') == null or
+        !ordinaryLineOperands(line)) return null;
+
+    var inline_tokens: encoder.document_ir.InlineIterator = .{ .input = line[open..] };
+    const link = inline_tokens.next() orelse return null;
+    if (link.kind != .external_link or link.target.ptr != target.ptr or link.target.len != target.len)
+        return null;
+    return end;
+}
+
+// The contents of a flat navigation list are independent wiki link targets
+// and plain separators. No attributes, piped labels, entities, namespace
+// effects or formatting are admitted. Keep checking for a marker inside each
+// target; accumulating one across unrelated targets cannot describe a class.
+fn ordinaryPinFlatLinkList(line: []const u8) ?bool {
+    if (line.len > 4096 or !std.mem.startsWith(u8, line, "[[") or std.mem.indexOf(u8, line, " · ") == null)
+        return null;
+    var pos: usize = 0;
+    var links: usize = 0;
+    var marker_found = false;
+    while (pos < line.len) {
+        if (std.mem.startsWith(u8, line[pos..], "[[")) {
+            const close = std.mem.indexOfPos(u8, line, pos + 2, "]]") orelse return null;
+            const name = line[pos + 2 .. close];
+            if (std.mem.trim(u8, name, " ").len == 0) return null;
+            for (name) |c| {
+                if (c < 0x80 and !std.ascii.isAlphanumeric(c) and std.mem.indexOfScalar(u8, " '-", c) == null)
+                    return null;
+            }
+            var matched: usize = 0;
+            if (ordinaryPinMatch(name, &matched)) marker_found = true;
+            links += 1;
+            pos = close + 2;
+        } else if (std.mem.startsWith(u8, line[pos..], " · ")) {
+            pos += " · ".len;
+        } else if (std.mem.startsWith(u8, line[pos..], "o ")) {
+            pos += 2;
+        } else if (std.mem.indexOfScalar(u8, " ()", line[pos]) != null) {
+            pos += 1;
+        } else return null;
+    }
+    return if (links >= 2) !marker_found else null;
+}
+
 fn ordinaryPinHeaderAbsent(expanded: []const u8) bool {
     if (std.mem.indexOf(u8, expanded, "-{") != null) return false;
     var lines = std.mem.splitScalar(u8, expanded, '\n');
@@ -534,6 +780,10 @@ fn ordinaryPinHeaderAbsent(expanded: []const u8) bool {
     while (lines.next()) |line| {
         if (!joined_suffix) {
             matched = 0;
+            if (ordinaryPinFlatLinkList(line)) |absent| {
+                if (!absent) return false;
+                continue;
+            }
             joined_suffix = !ordinaryLineOperands(line);
         }
         // A subsequence covers token flattening that drops source bytes. Feed
@@ -541,15 +791,14 @@ fn ordinaryPinHeaderAbsent(expanded: []const u8) bool {
         var cursor: usize = 0;
         while (std.mem.indexOfScalarPos(u8, line, cursor, '&')) |amp| {
             if (ordinaryPinMatch(line[cursor..amp], &matched)) return false;
-            // An alphanumeric query key followed by '=' cannot be a character
-            // reference in the maintained single-pass decoder. Keep every
-            // literal byte in the marker observation; do not swallow a later
-            // ampersand or relax unknown/numeric reference handling.
-            var key_end = amp + 1;
-            while (key_end < line.len and std.ascii.isAlphanumeric(line[key_end])) : (key_end += 1) {}
-            if (key_end > amp + 1 and key_end < line.len and line[key_end] == '=') {
-                if (ordinaryPinMatch(line[amp .. key_end + 1], &matched)) return false;
-                cursor = key_end + 1;
+            if (ordinaryLiteralQueryKeyEnd(line, amp)) |end| {
+                if (ordinaryPinMatch(line[amp..end], &matched)) return false;
+                cursor = end;
+                continue;
+            }
+            if (ordinaryTerminalQueryFlagEnd(line, amp)) |end| {
+                if (ordinaryPinMatch(line[amp..end], &matched)) return false;
+                cursor = end;
                 continue;
             }
             const window = line[amp..][0..@min(line.len - amp, 64)];
@@ -574,11 +823,59 @@ fn ordinaryPinHeaderAbsent(expanded: []const u8) bool {
 
 pub const OrdinarySourceCall = struct { name: []const u8, source: []const u8, depth: usize };
 
+// A single } following one complete flat link at physical EOL is ordinary
+// text (for example a translation list), not a template closer.
+fn ordinaryStaticLinkTail(raw: []const u8, brace: usize) bool {
+    if (brace < 4 or !std.mem.eql(u8, raw[brace - 2 .. brace], "]]")) return false;
+    const line = if (std.mem.lastIndexOfScalar(u8, raw[0..brace], 0x0a)) |lf| lf + 1 else 0;
+    if (brace - 2 < line) return false;
+    const open = line + (std.mem.indexOfAny(u8, raw[line .. brace - 2], "[]<>") orelse return false);
+    if (!std.mem.startsWith(u8, raw[open .. brace - 2], "[[")) return false;
+    const content = raw[open + 2 .. brace - 2];
+    return content.len != 0 and std.mem.indexOfAny(u8, content, "[]{}<>&\r") == null;
+}
+
 fn ordinaryStaticCalls(raw: []const u8, depth: usize, visitor: anytype) bool {
     var pos: usize = 0;
-    while (std.mem.indexOfAnyPos(u8, raw, pos, "{}")) |start| {
+    var table = false;
+    while (std.mem.indexOfAnyPos(u8, raw, pos, "<{}")) |start| {
+        if (raw[start] == '<') {
+            pos = if (std.mem.startsWith(u8, raw[start..], "<!--"))
+                ordinaryRawCommentEnd(raw, start) orelse return false
+            else
+                start + 1;
+            continue;
+        }
+        // These root wikitext table markers are literal braces. Resume at the
+        // marker so templates in table attributes and cells are still visited.
+        if (depth == 0 and (start == 0 or raw[start - 1] == 0x0a) and std.mem.startsWith(u8, raw[start..], "{|")) {
+            if (table) return false;
+            table = true;
+            pos = start + 2;
+            continue;
+        }
+        const line_end = start + 1 == raw.len or raw[start + 1] == 0x0a;
+        if (depth == 0 and line_end and raw[start] == '}') {
+            if (start != 0 and raw[start - 1] == '|' and (start == 1 or raw[start - 2] == 0x0a)) {
+                if (!table) return false;
+                table = false;
+                pos = start + 1;
+                continue;
+            }
+            if (ordinaryStaticLinkTail(raw, start)) {
+                pos = start + 1;
+                continue;
+            }
+        }
         if (depth == 16 or !std.mem.startsWith(u8, raw[start..], "{{") or std.mem.startsWith(u8, raw[start..], "{{{")) return false;
         const pair = encoder.wikitext_syntax.balanced(raw, start) orelse return false;
+        // The expander resolves the exact argument-level pipe magic to one
+        // literal byte, without a template call. Qualified output still faces
+        // the independent HTML, style, marker and media checks.
+        if (depth != 0 and std.mem.eql(u8, raw[start..pair.end], "{{!}}")) {
+            pos = pair.end;
+            continue;
+        }
         const body = raw[start + 2 .. pair.inner_end];
         const bar = std.mem.indexOfScalar(u8, body, '|') orelse body.len;
         const name = std.mem.trim(u8, body[0..bar], " \t\r\n");
@@ -587,7 +884,7 @@ fn ordinaryStaticCalls(raw: []const u8, depth: usize, visitor: anytype) bool {
         if (bar < body.len and !ordinaryStaticCalls(body[bar + 1 ..], depth + 1, visitor)) return false;
         pos = pair.end;
     }
-    return true;
+    return !table;
 }
 
 // The provider may stage source effects using exact original call slices.
@@ -603,7 +900,7 @@ pub fn ordinaryFamilyStyleInventory(raw: []const u8, expanded: []const u8, impor
     visitor: anytype) bool
 {
     if (!ordinaryBoundedSource(&.{}, raw, expanded) or std.mem.indexOf(u8, expanded, "{{") != null or
-        std.mem.indexOf(u8, expanded, "}}") != null or !ordinaryLiteralHtml(raw, &.{}) or !ordinaryLiteralHtml(expanded, imports)) return false;
+        std.mem.indexOf(u8, expanded, "}}") != null or !ordinaryHtml(raw, &.{}, .raw) or !ordinaryLiteralHtml(expanded, imports)) return false;
     if (!ordinaryPinHeaderAbsent(expanded)) return false;
     return ordinaryStaticCalls(raw, 0, visitor);
 }
@@ -693,6 +990,17 @@ fn workerProjectionValid(w: WorkerProjection, m: OrdinaryManifest) !bool {
         !std.mem.eql(u8, m.wiki, "itwiktionary") or !std.mem.eql(u8, w.catalog_sha256, m.module_selection_sha256) or
         w.toc_on.len != m.sheets.len or w.media_operations.len > 4096) return false;
     _ = try digest(w.feature_source_sha256);
+    if (w.image_catalog) |ref| {
+        try image_catalog.validReference(ref);
+        if (!std.mem.eql(u8, ref.namespace_sha256, m.namespace_sha256) or
+            !std.mem.eql(u8, ref.feature_source_sha256, w.feature_source_sha256) or
+            !std.mem.eql(u8, ref.module_selection_sha256, m.module_selection_sha256)) return false;
+    }
+    if (w.timed_media) |ref| {
+        try timed_media_inputs.validReference(ref);
+        if (w.image_catalog == null or !std.mem.eql(u8, ref.namespace_sha256, m.namespace_sha256) or
+            !std.mem.eql(u8, ref.module_selection_sha256, m.module_selection_sha256)) return false;
+    }
     if (w.placement_source_sha256) |pin| if (!std.mem.eql(u8, pin, m.local_registry.?.placement_sha256)) return false;
     if (w.local_placement) |mode| {
         if ((!std.mem.eql(u8, mode, "document-prefix-first-key.v1") and
@@ -926,27 +1234,118 @@ fn workerDoubleExternalEnd(line: []const u8, start: usize, close: usize) ?usize 
 // Only count closed wiki headings at root. Require local, single-line link
 // syntax, balanced non-nested wiki tables and balanced literal HTML. Ambiguous
 // transitions cannot contribute a heading or a negative media observation.
-fn workerFeatures(expanded: []const u8, ns: *const namespace_registry.Registry, recipe: WorkerProjection) ?WorkerFeatures {
+// Parsoid inlineline falls back to text when neither wikilink nor extlink
+// matches. These bounded alphabets also exclude autolinks and inline markup.
+fn ordinaryLiteralBracket(content: []const u8) bool {
+    if (content.len == 0 or content.len > 128) return false;
+    if (std.mem.eql(u8, content, "...")) return true;
+
+    // A primary-stress mark followed only by letters cannot introduce an
+    // external target, a magic link or inline markup in Parsoid inlineline.
+    if (std.mem.cutPrefix(u8, content, "ˈ")) |letters| {
+        if (letters.len == 0) return false;
+        const view = std.unicode.Utf8View.init(letters) catch return false;
+        var chars = view.iterator();
+        while (chars.nextCodepoint()) |cp| {
+            if (cp >= 'a' and cp <= 'z') continue;
+            if (cp < 0x0250 or cp > 0x02af) return false;
+        }
+        return true;
+    }
+
+    if (std.ascii.isLower(content[0])) {
+        if (std.mem.indexOfScalar(u8, content, '-') == null) return false;
+        var words = std.mem.splitScalar(u8, content, '-');
+        while (words.next()) |word| {
+            if (word.len == 0) return false;
+            for (word) |c| if (!std.ascii.isLower(c)) return false;
+        }
+        return true;
+    }
+
+    var groups = std.mem.splitSequence(u8, content, ", ");
+    while (groups.next()) |group| {
+        const view = std.unicode.Utf8View.init(group) catch return false;
+        var chars = view.iterator();
+        const first = chars.nextCodepoint() orelse return false;
+        if (first < 0x4e00 or first > 0x9fff) return false;
+        var digits = false;
+        while (chars.nextCodepoint()) |c| {
+            if (c >= '0' and c <= '9') {
+                digits = true;
+            } else if (digits or c < 0x4e00 or c > 0x9fff) return false;
+        }
+    }
+    return true;
+}
+
+fn workerFeatures(a: std.mem.Allocator, expanded: []const u8, ns: *const namespace_registry.Registry,
+    recipe: WorkerProjection, catalog: ?*const image_catalog.Catalog) !?WorkerFeatures
+{
+    return workerFeaturesWithTimed(a, expanded, ns, recipe, catalog, null);
+}
+
+fn workerStandaloneNonModificabileHeading(expanded: []const u8, start: usize, end: usize) bool {
+    const opener = "<div class=\"NonModificabile\">\n";
+    if (start < opener.len) return false;
+    const open = start - opener.len;
+    if (open != 0 and expanded[open - 1] != '\n') return false;
+    if (!std.mem.eql(u8, expanded[open..start], opener)) return false;
+    const tail = expanded[end..];
+    return std.mem.eql(u8, tail, "\n</div>") or std.mem.startsWith(u8, tail, "\n</div>\n");
+}
+
+fn workerFeaturesWithTimed(a: std.mem.Allocator, expanded: []const u8, ns: *const namespace_registry.Registry,
+    recipe: WorkerProjection, catalog: ?*const image_catalog.Catalog, timed: ?timed_media_inputs.Page) !?WorkerFeatures
+{
     var html_depth: usize = 0;
+    var html_open: [64][]const u8 = undefined;
     var in_table = false;
-    var table_outer_depth: ?usize = null;
+    // Two wiki-table frames admit the retained RAL color layouts. A nested
+    // table may start only in a bare data cell, through DIV wrappers.
+    const TableFrame = struct { outer_depth: usize, bare_cell_depth: ?usize = null };
+    var tables: [2]TableFrame = undefined;
+    var table_count: usize = 0;
     var headings: usize = 0;
+    var early_reference_heading = false;
     var audio = false;
     var lines = std.mem.splitScalar(u8, expanded, '\n');
     while (lines.next()) |raw| {
         const line = std.mem.trimEnd(u8, raw, " \t\r");
+        // An indented closing control is outside this witnessed grammar.
+        // Do not silently count it as ordinary text inside an open table.
+        const table_control = std.mem.trimStart(u8, line, " \t");
+        if (in_table and table_control.len != line.len and std.mem.startsWith(u8, table_control, "|}")) return null;
         if (std.mem.startsWith(u8, line, "{|")) {
-            if (in_table) return null;
+            if (table_count == tables.len) return null;
+            if (in_table) {
+                const parent = tables[table_count - 1];
+                const cell_depth = parent.bare_cell_depth orelse return null;
+                if (parent.outer_depth != cell_depth or cell_depth > html_depth) return null;
+                for (html_open[cell_depth..html_depth]) |name| {
+                    if (!std.ascii.eqlIgnoreCase(name, "div")) return null;
+                }
+            }
+            tables[table_count] = .{ .outer_depth = html_depth };
+            table_count += 1;
             in_table = true;
-            table_outer_depth = html_depth;
         } else if (std.mem.startsWith(u8, line, "|}")) {
+            // Every HTML scope opened inside the wiki table must close there.
+            // A suffix may then close wrappers belonging to the exterior.
             if (!in_table) return null;
-            in_table = false;
+            const frame = tables[table_count - 1];
+            if (frame.outer_depth != html_depth or (table_count > 1 and line.len != 2)) return null;
+            table_count -= 1;
+            in_table = table_count != 0;
             if (line.len != 2) {
-                if (table_outer_depth != html_depth) return null;
                 html_depth = workerTableTailDepth(line[2..], html_depth) orelse return null;
                 continue;
             }
+        } else if (in_table and line.len != 0 and (line[0] == '|' or line[0] == '!')) {
+            // Row, caption, header and non-bare cells revoke nested entry.
+            tables[table_count - 1].bare_cell_depth =
+                if (std.mem.eql(u8, line, "|") and tables[table_count - 1].outer_depth == html_depth)
+                    html_depth else null;
         } else if (line.len != 0 and line[0] == '=') {
             var left: usize = 0;
             while (left < line.len and line[left] == '=') left += 1;
@@ -956,10 +1355,14 @@ fn workerFeatures(expanded: []const u8, ns: *const namespace_registry.Registry, 
             if (html_depth == 0) {
                 headings += 1;
             } else if (headings < 4) {
-                return null;
+                const line_offset = @intFromPtr(raw.ptr) - @intFromPtr(expanded.ptr);
+                if (html_depth != 1 or left != 2 or early_reference_heading or
+                    !workerStandaloneNonModificabileHeading(expanded, line_offset, line_offset + raw.len))
+                    return null;
+                early_reference_heading = true;
             }
-            // Once four root headings establish TOC-on, a heading in an HTML
-            // wrapper cannot change that choice. Scan its links as usual.
+            // A single isolated reference heading may precede the fourth
+            // root heading. Keep scanning its links and prove TOC-on at EOF.
         }
         var pos: usize = 0;
         while (std.mem.indexOfAnyPos(u8, line, pos, "<[]")) |start| {
@@ -968,10 +1371,19 @@ fn workerFeatures(expanded: []const u8, ns: *const namespace_registry.Registry, 
                 if (tag.is("br")) {
                     if (tag.closing and !std.ascii.eqlIgnoreCase(line[start..tag.end], "</br>")) return null;
                 } else if (tag.closing) {
-                    if (html_depth == 0) return null;
-                    if (in_table and table_outer_depth == html_depth) table_outer_depth = null;
-                    html_depth -= 1;
-                } else if (!tag.self_closing) html_depth += 1;
+                    if (line[tag.end - 2] == '/') return null;
+                    const next_depth = ordinaryHtmlClosingDepth(html_open[0..html_depth], tag) orelse return null;
+                    // Optional TD/TR closes may return to their literal
+                    // TABLE, but cannot escape any open wiki-table frame.
+                    for (tables[0..table_count]) |frame| {
+                        if (next_depth < frame.outer_depth) return null;
+                    }
+                    html_depth = next_depth;
+                } else if (!tag.self_closing) {
+                    if (html_depth == html_open.len) return null;
+                    html_open[html_depth] = tag.name;
+                    html_depth += 1;
+                }
                 pos = tag.end;
                 continue;
             }
@@ -980,6 +1392,10 @@ fn workerFeatures(expanded: []const u8, ns: *const namespace_registry.Registry, 
                 const end = std.mem.indexOfAnyPos(u8, line, start + 1, "[]<>") orelse return null;
                 if (line[end] != ']') return null;
                 const content = line[start + 1 .. end];
+                if (ordinaryLiteralBracket(content)) {
+                    pos = end + 1;
+                    continue;
+                }
                 const space = std.mem.indexOfAny(u8, content, " \t") orelse content.len;
                 const target = content[0..space];
                 if ((!std.mem.startsWith(u8, target, "https://") and !std.mem.startsWith(u8, target, "http://") and
@@ -987,9 +1403,27 @@ fn workerFeatures(expanded: []const u8, ns: *const namespace_registry.Registry, 
                 pos = end + 1;
                 continue;
             }
-            const right = std.mem.indexOfAnyPos(u8, line, start + 2, "[]<>") orelse return null;
+            var right = std.mem.indexOfAnyPos(u8, line, start + 2, "[]<>") orelse return null;
+            if (catalog) |images| if (images.ordinary_captions) {
+                const head = line[start + 2 .. right];
+                const file_target = std.mem.trim(u8, head[0 .. std.mem.indexOfScalar(u8, head, '|') orelse head.len], " \t");
+                if (ns.ofTitle(file_target).id == 6) {
+                    // A v2 catalog recognizes exactly one bounded ordinary
+                    // caption-link level. The entire outer file operand is
+                    // subsequently classified; inner media/options cannot be
+                    // hidden by advancing to an inner closing bracket.
+                    const end = image_catalog.captionOperandEnd(line[start..]) orelse return null;
+                    right = start + end - 2;
+                }
+            };
             if (!std.mem.startsWith(u8, line[right..], "]]")) {
                 pos = workerDoubleExternalEnd(line, start, right) orelse return null;
+                continue;
+            }
+            // The empty wikilink production emits the original four delimiters as text.
+            // Both bracket pairs are verified here. Resume before any following operand.
+            if (right == start + 2) {
+                pos = right + 2;
                 continue;
             }
             const body = line[start + 2 .. right];
@@ -1012,12 +1446,26 @@ fn workerFeatures(expanded: []const u8, ns: *const namespace_registry.Registry, 
                     // The optional thumbnail script contributes no sheet in
                     // either state under the authenticated normal module catalog.
                     break;
-                } else return null;
+                } else {
+                    const images = catalog orelse return null;
+                    // This fallback only proves a static image cannot add TMH.
+                    // Thumbnail script selection is independent and contributes
+                    // no sheet in the authenticated normal module catalog.
+                    if ((try images.classify(a, ns, line[start .. right + 2])) == null) {
+                        const held = timed orelse return null;
+                        // This exact byte offset and live ancestry belong to the
+                        // same source-bound expansion as the page quota proof.
+                        const absolute = @intFromPtr(line.ptr) - @intFromPtr(expanded.ptr) + start;
+                        _ = held.proof.contribution(held.catalog, absolute, in_table, html_depth) orelse return null;
+                        audio = true;
+                    }
+                }
             }
             pos = right + 2;
         }
     }
     if (html_depth != 0 or in_table) return null;
+    if (early_reference_heading and headings < 4) return null;
     return .{ .toc = headings >= 4, .tmh = audio };
 }
 
@@ -1292,11 +1740,19 @@ const OrdinaryConstructor = struct {
 
 pub const Book = struct {
     ordinary: ?OrdinaryConstructor = null,
+    images: ?image_catalog.Catalog = null,
+    timed: ?timed_media_inputs.Book = null,
     arena: std.heap.ArenaAllocator,
     input: Input,
     shared: ?*const encoder.table_style_profile.DisclosureSharedProfile = null,
 
     pub fn init(backing: std.mem.Allocator, bytes: []const u8, namespaces: *const namespace_registry.Registry) !Book {
+        return initWithMediaSources(backing, bytes, namespaces, null);
+    }
+
+    pub fn initWithMediaSources(backing: std.mem.Allocator, bytes: []const u8,
+        namespaces: *const namespace_registry.Registry, media: ?MediaSources) !Book
+    {
         if (bytes.len == 0 or bytes.len > max_input) return error.InvalidContainerDisclosureInput;
         var arena = std.heap.ArenaAllocator.init(backing);
         errdefer arena.deinit();
@@ -1349,7 +1805,30 @@ pub const Book = struct {
         const shared = if (input.shared) |value| try sharedProfile(arena.allocator(), backing, value) else null;
         errdefer if (shared) |profile| @constCast(profile.styles).deinit();
         const ordinary = if (shared) |profile| try OrdinaryConstructor.prepare(arena.allocator(), input, profile) else null;
-        return .{ .arena = arena, .input = input, .shared = shared, .ordinary = ordinary };
+        const images: ?image_catalog.Catalog = images: {
+            const ref = if (ordinary) |o| if (o.dynamic) |m| if (m.worker_projection) |w| w.image_catalog else null else null else null;
+            if (ref == null and media == null) break :images null;
+            if (ref == null or media == null) return error.InvalidContainerDisclosureInput;
+            const catalog = try image_catalog.Catalog.prepare(arena.allocator(), backing, ref.?, media.?, namespaces);
+            // Overlapping exact evidence must agree; exceptional operands that
+            // the generic grammar refuses still use their original exact proof.
+            for (ordinary.?.dynamic.?.worker_projection.?.media_operations) |op| {
+                if (try catalog.classify(arena.allocator(), namespaces, op.operand)) |effect| {
+                    if (op.media != .image or op.thumbnail != effect.thumbnail)
+                        return error.InvalidContainerDisclosureInput;
+                }
+            }
+            break :images catalog;
+        };
+        const timed: ?timed_media_inputs.Book = timed: {
+            const m = if (ordinary) |o| o.dynamic orelse break :timed null else break :timed null;
+            const w = m.worker_projection orelse break :timed null;
+            const ref = w.timed_media orelse break :timed null;
+            const source = media orelse return error.InvalidContainerDisclosureInput;
+            break :timed try timed_media_inputs.Book.prepare(arena.allocator(), ref, source.file_metadata,
+                namespaces.source_sha256, try digest(m.module_selection_sha256));
+        };
+        return .{ .arena = arena, .input = input, .shared = shared, .ordinary = ordinary, .images = images, .timed = timed };
     }
 
     pub fn deinit(self: *Book) void {
@@ -1402,7 +1881,10 @@ pub const Book = struct {
         if (!workerOperationsMatch(phase, imports, registry) or !ordinaryReceiptSource(m.calls, raw, expanded, imports)) return null;
         for ([_][]const u8{ title, raw, expanded, display }) |source| if (!try workerTriggerFree(a, source)) return null;
         if (!workerLocalPlacementValid(w, expanded, imports)) return null;
-        const features = workerFeatures(expanded, ns, w) orelse return null;
+        const timed = if (self.timed) |*media| try media.forPage(a,
+            .{ .title = title, .page_id = id.page_id, .revision_id = id.revision_id }, raw, expanded) else null;
+        const features = (try workerFeaturesWithTimed(a, expanded, ns, w,
+            if (self.images) |*images| images else null, timed)) orelse return null;
         const globals = workerSlots(w, features) orelse return null;
         const url = if (imports.len != 0) try workerDocumentUrl(a, title, id.revision_id) else null;
         var ordered: std.ArrayList(S.Source) = .empty;
@@ -1487,3 +1969,17 @@ pub const Book = struct {
         return null;
     }
 };
+
+test "IT qualified optional table refuses an indented wiki-table close through HTML" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var ns = try namespace_registry.Registry.init(a, @embedFile("testdata/it-per/namespace-registry.tsv"));
+    defer ns.deinit();
+    const recipe: WorkerProjection = .{ .schema = "test-direct-feature-observation",
+        .catalog_sha256 = "", .feature_source_sha256 = "", .toc_on = &.{} };
+    const source = "{|\n|-\n|\n<table><tr><td>v\n |}\n</table>\n|}\n";
+    try std.testing.expect(ordinaryLiteralHtml(source, &.{}));
+    if ((try workerFeatures(a, source, &ns, recipe, null)) != null)
+        return error.IndentedWikiTableCloseCrossesHtml;
+}

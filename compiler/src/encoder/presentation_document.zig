@@ -190,7 +190,7 @@ fn tracePreObservationBinding(renderer: *const compiler.Renderer, stage: []const
     }
 }
 
-// This carries only the existing insertion-only source projection. It grants
+// This carries only the existing byte-copy source projection. It grants
 // no ancestor/cascade authority and refuses generated or lost source ranges.
 fn bindContainerDisclosureProjection(renderer: *compiler.Renderer,
     projection: ?*const compiler.SourceElementProjection, tracked: MissingText,
@@ -1852,6 +1852,7 @@ fn workWithHeadingOffsetsAllocIn(a: A, title: []const u8, language: []const u8, 
     renderer.context.normal_title_defaults = reference_context.normal_title_defaults;
     renderer.context.citations = reference_context.citations;
     renderer.context.container_disclosures = reference_context.container_disclosures;
+    renderer.context.notice_icon_alignment = reference_context.notice_icon_alignment;
     renderer.context.local_link_targets = reference_context.local_link_targets;
     renderer.context.body_link_continuations = reference_context.body_link_continuations;
     renderer.context.content_conversion = try compiler.pageContentConversion(a, source.bytes, .{ .namespace_catalog = namespace_catalog, .behavior_switches = behavior_switches, .content_conversion = reference_context.content_conversion });

@@ -6329,6 +6329,12 @@ fn processMain(
     var reference_context = try presentation_document.referenceDefinitionsWithMissingAlloc(page_allocator, source_missing);
     reference_context.local_link_targets = codes.local_link_targets;
     reference_context.container_disclosures = codes.container_disclosures;
+    if (codes.table_styles) |styles| {
+        if (styles.notice_icon_alignment) |alignment| {
+            if (@import("presentation_compile.zig").vediNoticePageSource(raw_source, raw_missing))
+                reference_context.notice_icon_alignment = alignment;
+        }
+    }
     reference_context.container_disclosure_projection = if (numbered.source_element_projection) |*proof| proof else null;
     if (body_source.body_link_continuations) |continuations| {
         if (source.ptr != continuations.source.bytes.ptr or source.len != continuations.source.bytes.len)

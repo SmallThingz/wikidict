@@ -9824,6 +9824,9 @@ pub const ReadingTarget = enum { unknown, screen, print };
 /// Producer-only static table styles. No selector or declaration text enters a reader.
 pub const Profile = struct {
     reading_target: ReadingTarget = .unknown,
+    // The ordinary indexed source reader issues only the source-proved
+    // TemplateStyles alignment. Page and cell ownership are checked later.
+    notice_icon_alignment: ?types.CellTextAlign = null,
     // Issued on the exact page's shallow view. The shared profile's scalar
     // stays absent even when it carries an observed article.
     selected_root_per_body: ?f32 = null,
@@ -35981,6 +35984,7 @@ pub fn resolveObservedRichInlineLinkOwnerStyleWithScripts(a: std.mem.Allocator, 
 
 const ObservedStyleInventoryData = struct {
     reading_target: ReadingTarget,
+    notice_icon_alignment: ?types.CellTextAlign,
     selected_root_per_body: ?f32,
     selected_phonos: []const SelectedPhonos,
     selected_terms: []const SelectedTerm,
@@ -36032,7 +36036,7 @@ fn observedStyleInventoryData(styles: *const Profile) ObservedStyleInventoryData
             if (!@hasField(ObservedStyleInventoryData, name)) @compileError("Profile semantic field missing from inventory snapshot");
         }
     }
-    return .{ .reading_target = styles.reading_target, .selected_root_per_body = styles.selected_root_per_body,
+    return .{ .reading_target = styles.reading_target, .notice_icon_alignment = styles.notice_icon_alignment, .selected_root_per_body = styles.selected_root_per_body,
         .selected_phonos = styles.selected_phonos,
         .selected_terms = styles.selected_terms,
         .selected_descriptions = styles.selected_descriptions,
@@ -46004,7 +46008,7 @@ fn disclosureOrdinaryPrefix(prefix: []const u8) bool {
             // A closed wiki table can end the preceding disclosure sibling
             // only when the two matching DIV frames close on this line.
             closed_disclosure = disclosure_owner and disclosure_content and depth == 2 and
-                std.mem.eql(u8, line, "|}</div></div>");
+                std.mem.eql(u8, std.mem.trimEnd(u8, line, " \t"), "|}</div></div>");
             table_depth = null;
             pos = 2;
             const tail = trim(line[pos..]);
@@ -46028,7 +46032,7 @@ fn disclosureOrdinaryPrefix(prefix: []const u8) bool {
                             next != 0 or tag.end != line.len) return false;
                     } else {
                         var admitted = false;
-                        for ([_][]const u8{ "div", "span", "small", "sup", "sub", "i", "b", "table", "tr", "td", "th" }) |name|
+                        for ([_][]const u8{ "div", "span", "small", "sup", "sub", "i", "b", "kbd", "table", "tr", "td", "th" }) |name|
                             if (tag.is(name)) { admitted = true; break; };
                         if (!admitted or tag.self_closing) return false;
                         if (tag.closing) {
@@ -46123,6 +46127,26 @@ test "adjacent disclosure root requires a closed table and two proven sibling fr
         "<div>\n" ++ owner ++ content ++ table ++ "|}</div></div>\n",
         owner ++ content ++ table ++ "|}</span></div>\n",
     }) |negative| try std.testing.expect(!disclosureOrdinaryPrefix(negative));
+}
+
+test "disclosure root prefix accepts closed Italia SAMPA kbd and preserves line and attribute guards" {
+    const heading = "=== Traduzione ===\n";
+    const sampa = "<kbd class=\"SAMPA\">/i\"talja/</kbd>";
+    try std.testing.expect(disclosureOrdinaryPrefix("Pronuncia: " ++ sampa ++ "\n\n" ++ heading));
+    try std.testing.expect(disclosureOrdinaryPrefix("<small><KBD>/i/</KBD></small>\n\n" ++ heading));
+    inline for ([_][]const u8{
+        "<kbd class=\"SAMPA\">/i/\n</kbd>\n",
+        "<kbd>/i/\n",
+        "<kbd><i>/i/</kbd></i>\n",
+        "<kbd class=SAMPA>/i/</kbd>\n",
+        "<kbd class=\"mw-content-rtl\">/i/</kbd>\n",
+        "<kbd title=\"[opaque]\">/i/</kbd>\n",
+        "<kbd title=\"x&amp;y\">/i/</kbd>\n",
+        "<kbd>/i/</kbd class=\"SAMPA\">\n",
+        "<kbd/>\n",
+        "<table><kbd>/i/</kbd></table>\n",
+        "<pre><kbd>/i/</kbd></pre>\n",
+    }) |negative| try std.testing.expect(!disclosureOrdinaryPrefix(negative ++ "\n" ++ heading));
 }
 
 // PC supplies the actual whole expanded record and the original offset from

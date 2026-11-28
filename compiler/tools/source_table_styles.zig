@@ -144,13 +144,14 @@ pub const DefaultGadgetsProof = struct {
 const IndexedGadget = struct { css: []const u8, proof: IndexedGadgetSource };
 const DefaultGadgetInputs = struct { proof: DefaultGadgetsProof, sources: []const encoder.table_style_profile.Source };
 
-fn readIndexedGadget(
+fn readIndexedStyleSource(
     a: std.mem.Allocator,
     source: *dump_source.SourceReader,
     page_index: []const u8,
     title_index: dump_source.PageTitleIndex,
     title: []const u8,
     model: []const u8,
+    namespace: u32,
 ) !?IndexedGadget {
     const found = (try title_index.lookup(page_index, title)) orelse return null;
     const offset = dump_source.pageRowRefOffset(found);
@@ -164,7 +165,7 @@ fn readIndexedGadget(
     // the selector scoping of a <templatestyles> inclusion.
     const matches_model = std.mem.eql(u8, row.content_model, model) or
         (std.mem.eql(u8, model, "css") and std.mem.eql(u8, row.content_model, "sanitized-css"));
-    if (row.ns != 8 or !row.has_source or row.redirect != null or
+    if (row.ns != namespace or !row.has_source or row.redirect != null or
         !matches_model or !std.mem.eql(u8, row.title, title) or
         row.page_id == 0 or row.revision_id == 0 or dump_source.sourceLen(row.source) > max_source_bytes)
         return error.InvalidTableStylesSource;
@@ -181,6 +182,29 @@ fn readIndexedGadget(
         .decoded_source_bytes = decoded.len, .decoded_source_sha256 = sha256(decoded),
     } };
 }
+// This finite TemplateStyles projection is restricted to the indexed sheet
+// revision whose raw and scoped MediaWiki declarations agree. It does not
+// register the sheet in the edition profile or authorize any other property.
+pub fn vediIconAlignment(
+    a: std.mem.Allocator,
+    source: *dump_source.SourceReader,
+    page_index: []const u8,
+    title_index: dump_source.PageTitleIndex,
+) !?encoder.presentation_compile.NoticeIconAlignment {
+    var scratch = std.heap.ArenaAllocator.init(a);
+    defer scratch.deinit();
+    const alloc = scratch.allocator();
+    const held = (try readIndexedStyleSource(alloc, source, page_index, title_index,
+        "Template:Mbox/common.css", "sanitized-css", 10)) orelse return null;
+    if (held.proof.page_id != 502704 or held.proof.revision_id != 3394793 or
+        !std.mem.eql(u8, &held.proof.decoded_source_sha256, "178b38a62e60c2a1dc923fc50d170c4b66525a82c1585ae8fae1c86b5a102511"))
+        return null;
+    var sheet = try encoder.table_style_profile.parseForTargetAlloc(alloc, held.css, .screen);
+    defer sheet.deinit();
+    const computed = try sheet.resolveAlignment(alloc, "td", "mbox-image", "", null, "");
+    return if (computed.specified and !computed.unresolved) computed.value else null;
+}
+
 fn defaultGadgetInputs(
     a: std.mem.Allocator,
     namespace_name: []const u8,
@@ -189,7 +213,7 @@ fn defaultGadgetInputs(
     title_index: dump_source.PageTitleIndex,
 ) !?DefaultGadgetInputs {
     const title = try std.fmt.allocPrint(a, "{s}:Gadgets-definition", .{namespace_name});
-    const definition = (try readIndexedGadget(a, source, page_index, title_index, title, "wikitext")) orelse {
+    const definition = (try readIndexedStyleSource(a, source, page_index, title_index, title, "wikitext", 8)) orelse {
         // A negative title-index lookup alone cannot certify absence. Match
         // Common.css's source-row guard without its Common-specific aliases.
         var rows = std.mem.splitScalar(u8, page_index, '\n');
@@ -208,7 +232,7 @@ fn defaultGadgetInputs(
         if (sources.items.len == 1024) return error.InvalidTableStylesSource;
         const page_title = try std.fmt.allocPrint(a, "{s}:Gadget-{s}", .{namespace_name, page});
         if (page_title.len > 4096) return error.InvalidTableStylesSource;
-        const sheet = (try readIndexedGadget(a, source, page_index, title_index, page_title, "css")) orelse
+        const sheet = (try readIndexedStyleSource(a, source, page_index, title_index, page_title, "css", 8)) orelse
             return error.MissingDefaultGadgetStylesheet;
         total = std.math.add(usize, total, sheet.css.len) catch return error.StyleProfileLimit;
         if (total > max_source_bytes) return error.StyleProfileLimit;

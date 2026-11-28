@@ -242,7 +242,14 @@ pub fn selectAlloc(a: std.mem.Allocator, source: []const u8, options: Options) !
         const text = definitionText(line.text) orelse continue;
         if (definitions.items.len == max_definitions) return error.InvalidGadgetDefinition;
         const def = try parseLine(a, text, line.number);
-        for (definitions.items) |old| if (std.mem.eql(u8, old.name, def.name)) return error.InvalidGadgetDefinition;
+        for (definitions.items) |old| {
+            if (!std.mem.eql(u8, old.name, def.name)) continue;
+            // Duplicate script-only declarations cannot contribute a stylesheet
+            // directly or via peers. Keep rejecting ambiguous style declarations.
+            if (old.style_type or def.style_type or old.pages.len != 0 or def.pages.len != 0 or
+                old.peers.len != 0 or def.peers.len != 0)
+                return error.InvalidGadgetDefinition;
+        }
         try definitions.append(a, def);
     }
     var modules: std.ArrayList(Module) = .empty;
@@ -510,4 +517,54 @@ test "gadget repeated values retain conflicting valueless and malformed refusals
         "* A[default|supportsUrlLoad=bad|supportsUrlLoad=bad]|a.css",
         "* A[default|type=unknown|type=unknown]|a.css",
     }) |source| try std.testing.expectError(error.InvalidGadgetDefinition, selectAlloc(a, source, .{}));
+}
+
+test "dated MNI duplicate script-only HotCat keeps default CSS" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = @embedFile("testdata/mni-default-gadgets-2747/Gadgets-definition.wikitext");
+    try std.testing.expectEqual(@as(usize, 1493), source.len);
+    var digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(source, &digest, .{});
+    const hex = std.fmt.bytesToHex(digest, .lower);
+    try std.testing.expectEqualStrings("49d41f1f519c2d32927f1fde4a03174d959c0e38e7e919acd1a5fd4c0bd73286", &hex);
+    try std.testing.expectEqual(@as(usize, 0), (try selectAlloc(a, source, .{})).len);
+
+    const with_css = try std.mem.concat(a, u8, &.{
+        source, "\n* Visible[default|skins=vector]|visible.css\n",
+    });
+    const styles = try selectAlloc(a, with_css, .{});
+    try std.testing.expectEqual(@as(usize, 1), styles.len);
+    try std.testing.expectEqualStrings("Visible", styles[0].name);
+    try std.testing.expectEqualStrings("visible.css", styles[0].pages[0]);
+    try std.testing.expectEqual(@as(usize, 40), styles[0].definition_line);
+    try std.testing.expect(styles[0].unknown_applicability);
+
+    const with_peer = try std.mem.concat(a, u8, &.{
+        source, "\n* Caller[default|peers=HotCat,Plain]|caller.js\n* Plain[hidden]|plain.css\n",
+    });
+    const peers = try selectAlloc(a, with_peer, .{});
+    try std.testing.expectEqual(@as(usize, 1), peers.len);
+    try std.testing.expectEqualStrings("Plain", peers[0].name);
+    try std.testing.expectEqualStrings("plain.css", peers[0].pages[0]);
+    try std.testing.expectEqual(@as(usize, 41), peers[0].definition_line);
+    try std.testing.expect(!peers[0].unknown_applicability);
+}
+
+test "duplicate gadget style or peer declarations still refuse" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{
+        "* HotCat[default]|first.css\n* HotCat|second.js",
+        "* HotCat|first.js\n* HotCat[default]|second.css",
+        "* HotCat[default|peers=Other]|first.js\n* HotCat|second.js",
+        "* HotCat|first.js\n* HotCat[peers=Other]|second.js",
+        "* HotCat[type=styles]|first.js\n* HotCat|second.js",
+        "* HotCat[type=general]|first.js|first.css\n* HotCat|second.js",
+        "* HotCat|first.js\n* HotCat[default=0]|second.js",
+    }) |invalid| {
+        try std.testing.expectError(error.InvalidGadgetDefinition, selectAlloc(a, invalid, .{}));
+    }
 }

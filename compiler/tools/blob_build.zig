@@ -1109,7 +1109,43 @@ fn loadContainerDisclosureInputs(io: std.Io, a: std.mem.Allocator, root: []const
     };
     defer mapped.deinit();
     if (captured_writer_inputs) |inputs| if (observed) |index| try inputs.acceptBytes(index, mapped.bytes);
-    return try container_disclosure_inputs.Book.init(a, mapped.bytes, namespaces);
+
+    const needs_interwiki = try container_disclosure_inputs.requiresInterwikiMap(a, mapped.bytes);
+    const catalog = container_disclosure_inputs.image_catalog;
+    const files = [_]struct { name: []const u8, limit: usize }{
+        .{ .name = catalog.filename, .limit = catalog.max_catalog_bytes },
+        .{ .name = "file-metadata.tsv", .limit = catalog.max_provider_bytes },
+        .{ .name = "image-options.tsv", .limit = catalog.max_options_bytes },
+        .{ .name = "behavior-switches.tsv", .limit = catalog.max_behavior_bytes },
+        .{ .name = "interwiki-map.tsv", .limit = 4 * 1024 * 1024 },
+    };
+    var media_maps: [files.len]?Mapped = @splat(null);
+    defer for (&media_maps) |*slot| if (slot.*) |*file| file.deinit();
+    const media_sources: ?container_disclosure_inputs.MediaSources = media: {
+        for (files, 0..) |file, i| {
+            if (i == 4 and !needs_interwiki) continue;
+            const media_path = try std.fs.path.join(a, &.{ root, file.name });
+            defer a.free(media_path);
+            const record = if (captured_writer_inputs) |inputs| try inputs.hold(media_path, file.name) else null;
+            media_maps[i] = mmapPathLimit(io, media_path, file.limit) catch |err| switch (err) {
+                error.FileNotFound => {
+                    if (record) |index| try captured_writer_inputs.?.checkRecord(index);
+                    if (i == 0) break :media null;
+                    return err;
+                },
+                else => return err,
+            };
+            if (record) |index| try captured_writer_inputs.?.acceptBytes(index, media_maps[i].?.bytes);
+        }
+        break :media .{
+            .catalog = media_maps[0].?.bytes,
+            .file_metadata = media_maps[1].?.bytes,
+            .image_options = media_maps[2].?.bytes,
+            .behavior_switches = media_maps[3].?.bytes,
+            .interwiki_map = if (media_maps[4]) |map| map.bytes else null,
+        };
+    };
+    return try container_disclosure_inputs.Book.initWithMediaSources(a, mapped.bytes, namespaces, media_sources);
 }
 
 fn loadFigurePageObservations(io: std.Io, a: std.mem.Allocator, root: []const u8, namespaces: *const namespace_registry.Registry, registry: ?*const figure_sizing.Registry, site: ?FigureSite) !?figure_page_observations.Book {
@@ -2836,6 +2872,60 @@ fn sourceEquivalentLiteral(source: []const u8) bool {
     return true;
 }
 
+// These complete indexed NS10 sources corroborate the literal rows in
+// Wikizionario:switch lang p81721/r4264627 of the 20261001 Italian dump.
+// The NS4 switch body is not in the template sidecar. Require both its
+// independently authored code/label peer and the exact heading wrapper.
+const ItalianInlineLanguageRoles = struct {
+    const Source = struct {
+        title: []const u8,
+        page: u64,
+        revision: u64,
+        digest: []const u8,
+    };
+
+    const sources = [_]Source{
+        .{ .title = "Intestazione voce", .page = 575709, .revision = 3619913, .digest = "cc76f52fe844407fa217b816f33c9915c2103a480ef00f9a2144722f6aa84ca6" },
+        .{ .title = "fil", .page = 9017, .revision = 276611, .digest = "11ac2947a4fa15daa16ee7d4915b993f5e0bd87cdde89428483ad4b39f1086c3" },
+        .{ .title = "-fil-", .page = 80149, .revision = 3620914, .digest = "dec1b041f56762d409da1e665095a844a44b09fd6c34a78221ee20929ac3e2fb" },
+        .{ .title = "ro", .page = 1456, .revision = 409182, .digest = "d667122e317da73bbaef63683f674cff6a5a956407f6786e698fcd7c7ca0ff71" },
+        .{ .title = "-ro-", .page = 1967, .revision = 3620787, .digest = "17cfa00aaae844882bf3130dd325d3fec1ce955890f591832bf997e31029baed" },
+        .{ .title = "ra", .page = 1522, .revision = 404665, .digest = "4695535b962cc927c5bdb87e24206be779ef580526b9a4246bf2f8dea2058f53" },
+        .{ .title = "-ra-", .page = 1872, .revision = 3620015, .digest = "28514496b5a1b1ee4dcb74ae3da5b446750923f1905ea1aac4d1132fa2c984f3" },
+    };
+
+    fn install(a: std.mem.Allocator, view: *LanguageTemplateRows, root: []const u8,
+        ns: *const namespace_registry.Registry, registry: *language_registry.Registry,
+        rows: []const SourceEquivalentTemplate, names: *const std.StringHashMapUnmanaged(usize)) !void
+    {
+        if (!std.mem.eql(u8, ns.wiki, "itwiktionary") or !std.mem.eql(u8, ns.content_language, "it") or
+            !std.mem.eql(u8, ns.dump_date, "20261001") or !names.contains(sources[0].title)) return;
+        const provider = (try view.templates(root, ns)) orelse return;
+        var matched: [sources.len]bool = @splat(false);
+        for (sources, &matched) |source, *ok| {
+            const entry = rows[names.get(source.title) orelse continue];
+            if (entry.row.page_id != source.page or entry.row.revision_id != source.revision) continue;
+            const body = (try boundedLanguageTemplateSource(a, provider, entry)) orelse continue;
+            defer a.free(body);
+            var digest: [32]u8 = undefined;
+            std.crypto.hash.sha2.Sha256.hash(body, &digest, .{});
+            const hex = std.fmt.bytesToHex(digest, .lower);
+            ok.* = std.mem.eql(u8, &hex, source.digest);
+        }
+        if (!matched[0]) return;
+        if (matched[1] and matched[2]) try addLabels(registry, "fil", "filippino", "Filippino");
+        if (matched[3] and matched[4]) try addLabels(registry, "ro", "romeno", "Romeno");
+        if (matched[5] and matched[6]) try registry.addSourceItalianRomanica();
+    }
+
+    fn addLabels(registry: *language_registry.Registry, code: []const u8, lower: []const u8, upper: []const u8) !void {
+        if (registry.isLanguageBoundary(lower) or registry.isLanguageBoundary(upper) or
+            !registry.sourceBannerLiteralCodeNameCompatible(code, lower)) return;
+        try registry.addSourceTemplateLabel(lower, code);
+        try registry.addSourceTemplateLabel(upper, code);
+    }
+};
+
 fn loadSourceEquivalentLanguageTemplates(io: std.Io, a: std.mem.Allocator, root: []const u8, namespaces: *const namespace_registry.Registry, registry: *language_registry.Registry) !void {
     var view: LanguageTemplateRows = .{ .io = io, .a = a, .root = root, .namespaces = namespaces };
     defer view.deinit();
@@ -2948,6 +3038,7 @@ fn loadSourceEquivalentLanguageTemplatesWithRows(io: std.Io, a: std.mem.Allocato
             }
         }
     };
+    try ItalianInlineLanguageRoles.install(a, view, root, namespaces, registry, rows.items, &names);
 }
 
 fn addTsongaEnglishLink(registry: *language_registry.Registry, code: []const u8, source: []const u8) !void {
@@ -5880,6 +5971,13 @@ fn runBlobBuild(io: std.Io, a: std.mem.Allocator, args: []const []const u8, opti
     const style_observation = try source_table_styles.observeWithImportsForTarget(a, &namespaces, &dump, page_index.bytes, title_index, stylesheet_snapshot, .screen);
     var table_styles = style_observation.authority;
     defer if (table_styles) |*authority| authority.deinit();
+    if (table_styles) |*authority| {
+        if (std.mem.eql(u8, namespaces.wiki, "itwiktionary") and stylesheet_snapshot == null and
+            std.mem.eql(u8, &authority.provenance.decoded_source_sha256, "98694865a8a0da877f6cad072dbf74ff605b410afaa3587b39c7864ddacc294a"))
+        {
+            authority.profile.notice_icon_alignment = try source_table_styles.vediIconAlignment(a, &dump, page_index.bytes, title_index);
+        }
+    }
     var screen_styles = style_observation.screen_styles;
     defer if (screen_styles) |*screen| screen.profile.deinit();
     defer if (style_observation.article_styles) |articles| source_table_styles.deinitArticleStyles(a, articles);
@@ -6004,7 +6102,7 @@ fn runBlobBuild(io: std.Io, a: std.mem.Allocator, args: []const []const u8, opti
         .is_missing_file_fn = figure_sizing.Registry.isMissingFile,
         .resolve_intrinsic_size_fn = figure_sizing.Registry.resolveIntrinsicSize,
         .default_thumbnail_file_fn = if (value.defaultThumbnailPageIndex(page_index.bytes, if (figure_site) |site| site.source_sha256 else null)) figure_sizing.Registry.defaultThumbnailFile else null,
-        .resolve_canonical_file_fn = figure_sizing.Registry.resolveCanonicalFile,
+        .resolve_canonical_file_fn = figure_sizing.Registry.resolveWriterCanonicalFile,
         .resolve_svg_explicit_box_fn = figure_sizing.Registry.resolveSvgExplicitBox,
         .resolve_default_tiff_page_fn = figure_sizing.Registry.resolveDefaultTiffPage,
         .resolve_height_only_width_fn = figure_sizing.Registry.resolveHeightOnlyWidth,

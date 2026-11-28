@@ -1971,7 +1971,35 @@ pub const SelectedTimedAudio = struct {
     }
 };
 
+pub const NoticeIconAlignment = presentation_types.CellTextAlign;
+
+const vedi_notice_styles = "<templatestyles src=\"Mbox/common.css\" />";
+const vedi_notice_table = "<table class=\"plainlinks ombox ombox-notice\" role=\"presentation\" style=\"background-color: #D8E8FF; border:1px solid #A0CCA0; color:#000;\">";
+const vedi_notice_icon = "<td class=\"mbox-image\">";
+
+// Keep the single authenticated sheet attached to the leading source
+// operation. Other authored sheets or incomplete effects make it ineligible.
+pub fn vediNoticePageSource(raw_source: ?[]const u8, expanded: MissingText) bool {
+    const raw = raw_source orelse return false;
+    if (!starts(trim(raw), "{{Vedi|") or expanded.unknown or expanded.lost_missing_range or
+        expanded.generated_source != null or expanded.ranges.len != 0 or
+        expanded.literal_curly_ranges.len != 0 or expanded.generated_links.len != 0) return false;
+    const source = trim(expanded.bytes);
+    if (!starts(source, vedi_notice_styles)) return false;
+    const remainder = trim(source[vedi_notice_styles.len..]);
+    if (!starts(remainder, vedi_notice_table)) return false;
+    // A second stylesheet or an HTML style element can change precedence.
+    var search: usize = 0;
+    while (std.mem.indexOfScalarPos(u8, remainder, search, '<')) |at| {
+        search = at + 1;
+        const tag = syntax.tagAt(remainder, at) orelse continue;
+        if (tag.is("templatestyles") or tag.is("style")) return false;
+    }
+    return true;
+}
+
 pub const Context = struct {
+    notice_icon_alignment: ?NoticeIconAlignment = null,
     container_disclosures: ?*const ContainerDisclosureSource = null,
     body_link_continuations: ?*const BodyLinkContinuations = null,
     normal_title_defaults: ?NormalTitleDefaults = null,
@@ -3792,7 +3820,7 @@ fn normalizeWikiQuotesPreparedMappedInDomain(a: A, source: MissingText, depth: u
 
 pub const Reference = struct { kind: citation_state.Kind = .note, number: usize, group_number: ?u32, name: []const u8 = "", group: []const u8 = "", body: []const u8 = "", missing: ?MissingText = null, spans: []const Span = &.{}, blocks: ?[]const Block = null, poem: bool = false, poem_direction: []const u8 = "", citation_plan: ?*const CitationPlan = null, citation_item: ?usize = null };
 pub const ReferenceDefinition = struct { name: []const u8, group: []const u8 = "", body: []const u8 = "", missing: ?MissingText = null, list_defined: bool = false };
-pub const ReferenceDefinitions = struct { container_disclosures: ?*const ContainerDisclosureSource = null, container_disclosure_projection: ?*const SourceElementProjection = null, body_link_continuations: ?*const BodyLinkContinuations = null, normal_title_defaults: ?NormalTitleDefaults = null, display_title_precedence: ?DisplayTitlePrecedence = null, local_link_targets: ?LocalLinkTargetSource = null, content_conversion: ?bool = null, items: []const ReferenceDefinition = &.{}, fallbacks: @import("presentation_fallback.zig").Report = .{}, citations: ?*const CitationPlan = null };
+pub const ReferenceDefinitions = struct { notice_icon_alignment: ?NoticeIconAlignment = null, container_disclosures: ?*const ContainerDisclosureSource = null, container_disclosure_projection: ?*const SourceElementProjection = null, body_link_continuations: ?*const BodyLinkContinuations = null, normal_title_defaults: ?NormalTitleDefaults = null, display_title_precedence: ?DisplayTitlePrecedence = null, local_link_targets: ?LocalLinkTargetSource = null, content_conversion: ?bool = null, items: []const ReferenceDefinition = &.{}, fallbacks: @import("presentation_fallback.zig").Report = .{}, citations: ?*const CitationPlan = null };
 
 /// Collect names once without rendering reference bodies or creating citations.
 pub fn referenceDefinitionsAlloc(a: std.mem.Allocator, source: []const u8) Error!ReferenceDefinitions {
@@ -5415,7 +5443,7 @@ pub const PreparedExternalLinks = struct {
 };
 const PageExternalNumbering = struct {
     const Phase = enum { extensions, interlanguage, media, ordinary };
-    const Edit = struct { start: usize, end: usize, value: []const u8, tracked: ?MissingText = null, numbered_label_only: bool = false, citation_attribute_only: bool = false };
+    const Edit = struct { start: usize, end: usize, value: []const u8, tracked: ?MissingText = null, numbered_label_only: bool = false, citation_attribute_only: bool = false, terminal_language_elision: bool = false };
     a: A,
     renderer: Renderer,
     phase: ?*const PoemPhase,
@@ -5852,11 +5880,18 @@ const PageExternalNumbering = struct {
             !std.mem.eql(u8, original.bytes, source.bytes)) return null;
         const begin = @intFromPtr(source.bytes.ptr);
         const end = begin + source.bytes.len;
+        const permits_language_tail = if (self.renderer.context.container_disclosures) |held|
+            held.captures.len == 0 and held.source.ptr == original.bytes.ptr and held.source.len == original.bytes.len
+        else false;
         var selected: std.ArrayList(Edit) = .empty;
         defer selected.deinit(self.a);
         for (self.edits.items) |edit| {
-            if (!enclosed(begin, end, edit) or edit.start != edit.end or edit.tracked != null or
-                (!edit.numbered_label_only and !edit.citation_attribute_only)) return null;
+            if (!enclosed(begin, end, edit) or edit.tracked != null) return null;
+            if (edit.terminal_language_elision) {
+                if (!permits_language_tail or edit.start >= edit.end or edit.value.len != 0 or
+                    edit.numbered_label_only or edit.citation_attribute_only or
+                    !ordinaryNormalizationRange(source, edit.start - begin, edit.end - begin)) return null;
+            } else if (edit.start != edit.end or (!edit.numbered_label_only and !edit.citation_attribute_only)) return null;
             try selected.append(self.a, edit);
         }
         std.mem.sort(Edit, selected.items, {}, struct {
@@ -5866,9 +5901,11 @@ const PageExternalNumbering = struct {
         defer copies.deinit(self.a);
         var original_at: usize = 0;
         var prepared_at: usize = 0;
+        var language_tail = false;
         for (selected.items) |edit| {
             const start = edit.start - begin;
-            if (start < original_at) return null;
+            if (start < original_at or (language_tail and (!edit.terminal_language_elision or start != original_at)))
+                return null;
             const len = start - original_at;
             if (prepared_at > prepared.len or len > prepared.len - prepared_at or
                 !std.mem.eql(u8, source.bytes[original_at..start], prepared[prepared_at..][0..len])) return null;
@@ -5876,8 +5913,14 @@ const PageExternalNumbering = struct {
             prepared_at += len;
             if (edit.value.len > prepared.len - prepared_at or !std.mem.eql(u8, edit.value, prepared[prepared_at..][0..edit.value.len])) return null;
             prepared_at += edit.value.len;
-            original_at = start;
+            original_at = edit.end - begin;
+            language_tail = edit.terminal_language_elision;
         }
+        // A proved metadata suffix may be absent from prepared text. No
+        // mapped copy spans the elision, and later rendered material cannot
+        // acquire the selected root's source authority across it.
+        if (language_tail and std.mem.trim(u8, source.bytes[original_at..], " \t\r\n").len != 0)
+            return null;
         const len = source.bytes.len - original_at;
         if (prepared_at > prepared.len or len != prepared.len - prepared_at or
             !std.mem.eql(u8, source.bytes[original_at..], prepared[prepared_at..])) return null;
@@ -6095,7 +6138,21 @@ const PageExternalNumbering = struct {
             while (first != 0 and std.ascii.isWhitespace(input[first - 1])) first -= 1;
             // Match Parser's newline-plus-whitespace removal, not inline spaces.
             if (std.mem.indexOfScalar(u8, input[first..opening], '\n') == null) first = opening;
-            try self.replace(input, first, end - token.trail.len, "");
+            const closing = end - token.trail.len;
+            try self.replace(input, first, closing, "");
+            if (!in_reference and input.ptr == self.root_missing.bytes.ptr and input.len == self.root_missing.bytes.len and
+                first < opening and token.trail.len == 0 and !token.link_has_pipe and
+                std.mem.eql(u8, token.target, target) and closing - opening >= 4 and
+                std.mem.eql(u8, input[opening + 2 .. closing - 2], token.target))
+            {
+                const first_address = self.address(input, first);
+                const last_address = self.address(input, closing);
+                for (self.edits.items) |*edit| {
+                    if (edit.start != first_address or edit.end != last_address) continue;
+                    if (edit.value.len == 0 and edit.tracked == null) edit.terminal_language_elision = true;
+                    break;
+                }
+            }
             return;
         }
         if (phase == .extensions) {
@@ -51501,6 +51558,7 @@ pub const Renderer = struct {
         alignment: ?presentation_types.CellTextAlign,
         table: ?presentation_types.TableStyle,
         tag: ?syntax.Tag = null,
+        notice_icon: ?[]const u8 = null,
     };
 
     fn appendHtmlRowCell(self: *Renderer, cells: *std.ArrayList(Cell), cell_tag: syntax.Tag,
@@ -51529,6 +51587,14 @@ pub const Renderer = struct {
             }
         };
         var resolved_cell = try self.resolvedCellStyle(cell_tag, background_fallback, row.alignment, cell_style, cell_native_context, false, null, false);
+        if (row.notice_icon) |opening| {
+            if (cell_tag.name.ptr == opening[1..].ptr and !resolved_cell.unresolved and !resolved_cell.alignment_specified) {
+                var value = resolved_cell.style orelse presentation_types.CellStyle{};
+                value.text_align = self.context.notice_icon_alignment;
+                resolved_cell.style = value;
+                resolved_cell.alignment_specified = true;
+            }
+        }
         try preserveCellGroupBackdrop(&resolved_cell, row.background, row.table, cell_rowspan);
         var nested_table: ?Table = null;
         var cell_blocks: ?[]const Block = null;
@@ -51654,9 +51720,34 @@ pub const Renderer = struct {
         return null;
     }
 
+    fn vediNoticeIconOpening(self: *const Renderer, tag: syntax.Tag, input: []const u8) ?[]const u8 {
+        if (self.context.notice_icon_alignment == null or self.content_root != .parser_output or
+            !std.mem.eql(u8, self.context.language, "Unclassified")) return null;
+        const tracked = self.body_missing orelse return null;
+        if (tracked.unknown) return null;
+        const opening = projectedTrackedTagOpening(tracked, tag) orelse return null;
+        if (!std.mem.eql(u8, opening, vedi_notice_table)) return null;
+        const offset = @intFromPtr(opening.ptr) - @intFromPtr(tracked.bytes.ptr);
+        const first = trim(tracked.bytes[0..offset]);
+        if (!std.mem.eql(u8, first, vedi_notice_styles)) return null;
+        const live = syntax.tagAt(tracked.bytes, offset) orelse return null;
+        const pair = syntax.matchingTag(tracked.bytes, live) orelse return null;
+        if (input.ptr != tracked.bytes[live.end..].ptr or input.len != pair.inner_end - live.end or
+            !noLiParentSourceRange(tracked, tracked.bytes[0..pair.end])) return null;
+        const icon_start = "<tr>".len;
+        if (!starts(input, "<tr>" ++ vedi_notice_icon) or
+            !std.mem.endsWith(u8, input, "</td></tr>")) return null;
+        const icon = syntax.tagAt(input, icon_start) orelse return null;
+        const icon_end = syntax.matchingTag(input, icon) orelse return null;
+        if (!std.mem.eql(u8, input[icon.end..icon_end.inner_end], "[[File:Blue_Glass_Arrow.svg|30px]]") or
+            !starts(input[icon_end.end..], "<td class=\"mbox-text\">Vedi anche: ")) return null;
+        return input[icon_start..icon.end];
+    }
+
     fn htmlTable(self: *Renderer, input: []const u8, fostered: *std.ArrayList(Block), defer_zero_rowspans: bool, original_style: Style, table_background: ?[]const u8, nested_grid: ?HtmlNestedGrid, opening: ?syntax.Tag, inherited_alignment: ?presentation_types.CellTextAlign, parent_cell_context: CellNativeContext) Error!?Table {
         const previous_literal_html_table = self.literal_html_table;
         self.literal_html_table = if (opening) |tag| self.prepareLiteralHtmlTable(tag, input) else null;
+        const notice_icon = if (opening) |tag| self.vediNoticeIconOpening(tag, input) else null;
         defer self.literal_html_table = previous_literal_html_table;
         const nested_table_owner = if (opening) |tag| self.tableNestedFontForTag(tag) else null;
         const style = if (nested_table_owner) |owner| tableNestedOwnerStyle(original_style, owner) else original_style;
@@ -51774,6 +51865,7 @@ pub const Renderer = struct {
                 try self.appendHtmlRowCell(&cells, cell_tag, input[cell_tag.end..cell_pair.inner_end], .{
                     .native = row_native_context, .style = row_style, .background = row_background,
                     .alignment = row_alignment, .table = resolved.style, .tag = if (implicit_row) null else tag,
+                    .notice_icon = notice_icon,
                 }, nested_grid);
             }
             // Explicit empty rows still occupy a grid position and node budget.

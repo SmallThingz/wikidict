@@ -3309,6 +3309,15 @@ pub const Registry = struct {
         }
         return null;
     }
+    // Writer-only identity from the independently replayed width inventory.
+    // Ordinary/Book callbacks keep their primary-registry authority unchanged.
+    pub fn resolveWriterCanonicalFile(raw: ?*const anyopaque, a: A, file: []const u8) A.Error!?[]const u8 {
+        if (try resolveCanonicalFile(raw, a, file)) |canonical| return canonical;
+        const self: *const Registry = @ptrCast(@alignCast(raw orelse return null));
+        const fact = (try self.supplementalWidthRecord(a, file)) orelse return null;
+        return try a.dupe(u8, self.namespace_catalog.ofTitle(fact.canonical_file).text);
+    }
+
     pub fn attachWidthInventory(self: *Registry, inventory: Registry) !void {
         if (!self.file_authority or self.it_inventory or self.width_inventory != null or !inventory.it_inventory or
             self.namespace_catalog != inventory.namespace_catalog) return invalid;
@@ -3337,10 +3346,18 @@ pub const Registry = struct {
         return null;
     }
 
-    const SupplementalWidth = struct { record: Record, handler: HeightBound };
+    const SupplementalWidth = struct { record: Record, handler: HeightBound, canonical_file: []const u8 };
+
+    fn sameWidthIdentity(left: Record, right: Record) bool {
+        return equal(left.file_sha1, right.file_sha1) and equal(left.file_timestamp, right.file_timestamp) and
+            left.original_width == right.original_width and left.original_height == right.original_height;
+    }
 
     fn supplementalWidthRecord(self: *const Registry, a: A, file: []const u8) A.Error!?SupplementalWidth {
         const inventory = self.width_inventory orelse return null;
+        if (!self.file_authority or self.it_inventory or !inventory.file_authority or !inventory.it_inventory or
+            self.namespace_catalog != inventory.namespace_catalog or self.resolved_files.len != self.records.len or
+            inventory.resolved_files.len != inventory.records.len or inventory.height_bound_records.len != inventory.records.len) return null;
         const key = canonicalFile(a, self.namespace_catalog, file) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             else => return null,
@@ -3349,13 +3366,25 @@ pub const Registry = struct {
         if (self.fileRecordIndex(key) != null or self.missing_files.contains(key)) return null;
         const index = inventory.fileRecordIndex(key) orelse return null;
         const record = inventory.records[index];
-        // The independent file Provider owns redirects. Grant only a positive
-        // same-title fact with validated logical axes. ApiQueryImageInfo and
-        // ImageHandler read the same File.getWidth/getHeight values, including
-        // logical JPEG axes after the source handler's EXIF normalization.
-        if (!equal(inventory.resolved_files[index], key) or
-            !equal(record.proof_kind, "file-logical-axes-width-bound")) return null;
-        return .{ .record = record, .handler = inventory.height_bound_records[index] };
+        if (!equal(record.proof_kind, "file-logical-axes-width-bound")) return null;
+        const canonical = inventory.resolved_files[index];
+        const canonical_index = inventory.fileRecordIndex(canonical) orelse return null;
+        const canonical_record = inventory.records[canonical_index];
+        // initFileFacts replays every normalized/redirect mapping and ImageInfo
+        // identity against the raw response. Both keys must retain that same
+        // final file, hash, timestamp and logical axes; no title guessing.
+        if (!equal(inventory.resolved_files[canonical_index], canonical) or
+            !equal(canonical_record.proof_kind, record.proof_kind) or !sameWidthIdentity(record, canonical_record) or
+            inventory.height_bound_records[index] != inventory.height_bound_records[canonical_index] or
+            inventory.missing_files.contains(key) or inventory.missing_files.contains(canonical) or
+            self.missing_files.contains(canonical)) return null;
+        // A newer supplemental alias cannot bridge contradictory primary
+        // evidence, including a different physical revision of its target.
+        if (self.fileRecordIndex(canonical)) |primary_index| {
+            if (!equal(self.resolved_files[primary_index], canonical) or
+                !sameWidthIdentity(record, self.records[primary_index])) return null;
+        }
+        return .{ .record = record, .handler = inventory.height_bound_records[index], .canonical_file = canonical };
     }
 
     pub fn resolveWriter(raw: ?*const anyopaque, a: A, file: []const u8, format_value: types.FigureFormat, width: ?u32, height: ?u32) A.Error!?types.FigureSizingPolicy {
